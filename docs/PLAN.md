@@ -68,108 +68,130 @@ NightCodeForge/
 ## 3. Phased Implementation Roadmap
 
 ### Phase 1: Foundation, Domain Models & Extensible Workflow Pipeline
-* **Objective:** Establish the solution, domain entities, SQLite persistence, DAG dependency manager, and extensible workflow pipeline engine.
+* **Objective:** Establish the solution, multi-workspace support, domain entities, SQLite persistence, DAG dependency manager, and extensible workflow pipeline engine.
 * **Tasks:**
   1. Initialize .NET 10 solution and create project skeleton (`Core`, `Infrastructure`, `Agents`, `Web`, `Tests`).
   2. Implement domain entities:
-     * `Issue` (Id, Title, Description, Status, CurrentStageId, Priority, BaseBranch, FeatureBranch).
+     * `Workspace` (Id, Name, RepositoryPath, DefaultBaseBranch, CreatedAt).
+     * `AgentProfile` (Id, WorkspaceId, Name, HarnessId, ModelName, ThinkingEffort, ThinkingTokenBudget, Temperature, HarnessConfigurationJson).
+     * `Issue` (Id, WorkspaceId, Title, Description, Status, CurrentStageId, Priority, BaseBranch, FeatureBranch).
      * `IssueDependency` (IssueId, DependsOnIssueId).
      * `Question` (IssueId, StageId, Prompt, Rationale, OptionsJson, Answer, Status).
      * `StageCheckpoint` (IssueId, StageId, SerializedMemory, GitCommitHash).
+     * `StageExecutionRecord` (IssueId, StageId, AgentProfileId, HarnessId, StartedAt, CompletedAt, DurationMs, PromptTokens, CompletionTokens, TotalTokens, TargetRouting, Status).
      * `ExecutionLog` (IssueId, StageId, Timestamp, Level, Source, Message).
   3. Implement `DependencyResolutionEngine`:
-     * Topological sorting of issues.
+     * Topological sorting of issues per workspace.
      * Cycle detection (reject circular dependencies).
      * Dependency readiness evaluation: `IsReadyForExecution(issueId)`.
      * Cascade activation when a prerequisite reaches `Completed`.
   4. Implement `ExtensibleWorkflowEngine`:
-     * `IWorkflowPipeline` and `IWorkflowStage` abstractions.
+     * `IWorkflowPipeline` and `IWorkflowStage` abstractions with `AgentProfile` associations.
      * Built-in `Default3AgentPipeline`:
-       1. `IssueReviewStage`
-       2. `ImplementationStage`
-       3. `CodeReviewAndFixStage`
-     * Transition logic: advancing stages, pausing for human input, failure handling.
-  5. Configure `AppDbContext` with SQLite and create initial migrations.
-  6. Unit tests in `NightCodeForge.Core.Tests` for pipeline progression, pause/resume, and DAG dependency graph resolution.
-* **Deliverables:** Solution builds cleanly; workflow pipeline and DAG dependency unit tests pass 100%.
+       1. `IssueReviewStage` (Default Profile: Deep Reasoning / high thinking effort)
+       2. `ImplementationStage` (Default Profile: Fast Coder / medium thinking effort)
+       3. `CodeReviewAndFixStage` (Default Profile: Strict Auditor / low temperature)
+  5. Implement **`IssueMarkdownSyncService`**:
+     * Generates and updates Markdown files with YAML frontmatter in `<WorkspaceRoot>/docs/issues/YYYY-MM-DD-<slug>.md` (date-prefixed without ID in filename to enable clean sorting and avoid renames).
+     * Automatically syncs question/answer logs, stage transitions, and generated plans to disk.
+     * Enforces field protection: user edits to title, body, priority, profile, and dependencies sync to DB; system-managed fields (`status`, `stage`, `id`) are protected and restored if altered.
+     * Detects dropped new files, allocates a new database ID, and injects `id` into frontmatter in-place without renaming.
+     * Cleans up or archives files when issues reach `Completed` or `Cancelled`.
+  6. Configure `AppDbContext` with SQLite and create initial migrations.
+  7. Unit tests in `NightCodeForge.Core.Tests` for pipeline progression, pause/resume, token/duration tracking, DAG dependency graph resolution, and markdown issue sync.
+* **Deliverables:** Solution builds cleanly; workflow pipeline, metrics tracking, DAG dependency, and markdown sync unit tests pass 100%.
 
 ---
 
 ### Phase 2: Git CLI Subsystem (CliWrap)
-* **Objective:** Deliver a bulletproof Git manager using native CLI only (no LibGit2Sharp) capable of safe context switching and WIP checkpointing.
+* **Objective:** Deliver a bulletproof Git manager using native CLI only (no LibGit2Sharp) capable of safe context switching and WIP checkpointing across configured workspaces.
 * **Tasks:**
   1. Implement `GitCliRunner` wrapping `CliWrap` with command execution, timeout policies, stdout/stderr capture, and typed `GitCommandException`.
   2. Implement `GitWorkspaceManager`:
-     * `EnsureRepositoryValidAsync()`: Validates target working tree.
-     * `CheckoutIssueBranchAsync(int issueId, string baseBranch)`: Branch creation (`feature/issue-{id}`) and checkout.
-     * `CreateWipCheckpointAsync(int issueId, string stageName, string questionSummary)`: Performs `git add -A` and `git commit -m "WIP: [Issue #{id}][Stage: {stageName}] {summary}" --no-verify`.
-     * `GenerateDiffAsync(int issueId, string baseBranch)`: Executes `git diff {baseBranch}...feature/issue-{id}`.
-     * `RevertOrCleanAsync()`: Handles dirty states during crashes.
-     * `SquashAndMergeAsync(int issueId, string baseBranch, string finalMessage)`: Squashes WIP commits upon approval.
+     * `EnsureRepositoryValidAsync(string repoPath)`: Validates target working tree.
+     * `CheckoutIssueBranchAsync(Workspace workspace, int issueId, string baseBranch)`: Branch creation (`feature/issue-{id}`) and checkout.
+     * `CreateWipCheckpointAsync(Workspace workspace, int issueId, string stageName, string questionSummary)`: Performs `git add -A` and `git commit -m "WIP: [Issue #{id}][Stage: {stageName}] {summary}" --no-verify`.
+     * `GenerateDiffAsync(Workspace workspace, int issueId, string baseBranch)`: Executes `git diff {baseBranch}...feature/issue-{id}`.
+     * `RevertOrCleanAsync(Workspace workspace)`: Handles dirty states during crashes.
+     * `SquashAndMergeAsync(Workspace workspace, int issueId, string baseBranch, string finalMessage)`: Squashes WIP commits upon approval.
   3. Create integration tests in `NightCodeForge.Infrastructure.Tests` executing real Git commands on dynamically created temporary directories.
 * **Deliverables:** Git operations verified with automated tests covering branch switching, dirty detection, WIP commits, and diff generation.
 
 ---
 
 ### Phase 3: Hangfire Queue & Orchestration Engine
-* **Objective:** Configure the single-worker GPU inference queue and background task coordinator.
+* **Objective:** Configure the single-worker GPU inference queue, step metrics recording, and background task coordinator.
 * **Tasks:**
   1. Configure Hangfire with SQLite storage.
   2. Register two background job servers:
-     * **LLM Inference Server:** `WorkerCount = 1`, `Queues = new[] { "llm-urgent", "llm-inference" }`.
+     * **LLM Inference Server:** `WorkerCount = 1`, `Queues = new[] { "llm-urgent", "llm-inference" }` (global across all workspaces to guard GPU VRAM).
      * **Utility Server:** `WorkerCount = 4`, `Queues = new[] { "default" }`.
   3. Implement `IssueOrchestrator`:
-     * Dequeues issue, checks DAG dependencies.
+     * Dequeues issue, checks workspace and DAG dependencies.
      * Locks workspace mutex and checks out branch.
-     * Loads current stage in the pipeline and invokes the appropriate agent harness.
+     * Loads current stage in the pipeline and invokes the selected harness (`IAgentHarness`).
+     * Measures step performance (start/end timestamp, duration in ms, token usage).
      * Evaluates `StageExecutionResult`:
-       * If `WaitingForHuman`: saves `Question` and `StageCheckpoint`, performs Git WIP commit, sets status to `BlockedQuestion`, finishes job to release worker.
-       * If `StageCompleted`: saves checkpoint, advances to next stage in pipeline. If final stage completed, transitions to `Review` and generates diff.
-       * If `Failed`: logs error, transitions state to `Failed`.
+       * If `WaitingForHuman`: records `Question`, `StageCheckpoint`, and `StageExecutionRecord`, performs Git WIP commit, sets status to `BlockedQuestion`, finishes job to release worker.
+       * If `StageCompleted`: saves `StageExecutionRecord` and checkpoint, advances to next stage in pipeline. If final stage completed, transitions to `Review` and generates diff.
+       * If `Failed`: logs error and metrics, transitions state to `Failed`.
   4. Implement `SubmitHumanAnswerAsync`:
      * Saves answer in DB.
      * Transitions state from `BlockedQuestion` to `Pending`.
      * Enqueues job to `llm-urgent` queue for immediate priority resumption.
   5. Implement `CompleteIssueAndCascadeAsync`:
      * On final human approval/merge, sets issue to `Completed`.
-     * Unlocks dependent issues and enqueues newly ready issues into `llm-inference`.
-* **Deliverables:** Background worker lifecycle working with simulated agent tasks, testing queue priority, interruption, and dependency unblocking.
+     * Unlocks dependent issues in the same workspace and enqueues newly ready issues into `llm-inference`.
+* **Deliverables:** Background worker lifecycle working with simulated agent tasks, testing queue priority, step duration/token metrics, interruption, and dependency unblocking.
 
 ---
 
-### Phase 4: AI Harness Implementations & 3 Specialized Agent Stages
-* **Objective:** Implement both AI engines (Microsoft Agent Framework & Pi JSON-RPC fallback), the 3 default workflow stages, discovery agent, and primary gateway integration with **OllamaRouter**.
+### Phase 4: AI Harness Abstraction & Implementations (Native, Pi, and ACP)
+* **Objective:** Deliver the unified harness abstraction layer, first-class native & Pi engines, open **Agent Client Protocol (ACP)** adapter, and primary gateway integration with **OllamaRouter**.
 * **Tasks:**
-  1. Define `IAgentHarness`, `AgentSessionContext`, `AgentRunResult`, and `AgentTelemetryEvent`.
+  1. Define `IAgentHarness`, `IHarnessRegistry`, `AgentSessionContext`, `AgentRunResult`, `StepExecutionMetrics`, and `AgentTelemetryEvent`.
   2. Implement **OllamaRouter Gateway Integration:**
      * Connect to OllamaRouter (`jetelain/OllamaRouter`) via `Microsoft.Extensions.AI.Ollama` or `Microsoft.Extensions.AI.OpenAI` pointing to `http://localhost:11434`.
      * Leverage OllamaRouter's automated GPU routing (Fast Local GPU vs Remote High-VRAM vs Cloud overflow).
      * Implement `IOllamaModelCatalogService` to query `/api/tags` and populate active local/remote models dynamically.
      * Capture target routing telemetry (e.g. from `/monitor` or response headers) for real-time UI display.
-  3. Build standard agent tools:
-     * `ReadFileTool`: reads line ranges safely.
-     * `WriteFileTool`: creates/updates files inside repository root.
-     * `RunCommandTool`: executes `dotnet build`, `dotnet test`, etc., with security filters.
-     * `AskHumanQuestionTool`: records the question and triggers context suspension.
-     * `ProposeIssuesTool`: structured proposal tool for the ideation chat.
-  4. Implement the 3 Specialized Workflow Stages:
-     * **`IssueReviewStage`:** Specialized prompt to verify requirements against codebase, check ambiguities, and clarify proactively with human.
-     * **`ImplementationStage`:** Tool loop for coding, building, and running tests.
-     * **`CodeReviewAndFixStage`:** Diff inspection against base branch, regression detection, and automated patch application.
-  5. **Implementation A (Microsoft Agent Framework & `Microsoft.Extensions.AI`):**
-     * Sets up `IChatClient` (configured for OllamaRouter or direct OpenAI/Ollama endpoints).
-     * Manages function calling, chat history serialization, and question interception.
-  6. **Implementation B (Pi via JSON-RPC Fallback):**
-     * Implements JSON-RPC client over process stdin/stdout or local socket.
-     * Listens for human input events, requests session suspension, and serializes state token.
-  7. **Interactive Ideation Agent Service (`IIdeationService`):**
-     * Read-only exploration agent that converses with the developer, browses the codebase, and proposes issues with dependencies.
-* **Deliverables:** OllamaRouter integrated; both harnesses functional; 3 agent stages and discovery agent verified with mock/local LLMs.
+  3. Implement **Harness Implementations:**
+     * **Implementation A (Native First-Class): Microsoft Agent Framework & `Microsoft.Extensions.AI`:**
+       * In-process C# agent with function tools (`ReadFile`, `WriteFile`, `ListDirectory`, `RunCommand`, `AskHumanQuestion`).
+       * Automatic token usage extraction from `AdditionalProperties["usage"]`.
+     * **Implementation B (Fallback First-Class): Pi via JSON-RPC:**
+       * External process runner communicating via JSON-RPC over `stdio` or local socket.
+       * Captures `ask_user` events, requests session suspension, and captures state token.
+     * **Implementation C (Open Standard): Agent Client Protocol (ACP) Harness Adapter:**
+       * Protocol adapter implementing the official **[ACP specification](https://agentclientprotocol.com/)** over JSON-RPC (`stdio` or WebSocket/HTTP).
+       * Bridges ACP session messages, workspace tools, and human prompt requests into NightCodeForge's pause/resume checkpointing.
+       * Enables plugging any external ACP-compliant coding agent out-of-the-box.
+  4. Implement the 3 Specialized Workflow Stages & Bootstrap Prompts:
+     * **`IssueReviewStage`:** System persona for architectural analysis; bootstrap prompt injecting `{{Issue.Title}}`, `{{Issue.Description}}`, repository structure, with strict directive to invoke `AskHumanQuestion` on any ambiguity.
+     * **`ImplementationStage`:** System persona for senior engineer / TDD; bootstrap prompt injecting approved Stage 1 plan, `{{PriorAnswers}}`, affected files; tool loop for coding, building, and running tests.
+     * **`CodeReviewAndFixStage`:** System persona for critical code auditor; bootstrap prompt injecting target `{{BaseBranch}}`, `{{GitDiff}}` changeset; automated gap analysis, regression detection, and direct patch application.
+  5. Implement **Model Context Protocol (MCP) Integration:**
+     * Connect to external MCP servers configured in `mcp_config.json` via Microsoft Agent Framework (`Microsoft.Agents.Mcp`).
+     * Dynamically discover tools from database, GitHub, or custom CLI MCP servers and register them into the active agent session.
+     * Forward MCP tool definitions to ACP agents for unified multi-harness tooling.
+  6. Implement **Modular Skills System:**
+     * Parser for `.agents/skills/<skill-name>/SKILL.md` (metadata frontmatter + operational markdown instructions).
+     * Provide `ReadSkill(skillName)` tool allowing agents to look up repo-specific guidelines on demand.
+     * Context-aware skill injection into stage prompt templates based on file triggers or profile bindings.
+  7. Implement **Repository Guidelines & `AGENTS.md` Loader:**
+     * Automatically discover and parse `AGENTS.md`, `.agents/AGENTS.md`, or `CLAUDE.md` from the target workspace.
+     * Prepend parsed repository instructions, architectural rules, and build/test commands to stage system prompts across all harnesses (Microsoft Agent, Pi, and ACP).
+  8. Implement **Session Transcript & Hybrid Diagnostics Service:**
+     * `SessionTranscriptService`: Serializes full turn-by-turn agent sessions into structured Markdown files in `<WorkspaceRoot>/docs/transcripts/YYYY-MM-DD-issue-{id}-{stage}-{status}.md` (thought blocks, tool calls, compiler outputs, Q&A).
+     * `TranscriptDiagnosticService`: Evaluates failed or anomalous transcripts via either **Cloud LLMs** (fast, zero local VRAM consumption via OllamaRouter cloud models or external cloud API) or **Local LLMs** (100% private/offline, queued sequentially via `WorkerCount = 1`) to produce actionable remediation advice.
+  9. **Interactive Ideation Agent Service (`IIdeationService`):**
+     * Read-only exploration agent that converses with the developer, browses the workspace codebase, and proposes issues with dependencies.
+* **Deliverables:** Harness abstraction layer complete; Microsoft Agent, Pi, and ACP adapter functional; MCP, Skills, and AGENTS.md integration verified; session transcripts and hybrid failure diagnostics operational; 3 agent stages and discovery agent verified with mock/local LLMs and step metrics recorded.
 
 ---
 
 ### Phase 5: Modern Blazor Web UI & SignalR Telemetry
-* **Objective:** Build a sleek, responsive, developer-grade dashboard for ideation chat, backlog & dependency management, live monitoring, question answering, and diff review.
+* **Objective:** Build a sleek, responsive, developer-grade dashboard for ideation chat, backlog & dependency management, live monitoring, question answering, transcript inspection, and diff review.
 * **Tasks:**
   1. Setup Blazor Interactive Server with modern dark-mode aesthetic (custom CSS tokens, obsidian/indigo palette, crisp typography).
   2. Implement **SignalR Hub (`/hubs/orchestrator`)** streaming:
@@ -192,6 +214,12 @@ NightCodeForge/
   7. Implement **Review Room:**
      * Visual `git diff` viewer highlighting added/modified/deleted files.
      * Action buttons: "Approve & Merge" (squash & merge to base branch, unblocking dependent tasks) or "Request Changes".
+  8. Implement **Workspace, Agent Profile & MCP Settings:**
+     * Workspace creation/switching and target Git repository path configuration.
+     * Agent Profile editor: configure Harness, Model, Thinking Effort, Temperature, and custom JSON parameters, with stage-to-profile assignment.
+  9. Implement **Session Transcripts & AI Diagnostics Modal:**
+     * Markdown viewer for past and current execution transcripts with syntax highlighting.
+     * Choice between "Diagnose with Cloud AI" (fast, zero VRAM impact) and "Diagnose with Local AI" (100% private, sequential execution).
 * **Deliverables:** Fully operational web interface with real-time reactive updates.
 
 ---

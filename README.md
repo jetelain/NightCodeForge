@@ -37,12 +37,29 @@ NightCodeForge eliminates idle GPU time through **automatic Git checkpointing an
 
 ## ✨ Key Features
 
-* 🛡️ **Strict VRAM & Hardware Protection (`WorkerCount = 1`):** Dedicated inference queue guarantees sequential execution, preventing VRAM overflow.
+* 🛡️ **Strict VRAM & Hardware Protection (`WorkerCount = 1`):** Dedicated inference queue guarantees sequential execution, preventing VRAM overflow across all projects.
+* 📁 **Multi-Workspace Architecture:** Manage multiple independent local repositories. Each issue is tied to a workspace with its own Git working tree, base branch, and preferred model settings.
 * 🔀 **Native Git CLI Context Switching:** Pure command-line interaction via `CliWrap` (strictly no `LibGit2Sharp` wrappers). Safe branch isolation, WIP commits, and squash-on-merge diffs.
 * 🧩 **Extensible 3-Agent Workflow Pipeline:**
   1. **Issue Review Agent:** Pre-inspects the codebase, clarifies requirements, and prompts the human proactively *before* any coding begins.
   2. **Implementation Agent:** Modifies code, runs builds (`dotnet build`), executes unit tests, and iterates.
   3. **Code Review & Fixes Agent:** Inspects diffs, runs static checks, identifies gaps or regressions, and applies automated fixes.
+* 🎭 **Agent Profiles per Stage:** Customize the intelligence for each workflow step. Assign a specialized profile combining **Harness** (`MicrosoftAgent`, `PiRpc`, or `Acp`), **Model Name** (e.g. `deepseek-r1:32b` for deep review vs `qwen2.5-coder:32b` for fast coding), **Thinking Effort** (None, Low, Medium, High, or custom token budget), and harness-specific launch configurations.
+* 📝 **Stage-Specific Bootstrap Prompts:** Every stage has its own tailored System Persona and Bootstrap Context injection:
+  - *Stage 1 (Review):* Focuses on architectural ambiguities, injecting issue requirements, with strict instructions to prompt the human before coding.
+  - *Stage 2 (Implementation):* Injects the approved technical plan and prior human Q&A, driving test-driven coding and compilation loops.
+  - *Stage 3 (Review & Fixes):* Injects the live `git diff` against the base branch, running critical audit checklists and applying direct patches.
+* 🛠️ **Model Context Protocol (MCP) & Modular Skills:**
+  - **Native MCP Host:** Connect external MCP servers (e.g. SQLite, PostgreSQL, GitHub, custom CLIs) via `mcp_config.json`, leveraging Microsoft Agent Framework's native `Microsoft.Agents.Mcp` client.
+  - **Modular Skills (`SKILL.md`):** Teach agents framework-specific best practices and project conventions on demand (`.agents/skills/`).
+* 📜 **Native `AGENTS.md` Support:** Automatically loads repository instructions, architecture guidelines, and build/test commands from `AGENTS.md` or `.agents/AGENTS.md` and prepends them into every agent stage across all harnesses.
+* 🔌 **Universal Agent Harness Abstraction:**
+  - **Native C# (First-Class):** In-process via Microsoft Agent Framework & `Microsoft.Extensions.AI`.
+  - **Pi JSON-RPC (First-Class):** Managed sub-process runner via stdio JSON-RPC.
+  - **[Agent Client Protocol (ACP)](https://agentclientprotocol.com/) Compatible:** Plug any existing or future ACP-compliant coding agent (from Zed, JetBrains, or the open ACP Registry) without altering core code.
+* ⏱️ **Fine-Grained Step Duration & Token Metrics:** Tracks exact elapsed execution time, prompt tokens, completion tokens, total tokens, and hardware target for every workflow stage.
+* 📜 **Session Transcripts & Hybrid AI Diagnostics:** Automatically saves turn-by-turn markdown execution logs (`docs/transcripts/`) capturing model thoughts, tool calls, and compiler outputs. If a local model fails or gets stuck in a reasoning loop, a one-click **"Diagnose with AI"** feature evaluates the transcript using either **Cloud LLMs** (fast, zero local VRAM impact via OllamaRouter cloud models or cloud APIs) or **Local LLMs** (100% private & offline, queued sequentially) to pinpoint root causes and recommend prompt/skill fixes.
+* 📁 **Markdown Issue Mirroring (`docs/issues/`):** Active non-resolved issues are automatically mirrored to the workspace filesystem as date-prefixed Markdown files with YAML frontmatter (`docs/issues/YYYY-MM-DD-<slug>.md`). Omitting the ID from the filename enables clean chronological sorting and avoids file renames when new files are dropped into the directory (the system simply injects the assigned `id` in-place). User edits to requirements, priority, or dependencies sync to the DB, while state and stage are protected by the orchestrator.
 * 🔗 **Issue Dependency Graph (DAG):** Define prerequisite dependencies between issues with automatic cycle detection. An issue stays locked until all its dependencies are completed and merged.
 * 💡 **Interactive Ideation & Codebase Discovery Chat:** Ask questions about your repository in real time. The read-only discovery agent analyzes the code and proposes structured issues with dependency links directly into the backlog.
 * 🔀 **First-Class [OllamaRouter](https://github.com/jetelain/OllamaRouter) Integration:**
@@ -51,7 +68,7 @@ NightCodeForge eliminates idle GPU time through **automatic Git checkpointing an
   - Dynamic model catalog discovery via `/api/tags`.
 * 📬 **Human-in-the-Loop Inbox & Review Room:**
   - **Inbox:** Clean, consolidated dashboard of all blocked questions with quick text or multiple-choice answering.
-  - **Monitoring:** Live token streaming, Git CLI logs, and GPU routing telemetry via SignalR.
+  - **Monitoring:** Live token streaming, Git CLI logs, step duration gauges, and GPU routing telemetry via SignalR.
   - **Review Room:** Visual side-by-side Git diff viewer with one-click "Approve & Merge" or "Request Changes".
 
 ---
