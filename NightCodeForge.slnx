@@ -3,6 +3,7 @@
     <Project Path="src/NightCodeForge.Agents/NightCodeForge.Agents.csproj" />
     <Project Path="src/NightCodeForge.Core/NightCodeForge.Core.csproj" />
     <Project Path="src/NightCodeForge.Infrastructure/NightCodeForge.Infrastructure.csproj" />
+    <Project Path="src/NightCodeForge.ScenarioRunner/NightCodeForge.ScenarioRunner.csproj" />
     <Project Path="src/NightCodeForge.Web/NightCodeForge.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">

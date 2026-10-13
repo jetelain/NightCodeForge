@@ -52,7 +52,11 @@ public partial class CanonicalTools
     {
         if (_pathResolver != null && _workspaceId.HasValue)
         {
-            return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path);
+            var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path);
+            if (File.Exists(cruciblePath) || Directory.Exists(cruciblePath))
+            {
+                return cruciblePath;
+            }
         }
 
         var normalized = (path ?? string.Empty).Replace('\\', '/');
