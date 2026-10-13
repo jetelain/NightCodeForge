@@ -7,7 +7,11 @@ The solution is organized using clean architecture principles, separating core d
 ```text
 NightCodeForge/
 ├── docs/
-│   ├── ARCHITECTURE.md          # Complete architectural specification
+│   ├── ARCHITECTURE.md          # Complete architectural specification of Forge orchestrator
+│   ├── CRUCIBLE.md              # Native Crucible agent harness specification
+│   ├── PI.md                    # Pi headless JSONL RPC daemon protocol & integration
+│   ├── ACP.md                   # Agent Client Protocol (ACP) specification & modernization
+│   ├── REFERENCES.md            # Source code mapping to MS Agent Framework, Pi & ACP
 │   └── PLAN.md                  # Step-by-step roadmap & execution guide
 ├── src/
 │   ├── NightCodeForge.Core/
@@ -31,14 +35,16 @@ NightCodeForge/
 │   │
 │   ├── NightCodeForge.Agents/
 │   │   ├── Common/              # AgentSessionContext, AgentRunResult, TelemetryEvent
-│   │   ├── Tools/               # FileReadTool, FileWriteTool, RunCmdTool, AskHumanQuestionTool, ProposeIssuesTool
+│   │   ├── Tools/               # Minimalist Canonical (Pi-Harmonized): read, edit, write, bash, get_file_outline, web_search, ask_human_question, propose_issues
+│   │   ├── Dispatcher/          # LenientToolDispatcher (Aliasing, fuzzy matching, parameter normalization, payload repair)
 │   │   ├── Stages/              # Default 3-Agent Stages:
 │   │   │   ├── IssueReviewStage.cs       # Stage 1: Scope, ambiguities, proactive human Q&A
 │   │   │   ├── ImplementationStage.cs    # Stage 2: Code modifications, compilation & tests
 │   │   │   └── CodeReviewAndFixStage.cs  # Stage 3: Gap analysis, lint checks & automated fixes
 │   │   ├── Ideation/            # Interactive Discovery & Codebase Chat Agent
 │   │   ├── Crucible/            # Implementation A: Crucible Harness (Microsoft Agent Framework & Extensions.AI)
-│   │   └── PiRpc/               # Implementation B: Fallback Pi Agent via JSON-RPC
+│   │   ├── PiRpc/               # Implementation B: Fallback Pi Agent via JSON-RPC
+│   │   └── Acp/                 # Implementation C: Open Agent Client Protocol (ACP) Adapter
 │   │
 │   └── NightCodeForge.Web/
 │       ├── Components/          # Blazor Interactive Server UI
@@ -65,7 +71,7 @@ NightCodeForge/
 | :--- | :--- | :--- |
 | **NightCodeForge.Core** | *No external heavy dependencies* (Clean pure C#) | Domain models, extensible workflow engine, DAG dependency resolution |
 | **NightCodeForge.Infrastructure** | `CliWrap` (v3.7+)<br>`Hangfire.AspNetCore`<br>`Hangfire.Storage.SQLite`<br>`Microsoft.EntityFrameworkCore.Sqlite`<br>`Microsoft.AspNetCore.SignalR` | Native Git CLI execution, background queue with `WorkerCount = 1`, database persistence & real-time telemetry |
-| **NightCodeForge.Agents** | `Microsoft.Extensions.AI`<br>`Microsoft.Extensions.AI.Ollama`<br>`System.Text.Json` | AI agent abstractions, function/tool calling, memory checkpointing, JSON-RPC communication |
+| **NightCodeForge.Agents** | `Microsoft.Extensions.AI`<br>`Microsoft.Extensions.AI.Ollama`<br>`StreamJsonRpc`<br>`System.Text.Json` | AI agent abstractions, function/tool calling, memory checkpointing, ACP & Pi JSON-RPC communication, MCP host client |
 | **NightCodeForge.Web** | `Microsoft.AspNetCore.Components.Web`<br>`DiffPlex` (for diff parsing) | Reactive Blazor UI, terminal streaming, side-by-side git diff rendering |
 | **NightCodeForge.Tests** | `xunit`<br>`FluentAssertions`<br>`NSubstitute` | Automated unit and integration testing |
 
@@ -77,34 +83,39 @@ NightCodeForge/
 * **Objective:** Establish the solution, multi-workspace support, domain entities, SQLite persistence, DAG dependency manager, and extensible workflow pipeline engine.
 * **Tasks:**
   1. Initialize .NET 10 solution and create project skeleton (`Core`, `Infrastructure`, `Agents`, `Web`, `Tests`).
-  2. Implement domain entities:
+  2. Implement domain entities and enumerations:
      * `Workspace` (Id, Name, RepositoryPath, DefaultBaseBranch, ExecutionMode [BareHost, WslDirect, ContainerSandbox], ContainerImage, Ext4MirrorPath, CreatedAt).
      * `AgentProfile` (Id, WorkspaceId, Name, HarnessId, ModelName, ThinkingEffort, ThinkingTokenBudget, Temperature, HarnessConfigurationJson).
      * `Issue` (Id, WorkspaceId, Title, Description, Status, CurrentStageId, Priority, BaseBranch, FeatureBranch).
      * `IssueDependency` (IssueId, DependsOnIssueId).
      * `Question` (IssueId, StageId, Prompt, Rationale, OptionsJson, Answer, Status).
      * `StageCheckpoint` (IssueId, StageId, SerializedMemory, GitCommitHash).
-     * `StageExecutionRecord` (IssueId, StageId, AgentProfileId, HarnessId, StartedAt, CompletedAt, DurationMs, PromptTokens, CompletionTokens, TotalTokens, TargetRouting, Status).
+     * `StageExecutionRecord` (IssueId, StageId, AgentProfileId, HarnessId, ModelName, StartedAt, CompletedAt, DurationMs, PromptTokens, CompletionTokens, TotalTokens, TargetRouting, Status).
      * `ExecutionLog` (IssueId, StageId, Timestamp, Level, Source, Message).
+     * Enums: `IssueOverallStatus` (`WaitingOnDependencies`, `Pending`, `Running`, `BlockedQuestion`, `Review`, `Completed`, `Cancelled`, `Failed`), `ExecutionMode`, `ThinkingEffort`, `HarnessType`.
   3. Implement `DependencyResolutionEngine`:
      * Topological sorting of issues per workspace.
      * Cycle detection (reject circular dependencies).
      * Dependency readiness evaluation: `IsReadyForExecution(issueId)`.
      * Cascade activation when a prerequisite reaches `Completed`.
   4. Implement `ExtensibleWorkflowEngine`:
-     * `IWorkflowPipeline` and `IWorkflowStage` abstractions with `AgentProfile` associations.
+     * `IWorkflowPipeline` and `IWorkflowStage` abstractions supporting both **Agentic** (LLM-driven with GPU allocation) and **Deterministic** (CPU-native builds, tests, SAST with 0 GPU/tokens) stages via `WorkflowStageKind`.
+      * **Deterministic Quality Gates & Outcome Routing:** Enables deterministic stages (`DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicSastStage`) to act as outcome-driven routers: advancing forward on pass, or looping backward to fix errors (with retry circuit breaker) paired with **Synthetic Conversation Priming** to prevent agents from re-running redundant builds/tests.
+     * **Explicit Stage Boundary Handover Protocol:** Enforces zero-memory clean context resets at stage transitions (archives previous stage chat history to disk transcripts, injecting only structured plan/diff/diagnostic artifacts into next stage).
      * Built-in `Default3AgentPipeline`:
-       1. `IssueReviewStage` (Default Profile: Deep Reasoning / high thinking effort)
-       2. `ImplementationStage` (Default Profile: Fast Coder / medium thinking effort)
-       3. `CodeReviewAndFixStage` (Default Profile: Strict Auditor / low temperature)
+       1. `IssueReviewStage` (Agentic - Default Profile: Deep Reasoning / high thinking effort)
+       2. `ImplementationStage` (Agentic - Default Profile: Fast Coder / medium thinking effort)
+       3. `CodeReviewAndFixStage` (Agentic - Default Profile: Strict Auditor / low temperature)
+     * Extensible pipeline configurations allowing deterministic gate insertion (e.g. `Review ➔ Implementation ➔ Deterministic Build & Test ➔ Review & Fix`).
   5. Implement **`IssueMarkdownSyncService`**:
-     * Generates and updates Markdown files with YAML frontmatter in `<WorkspaceRoot>/docs/issues/YYYY-MM-DD-<slug>.md` (date-prefixed without ID in filename to enable clean sorting and avoid renames).
+     * Generates and updates Markdown files with YAML frontmatter in `<WorkspaceRoot>/docs/issues/YYYY-MM-DD-<slug>.md` (date-prefixed without ID in filename to enable clean sorting and avoid renames; appends `-2`, `-3` on slug collisions for the same date).
      * Automatically syncs question/answer logs, stage transitions, and generated plans to disk.
+     * Employs `FileSystemWatcher` event debouncing (300ms window) and an in-memory write-suppression tracker (recording expected file hashes) to prevent self-triggering echo loops when writing back protected fields.
      * Enforces field protection: user edits to title, body, priority, profile, and dependencies sync to DB; system-managed fields (`status`, `stage`, `id`) are protected and restored if altered.
      * Detects dropped new files, allocates a new database ID, and injects `id` into frontmatter in-place without renaming.
      * Cleans up or archives files when issues reach `Completed` or `Cancelled`.
   6. Configure `AppDbContext` with SQLite and create initial migrations.
-  7. Unit tests in `NightCodeForge.Core.Tests` for pipeline progression, pause/resume, token/duration tracking, DAG dependency graph resolution, and markdown issue sync.
+  7. Unit tests in `NightCodeForge.Core.Tests` for pipeline progression, pause/resume, token/duration tracking, DAG dependency graph resolution, echo loop suppression, and markdown issue sync.
 * **Deliverables:** Solution builds cleanly; workflow pipeline, metrics tracking, DAG dependency, and markdown sync unit tests pass 100%.
 
 ---
@@ -123,6 +134,7 @@ NightCodeForge/
   3. Implement **`GitMirrorSyncService` (Ext4 Mirroring Protocol):**
      * Solves the WSL2 9p filesystem performance bottleneck on Windows hosts.
      * Establishes isolated clone on ext4 (`/var/ncf/workspaces/{workspaceId}/repo`) with local remote `host-origin` pointing to the developer's Windows repository.
+     * Configures the host repository with `git config receive.denyCurrentBranch updateInstead` to ensure `git push host-origin feature/issue-{id}` succeeds without rejection even when the developer has the branch checked out in their IDE on the host.
      * Performs `git fetch host-origin <baseBranch>` on stage inception.
      * Performs `git push host-origin feature/issue-{id}` upon WIP checkpointing, human questions, or stage completion to keep developer's IDE in sync.
      * Directly mounts workspace when repo is already native to Linux/WSL2 ext4.
@@ -136,7 +148,7 @@ NightCodeForge/
 * **Tasks:**
   1. Configure Hangfire with SQLite storage.
   2. Register two background job servers:
-     * **LLM Inference Server:** `WorkerCount = 1`, `Queues = new[] { "llm-urgent", "llm-inference" }` (global across all workspaces to guard GPU VRAM).
+     * **LLM Inference Server:** `WorkerCount = 1`, `Queues = new[] { "llm-urgent", "llm-inference" }` (global across all workspaces to guard GPU VRAM; provides non-preemptive priority pick-up so resumed issues in `llm-urgent` are prioritized upon the next worker turn without concurrent VRAM oversubscription).
      * **Utility Server:** `WorkerCount = 4`, `Queues = new[] { "default" }`.
   3. Implement `IssueOrchestrator`:
      * Dequeues issue, checks workspace and DAG dependencies.
@@ -151,9 +163,18 @@ NightCodeForge/
      * Saves answer in DB.
      * Transitions state from `BlockedQuestion` to `Pending`.
      * Enqueues job to `llm-urgent` queue for immediate priority resumption.
-  5. Implement `CompleteIssueAndCascadeAsync`:
+  5. Implement `RequestChangesAsync`:
+     * Allows reviewer to provide revision feedback notes from the Review Room.
+     * Transitions issue from `Review` back to Stage 2 (`ImplementationStage`) with reviewer feedback injected into prompt context.
+     * Enqueues job to `llm-urgent` queue for priority iteration.
+  6. Implement `CompleteIssueAndCascadeAsync`:
      * On final human approval/merge, sets issue to `Completed`.
      * Unlocks dependent issues in the same workspace and enqueues newly ready issues into `llm-inference`.
+   7. Implement `IStartupRecoveryService` (Graceful Restart & Windows Update Recovery):
+      * Executes during host startup before Hangfire worker begins polling.
+      * Purges dangling Git lock files (`.git/index.lock`, `.git/refs/...`) left by abrupt process termination.
+      * Scans working tree and creates automated rescue commit for uncommitted edits (`WIP-RECOVERY`).
+      * Reconciles orphaned `Running` issues: rehydrates conversation memory from last checkpoint, injects reboot notice, and enqueues to `llm-urgent` for immediate resumption.
 * **Deliverables:** Background worker lifecycle working with simulated agent tasks, testing queue priority, step duration/token metrics, interruption, and dependency unblocking.
 
 ---
@@ -167,34 +188,53 @@ NightCodeForge/
      * Leverage OllamaRouter's automated GPU routing (Fast Local GPU vs Remote High-VRAM vs Cloud overflow).
      * Implement `IOllamaModelCatalogService` to query `/api/tags` and populate active local/remote models dynamically.
      * Capture target routing telemetry (e.g. from `/monitor` or response headers) for real-time UI display.
-  3. Implement **Harness Implementations:**
-     * **Implementation A (Native First-Class): Crucible Harness (Microsoft Agent Framework & `Microsoft.Extensions.AI`):**
-       * In-process C# agent with function tools (`ReadFile`, `WriteFile`, `ListDirectory`, `RunCommand`, `AskHumanQuestion`).
+  3. Implement **Harness Implementations & Canonical Tools:**
+      * **Minimalist Canonical Tool Suite (Pi-Harmonized):** `read` (line-sliced via `offset`/`limit`), `get_file_outline` (AST symbol skeleton), `edit` (precision chunk search-and-replace, supporting multi-disjoint `edits: []`), `write`, `bash` (with `HeadTailBuffer` truncation, compiler error extraction, and shell discovery `ls`/`find`/`rg`), `web_search` (extensible via `IWebSearchService`, defaulting to Ollama Web Search API), `ask_human_question`, and `propose_issues`.
+     * **`LenientToolDispatcher` (Tolerance Engine):**
+        - Tool name aliasing and fuzzy matching (`read` $\leftarrow$ `read_file`, `ReadFile`, `cat`, `view_file`; `edit` $\leftarrow$ `replace_file_content`, `edit_file`, `str_replace`, `replace_content`; `write` $\leftarrow$ `write_file`, `write_to_file`; `bash` $\leftarrow$ `run_command`, `exec`, `cmd`, `terminal`; `web_search` $\leftarrow$ `search_web`, `google_search`, `webSearch`, etc.).
+        - Dropped tool translation: `list_dir` $\rightarrow$ `bash("ls -la ...")`, `grep_search` $\rightarrow$ `bash("rg -n ...")`.
+       - Parameter normalization (`path` $\leftarrow$ `filePath`, `file`; `edits` $\leftarrow$ root `old_text` / `oldText` / `target_content`, `new_text` / `newText` / `replacement_content`; `offset` $\leftarrow$ `start_line`, `line`; `limit` $\leftarrow$ `end_line`, `limit_lines`).
+       - Resilient JSON payload repair (stripping markdown code fences, sanitizing unescaped newlines in multi-line code writes).
+       - Automatic type coercion (e.g. numeric strings to integers).
+     * **Implementation A (Native First-Class): Crucible Harness (Microsoft Agent Framework via Official NuGet Releases, see docs/CRUCIBLE.md):**
+       * Pre-configured `HarnessAgent` (`Microsoft.Agents.AI.Harness`) orchestrating tool invocation, function approval, and OpenTelemetry instrumentation.
+       * Interruption & Checkpointing: Uses `AIAgent.SerializeSessionAsync` / `DeserializeSessionAsync` with `AgentSession` persistence to `AppDbContext`.
+       * Zero data-loss guaranteed by `PerServiceCallChatHistoryPersistingChatClient` across tool calls; session resumption seamlessly injects human replies via `MessageInjectingChatClient`.
        * Automatic token usage extraction from `AdditionalProperties["usage"]`.
-     * **Implementation B (Fallback First-Class): Pi via JSON-RPC:**
+     * **Implementation B (Fallback First-Class): Pi via JSON-RPC (see docs/PI.md):**
        * External process runner communicating via JSON-RPC over `stdio` or local socket.
        * Captures `ask_user` events, requests session suspension, and captures state token.
-     * **Implementation C (Open Standard): Agent Client Protocol (ACP) Harness Adapter:**
-       * Protocol adapter implementing the official **[ACP specification](https://agentclientprotocol.com/)** over JSON-RPC (`stdio` or WebSocket/HTTP).
-       * Bridges ACP session messages, workspace tools, and human prompt requests into NightCodeForge's pause/resume checkpointing.
-       * Enables plugging any external ACP-compliant coding agent out-of-the-box.
+      * **Implementation C (Open Standard): Agent Client Protocol (ACP) Harness Adapter (see docs/ACP.md):**
+        * Protocol adapter implementing the official **[ACP specification](https://agentclientprotocol.com/)** over JSON-RPC (`stdio` or WebSocket/HTTP).
+        * Incorporates and modernizes the `acp-csharp` SDK (`AgentClientProtocol`), upgrading to C# 13 and adding ACP v2 negotiation with backward-compatible v1 fallback.
+        * Bridges ACP session messages, workspace tools, and human permission requests (`session/request_permission`) into NightCodeForge's pause/resume checkpointing.
+        * Enables plugging any external ACP-compliant coding agent out-of-the-box.
   4. Implement **Execution Sandboxing Subsystem (`IExecutionEnvironment`):**
-     * Pluggable runners: `BareHostExecutionEnvironment`, `WslExecutionEnvironment`, and `ContainerSandboxEnvironment` (Docker/Podman).
-     * Shared persistent package cache volume mounts (`~/.nuget/packages`, `~/.npm`, `~/.m2`, `~/.cache/uv`) and read-only host toolchain mounts (`/usr/share/dotnet`, `/usr/lib/jvm`, `/opt/android-sdk`).
-     * In-process harness delegation: `RunCommand` in Crucible, Pi, and ACP harnesses executes inside the sandbox container/WSL, granting autonomous command execution without user prompt fatigue.
+     * Pluggable runners: `BareHostExecutionEnvironment`, `WslExecutionEnvironment`, and `ContainerSandboxEnvironment` (`NightCodeForgeContainerExecutor`).
+     * Inspired by Microsoft Agent Framework shell executor architecture:
+       - **Persistent Sentinel REPL Protocol:** Keeps `docker exec -i <container> bash --noprofile --norc` alive with unique GUID sentinels (`echo "__NCF_SENTINEL_<guid>__ $?"`) for instant command execution without container restart overhead.
+       - **`HeadTailBuffer` Output Compaction:** UTF-8 rune-safe bounded accumulation capping stdout/stderr at 32 KB with `[... truncated N bytes ...]` markers.
+     * Customizations for software engineering: Network enabled (for package restores), non-read-only root (for package caches), rich developer images (.NET, Node, Git), and native ext4 Git branch mirror mounts.
+     * In-process harness delegation: `bash` in Crucible, Pi, and ACP harnesses executes inside the sandbox container/WSL, granting autonomous command execution without user prompt fatigue.
      * Central host orchestration: LLM inference, API keys, ACP/Pi lifecycle management, and `mcp_config.json` remain centralized on the host.
-  5. Implement the 3 Specialized Workflow Stages & Bootstrap Prompts:
-     * **`IssueReviewStage`:** System persona for architectural analysis; bootstrap prompt injecting `{{Issue.Title}}`, `{{Issue.Description}}`, repository structure, with strict directive to invoke `AskHumanQuestion` on any ambiguity.
-     * **`ImplementationStage`:** System persona for senior engineer / TDD; bootstrap prompt injecting approved Stage 1 plan, `{{PriorAnswers}}`, affected files; tool loop for coding, building, and running tests.
-     * **`CodeReviewAndFixStage`:** System persona for critical code auditor; bootstrap prompt injecting target `{{BaseBranch}}`, `{{GitDiff}}` changeset; automated gap analysis, regression detection, and direct patch application.
+   5. Implement Specialized Workflow Stages (Agentic & Deterministic) & Bootstrap Prompts:
+      * **Stage-Scoped Tool Visibility:** Enforces strict tool gating per stage (Stage 1: Read-only; Stage 2: Code/Build/Test; Stage 3: Audit/Patch; Discovery: Read-only exploration).
+      * **`IssueReviewStage`:** System persona for architectural analysis; bootstrap prompt injecting `{{Issue.Title}}`, `{{Issue.Description}}`, repository structure, with strict directive to invoke `ask_human_question` on any ambiguity.
+      * **`ImplementationStage`:** System persona for senior engineer / TDD; bootstrap prompt injecting approved Stage 1 plan, `{{PriorAnswers}}`, affected files, and parsed diagnostic findings from prior deterministic stages (`{{PriorStageArtifacts.Diagnostics}}`); tool loop for coding, building, and running tests.
+      * **`CodeReviewAndFixStage`:** System persona for critical code auditor; bootstrap prompt injecting target `{{BaseBranch}}`, noise-filtered `{{GitDiff}}` changeset (`-U2`, lockfile exclusions); automated gap analysis, regression detection, and direct patch application.
+      * **Built-in Deterministic Stages (DeterministicWorkflowStage):**
+        - `DeterministicBuildStage`: Executes `dotnet build` / package build; validates compile cleanliness without consuming GPU tokens.
+        - `DeterministicTestStage`: Executes unit test runner; parses failing test assertions and stack frames into structured diagnostic artifacts.
+        - `DeterministicSastStage`: Executes static code and vulnerability analyzers (Roslyn Analyzers, Semgrep, Trivy) producing finding reports for remediation.
   6. Implement **Model Context Protocol (MCP) Integration:**
-     * Connect to external MCP servers configured in `mcp_config.json` via Microsoft Agent Framework (`Microsoft.Agents.Mcp`).
+     * Define `IMcpClientManager` to decouple MCP lifecycle management from specific underlying client packages.
+     * Connect to external MCP servers configured in `mcp_config.json` via Microsoft Agent Framework (`Microsoft.Agents.Mcp`) or standard MCP JSON-RPC.
      * Dynamically discover tools from database, GitHub, or custom CLI MCP servers and register them into the active agent session.
      * Forward MCP tool definitions to ACP agents for unified multi-harness tooling.
-  7. Implement **Modular Skills System:**
-     * Parser for `.agents/skills/<skill-name>/SKILL.md` (metadata frontmatter + operational markdown instructions).
-     * Provide `ReadSkill(skillName)` tool allowing agents to look up repo-specific guidelines on demand.
-     * Context-aware skill injection into stage prompt templates based on file triggers or profile bindings.
+  7. Implement **Modular Skills System (`Microsoft.Agents.AI.Skills`):**
+     * Adopt standard **[Agent Skills specification](https://agentskills.io/)** using `AgentSkillsProvider` (as an `AIContextProvider`).
+     * Support hierarchical skill resolution via `AggregatingAgentSkillsSource` (global `~/.nightcodeforge/skills/` and repo-level `.nightcodeforge/skills/` or `.agents/skills/`).
+     * Progressive disclosure pattern: advertises skill names and descriptions in the system prompt prefix (~25 tokens/skill); loads full markdown instructions on-demand via `load_skill`, supplementary assets via `read_skill_resource`, and verified automation scripts via `run_skill_script`.
   8. Implement **Repository Guidelines & `AGENTS.md` Loader:**
      * Automatically discover and parse `AGENTS.md`, `.agents/AGENTS.md`, or `CLAUDE.md` from the target workspace.
      * Prepend parsed repository instructions, architectural rules, and build/test commands to stage system prompts across all harnesses (Crucible, Pi, and ACP).
@@ -202,8 +242,13 @@ NightCodeForge/
      * `SessionTranscriptService`: Serializes full turn-by-turn agent sessions into structured Markdown files in `<WorkspaceRoot>/docs/transcripts/YYYY-MM-DD-issue-{id}-{stage}-{status}.md` (thought blocks, tool calls, compiler outputs, Q&A).
      * `TranscriptDiagnosticService`: Evaluates failed or anomalous transcripts via either **Cloud LLMs** (fast, zero local VRAM consumption via OllamaRouter cloud models or external cloud API) or **Local LLMs** (100% private/offline, queued sequentially via `WorkerCount = 1`) to produce actionable remediation advice.
   10. **Interactive Ideation Agent Service (`IIdeationService`):**
-     * Read-only exploration agent that converses with the developer, browses the workspace codebase, and proposes issues with dependencies.
-* **Deliverables:** Harness abstraction layer complete; Crucible, Pi, and ACP adapter functional; MCP, Skills, and AGENTS.md integration verified; execution sandboxing and shared caches operational; session transcripts and hybrid failure diagnostics operational; 3 agent stages and discovery agent verified with mock/local LLMs and step metrics recorded.
+      * Read-only exploration agent that converses with the developer, browses the workspace codebase, and proposes issues with dependencies via `propose_issues`.
+  11. Implement **Local LLM Token Minimization & Context Compaction Engine:**
+      * Static prompt prefix stabilization ensuring 100% byte-identical headers for KV cache hit rate maximization.
+      * Native in-loop context compaction via `ToolResultCompactionStrategy` (`Microsoft.Agents.AI.Compaction`) with `MinimumPreservedGroups = 3` and custom `ToolCallFormatter` to compact older tool outputs into concise stubs.
+      * Bounded command output streaming via `HeadTailBuffer` + compiler diagnostic extraction (extracting only failing `error CS\d+` lines and test assertions).
+      * Synthetic conversation priming: pre-seeds active chat history with simulated prior tool execution pairs (e.g. deterministic test results) to eliminate exploratory agent tool round-trips.
+* **Deliverables:** Harness abstraction layer complete; Canonical tools & LenientToolDispatcher operational; Crucible, Pi, and ACP adapter functional; token minimization & context compaction engine verified; MCP, Skills, and AGENTS.md integration verified; execution sandboxing and shared caches operational; session transcripts and hybrid failure diagnostics operational; 3 agent stages and discovery agent verified with mock/local LLMs and step metrics recorded.
 
 ---
 
@@ -251,7 +296,7 @@ NightCodeForge/
      * User answers question -> Issue A resumes in `llm-urgent` -> proceeds through Stage 2 (Implementation) and Stage 3 (Code Review & Fix).
      * Issue A approved in Review Room -> merges -> Issue B automatically unblocks and enters queue.
   2. Resilience checks:
-     * Unexpected process crash during inference -> verify workspace recovery on next startup.
+      * Abrupt process crash / host reboot simulation (e.g. Windows Update mid-inference): verify stale lock purge, rescue commit, conversation rehydration, and automatic resumption via `llm-urgent`.
      * Command timeout handling (long-running build commands).
      * Malformed JSON or LLM errors handled gracefully without deadlocking the queue.
   3. Documentation updates and quickstart instructions.

@@ -5,6 +5,7 @@
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Architecture Docs](https://img.shields.io/badge/Docs-Architecture-teal.svg)](docs/ARCHITECTURE.md)
+[![Crucible Harness](https://img.shields.io/badge/Docs-Crucible%20Harness-firebrick.svg)](docs/CRUCIBLE.md)
 [![Implementation Plan](https://img.shields.io/badge/Roadmap-Plan-orange.svg)](docs/PLAN.md)
 
 ---
@@ -131,7 +132,8 @@ flowchart TD
 
 ## 📚 Documentation Links
 
-* 📐 **System Architecture:** Detailed design specifications, state transitions, tool interfaces, and security rules in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+* 📐 **Forge System Architecture:** Detailed orchestrator specifications, dev-queue, Git context switching, sandboxing, and data schema in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+* 🔥 **Crucible Harness Specification:** In-process native C# agent harness, canonical tools, lenient dispatcher, and token minimization engine in [docs/CRUCIBLE.md](docs/CRUCIBLE.md).
 * 🗺️ **Implementation Roadmap:** Phased breakdown from solution scaffolding to full end-to-end testing in [docs/PLAN.md](docs/PLAN.md).
 
 ---

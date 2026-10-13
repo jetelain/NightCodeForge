@@ -17,7 +17,7 @@ Standard autonomous coding agents operate in interactive synchronous loops:
 
 ### 1.3 The NightCodeForge Solution: Context-Switching Dev-Queue
 NightCodeForge decouples task execution from human availability through **asynchronous checkpointing and workspace context switching**:
-* When an agent needs human guidance, it invokes a specialized interruption tool (`AskHumanQuestion`).
+* When an agent needs human guidance, it invokes a specialized interruption tool (`ask_human_question`).
 * The orchestrator intercepts this call, captures the agent's memory/chat session into persistent storage, performs a Git WIP commit on the issue branch, and **terminates the worker task cleanly**.
 * The single-worker GPU queue immediately picks up the next task in line.
 * When the developer answers the pending question via the web interface, the issue transitions back to high-priority readiness. The orchestrator checks out the branch, restores the memory context with the human's answer, and resumes reasoning without loss of continuity.
@@ -99,10 +99,11 @@ flowchart LR
     S3 --> Review(["Human Review Room\n(Final Diff Approval)"])
     Review --> Completed(["Completed & Merged"])
 
-    S1 -.->|AskHumanQuestion| Blocked["Blocked (Waiting for Human)"]
-    S2 -.->|AskHumanQuestion| Blocked
-    S3 -.->|AskHumanQuestion| Blocked
-    Blocked -.->|User Answers| UrgentQueue(["High-Priority Resume"])
+    Review -.->|Request Changes (with feedback)| UrgentQueue(["High-Priority Resume"])
+    S1 -.->|ask_human_question| Blocked["Blocked (Waiting for Human)"]
+    S2 -.->|ask_human_question| Blocked
+    S3 -.->|ask_human_question| Blocked
+    Blocked -.->|User Answers| UrgentQueue
     UrgentQueue --> S1
     UrgentQueue --> S2
     UrgentQueue --> S3
@@ -156,20 +157,28 @@ public enum ThinkingEffort
 ```
 
 ### 3.3 Extensibility & Pipeline Abstraction
-The workflow pipeline is defined via modular contracts. Each stage specifies its default `AgentProfileId` while allowing per-issue or per-workspace overrides:
+The workflow pipeline is defined via modular contracts. Stages can be **Agentic** (driven by LLMs with exclusive GPU scheduling) or **Deterministic** (driven by native commands, e.g., builds, tests, SAST, running on CPU with zero token usage):
 
 ```csharp
+public enum WorkflowStageKind
+{
+    Agentic = 0,       // AI agent driven by LLM, consumes GPU worker, bound to AgentProfile
+    Deterministic = 1  // Native command execution (build, test, SAST, linter), runs on CPU/sandbox, 0 GPU tokens
+}
+
 public interface IWorkflowStage
 {
     string StageId { get; }
     string DisplayName { get; }
     int Order { get; }
-    string DefaultAgentProfileId { get; }
+    WorkflowStageKind StageKind { get; }
+    string? DefaultAgentProfileId { get; } // Null for deterministic stages
     
     Task<StageExecutionResult> ExecuteAsync(
         StageExecutionContext context,
-        IAgentHarness harness,
-        AgentProfile profile,
+        IExecutionEnvironment executionEnvironment,
+        IAgentHarness? harness,
+        AgentProfile? profile,
         Func<AgentTelemetryEvent, Task> onTelemetry,
         CancellationToken cancellationToken);
 }
@@ -199,12 +208,12 @@ public class StagePromptTemplate
    - **System Persona:** Architectural Analyst & Requirements Investigator.
    - **Mission:** Scrutinize the codebase against the issue description. Proactively uncover ambiguities, implicit assumptions, and architectural conflicts *before* any implementation begins.
    - **Injected Context:** `{{Issue.Title}}`, `{{Issue.Description}}`, repository structure, guidelines.
-   - **Behavioral Directive:** "If any requirement or design decision is ambiguous or has multiple valid alternatives, invoke `AskHumanQuestion` immediately to clarify. Do not guess."
+   - **Behavioral Directive:** "If any requirement or design decision is ambiguous or has multiple valid alternatives, invoke `ask_human_question` immediately to clarify. Do not guess."
 2. **Stage 2 (Implementation):**
    - **System Persona:** Senior Software Engineer & TDD Practitioner.
    - **Mission:** Implement clean, robust code according to the approved plan. Run builds (`dotnet build`), run tests, and fix errors incrementally.
    - **Injected Context:** Approved technical plan from Stage 1, all resolved Q&A pairs from `{{PriorAnswers}}`, list of affected files.
-   - **Behavioral Directive:** "Write working code and verify with build tools. If unexpected blockers or breaking changes arise, call `AskHumanQuestion`."
+   - **Behavioral Directive:** "Write working code and verify with build tools. If unexpected blockers or breaking changes arise, call `ask_human_question`."
 3. **Stage 3 (Code Review and Fixes):**
    - **System Persona:** Critical Code Auditor & QA Specialist.
    - **Mission:** Review the full changeset against the base branch. Identify regressions, edge cases, missing unit tests, or lint violations, and make targeted fixes.
@@ -212,12 +221,90 @@ public class StagePromptTemplate
    - **Behavioral Directive:** "Inspect the diff line-by-line. If you find bugs or gaps, use file editing tools to fix them directly. When confident, summarize findings."
 
 ### 3.5 Stage Interruption & Universal Context Switching
-At **any point** in **any stage**, an agent may invoke the `AskHumanQuestion` tool. When this occurs:
+At **any point** in **any stage**, an agent may invoke the `ask_human_question` tool. When this occurs:
 1. The stage returns `StageExecutionResult.WaitingForHuman(question)`.
 2. The orchestrator records the question in the database and updates the issue state to `BlockedQuestion(stageId)`.
 3. The orchestrator triggers a native Git WIP commit on `feature/issue-{id}`.
 4. The Hangfire job completes, releasing the single GPU worker.
 5. When the user submits the answer, the issue transitions back to `Pending` and is enqueued into `llm-urgent`. The active stage is resumed with the previous conversation memory and the newly supplied human answer.
+
+### 3.6 Review Room Iteration & Change Requests
+If the developer inspects the diff in the Review Room and identifies issues or wants adjustments before merging:
+1. The developer clicks **"Request Changes"** and provides revision notes / feedback.
+2. The orchestrator records the reviewer feedback.
+3. The issue transitions from `Review` back to **Stage 2 (`ImplementationStage`)**, with the reviewer feedback injected into the prompt context (`{{PriorAnswers}}` / `{{ReviewerFeedback}}`).
+4. The task is enqueued with highest priority into `llm-urgent` so the Implementation Agent directly addresses the feedback on the existing feature branch.
+
+### 3.7 Explicit Stage Boundary Handover Protocol (Zero-Memory Clean Handoff)
+Carrying forward raw multi-turn conversation histories across stage boundaries causes massive token bloat, increases prompt evaluation latency on local LLMs, and leads to attention drift. NightCodeForge implements an **explicit zero-memory clean handoff**:
+
+```mermaid
+flowchart TD
+    subgraph S1 ["Stage 1: Issue Review"]
+        Turn1["Turn 1..N: Codebase exploration & Q&A"]
+        S1Artifact["📄 Output Artifact:\nApproved Technical Plan & Scope\n(docs/issues/YYYY-MM-DD-slug.md)"]
+        Turn1 --> S1Artifact
+    end
+
+    subgraph Archive ["Transcript Storage"]
+        DiskLog1["💾 docs/transcripts/\nS1 Full Turn Transcript"]
+    end
+
+    subgraph S2 ["Stage 2: Implementation (Clean Reset at Turn 0)"]
+        S2Prompt["Fresh Prompt:\n• Approved Plan from S1 (~350 tok)\n• Resolved Human Q&A (~150 tok)\n• Stage 2 System Persona"]
+        Turn2["Turn 1..M: Code, Build & Test Loops"]
+        S2Commit["Git Commit on feature/issue-{id}"]
+        S2Prompt --> Turn2 --> S2Commit
+    end
+
+    subgraph S3 ["Stage 3: Review & Fixes (Clean Reset at Turn 0)"]
+        S3Prompt["Fresh Prompt:\n• Target Base Branch\n• Clean Git Diff (~500 tok)\n• Stage 3 System Persona"]
+        Turn3["Turn 1..K: Lint, Regression Audit, Direct Patches"]
+        S3Prompt --> Turn3
+    end
+
+    S1Artifact --> S2Prompt
+    Turn1 -.->|Archive Full History| DiskLog1
+    S2Commit --> S3Prompt
+```
+
+1. **Stage 1 $\rightarrow$ Stage 2 Handover:**
+   - When `IssueReviewStage` finishes, its complete turn-by-turn chat history (10–20 turns) is archived to disk under `docs/transcripts/`.
+   - `ImplementationStage` starts at **Turn 0 with an empty chat history**, receiving only the approved Technical Plan & Scope markdown artifact and the list of resolved Q&A pairs from `docs/issues/`.
+2. **Stage 2 $\rightarrow$ Stage 3 Handover:**
+   - When `ImplementationStage` completes, all internal build attempts, compile errors, and test iterations are archived to disk.
+   - `CodeReviewAndFixStage` starts at **Turn 0 with an empty chat history**, receiving only the base branch name, the clean `git diff` generated from the feature branch, and coding guidelines.
+3. **Impact:** Eliminates 75%–85% of redundant prompt tokens, maintains high local LLM attention precision, and prevents cross-stage context pollution.
+
+### 3.8 Deterministic Stages: Quality Gates & Agent Input Feeders
+
+Workflows in NightCodeForge are not limited to purely agentic reasoning loops. A robust software engineering pipeline often requires **deterministic steps** (e.g., compilation, unit test suites, Static Application Security Testing [SAST], formatters, or linters) that execute predictable shell commands without AI intervention.
+
+#### Architectural Advantages:
+1. **Zero GPU & Token Overhead:** Deterministic stages execute directly in the workspace sandbox (`IExecutionEnvironment`), running on the host CPU or inside the sandbox container. They consume **0 LLM tokens** and **do not occupy the exclusive GPU inference worker** (`WorkerCount = 1`).
+2. **Deterministic Quality Gates & Outcome-Based Routing:**
+   * **Forward Routing (Pass):** If builds, unit tests, and SAST scans pass cleanly, the deterministic stage packages a verified status (`ValidationStatus = Success`) and advances to the next stage (e.g. `CodeReviewAndFixStage`).
+   * **Backward Feedback Loop (Fail):** If compilation fails or tests break, the deterministic step routes backward to the implementation agent (with a configurable loop counter, e.g. max 3 iterations, to prevent infinite loops) to request an immediate fix. If the loop counter expires, it pauses and alerts the human (`WaitingForHuman`).
+3. **Structured Diagnostics Feeder (Smart Handover & Synthetic Priming):**
+   * When configured as an **Input Feeder**, failing command outputs are parsed into structured artifacts rather than raw console noise.
+   * *Example (Deterministic Compiler/Test Stage):* The stage extracts failing compiler diagnostics (`error CS\d+`) and failing test assertion stacks, saving them into `StageHandoverArtifacts.Diagnostics`.
+   * **Crucible Synthetic Conversation Priming:** To prevent local LLMs from redundantly running `bash("dotnet build")` or `bash("dotnet test")` at the start of a turn, Crucible seeds the agent's chat history with a synthetic tool call/result pair mimicking that the agent already ran the test/build and received the exact deterministic results. The agent immediately moves to editing code.
+4. **Built-in Deterministic Stage Implementations:**
+   * **`DeterministicBuildStage`:** Executes project build (`dotnet build`, `npm run build`, `mvn compile`). Validates compile cleanliness.
+   * **`DeterministicTestStage`:** Executes test runners (`dotnet test`, `pytest`, `jest`). Parses failing assertions and stack traces.
+   * **`DeterministicSastStage`:** Runs security and static code analyzers (e.g. Roslyn Analyzers, Semgrep, Trivy, SonarScanner). Produces structured vulnerability/finding reports for automated remediation agents.
+   * **`DeterministicFormatStage`:** Runs code formatters (e.g. `dotnet format`, `prettier --check`).
+
+#### Pipeline Composition with Deterministic Steps & Feedback Loops:
+```mermaid
+flowchart LR
+    S1["1. Issue Review\n(Agentic LLM)"] --> S2["2. Implementation\n(Agentic LLM)"]
+    S2 --> S3["3. Deterministic Build & Test\n(CPU Native / SAST Gate)"]
+    S3 -->|Pass: Success Input| S4["4. Code Review & Fix\n(Agentic LLM)"]
+    S3 -->|Fail: Parse Diagnostics & Loop Back| S2Fix["2b. Fix Errors\n(Agentic LLM with Synthetic Priming)"]
+    S2Fix --> S3
+    S3 -.->|Exceeds Max Retries (3)| Blocked["Blocked: Human Q&A"]
+```
 
 ---
 
@@ -254,12 +341,12 @@ To provide optimal ergonomics for AI agents, developers, and Git workflows, acti
 flowchart LR
     DB[("Database\n(Single Source of Truth)")] <-->|"Real-Time Bidirectional Sync"| SyncEngine["IssueMarkdownSyncService"]
     SyncEngine <-->|"docs/issues/ISSUE-00123-title.md"| Disk["Workspace File System\n(docs/issues/)"]
-    Disk -->|"Native ReadFile tool"| Agent["Active AI Agent"]
+    Disk -->|"Native read tool"| Agent["Active AI Agent"]
     Disk -->|"Direct IDE editing / Git commit"| Developer["Developer / Git Repo"]
 ```
 
 ### 5.1 Why Markdown Files for Agents?
-1. **Native Agent Accessibility:** Agents inside the workspace can read issue specifications, requirements, and previous Q&A directly using basic file tools (`ReadFile`), without needing custom database query APIs or SDK dependencies.
+1. **Native Agent Accessibility:** Agents inside the workspace can read issue specifications, requirements, and previous Q&A directly using basic file tools (`read`), without needing custom database query APIs or SDK dependencies.
 2. **Developer & IDE Transparency:** Developers can review, search, and edit issues directly in VS Code, Visual Studio, or Obsidian without leaving their editor.
 3. **Version Control Integration:** Active issue specifications live alongside the code on the issue branch, preserving the exact requirements snapshot in Git history.
 
@@ -271,6 +358,7 @@ To allow developers and agents to quickly sort issues chronologically in their f
 
 * The database `id` is stored exclusively **inside the frontmatter**, not in the filename.
 * Dropping a new file never requires a file rename when the system assigns an ID.
+* **Slug Collision Resolution:** If multiple issues created on the same date produce identical slugs, the sync service appends an incrementing numeric suffix (e.g. `YYYY-MM-DD-<slug>-2.md`, `YYYY-MM-DD-<slug>-3.md`).
 
 ```markdown
 ---
@@ -334,6 +422,10 @@ flowchart TD
      3. The sync service injects `id: 124` and `created_at` directly into the file's frontmatter **in-place**, without renaming the file.
 4. **Resolution Archival / Cleanup:**
    * When an issue reaches `Completed` (or `Cancelled`), the markdown file is removed from `docs/issues/` (or archived to `docs/issues/archive/`), ensuring that `docs/issues/` contains only active and pending work.
+5. **FileSystemWatcher Debouncing & Echo Loop Prevention:**
+   * Operating systems and IDEs emit multiple rapid events per save (e.g. `Created` followed by multiple `Changed` events within 50ms) and may hold temporary locks during atomic saves.
+   * `IssueMarkdownSyncService` applies a **300ms debounce window** to coalesce rapid I/O bursts.
+   * To prevent infinite echo loops (where the system writing back protected frontmatter fields triggers the watcher to fire again), the service maintains an in-memory **write-suppression tracker**: whenever the orchestrator writes a file, it registers the computed hash and ignores the subsequent event.
 
 ---
 
@@ -363,8 +455,8 @@ sequenceDiagram
 ```
 
 ### 6.1 Discovery Agent Capabilities
-* **Read-Only Access:** Equipped with search, file-reading, and symbol exploration tools (`FindFiles`, `ReadFile`, `GrepSearch`, `ListTree`). Cannot modify working tree files.
-* **Issue Extraction Tool:** Agent has a function tool `ProposeIssues(List<IssueProposalDto>)` allowing it to output structured titles, acceptance criteria, affected components, and recommended dependencies directly into the UI for developer approval.
+* **Read-Only Access:** Equipped with search, file-reading, and symbol exploration tools (`bash` with ls/rg, `read`, `get_file_outline`). Cannot modify working tree files.
+* **Issue Extraction Tool:** Agent has a function tool `propose_issues(List<IssueProposalDto>)` allowing it to output structured titles, acceptance criteria, affected components, and recommended dependencies directly into the UI for developer approval.
 
 ---
 
@@ -383,8 +475,8 @@ The background job system uses **Hangfire** backed by persistent storage. Hangfi
 > The `llm-urgent` and `llm-inference` queues share a dedicated Hangfire `BackgroundJobServer` configured with `WorkerCount = 1` and ordered queue processing:
 > `Queues = new[] { "llm-urgent", "llm-inference" }`.
 > This guarantees that:
-> 1. At most **one** AI task runs on the GPU at any millisecond.
-> 2. An answered issue in `llm-urgent` will preemptively be picked up before any new task in `llm-inference`.
+> 1. At most **one** AI task runs on the GPU at any millisecond, strictly guarding VRAM against out-of-memory crashes.
+> 2. Resumed issues in `llm-urgent` receive **priority pick-up**: as soon as the single worker completes its active turn/task, jobs in `llm-urgent` are dequeued before standard items in `llm-inference` (non-preemptive priority dispatch without concurrent VRAM oversubscription).
 
 ---
 
@@ -408,6 +500,7 @@ When running on Windows hosts with containerized or WSL2 execution:
 1. **The 9p / DrvFs Bottleneck:** Accessing Windows NTFS files from WSL2 via `/mnt/c/...` uses the Plan 9 (9p) network filesystem. For recursive Git scans, `dotnet build`, `node_modules`, and code searches, 9p is **10x to 50x slower** than native Linux ext4.
 2. **Local Git Mirror Architecture:**
    * The developer keeps their primary repo on Windows NTFS (e.g., `C:\Users\Julien\source\repos\MyProject`).
+   * The host repository is configured with `git config receive.denyCurrentBranch updateInstead` to ensure pushes to a branch that happens to be checked out in the host IDE succeed cleanly without refusal.
    * NightCodeForge maintains an isolated clone on the WSL2/Linux ext4 filesystem (`/var/ncf/workspaces/{workspaceId}/repo`).
    * A local Git remote is registered linking the ext4 mirror back to the host repository:
      ```bash
@@ -506,19 +599,23 @@ flowchart LR
 
 #### Implementation A (First-Class Native): Crucible Harness (Microsoft Agent Framework & `Microsoft.Extensions.AI`)
 * **Type:** In-process C# Agent Engine.
+* **Role:** Primary native execution harness for NightCodeForge.
+* **Dedicated Specification:** For the complete, dedicated architectural specification, tool implementation details, resilient forgiving dispatcher, and token minimization engine, see **[CRUCIBLE.md](CRUCIBLE.md)**.
 * **Compatibility:** Plugs directly into OllamaRouter, vanilla Ollama, LM Studio, vLLM, or any OpenAI-compatible server.
 * **Profile Integration:** Adapts execution parameters based on the stage's `AgentProfile` (e.g. mapping `ThinkingEffort` to OpenAI `reasoning_effort` or DeepSeek/Ollama thinking budget tokens).
-* **Auto-Configuration:** Pre-configured out of the box with system prompts, function tools (`ReadFile`, `WriteFile`, `ListDirectory`, `RunCommand`), and memory serialization.
-* **Interruption:** Tool `AskHumanQuestion` catches the call, serializes the active `ChatHistory` to JSON, captures token counters from `AdditionalProperties["usage"]`, and flags `AgentRunStatus.WaitingForHuman`.
+* **Auto-Configuration:** Pre-configured out of the box with system prompts, canonical function tools (`read`, `edit`, `write`, `bash`, `get_file_outline`, `web_search`, `ask_human_question`, `propose_issues`), and memory serialization.
+* **Interruption:** Tool `ask_human_question` catches the call, serializes the active `ChatHistory` to JSON, captures token counters from `AdditionalProperties["usage"]`, and flags `AgentRunStatus.WaitingForHuman`.
 
 #### Implementation B (First-Class Fallback): Pi via JSON-RPC
-* **Type:** External sub-process runner communicating via JSON-RPC over `stdio` or a local socket.
+* **Type:** External sub-process runner communicating via JSON-RPC over `stdio` (JSON Lines protocol).
+* **Dedicated Specification:** For the complete headless JSONL RPC protocol specification, event streaming, multi-disjoint edit tools, and interruption mapping, see **[PI.md](PI.md)**.
 * **Profile Integration:** Passes `AgentProfile.ModelName`, custom flags, and `HarnessConfigurationJson` to the Pi RPC daemon.
-* **Auto-Configuration:** Managed process lifecycle with automatic start/stop and session state snapshotting.
-* **Interruption:** Listens for `ask_user` notification/request events over JSON-RPC. Upon detection, requests session suspension, retrieves the serialized session snapshot ID, calculates duration/tokens, and yields `WaitingForHuman`.
+* **Auto-Configuration:** Managed process lifecycle (`pi --mode rpc`) with automatic start/stop and session state snapshotting.
+* **Interruption:** Listens for `extension_ui_request` events over JSONL stdout. Upon detection, requests session suspension, retrieves the serialized session snapshot ID, calculates duration/tokens, and yields `WaitingForHuman`.
 
 #### Implementation C (Extensible Open Standard): Agent Client Protocol (ACP) Harness
 * **Type:** Universal protocol adapter supporting the **[Agent Client Protocol (ACP)](https://agentclientprotocol.com/)** specification.
+* **Dedicated Specification:** For the complete protocol specification, v1 vs. v2 comparison, modernized `acp-csharp` SDK architecture, and sandboxed client execution, see **[ACP.md](ACP.md)**.
 * **Profile Integration:** Configures the spawned ACP agent binary or remote endpoint with the profile's model, thinking budget, and environment variables defined in `HarnessConfigurationJson`.
 * **Value Proposition:** ACP is an open, standardized protocol (backed by Zed, JetBrains, and the open-source community) designed specifically for code editors and orchestrators to communicate with external AI coding agents via JSON-RPC over `stdio`, WebSocket, or HTTP.
 * **How NightCodeForge Acts as an ACP Client:**
@@ -526,6 +623,15 @@ flowchart LR
   2. **Workspace & Tool Delegation:** NightCodeForge exposes workspace tools (file system access, terminal execution) to the ACP agent via standardized MCP/ACP tool specifications.
   3. **Interruption & Human Input Mapping:** When an ACP agent sends a prompt/permission request requiring user input, NightCodeForge intercepts the request, saves the ACP session token/history into the checkpoint record, performs the Git WIP commit, and suspends the worker.
   4. **Universal Compatibility:** Allows developers to use existing or future ACP-compliant agents (e.g. from the ACP Registry, Zed AI agents, JetBrains AI agents) without modifying NightCodeForge core code.
+
+### 9.4 Crucible Harness Specification & Token Minimization
+For the complete technical specification of the native Crucible harness—including:
+* **Canonical Tool Suite (Pi-Harmonized):** (`read`, `edit`, `write`, `bash`, `get_file_outline`, `web_search`, `ask_human_question`, `propose_issues` - with `list_dir` / `grep_search` mapped to `bash`)
+* **The "Forgiving" Tool Dispatcher:** Tool name aliasing, parameter normalization, markdown code fence stripping, and indentation tolerance
+* **Stage-Scoped Tool Visibility Matrix:** Gating tool schemas per stage to reduce static prompt overhead
+* **Local LLM Token Minimization:** Prompt prefix stabilization for KV cache reuse, ephemeral tool output eviction, compiler error extraction, and noise-filtered git diffs
+
+Please refer directly to the dedicated specification document: **[CRUCIBLE.md](CRUCIBLE.md)**.
 
 ---
 
@@ -711,14 +817,14 @@ created_at: 2026-10-12T22:25:00Z
 **Model Thoughts:**
 > Need to check if `Microsoft.AspNetCore.Authentication.OpenIdConnect` is installed. I will inspect `NightCodeForge.Web.csproj`.
 
-**Tool Invocation:** `ReadFile(path="src/NightCodeForge.Web/NightCodeForge.Web.csproj")`
+**Tool Invocation:** `read(path="src/NightCodeForge.Web/NightCodeForge.Web.csproj")`
 **Tool Output:** (Csproj XML content...)
 
 ### Turn 2
 **Model Thoughts:**
-> Package is missing. I will add the package using `RunCommand`.
+> Package is missing. I will add the package using `bash`.
 
-**Tool Invocation:** `RunCommand(command="dotnet add package Microsoft.AspNetCore.Authentication.OpenIdConnect")`
+**Tool Invocation:** `bash(command="dotnet add package Microsoft.AspNetCore.Authentication.OpenIdConnect")`
 **Tool Output:** `error: NU1102: Unable to find package with version...`
 
 ### Turn 3 (Failure Event)
@@ -776,6 +882,9 @@ erDiagram
         string Name
         string RepositoryPath
         string DefaultBaseBranch
+        string ExecutionMode
+        string ContainerImage
+        string Ext4MirrorPath
         datetime CreatedAt
     }
 
@@ -839,7 +948,10 @@ erDiagram
         int Id PK
         int IssueId FK
         string StageId
+        string StageKind
+        string AgentProfileId
         string HarnessId
+        string ModelName
         datetime StartedAt
         datetime CompletedAt
         int DurationMs
@@ -884,7 +996,7 @@ erDiagram
    - Rich answer form supporting freeform text, code snippets, or multiple-choice options.
 5. **Review Room:**
    - Visual side-by-side / unified `git diff` against base branch.
-   - One-click "Approve & Merge" (squashing WIP commits) or "Request Changes".
+   - Action buttons: "Approve & Merge" (squashes WIP commits into base branch and triggers cascade unblocking) or "Request Changes" (opens revision notes input modal and routes issue back to Stage 2 `ImplementationStage` with highest priority via `llm-urgent`).
 6. **Workspace, Profiles & MCP Settings:**
    - Manage target repositories, configure MCP servers (`mcp_config.json`), and tune Agent Profiles per stage.
 7. **Session Transcripts & Cloud AI Diagnostics:**
@@ -987,8 +1099,8 @@ flowchart LR
     subgraph Host ["NightCodeForge Host Process (C#)"]
         CentralConfig["Central Config\n(mcp_config.json, API Keys, Prompts)"]
         Harness["IAgentHarness\n(Crucible / ACP Client / Pi Host)"]
-        FileTools["File Tools\n(ReadFile, WriteFile, Grep)"]
-        CmdTool["RunCommand Tool"]
+        FileTools["File Tools\n(read, edit, write)"]
+        CmdTool["bash Tool"]
     end
 
     subgraph Sandbox ["Container Sandbox"]
@@ -1006,11 +1118,11 @@ flowchart LR
 #### Why In-Process Orchestration is Superior:
 1. **Network Simplicity for Inference:** The LLM client runs directly on the host, communicating with OllamaRouter on `localhost:11434` or cloud providers without Docker-to-Host bridge networking issues.
 2. **Central Configuration for Pi & ACP:**
-   - **Pi JSON-RPC:** NightCodeForge spawns and monitors the Pi agent runner on the host, passing tool implementations that forward `RunCommand` into the container sandbox.
+   - **Pi JSON-RPC:** NightCodeForge spawns and monitors the Pi agent runner on the host, passing tool implementations that forward `bash` into the container sandbox.
    - **Agent Client Protocol (ACP):** NightCodeForge acts as the ACP client. When an ACP agent requests a terminal command execution, NightCodeForge routes the command into the container sandbox.
    - `mcp_config.json`, API credentials, and skills remain centralized on the host.
 3. **Optimized File Operations:**
-   - Single-file reads and writes (`ReadFile`, `WriteFile`) access the ext4 mirror directly via `\\wsl.localhost\Ubuntu\var\ncf\...` or fast exec streaming.
+   - Single-file reads and writes (`read`, `edit`, `write`) access the ext4 mirror directly via `\\wsl.localhost\Ubuntu\var\ncf\...` or fast exec streaming.
    - Heavy recursive operations (compilation, test runners, git status) run completely inside the container.
 
 ### 14.5 Host Guardrails & Command Isolation
@@ -1022,6 +1134,51 @@ flowchart LR
 * Every LLM step and Git command is bound to a strict timeout policy.
 * Hangfire automatic retry is disabled for LLM inference tasks (`[AutomaticRetry(Attempts = 0)]`) to prevent duplicate code edits on failure; instead, failures transition cleanly to `Failed` state.
 
-### 14.7 Working Tree Recovery
-* If a worker is terminated unexpectedly (e.g. server reboot or process kill), the startup health check scans for uncommitted or untracked changes in the active workspace mirror, creates a rescue WIP commit, and recovers the state machine cleanly.
+### 14.7 Graceful Restart & Crash Recovery System (`IStartupRecoveryService`)
+
+In overnight autonomous operation, unexpected host restarts are inevitable—most commonly triggered by **Windows Update reboot cycles**, power outages, or kernel driver updates. 
+
+NightCodeForge implements an automated **Startup Reconciliation Protocol** executed during host boot before the Hangfire worker begins polling for jobs:
+
+```mermaid
+flowchart TD
+    Boot["Host Application Boot (Program.cs)"] --> RunRecovery["IStartupRecoveryService.ReconcileWorkspacesAsync()"]
+    
+    subgraph Sanitation ["1. Git & Lock Sanitation"]
+        CleanLocks["Detect & Purge Stale Lock Files\n(.git/index.lock, .git/HEAD.lock, .git/refs/...)"]
+        CheckDirty{"Uncommitted / Untracked\nFiles on Disk?"}
+        RescueCommit["Create Automated Rescue Commit\n'WIP-RECOVERY: [Crash Recovery] Preserving workspace state'"]
+    end
+
+    subgraph StateReconciliation ["2. State Machine Reconciliation"]
+        FindRunning["Query DB for Issues in 'Running' Status"]
+        CheckStage{"Interrupted Stage Type?"}
+        AgenticStage["Agentic Stage:\n- Restore last turn snapshot from STAGE_CHECKPOINT\n- Inject '[System Notice: Host restarted unexpectedly]'"]
+        DeterministicStage["Deterministic Stage:\n- Reset stage execution metrics\n- Mark ready for fresh execution"]
+    end
+
+    subgraph Resumption ["3. Urgent Re-Enqueueing"]
+        EnqueueUrgent["Transition Issue to 'Pending'\nEnqueue to 'llm-urgent' queue"]
+        AuditLog["Log Recovery in EXECUTION_LOG\nAppend entry to docs/transcripts/"]
+        StartWorker["Start Hangfire Background Queue\n(Immediate pickup of recovered task)"]
+    end
+
+    RunRecovery --> CleanLocks
+    CleanLocks --> CheckDirty
+    CheckDirty -->|Yes| RescueCommit --> FindRunning
+    CheckDirty -->|Clean| FindRunning
+    FindRunning --> CheckStage
+    CheckStage -->|Agentic| AgenticStage --> EnqueueUrgent
+    CheckStage -->|Deterministic| DeterministicStage --> EnqueueUrgent
+    EnqueueUrgent --> AuditLog --> StartWorker
+```
+
+#### Detailed Recovery Procedures:
+1. **Stale Lock Cleanup:** If the OS reboots during a Git command, dangling lock files (`.git/index.lock`, `.git/refs/heads/*.lock`) block all subsequent Git operations. The recovery service safely purges stale lock files before attempting workspace commands.
+2. **Uncommitted Working Tree Rescue:** Any edits flushed to disk prior to the reboot that were not yet wrapped in a Git commit are safeguarded via an automated rescue commit (`WIP-RECOVERY: Preserving uncommitted workspace changes`). This guarantees zero developer code loss.
+3. **Session Rehydration:**
+   * For **Agentic Stages**, Crucible rehydrates the serialized conversation memory up to the last successful turn from `STAGE_CHECKPOINT.SerializedMemory`, appending a system notice informing the model that the environment was restarted and workspace files were restored.
+   * For **Deterministic Stages** (e.g. interrupted midway through `dotnet test`), the stage is reset to run freshly from the beginning.
+4. **Immediate Priority Re-Enqueueing (`llm-urgent`):** The recovered issue is placed directly at the head of `llm-urgent`. When Hangfire initializes (`WorkerCount = 1`), the single GPU worker immediately resumes the interrupted overnight task before touching any other backlog items.
+5. **Auditing & Notification:** The recovery event is permanently recorded in `EXECUTION_LOG`, noted in the issue's session transcript under `docs/transcripts/`, and broadcasted via SignalR to the web UI.
 
