@@ -448,6 +448,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
         stopwatch.Stop();
         var lastAssistantMessage = chatHistory.LastOrDefault(m => m.Role == ChatRole.Assistant)?.Text;
 
+        if (canonicalTools.PendingProposals.Count > 0 && context.PipelineContext != null)
+        {
+            var existingProposals = context.PipelineContext.DataBag.Get<List<IssueProposal>>("PendingProposals") ?? new List<IssueProposal>();
+            existingProposals.AddRange(canonicalTools.PendingProposals);
+            context.PipelineContext.DataBag.Set("PendingProposals", existingProposals);
+        }
+
         await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageCompleted, lastAssistantMessage ?? "Stage finished", cancellationToken);
 
         await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);

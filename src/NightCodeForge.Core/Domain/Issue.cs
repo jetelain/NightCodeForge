@@ -31,3 +31,14 @@ public class Issue
     public ICollection<StageExecutionRecord> ExecutionRecords { get; set; } = new List<StageExecutionRecord>();
     public ICollection<ExecutionLog> ExecutionLogs { get; set; } = new List<ExecutionLog>();
 }
+
+/// <summary>
+/// Structured backlog proposal emitted by triage or discovery agents via propose_issues.
+/// </summary>
+public record IssueProposal(
+    string Title,
+    string Description,
+    string? Type = "feature",
+    IReadOnlyList<string>? AffectedFiles = null,
+    IReadOnlyList<string>? AcceptanceCriteria = null);
+

@@ -311,4 +311,43 @@ public class IssueOrchestratorTests
         Assert.Equal(1550, records[0].TotalTokens);
         Assert.Equal(StageExecutionStatus.Completed, records[0].Status);
     }
+
+    [Fact]
+    public async Task ProcessIssueAsync_WhenPendingProposalsPresent_PersistsSuggestedIssues()
+    {
+        var issue = await _issueRepo.CreateAsync(new Issue
+        {
+            Id = 80,
+            WorkspaceId = 1,
+            Status = IssueOverallStatus.Open,
+            CurrentStageId = "triage-stage"
+        });
+        _depStore.AddIssue(80, 1, IssueOverallStatus.Open);
+
+        var stage = new TestWorkflowStage("triage-stage")
+        {
+            Handler = (ctx, ct) =>
+            {
+                ctx.DataBag.Set("PendingProposals", new List<IssueProposal>
+                {
+                    new IssueProposal("Fix Memory Leak", "Found memory leak in parser", "bug")
+                });
+                return Task.FromResult(StageExecutionResult.Success());
+            }
+        };
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
+
+        var orchestrator = new IssueOrchestrator(
+            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+
+        await orchestrator.ProcessIssueAsync(issue.Id);
+
+        var workspaceIssues = await _issueRepo.GetByWorkspaceIdAsync(_workspace.Id);
+        var proposal = workspaceIssues.FirstOrDefault(i => i.Title == "Fix Memory Leak");
+        Assert.NotNull(proposal);
+        Assert.Equal(IssueOverallStatus.Suggested, proposal.Status);
+        Assert.Equal("Found memory leak in parser", proposal.Description);
+        Assert.Equal(1, proposal.Priority);
+    }
 }

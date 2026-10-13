@@ -1,3 +1,4 @@
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow.Stages;
 
 namespace NightCodeForge.Core.Workflow;
@@ -20,16 +21,27 @@ public static class Default3AgentPipeline
         ImplementationStage? implStage = null,
         DeterministicPostImplementationStage? postImplStage = null,
         CodeReviewAndFixStage? fixStage = null,
-        DeterministicPostReviewStage? postReviewStage = null)
+        DeterministicPostReviewStage? postReviewStage = null,
+        IExecutionEnvironmentProvider? envProvider = null,
+        IExecutionEnvironment? executionEnv = null,
+        IOllamaModelPreloadService? preloadService = null)
     {
         return new WorkflowPipeline(new IWorkflowStage[]
         {
             reviewStage ?? new IssueReviewStage(),
-            preImplStage ?? new DeterministicPreImplementationStage(),
+            preImplStage ?? new DeterministicPreImplementationStage(
+                envProvider: envProvider,
+                executionEnv: executionEnv,
+                preloadService: preloadService),
             implStage ?? new ImplementationStage(),
-            postImplStage ?? new DeterministicPostImplementationStage(),
+            postImplStage ?? new DeterministicPostImplementationStage(
+                envProvider: envProvider,
+                executionEnv: executionEnv),
             fixStage ?? new CodeReviewAndFixStage(),
-            postReviewStage ?? new DeterministicPostReviewStage()
+            postReviewStage ?? new DeterministicPostReviewStage(
+                envProvider: envProvider,
+                executionEnv: executionEnv,
+                preloadService: preloadService)
         });
     }
 }

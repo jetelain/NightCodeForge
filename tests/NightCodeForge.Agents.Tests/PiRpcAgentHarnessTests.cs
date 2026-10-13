@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.PiRpc;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
 
 namespace NightCodeForge.Agents.Tests;
@@ -140,5 +141,68 @@ public class PiRpcAgentHarnessTests
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         var sentCommands = Encoding.UTF8.GetString(outStream.ToArray());
         Assert.Contains("[Human Answer]: Use SQLite for tests", sentCommands);
+    }
+
+    [Fact]
+    public async Task RunSessionStreamAsync_ResolvesUnixWorkspacePath_WithWorkspacePathResolver()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "pirpc_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var pathResolver = new TestWorkspacePathResolver(tempDir);
+            var harness = new PiRpcAgentHarness(pathResolver: pathResolver);
+
+            var context = new AgentSessionContext
+            {
+                Issue = new Issue { Id = 33, Title = "Pi Path Test", Description = "Test path resolution" },
+                StageId = "stage-1",
+                Profile = new AgentProfile { Name = "PiAgent" },
+                Workspace = new Workspace { Id = 7, RepositoryPath = tempDir },
+                WorkspacePath = "/home/wsluser/.nightcodeforge/wks/7"
+            };
+
+            var piOutput = new StringBuilder();
+            piOutput.AppendLine("{\"type\":\"agent_settled\"}");
+
+            using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(piOutput.ToString()));
+            using var reader = new StreamReader(inStream);
+            using var outStream = new MemoryStream();
+            using var writer = new StreamWriter(outStream, Encoding.UTF8) { AutoFlush = true };
+
+            var sw = Stopwatch.StartNew();
+            var result = await harness.RunSessionStreamAsync(writer, reader, context, "sess-6", sw);
+
+            Assert.Equal(AgentRunStatus.Completed, result.Status);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    private class TestWorkspacePathResolver : IWorkspacePathResolver
+    {
+        private readonly string _rootDir;
+
+        public TestWorkspacePathResolver(string rootDir)
+        {
+            _rootDir = rootDir;
+        }
+
+        public string GetAgentWorkingClonePath(int workspaceId) => _rootDir;
+        public string GetHostRemoteUrl(string repositoryPath) => repositoryPath;
+        public string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath)
+        {
+            var rel = (relativeOrContainerPath ?? string.Empty).Replace('\\', '/').TrimStart('/');
+            if (rel.StartsWith("workspace/", StringComparison.OrdinalIgnoreCase))
+                rel = rel.Substring("workspace/".Length);
+            return string.IsNullOrEmpty(rel) ? _rootDir : Path.Combine(_rootDir, rel);
+        }
+        public string GetWslDistributionName() => "Ubuntu";
+        public string GetWslUserName() => "user";
     }
 }

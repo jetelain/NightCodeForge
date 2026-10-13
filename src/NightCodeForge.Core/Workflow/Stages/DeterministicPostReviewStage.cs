@@ -24,10 +24,12 @@ public class DeterministicPostReviewStage : IWorkflowStage
         DeterministicBuildStage? buildStage = null,
         DeterministicTestStage? testStage = null,
         IExecutionEnvironment? executionEnv = null,
-        IExecutionEnvironmentProvider? envProvider = null)
+        IExecutionEnvironmentProvider? envProvider = null,
+        IOllamaModelPreloadService? preloadService = null)
     {
         _buildStage = buildStage ?? new DeterministicBuildStage(
             executionEnv: executionEnv,
+            preloadService: preloadService,
             stageId: "post-review-build",
             displayName: "Post-Review Build Verification",
             envProvider: envProvider)

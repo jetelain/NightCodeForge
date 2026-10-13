@@ -29,6 +29,7 @@ public class PiRpcAgentHarness : IAgentHarness
     private readonly Context.AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer? _activityStreamer;
     private readonly SessionTranscriptService? _transcriptService;
+    private readonly IWorkspacePathResolver? _pathResolver;
     private readonly ILogger<PiRpcAgentHarness> _logger;
 
     public string HarnessId => HarnessType.PiRpc;
@@ -39,6 +40,7 @@ public class PiRpcAgentHarness : IAgentHarness
         Context.AgentsMdService? agentsMdService = null,
         IAgentActivityStreamer? activityStreamer = null,
         SessionTranscriptService? transcriptService = null,
+        IWorkspacePathResolver? pathResolver = null,
         ILogger<PiRpcAgentHarness>? logger = null)
     {
         _options = options ?? new PiRpcHarnessOptions();
@@ -46,6 +48,7 @@ public class PiRpcAgentHarness : IAgentHarness
         _agentsMdService = agentsMdService ?? new Context.AgentsMdService();
         _activityStreamer = activityStreamer;
         _transcriptService = transcriptService;
+        _pathResolver = pathResolver;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<PiRpcAgentHarness>.Instance;
     }
 
@@ -89,11 +92,40 @@ public class PiRpcAgentHarness : IAgentHarness
                 }
             }
 
+            var workingDir = !string.IsNullOrEmpty(context.WorkspacePath) ? context.WorkspacePath : Directory.GetCurrentDirectory();
+            if (OperatingSystem.IsWindows() && (workingDir.StartsWith('/') || workingDir.StartsWith('~')))
+            {
+                if (_pathResolver != null && context.Workspace != null)
+                {
+                    workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty);
+                }
+                else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
+                {
+                    workingDir = context.Workspace.RepositoryPath;
+                }
+                else
+                {
+                    workingDir = Directory.GetCurrentDirectory();
+                }
+            }
+
+            if (!Directory.Exists(workingDir))
+            {
+                if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath) && Directory.Exists(context.Workspace.RepositoryPath))
+                {
+                    workingDir = context.Workspace.RepositoryPath;
+                }
+                else
+                {
+                    workingDir = Directory.GetCurrentDirectory();
+                }
+            }
+
             var psi = new ProcessStartInfo
             {
                 FileName = exePath,
                 Arguments = args,
-                WorkingDirectory = !string.IsNullOrEmpty(context.WorkspacePath) ? context.WorkspacePath : Directory.GetCurrentDirectory(),
+                WorkingDirectory = workingDir,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -156,6 +188,19 @@ public class PiRpcAgentHarness : IAgentHarness
             ? context.WorkspacePath
             : (context.Workspace?.RepositoryPath ?? Directory.GetCurrentDirectory());
 
+        var localWorkspaceRoot = workspacePath;
+        if (OperatingSystem.IsWindows() && (localWorkspaceRoot.StartsWith('/') || localWorkspaceRoot.StartsWith('~')))
+        {
+            if (_pathResolver != null && context.Workspace != null)
+            {
+                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty);
+            }
+            else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
+            {
+                localWorkspaceRoot = context.Workspace.RepositoryPath;
+            }
+        }
+
         try
         {
             // 1. Configure Model if specified or fallback to default from appsettings
@@ -176,7 +221,7 @@ public class PiRpcAgentHarness : IAgentHarness
             }
 
             // 2. Dispatch prompt command (including pending human answer if resuming)
-            var projectConfig = CodeStackPresets.ResolveConfig(workspacePath, null);
+            var projectConfig = CodeStackPresets.ResolveConfig(localWorkspaceRoot, null);
             var guidelines = _agentsMdService.FormatExecutionGuidelines(projectConfig, context.Workspace);
 
             var basePromptText = !string.IsNullOrEmpty(context.BootstrapPrompt)
@@ -233,7 +278,7 @@ public class PiRpcAgentHarness : IAgentHarness
                         sw.Stop();
                         await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Interrupted, prompt, cancellationToken);
 
-                        await SaveTranscriptAsync(context, workspacePath, promptText, lastAgentSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
+                        await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, lastAgentSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
 
                         return AgentRunResult.WaitingForHuman(
                             prompt,
@@ -329,7 +374,7 @@ public class PiRpcAgentHarness : IAgentHarness
             var finalSummary = lastAgentSummary ?? "Pi agent completed successfully.";
             await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageCompleted, finalSummary, cancellationToken);
 
-            await SaveTranscriptAsync(context, workspacePath, promptText, finalSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
+            await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, finalSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
 
             return AgentRunResult.Completed(
                 new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
@@ -351,7 +396,7 @@ public class PiRpcAgentHarness : IAgentHarness
         {
             sw.Stop();
             await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
-            await SaveTranscriptAsync(context, workspacePath, "", ex.Message, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken);
+            await SaveTranscriptAsync(context, localWorkspaceRoot, "", ex.Message, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken);
             throw;
         }
     }

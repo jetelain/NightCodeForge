@@ -39,6 +39,7 @@ public class AcpAgentHarness : IAgentHarness
     private readonly AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer? _activityStreamer;
     private readonly SessionTranscriptService? _transcriptService;
+    private readonly IWorkspacePathResolver? _pathResolver;
     private readonly ILogger<AcpAgentHarness> _logger;
 
     public string HarnessId => "acp";
@@ -53,6 +54,7 @@ public class AcpAgentHarness : IAgentHarness
         AgentsMdService? agentsMdService = null,
         IAgentActivityStreamer? activityStreamer = null,
         SessionTranscriptService? transcriptService = null,
+        IWorkspacePathResolver? pathResolver = null,
         ILogger<AcpAgentHarness>? logger = null)
     {
         _options = options ?? new AcpHarnessOptions();
@@ -64,6 +66,7 @@ public class AcpAgentHarness : IAgentHarness
         _agentsMdService = agentsMdService ?? new AgentsMdService();
         _activityStreamer = activityStreamer;
         _transcriptService = transcriptService;
+        _pathResolver = pathResolver;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<AcpAgentHarness>.Instance;
     }
 
@@ -111,11 +114,40 @@ public class AcpAgentHarness : IAgentHarness
                 }
             }
 
+            var workingDir = !string.IsNullOrEmpty(context.WorkspacePath) ? context.WorkspacePath : Directory.GetCurrentDirectory();
+            if (OperatingSystem.IsWindows() && (workingDir.StartsWith('/') || workingDir.StartsWith('~')))
+            {
+                if (_pathResolver != null && context.Workspace != null)
+                {
+                    workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty);
+                }
+                else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
+                {
+                    workingDir = context.Workspace.RepositoryPath;
+                }
+                else
+                {
+                    workingDir = Directory.GetCurrentDirectory();
+                }
+            }
+
+            if (!Directory.Exists(workingDir))
+            {
+                if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath) && Directory.Exists(context.Workspace.RepositoryPath))
+                {
+                    workingDir = context.Workspace.RepositoryPath;
+                }
+                else
+                {
+                    workingDir = Directory.GetCurrentDirectory();
+                }
+            }
+
             var psi = new ProcessStartInfo
             {
                 FileName = exePath,
                 Arguments = args,
-                WorkingDirectory = !string.IsNullOrEmpty(context.WorkspacePath) ? context.WorkspacePath : Directory.GetCurrentDirectory(),
+                WorkingDirectory = workingDir,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -179,6 +211,19 @@ public class AcpAgentHarness : IAgentHarness
             ? context.WorkspacePath
             : (context.Workspace?.RepositoryPath ?? Directory.GetCurrentDirectory());
 
+        var localWorkspaceRoot = workspacePath;
+        if (OperatingSystem.IsWindows() && (localWorkspaceRoot.StartsWith('/') || localWorkspaceRoot.StartsWith('~')))
+        {
+            if (_pathResolver != null && context.Workspace != null)
+            {
+                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty);
+            }
+            else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
+            {
+                localWorkspaceRoot = context.Workspace.RepositoryPath;
+            }
+        }
+
         var effectiveEnv = (context.Workspace != null && _envProvider != null)
             ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier)
             : _executionEnv;
@@ -217,14 +262,14 @@ public class AcpAgentHarness : IAgentHarness
                     @params = new
                     {
                         cwd = workspacePath,
-                        mcpServers = _mcpManager != null ? await _mcpManager.GetAcpMcpServersAsync(context.Workspace?.Id, workspacePath, cancellationToken) : null
+                        mcpServers = _mcpManager != null ? await _mcpManager.GetAcpMcpServersAsync(context.Workspace?.Id, localWorkspaceRoot, cancellationToken) : null
                     }
                 });
                 await stdin.WriteLineAsync(newSessionReq.AsMemory(), cancellationToken);
             }
 
             // 3. Dispatch Prompt Request (incorporating human answer if resuming from permission request)
-            var projectConfig = CodeStackPresets.ResolveConfig(workspacePath, null);
+            var projectConfig = CodeStackPresets.ResolveConfig(localWorkspaceRoot, null);
             var guidelines = _agentsMdService.FormatExecutionGuidelines(projectConfig, context.Workspace);
 
             var basePromptText = !string.IsNullOrEmpty(context.BootstrapPrompt)
@@ -312,7 +357,29 @@ public class AcpAgentHarness : IAgentHarness
                     if (method == "terminal/create" || method == "terminal/run")
                     {
                         var cmd = node?["params"]?["command"]?.ToString() ?? "";
-                        var cwd = node?["params"]?["cwd"]?.ToString() ?? workspacePath;
+                        var rawCwd = node?["params"]?["cwd"]?.ToString();
+                        string cwd;
+                        if (string.IsNullOrWhiteSpace(rawCwd) ||
+                            string.Equals(rawCwd, "/workspace", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(rawCwd, "workspace", StringComparison.OrdinalIgnoreCase))
+                        {
+                            cwd = workspacePath;
+                        }
+                        else if (rawCwd.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var rel = rawCwd.Substring("/workspace/".Length);
+                            cwd = Path.Combine(workspacePath, rel).Replace('\\', '/');
+                        }
+                        else
+                        {
+                            cwd = rawCwd;
+                        }
+
+                        if (effectiveEnv == null && OperatingSystem.IsWindows() && (cwd.StartsWith('/') || cwd.StartsWith('~')))
+                        {
+                            cwd = localWorkspaceRoot;
+                        }
+
                         var terminalId = Guid.NewGuid().ToString("N");
 
                         string output = "";
@@ -405,7 +472,7 @@ public class AcpAgentHarness : IAgentHarness
 
                         try
                         {
-                            var content = ReadWorkspaceFile(workspacePath, filePath, offset, limit);
+                            var content = ReadWorkspaceFile(localWorkspaceRoot, filePath, offset, limit, context.Workspace?.Id);
                             var readResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { content } });
                             await stdin.WriteLineAsync(readResp.AsMemory(), cancellationToken);
                         }
@@ -423,7 +490,7 @@ public class AcpAgentHarness : IAgentHarness
 
                         try
                         {
-                            await WriteWorkspaceFileAsync(workspacePath, filePath, content, cancellationToken);
+                            await WriteWorkspaceFileAsync(localWorkspaceRoot, filePath, content, context.Workspace?.Id, cancellationToken);
                             var writeResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { } });
                             await stdin.WriteLineAsync(writeResp.AsMemory(), cancellationToken);
                         }
@@ -456,7 +523,7 @@ public class AcpAgentHarness : IAgentHarness
                         sw.Stop();
                         await BroadcastAsync(activeSessionId, context.Issue.Id, context.StageId, AgentActivityKind.Interrupted, finalPrompt, cancellationToken);
 
-                        await SaveTranscriptAsync(context, workspacePath, promptText, lastAgentSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
+                        await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, lastAgentSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
 
                         return AgentRunResult.WaitingForHuman(
                             finalPrompt,
@@ -483,7 +550,7 @@ public class AcpAgentHarness : IAgentHarness
             var finalSummary = lastAgentSummary ?? "ACP agent completed successfully.";
             await BroadcastAsync(activeSessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageCompleted, finalSummary, cancellationToken);
 
-            await SaveTranscriptAsync(context, workspacePath, promptText, finalSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
+            await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, finalSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
 
             return AgentRunResult.Completed(
                 new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
@@ -504,14 +571,60 @@ public class AcpAgentHarness : IAgentHarness
         {
             sw.Stop();
             await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
-            await SaveTranscriptAsync(context, workspacePath, "", ex.Message, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken);
+            await SaveTranscriptAsync(context, localWorkspaceRoot, "", ex.Message, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken);
             throw;
         }
     }
 
-    private static string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit)
+    private string ResolveFilePath(string workspacePath, string filePath, int? workspaceId)
     {
-        var resolvedPath = Path.IsPathRooted(filePath) ? filePath : Path.Combine(workspacePath, filePath);
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            if (_pathResolver != null && workspaceId.HasValue)
+            {
+                return _pathResolver.ResolveCruciblePath(workspaceId.Value, string.Empty);
+            }
+            return workspacePath;
+        }
+
+        if (filePath.StartsWith(@"\\") || (filePath.Length >= 2 && filePath[1] == ':'))
+        {
+            return Path.GetFullPath(filePath);
+        }
+
+        if (_pathResolver != null && workspaceId.HasValue)
+        {
+            return _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath);
+        }
+
+        var normalized = filePath.Replace('\\', '/');
+        if (normalized.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
+        {
+            var rel = normalized.Substring("/workspace/".Length);
+            return Path.GetFullPath(Path.Combine(workspacePath, rel));
+        }
+        if (string.Equals(normalized, "/workspace", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "workspace", StringComparison.OrdinalIgnoreCase))
+        {
+            return Path.GetFullPath(workspacePath);
+        }
+        if (normalized.StartsWith("workspace/", StringComparison.OrdinalIgnoreCase))
+        {
+            var rel = normalized.Substring("workspace/".Length);
+            return Path.GetFullPath(Path.Combine(workspacePath, rel));
+        }
+
+        if (Path.IsPathRooted(filePath))
+        {
+            return Path.GetFullPath(filePath);
+        }
+
+        return Path.GetFullPath(Path.Combine(workspacePath, filePath));
+    }
+
+    private string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit, int? workspaceId)
+    {
+        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId);
         if (!File.Exists(resolvedPath))
         {
             throw new FileNotFoundException($"File not found: {filePath}", filePath);
@@ -529,9 +642,9 @@ public class AcpAgentHarness : IAgentHarness
         return string.Join(Environment.NewLine, slice);
     }
 
-    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, CancellationToken ct)
+    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, int? workspaceId, CancellationToken ct)
     {
-        var resolvedPath = Path.IsPathRooted(filePath) ? filePath : Path.Combine(workspacePath, filePath);
+        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId);
         var dir = Path.GetDirectoryName(resolvedPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {

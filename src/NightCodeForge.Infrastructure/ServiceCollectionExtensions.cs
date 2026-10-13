@@ -66,6 +66,18 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicSastStage>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicCoverageGate>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicWarningRatchetStage>();
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPreImplementationStage>();
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPostImplementationStage>();
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPostReviewStage>();
+
+        services.TryAddScoped<IWorkflowPipeline>(sp => Default3AgentPipeline.Create(
+            preImplStage: sp.GetService<NightCodeForge.Core.Workflow.Stages.DeterministicPreImplementationStage>(),
+            postImplStage: sp.GetService<NightCodeForge.Core.Workflow.Stages.DeterministicPostImplementationStage>(),
+            postReviewStage: sp.GetService<NightCodeForge.Core.Workflow.Stages.DeterministicPostReviewStage>(),
+            envProvider: sp.GetService<IExecutionEnvironmentProvider>(),
+            executionEnv: sp.GetService<IExecutionEnvironment>(),
+            preloadService: sp.GetService<IOllamaModelPreloadService>()
+        ));
 
         return services;
     }

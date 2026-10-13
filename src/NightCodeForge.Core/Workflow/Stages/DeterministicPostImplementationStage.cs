@@ -1,4 +1,5 @@
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Core.Workflow.Stages;
 
@@ -20,9 +21,13 @@ public class DeterministicPostImplementationStage : IWorkflowStage
 
     public DeterministicPostImplementationStage(
         DeterministicCoverageGate? coverageGate = null,
-        DeterministicWarningRatchetStage? warningRatchet = null)
+        DeterministicWarningRatchetStage? warningRatchet = null,
+        IExecutionEnvironment? executionEnv = null,
+        IExecutionEnvironmentProvider? envProvider = null)
     {
-        _coverageGate = coverageGate ?? new DeterministicCoverageGate();
+        _coverageGate = coverageGate ?? new DeterministicCoverageGate(
+            executionEnv: executionEnv,
+            envProvider: envProvider);
         _warningRatchet = warningRatchet ?? new DeterministicWarningRatchetStage();
     }
 

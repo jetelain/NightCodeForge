@@ -10,13 +10,6 @@ namespace NightCodeForge.Agents.Tools;
 
 public record EditChunk(string OldText, string NewText);
 
-public record IssueProposal(
-    string Title,
-    string Description,
-    string? Type = "feature",
-    IReadOnlyList<string>? AffectedFiles = null,
-    IReadOnlyList<string>? AcceptanceCriteria = null);
-
 public partial class CanonicalTools
 {
     [GeneratedRegex(@"\r\n|\r|\n")]

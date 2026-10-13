@@ -238,6 +238,7 @@ public class IssueOrchestrator : IIssueOrchestrator
         }
 
         var pipelineContext = new PipelineContext(issue, workspace);
+        pipelineContext.Pipeline = pipeline;
         pipelineContext.CurrentProfile = profile;
 
         var startedAt = DateTime.UtcNow;
@@ -344,6 +345,31 @@ public class IssueOrchestrator : IIssueOrchestrator
             : (result.IsSuccess ? StageExecutionStatus.Completed : StageExecutionStatus.Failed);
 
         await _issueRepository.AddExecutionRecordAsync(record, cancellationToken);
+
+        // Auto-persist any backlog proposals emitted by triage or discovery agents (propose_issues)
+        var pendingProposals = pipelineContext.DataBag.Get<List<IssueProposal>>("PendingProposals");
+        if (pendingProposals != null && pendingProposals.Count > 0)
+        {
+            foreach (var p in pendingProposals)
+            {
+                var suggestedIssue = new Issue
+                {
+                    WorkspaceId = workspace.Id,
+                    Title = p.Title,
+                    Description = p.Description,
+                    Status = IssueOverallStatus.Suggested,
+                    MergeMode = MergeMode.ManualReviewRequired,
+                    BaseBranch = workspace.DefaultBaseBranch ?? "main",
+                    Priority = 1,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+                await _issueRepository.CreateAsync(suggestedIssue, cancellationToken: cancellationToken);
+                _logger.LogInformation("Triage/Discovery created suggested issue #{NewIssueId}: {Title}", suggestedIssue.Id, suggestedIssue.Title);
+                await SyncMarkdownIssueSafeAsync(workspace, suggestedIssue, cancellationToken);
+            }
+            pipelineContext.DataBag.Remove("PendingProposals");
+        }
 
         // 5. Result Evaluation
         if (result.NeedsClarification)

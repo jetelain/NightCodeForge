@@ -1,4 +1,5 @@
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Core.Workflow;
 
@@ -17,9 +18,16 @@ public class DefaultWorkflowPipelineProvider : IWorkflowPipelineProvider
 {
     private readonly IWorkflowPipeline _pipeline;
 
-    public DefaultWorkflowPipelineProvider(IWorkflowPipeline? pipeline = null)
+    public DefaultWorkflowPipelineProvider(
+        IWorkflowPipeline? pipeline = null,
+        IExecutionEnvironmentProvider? envProvider = null,
+        IExecutionEnvironment? executionEnv = null,
+        IOllamaModelPreloadService? preloadService = null)
     {
-        _pipeline = pipeline ?? Default3AgentPipeline.Create();
+        _pipeline = pipeline ?? Default3AgentPipeline.Create(
+            envProvider: envProvider,
+            executionEnv: executionEnv,
+            preloadService: preloadService);
     }
 
     public IWorkflowPipeline GetPipeline(Issue issue) => _pipeline;

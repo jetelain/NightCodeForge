@@ -342,5 +342,56 @@ public class DeterministicStageTests
         Assert.Equal(90, fakeEnv.LastTimeoutSeconds);
         Assert.Equal(90, context.DataBag.Get<int>("test.timeout_seconds"));
     }
+
+    [Fact]
+    public async Task DeterministicBuildStage_UsesExt4MirrorPath_WhenSet()
+    {
+        var fakeEnv = new FakeExecutionEnvironment
+        {
+            NextResult = new CommandResult(0, "Build succeeded.", string.Empty, TimeSpan.FromSeconds(1))
+        };
+        var stage = new DeterministicBuildStage(fakeEnv);
+        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace
+        {
+            Id = 1,
+            RepositoryPath = @"C:\host\repo",
+            Ext4MirrorPath = "/home/user/.nightcodeforge/wks/1"
+        };
+        var context = new PipelineContext(issue, workspace);
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("/home/user/.nightcodeforge/wks/1", fakeEnv.LastWorkingDir);
+    }
+
+    [Fact]
+    public async Task DeterministicBuildStage_PreloadsNextAgentModel_WhenPipelineAndLookaheadAvailable()
+    {
+        var fakeEnv = new FakeExecutionEnvironment
+        {
+            NextResult = new CommandResult(0, "Build succeeded.", string.Empty, TimeSpan.FromSeconds(1))
+        };
+        var preloadService = new FakePreloadService();
+        var stage = new DeterministicBuildStage(fakeEnv, preloadService: preloadService);
+
+        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var profile = new AgentProfile { Id = "implementation", Name = "qwen-coder", ModelName = "qwen2.5-coder:14b" };
+        workspace.AgentProfiles.Add(profile);
+
+        var pipeline = Default3AgentPipeline.Create(executionEnv: fakeEnv, preloadService: preloadService);
+        var context = new PipelineContext(issue, workspace)
+        {
+            Pipeline = pipeline
+        };
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotEmpty(preloadService.PreloadedModels);
+        Assert.Contains(preloadService.PreloadedModels, m => m.ModelName == "qwen2.5-coder:14b");
+    }
 }
 

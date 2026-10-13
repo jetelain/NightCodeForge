@@ -51,9 +51,13 @@ public partial class DeterministicTestStage : IWorkflowStage
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)
     {
         var bag = context.DataBag;
-        var config = CodeStackPresets.ResolveConfig(context.Workspace.RepositoryPath, bag);
+        var repoPath = context.Workspace.RepositoryPath;
+        var workDir = !string.IsNullOrWhiteSpace(context.Workspace.Ext4MirrorPath)
+            ? context.Workspace.Ext4MirrorPath
+            : repoPath;
+
+        var config = CodeStackPresets.ResolveConfig(repoPath, bag);
         var command = config.TestCommand ?? _testCommand;
-        var workDir = context.Workspace.RepositoryPath;
 
         var effectiveEnv = (context.Workspace != null && _envProvider != null)
             ? _envProvider.GetEnvironment(context.Workspace)

@@ -48,14 +48,54 @@ public partial class DeterministicBuildStage : IWorkflowStage
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)
     {
         var bag = context.DataBag;
-        var config = CodeStackPresets.ResolveConfig(context.Workspace.RepositoryPath, bag);
-        var command = config.BuildCommand ?? _buildCommand;
-        var workDir = context.Workspace.RepositoryPath;
+        var repoPath = context.Workspace.RepositoryPath;
+        var workDir = !string.IsNullOrWhiteSpace(context.Workspace.Ext4MirrorPath)
+            ? context.Workspace.Ext4MirrorPath
+            : repoPath;
 
-        // Trigger JIT model preloading asynchronously if next stage model is known
-        if (_preloadService != null && context.CurrentProfile != null && !string.IsNullOrWhiteSpace(context.CurrentProfile.ModelName))
+        var config = CodeStackPresets.ResolveConfig(repoPath, bag);
+        var command = config.BuildCommand ?? _buildCommand;
+
+        // Trigger JIT model preloading asynchronously for the next agentic stage's model
+        if (_preloadService != null)
         {
-            _ = _preloadService.PreloadModelAsync(context.CurrentProfile.ModelName, "15m", CancellationToken.None);
+            string? nextModelName = null;
+            if (context.Pipeline != null)
+            {
+                var nextStage = context.Pipeline.GetNextStage(StageId);
+                if (nextStage == null)
+                {
+                    // Fallback for compound stages (e.g. pre-impl-build inside deterministic-pre-impl)
+                    nextStage = context.Pipeline.Stages.FirstOrDefault(s => s.Kind == WorkflowStageKind.Agentic);
+                }
+                else
+                {
+                    while (nextStage != null && nextStage.Kind != WorkflowStageKind.Agentic)
+                    {
+                        nextStage = context.Pipeline.GetNextStage(nextStage.StageId);
+                    }
+                }
+
+                if (nextStage != null)
+                {
+                    var nextProfile = context.Workspace?.AgentProfiles?.FirstOrDefault(p =>
+                        string.Equals(p.Id, nextStage.StageId, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(p.Name, nextStage.StageId, StringComparison.OrdinalIgnoreCase) ||
+                        (p.StageDirectives != null && p.StageDirectives.ContainsKey(nextStage.StageId)))
+                        ?? context.Workspace?.AgentProfiles?.FirstOrDefault();
+                    nextModelName = nextProfile?.ModelName;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(nextModelName) && context.CurrentProfile != null)
+            {
+                nextModelName = context.CurrentProfile.ModelName;
+            }
+
+            if (!string.IsNullOrWhiteSpace(nextModelName))
+            {
+                _ = _preloadService.PreloadModelAsync(nextModelName, "15m", CancellationToken.None);
+            }
         }
 
         var effectiveEnv = (context.Workspace != null && _envProvider != null)
