@@ -17,6 +17,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IGitCliRunner, GitCliRunner>();
         services.TryAddScoped<IGitWorkspaceManager, GitWorkspaceManager>();
         services.TryAddScoped<IGitMirrorSyncService, GitMirrorSyncService>();
+        services.TryAddScoped<IGitAlertNotifier, LoggingGitAlertNotifier>();
         return services;
     }
 }

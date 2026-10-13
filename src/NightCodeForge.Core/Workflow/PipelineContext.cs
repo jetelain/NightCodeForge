@@ -19,10 +19,21 @@ public class PipelineContext
         Issue = issue ?? throw new ArgumentNullException(nameof(issue));
         Workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
         DataBag = dataBag ?? PipelineDataBag.FromJson(issue.PipelineDataJson);
+        RetryCount = DataBag.Get<int?>("Workflow.RetryCount") ?? 0;
+        var savedRetries = DataBag.Get<Dictionary<string, int>>("Workflow.StageRetries");
+        if (savedRetries != null)
+        {
+            foreach (var kvp in savedRetries)
+            {
+                StageRetries[kvp.Key] = kvp.Value;
+            }
+        }
     }
 
     public void SyncDataBagToIssue()
     {
+        DataBag.Set("Workflow.RetryCount", RetryCount);
+        DataBag.Set("Workflow.StageRetries", new Dictionary<string, int>(StageRetries));
         Issue.PipelineDataJson = DataBag.ToJson();
     }
 
@@ -33,12 +44,17 @@ public class PipelineContext
         {
             StageRetries[stageId] = 0;
         }
-        return ++StageRetries[stageId];
+        var next = ++StageRetries[stageId];
+        DataBag.Set("Workflow.RetryCount", RetryCount);
+        DataBag.Set("Workflow.StageRetries", new Dictionary<string, int>(StageRetries));
+        return next;
     }
 
     public void ResetRetries()
     {
         RetryCount = 0;
         StageRetries.Clear();
+        DataBag.Set("Workflow.RetryCount", 0);
+        DataBag.Set("Workflow.StageRetries", new Dictionary<string, int>());
     }
 }

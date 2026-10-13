@@ -39,7 +39,21 @@ public class HarnessRegistry : IHarnessRegistry
 
     public bool TryGetHarness(string harnessId, out IAgentHarness? harness)
     {
-        return _harnesses.TryGetValue(harnessId, out harness);
+        if (_harnesses.TryGetValue(harnessId, out harness))
+        {
+            return true;
+        }
+
+        if (string.Equals(harnessId, "pi", StringComparison.OrdinalIgnoreCase) && _harnesses.TryGetValue("pi-rpc", out harness))
+        {
+            return true;
+        }
+        if (string.Equals(harnessId, "pi-rpc", StringComparison.OrdinalIgnoreCase) && _harnesses.TryGetValue("pi", out harness))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     public IEnumerable<IAgentHarness> GetAllHarnesses()

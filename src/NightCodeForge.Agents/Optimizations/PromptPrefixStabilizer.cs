@@ -22,6 +22,7 @@ public class PromptPrefixStabilizer
 - ask: Ask clarifying questions to the user when blocked (prompt, rationale, options)
 - web_search: Search technical web documentation for APIs, errors, or libraries (query, max_results)
 - propose_issues: Propose structured backlog items (issues: [{ title, description, type }])
+- load_skill: Load full instructions and reference documentation for a modular skill (skillName)
 </tools>";
 
     public const string CanonicalRulesPrompt = @"<rules>

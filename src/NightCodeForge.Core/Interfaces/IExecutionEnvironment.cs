@@ -31,3 +31,12 @@ public interface IExecutionEnvironment
         IReadOnlyDictionary<string, string>? environmentVariables = null,
         CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// Provider factory resolving the appropriate execution environment for a workspace.
+/// </summary>
+public interface IExecutionEnvironmentProvider
+{
+    IExecutionEnvironment GetEnvironment(NightCodeForge.Core.Domain.Workspace workspace);
+}
+

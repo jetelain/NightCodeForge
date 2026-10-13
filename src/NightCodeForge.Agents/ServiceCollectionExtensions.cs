@@ -59,12 +59,12 @@ public static class ServiceCollectionExtensions
             return registry;
         });
 
-        // 7. Local LLM Chat Client (Ollama / OllamaRouter via OllamaSharp with tuned timeout)
+        // 7. Local LLM Chat Client & Factory (Ollama / OllamaRouter via OllamaSharp with tuned timeout)
+        services.TryAddSingleton<Inference.IOllamaChatClientFactory, Inference.DefaultOllamaChatClientFactory>();
         services.TryAddSingleton(sp =>
         {
-            var options = sp.GetService<Microsoft.Extensions.Options.IOptions<Inference.LlmProviderOptions>>()?.Value
-                          ?? new Inference.LlmProviderOptions();
-            return Inference.OllamaChatClientFactory.CreateOllama(options);
+            var factory = sp.GetRequiredService<Inference.IOllamaChatClientFactory>();
+            return factory.CreateClient();
         });
 
         return services;

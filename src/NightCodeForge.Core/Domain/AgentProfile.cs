@@ -23,4 +23,22 @@ public class AgentProfile
     public int? MaxTurns { get; set; }
 
     public Workspace? Workspace { get; set; }
+
+    /// <summary>
+    /// Default agent profile used for interactive ideation and codebase discovery.
+    /// Not scheduled like other pipeline workloads.
+    /// </summary>
+    public static AgentProfile CreateDefaultIdeationProfile(int? workspaceId = null) => new()
+    {
+        Id = "ideation",
+        WorkspaceId = workspaceId,
+        Name = "Ideation & Codebase Discovery Agent",
+        HarnessId = HarnessType.Crucible,
+        ModelName = "", // Defaults to LlmProviderOptions.ModelId from appsettings.json
+        Mode = AgentMode.ReadOnly,
+        PermittedTools = new[] { "read", "bash", "web_search", "propose_issues" },
+        SystemPrompt = @"You are the NightCodeForge Ideation & Codebase Discovery Agent.
+Your objective is to explore the codebase, discuss architectural features, and help the developer plan new issues.",
+        Temperature = 0.3
+    };
 }

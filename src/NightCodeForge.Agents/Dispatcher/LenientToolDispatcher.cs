@@ -47,6 +47,45 @@ public partial class LenientToolDispatcher
         }
     }
 
+    /// <summary>
+    /// Registers an AIFunction (from Microsoft Agent Framework or MCP) into the dispatcher.
+    /// </summary>
+    public void RegisterAIFunction(Microsoft.Extensions.AI.AIFunction aiFunction, IEnumerable<string>? aliases = null)
+    {
+        ArgumentNullException.ThrowIfNull(aiFunction);
+        var toolDef = new ToolDefinition(
+            aiFunction.Name,
+            aiFunction.Description ?? string.Empty,
+            async (args, ct) =>
+            {
+                var funcArgs = new Microsoft.Extensions.AI.AIFunctionArguments();
+                foreach (var (k, v) in args)
+                {
+                    if (v != null) funcArgs[k] = v;
+                }
+                var result = await aiFunction.InvokeAsync(funcArgs, ct);
+                return result?.ToString() ?? string.Empty;
+            },
+            aliases: aliases);
+
+        RegisterTool(toolDef);
+    }
+
+    /// <summary>
+    /// Registers multiple AITools (e.g. from Microsoft Agent Framework AIContextProvider or MCP) into the dispatcher.
+    /// </summary>
+    public void RegisterAITools(IEnumerable<Microsoft.Extensions.AI.AITool>? tools)
+    {
+        if (tools == null) return;
+        foreach (var tool in tools)
+        {
+            if (tool is Microsoft.Extensions.AI.AIFunction aiFunction)
+            {
+                RegisterAIFunction(aiFunction);
+            }
+        }
+    }
+
     public void RegisterTranslation(ToolTranslationRule rule)
     {
         ArgumentNullException.ThrowIfNull(rule);

@@ -189,8 +189,11 @@ public class IssueOrchestrator : IIssueOrchestrator
             return;
         }
 
-        // Resolve Agent Profile if available
-        var profile = workspace.AgentProfiles?.FirstOrDefault();
+        // Resolve Agent Profile matching the current stage, or fallback to first
+        var profile = workspace.AgentProfiles?.FirstOrDefault(p =>
+            string.Equals(p.Id, stage.StageId, StringComparison.OrdinalIgnoreCase) ||
+            (p.StageDirectives != null && p.StageDirectives.ContainsKey(stage.StageId)))
+            ?? workspace.AgentProfiles?.FirstOrDefault();
 
         issue.Status = IssueOverallStatus.Running;
         await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
@@ -248,6 +251,15 @@ public class IssueOrchestrator : IIssueOrchestrator
                         if (!string.IsNullOrEmpty(runResult.UpdatedState))
                         {
                             pipelineContext.DataBag.Set("SerializedMemory", runResult.UpdatedState);
+                        }
+
+                        if (!string.IsNullOrEmpty(runResult.Summary))
+                        {
+                            pipelineContext.DataBag.Set($"StageSummary_{stage.StageId}", runResult.Summary);
+                            if (string.Equals(stage.StageId, "issue-review", StringComparison.OrdinalIgnoreCase))
+                            {
+                                pipelineContext.DataBag.Set("Stage1.ApprovedPlan", runResult.Summary);
+                            }
                         }
 
                         result = MapAgentRunResultToStageResult(runResult, stage, profile, startedAt);
@@ -361,6 +373,16 @@ public class IssueOrchestrator : IIssueOrchestrator
             // Case B: Stage Completed
             pipelineContext.ResetRetries();
 
+            var checkpoint = new StageCheckpoint
+            {
+                IssueId = issue.Id,
+                StageId = stage.StageId,
+                GitCommitHash = string.Empty,
+                SerializedMemory = pipelineContext.DataBag.Get<string>("SerializedMemory") ?? string.Empty,
+                CreatedAt = DateTime.UtcNow
+            };
+            await _issueRepository.AddCheckpointAsync(checkpoint, cancellationToken);
+
             var nextStageId = result.TargetRoutingStageId;
             IWorkflowStage? nextStage = !string.IsNullOrWhiteSpace(nextStageId)
                 ? pipeline.GetStage(nextStageId)
@@ -416,7 +438,47 @@ public class IssueOrchestrator : IIssueOrchestrator
             return;
         }
 
-        // Case C: Failed
+        // Loopback / Retry Routing (e.g. deterministic build, test, or lint quality gate failed and routed back to implementation)
+        if (!string.IsNullOrWhiteSpace(result.TargetRoutingStageId))
+        {
+            var retries = pipelineContext.IncrementRetry(stage.StageId);
+            var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>("Workflow.MaxRetries") ?? 3;
+            if (retries <= effectiveMaxRetries)
+            {
+                _logger.LogWarning("Stage '{StageId}' failed, routing backward to '{TargetStage}' (Retry {Retry}/{Max}): {Reason}",
+                    stage.StageId, result.TargetRoutingStageId, retries, effectiveMaxRetries, result.ErrorMessage);
+
+                if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+                {
+                    var errors = pipelineContext.DataBag.Get<List<string>>("diagnostics.compiler_errors") ?? new List<string>();
+                    errors.Add($"[{stage.StageId} attempt {retries}] {result.ErrorMessage}");
+                    pipelineContext.DataBag.Set("diagnostics.compiler_errors", errors);
+                }
+
+                issue.CurrentStageId = result.TargetRoutingStageId;
+                issue.Status = IssueOverallStatus.Pending;
+                pipelineContext.SyncDataBagToIssue();
+                await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
+                if (_dependencyStore != null)
+                {
+                    await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Pending, cancellationToken);
+                }
+                await SyncIssueMarkdownAndMirrorAsync(issue, workspace, cancellationToken);
+
+                await _issueRepository.AddExecutionLogAsync(new ExecutionLog
+                {
+                    IssueId = issue.Id,
+                    Level = LogLevel.Warning,
+                    Message = $"Quality gate '{stage.StageId}' failed: {result.ErrorMessage}. Looping back to '{result.TargetRoutingStageId}' (attempt {retries}/{effectiveMaxRetries}).",
+                    Timestamp = DateTime.UtcNow
+                }, cancellationToken);
+
+                _jobQueue.EnqueueUrgent(issue.Id);
+                return;
+            }
+        }
+
+        // Case C: Permanent Failure
         issue.Status = IssueOverallStatus.Failed;
         pipelineContext.SyncDataBagToIssue();
         await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
@@ -626,11 +688,21 @@ public class IssueOrchestrator : IIssueOrchestrator
             ? $"\n\n[Prior Diagnostic Failures to Remediate]:\n{string.Join("\n", compilerErrors)}\n"
             : string.Empty;
 
+        var approvedPlan = context.DataBag.Get<string>("Stage1.ApprovedPlan") ?? context.DataBag.Get<string>("StageSummary_issue-review");
+        var planSection = !string.IsNullOrWhiteSpace(approvedPlan) && !string.Equals(stageId, "issue-review", StringComparison.OrdinalIgnoreCase)
+            ? $"\n\n[Approved Implementation Plan]:\n{approvedPlan}\n"
+            : string.Empty;
+
+        var answeredQuestions = issue.Questions?.Where(q => q.Status == QuestionStatus.Answered && !string.IsNullOrWhiteSpace(q.Answer)).ToList();
+        var qaSection = answeredQuestions != null && answeredQuestions.Count > 0
+            ? $"\n\n[Human Clarifications & Answers]:\n" + string.Join("\n", answeredQuestions.Select(q => $"Q: {q.Prompt}\nA: {q.Answer}")) + "\n"
+            : string.Empty;
+
         var directiveSection = !string.IsNullOrWhiteSpace(stageDirective)
             ? $"\n\n[Stage Directive]:\n{stageDirective}\n"
             : string.Empty;
 
-        return $"Execute stage '{stageId}' for issue #{issue.Id}: {issue.Title}\n{issue.Description}{directiveSection}{feedbackSection}{diagnosticSection}".Trim();
+        return $"Execute stage '{stageId}' for issue #{issue.Id}: {issue.Title}\n{issue.Description}{directiveSection}{planSection}{qaSection}{feedbackSection}{diagnosticSection}".Trim();
     }
 
     private async Task SyncMarkdownIssueSafeAsync(Workspace workspace, Issue issue, CancellationToken cancellationToken)

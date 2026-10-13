@@ -34,4 +34,121 @@ public class OllamaApiClientTests
         Assert.NotNull(client);
         Assert.IsAssignableFrom<IChatClient>(client);
     }
+
+    [Fact]
+    public void OllamaChatClientFactory_SupportsProfileModel_WithFallbackToDefault()
+    {
+        var defaultOptions = new LlmProviderOptions
+        {
+            Endpoint = "http://localhost:11434",
+            ModelId = "qwen2.5-coder:7b"
+        };
+
+        // When profile specifies a model
+        var profileWithModel = new Core.Domain.AgentProfile
+        {
+            Name = "Reviewer",
+            ModelName = "deepseek-r1:14b"
+        };
+
+        var clientForProfile = OllamaChatClientFactory.CreateOllama(defaultOptions, profileWithModel.ModelName);
+        Assert.NotNull(clientForProfile);
+
+        // When profile does NOT specify a model (empty/null), fallback to appsettings ModelId
+        var profileWithoutModel = new Core.Domain.AgentProfile
+        {
+            Name = "Triage",
+            ModelName = ""
+        };
+
+        var clientDefault = OllamaChatClientFactory.CreateOllama(defaultOptions, profileWithoutModel.ModelName);
+        Assert.NotNull(clientDefault);
+    }
+
+    [Fact]
+    public void DefaultOllamaChatClientFactory_CachesClients_AndResolvesProfileModel()
+    {
+        var options = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions
+        {
+            Endpoint = "http://localhost:11434",
+            ModelId = "default-coder:7b"
+        });
+
+        var factory = new DefaultOllamaChatClientFactory(options);
+
+        var profileCoder = new Core.Domain.AgentProfile { Name = "Coder", ModelName = "qwen2.5-coder:32b" };
+        var client1 = factory.CreateClient(profileCoder);
+        var client2 = factory.CreateClient(profileCoder);
+
+        // Same model resolves cached instance
+        Assert.Same(client1, client2);
+
+        // Profile without model resolves default model
+        var profileDefault = new Core.Domain.AgentProfile { Name = "DefaultAgent", ModelName = "" };
+        var clientDefault = factory.CreateClient(profileDefault);
+        Assert.NotSame(client1, clientDefault);
+
+        var clientDefaultExplicit = factory.CreateClient();
+        Assert.Same(clientDefault, clientDefaultExplicit);
+    }
+
+    [Fact]
+    public async Task CrucibleAgentHarness_UsesProfileModel_FromChatClientFactory()
+    {
+        string? capturedModelId = null;
+
+        var mockChatClient = new TestCapturingChatClient((opts) =>
+        {
+            capturedModelId = opts?.ModelId;
+        });
+
+        var mockFactory = new TestOllamaChatClientFactory(mockChatClient);
+        var harness = new Crucible.CrucibleAgentHarness(chatClientFactory: mockFactory);
+
+        var profile = new Core.Domain.AgentProfile
+        {
+            Id = "prof_custom",
+            Name = "CustomCoder",
+            ModelName = "deepseek-coder:67b"
+        };
+
+        var sessionContext = new Core.Domain.AgentSessionContext
+        {
+            Profile = profile,
+            StageId = "stage-2",
+            Issue = new Core.Domain.Issue { Id = 1, Title = "Test Issue", Description = "Implement feature" }
+        };
+
+        var result = await harness.RunStageAsync(sessionContext);
+
+        Assert.NotNull(result);
+        Assert.Equal("deepseek-coder:67b", capturedModelId);
+    }
+
+    private class TestOllamaChatClientFactory : IOllamaChatClientFactory
+    {
+        private readonly IChatClient _client;
+        public TestOllamaChatClientFactory(IChatClient client) => _client = client;
+        public IChatClient CreateClient(string? modelId = null) => _client;
+        public IChatClient CreateClient(Core.Domain.AgentProfile? profile) => _client;
+    }
+
+    private class TestCapturingChatClient : IChatClient
+    {
+        private readonly Action<ChatOptions?> _onCall;
+        public TestCapturingChatClient(Action<ChatOptions?> onCall) => _onCall = onCall;
+        public void Dispose() { }
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            _onCall(options);
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Done")));
+        }
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            _onCall(options);
+            await Task.Yield();
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "Done");
+        }
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+    }
 }

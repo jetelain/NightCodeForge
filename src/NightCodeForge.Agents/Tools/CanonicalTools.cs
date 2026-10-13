@@ -355,3 +355,4 @@ public partial class CanonicalTools
         return $"Proposed {issues.Count} backlog issue(s):\n{json}";
     }
 }
+

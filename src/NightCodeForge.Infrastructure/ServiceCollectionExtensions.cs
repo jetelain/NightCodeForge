@@ -50,6 +50,7 @@ public static class ServiceCollectionExtensions
         // 6. Execution Environments
         services.TryAddSingleton<IExecutionEnvironment, Execution.BareHostExecutionEnvironment>();
         services.TryAddTransient<Execution.WslExecutionEnvironment>();
+        services.TryAddScoped<IExecutionEnvironmentProvider, Execution.ExecutionEnvironmentProvider>();
 
         // 7. OllamaRouter Services
         services.AddHttpClient<IOllamaModelCatalogService, Inference.OllamaModelCatalogService>();
@@ -57,6 +58,13 @@ public static class ServiceCollectionExtensions
 
         // 8. Markdown Issue Mirroring
         services.TryAddScoped<IIssueMarkdownSyncService, IssueMarkdownSyncService>();
+
+        // 9. Deterministic Quality Gate Stages
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicBuildStage>();
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicTestStage>();
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicSastStage>();
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicCoverageGate>();
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicWarningRatchetStage>();
 
         return services;
     }

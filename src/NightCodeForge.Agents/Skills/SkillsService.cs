@@ -1,5 +1,7 @@
 using System.Text;
-using System.Text.RegularExpressions;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 
 namespace NightCodeForge.Agents.Skills;
 
@@ -10,82 +12,178 @@ public record SkillDescriptor(
     string SkillFilePath);
 
 /// <summary>
-/// Service implementing the progressive disclosure pattern for modular skills.
-/// Advertises skill summaries in the prompt and loads full bodies dynamically via load_skill.
+/// Service integrating into Microsoft Agent Framework's modular skills system (Microsoft.Agents.AI.Skills).
+/// Implements progressive disclosure by discovering skills via AgentFileSkillsSource and providing
+/// skill tools (load_skill, read_skill_resource, run_skill_script) and prompt instructions via AgentSkillsProvider.
 /// </summary>
 public partial class SkillsService
 {
-    [GeneratedRegex(@"^---\s*[\r\n]+(.*?)\s*[\r\n]+---", RegexOptions.Singleline)]
-    private static partial Regex FrontmatterRegex();
-
-    [GeneratedRegex(@"^name:\s*(.+)$", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
-    private static partial Regex NameRegex();
-
-    [GeneratedRegex(@"^description:\s*(.+)$", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
-    private static partial Regex DescriptionRegex();
-
-    public async Task<IReadOnlyList<SkillDescriptor>> DiscoverSkillsAsync(string workspaceRoot, string? globalSkillsDirectory = null, CancellationToken cancellationToken = default)
+    private sealed class DummyChatClient : IChatClient
     {
-        var result = new Dictionary<string, SkillDescriptor>(StringComparer.OrdinalIgnoreCase);
+        public void Dispose() { }
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "")));
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
+            AsyncEnumerableEmpty();
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
-        // 1. Global skills
-        if (!string.IsNullOrWhiteSpace(globalSkillsDirectory) && Directory.Exists(globalSkillsDirectory))
+        private static async IAsyncEnumerable<ChatResponseUpdate> AsyncEnumerableEmpty()
         {
-            await ScanSkillsDirectoryAsync(globalSkillsDirectory, result, cancellationToken);
+            await Task.Yield();
+            yield break;
         }
+    }
 
-        // 2. Workspace skills (override global)
-        var workspaceSkillDirs = new[]
+    /// <summary>
+    /// Resolves existing skill directories according to the hierarchical resolution order:
+    /// 1. Workspace: .nightcodeforge/skills, .agents/skills, skills
+    /// 2. Global: ~/.nightcodeforge/skills
+    /// </summary>
+    public static IReadOnlyList<string> ResolveSkillPaths(string workspaceRoot, string? globalSkillsDirectory = null)
+    {
+        var paths = new List<string>();
+
+        // 1. Workspace skill directories (override / take precedence)
+        var workspaceCandidateDirs = new[]
         {
             Path.Combine(workspaceRoot, ".nightcodeforge", "skills"),
             Path.Combine(workspaceRoot, ".agents", "skills"),
             Path.Combine(workspaceRoot, "skills")
         };
 
-        foreach (var dir in workspaceSkillDirs)
+        foreach (var dir in workspaceCandidateDirs)
         {
             if (Directory.Exists(dir))
             {
-                await ScanSkillsDirectoryAsync(dir, result, cancellationToken);
+                paths.Add(dir);
             }
         }
 
-        return result.Values.ToList();
-    }
+        // 2. Global skills directory
+        var globalDir = !string.IsNullOrWhiteSpace(globalSkillsDirectory)
+            ? globalSkillsDirectory
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nightcodeforge", "skills");
 
-    private async Task ScanSkillsDirectoryAsync(string baseDir, Dictionary<string, SkillDescriptor> result, CancellationToken cancellationToken)
-    {
-        var subDirs = Directory.GetDirectories(baseDir);
-        foreach (var subDir in subDirs)
+        if (Directory.Exists(globalDir))
         {
-            var skillFile = Path.Combine(subDir, "SKILL.md");
-            if (File.Exists(skillFile))
-            {
-                var content = await File.ReadAllTextAsync(skillFile, cancellationToken);
-                var (name, desc) = ParseFrontmatter(content, Path.GetFileName(subDir));
-                result[name] = new SkillDescriptor(name, desc, subDir, skillFile);
-            }
-        }
-    }
-
-    private static (string Name, string Description) ParseFrontmatter(string content, string defaultName)
-    {
-        var match = FrontmatterRegex().Match(content);
-        if (!match.Success)
-        {
-            return (defaultName, $"Skill in {defaultName}");
+            paths.Add(globalDir);
         }
 
-        var yaml = match.Groups[1].Value;
-        var nameMatch = NameRegex().Match(yaml);
-        var descMatch = DescriptionRegex().Match(yaml);
-
-        var name = nameMatch.Success ? nameMatch.Groups[1].Value.Trim('\'', '"', ' ') : defaultName;
-        var desc = descMatch.Success ? descMatch.Groups[1].Value.Trim('\'', '"', ' ') : $"Skill for {name}";
-
-        return (name, desc);
+        return paths;
     }
 
+    /// <summary>
+    /// Creates a Microsoft Agent Framework AgentSkillsProvider configured for the workspace.
+    /// </summary>
+    public AgentSkillsProvider? CreateSkillsProvider(
+        string workspaceRoot,
+        string? globalSkillsDirectory = null,
+        ILoggerFactory? loggerFactory = null)
+    {
+        var paths = ResolveSkillPaths(workspaceRoot, globalSkillsDirectory);
+        if (paths.Count == 0)
+        {
+            return null;
+        }
+
+        var options = new AgentSkillsProviderOptions
+        {
+            DisableLoadSkillApproval = true,
+            DisableReadSkillResourceApproval = true
+        };
+
+        return new AgentSkillsProvider(
+            paths,
+            options: options,
+            loggerFactory: loggerFactory);
+    }
+
+    /// <summary>
+    /// Retrieves the AIContext generated by Microsoft Agent Framework's AgentSkillsProvider,
+    /// including skill catalog instructions and skill tools (load_skill, read_skill_resource).
+    /// </summary>
+    public async Task<AIContext?> GetSkillsContextAsync(
+        string workspaceRoot,
+        string? globalSkillsDirectory = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var provider = CreateSkillsProvider(workspaceRoot, globalSkillsDirectory);
+        if (provider == null)
+        {
+            return null;
+        }
+
+        var dummyAgent = new ChatClientAgent(new DummyChatClient(), new ChatClientAgentOptions { Name = "NightCodeForgeSkills" });
+        var invokingContext = new AIContextProvider.InvokingContext(dummyAgent, session: null, new AIContext());
+
+        return await provider.InvokingAsync(invokingContext, cancellationToken);
+    }
+
+    /// <summary>
+    /// Discovers skills in the workspace using Microsoft Agent Framework's AgentFileSkillsSource.
+    /// </summary>
+    public async Task<IReadOnlyList<SkillDescriptor>> DiscoverSkillsAsync(
+        string workspaceRoot,
+        string? globalSkillsDirectory = null,
+        CancellationToken cancellationToken = default)
+    {
+        var paths = ResolveSkillPaths(workspaceRoot, globalSkillsDirectory);
+        if (paths.Count == 0)
+        {
+            return Array.Empty<SkillDescriptor>();
+        }
+
+        using var source = new AgentFileSkillsSource(paths);
+        var dummyAgent = new ChatClientAgent(new DummyChatClient(), new ChatClientAgentOptions { Name = "NightCodeForgeSkills" });
+        var context = new AgentSkillsSourceContext(dummyAgent, null);
+
+        var agentSkills = await source.GetSkillsAsync(context, cancellationToken);
+        var descriptors = new List<SkillDescriptor>();
+
+        foreach (var s in agentSkills)
+        {
+            descriptors.Add(new SkillDescriptor(
+                s.Frontmatter.Name,
+                s.Frontmatter.Description ?? string.Empty,
+                string.Empty,
+                string.Empty));
+        }
+
+        return descriptors;
+    }
+
+    /// <summary>
+    /// Loads the full content of a skill using Microsoft Agent Framework's AgentFileSkillsSource.
+    /// </summary>
+    public async Task<string> LoadSkillAsync(
+        string workspaceRoot,
+        string skillName,
+        CancellationToken cancellationToken = default)
+    {
+        var paths = ResolveSkillPaths(workspaceRoot);
+        if (paths.Count == 0)
+        {
+            return $"Error: Skill '{skillName}' not found (no skills directory detected).";
+        }
+
+        using var source = new AgentFileSkillsSource(paths);
+        var dummyAgent = new ChatClientAgent(new DummyChatClient(), new ChatClientAgentOptions { Name = "NightCodeForgeSkills" });
+        var context = new AgentSkillsSourceContext(dummyAgent, null);
+
+        var agentSkills = await source.GetSkillsAsync(context, cancellationToken);
+        var skill = agentSkills.FirstOrDefault(s => string.Equals(s.Frontmatter.Name, skillName, StringComparison.OrdinalIgnoreCase));
+        if (skill == null)
+        {
+            return $"Error: Skill '{skillName}' not found. Available skills: {string.Join(", ", agentSkills.Select(s => s.Frontmatter.Name))}";
+        }
+
+        return await skill.GetContentAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Formats skills catalog prompt following the minimalist Pi approach to minimize token overhead (~25 tokens/skill).
+    /// Matches PromptPrefixStabilizer's 4-layer prefix convention.
+    /// </summary>
     public string FormatSkillsCatalogPrompt(IReadOnlyList<SkillDescriptor> skills)
     {
         if (skills == null || skills.Count == 0)
@@ -102,21 +200,5 @@ public partial class SkillsService
         }
         sb.AppendLine("</skills>");
         return sb.ToString().TrimEnd();
-    }
-
-    public async Task<string> LoadSkillContentAsync(IReadOnlyList<SkillDescriptor> skills, string skillName, CancellationToken cancellationToken = default)
-    {
-        var skill = skills.FirstOrDefault(s => string.Equals(s.Name, skillName, StringComparison.OrdinalIgnoreCase));
-        if (skill == null)
-        {
-            return $"Skill '{skillName}' not found. Available skills: {string.Join(", ", skills.Select(s => s.Name))}";
-        }
-
-        if (File.Exists(skill.SkillFilePath))
-        {
-            return await File.ReadAllTextAsync(skill.SkillFilePath, cancellationToken);
-        }
-
-        return $"Skill file not found at '{skill.SkillFilePath}'.";
     }
 }

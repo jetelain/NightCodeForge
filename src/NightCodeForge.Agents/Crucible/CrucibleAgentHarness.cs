@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Crucible.ChatClients;
 using NightCodeForge.Agents.Dispatcher;
+using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tools;
@@ -22,7 +23,8 @@ namespace NightCodeForge.Agents.Crucible;
 
 public partial class CrucibleAgentHarness : IAgentHarness
 {
-    private readonly IChatClient _baseChatClient;
+    private readonly IChatClient? _baseChatClient;
+    private readonly IOllamaChatClientFactory? _chatClientFactory;
     private readonly IExecutionEnvironment? _executionEnv;
     private readonly IEditorConfigService _editorConfigService;
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
@@ -40,7 +42,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private static partial Regex ToolCallTagRegex();
 
     public CrucibleAgentHarness(
-        IChatClient baseChatClient,
+        IChatClient? baseChatClient = null,
+        IOllamaChatClientFactory? chatClientFactory = null,
         IExecutionEnvironment? executionEnv = null,
         IEditorConfigService? editorConfigService = null,
         IEditorConfigFileApplier? editorConfigFileApplier = null,
@@ -52,7 +55,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
         SessionTranscriptService? transcriptService = null,
         ILogger<CrucibleAgentHarness>? logger = null)
     {
-        _baseChatClient = baseChatClient ?? throw new ArgumentNullException(nameof(baseChatClient));
+        if (baseChatClient == null && chatClientFactory == null)
+        {
+            throw new ArgumentNullException(nameof(baseChatClient), "Either baseChatClient or chatClientFactory must be provided.");
+        }
+
+        _baseChatClient = baseChatClient;
+        _chatClientFactory = chatClientFactory;
         _executionEnv = executionEnv;
         _editorConfigService = editorConfigService ?? new EditorConfigService();
         _editorConfigFileApplier = editorConfigFileApplier ?? new EditorConfigFileApplier();
@@ -110,12 +119,20 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         var circuitBreaker = new ToolLoopCircuitBreaker(context.OptimizationFlags);
 
-        // 3. Discover context: AGENTS.md, Skills, Symbols
+        // 3. Discover context: AGENTS.md, Skills (Microsoft Agent Framework), Symbols
         var agentsMdRules = await _agentsMdService.IngestRulesAsync(workspacePath, cancellationToken);
         var projectContext = _agentsMdService.FormatProjectContextSection(agentsMdRules);
 
+        // Discover skills and format catalog using minimalist Pi syntax (~25 tokens/skill)
         var skills = await _skillsService.DiscoverSkillsAsync(workspacePath, cancellationToken: cancellationToken);
         var skillsCatalog = _skillsService.FormatSkillsCatalogPrompt(skills);
+
+        // Register framework skill tools (load_skill, read_skill_resource, run_skill_script) into dispatcher
+        var skillsContext = await _skillsService.GetSkillsContextAsync(workspacePath, cancellationToken: cancellationToken);
+        if (skillsContext?.Tools != null && skillsContext.Tools.Any())
+        {
+            dispatcher.RegisterAITools(skillsContext.Tools);
+        }
 
         string discoveredSymbols = string.Empty;
         if (context.OptimizationFlags.DeterministicSymbolMap)
@@ -172,11 +189,19 @@ public partial class CrucibleAgentHarness : IAgentHarness
             chatHistory.Add(new ChatMessage(ChatRole.User, $"[Human Answer]: {context.PendingHumanAnswer}"));
         }
 
-        // 9. Assemble ChatClient with Zero Data Loss & Token Compaction middlewares
+        // 9. Resolve effective ChatClient for the profile and assemble middlewares
+        var baseClient = _chatClientFactory != null
+            ? _chatClientFactory.CreateClient(context.Profile)
+            : (_baseChatClient ?? throw new InvalidOperationException("No IChatClient or IOllamaChatClientFactory configured for CrucibleAgentHarness."));
+
+        var effectiveModel = !string.IsNullOrWhiteSpace(context.Profile.ModelName)
+            ? context.Profile.ModelName
+            : baseClient.GetService<ChatClientMetadata>()?.DefaultModelId;
+
         string latestSerializedState = SerializeSession(chatHistory);
 
         var persistingClient = new PerServiceCallChatHistoryPersistingChatClient(
-            _baseChatClient,
+            baseClient,
             history =>
             {
                 latestSerializedState = SerializeSession(history.ToList());
@@ -198,6 +223,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             currentTurn++;
             var chatOptions = new ChatOptions
             {
+                ModelId = !string.IsNullOrWhiteSpace(effectiveModel) ? effectiveModel : null,
                 Temperature = (float?)context.Profile.Temperature,
                 Tools = BuildAIFunctionList(permittedTools)
             };
@@ -263,6 +289,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 _logger.LogError(ex, "Error during Crucible streaming LLM invocation");
                 stopwatch.Stop();
                 await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+
+                await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken);
 
                 return AgentRunResult.Failed(
                     ex.Message,
@@ -338,6 +366,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
                     await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Interrupted, interruption.Question.Prompt, cancellationToken);
 
+                    await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
+
                     return AgentRunResult.WaitingForHuman(
                         interruption.Question.Prompt,
                         new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
@@ -362,33 +392,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageCompleted, lastAssistantMessage ?? "Stage finished", cancellationToken);
 
-        if (_transcriptService != null)
-        {
-            try
-            {
-                var entries = chatHistory.Select(m => new TranscriptEntry(
-                    DateTime.UtcNow,
-                    m.Role.Value,
-                    m.Text ?? string.Empty
-                )).ToList();
-
-                var meta = new TranscriptMetadata(
-                    context.Issue.Id,
-                    context.StageId,
-                    context.Profile.Name,
-                    context.Profile.ModelName,
-                    stopwatch.ElapsedMilliseconds,
-                    new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
-                    context.OptimizationFlags,
-                    AgentRunStatus.Completed);
-
-                await _transcriptService.SaveTranscriptAsync(meta, entries, cancellationToken);
-            }
-            catch (Exception tex)
-            {
-                _logger.LogWarning(tex, "Failed to persist session transcript for issue #{IssueId}", context.Issue.Id);
-            }
-        }
+        await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
 
         return AgentRunResult.Completed(
             new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
@@ -404,6 +408,100 @@ public partial class CrucibleAgentHarness : IAgentHarness
             var evt = new AgentActivityEvent(sessionId, issueId, stageId, kind, content, DateTime.UtcNow);
             await _activityStreamer.BroadcastAsync(evt, ct);
         }
+    }
+
+    private async Task SaveTranscriptAsync(
+        AgentSessionContext context,
+        string workspacePath,
+        IReadOnlyList<ChatMessage> chatHistory,
+        long elapsedMs,
+        long promptTokens,
+        long completionTokens,
+        AgentRunStatus status,
+        CancellationToken cancellationToken)
+    {
+        if (_transcriptService == null) return;
+
+        try
+        {
+            var entries = BuildTranscriptEntries(chatHistory);
+            var meta = new TranscriptMetadata(
+                context.Issue.Id,
+                context.StageId,
+                context.Profile.Name,
+                context.Profile.ModelName,
+                elapsedMs,
+                new AgentRunMetrics(elapsedMs, promptTokens, completionTokens, promptTokens + completionTokens),
+                context.OptimizationFlags,
+                status);
+
+            var transcriptDir = Path.Combine(workspacePath, "docs", "transcripts");
+            await _transcriptService.SaveTranscriptAsync(meta, entries, transcriptDir, cancellationToken);
+        }
+        catch (Exception tex)
+        {
+            _logger.LogWarning(tex, "Failed to persist session transcript for issue #{IssueId} with status {Status}", context.Issue.Id, status);
+        }
+    }
+
+    public static List<TranscriptEntry> BuildTranscriptEntries(IReadOnlyList<ChatMessage> chatHistory)
+    {
+        var entries = new List<TranscriptEntry>();
+        var now = DateTime.UtcNow;
+
+        foreach (var msg in chatHistory)
+        {
+            var role = msg.Role.Value;
+            var text = msg.Text ?? string.Empty;
+
+            var functionCalls = msg.Contents.OfType<FunctionCallContent>().ToList();
+            var functionResults = msg.Contents.OfType<FunctionResultContent>().ToList();
+
+            if (functionCalls.Count > 0)
+            {
+                for (int i = 0; i < functionCalls.Count; i++)
+                {
+                    var fc = functionCalls[i];
+                    var argsJson = fc.Arguments != null
+                        ? JsonSerializer.Serialize(fc.Arguments, new JsonSerializerOptions { WriteIndented = true })
+                        : null;
+
+                    entries.Add(new TranscriptEntry(
+                        now,
+                        role,
+                        Content: i == 0 ? text : string.Empty,
+                        ToolName: fc.Name,
+                        ToolArguments: argsJson,
+                        ToolResult: null));
+                }
+            }
+            else if (functionResults.Count > 0)
+            {
+                foreach (var fr in functionResults)
+                {
+                    var resultStr = fr.Result?.ToString() ?? string.Empty;
+                    entries.Add(new TranscriptEntry(
+                        now,
+                        role,
+                        Content: string.Empty,
+                        ToolName: fr.CallId,
+                        ToolArguments: null,
+                        ToolResult: resultStr));
+                }
+            }
+            else
+            {
+                entries.Add(new TranscriptEntry(
+                    now,
+                    role,
+                    Content: text,
+                    ToolName: null,
+                    ToolArguments: null,
+                    ToolResult: null));
+            }
+        }
+
+        return entries;
     }
 
     private static CrucibleHarnessConfig ParseHarnessConfig(string? json)
@@ -441,8 +539,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var effectiveMode = profile.Mode == AgentMode.ReadOnly ? AgentMode.ReadOnly : requiredMode;
         return effectiveMode switch
         {
-            AgentMode.ReadOnly => new[] { "read", "propose_issues", "web_search", "ask" },
-            _ => new[] { "read", "edit", "write", "bash", "web_search", "ask", "propose_issues" }
+            AgentMode.ReadOnly => new[] { "read", "propose_issues", "web_search", "ask", "load_skill", "read_skill_resource" },
+            _ => new[] { "read", "edit", "write", "bash", "web_search", "ask", "propose_issues", "load_skill", "read_skill_resource", "run_skill_script" }
         };
     }
 

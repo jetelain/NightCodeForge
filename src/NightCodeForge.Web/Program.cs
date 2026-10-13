@@ -22,11 +22,25 @@ builder.Services.AddNightCodeForgeHangfireServers();
 
 var app = builder.Build();
 
-// Run startup recovery and crash reconciliation before background processing starts
+// Run startup DB initialization, recovery, crash reconciliation, and start markdown watchers
 using (var scope = app.Services.CreateScope())
 {
+    var dbContext = scope.ServiceProvider.GetRequiredService<NightCodeForge.Infrastructure.Data.AppDbContext>();
+    await dbContext.EnsureDatabaseCreatedAndWalAsync();
+
     var recoveryService = scope.ServiceProvider.GetRequiredService<IStartupRecoveryService>();
     await recoveryService.ReconcileWorkspacesAsync();
+
+    var workspaceRepo = scope.ServiceProvider.GetRequiredService<NightCodeForge.Core.Repositories.IWorkspaceRepository>();
+    var markdownSync = scope.ServiceProvider.GetRequiredService<IIssueMarkdownSyncService>();
+    var workspaces = await workspaceRepo.GetAllAsync();
+    foreach (var ws in workspaces)
+    {
+        if (!string.IsNullOrWhiteSpace(ws.RepositoryPath) && Directory.Exists(ws.RepositoryPath))
+        {
+            markdownSync.StartWatching(ws.Id, ws.RepositoryPath);
+        }
+    }
 }
 
 // Configure the HTTP request pipeline.

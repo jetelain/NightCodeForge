@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using NightCodeForge.Core.Domain;
 
@@ -37,31 +38,36 @@ public class SessionTranscriptService
     public async Task<string> SaveTranscriptAsync(
         TranscriptMetadata metadata,
         IReadOnlyList<TranscriptEntry> entries,
+        string? outputDirectory = null,
         CancellationToken cancellationToken = default)
     {
-        if (!Directory.Exists(_transcriptsDirectory))
+        var targetDir = !string.IsNullOrWhiteSpace(outputDirectory)
+            ? outputDirectory
+            : _transcriptsDirectory;
+
+        if (!Directory.Exists(targetDir))
         {
-            Directory.CreateDirectory(_transcriptsDirectory);
+            Directory.CreateDirectory(targetDir);
         }
 
         var dateStr = DateTime.UtcNow.ToString("yyyy-MM-dd");
         var statusStr = metadata.Status.ToString().ToLowerInvariant();
         var fileName = $"{dateStr}-issue-{metadata.IssueId}-{metadata.StageId}-{statusStr}.md";
-        var filePath = Path.Combine(_transcriptsDirectory, fileName);
+        var filePath = Path.Combine(targetDir, fileName);
 
         var sb = new StringBuilder();
 
         // YAML Frontmatter
         sb.AppendLine("---");
-        sb.AppendLine($"issue_id: {metadata.IssueId}");
-        sb.AppendLine($"stage_id: {metadata.StageId}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"issue_id: {metadata.IssueId}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"stage_id: {metadata.StageId}");
         sb.AppendLine($"agent_profile: {metadata.AgentProfile}");
         sb.AppendLine($"model: {metadata.ModelName}");
-        sb.AppendLine($"duration_ms: {metadata.DurationMs}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"duration_ms: {metadata.DurationMs}");
         sb.AppendLine("tokens:");
-        sb.AppendLine($"  prompt: {metadata.Metrics.PromptTokens}");
-        sb.AppendLine($"  completion: {metadata.Metrics.CompletionTokens}");
-        sb.AppendLine($"  total: {metadata.Metrics.TotalTokens}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"  prompt: {metadata.Metrics.PromptTokens}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"  completion: {metadata.Metrics.CompletionTokens}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"  total: {metadata.Metrics.TotalTokens}");
         sb.AppendLine("optimizations:");
         sb.AppendLine($"  thinking_trace_compaction: {metadata.Optimizations.ThinkingTraceCompaction.ToString().ToLowerInvariant()}");
         sb.AppendLine($"  loop_circuit_breaker: {metadata.Optimizations.LoopCircuitBreaker.ToString().ToLowerInvariant()}");
@@ -72,7 +78,7 @@ public class SessionTranscriptService
         sb.AppendLine($"  jit_model_preload: {metadata.Optimizations.JitModelPreload.ToString().ToLowerInvariant()}");
         if (metadata.KvCacheHitRate.HasValue)
         {
-            sb.AppendLine($"kv_cache_hit_rate: {metadata.KvCacheHitRate.Value:F2}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"kv_cache_hit_rate: {metadata.KvCacheHitRate.Value:F2}");
         }
         sb.AppendLine($"status: {metadata.Status}");
         sb.AppendLine("---");
@@ -85,6 +91,10 @@ public class SessionTranscriptService
         foreach (var entry in entries)
         {
             sb.AppendLine($"### [{entry.Timestamp:HH:mm:ss}] {entry.Role.ToUpperInvariant()}");
+            if (!string.IsNullOrEmpty(entry.Content))
+            {
+                sb.AppendLine(entry.Content);
+            }
             if (!string.IsNullOrEmpty(entry.ToolName))
             {
                 sb.AppendLine($"**Tool Invocation:** `{entry.ToolName}`");
@@ -94,17 +104,13 @@ public class SessionTranscriptService
                     sb.AppendLine(entry.ToolArguments);
                     sb.AppendLine("```");
                 }
-                if (!string.IsNullOrEmpty(entry.ToolResult))
-                {
-                    sb.AppendLine("**Tool Output:**");
-                    sb.AppendLine("```");
-                    sb.AppendLine(entry.ToolResult);
-                    sb.AppendLine("```");
-                }
             }
-            else
+            if (!string.IsNullOrEmpty(entry.ToolResult))
             {
-                sb.AppendLine(entry.Content);
+                sb.AppendLine("**Tool Output:**");
+                sb.AppendLine("```");
+                sb.AppendLine(entry.ToolResult);
+                sb.AppendLine("```");
             }
             sb.AppendLine();
         }
