@@ -1,7 +1,7 @@
 # ⚡ Phase 3: Hangfire Queue & Orchestration Engine
 
 > **Implementation Roadmap & Technical Specification**  
-> *Parent Plan:* [docs/PLAN.md](../PLAN.md) | *Status:* Ready for Scaffolding
+> *Parent Plan:* [docs/PLAN.md](../PLAN.md) | *Status:* Completed
 
 ---
 
@@ -156,11 +156,11 @@ flowchart TD
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Hangfire configured with SQLite storage and two isolated background processing servers.
-- [ ] `WorkerCount = 1` verified: zero concurrent LLM inference jobs across all workspaces.
-- [ ] Human interruption (`ask`) cleanly completes Hangfire job as `Succeeded`, releasing GPU.
-- [ ] Answering a question enqueues issue to `llm-urgent` with top priority.
-- [ ] Requesting changes in review room routes issue back to Stage 2 at `llm-urgent`.
-- [ ] Approving an issue merges branch and cascades unblocking to dependent tasks.
-- [ ] `IStartupRecoveryService` purges stale locks and rescues uncommitted files upon boot.
-- [ ] All queue and orchestrator unit/integration tests pass 100%.
+- [x] Hangfire configured with SQLite storage and two isolated background processing servers.
+- [x] `WorkerCount = 1` verified: zero concurrent LLM inference jobs across all workspaces.
+- [x] Human interruption (`ask`) cleanly completes Hangfire job as `Succeeded`, releasing GPU.
+- [x] Answering a question enqueues issue to `llm-urgent` with top priority.
+- [x] Requesting changes in review room routes issue back to Stage 2 at `llm-urgent`.
+- [x] Approving an issue merges branch and cascades unblocking to dependent tasks.
+- [x] `IStartupRecoveryService` purges stale locks and rescues uncommitted files upon boot.
+- [x] All queue and orchestrator unit/integration tests pass 100%.

@@ -178,11 +178,11 @@ Implement clean domain entities with explicit value types:
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] All 5 projects scaffolded and compiling with 0 warnings on .NET 10.
-- [ ] SQLite database migrations created and verified in WAL mode.
-- [ ] DAG dependency engine passes all topological sort and cycle detection tests.
-- [ ] Workspace concurrency provider serializes operations per workspace ID.
-- [ ] `PipelineDataBag` stores and retrieves cross-stage state reliably.
-- [ ] `DeterministicCoverageGate` detects coverage drops and deleted tests.
-- [ ] `IssueMarkdownSyncService` mirrors issues to `docs/issues/` with echo loop suppression.
-- [ ] 100% of unit tests in `NightCodeForge.Core.Tests` pass cleanly.
+- [x] All 5 projects scaffolded and compiling with 0 warnings on .NET 10.
+- [x] SQLite database migrations created and verified in WAL mode.
+- [x] DAG dependency engine passes all topological sort and cycle detection tests.
+- [x] Workspace concurrency provider serializes operations per workspace ID.
+- [x] `PipelineDataBag` stores and retrieves cross-stage state reliably.
+- [x] `DeterministicCoverageGate` detects coverage drops and deleted tests.
+- [x] `IssueMarkdownSyncService` mirrors issues to `docs/issues/` with echo loop suppression.
+- [x] 100% of unit tests in `NightCodeForge.Core.Tests` pass cleanly.

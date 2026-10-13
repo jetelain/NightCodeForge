@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NightCodeForge.Agents/NightCodeForge.Agents.csproj" />
+    <Project Path="src/NightCodeForge.Core/NightCodeForge.Core.csproj" />
+    <Project Path="src/NightCodeForge.Infrastructure/NightCodeForge.Infrastructure.csproj" />
+    <Project Path="src/NightCodeForge.Web/NightCodeForge.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NightCodeForge.Agents.Tests/NightCodeForge.Agents.Tests.csproj" />
+    <Project Path="tests/NightCodeForge.Core.Tests/NightCodeForge.Core.Tests.csproj" />
+    <Project Path="tests/NightCodeForge.Infrastructure.Tests/NightCodeForge.Infrastructure.Tests.csproj" />
+  </Folder>
+</Solution>

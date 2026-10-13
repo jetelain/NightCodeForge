@@ -1,7 +1,7 @@
 # 🔀 Phase 2: Git CLI Subsystem & Ext4 Workspace Mirroring (CliWrap)
 
 > **Implementation Roadmap & Technical Specification**  
-> *Parent Plan:* [docs/PLAN.md](../PLAN.md) | *Status:* Ready for Scaffolding
+> *Parent Plan:* [docs/PLAN.md](../PLAN.md) | *Status:* Completed
 
 ---
 
@@ -119,9 +119,9 @@ flowchart TD
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] `GitCliRunner` wraps `CliWrap` with timeout governance and typed exceptions.
-- [ ] Safe branch isolation and WIP commit checkpointing verified.
-- [ ] Noise-filtered diff generation verified with lockfile exclusions.
-- [ ] Ext4 Git mirroring protocol verified with local remote fetch and push.
-- [ ] `denyCurrentBranch updateInstead` and dirty-tree fallback verified.
-- [ ] 100% of integration tests in `NightCodeForge.Infrastructure.Tests` pass using real temporary Git repositories.
+- [x] `GitCliRunner` wraps `CliWrap` with timeout governance and typed exceptions.
+- [x] Safe branch isolation and WIP commit checkpointing verified.
+- [x] Noise-filtered diff generation verified with lockfile exclusions.
+- [x] Ext4 Git mirroring protocol verified with local remote fetch and push.
+- [x] `denyCurrentBranch updateInstead` and dirty-tree fallback verified.
+- [x] 100% of integration tests in `NightCodeForge.Infrastructure.Tests` pass using real temporary Git repositories.

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\NightCodeForge.Core\NightCodeForge.Core.csproj" />
+    <ProjectReference Include="..\NightCodeForge.Infrastructure\NightCodeForge.Infrastructure.csproj" />
+    <ProjectReference Include="..\NightCodeForge.Agents\NightCodeForge.Agents.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+  </PropertyGroup>
+
+</Project>
