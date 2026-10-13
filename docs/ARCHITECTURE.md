@@ -51,7 +51,7 @@ flowchart TB
 
     subgraph Harness ["AI Agent Harness Layer (Strategy Pattern)"]
         IHarness["<<interface>>\nIAgentHarness"]
-        MsAgent["Microsoft Agent Framework\n(Microsoft.Extensions.AI)"]
+        Crucible["Crucible\n(Microsoft Agent Framework & Extensions.AI)"]
         PiRpc["Pi Agent via JSON-RPC\n(External Process Fallback)"]
     end
 
@@ -74,7 +74,7 @@ flowchart TB
     QueueStandard -->|WorkerCount = 1| IHarness
     QueueUtility --> GitCli
 
-    IHarness -.->|Primary Target| MsAgent
+    IHarness -.->|Primary Target| Crucible
     IHarness -.->|Fallback Engine| PiRpc
 
     IHarness --> PipelineEngine
@@ -126,9 +126,9 @@ Each step in a workflow pipeline is associated with an **Agent Profile** (`Agent
 
 | Stage | Typical Profile Needs | Example Configuration |
 | :--- | :--- | :--- |
-| **1. Issue Review** | High reasoning capability, deep codebase comprehension, proactively questioning edge cases. | **Harness:** `MicrosoftAgent` (or `PiRpc`)<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `High`<br>**Config:** `{ "proactiveAmbiguityCheck": true }` |
-| **2. Implementation** | Rapid tool execution, fast code generation, test iteration. | **Harness:** `MicrosoftAgent`<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium` (or `Low`)<br>**Config:** `{ "autoCompile": true, "maxTestRetries": 3 }` |
-| **3. Code Review & Fixes** | Strict gap analysis, linting, regression auditing. | **Harness:** `Acp` (or `MicrosoftAgent`)<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium`<br>**Config:** `{ "strictLinting": true, "temperature": 0.1 }` |
+| **1. Issue Review** | High reasoning capability, deep codebase comprehension, proactively questioning edge cases. | **Harness:** `Crucible` (or `PiRpc`)<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `High`<br>**Config:** `{ "proactiveAmbiguityCheck": true }` |
+| **2. Implementation** | Rapid tool execution, fast code generation, test iteration. | **Harness:** `Crucible`<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium` (or `Low`)<br>**Config:** `{ "autoCompile": true, "maxTestRetries": 3 }` |
+| **3. Code Review & Fixes** | Strict gap analysis, linting, regression auditing. | **Harness:** `Acp` (or `Crucible`)<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium`<br>**Config:** `{ "strictLinting": true, "temperature": 0.1 }` |
 
 #### Agent Profile Definition
 ```csharp
@@ -136,7 +136,7 @@ public class AgentProfile
 {
     public string Id { get; set; } = default!;          // e.g. "deep-analyst", "fast-coder", "acp-auditor"
     public string Name { get; set; } = default!;
-    public string HarnessId { get; set; } = default!;    // "microsoft-agent", "pi-rpc", or "acp"
+    public string HarnessId { get; set; } = default!;    // "crucible", "pi-rpc", or "acp"
     public string ModelName { get; set; } = default!;    // e.g. "deepseek-r1:32b", "qwen2.5-coder:32b"
     public ThinkingEffort ThinkingEffort { get; set; }  // None, Low, Medium, High, CustomBudget
     public int? ThinkingTokenBudget { get; set; }
@@ -403,6 +403,27 @@ To ensure zero data loss during context switches:
    ```
 3. When the issue passes all stages and is approved in the Review Room, the orchestrator squashes the WIP commits into a clean, conventional commit before merging.
 
+### 8.3 Cross-Environment Git Synchronization & Ext4 Mirroring (Solving the 9p Trap)
+When running on Windows hosts with containerized or WSL2 execution:
+1. **The 9p / DrvFs Bottleneck:** Accessing Windows NTFS files from WSL2 via `/mnt/c/...` uses the Plan 9 (9p) network filesystem. For recursive Git scans, `dotnet build`, `node_modules`, and code searches, 9p is **10x to 50x slower** than native Linux ext4.
+2. **Local Git Mirror Architecture:**
+   * The developer keeps their primary repo on Windows NTFS (e.g., `C:\Users\Julien\source\repos\MyProject`).
+   * NightCodeForge maintains an isolated clone on the WSL2/Linux ext4 filesystem (`/var/ncf/workspaces/{workspaceId}/repo`).
+   * A local Git remote is registered linking the ext4 mirror back to the host repository:
+     ```bash
+     git remote add host-origin file:///mnt/c/Users/Julien/source/repos/MyProject
+     ```
+3. **Synchronization Protocol:**
+   * **Stage Inception:** NightCodeForge fetches the latest base branch commits (`git fetch host-origin <baseBranch>`) and checks out `feature/issue-{id}` on ext4.
+   * **Active Reasoning & Build Loop:** All file inspections, edits, compiler builds (`dotnet build`), and test runs execute 100% on native ext4 at full SSD speeds.
+   * **WIP Checkpoint / Human Interruption / Stage Completion:**
+     NightCodeForge commits the WIP state on ext4 and pushes the branch directly back to the host repository:
+     ```bash
+     git push host-origin feature/issue-{id}
+     ```
+   * **Ergonomics & Safety:** The developer's Windows IDE sees the updated `feature/issue-{id}` branch immediately without touching the active `main` branch. Zero 9p disk overhead during compilation or code search.
+4. **WSL-Native Repositories:** If the developer's project already lives natively in WSL2 (e.g. `\\wsl.localhost\Ubuntu\home\...`), the container directly volume-mounts that directory on ext4, bypassing the mirror sync step.
+
 ---
 
 ## 9. AI Harness Abstraction Layer (`IAgentHarness`)
@@ -483,7 +504,7 @@ flowchart LR
 
 ### 9.3 Supported Harness Implementations
 
-#### Implementation A (First-Class Native): Microsoft Agent Framework & `Microsoft.Extensions.AI`
+#### Implementation A (First-Class Native): Crucible Harness (Microsoft Agent Framework & `Microsoft.Extensions.AI`)
 * **Type:** In-process C# Agent Engine.
 * **Compatibility:** Plugs directly into OllamaRouter, vanilla Ollama, LM Studio, vLLM, or any OpenAI-compatible server.
 * **Profile Integration:** Adapts execution parameters based on the stage's `AgentProfile` (e.g. mapping `ThinkingEffort` to OpenAI `reasoning_effort` or DeepSeek/Ollama thinking budget tokens).
@@ -518,7 +539,7 @@ NightCodeForge leverages the **Microsoft Agent Framework** native MCP client int
 ```mermaid
 flowchart LR
     subgraph NightCodeForge ["NightCodeForge Core"]
-        Harness["IAgentHarness\n(Microsoft Agent / ACP)"]
+        Harness["IAgentHarness\n(Crucible / ACP)"]
         McpManager["MCP Client Manager\n(Microsoft.Agents.Mcp)"]
     end
 
@@ -557,7 +578,7 @@ flowchart LR
    }
    ```
 2. **Dynamic Tool Discovery:** When an issue session begins, the MCP client manager connects to configured servers, queries `tools/list`, and dynamically exposes them as callable tools in the agent's reasoning loop.
-3. **ACP & MCP Synergy:** Because the **Agent Client Protocol (ACP)** specification natively re-uses MCP data types, NightCodeForge seamlessly forwards configured MCP server capabilities to both native Microsoft Agent Framework harnesses and external ACP agents.
+3. **ACP & MCP Synergy:** Because the **Agent Client Protocol (ACP)** specification natively re-uses MCP data types, NightCodeForge seamlessly forwards configured MCP server capabilities to both native Crucible (Microsoft Agent Framework) harnesses and external ACP agents.
 
 ### 10.2 Modular Skills System
 Skills are directory-based bundles of specialized operational instructions, guidelines, and reference implementations that teach agents specific frameworks, idioms, or repo-specific rules:
@@ -608,7 +629,7 @@ flowchart TD
     
     RepoFile --> Loader
     Loader -->|Prepends Repo Guidelines| SystemPrompt
-    SystemPrompt --> MsHarness["Microsoft Agent Framework\n(In-Process System Prompt)"]
+    SystemPrompt --> CrucibleHarness["Crucible Harness\n(In-Process System Prompt)"]
     SystemPrompt --> PiHarness["Pi RPC\n(Session Prelude Message)"]
     SystemPrompt --> AcpHarness["ACP Adapter\n(Session System Instructions)"]
 ```
@@ -872,14 +893,135 @@ erDiagram
 
 ---
 
-## 14. Security, Isolation & Reliability Safeguards
+## 14. Execution Sandboxing, Security & Reliability Safeguards
 
-1. **Tool Execution Sandboxing:**
-   - `RunCommand` and MCP tool calls are constrained to the target workspace repository directory.
-   - Potentially destructive commands are governed by an allowlist/blocklist security filter.
-2. **Crash & Hang Protection:**
-   - Every LLM step and Git command is bound to a strict timeout (e.g., 5-minute timeout per reasoning turn, 30-second timeout per Git CLI command).
-   - Hangfire automatic retry is disabled for LLM inference tasks (`[AutomaticRetry(Attempts = 0)]`) to prevent duplicate code edits on failure; instead, failures transition cleanly to `Failed` state.
-3. **Working Tree Recovery:**
-   - If a worker is terminated unexpectedly (e.g. server reboot or process kill), the startup health check scans for uncommitted or untracked changes, creates a rescue WIP commit, and recovers the state machine cleanly.
+### 14.1 The Sandboxing Dilemma & Zero-Prompt Fatigue
+Autonomous overnight coding agents cannot function effectively if every command (`rm`, `dotnet`, `npm`, `curl`, `pip`) triggers a human permission confirmation. Conversely, running autonomous agents on bare Windows or Linux hosts with unfettered system access introduces severe security and stability risks.
+
+To achieve **zero prompt fatigue** without compromising host safety:
+* Agents execute commands inside an isolated **Container Sandbox** or **WSL2 environment**.
+* Only necessary directories (the ext4 repository mirror and shared tool caches) are mounted.
+* The container can safely run with elevated or unrestricted permissions inside its own isolated namespace because the host OS, registry, user directories, and credentials remain inaccessible.
+
+```mermaid
+flowchart TD
+    subgraph Host ["Host Machine (Windows / Linux / macOS)"]
+        UserRepo["Host Working Tree (NTFS / Native)\nC:/Users/.../MyProject"]
+        Orchestrator["NightCodeForge Orchestrator\n(In-Process Engine & Central Config)"]
+        GPU["Local GPU / OllamaRouter\n(Host Network localhost:11434)"]
+    end
+
+    subgraph Sandbox ["Execution Sandbox (Docker / Podman in WSL2)"]
+        Ext4Repo["ext4 Working Tree Mirror\n(/var/ncf/workspaces/{id}/repo)"]
+        Runner["Agent Runner Container\n(Full command autonomy inside sandbox)"]
+        SharedCaches["Shared Package Caches\n(~/.nuget, ~/.npm, ~/.m2)"]
+    end
+
+    Orchestrator -->|Direct Host Inference| GPU
+    Orchestrator -->|Terminal Delegation via exec| Runner
+    Orchestrator <-->|Git Push / Fetch Sync on Checkpoints| Ext4Repo
+    Ext4Repo -->|Volume Mount| Runner
+    SharedCaches -->|Bind Mounts (rw)| Runner
+    UserRepo <-->|Local Git Remote Sync| Ext4Repo
+```
+
+### 14.2 Pluggable Execution Environments (`IExecutionEnvironment`)
+NightCodeForge provides an extensible abstraction allowing developers to configure the execution environment per workspace:
+
+```csharp
+public interface IExecutionEnvironment : IAsyncDisposable
+{
+    ExecutionMode Mode { get; }
+    string WorkingDirectory { get; }
+    
+    Task<CommandResult> ExecuteAsync(
+        string command,
+        IReadOnlyList<string> args,
+        string? workingDirectory = null,
+        IReadOnlyDictionary<string, string>? environmentVariables = null,
+        CancellationToken cancellationToken = default);
+        
+    Task SyncToHostAsync(CancellationToken cancellationToken = default);
+    Task SyncFromHostAsync(CancellationToken cancellationToken = default);
+}
+
+public enum ExecutionMode
+{
+    BareHost = 0,          // Direct host CLI (Opt-in for simple setups or bare Linux)
+    WslDirect = 1,         // Direct execution inside WSL2 distro (wsl.exe -d <distro>)
+    ContainerSandbox = 2   // Ephemeral Docker/Podman container running on ext4 (Default)
+}
+```
+
+#### Comparison of Execution Modes:
+
+| Feature | `BareHost` | `WslDirect` | `ContainerSandbox` *(Default)* |
+| :--- | :--- | :--- | :--- |
+| **Host OS** | Windows / Linux / macOS | Windows (WSL2) / Linux | Windows (WSL2 Docker) / Linux |
+| **Filesystem Speed** | Native host | **High** on ext4 | **High** on ext4 |
+| **Isolation Level** | None | User space isolation | **Full container isolation** |
+| **Prompt Fatigue** | High (must confirm risky commands) | Moderate | **Zero** (Autonomous within container) |
+| **Windows Sync** | Direct (Same filesystem) | Git local remote push/fetch | Git local remote push/fetch |
+| **Tooling & SDKs** | Uses host SDKs | Distro-installed SDKs | Shared cache mounts + Host SDK mounts |
+
+### 14.3 Shared SDKs & Persistent Package Caches
+To prevent containers from downloading gigabytes of SDKs and package dependencies for every issue:
+
+1. **Persistent Package Caches (Read-Write Bind Mounts):**
+   Package managers write to host-mounted shared cache directories:
+   - **NuGet:** `/var/ncf/caches/nuget` $\rightarrow$ `/root/.nuget/packages`
+   - **npm / pnpm:** `/var/ncf/caches/npm` $\rightarrow$ `/root/.npm` and `/root/.local/share/pnpm/store`
+   - **Maven / Gradle:** `/var/ncf/caches/m2` $\rightarrow$ `/root/.m2/repository`
+   - **Python:** `/var/ncf/caches/uv` $\rightarrow$ `/root/.cache/uv`
+   *Result:* When Container 1 downloads a package, Container 2 gets an immediate local cache hit.
+
+2. **Heavy SDK Sharing (Read-Only Mounts or Base Images):**
+   - **Strategy A (Host Toolchain Mounts):** On Linux/WSL2 hosts with existing toolchains, SDK directories (e.g. `/usr/share/dotnet`, `/usr/lib/jvm`, `/opt/android-sdk`) are mounted **read-only (`:ro`)** into the container.
+   - **Strategy B (Standard Multi-Tool Runner Image):** NightCodeForge ships a pre-built base image (`nightcodeforge/runner:latest`) containing LTS versions of .NET, Node.js, Python/uv, and Git, eliminating runtime provisioning.
+
+### 14.4 In-Process Harness vs. Sandboxed Tool Execution
+NightCodeForge adopts an **In-Process Harness + Sandboxed Tool Delegation** architecture:
+
+```mermaid
+flowchart LR
+    subgraph Host ["NightCodeForge Host Process (C#)"]
+        CentralConfig["Central Config\n(mcp_config.json, API Keys, Prompts)"]
+        Harness["IAgentHarness\n(Crucible / ACP Client / Pi Host)"]
+        FileTools["File Tools\n(ReadFile, WriteFile, Grep)"]
+        CmdTool["RunCommand Tool"]
+    end
+
+    subgraph Sandbox ["Container Sandbox"]
+        Exec["docker exec -i / wsl.exe\n(dotnet, npm, tests)"]
+        Ext4FS["ext4 /workspace"]
+    end
+
+    Harness --> CmdTool
+    Harness --> FileTools
+    CmdTool --> Exec
+    FileTools -->|"\\wsl.localhost (UNC) or container tar/cat"| Ext4FS
+    CentralConfig --> Harness
+```
+
+#### Why In-Process Orchestration is Superior:
+1. **Network Simplicity for Inference:** The LLM client runs directly on the host, communicating with OllamaRouter on `localhost:11434` or cloud providers without Docker-to-Host bridge networking issues.
+2. **Central Configuration for Pi & ACP:**
+   - **Pi JSON-RPC:** NightCodeForge spawns and monitors the Pi agent runner on the host, passing tool implementations that forward `RunCommand` into the container sandbox.
+   - **Agent Client Protocol (ACP):** NightCodeForge acts as the ACP client. When an ACP agent requests a terminal command execution, NightCodeForge routes the command into the container sandbox.
+   - `mcp_config.json`, API credentials, and skills remain centralized on the host.
+3. **Optimized File Operations:**
+   - Single-file reads and writes (`ReadFile`, `WriteFile`) access the ext4 mirror directly via `\\wsl.localhost\Ubuntu\var\ncf\...` or fast exec streaming.
+   - Heavy recursive operations (compilation, test runners, git status) run completely inside the container.
+
+### 14.5 Host Guardrails & Command Isolation
+* **Docker Socket Prohibition:** Mounting `/var/run/docker.sock` into the container is strictly prohibited to prevent container escapes.
+* **Network Policies:** Optional network egress restrictions limit container network calls to trusted package registries (nuget.org, npmjs.org, pypi.org) while blocking internal private subnets.
+* **Timeout Governance:** Every command execution inside the sandbox is governed by a strict timeout (e.g. 5 minutes for compilation, 30 seconds for git operations).
+
+### 14.6 Crash & Hang Protection
+* Every LLM step and Git command is bound to a strict timeout policy.
+* Hangfire automatic retry is disabled for LLM inference tasks (`[AutomaticRetry(Attempts = 0)]`) to prevent duplicate code edits on failure; instead, failures transition cleanly to `Failed` state.
+
+### 14.7 Working Tree Recovery
+* If a worker is terminated unexpectedly (e.g. server reboot or process kill), the startup health check scans for uncommitted or untracked changes in the active workspace mirror, creates a rescue WIP commit, and recovers the state machine cleanly.
 

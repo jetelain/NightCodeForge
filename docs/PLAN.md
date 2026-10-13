@@ -20,6 +20,12 @@ NightCodeForge/
 │   ├── NightCodeForge.Infrastructure/
 │   │   ├── Data/                # AppDbContext, Entity Configurations, SQLite Migrations
 │   │   ├── Git/                 # Native Git CLI runner using CliWrap (WIP commits, diff, branch isolation)
+│   │   ├── Execution/           # Pluggable Execution Environments & Sandboxing:
+│   │   │   ├── IExecutionEnvironment.cs           # Execution environment contract (BareHost, WSL2, Container)
+│   │   │   ├── BareHostExecutionEnvironment.cs    # Direct host CLI execution (Developer opt-in)
+│   │   │   ├── WslExecutionEnvironment.cs         # WSL2 distro execution (wsl.exe -d <distro>)
+│   │   │   ├── ContainerSandboxEnvironment.cs     # Docker/Podman container runner with shared cache mounts
+│   │   │   └── GitMirrorSyncService.cs            # Ext4 local Git mirror & host remote push/fetch
 │   │   ├── BackgroundJobs/      # Hangfire setup (llm-urgent & llm-inference queues: WorkerCount = 1)
 │   │   └── Hubs/                # SignalR Telemetry & Live Chat Hub (/hubs/orchestrator)
 │   │
@@ -31,7 +37,7 @@ NightCodeForge/
 │   │   │   ├── ImplementationStage.cs    # Stage 2: Code modifications, compilation & tests
 │   │   │   └── CodeReviewAndFixStage.cs  # Stage 3: Gap analysis, lint checks & automated fixes
 │   │   ├── Ideation/            # Interactive Discovery & Codebase Chat Agent
-│   │   ├── MicrosoftAgent/      # Implementation A: Microsoft Agent Framework & Extensions.AI
+│   │   ├── Crucible/            # Implementation A: Crucible Harness (Microsoft Agent Framework & Extensions.AI)
 │   │   └── PiRpc/               # Implementation B: Fallback Pi Agent via JSON-RPC
 │   │
 │   └── NightCodeForge.Web/
@@ -72,7 +78,7 @@ NightCodeForge/
 * **Tasks:**
   1. Initialize .NET 10 solution and create project skeleton (`Core`, `Infrastructure`, `Agents`, `Web`, `Tests`).
   2. Implement domain entities:
-     * `Workspace` (Id, Name, RepositoryPath, DefaultBaseBranch, CreatedAt).
+     * `Workspace` (Id, Name, RepositoryPath, DefaultBaseBranch, ExecutionMode [BareHost, WslDirect, ContainerSandbox], ContainerImage, Ext4MirrorPath, CreatedAt).
      * `AgentProfile` (Id, WorkspaceId, Name, HarnessId, ModelName, ThinkingEffort, ThinkingTokenBudget, Temperature, HarnessConfigurationJson).
      * `Issue` (Id, WorkspaceId, Title, Description, Status, CurrentStageId, Priority, BaseBranch, FeatureBranch).
      * `IssueDependency` (IssueId, DependsOnIssueId).
@@ -103,8 +109,8 @@ NightCodeForge/
 
 ---
 
-### Phase 2: Git CLI Subsystem (CliWrap)
-* **Objective:** Deliver a bulletproof Git manager using native CLI only (no LibGit2Sharp) capable of safe context switching and WIP checkpointing across configured workspaces.
+### Phase 2: Git CLI Subsystem & Ext4 Workspace Mirroring (CliWrap)
+* **Objective:** Deliver a bulletproof Git manager using native CLI only (no LibGit2Sharp) capable of safe context switching, WIP checkpointing, and cross-filesystem Git mirroring (solving the 9p latency trap on Windows/WSL2).
 * **Tasks:**
   1. Implement `GitCliRunner` wrapping `CliWrap` with command execution, timeout policies, stdout/stderr capture, and typed `GitCommandException`.
   2. Implement `GitWorkspaceManager`:
@@ -114,8 +120,14 @@ NightCodeForge/
      * `GenerateDiffAsync(Workspace workspace, int issueId, string baseBranch)`: Executes `git diff {baseBranch}...feature/issue-{id}`.
      * `RevertOrCleanAsync(Workspace workspace)`: Handles dirty states during crashes.
      * `SquashAndMergeAsync(Workspace workspace, int issueId, string baseBranch, string finalMessage)`: Squashes WIP commits upon approval.
-  3. Create integration tests in `NightCodeForge.Infrastructure.Tests` executing real Git commands on dynamically created temporary directories.
-* **Deliverables:** Git operations verified with automated tests covering branch switching, dirty detection, WIP commits, and diff generation.
+  3. Implement **`GitMirrorSyncService` (Ext4 Mirroring Protocol):**
+     * Solves the WSL2 9p filesystem performance bottleneck on Windows hosts.
+     * Establishes isolated clone on ext4 (`/var/ncf/workspaces/{workspaceId}/repo`) with local remote `host-origin` pointing to the developer's Windows repository.
+     * Performs `git fetch host-origin <baseBranch>` on stage inception.
+     * Performs `git push host-origin feature/issue-{id}` upon WIP checkpointing, human questions, or stage completion to keep developer's IDE in sync.
+     * Directly mounts workspace when repo is already native to Linux/WSL2 ext4.
+  4. Create integration tests in `NightCodeForge.Infrastructure.Tests` executing real Git commands on dynamically created temporary directories and verifying local remote fetch/push mirror sync.
+* **Deliverables:** Git operations verified with automated tests covering branch switching, dirty detection, WIP commits, diff generation, and bidirectional ext4 mirror synchronization.
 
 ---
 
@@ -156,7 +168,7 @@ NightCodeForge/
      * Implement `IOllamaModelCatalogService` to query `/api/tags` and populate active local/remote models dynamically.
      * Capture target routing telemetry (e.g. from `/monitor` or response headers) for real-time UI display.
   3. Implement **Harness Implementations:**
-     * **Implementation A (Native First-Class): Microsoft Agent Framework & `Microsoft.Extensions.AI`:**
+     * **Implementation A (Native First-Class): Crucible Harness (Microsoft Agent Framework & `Microsoft.Extensions.AI`):**
        * In-process C# agent with function tools (`ReadFile`, `WriteFile`, `ListDirectory`, `RunCommand`, `AskHumanQuestion`).
        * Automatic token usage extraction from `AdditionalProperties["usage"]`.
      * **Implementation B (Fallback First-Class): Pi via JSON-RPC:**
@@ -166,27 +178,32 @@ NightCodeForge/
        * Protocol adapter implementing the official **[ACP specification](https://agentclientprotocol.com/)** over JSON-RPC (`stdio` or WebSocket/HTTP).
        * Bridges ACP session messages, workspace tools, and human prompt requests into NightCodeForge's pause/resume checkpointing.
        * Enables plugging any external ACP-compliant coding agent out-of-the-box.
-  4. Implement the 3 Specialized Workflow Stages & Bootstrap Prompts:
+  4. Implement **Execution Sandboxing Subsystem (`IExecutionEnvironment`):**
+     * Pluggable runners: `BareHostExecutionEnvironment`, `WslExecutionEnvironment`, and `ContainerSandboxEnvironment` (Docker/Podman).
+     * Shared persistent package cache volume mounts (`~/.nuget/packages`, `~/.npm`, `~/.m2`, `~/.cache/uv`) and read-only host toolchain mounts (`/usr/share/dotnet`, `/usr/lib/jvm`, `/opt/android-sdk`).
+     * In-process harness delegation: `RunCommand` in Crucible, Pi, and ACP harnesses executes inside the sandbox container/WSL, granting autonomous command execution without user prompt fatigue.
+     * Central host orchestration: LLM inference, API keys, ACP/Pi lifecycle management, and `mcp_config.json` remain centralized on the host.
+  5. Implement the 3 Specialized Workflow Stages & Bootstrap Prompts:
      * **`IssueReviewStage`:** System persona for architectural analysis; bootstrap prompt injecting `{{Issue.Title}}`, `{{Issue.Description}}`, repository structure, with strict directive to invoke `AskHumanQuestion` on any ambiguity.
      * **`ImplementationStage`:** System persona for senior engineer / TDD; bootstrap prompt injecting approved Stage 1 plan, `{{PriorAnswers}}`, affected files; tool loop for coding, building, and running tests.
      * **`CodeReviewAndFixStage`:** System persona for critical code auditor; bootstrap prompt injecting target `{{BaseBranch}}`, `{{GitDiff}}` changeset; automated gap analysis, regression detection, and direct patch application.
-  5. Implement **Model Context Protocol (MCP) Integration:**
+  6. Implement **Model Context Protocol (MCP) Integration:**
      * Connect to external MCP servers configured in `mcp_config.json` via Microsoft Agent Framework (`Microsoft.Agents.Mcp`).
      * Dynamically discover tools from database, GitHub, or custom CLI MCP servers and register them into the active agent session.
      * Forward MCP tool definitions to ACP agents for unified multi-harness tooling.
-  6. Implement **Modular Skills System:**
+  7. Implement **Modular Skills System:**
      * Parser for `.agents/skills/<skill-name>/SKILL.md` (metadata frontmatter + operational markdown instructions).
      * Provide `ReadSkill(skillName)` tool allowing agents to look up repo-specific guidelines on demand.
      * Context-aware skill injection into stage prompt templates based on file triggers or profile bindings.
-  7. Implement **Repository Guidelines & `AGENTS.md` Loader:**
+  8. Implement **Repository Guidelines & `AGENTS.md` Loader:**
      * Automatically discover and parse `AGENTS.md`, `.agents/AGENTS.md`, or `CLAUDE.md` from the target workspace.
-     * Prepend parsed repository instructions, architectural rules, and build/test commands to stage system prompts across all harnesses (Microsoft Agent, Pi, and ACP).
-  8. Implement **Session Transcript & Hybrid Diagnostics Service:**
+     * Prepend parsed repository instructions, architectural rules, and build/test commands to stage system prompts across all harnesses (Crucible, Pi, and ACP).
+  9. Implement **Session Transcript & Hybrid Diagnostics Service:**
      * `SessionTranscriptService`: Serializes full turn-by-turn agent sessions into structured Markdown files in `<WorkspaceRoot>/docs/transcripts/YYYY-MM-DD-issue-{id}-{stage}-{status}.md` (thought blocks, tool calls, compiler outputs, Q&A).
      * `TranscriptDiagnosticService`: Evaluates failed or anomalous transcripts via either **Cloud LLMs** (fast, zero local VRAM consumption via OllamaRouter cloud models or external cloud API) or **Local LLMs** (100% private/offline, queued sequentially via `WorkerCount = 1`) to produce actionable remediation advice.
-  9. **Interactive Ideation Agent Service (`IIdeationService`):**
+  10. **Interactive Ideation Agent Service (`IIdeationService`):**
      * Read-only exploration agent that converses with the developer, browses the workspace codebase, and proposes issues with dependencies.
-* **Deliverables:** Harness abstraction layer complete; Microsoft Agent, Pi, and ACP adapter functional; MCP, Skills, and AGENTS.md integration verified; session transcripts and hybrid failure diagnostics operational; 3 agent stages and discovery agent verified with mock/local LLMs and step metrics recorded.
+* **Deliverables:** Harness abstraction layer complete; Crucible, Pi, and ACP adapter functional; MCP, Skills, and AGENTS.md integration verified; execution sandboxing and shared caches operational; session transcripts and hybrid failure diagnostics operational; 3 agent stages and discovery agent verified with mock/local LLMs and step metrics recorded.
 
 ---
 
@@ -214,8 +231,9 @@ NightCodeForge/
   7. Implement **Review Room:**
      * Visual `git diff` viewer highlighting added/modified/deleted files.
      * Action buttons: "Approve & Merge" (squash & merge to base branch, unblocking dependent tasks) or "Request Changes".
-  8. Implement **Workspace, Agent Profile & MCP Settings:**
+  8. Implement **Workspace, Agent Profile, Execution & MCP Settings:**
      * Workspace creation/switching and target Git repository path configuration.
+     * **Execution Sandbox Settings:** Selection between `BareHost`, `WslDirect`, and `ContainerSandbox` (Docker/Podman image selection, cache mount paths, read-only SDK mount paths).
      * Agent Profile editor: configure Harness, Model, Thinking Effort, Temperature, and custom JSON parameters, with stage-to-profile assignment.
   9. Implement **Session Transcripts & AI Diagnostics Modal:**
      * Markdown viewer for past and current execution transcripts with syntax highlighting.

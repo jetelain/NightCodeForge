@@ -44,7 +44,7 @@ NightCodeForge eliminates idle GPU time through **automatic Git checkpointing an
   1. **Issue Review Agent:** Pre-inspects the codebase, clarifies requirements, and prompts the human proactively *before* any coding begins.
   2. **Implementation Agent:** Modifies code, runs builds (`dotnet build`), executes unit tests, and iterates.
   3. **Code Review & Fixes Agent:** Inspects diffs, runs static checks, identifies gaps or regressions, and applies automated fixes.
-* 🎭 **Agent Profiles per Stage:** Customize the intelligence for each workflow step. Assign a specialized profile combining **Harness** (`MicrosoftAgent`, `PiRpc`, or `Acp`), **Model Name** (e.g. `deepseek-r1:32b` for deep review vs `qwen2.5-coder:32b` for fast coding), **Thinking Effort** (None, Low, Medium, High, or custom token budget), and harness-specific launch configurations.
+* 🎭 **Agent Profiles per Stage:** Customize the intelligence for each workflow step. Assign a specialized profile combining **Harness** (`Crucible`, `PiRpc`, or `Acp`), **Model Name** (e.g. `deepseek-r1:32b` for deep review vs `qwen2.5-coder:32b` for fast coding), **Thinking Effort** (None, Low, Medium, High, or custom token budget), and harness-specific launch configurations.
 * 📝 **Stage-Specific Bootstrap Prompts:** Every stage has its own tailored System Persona and Bootstrap Context injection:
   - *Stage 1 (Review):* Focuses on architectural ambiguities, injecting issue requirements, with strict instructions to prompt the human before coding.
   - *Stage 2 (Implementation):* Injects the approved technical plan and prior human Q&A, driving test-driven coding and compilation loops.
@@ -54,7 +54,7 @@ NightCodeForge eliminates idle GPU time through **automatic Git checkpointing an
   - **Modular Skills (`SKILL.md`):** Teach agents framework-specific best practices and project conventions on demand (`.agents/skills/`).
 * 📜 **Native `AGENTS.md` Support:** Automatically loads repository instructions, architecture guidelines, and build/test commands from `AGENTS.md` or `.agents/AGENTS.md` and prepends them into every agent stage across all harnesses.
 * 🔌 **Universal Agent Harness Abstraction:**
-  - **Native C# (First-Class):** In-process via Microsoft Agent Framework & `Microsoft.Extensions.AI`.
+  - **Crucible (First-Class Native C#):** In-process via Microsoft Agent Framework & `Microsoft.Extensions.AI`.
   - **Pi JSON-RPC (First-Class):** Managed sub-process runner via stdio JSON-RPC.
   - **[Agent Client Protocol (ACP)](https://agentclientprotocol.com/) Compatible:** Plug any existing or future ACP-compliant coding agent (from Zed, JetBrains, or the open ACP Registry) without altering core code.
 * ⏱️ **Fine-Grained Step Duration & Token Metrics:** Tracks exact elapsed execution time, prompt tokens, completion tokens, total tokens, and hardware target for every workflow stage.
