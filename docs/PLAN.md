@@ -35,9 +35,11 @@ NightCodeForge/
 │   │
 │   ├── NightCodeForge.Agents/
 │   │   ├── Common/              # AgentSessionContext, AgentRunResult, TelemetryEvent
-│   │   ├── Tools/               # Minimalist Canonical (Pi-Harmonized): read, edit, write, bash, get_file_outline, web_search, ask_human_question, propose_issues
+│   │   ├── Tools/               # Minimalist Canonical (Pi-Harmonized): read, edit, write, bash, web_search, ask, propose_issues
+│   │   │   └── EditorConfig/    # IEditorConfigService, EditorConfigParser, EditorConfigFileApplier (EOL, indent, tab/space, whitespace, charset)
 │   │   ├── Dispatcher/          # LenientToolDispatcher (Aliasing, fuzzy matching, parameter normalization, payload repair)
-│   │   ├── Stages/              # Default 3-Agent Stages:
+│   │   ├── Stages/              # Agent Stages:
+│   │   │   ├── TriageStage.cs            # Stage 0: Untrusted external intake, read-only pre-analysis on main/master
 │   │   │   ├── IssueReviewStage.cs       # Stage 1: Scope, ambiguities, proactive human Q&A
 │   │   │   ├── ImplementationStage.cs    # Stage 2: Code modifications, compilation & tests
 │   │   │   └── CodeReviewAndFixStage.cs  # Stage 3: Gap analysis, lint checks & automated fixes
@@ -98,7 +100,10 @@ NightCodeForge/
      * Cycle detection (reject circular dependencies).
      * Dependency readiness evaluation: `IsReadyForExecution(issueId)`.
      * Cascade activation when a prerequisite reaches `Completed`.
-  4. Implement `ExtensibleWorkflowEngine`:
+  4. Implement **Workspace Concurrency Control (`IWorkspaceLockProvider`):**
+     * Keyed async lock provider (`AsyncKeyedLock<int>` by `WorkspaceId`).
+     * Guarantees that while the global inference queue processes sequentially (`WorkerCount = 1`), background utility jobs (`WorkerCount = 4`) and user UI actions do not execute concurrent Git operations or index modifications on the same workspace, preventing `.git/index.lock` race conditions.
+  5. Implement `ExtensibleWorkflowEngine`:
      * `IWorkflowPipeline` and `IWorkflowStage` abstractions supporting both **Agentic** (LLM-driven with GPU allocation) and **Deterministic** (CPU-native builds, tests, SAST with 0 GPU/tokens) stages via `WorkflowStageKind`.
       * **Deterministic Quality Gates & Outcome Routing:** Enables deterministic stages (`DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicSastStage`) to act as outcome-driven routers: advancing forward on pass, or looping backward to fix errors (with retry circuit breaker) paired with **Synthetic Conversation Priming** to prevent agents from re-running redundant builds/tests.
      * **Explicit Stage Boundary Handover Protocol:** Enforces zero-memory clean context resets at stage transitions (archives previous stage chat history to disk transcripts, injecting only structured plan/diff/diagnostic artifacts into next stage).
@@ -107,15 +112,15 @@ NightCodeForge/
        2. `ImplementationStage` (Agentic - Default Profile: Fast Coder / medium thinking effort)
        3. `CodeReviewAndFixStage` (Agentic - Default Profile: Strict Auditor / low temperature)
      * Extensible pipeline configurations allowing deterministic gate insertion (e.g. `Review ➔ Implementation ➔ Deterministic Build & Test ➔ Review & Fix`).
-  5. Implement **`IssueMarkdownSyncService`**:
+  6. Implement **`IssueMarkdownSyncService`**:
      * Generates and updates Markdown files with YAML frontmatter in `<WorkspaceRoot>/docs/issues/YYYY-MM-DD-<slug>.md` (date-prefixed without ID in filename to enable clean sorting and avoid renames; appends `-2`, `-3` on slug collisions for the same date).
      * Automatically syncs question/answer logs, stage transitions, and generated plans to disk.
      * Employs `FileSystemWatcher` event debouncing (300ms window) and an in-memory write-suppression tracker (recording expected file hashes) to prevent self-triggering echo loops when writing back protected fields.
      * Enforces field protection: user edits to title, body, priority, profile, and dependencies sync to DB; system-managed fields (`status`, `stage`, `id`) are protected and restored if altered.
      * Detects dropped new files, allocates a new database ID, and injects `id` into frontmatter in-place without renaming.
      * Cleans up or archives files when issues reach `Completed` or `Cancelled`.
-  6. Configure `AppDbContext` with SQLite and create initial migrations.
-  7. Unit tests in `NightCodeForge.Core.Tests` for pipeline progression, pause/resume, token/duration tracking, DAG dependency graph resolution, echo loop suppression, and markdown issue sync.
+  7. Configure `AppDbContext` with SQLite and create initial migrations.
+  8. Unit tests in `NightCodeForge.Core.Tests` for pipeline progression, pause/resume, token/duration tracking, DAG dependency graph resolution, echo loop suppression, and markdown issue sync.
 * **Deliverables:** Solution builds cleanly; workflow pipeline, metrics tracking, DAG dependency, and markdown sync unit tests pass 100%.
 
 ---
@@ -135,6 +140,7 @@ NightCodeForge/
      * Solves the WSL2 9p filesystem performance bottleneck on Windows hosts.
      * Establishes isolated clone on ext4 (`/var/ncf/workspaces/{workspaceId}/repo`) with local remote `host-origin` pointing to the developer's Windows repository.
      * Configures the host repository with `git config receive.denyCurrentBranch updateInstead` to ensure `git push host-origin feature/issue-{id}` succeeds without rejection even when the developer has the branch checked out in their IDE on the host.
+     * **Host Working Tree Dirty Conflict Fallback:** If the developer has uncommitted changes to tracked files in their host IDE, Git rejects `updateInstead`; `GitMirrorSyncService` catches the rejection, pushes to `refs/heads/feature/issue-{id}-ncf` instead, and emits a SignalR alert informing the developer to reconcile local uncommitted files.
      * Performs `git fetch host-origin <baseBranch>` on stage inception.
      * Performs `git push host-origin feature/issue-{id}` upon WIP checkpointing, human questions, or stage completion to keep developer's IDE in sync.
      * Directly mounts workspace when repo is already native to Linux/WSL2 ext4.
@@ -152,11 +158,11 @@ NightCodeForge/
      * **Utility Server:** `WorkerCount = 4`, `Queues = new[] { "default" }`.
   3. Implement `IssueOrchestrator`:
      * Dequeues issue, checks workspace and DAG dependencies.
-     * Locks workspace mutex and checks out branch.
+     * Acquires workspace lock via `IWorkspaceLockProvider` and checks out branch.
      * Loads current stage in the pipeline and invokes the selected harness (`IAgentHarness`).
      * Measures step performance (start/end timestamp, duration in ms, token usage).
      * Evaluates `StageExecutionResult`:
-       * If `WaitingForHuman`: records `Question`, `StageCheckpoint`, and `StageExecutionRecord`, performs Git WIP commit, sets status to `BlockedQuestion`, finishes job to release worker.
+       * If `WaitingForHuman`: records `Question`, `StageCheckpoint`, and `StageExecutionRecord`, performs Git WIP commit, sets status to `BlockedQuestion`, and cleanly completes the Hangfire job (`Succeeded`) to release the worker without false error alerts.
        * If `StageCompleted`: saves `StageExecutionRecord` and checkpoint, advances to next stage in pipeline. If final stage completed, transitions to `Review` and generates diff.
        * If `Failed`: logs error and metrics, transitions state to `Failed`.
   4. Implement `SubmitHumanAnswerAsync`:
@@ -170,11 +176,11 @@ NightCodeForge/
   6. Implement `CompleteIssueAndCascadeAsync`:
      * On final human approval/merge, sets issue to `Completed`.
      * Unlocks dependent issues in the same workspace and enqueues newly ready issues into `llm-inference`.
-   7. Implement `IStartupRecoveryService` (Graceful Restart & Windows Update Recovery):
-      * Executes during host startup before Hangfire worker begins polling.
-      * Purges dangling Git lock files (`.git/index.lock`, `.git/refs/...`) left by abrupt process termination.
-      * Scans working tree and creates automated rescue commit for uncommitted edits (`WIP-RECOVERY`).
-      * Reconciles orphaned `Running` issues: rehydrates conversation memory from last checkpoint, injects reboot notice, and enqueues to `llm-urgent` for immediate resumption.
+  7. Implement `IStartupRecoveryService` (Graceful Restart & Windows Update Recovery):
+     * Executes during host startup before Hangfire worker begins polling.
+     * Purges dangling Git lock files (`.git/index.lock`, `.git/refs/...`) left by abrupt process termination.
+     * Scans working tree and creates automated rescue commit for uncommitted edits (`WIP-RECOVERY`).
+     * Reconciles orphaned `Running` issues: rehydrates conversation memory from last checkpoint, injects reboot notice, and enqueues to `llm-urgent` for immediate resumption.
 * **Deliverables:** Background worker lifecycle working with simulated agent tasks, testing queue priority, step duration/token metrics, interruption, and dependency unblocking.
 
 ---
@@ -189,7 +195,13 @@ NightCodeForge/
      * Implement `IOllamaModelCatalogService` to query `/api/tags` and populate active local/remote models dynamically.
      * Capture target routing telemetry (e.g. from `/monitor` or response headers) for real-time UI display.
   3. Implement **Harness Implementations & Canonical Tools:**
-      * **Minimalist Canonical Tool Suite (Pi-Harmonized):** `read` (line-sliced via `offset`/`limit`), `get_file_outline` (AST symbol skeleton), `edit` (precision chunk search-and-replace, supporting multi-disjoint `edits: []`), `write`, `bash` (with `HeadTailBuffer` truncation, compiler error extraction, and shell discovery `ls`/`find`/`rg`), `web_search` (extensible via `IWebSearchService`, defaulting to Ollama Web Search API), `ask_human_question`, and `propose_issues`.
+      * **Minimalist Canonical Tool Suite (Pi-Harmonized) & EditorConfig Compliance:**
+        - `read` (line-sliced via `offset`/`limit`), `bash` (with `HeadTailBuffer` truncation, compiler error extraction, and shell discovery `ls`/`find`/`rg`), `web_search` (extensible via `IWebSearchService`, defaulting to Ollama Web Search API), `ask`, and `propose_issues`.
+        - `write` & `edit` with **EditorConfig Enforcement (`IEditorConfigService`, `EditorConfigFileApplier`):**
+          * Hierarchically resolves `.editorconfig` from target file directory up to `root = true`.
+          * Applies `end_of_line` (`lf`, `crlf`, `cr`), `indent_style` (`tab`, `space`), `indent_size` / `tab_width`, `insert_final_newline` (`true`, `false`), `trim_trailing_whitespace` (`true`, `false`), and `charset` encoding on every file write or precision edit.
+          * Automatically falls back to detecting dominant file conventions if `.editorconfig` is absent, preventing cross-platform Git diff churn.
+          * Precision chunk search-and-replace in `edit`, supporting multi-disjoint `edits: []` and indentation tolerance.
      * **`LenientToolDispatcher` (Tolerance Engine):**
         - Tool name aliasing and fuzzy matching (`read` $\leftarrow$ `read_file`, `ReadFile`, `cat`, `view_file`; `edit` $\leftarrow$ `replace_file_content`, `edit_file`, `str_replace`, `replace_content`; `write` $\leftarrow$ `write_file`, `write_to_file`; `bash` $\leftarrow$ `run_command`, `exec`, `cmd`, `terminal`; `web_search` $\leftarrow$ `search_web`, `google_search`, `webSearch`, etc.).
         - Dropped tool translation: `list_dir` $\rightarrow$ `bash("ls -la ...")`, `grep_search` $\rightarrow$ `bash("rg -n ...")`.
@@ -213,13 +225,16 @@ NightCodeForge/
      * Pluggable runners: `BareHostExecutionEnvironment`, `WslExecutionEnvironment`, and `ContainerSandboxEnvironment` (`NightCodeForgeContainerExecutor`).
      * Inspired by Microsoft Agent Framework shell executor architecture:
        - **Persistent Sentinel REPL Protocol:** Keeps `docker exec -i <container> bash --noprofile --norc` alive with unique GUID sentinels (`echo "__NCF_SENTINEL_<guid>__ $?"`) for instant command execution without container restart overhead.
+       - **Timeout & Runaway Process Cancellation:** Sends `\x03` (SIGINT) on command timeout, awaits 2-second grace period for sentinel return, and forcefully restarts the shell process if unresponsive.
        - **`HeadTailBuffer` Output Compaction:** UTF-8 rune-safe bounded accumulation capping stdout/stderr at 32 KB with `[... truncated N bytes ...]` markers.
      * Customizations for software engineering: Network enabled (for package restores), non-read-only root (for package caches), rich developer images (.NET, Node, Git), and native ext4 Git branch mirror mounts.
+     * **Restricted Read-Only Sandbox Tier (`RestrictedReadOnly`):** For untrusted intake triage on `main`/`master`, launches containers with `--network none`, `:ro` workspace mounts, `--read-only` root filesystem, `--cap-drop=ALL`, `--user 1000:1000`, and scrubbed host secrets to neutralize indirect prompt injection exfiltration.
      * In-process harness delegation: `bash` in Crucible, Pi, and ACP harnesses executes inside the sandbox container/WSL, granting autonomous command execution without user prompt fatigue.
      * Central host orchestration: LLM inference, API keys, ACP/Pi lifecycle management, and `mcp_config.json` remain centralized on the host.
    5. Implement Specialized Workflow Stages (Agentic & Deterministic) & Bootstrap Prompts:
-      * **Stage-Scoped Tool Visibility:** Enforces strict tool gating per stage (Stage 1: Read-only; Stage 2: Code/Build/Test; Stage 3: Audit/Patch; Discovery: Read-only exploration).
-      * **`IssueReviewStage`:** System persona for architectural analysis; bootstrap prompt injecting `{{Issue.Title}}`, `{{Issue.Description}}`, repository structure, with strict directive to invoke `ask_human_question` on any ambiguity.
+      * **Stage-Scoped Tool Visibility:** Enforces strict tool gating per stage (Stage 0 Triage: Read-only + `propose_issues`; Stage 1: Read-only; Stage 2: Code/Build/Test; Stage 3: Audit/Patch; Discovery: Read-only exploration).
+      * **`TriageStage`:** Automated intake stage for untrusted external reports (GitHub/GitLab issues) running on `main`/`master`; uses Crucible-exclusive tool whitelisting (`read`, `propose_issues`) and `RestrictedReadOnly` sandbox to prevent tampering or exfiltration; outputs backlog proposals for human review.
+      * **`IssueReviewStage`:** System persona for architectural analysis; bootstrap prompt injecting `{{Issue.Title}}`, `{{Issue.Description}}`, repository structure, with strict directive to invoke `ask` on any ambiguity.
       * **`ImplementationStage`:** System persona for senior engineer / TDD; bootstrap prompt injecting approved Stage 1 plan, `{{PriorAnswers}}`, affected files, and parsed diagnostic findings from prior deterministic stages (`{{PriorStageArtifacts.Diagnostics}}`); tool loop for coding, building, and running tests.
       * **`CodeReviewAndFixStage`:** System persona for critical code auditor; bootstrap prompt injecting target `{{BaseBranch}}`, noise-filtered `{{GitDiff}}` changeset (`-U2`, lockfile exclusions); automated gap analysis, regression detection, and direct patch application.
       * **Built-in Deterministic Stages (DeterministicWorkflowStage):**
@@ -248,7 +263,7 @@ NightCodeForge/
       * Native in-loop context compaction via `ToolResultCompactionStrategy` (`Microsoft.Agents.AI.Compaction`) with `MinimumPreservedGroups = 3` and custom `ToolCallFormatter` to compact older tool outputs into concise stubs.
       * Bounded command output streaming via `HeadTailBuffer` + compiler diagnostic extraction (extracting only failing `error CS\d+` lines and test assertions).
       * Synthetic conversation priming: pre-seeds active chat history with simulated prior tool execution pairs (e.g. deterministic test results) to eliminate exploratory agent tool round-trips.
-* **Deliverables:** Harness abstraction layer complete; Canonical tools & LenientToolDispatcher operational; Crucible, Pi, and ACP adapter functional; token minimization & context compaction engine verified; MCP, Skills, and AGENTS.md integration verified; execution sandboxing and shared caches operational; session transcripts and hybrid failure diagnostics operational; 3 agent stages and discovery agent verified with mock/local LLMs and step metrics recorded.
+* **Deliverables:** Harness abstraction layer complete; Canonical tools & LenientToolDispatcher operational with EditorConfig compliance (EOL, tab/space, whitespace, charset); Crucible, Pi, and ACP adapter functional; token minimization & context compaction engine verified; MCP, Skills, and AGENTS.md integration verified; execution sandboxing and shared caches operational; session transcripts and hybrid failure diagnostics operational; 3 agent stages and discovery agent verified with mock/local LLMs and step metrics recorded.
 
 ---
 

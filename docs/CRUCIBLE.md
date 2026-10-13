@@ -21,6 +21,7 @@ flowchart TD
         Skills["AgentSkillsProvider\n(Progressive Disclosure)"]
         Dispatcher["LenientToolDispatcher\n(Tolerance Engine & Aliasing)"]
         ToolRegistry["Stage-Scoped Tool Registry"]
+        EditorConfigApplier["EditorConfig Applier\n(EOL, Tab/Space, Trim, Charset)"]
         Compaction["ToolResultCompactionStrategy\n(In-Loop Token Minimization)"]
         McpMgr["IMcpClientManager\n(Microsoft.Agents.AI.Mcp)"]
         Persistence["PerServiceCall Persistence\n& AgentSession Serialization"]
@@ -33,11 +34,12 @@ flowchart TD
     Queue -->|Executes Stage Session| Harness
     Harness -->|Inference Requests| Router
     Harness -->|Delegates bash| Sandbox
-    Harness -->|Intercepts ask_human_question| Forge
+    Harness -->|Intercepts ask| Forge
     Forge --> GitMgr
     Forge --> DB
     ToolRegistry --> Dispatcher
-    Dispatcher --> Compaction
+    Dispatcher --> EditorConfigApplier
+    EditorConfigApplier --> Compaction
     Skills --> Harness
     Compaction --> Persistence
     McpMgr --> Harness
@@ -50,6 +52,7 @@ Crucible is built in pure C# targeting .NET 9/.NET 10, consuming official **NuGe
 * **`Microsoft.Agents.AI.Abstractions`:** `AIAgent`, `AgentSession`, `AgentRunContext`, and JSON session serialization/deserialization contracts.
 * **`Microsoft.Agents.AI.Mcp`:** Native Model Context Protocol (MCP) host integration for stdio and SSE tools.
 * **`Microsoft.Extensions.AI`:** The standard .NET AI abstraction layer for `IChatClient`, function definitions, streaming, and OpenTelemetry instrumentation.
+* **`editorconfig`:** Official .NET EditorConfig parser library for hierarchical directory traversal and glob rule matching.
 * **`OllamaRouter` Compatibility:** Native HTTP communication with local Ollama, vLLM, LM Studio, or OpenAI-compatible endpoints with dynamic GPU routing.
 
 ---
@@ -62,30 +65,51 @@ Every execution stage in a workflow pipeline binds to an **Agent Profile** (`Age
 ```csharp
 public class AgentProfile
 {
-    public string Id { get; set; } = default!;          // e.g. "deep-analyst", "fast-coder", "strict-auditor"
+    public string Id { get; set; } = default!;          // e.g. "triage-guard", "deep-analyst", "fast-coder", "strict-auditor"
     public string Name { get; set; } = default!;
-    public string HarnessId { get; set; } = "crucible";
+    public string HarnessId { get; set; } = "crucible"; // Triage strictly requires Crucible
     public string ModelName { get; set; } = default!;    // e.g. "deepseek-r1:32b", "qwen2.5-coder:32b"
     public ThinkingEffort ThinkingEffort { get; set; }  // None, Low, Medium, High, CustomBudget
     public int? ThinkingTokenBudget { get; set; }
     public double? Temperature { get; set; }
     public string? HarnessConfigurationJson { get; set; } // Custom runtime options
+    public IReadOnlyList<string>? PermittedTools { get; set; } // Whitelist: null = all stage tools; ["read", "propose_issues"]
+    public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard; // Standard vs RestrictedReadOnly
     public int? WorkspaceId { get; set; }               // Nullable: workspace override
+}
+
+public enum SandboxSecurityTier
+{
+    Standard = 0,          // Normal execution on feature branch; network permitted for restores
+    RestrictedReadOnly = 1 // Untrusted external intake on main/master: :ro mount, --network none, --read-only, --cap-drop=ALL
 }
 ```
 
 ### 2.2 Stage Persona Prompts & Behavioral Directives
 Crucible specializes agent behavior per stage using tailored System Personas and dynamic Bootstrap Prompts:
 
+0. **Stage 0: Automated Triage (`TriageStage` - Untrusted Issue Intake):**
+   * **System Persona:** Untrusted Issue Triage & Bug Reproducibility Analyst.
+   * **Mission:** Automatically evaluate incoming issues from external trackers (e.g. GitHub issues, Jira, webhooks) directly on the base branch (`main` or `master`). Verify technical relevance, inspect candidate files, extract reproduction steps and acceptance criteria, and propose structured backlog items via `propose_issues`.
+   * **Security Posture & Untrusted Content Guardrails:**
+     - External issue text may contain malicious **indirect prompt injections**.
+     - Tool access is strictly locked down: only `read` and `propose_issues` are registered.
+     - `write` and `edit` are **strictly prohibited** to prevent working tree tampering.
+     - `ask` is **prohibited** to prevent external inputs from blocking the human dev-queue.
+     - `web_search` is **prohibited** to eliminate SSRF and data exfiltration channels.
+     - Runs exclusively in a **Restricted Read-Only Container Sandbox** (`--network none`, `:ro` workspace mount, `--read-only`, `--cap-drop=ALL`) on `main`/`master`.
+     - *Crucible Exclusive:* Pi and ACP harnesses cannot be used for triage because their static tool architectures do not support fine-grained runtime tool restriction.
+   * **Directive:** *"Analyze the reported issue against the repository base branch. Determine affected files and acceptance criteria. Call propose_issues to recommend structured backlog items. You have read-only access and cannot modify code or access external networks."*
+   * **Output:** Structured backlog proposal(s) awaiting human confirmation in the Web UI.
 1. **Stage 1: Issue Review (`IssueReviewStage`):**
    * **System Persona:** Architectural Analyst & Requirements Investigator.
    * **Mission:** Deeply inspect the codebase against the issue request *before* coding. Proactively uncover ambiguities, implicit assumptions, and architectural conflicts.
-   * **Directive:** *"If any requirement or design decision is ambiguous or has multiple valid alternatives, invoke `ask_human_question` immediately to clarify. Do not guess."*
+   * **Directive:** *"If any requirement or design decision is ambiguous or has multiple valid alternatives, invoke `ask` immediately to clarify. Do not guess."*
    * **Output:** Approved Technical Specification & Execution Plan.
 2. **Stage 2: Implementation (`ImplementationStage`):**
    * **System Persona:** Senior Software Engineer & TDD Practitioner.
    * **Mission:** Implement clean, robust code according to the approved Stage 1 plan. Run builds (`dotnet build`), run tests, and fix errors incrementally.
-   * **Directive:** *"Write working code and verify with build tools. If unexpected blockers or breaking changes arise, call `ask_human_question`."*
+   * **Directive:** *"Write working code and verify with build tools. If unexpected blockers or breaking changes arise, call `ask`."*
    * **Output:** Working implementation on the feature branch.
 3. **Stage 3: Code Review and Fixes (`CodeReviewAndFixStage`):**
    * **System Persona:** Critical Code Auditor & QA Specialist.
@@ -104,17 +128,20 @@ Crucible adopts the standard, minimalist tool names established by **Pi** (`read
 | Tool Name | Parameters | Purpose | Token & Operational Strategy |
 | :--- | :--- | :--- | :--- |
 | **`read`** | `path` (string)<br>`offset` (int?, 1-indexed)<br>`limit` (int?) | Read file contents with line slicing. | Enforces window slicing (default 150 lines max) to prevent context flooding. Guideline: *"Use read to examine files instead of cat or sed."* |
-| **`edit`** | `path` (string)<br>`edits` (`{ oldText, newText }[]`)<br>*(legacy: root `oldText`, `newText`)* | Precision search-and-replace chunk editing, supporting both single replacements and **multi-disjoint edits** in one call. | Generates ~40 completion tokens instead of rewriting full files. Supports multi-edit batches to modify imports and methods in a single turn. Guideline: *"Use edit for precise changes (`edits[].oldText` must match exactly)."* |
-| **`write`** | `path` (string)<br>`content` (string) | Create a brand-new file or perform a deliberate full overwrite. | Restricted primarily to new file creation or full template generation. Guideline: *"Use write only for new files or complete rewrites."* |
+| **`edit`** | `path` (string)<br>`edits` (`{ oldText, newText }[]`)<br>*(legacy: root `oldText`, `newText`)* | Precision search-and-replace chunk editing, supporting both single replacements and **multi-disjoint edits** in one call. | Generates ~40 completion tokens instead of rewriting full files. Supports multi-edit batches to modify imports and methods in a single turn. **Enforces repository `.editorconfig` rules** (EOL normalization, tab/space indent, trailing whitespace trimming, final newline). Guideline: *"Use edit for precise changes (`edits[].oldText` must match exactly)."* |
+| **`write`** | `path` (string)<br>`content` (string) | Create a brand-new file or perform a deliberate full overwrite. | Restricted primarily to new file creation or full template generation. **Formats content to repository `.editorconfig`** (EOL, tab/space style & width, trailing whitespace, final newline, charset encoding). Guideline: *"Use write only for new files or complete rewrites."* |
 | **`bash`** | `command` (string)<br>`timeout` (int?, seconds)<br>`working_directory` (string?) | Executes commands in the container sandbox. Used for builds, tests, git CLI, and file operations (`ls`, `find`, `rg`). | Output streamed via `HeadTailBuffer` rune-safe truncation + compiler error extraction. Guideline: *"Use bash for file operations like ls, rg, find."* |
-| **`get_file_outline`** | `path` (string) | Extracts high-level AST symbol skeleton (classes, methods, signatures, line numbers) without bodies. | ~80 tokens instead of reading full 2,000-line files. Rapid structural orientation before reading specific methods. |
-| **`ask_human_question`** | `prompt` (string)<br>`rationale` (string)<br>`options` (string[]?) | Triggers non-blocking checkpoint & GPU worker release. | Persisted to DB & frontmatter; frees GPU instantly for dev-queue. |
+| **`ask`** | `prompt` (string)<br>`rationale` (string)<br>`options` (string[]?) | Triggers non-blocking checkpoint & GPU worker release. | Persisted to DB & frontmatter; frees GPU instantly for dev-queue. |
 | **`web_search`** | `query` (string)<br>`max_results` (int?) | Live web search via pluggable search provider (default: Ollama Web Search). | Compact snippet extraction (default 5 results, ~250 tokens total). |
 | **`propose_issues`** | `issues` (List of issue proposals) | Read-only discovery agent outputs structured backlog items. | Schema-constrained for ideation chat. |
 
 > [!NOTE]
-> **Why `list_dir` and `grep_search` were dropped:**
-> In local LLM agent loops, declaring separate tools for directory listing and pattern searching adds hundreds of tokens of schema definitions to every single turn. Modern coding models are already trained to run `ls`, `find`, `grep`, and `ripgrep` (`rg`) via `bash`. For backward-compatibility with models biased toward older conventions, Crucible's `LenientToolDispatcher` transparently translates calls like `list_dir(path: "src")` into `bash("ls -la src")`.
+> **Why `list_dir`, `grep_search`, and `get_file_outline` were dropped:**
+> In local LLM agent loops, declaring separate tools for directory listing, pattern searching, and polyglot AST outlines adds hundreds of tokens of schema definitions to every single turn. Polyglot outline parsing (e.g. Roslyn for C#, Tree-sitter for TS/Python/Rust/Go) introduces heavy native binary dependencies and cross-platform container headaches. Modern coding models already inspect code structures using `read` (with line slicing via `offset`/`limit`) or fast shell commands in `bash` (`ls`, `find`, `rg`, `grep`). Dropping `get_file_outline` also achieves 100% core tool parity with Pi (`read`, `edit`, `write`, `bash`).
+> For backward-compatibility with models biased toward older conventions, Crucible's `LenientToolDispatcher` transparently translates legacy tool calls:
+> - `list_dir(path: "src")` $\rightarrow$ `bash("ls -la src")`
+> - `grep_search(query: "foo", path: "src")` $\rightarrow$ `bash("rg -n \"foo\" src")`
+> - `get_file_outline(path: "file.cs")` $\rightarrow$ `bash("rg -n \"^(public|private|protected|internal|class|interface|record|def|function)\" file.cs")` (or falls back to `read(path, offset: 1, limit: 120)` if `bash` is restricted)
 
 ### 3.2 Extensible Web Search Architecture (`IWebSearchService`)
 Crucible abstracts web search behind a pluggable `IWebSearchService` interface, allowing developers to switch providers or connect self-hosted search aggregators while defaulting out-of-the-box to Ollama's native service:
@@ -195,12 +222,12 @@ flowchart TD
 * **`edit`** $\leftarrow$ `replace_file_content`, `replace_content`, `edit_file`, `str_replace`, `patch_file`, `editFile`, `ReplaceFileContent`
 * **`write`** $\leftarrow$ `write_file`, `writeFile`, `create_file`, `new_file`, `WriteFile`
 * **`bash`** $\leftarrow$ `run_command`, `RunCommand`, `run_cmd`, `exec`, `execute`, `cmd`, `terminal`, `powershell`
-* **`get_file_outline`** $\leftarrow$ `outline`, `view_outline`, `get_outline`, `list_symbols`, `file_outline`
-* **`ask_human_question`** $\leftarrow$ `ask_human`, `ask_user`, `AskHumanQuestion`, `ask_question`
+* **`ask`** $\leftarrow$ `ask_human_question`, `ask_human`, `ask_user`, `AskHumanQuestion`, `ask_question`, `askHuman`
 * **`web_search`** $\leftarrow$ `search_web`, `google_search`, `bing_search`, `brave_search`, `webSearch`, `internet_search`, `search`
 * **Automatic Translation for Dropped Tools:**
   - `list_dir(path, recursive)` $\rightarrow$ Automatically re-routed to `bash("ls -la " + path)`
   - `grep_search(query, path)` $\rightarrow$ Automatically re-routed to `bash("rg -n \"" + query + "\" " + (path ?? "."))`
+  - `get_file_outline(path)` / `outline` / `view_outline` / `get_outline` / `list_symbols` / `file_outline` $\rightarrow$ Automatically re-routed to `bash("rg -n \"^(public|private|protected|internal|class|interface|record|def|function)\" " + path)` (or falls back to `read(path, offset: 1, limit: 120)` if `bash` is restricted in that stage)
 
 ### 4.2 Parameter Normalization
 * `path` $\leftarrow$ `file_path`, `filePath`, `filepath`, `filename`, `file`, `target_file`
@@ -261,6 +288,112 @@ flowchart TD
    - Adjust `replacement_content` indentation by `DeltaIndent` for each line.
    - Replace the matched block cleanly with correctly formatted code.
 
+### 4.5 EditorConfig Enforcement for File Operations (`write`, `edit`)
+
+Autonomous coding agents operating in cross-platform environments (e.g., Windows host syncing with WSL2/Linux container ext4 mirrors) frequently introduce subtle code formatting anomalies that pollute version control and trigger CI lint failures:
+* **EOL Inconsistencies (LF vs CRLF):** Local LLMs predominantly emit Unix `\n` (LF) line endings. On Windows repositories configured for CRLF (or vice versa), applying an unnormalized replacement can rewrite every line ending in the file, polluting `git diff` with hundreds of phantom changes.
+* **Indentation Inconsistencies:** Models frequently generate 2 spaces for files configured with 4 spaces, or spaces instead of tabs (`indent_style = tab`).
+* **Trailing Whitespace & Final Newline Regressions:** Models frequently introduce trailing spaces on blank lines or omit trailing newlines, triggering Git warnings (`\ No newline at end of file`) and PR review friction.
+* **Charset Encoding Drift:** Writing files without honoring repository encoding standards can strip BOMs needed by certain legacy compilers or corrupt non-ASCII characters.
+
+To guarantee zero diff pollution and strict adherence to repository standards, **Crucible applies EditorConfig rules automatically at the tool boundary** for all file-modifying operations (`write`, `edit`).
+
+```mermaid
+flowchart TD
+    RawCall["Tool Call: write(path, content) or edit(path, edits)"]
+    Lenient["1. LenientToolDispatcher\n(Normalizes path, edits, payload)"]
+    Service["2. IEditorConfigService\n- Upward directory walk to root = true\n- Section glob match (*.cs, *.{ts,js})\n- Resolves effective EditorConfigSettings"]
+    
+    subgraph Applier ["3. EditorConfigFileApplier"]
+        Match["a. Precision/Indentation-Tolerant Chunk Splicing (edit only)"]
+        Indent["b. Indentation Normalization\n(Converts spaces <-> tabs per indent_style & indent_size)"]
+        Trim["c. Trailing Whitespace Trimming\n(Strips trailing spaces/tabs per trim_trailing_whitespace)"]
+        FinalNL["d. Final Newline Enforcement\n(Ensures single trailing newline per insert_final_newline)"]
+        EOL["e. EOL Normalization\n(Enforces lf '\\n' or crlf '\\r\\n' per end_of_line)"]
+    end
+    
+    Disk["4. Atomic File Write\n(Encodes with resolved charset)"]
+    CleanDiff["Clean Git Working Tree\n(Zero EOL/formatting diff noise)"]
+
+    RawCall --> Lenient
+    Lenient --> Service
+    Service --> Applier
+    Applier --> Disk
+    Disk --> CleanDiff
+```
+
+#### 4.5.1 Supported EditorConfig Properties
+Crucible parses and enforces the core [EditorConfig Specification](https://editorconfig.org/):
+
+| Property | Supported Values | Crucible Enforcement Behavior |
+| :--- | :--- | :--- |
+| **`end_of_line`** | `lf`, `crlf`, `cr` | Normalizes all line terminators across the file (`\n`, `\r\n`, or `\r`). On `edit`, normalizes both the replaced block and guarantees the overall file EOL remains uniform. |
+| **`indent_style`** | `tab`, `space` | Enforces tab vs space indentation. Converts leading spaces to tabs (or tabs to spaces) according to `tab_width` / `indent_size`. |
+| **`indent_size`** | Integer (e.g. `2`, `4`), `tab` | Defines the number of spaces per indentation level. Guided by the Indentation-Tolerant Matcher to align inserted code. |
+| **`tab_width`** | Integer | Defines the column width of a tab character; defaults to `indent_size` when unspecified. |
+| **`insert_final_newline`** | `true`, `false` | When `true`, ensures the saved file terminates with exactly one newline character. When `false`, removes trailing blank lines/newlines. |
+| **`trim_trailing_whitespace`** | `true`, `false` | When `true`, strips trailing spaces and tabs from the end of each line before persisting to disk. |
+| **`charset`** | `utf-8`, `utf-8-bom`, `utf-16be`, `utf-16le`, `latin1` | Emits file bytes using the specified text encoding (e.g. standard UTF-8 without BOM or UTF-8 with BOM for specific .NET/Windows tooling). |
+
+#### 4.5.2 Hierarchical Traversal & Resolution Engine (`IEditorConfigService`)
+* **Upward Traversal:** Starting from the directory containing the target file, Crucible walks upward toward the root of the filesystem.
+* **Root Boundary:** Traversal halts immediately when a `.editorconfig` file containing `root = true` is reached.
+* **Section Glob Matching:** Globs (`*`, `*.cs`, `*.{js,ts}`, `[a-z]*`, `**`) are evaluated with OS-invariant forward slashes and case sensitivity rules matching the host platform.
+* **Precedence:** Properties defined in files closer to the target file override properties defined in higher-level parent directories. Within a single file, later sections override earlier sections.
+* **In-Memory Caching:** Parsed EditorConfig files are cached in memory per directory. A `FileSystemWatcher` invalidates cached ASTs whenever `.editorconfig` files are modified, ensuring zero filesystem thrashing during agent loops.
+
+#### 4.5.3 Operation Lifecycle: `write` vs. `edit`
+1. **`write(path, content)` Pipeline:**
+   - Resolves effective `EditorConfigSettings` for `path`.
+   - If `trim_trailing_whitespace = true`, trims trailing whitespace line-by-line.
+   - If `indent_style` is specified, adjusts leading whitespace to matching tabs/spaces using `indent_size`.
+   - If `insert_final_newline` is configured, ensures or strips trailing newline.
+   - Converts all newlines to `end_of_line` (`\n` for `lf`, `\r\n` for `crlf`).
+   - Writes to disk using the resolved `charset` encoding (e.g. UTF-8 without BOM).
+2. **`edit(path, edits)` Pipeline:**
+   - Resolves effective `EditorConfigSettings` for `path`.
+   - Reads target file and detects baseline formatting (existing dominant EOL, base indentation).
+   - Locates target chunk(s) using Section 4.4 exact match or indentation-tolerant fuzzy matcher.
+   - Re-indents replacement chunks to align with surrounding code indentation and the configured `indent_style` / `indent_size`.
+   - Splices replacement text into the existing file buffer.
+   - Applies `trim_trailing_whitespace` to the edited lines (and full file if configured).
+   - Enforces `insert_final_newline`.
+   - Normalizes newlines across the entire file to `end_of_line` (or preserves dominant existing EOL if unset).
+   - Writes file atomically with resolved `charset`.
+
+#### 4.5.4 Fallback & Auto-Detection Strategy (Unconfigured Files)
+If no `.editorconfig` is found or specific properties are omitted:
+* **EOL:** Auto-detects the dominant EOL in the existing file (`\r\n` vs `\n`). For brand-new files, defaults to `\n` (LF) or Git repository `core.autocrlf` convention.
+* **Indentation:** Auto-detects dominant indentation style (spaces vs tabs) and width (2 vs 4 spaces) from the file's first 100 lines.
+* **Trailing Whitespace & Final Newline:** Defaults to trimming trailing whitespace on modified lines and ensuring a single trailing newline (`insert_final_newline = true`), aligning with POSIX and Git best practices.
+* **Charset:** Defaults to UTF-8 without BOM (`new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)`).
+
+#### 4.5.5 Component Contracts
+```csharp
+public interface IEditorConfigService
+{
+    Task<EditorConfigSettings> GetSettingsForPathAsync(string filePath, CancellationToken cancellationToken = default);
+}
+
+public record EditorConfigSettings(
+    EndOfLine? EndOfLine,
+    IndentStyle? IndentStyle,
+    int? IndentSize,
+    int? TabWidth,
+    bool? InsertFinalNewline,
+    bool? TrimTrailingWhitespace,
+    Encoding? Charset);
+
+public enum EndOfLine { Lf, CrLf, Cr }
+public enum IndentStyle { Space, Tab }
+
+public interface IEditorConfigFileApplier
+{
+    string ApplyFormatting(string content, EditorConfigSettings settings, string? existingContent = null);
+    byte[] ApplyFormattingAndEncode(string content, EditorConfigSettings settings, string? existingContent = null);
+}
+```
+
 ---
 
 ## 5. Stage-Scoped Tool Visibility Matrix
@@ -269,12 +402,47 @@ To avoid wasting prompt tokens on unused tool definitions, Crucible exposes only
 
 | Stage | Permitted Tools | Excluded / Prohibited | Rationale |
 | :--- | :--- | :--- | :--- |
-| **Stage 1: Issue Review** | `read`, `get_file_outline`, `bash`, `web_search`, `ask_human_question` | `write`, `edit`, `propose_issues` | Requirements and architectural analysis. `bash` is restricted by system persona to inspection only (`ls`, `find`, `rg`, `git log`). Code edits are prohibited. |
-| **Stage 2: Implementation** | `read`, `get_file_outline`, `edit`, `write`, `bash`, `web_search`, `ask_human_question` | `propose_issues` | Full engineering tools for coding, building, running tests, and looking up API/compiler solutions. |
-| **Stage 3: Review & Fix** | `read`, `get_file_outline`, `edit`, `bash`, `ask_human_question` | `write`, `web_search`, `propose_issues` | Code auditing and precision patching; strictly focused on internal diffs without external search distraction. |
-| **Ideation / Discovery** | `read`, `get_file_outline`, `bash`, `web_search`, `propose_issues` | `write`, `edit` | Read-only codebase exploration + web research to propose structured backlog issues. |
+| **Stage 0: Automated Triage** *(Untrusted Intake)* | `read`, `propose_issues` | `write`, `edit`, `ask`, `web_search`, `bash` | Pre-analyses untrusted GitHub/GitLab issues directly on `main`/`master`. Strictly read-only; eliminates file mutations, human queue blocking (`ask`), and data exfiltration channels (`web_search`, `bash`). |
+| **Stage 1: Issue Review** | `read`, `bash`, `web_search`, `ask` | `write`, `edit`, `propose_issues` | Requirements and architectural analysis. `bash` is restricted by system persona to inspection only (`ls`, `find`, `rg`, `git log`). Code edits are prohibited. |
+| **Stage 2: Implementation** | `read`, `edit`, `write`, `bash`, `web_search`, `ask` | `propose_issues` | Full engineering tools for coding, building, running tests, and looking up API/compiler solutions. |
+| **Stage 3: Review & Fix** | `read`, `edit`, `bash`, `ask` | `write`, `web_search`, `propose_issues` | Code auditing and precision patching; strictly focused on internal diffs without external search distraction. |
+| **Ideation / Discovery** | `read`, `bash`, `web_search`, `propose_issues` | `write`, `edit` | Read-only codebase exploration + web research to propose structured backlog issues. |
 
 *Token Impact:* Reduces static tool schema overhead in the system prompt by **60%–70%** on every turn.
+
+### 5.1 Dynamic Tool Whitelisting vs. External Harness Limitations
+
+A foundational differentiator of Crucible over external agent harnesses is **dynamic, in-process tool whitelisting**:
+
+| Harness | Dynamic Tool Restriction Support | Architecture & Restriction Mechanism | Suitability for Untrusted Triage |
+| :--- | :--- | :--- | :--- |
+| **Crucible** (`CrucibleAgent`) | **Full (Native C#)** | Assembles `IList<AIFunction>` dynamically per session based on `AgentProfile.PermittedTools`. Prohibited tools are omitted from the LLM prompt schema entirely. | **Primary / Required for Triage.** Zero risk of the model executing unauthorized tools. |
+| **Pi Harness** (`PiRpcAgentHarness`) | **None (Static Engine)** | Tools (`read`, `edit`, `write`, `bash`) are hardcoded in Pi's TypeScript core (`@earendil-works/coding-agent`). The runner advertises all tools on startup. | **Unsuitable for Untrusted Triage.** Cannot revoke `write`, `edit`, or `bash` at runtime. |
+| **ACP Adapter** (`AcpAgentHarness`) | **Unsupported / Incompatible** | ACP agents (e.g. Zed/JetBrains external agents) advertise standard capabilities and expect full client toolsets. Dynamic tool revocation breaks agent handshakes. | **Unsuitable for Untrusted Triage.** Cannot guarantee external agents respect tool exclusions. |
+
+#### Crucible's In-Process Tool Binding Pipeline:
+```csharp
+public async Task<IAgentSession> CreateSessionAsync(
+    StageExecutionContext context, 
+    AgentProfile profile, 
+    CancellationToken ct)
+{
+    var allTools = _toolRegistry.GetCanonicalTools();
+    
+    // Enforce profile-level tool whitelisting (Defense-in-depth)
+    var activeTools = profile.PermittedTools is { Count: > 0 }
+        ? allTools.Where(t => profile.PermittedTools.Contains(t.Metadata.Name, StringComparer.OrdinalIgnoreCase)).ToList()
+        : GetDefaultStageTools(context.StageId);
+
+    // Build Crucible HarnessAgent with strictly bounded AIFunction delegates
+    return new CrucibleAgent(new HarnessAgentOptions
+    {
+        ChatClient = _chatClient,
+        Tools = activeTools,
+        SecurityTier = profile.SecurityTier
+    });
+}
+```
 
 ---
 
@@ -551,6 +719,10 @@ While inspired by the Microsoft Agent Framework's `DockerShellExecutor`, Crucibl
    * After dispatching a command over stdin, Crucible writes an echo command with a unique cryptographic GUID sentinel:
      `echo "__NCF_SENTINEL_<guid>__ $?"`
    * Crucible reads stdout until the sentinel is encountered, parsing the exact process exit code without terminating or restarting the shell process.
+   * **Timeout & Runaway Process Protection:** If a command hangs or enters an infinite loop, `ReadUntilSentinelAsync` reaches its timeout threshold:
+     1. Crucible immediately writes `\x03` (SIGINT / Ctrl+C) to `_stdin` to cancel the foreground process.
+     2. A 2-second grace period is granted for the shell to emit the sentinel and report the aborted exit status.
+     3. If the shell does not recover within the grace period, the container shell process is forcefully terminated (`docker kill` or shell restart) to guarantee zero orphaned runaway processes remain in the background.
 2. **`HeadTailBuffer` Output Compaction:**
    * Stdout and stderr are streamed through a rune-safe bounded accumulator that preserves the head (first 16 KB) and rolling tail (last 16 KB) separated by `[... truncated N bytes ...]`.
    * Evaluates whole UTF-8 runes to prevent orphan surrogates or byte-stream corruption.
@@ -571,14 +743,35 @@ public class NightCodeForgeContainerExecutor : IExecutionEnvironment, IAsyncDisp
         await _stdin.WriteLineAsync($"echo \"{sentinel} $?\"");
         await _stdin.FlushAsync();
 
-        return await ReadUntilSentinelAsync(sentinel, timeoutSeconds);
+        try
+        {
+            return await ReadUntilSentinelAsync(sentinel, timeoutSeconds);
+        }
+        catch (TimeoutException)
+        {
+            // 1. Send SIGINT (Ctrl+C) to abort the running command
+            await _stdin.WriteAsync('\x03');
+            await _stdin.FlushAsync();
+
+            try
+            {
+                // 2. Wait 2s grace period for shell to settle and emit sentinel
+                return await ReadUntilSentinelAsync(sentinel, timeoutSeconds: 2);
+            }
+            catch (TimeoutException)
+            {
+                // 3. Shell unresponsive: terminate and restart container shell process
+                await ForceRestartShellProcessAsync();
+                throw new TimeoutException($"Command timed out after {timeoutSeconds}s and was terminated.");
+            }
+        }
     }
 }
 ```
 
 ---
 
-### 11.2 Session Checkpointing & Asynchronous Interruption (`ask_human_question`)
+### 11.2 Session Checkpointing & Asynchronous Interruption (`ask`)
 
 Crucible natively implements NightCodeForge's asynchronous, non-blocking Human-in-the-Loop dev-queue architecture:
 
@@ -594,14 +787,14 @@ sequenceDiagram
     participant Queue as Hangfire Dev-Queue
     actor Dev as Human Developer
 
-    LLM->>Harness: Calls ask_human_question(prompt, options)
+    LLM->>Harness: Calls ask(prompt, options)
     Harness->>Persist: Commits chat turn to store
-    Harness-->>Stage: Yields HumanInterruptionException
+    Harness-->>Stage: Yields HumanInterruptionException (intercepted)
     Stage->>Harness: SerializeSessionAsync(agentSession)
     Stage->>Git: git commit -m "WIP: checkpoint before human question"
     Stage->>DB: Save SerializedSessionJson, Branch, PendingQuestion
-    Stage->>Queue: Terminate Hangfire Worker (Yield GPU!)
-    Note over Queue: GPU is instantly freed for next waiting task!
+    Stage->>Queue: Return StageExecutionResult.WaitingForHuman() (Job completes Succeeded!)
+    Note over Queue: Worker finishes cleanly; GPU is instantly freed for next waiting task!
     
     Dev->>DB: Submits answer via Web UI
     DB->>Queue: Enqueues stage at Priority 1 (llm-urgent)
@@ -612,7 +805,8 @@ sequenceDiagram
     Stage->>LLM: Resumes reasoning loop with exact context intact
 ```
 
-#### Zero Data-Loss Guarantee:
+#### Zero Data-Loss & Clean Queue Lifecycle:
+* **Clean Hangfire Job Completion:** When an agent invokes `ask`, the resulting `HumanInterruptionException` is caught internally by the orchestrator. Rather than letting the exception bubble up to Hangfire (which would mark the background job as red/`Failed`), the job orchestrator records the checkpoint and pending question, transitions the issue status to `BlockedQuestion`, and cleanly returns `StageExecutionResult.WaitingForHuman()`. The Hangfire job completes in a clean `Succeeded` state, releasing the single GPU worker for the next waiting task.
 * **`PerServiceCallChatHistoryPersistingChatClient`:** Persists message thread state after *every single tool call* inside the `FunctionInvokingChatClient` loop. If an unhandled crash or abort occurs, no intermediate reasoning is lost.
 * **`AIAgent.SerializeSessionAsync` / `DeserializeSessionAsync`:** Serializes all conversational memory, provider state bags, and reduction indices into a single standard `JsonElement` stored directly in `AppDbContext.IssueCheckpoints`.
 * **`MessageInjectingChatClient`:** Upon resumption from the dev-queue, the human's response is injected directly into the chat client stream as a fresh user turn, allowing the LLM to resume execution seamlessly without prompt re-bootstrapping or token waste.

@@ -17,7 +17,7 @@ Standard autonomous coding agents operate in interactive synchronous loops:
 
 ### 1.3 The NightCodeForge Solution: Context-Switching Dev-Queue
 NightCodeForge decouples task execution from human availability through **asynchronous checkpointing and workspace context switching**:
-* When an agent needs human guidance, it invokes a specialized interruption tool (`ask_human_question`).
+* When an agent needs human guidance, it invokes a specialized interruption tool (`ask`).
 * The orchestrator intercepts this call, captures the agent's memory/chat session into persistent storage, performs a Git WIP commit on the issue branch, and **terminates the worker task cleanly**.
 * The single-worker GPU queue immediately picks up the next task in line.
 * When the developer answers the pending question via the web interface, the issue transitions back to high-priority readiness. The orchestrator checks out the branch, restores the memory context with the human's answer, and resumes reasoning without loss of continuity.
@@ -100,9 +100,9 @@ flowchart LR
     Review --> Completed(["Completed & Merged"])
 
     Review -.->|Request Changes (with feedback)| UrgentQueue(["High-Priority Resume"])
-    S1 -.->|ask_human_question| Blocked["Blocked (Waiting for Human)"]
-    S2 -.->|ask_human_question| Blocked
-    S3 -.->|ask_human_question| Blocked
+    S1 -.->|ask| Blocked["Blocked (Waiting for Human)"]
+    S2 -.->|ask| Blocked
+    S3 -.->|ask| Blocked
     Blocked -.->|User Answers| UrgentQueue
     UrgentQueue --> S1
     UrgentQueue --> S2
@@ -127,6 +127,7 @@ Each step in a workflow pipeline is associated with an **Agent Profile** (`Agent
 
 | Stage | Typical Profile Needs | Example Configuration |
 | :--- | :--- | :--- |
+| **0. Automated Triage** *(Untrusted Intake)* | Autonomous pre-analysis of external issues/webhooks on `main`/`master`, strictly read-only, indirect injection defense. | **Harness:** `Crucible` *(Exclusive - Pi/ACP unsupported)*<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `Medium`<br>**Permitted Tools:** `["read", "propose_issues"]`<br>**Security:** `RestrictedReadOnly` (`--network none`, `:ro`) |
 | **1. Issue Review** | High reasoning capability, deep codebase comprehension, proactively questioning edge cases. | **Harness:** `Crucible` (or `PiRpc`)<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `High`<br>**Config:** `{ "proactiveAmbiguityCheck": true }` |
 | **2. Implementation** | Rapid tool execution, fast code generation, test iteration. | **Harness:** `Crucible`<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium` (or `Low`)<br>**Config:** `{ "autoCompile": true, "maxTestRetries": 3 }` |
 | **3. Code Review & Fixes** | Strict gap analysis, linting, regression auditing. | **Harness:** `Acp` (or `Crucible`)<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium`<br>**Config:** `{ "strictLinting": true, "temperature": 0.1 }` |
@@ -135,7 +136,7 @@ Each step in a workflow pipeline is associated with an **Agent Profile** (`Agent
 ```csharp
 public class AgentProfile
 {
-    public string Id { get; set; } = default!;          // e.g. "deep-analyst", "fast-coder", "acp-auditor"
+    public string Id { get; set; } = default!;          // e.g. "triage-guard", "deep-analyst", "fast-coder", "acp-auditor"
     public string Name { get; set; } = default!;
     public string HarnessId { get; set; } = default!;    // "crucible", "pi-rpc", or "acp"
     public string ModelName { get; set; } = default!;    // e.g. "deepseek-r1:32b", "qwen2.5-coder:32b"
@@ -143,7 +144,15 @@ public class AgentProfile
     public int? ThinkingTokenBudget { get; set; }
     public double? Temperature { get; set; }
     public string? HarnessConfigurationJson { get; set; } // Harness-specific launch/runtime JSON options
+    public IReadOnlyList<string>? PermittedTools { get; set; } // Whitelist: null = all stage tools; ["read", "propose_issues"]
+    public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard; // Standard vs RestrictedReadOnly
     public int? WorkspaceId { get; set; }               // Nullable: global profile or workspace override
+}
+
+public enum SandboxSecurityTier
+{
+    Standard = 0,          // Normal execution on feature branch; network permitted for restores
+    RestrictedReadOnly = 1 // Untrusted external intake on main/master: :ro mount, --network none, --read-only, --cap-drop=ALL
 }
 
 public enum ThinkingEffort
@@ -208,12 +217,12 @@ public class StagePromptTemplate
    - **System Persona:** Architectural Analyst & Requirements Investigator.
    - **Mission:** Scrutinize the codebase against the issue description. Proactively uncover ambiguities, implicit assumptions, and architectural conflicts *before* any implementation begins.
    - **Injected Context:** `{{Issue.Title}}`, `{{Issue.Description}}`, repository structure, guidelines.
-   - **Behavioral Directive:** "If any requirement or design decision is ambiguous or has multiple valid alternatives, invoke `ask_human_question` immediately to clarify. Do not guess."
+   - **Behavioral Directive:** "If any requirement or design decision is ambiguous or has multiple valid alternatives, invoke `ask` immediately to clarify. Do not guess."
 2. **Stage 2 (Implementation):**
    - **System Persona:** Senior Software Engineer & TDD Practitioner.
    - **Mission:** Implement clean, robust code according to the approved plan. Run builds (`dotnet build`), run tests, and fix errors incrementally.
    - **Injected Context:** Approved technical plan from Stage 1, all resolved Q&A pairs from `{{PriorAnswers}}`, list of affected files.
-   - **Behavioral Directive:** "Write working code and verify with build tools. If unexpected blockers or breaking changes arise, call `ask_human_question`."
+   - **Behavioral Directive:** "Write working code and verify with build tools. If unexpected blockers or breaking changes arise, call `ask`."
 3. **Stage 3 (Code Review and Fixes):**
    - **System Persona:** Critical Code Auditor & QA Specialist.
    - **Mission:** Review the full changeset against the base branch. Identify regressions, edge cases, missing unit tests, or lint violations, and make targeted fixes.
@@ -221,7 +230,7 @@ public class StagePromptTemplate
    - **Behavioral Directive:** "Inspect the diff line-by-line. If you find bugs or gaps, use file editing tools to fix them directly. When confident, summarize findings."
 
 ### 3.5 Stage Interruption & Universal Context Switching
-At **any point** in **any stage**, an agent may invoke the `ask_human_question` tool. When this occurs:
+At **any point** in **any stage**, an agent may invoke the `ask` tool. When this occurs:
 1. The stage returns `StageExecutionResult.WaitingForHuman(question)`.
 2. The orchestrator records the question in the database and updates the issue state to `BlockedQuestion(stageId)`.
 3. The orchestrator triggers a native Git WIP commit on `feature/issue-{id}`.
@@ -455,8 +464,55 @@ sequenceDiagram
 ```
 
 ### 6.1 Discovery Agent Capabilities
-* **Read-Only Access:** Equipped with search, file-reading, and symbol exploration tools (`bash` with ls/rg, `read`, `get_file_outline`). Cannot modify working tree files.
+* **Read-Only Access:** Equipped with search, file-reading, and code exploration tools (`bash` with ls/rg, `read`). Cannot modify working tree files.
 * **Issue Extraction Tool:** Agent has a function tool `propose_issues(List<IssueProposalDto>)` allowing it to output structured titles, acceptance criteria, affected components, and recommended dependencies directly into the UI for developer approval.
+
+### 6.2 Automated Untrusted Issue Triage (`TriageProfile` & Security Sandbox)
+NightCodeForge supports automated intake pre-analysis triggered by external webhooks (e.g. GitHub Issues, GitLab Issues, Jira):
+* **Intake Trigger & Objective:** When a new external bug report or feature request arrives, NightCodeForge spawns an autonomous **Triage Stage** (`TriageStage`). The agent inspects the repository's default branch (`main` or `master`) directly (without creating or checking out a feature branch), verifies if the report is actionable, locates relevant source files, and suggests one or more structured backlog issues via `propose_issues` for human review.
+* **Threat Model: Malicious External Content & Indirect Prompt Injections:**
+  External issues originate from unauthenticated or untrusted public users. Attackers can embed hidden prompt injections (e.g., instructions attempting to exfiltrate secrets, execute malicious shell scripts, or rewrite code).
+* **Dual-Lock Defense Architecture:**
+
+```mermaid
+flowchart TD
+    Webhook["1. External Webhook\n(GitHub / GitLab Issue created)"]
+    Queue["2. Hangfire Dev-Queue\n(Profile: triage-guard)"]
+    
+    subgraph Lock1 ["Lock 1: Crucible Dynamic Tool Whitelisting"]
+        Crucible["CrucibleAgent\n(Microsoft Agent Framework)"]
+        AllowedTools["Permitted: read, propose_issues"]
+        StrippedTools["Revoked at Schema Level:\nwrite, edit, ask, web_search, bash"]
+    end
+
+    subgraph Lock2 ["Lock 2: Restricted Read-Only Container Sandbox"]
+        Docker["Docker Container Execution\n(Target: main / master branch)"]
+        Flags["- Mount: /workspace:ro\n- Network: --network none\n- Filesystem: --read-only\n- Caps: --cap-drop=ALL\n- Scrubbed Environment (No host secrets)"]
+    end
+
+    BacklogUI["3. Backlog Review UI\n(Human approves / edits proposed issues)"]
+
+    Webhook --> Queue
+    Queue --> Crucible
+    Crucible --> AllowedTools
+    AllowedTools -.-> StrippedTools
+    Crucible --> Docker
+    Docker --> Flags
+    Crucible --> BacklogUI
+```
+
+1. **Lock 1: In-Process Tool Restriction (Crucible Exclusive):**
+   * Crucible dynamically binds *only* the read-only tools defined in `AgentProfile.PermittedTools`: `read` and `propose_issues`.
+   * `write` and `edit` are excluded entirely from the tool schema—the agent cannot modify files.
+   * `ask` is excluded—an untrusted issue cannot stall or block the human dev-queue.
+   * `web_search` is excluded—eliminating outbound SSRF and exfiltration channels.
+   * *Harness Exclusion:* **Pi and ACP harnesses cannot be used for triage** because their static tool engines advertise all capabilities (`write`, `edit`, `bash`) unconditionally.
+2. **Lock 2: Restricted Read-Only Container Sandbox:**
+   * Runs directly against the base branch (`main`/`master`) on ext4 mounted **read-only** (`:ro`).
+   * **`--network none`:** Completely air-gapped network namespace. Even if an LLM is hijacked by an adversarial prompt injection, it cannot exfiltrate environment variables, source code, or internal tokens over the network.
+   * **`--read-only` root filesystem:** Prevents writing malicious binaries or modifying system files.
+   * **`--cap-drop=ALL` & `--security-opt no-new-privileges:true`:** Drops all Linux root privileges.
+   * **Scrubbed Environment:** Host API keys, Git credentials, and database connection strings are strictly omitted from container environment variables.
 
 ---
 
@@ -477,6 +533,13 @@ The background job system uses **Hangfire** backed by persistent storage. Hangfi
 > This guarantees that:
 > 1. At most **one** AI task runs on the GPU at any millisecond, strictly guarding VRAM against out-of-memory crashes.
 > 2. Resumed issues in `llm-urgent` receive **priority pick-up**: as soon as the single worker completes its active turn/task, jobs in `llm-urgent` are dequeued before standard items in `llm-inference` (non-preemptive priority dispatch without concurrent VRAM oversubscription).
+
+### 7.2 Workspace-Level Concurrency & Git Locking (`IWorkspaceLockProvider`)
+While GPU inference is strictly serialized globally (`WorkerCount = 1`), background utility tasks (the `default` queue with `WorkerCount = 4`) and interactive developer actions (e.g. diff inspections, status checks, ideation chat) can operate concurrently.
+
+To prevent race conditions, concurrent Git index mutations, and `.git/index.lock` collisions on a given working tree:
+* All workspace-level Git CLI commands and filesystem modifications are guarded by a workspace-keyed concurrency lock (`IWorkspaceLockProvider`, backed by `AsyncKeyedLock<int>` or named mutex per `WorkspaceId`).
+* Operations on independent workspaces execute in parallel without contention; operations targeting the same workspace are strictly serialized.
 
 ---
 
@@ -515,6 +578,13 @@ When running on Windows hosts with containerized or WSL2 execution:
      git push host-origin feature/issue-{id}
      ```
    * **Ergonomics & Safety:** The developer's Windows IDE sees the updated `feature/issue-{id}` branch immediately without touching the active `main` branch. Zero 9p disk overhead during compilation or code search.
+   * **Handling Host Working Tree Dirty Conflicts:**
+     If the developer happens to have `feature/issue-{id}` checked out in their host IDE with uncommitted changes to tracked files, Git's `updateInstead` policy will reject the push to prevent overwriting uncommitted host edits.
+     * When this occurs, NightCodeForge catches the push rejection and pushes to an isolated tracking reference instead:
+       ```bash
+       git push host-origin feature/issue-{id}:refs/heads/feature/issue-{id}-ncf
+       ```
+     * An informative alert is broadcasted via SignalR to the UI, notifying the developer that their local uncommitted changes prevented direct working tree checkout, and providing the diff command to reconcile.
 4. **WSL-Native Repositories:** If the developer's project already lives natively in WSL2 (e.g. `\\wsl.localhost\Ubuntu\home\...`), the container directly volume-mounts that directory on ext4, bypassing the mirror sync step.
 
 ---
@@ -603,8 +673,8 @@ flowchart LR
 * **Dedicated Specification:** For the complete, dedicated architectural specification, tool implementation details, resilient forgiving dispatcher, and token minimization engine, see **[CRUCIBLE.md](CRUCIBLE.md)**.
 * **Compatibility:** Plugs directly into OllamaRouter, vanilla Ollama, LM Studio, vLLM, or any OpenAI-compatible server.
 * **Profile Integration:** Adapts execution parameters based on the stage's `AgentProfile` (e.g. mapping `ThinkingEffort` to OpenAI `reasoning_effort` or DeepSeek/Ollama thinking budget tokens).
-* **Auto-Configuration:** Pre-configured out of the box with system prompts, canonical function tools (`read`, `edit`, `write`, `bash`, `get_file_outline`, `web_search`, `ask_human_question`, `propose_issues`), and memory serialization.
-* **Interruption:** Tool `ask_human_question` catches the call, serializes the active `ChatHistory` to JSON, captures token counters from `AdditionalProperties["usage"]`, and flags `AgentRunStatus.WaitingForHuman`.
+* **Auto-Configuration:** Pre-configured out of the box with system prompts, canonical function tools (`read`, `edit`, `write`, `bash`, `web_search`, `ask`, `propose_issues`), and memory serialization.
+* **Interruption:** Tool `ask` catches the call, serializes the active `ChatHistory` to JSON, captures token counters from `AdditionalProperties["usage"]`, and flags `AgentRunStatus.WaitingForHuman`.
 
 #### Implementation B (First-Class Fallback): Pi via JSON-RPC
 * **Type:** External sub-process runner communicating via JSON-RPC over `stdio` (JSON Lines protocol).
@@ -626,8 +696,9 @@ flowchart LR
 
 ### 9.4 Crucible Harness Specification & Token Minimization
 For the complete technical specification of the native Crucible harness—including:
-* **Canonical Tool Suite (Pi-Harmonized):** (`read`, `edit`, `write`, `bash`, `get_file_outline`, `web_search`, `ask_human_question`, `propose_issues` - with `list_dir` / `grep_search` mapped to `bash`)
+* **Canonical Tool Suite (Pi-Harmonized):** (`read`, `edit`, `write`, `bash`, `web_search`, `ask`, `propose_issues` - with `list_dir` / `grep_search` / `get_file_outline` mapped to `bash` / `read`)
 * **The "Forgiving" Tool Dispatcher:** Tool name aliasing, parameter normalization, markdown code fence stripping, and indentation tolerance
+* **EditorConfig Enforcement for File Operations:** Automatic application of `.editorconfig` rules (`end_of_line` [LF/CRLF], `indent_style`, `indent_size`, `insert_final_newline`, `trim_trailing_whitespace`, `charset`) on `write` and `edit` to prevent cross-platform line ending churn and formatting diff noise
 * **Stage-Scoped Tool Visibility Matrix:** Gating tool schemas per stage to reduce static prompt overhead
 * **Local LLM Token Minimization:** Prompt prefix stabilization for KV cache reuse, ephemeral tool output eviction, compiler error extraction, and noise-filtered git diffs
 
@@ -907,7 +978,7 @@ erDiagram
         string Description
         string BaseBranch
         string FeatureBranch
-        string OverallState
+        string Status
         string CurrentStageId
         int Priority
         datetime CreatedAt
@@ -1121,18 +1192,33 @@ flowchart LR
    - **Pi JSON-RPC:** NightCodeForge spawns and monitors the Pi agent runner on the host, passing tool implementations that forward `bash` into the container sandbox.
    - **Agent Client Protocol (ACP):** NightCodeForge acts as the ACP client. When an ACP agent requests a terminal command execution, NightCodeForge routes the command into the container sandbox.
    - `mcp_config.json`, API credentials, and skills remain centralized on the host.
-3. **Optimized File Operations:**
+3. **Optimized File Operations & EditorConfig Compliance:**
    - Single-file reads and writes (`read`, `edit`, `write`) access the ext4 mirror directly via `\\wsl.localhost\Ubuntu\var\ncf\...` or fast exec streaming.
+   - All `write` and `edit` file mutations pass through Crucible's `EditorConfigFileApplier`, strictly enforcing repository `.editorconfig` rules (`end_of_line` [LF/CRLF], `indent_style`, `indent_size`, `trim_trailing_whitespace`, `insert_final_newline`, `charset`) before writing to disk. This completely prevents cross-environment newline churn (Windows CRLF vs Linux LF) and eliminates phantom diffs in Git.
    - Heavy recursive operations (compilation, test runners, git status) run completely inside the container.
 
 ### 14.5 Host Guardrails & Command Isolation
 * **Docker Socket Prohibition:** Mounting `/var/run/docker.sock` into the container is strictly prohibited to prevent container escapes.
 * **Network Policies:** Optional network egress restrictions limit container network calls to trusted package registries (nuget.org, npmjs.org, pypi.org) while blocking internal private subnets.
 * **Timeout Governance:** Every command execution inside the sandbox is governed by a strict timeout (e.g. 5 minutes for compilation, 30 seconds for git operations).
+* **Sentinel REPL Process Protection:** If a command hangs or enters an infinite loop inside `docker exec` / WSL, the runner sends `\x03` (SIGINT) over stdin. If the sentinel is not emitted within a 2-second grace period, the container shell process is forcefully terminated and restarted to eliminate runaway background processes.
+
+#### 14.5.1 Restricted Read-Only Container Sandbox (Triage Tier)
+For untrusted external input (such as incoming GitHub issues processed by `TriageProfile` on the `main` or `master` branch), NightCodeForge enforces a hardened container profile:
+* **Target Working Directory:** Mounted directly on the repository base branch (`main` or `master`) with strict read-only permissions (`-v /var/ncf/workspaces/{id}/repo:/workspace:ro`). No feature branch is checked out, guaranteeing the base branch cannot be modified.
+* **Air-Gapped Network Namespace (`--network none`):** The container is launched with zero network connectivity. Outbound TCP/UDP, DNS resolution, and access to host or internal subnets are completely disabled, neutralizing any data exfiltration or credential phone-home attempts.
+* **Read-Only Root Filesystem (`--read-only`):** The entire container filesystem (apart from a volatile 32MB in-memory `/tmp` tmpfs with `noexec,nosuid`) is immutable.
+* **Privilege & Capability Stripping:**
+  - `--cap-drop=ALL`: Drops all Linux kernel capabilities.
+  - `--security-opt no-new-privileges:true`: Prevents escalation via setuid/setgid binaries.
+  - `--user 1000:1000`: Enforces non-root execution.
+* **Secret & Environment Sanitization:** Container environment variables are scrubbed of all host secrets (Ollama/OpenAI API keys, GitHub personal access tokens, database connection strings, JWT signing keys).
+* **Host Execution Prohibition:** Invocations with `SecurityTier == SandboxSecurityTier.RestrictedReadOnly` strictly refuse to run under `BareHostExecutionEnvironment` or unconfined WSL; they must execute inside the hardened container.
 
 ### 14.6 Crash & Hang Protection
 * Every LLM step and Git command is bound to a strict timeout policy.
-* Hangfire automatic retry is disabled for LLM inference tasks (`[AutomaticRetry(Attempts = 0)]`) to prevent duplicate code edits on failure; instead, failures transition cleanly to `Failed` state.
+* Hangfire automatic retry is disabled for LLM inference tasks (`[AutomaticRetry(Attempts = 0)]`) to prevent duplicate code edits on unexpected runtime exceptions; unhandled errors transition the issue cleanly to `Failed`.
+* **Clean Interruption Lifecycle:** Interruption via `ask` is intercepted internally: the checkpoint and question are persisted, the issue transitions to `BlockedQuestion`, and the background job returns `StageExecutionResult.WaitingForHuman()`, completing in a clean `Succeeded` status in Hangfire rather than an artificial failure.
 
 ### 14.7 Graceful Restart & Crash Recovery System (`IStartupRecoveryService`)
 

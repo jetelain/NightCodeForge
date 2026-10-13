@@ -328,8 +328,10 @@ public class PiRpcAgentHarness : IAgentHarness, IAsyncDisposable
 | **Execution Model** | Native In-Process C# (.NET 9/10) | External Node.js/Bun Subprocess |
 | **Foundation** | Microsoft Agent Framework & `Microsoft.Extensions.AI` | Pi Agent Core (`@earendil-works/pi-agent-core`) |
 | **Communication** | Direct in-memory C# method calls & delegates | JSON-RPC over `stdio` pipes (JSON Lines) |
-| **Core Toolset** | `read`, `edit`, `write`, `bash`, `get_file_outline`, `ask_human_question`, `web_search` | `read`, `edit`, `write`, `bash` |
+| **Core Toolset** | `read`, `edit`, `write`, `bash`, `ask`, `web_search` | `read`, `edit`, `write`, `bash` |
 | **Multi-Disjoint Edit** | Native via `edits: [{ oldText, newText }]` | Native via `edits: [{ oldText, newText }]` |
+| **EditorConfig Compliance** | Native automated enforcement (`end_of_line`, `indent_style`, `indent_size`, `trim_trailing_whitespace`, `insert_final_newline`, `charset`) | Relies on LLM model compliance or external prettier/linters |
+| **Dynamic Tool Restriction & Untrusted Triage** | **Fully Supported:** In-process `IList<AIFunction>` whitelisting; enables read-only untrusted triage (`TriageStage`) on `main`/`master` | **Unsupported:** Fixed static tool definitions; cannot revoke `write`/`edit`/`bash` dynamically per session |
 | **Sandboxing** | `NightCodeForgeContainerExecutor` (Docker Sentinel REPL) | Process-level sandbox or WSL execution |
 | **Interruption Mechanism** | `HumanInterruptionException` + `AIAgent.SerializeSessionAsync` | `extension_ui_request` + session snapshot |
 | **Best Used For** | Primary native pipeline, tight EF Core & MCP integration, maximum performance | Fallback harness, testing models on Pi's reference harness, headless parity validation |
