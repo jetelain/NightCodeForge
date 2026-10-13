@@ -37,6 +37,7 @@ public partial class IdeationService : IIdeationService
     private readonly IWebSearchService _webSearchService;
     private readonly AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer? _activityStreamer;
+    private readonly IWorkspacePathResolver? _pathResolver;
     private readonly ILogger<IdeationService> _logger;
 
     public IdeationService(
@@ -47,6 +48,7 @@ public partial class IdeationService : IIdeationService
         IWebSearchService? webSearchService = null,
         AgentsMdService? agentsMdService = null,
         IAgentActivityStreamer? activityStreamer = null,
+        IWorkspacePathResolver? pathResolver = null,
         ILogger<IdeationService>? logger = null)
     {
         if (defaultChatClient == null && chatClientFactory == null)
@@ -61,6 +63,7 @@ public partial class IdeationService : IIdeationService
         _webSearchService = webSearchService ?? new MockWebSearchService();
         _agentsMdService = agentsMdService ?? new AgentsMdService();
         _activityStreamer = activityStreamer;
+        _pathResolver = pathResolver;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<IdeationService>.Instance;
     }
 
@@ -210,7 +213,9 @@ When you recommend one or more implementation tasks, format them as a structured
             effectiveEnv,
             webSearchService: _webSearchService,
             buildTimeoutSeconds: buildTimeout,
-            testTimeoutSeconds: testTimeout);
+            testTimeoutSeconds: testTimeout,
+            pathResolver: _pathResolver,
+            workspaceId: workspace?.Id);
 
         var dispatcher = new LenientToolDispatcher(canonicalTools);
 

@@ -51,7 +51,7 @@ public class QualityGateLoopbackTests
             Title = "Feature X",
             Description = "Implement feature X",
             CurrentStageId = "quality-gate",
-            Status = IssueOverallStatus.Pending
+            Status = IssueOverallStatus.Open
         };
 
         var workspace = new Workspace
@@ -67,7 +67,7 @@ public class QualityGateLoopbackTests
         var workspaceRepo = new InMemoryWorkspaceRepository();
         await workspaceRepo.CreateAsync(workspace);
         var depStore = new InMemoryIssueDependencyStore();
-        depStore.AddIssue(10, 1, IssueOverallStatus.Pending);
+        depStore.AddIssue(10, 1, IssueOverallStatus.Open);
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var jobQueue = new FakeIssueJobQueue();
@@ -102,7 +102,7 @@ public class QualityGateLoopbackTests
 
         // Assert
         Assert.Equal("implementation", issue.CurrentStageId);
-        Assert.Equal(IssueOverallStatus.Pending, issue.Status);
+        Assert.Equal(IssueOverallStatus.Open, issue.Status);
         Assert.Single(jobQueue.UrgentQueue);
         Assert.Equal(10, jobQueue.UrgentQueue[0]);
 
@@ -128,7 +128,7 @@ public class QualityGateLoopbackTests
             Title = "Feature Y",
             Description = "Implement feature Y",
             CurrentStageId = "quality-gate",
-            Status = IssueOverallStatus.Pending
+            Status = IssueOverallStatus.Open
         };
 
         var initialBag = new PipelineDataBag();
@@ -149,7 +149,7 @@ public class QualityGateLoopbackTests
         var workspaceRepo = new InMemoryWorkspaceRepository();
         await workspaceRepo.CreateAsync(workspace);
         var depStore = new InMemoryIssueDependencyStore();
-        depStore.AddIssue(11, 1, IssueOverallStatus.Pending);
+        depStore.AddIssue(11, 1, IssueOverallStatus.Open);
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var jobQueue = new FakeIssueJobQueue();
@@ -194,7 +194,7 @@ public class QualityGateLoopbackTests
             Title = "Feature Z",
             Description = "Implement feature Z",
             CurrentStageId = "implementation",
-            Status = IssueOverallStatus.Pending
+            Status = IssueOverallStatus.Open
         };
 
         issue.Questions.Add(new Question
@@ -223,7 +223,7 @@ public class QualityGateLoopbackTests
         var workspaceRepo = new InMemoryWorkspaceRepository();
         await workspaceRepo.CreateAsync(workspace);
         var depStore = new InMemoryIssueDependencyStore();
-        depStore.AddIssue(12, 1, IssueOverallStatus.Pending);
+        depStore.AddIssue(12, 1, IssueOverallStatus.Open);
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var jobQueue = new FakeIssueJobQueue();
@@ -272,7 +272,7 @@ public class QualityGateLoopbackTests
             Title = "Feature Checkpoint",
             Description = "Testing checkpoints",
             CurrentStageId = "stage1",
-            Status = IssueOverallStatus.Pending
+            Status = IssueOverallStatus.Open
         };
 
         var workspace = new Workspace
@@ -288,7 +288,7 @@ public class QualityGateLoopbackTests
         var workspaceRepo = new InMemoryWorkspaceRepository();
         await workspaceRepo.CreateAsync(workspace);
         var depStore = new InMemoryIssueDependencyStore();
-        depStore.AddIssue(13, 1, IssueOverallStatus.Pending);
+        depStore.AddIssue(13, 1, IssueOverallStatus.Open);
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var jobQueue = new FakeIssueJobQueue();

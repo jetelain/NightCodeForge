@@ -345,6 +345,29 @@ Let me know what you think!";
         public IChatClient CreateClient(string? modelId = null) => _createFunc(null);
         public IChatClient CreateClient(AgentProfile? profile) => _createFunc(profile);
     }
+
+    private class FakePathResolver : NightCodeForge.Core.Interfaces.IWorkspacePathResolver
+    {
+        public string GetAgentWorkingClonePath(int workspaceId) => $"/home/user/.nightcodeforge/wks/{workspaceId}";
+        public string GetHostRemoteUrl(string repositoryPath) => $"/mnt/c/{repositoryPath}";
+        public string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath) => $@"\\wsl.localhost\Ubuntu\home\user\.nightcodeforge\wks\{workspaceId}\{relativeOrContainerPath}";
+        public string GetWslDistributionName() => "Ubuntu";
+        public string GetWslUserName() => "user";
+    }
+
+    [Fact]
+    public async Task ConverseAsync_WithWorkspacePathResolver_InstantiatesCanonicalToolsAndExecutesSuccessfully()
+    {
+        var fakeClient = new FakeChatClient { ResponseToReturn = "Exploration complete." };
+        var pathResolver = new FakePathResolver();
+        var service = new IdeationService(fakeClient, pathResolver: pathResolver);
+
+        var workspace = new Workspace { Id = 42, Name = "Test WS", RepositoryPath = Directory.GetCurrentDirectory() };
+        var result = await service.ConverseAsync(workspace, "Explore the architecture");
+
+        Assert.NotNull(result);
+        Assert.Equal("Exploration complete.", result.AssistantMessage);
+    }
 }
 
 

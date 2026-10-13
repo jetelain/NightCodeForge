@@ -44,15 +44,15 @@ public class CascadeUnblockingTests
         // Issue 201 (Prerequisite)
         // Issue 202 depends on 201
         // Issue 203 depends on 201 AND 204 (where 204 is still Pending)
-        var issue201 = await _issueRepo.CreateAsync(new Issue { Id = 201, WorkspaceId = 1, Status = IssueOverallStatus.Review, BaseBranch = "main" });
-        var issue202 = await _issueRepo.CreateAsync(new Issue { Id = 202, WorkspaceId = 1, Status = IssueOverallStatus.WaitingOnDependencies });
-        var issue203 = await _issueRepo.CreateAsync(new Issue { Id = 203, WorkspaceId = 1, Status = IssueOverallStatus.WaitingOnDependencies });
-        var issue204 = await _issueRepo.CreateAsync(new Issue { Id = 204, WorkspaceId = 1, Status = IssueOverallStatus.Pending });
+        var issue201 = await _issueRepo.CreateAsync(new Issue { Id = 201, WorkspaceId = 1, Status = IssueOverallStatus.Ready, BaseBranch = "main" });
+        var issue202 = await _issueRepo.CreateAsync(new Issue { Id = 202, WorkspaceId = 1, Status = IssueOverallStatus.Open });
+        var issue203 = await _issueRepo.CreateAsync(new Issue { Id = 203, WorkspaceId = 1, Status = IssueOverallStatus.Open });
+        var issue204 = await _issueRepo.CreateAsync(new Issue { Id = 204, WorkspaceId = 1, Status = IssueOverallStatus.Open });
 
-        _depStore.AddIssue(201, 1, IssueOverallStatus.Review);
-        _depStore.AddIssue(202, 1, IssueOverallStatus.WaitingOnDependencies);
-        _depStore.AddIssue(203, 1, IssueOverallStatus.WaitingOnDependencies);
-        _depStore.AddIssue(204, 1, IssueOverallStatus.Pending);
+        _depStore.AddIssue(201, 1, IssueOverallStatus.Ready);
+        _depStore.AddIssue(202, 1, IssueOverallStatus.Open);
+        _depStore.AddIssue(203, 1, IssueOverallStatus.Open);
+        _depStore.AddIssue(204, 1, IssueOverallStatus.Open);
 
         _depStore.AddDependency(1, 202, 201);
         _depStore.AddDependency(1, 203, 201);
@@ -71,10 +71,10 @@ public class CascadeUnblockingTests
         Assert.Equal("main", merge.BaseBranch);
         Assert.Equal("feat(auth): Add JWT bearer token validation (#201)", merge.CommitMessage);
 
-        // 2. Issue 201 marked Completed
+        // 2. Issue 201 marked Closed
         var updated201 = await _issueRepo.GetByIdAsync(201);
         Assert.NotNull(updated201);
-        Assert.Equal(IssueOverallStatus.Completed, updated201.Status);
+        Assert.Equal(IssueOverallStatus.Closed, updated201.Status);
 
         // 3. Issue 202 unblocked and enqueued to llm-inference
         Assert.Contains(202, _jobQueue.InferenceQueue);

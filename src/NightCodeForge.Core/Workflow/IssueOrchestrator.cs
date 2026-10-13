@@ -26,6 +26,7 @@ public class IssueOrchestrator : IIssueOrchestrator
     private readonly IHarnessRegistry? _harnessRegistry;
     private readonly IGitMirrorSyncService? _gitMirrorSyncService;
     private readonly Services.IIssueMarkdownSyncService? _markdownSyncService;
+    private readonly IWorkspacePathResolver? _pathResolver;
     private readonly ILogger<IssueOrchestrator> _logger;
 
     public IssueOrchestrator(
@@ -40,6 +41,7 @@ public class IssueOrchestrator : IIssueOrchestrator
         IHarnessRegistry? harnessRegistry = null,
         IGitMirrorSyncService? gitMirrorSyncService = null,
         Services.IIssueMarkdownSyncService? markdownSyncService = null,
+        IWorkspacePathResolver? pathResolver = null,
         ILogger<IssueOrchestrator>? logger = null)
     {
         _issueRepository = issueRepository ?? throw new ArgumentNullException(nameof(issueRepository));
@@ -53,6 +55,7 @@ public class IssueOrchestrator : IIssueOrchestrator
         _harnessRegistry = harnessRegistry;
         _gitMirrorSyncService = gitMirrorSyncService;
         _markdownSyncService = markdownSyncService;
+        _pathResolver = pathResolver;
         _logger = logger ?? NullLogger<IssueOrchestrator>.Instance;
     }
 
@@ -69,13 +72,7 @@ public class IssueOrchestrator : IIssueOrchestrator
         var isReady = await _dependencyEngine.IsReadyForExecutionAsync(issueId, cancellationToken);
         if (!isReady)
         {
-            _logger.LogInformation("Issue #{IssueId} prerequisites not yet completed; transitioning to WaitingOnDependencies.", issueId);
-            issue.Status = IssueOverallStatus.WaitingOnDependencies;
-            await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
-            if (_dependencyStore != null)
-            {
-                await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.WaitingOnDependencies, cancellationToken);
-            }
+            _logger.LogInformation("Issue #{IssueId} prerequisites not yet completed or not open; waiting.", issueId);
             await _issueRepository.AddExecutionLogAsync(new ExecutionLog
             {
                 IssueId = issue.Id,
@@ -120,16 +117,37 @@ public class IssueOrchestrator : IIssueOrchestrator
         {
             await _gitWorkspaceManager.CheckoutIssueBranchAsync(workspace, issue.Id, issue.BaseBranch, cancellationToken);
 
-            if (_gitMirrorSyncService != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+            if (_gitMirrorSyncService != null)
             {
-                try
+                if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && _pathResolver != null)
                 {
-                    await _gitMirrorSyncService.ConfigureHostRepositoryAsync(workspace.RepositoryPath, cancellationToken);
-                    await _gitMirrorSyncService.FetchFromHostAsync(workspace.Ext4MirrorPath, issue.BaseBranch, cancellationToken);
+                    try
+                    {
+                        var defaultMirrorDir = _pathResolver.GetAgentWorkingClonePath(workspace.Id);
+                        var initializedPath = await _gitMirrorSyncService.InitializeMirrorAsync(workspace, defaultMirrorDir, cancellationToken);
+                        if (!string.IsNullOrWhiteSpace(initializedPath))
+                        {
+                            workspace.Ext4MirrorPath = initializedPath;
+                            await _workspaceRepository.UpdateAsync(workspace, cancellationToken);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Automatic ext4 mirror initialization failed for workspace #{WorkspaceId}", workspace.Id);
+                    }
                 }
-                catch (Exception mex)
+
+                if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
                 {
-                    _logger.LogWarning(mex, "Ext4 mirror fetch synchronization failed for issue #{IssueId}", issueId);
+                    try
+                    {
+                        await _gitMirrorSyncService.ConfigureHostRepositoryAsync(workspace.RepositoryPath, cancellationToken);
+                        await _gitMirrorSyncService.FetchFromHostAsync(workspace.Ext4MirrorPath, issue.BaseBranch, cancellationToken);
+                    }
+                    catch (Exception mex)
+                    {
+                        _logger.LogWarning(mex, "Ext4 mirror fetch synchronization failed for issue #{IssueId}", issueId);
+                    }
                 }
             }
         }
@@ -189,17 +207,34 @@ public class IssueOrchestrator : IIssueOrchestrator
             return;
         }
 
-        // Resolve Agent Profile matching the current stage, or fallback to first
-        var profile = workspace.AgentProfiles?.FirstOrDefault(p =>
-            string.Equals(p.Id, stage.StageId, StringComparison.OrdinalIgnoreCase) ||
-            (p.StageDirectives != null && p.StageDirectives.ContainsKey(stage.StageId)))
-            ?? workspace.AgentProfiles?.FirstOrDefault();
-
-        issue.Status = IssueOverallStatus.Running;
-        await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
-        if (_dependencyStore != null)
+        // Resolve Agent Profile matching interrupted profile or current stage, or fallback to first
+        AgentProfile? profile = null;
+        if (!string.IsNullOrWhiteSpace(issue.InterruptedAgentProfileId))
         {
-            await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Running, cancellationToken);
+            profile = workspace.AgentProfiles?.FirstOrDefault(p =>
+                string.Equals(p.Id, issue.InterruptedAgentProfileId, StringComparison.OrdinalIgnoreCase));
+            issue.InterruptedAgentProfileId = null;
+        }
+
+        if (profile == null)
+        {
+            profile = workspace.AgentProfiles?.FirstOrDefault(p =>
+                string.Equals(p.Id, stage.StageId, StringComparison.OrdinalIgnoreCase) ||
+                (p.StageDirectives != null && p.StageDirectives.ContainsKey(stage.StageId)))
+                ?? workspace.AgentProfiles?.FirstOrDefault();
+        }
+
+        if (issue.IsWaitingForHuman)
+        {
+            issue.IsWaitingForHuman = false;
+            if (_dependencyStore != null)
+            {
+                await _dependencyStore.SetWaitingForHumanAsync(issue.Id, false, cancellationToken);
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(issue.InterruptedStageId))
+        {
+            issue.InterruptedStageId = null;
         }
 
         var pipelineContext = new PipelineContext(issue, workspace);
@@ -230,6 +265,10 @@ public class IssueOrchestrator : IIssueOrchestrator
                     }
                     else
                     {
+                        var resumeMemory = (lastCheckpoint != null && string.Equals(lastCheckpoint.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase))
+                            ? lastCheckpoint.SerializedMemory
+                            : null;
+
                         var agentContext = new AgentSessionContext
                         {
                             Issue = issue,
@@ -239,7 +278,7 @@ public class IssueOrchestrator : IIssueOrchestrator
                             StageDirective = stageDirective,
                             RequiredMode = stage.RequiredMode,
                             WorkspacePath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) ? workspace.Ext4MirrorPath : workspace.RepositoryPath,
-                            SerializedStateJson = lastCheckpoint?.SerializedMemory,
+                            SerializedStateJson = resumeMemory,
                             PendingHumanAnswer = lastHumanAnswer,
                             BootstrapPrompt = BuildBootstrapPrompt(stage.StageId, issue, pipelineContext, stageDirective),
                             OptimizationFlags = profile?.OptimizationFlags ?? new LocalOptimizationFlags(),
@@ -318,6 +357,7 @@ public class IssueOrchestrator : IIssueOrchestrator
             question.IssueId = issue.Id;
             question.StageId = stage.StageId;
             question.Status = QuestionStatus.Pending;
+            question.AgentProfileId = profile?.Id;
             question.AskedAt = DateTime.UtcNow;
 
             issue.Questions.Add(question);
@@ -347,12 +387,17 @@ public class IssueOrchestrator : IIssueOrchestrator
             };
             await _issueRepository.AddCheckpointAsync(checkpoint, cancellationToken);
 
-            issue.Status = IssueOverallStatus.BlockedQuestion;
+            // Universal Interruption: human interruption NEVER mutates issue.Status!
+            issue.IsWaitingForHuman = true;
+            issue.InterruptedStageId = stage.StageId;
+            issue.InterruptedAgentProfileId = profile?.Id;
+
             pipelineContext.SyncDataBagToIssue();
             await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
             if (_dependencyStore != null)
             {
-                await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.BlockedQuestion, cancellationToken);
+                await _dependencyStore.UpdateIssueStatusAsync(issue.Id, issue.Status, cancellationToken);
+                await _dependencyStore.SetWaitingForHumanAsync(issue.Id, true, cancellationToken);
             }
             await SyncIssueMarkdownAndMirrorAsync(issue, workspace, cancellationToken);
 
@@ -373,15 +418,44 @@ public class IssueOrchestrator : IIssueOrchestrator
             // Case B: Stage Completed
             pipelineContext.ResetRetries();
 
+            string commitHash = string.Empty;
+            try
+            {
+                commitHash = await _gitWorkspaceManager.CreateWipCheckpointAsync(
+                    workspace,
+                    issue.Id,
+                    stage.StageId,
+                    $"Completed stage '{stage.StageId}'",
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed creating stage completion checkpoint commit for issue #{IssueId}", issue.Id);
+            }
+
             var checkpoint = new StageCheckpoint
             {
                 IssueId = issue.Id,
                 StageId = stage.StageId,
-                GitCommitHash = string.Empty,
-                SerializedMemory = pipelineContext.DataBag.Get<string>("SerializedMemory") ?? string.Empty,
+                GitCommitHash = commitHash,
+                SerializedMemory = string.Empty,
                 CreatedAt = DateTime.UtcNow
             };
             await _issueRepository.AddCheckpointAsync(checkpoint, cancellationToken);
+
+            // Status stamps per stage
+            if (string.Equals(stage.StageId, "issue-review", StringComparison.OrdinalIgnoreCase))
+            {
+                issue.Status = IssueOverallStatus.Reviewed;
+            }
+            else if (string.Equals(stage.StageId, "implementation", StringComparison.OrdinalIgnoreCase))
+            {
+                issue.Status = IssueOverallStatus.Implemented;
+            }
+            else if (string.Equals(stage.StageId, "deterministic-post-review", StringComparison.OrdinalIgnoreCase))
+            {
+                issue.Status = IssueOverallStatus.Ready;
+            }
 
             var nextStageId = result.TargetRoutingStageId;
             IWorkflowStage? nextStage = !string.IsNullOrWhiteSpace(nextStageId)
@@ -391,12 +465,11 @@ public class IssueOrchestrator : IIssueOrchestrator
             if (nextStage != null)
             {
                 issue.CurrentStageId = nextStage.StageId;
-                issue.Status = IssueOverallStatus.Pending;
                 pipelineContext.SyncDataBagToIssue();
                 await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
                 if (_dependencyStore != null)
                 {
-                    await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Pending, cancellationToken);
+                    await _dependencyStore.UpdateIssueStatusAsync(issue.Id, issue.Status, cancellationToken);
                 }
                 await SyncIssueMarkdownAndMirrorAsync(issue, workspace, cancellationToken);
 
@@ -405,8 +478,8 @@ public class IssueOrchestrator : IIssueOrchestrator
             }
             else
             {
-                // Final stage reached: Transition to Review and generate review diff
-                issue.Status = IssueOverallStatus.Review;
+                // Final stage reached: Transition to Ready and generate review diff
+                issue.Status = IssueOverallStatus.Ready;
 
                 string diff = string.Empty;
                 try
@@ -423,17 +496,25 @@ public class IssueOrchestrator : IIssueOrchestrator
                 await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
                 if (_dependencyStore != null)
                 {
-                    await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Review, cancellationToken);
+                    await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Ready, cancellationToken);
                 }
-                await SyncIssueMarkdownAndMirrorAsync(issue, workspace, cancellationToken);
 
-                await _issueRepository.AddExecutionLogAsync(new ExecutionLog
+                if (issue.MergeMode == MergeMode.Automatic)
                 {
-                    IssueId = issue.Id,
-                    Level = LogLevel.Information,
-                    Message = $"Pipeline completed all stages for issue #{issue.Id}. Transitioned to Review.",
-                    Timestamp = DateTime.UtcNow
-                }, cancellationToken);
+                    _logger.LogInformation("Issue #{IssueId} reached Ready with MergeMode.Automatic; executing auto-merge.", issue.Id);
+                    await CompleteIssueAndCascadeInternalAsync(issue, workspace, $"Auto-merge issue #{issue.Id}: {issue.Title}", cancellationToken);
+                }
+                else
+                {
+                    await SyncIssueMarkdownAndMirrorAsync(issue, workspace, cancellationToken);
+                    await _issueRepository.AddExecutionLogAsync(new ExecutionLog
+                    {
+                        IssueId = issue.Id,
+                        Level = LogLevel.Information,
+                        Message = $"Pipeline completed all stages for issue #{issue.Id}. Awaiting maintainer manual review to merge.",
+                        Timestamp = DateTime.UtcNow
+                    }, cancellationToken);
+                }
             }
             return;
         }
@@ -456,12 +537,11 @@ public class IssueOrchestrator : IIssueOrchestrator
                 }
 
                 issue.CurrentStageId = result.TargetRoutingStageId;
-                issue.Status = IssueOverallStatus.Pending;
                 pipelineContext.SyncDataBagToIssue();
                 await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
                 if (_dependencyStore != null)
                 {
-                    await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Pending, cancellationToken);
+                    await _dependencyStore.UpdateIssueStatusAsync(issue.Id, issue.Status, cancellationToken);
                 }
                 await SyncIssueMarkdownAndMirrorAsync(issue, workspace, cancellationToken);
 
@@ -514,7 +594,8 @@ public class IssueOrchestrator : IIssueOrchestrator
             throw new KeyNotFoundException($"Associated Issue #{question.IssueId} not found.");
         }
 
-        issue.Status = IssueOverallStatus.Pending;
+        // Universal Interruption: answering never mutates issue.Status!
+        issue.IsWaitingForHuman = false;
 
         var bag = PipelineDataBag.FromJson(issue.PipelineDataJson);
         bag.Set("LastHumanAnswer", answer);
@@ -524,7 +605,8 @@ public class IssueOrchestrator : IIssueOrchestrator
         await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
         if (_dependencyStore != null)
         {
-            await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Pending, cancellationToken);
+            await _dependencyStore.UpdateIssueStatusAsync(issue.Id, issue.Status, cancellationToken);
+            await _dependencyStore.SetWaitingForHumanAsync(issue.Id, false, cancellationToken);
         }
 
         await _issueRepository.AddExecutionLogAsync(new ExecutionLog
@@ -547,8 +629,8 @@ public class IssueOrchestrator : IIssueOrchestrator
             throw new KeyNotFoundException($"Issue #{issueId} not found.");
         }
 
-        // Re-route issue back to Implementation stage (Stage 2)
-        issue.Status = IssueOverallStatus.Pending;
+        // Re-route issue back to Implementation stage (Stage 3)
+        issue.Status = IssueOverallStatus.Reviewed;
         issue.CurrentStageId = ImplementationStage.DefaultStageId;
 
         var bag = PipelineDataBag.FromJson(issue.PipelineDataJson);
@@ -558,7 +640,7 @@ public class IssueOrchestrator : IIssueOrchestrator
         await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
         if (_dependencyStore != null)
         {
-            await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Pending, cancellationToken);
+            await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Reviewed, cancellationToken);
         }
 
         await _issueRepository.AddExecutionLogAsync(new ExecutionLog
@@ -571,6 +653,69 @@ public class IssueOrchestrator : IIssueOrchestrator
 
         // Enqueue to llm-urgent for rapid rework
         _jobQueue.EnqueueUrgent(issue.Id);
+    }
+
+    public async Task PromoteSuggestedIssueAsync(
+        int issueId,
+        IssueOverallStatus targetStatus,
+        int priority,
+        MergeMode mergeMode,
+        CancellationToken cancellationToken = default)
+    {
+        var issue = await _issueRepository.GetByIdAsync(issueId, cancellationToken);
+        if (issue == null)
+        {
+            throw new KeyNotFoundException($"Issue #{issueId} not found.");
+        }
+
+        if (targetStatus == IssueOverallStatus.Open)
+        {
+            issue.Status = IssueOverallStatus.Open;
+            issue.Priority = priority;
+            issue.MergeMode = mergeMode;
+            issue.UpdatedAt = DateTime.UtcNow;
+
+            await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
+            if (_dependencyStore != null)
+            {
+                await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Open, cancellationToken);
+            }
+
+            var isReady = await _dependencyEngine.IsReadyForExecutionAsync(issue.Id, cancellationToken);
+            if (isReady)
+            {
+                _jobQueue.EnqueueInference(issue.Id);
+            }
+        }
+        else if (targetStatus == IssueOverallStatus.Rejected)
+        {
+            issue.Status = IssueOverallStatus.Rejected;
+            issue.UpdatedAt = DateTime.UtcNow;
+
+            await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
+            if (_dependencyStore != null)
+            {
+                await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Rejected, cancellationToken);
+            }
+        }
+        else
+        {
+            throw new ArgumentException($"Invalid target status '{targetStatus}' for promotion of suggested issue. Must be Open or Rejected.", nameof(targetStatus));
+        }
+
+        var workspace = issue.Workspace ?? await _workspaceRepository.GetByIdAsync(issue.WorkspaceId, cancellationToken);
+        if (workspace != null)
+        {
+            await SyncIssueMarkdownAndMirrorAsync(issue, workspace, cancellationToken);
+        }
+
+        await _issueRepository.AddExecutionLogAsync(new ExecutionLog
+        {
+            IssueId = issue.Id,
+            Level = LogLevel.Information,
+            Message = $"Issue #{issue.Id} promoted to status {targetStatus} (Priority: {priority}, MergeMode: {mergeMode}).",
+            Timestamp = DateTime.UtcNow
+        }, cancellationToken);
     }
 
     public async Task CompleteIssueAndCascadeAsync(int issueId, string finalCommitMessage, CancellationToken cancellationToken = default)
@@ -588,6 +733,15 @@ public class IssueOrchestrator : IIssueOrchestrator
             throw new InvalidOperationException($"Workspace #{issue.WorkspaceId} not found.");
         }
 
+        await CompleteIssueAndCascadeInternalAsync(issue, workspace, finalCommitMessage, cancellationToken);
+    }
+
+    private async Task CompleteIssueAndCascadeInternalAsync(
+        Issue issue,
+        Workspace workspace,
+        string finalCommitMessage,
+        CancellationToken cancellationToken)
+    {
         // 1. Squash & Merge feature branch into base branch
         await _gitWorkspaceManager.SquashAndMergeAsync(
             workspace,
@@ -596,12 +750,12 @@ public class IssueOrchestrator : IIssueOrchestrator
             finalCommitMessage,
             cancellationToken);
 
-        // 2. Mark issue as completed
-        issue.Status = IssueOverallStatus.Completed;
+        // 2. Mark issue as completed (Closed)
+        issue.Status = IssueOverallStatus.Closed;
         await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
         if (_dependencyStore != null)
         {
-            await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Completed, cancellationToken);
+            await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Closed, cancellationToken);
         }
 
         await _issueRepository.AddExecutionLogAsync(new ExecutionLog
@@ -621,6 +775,18 @@ public class IssueOrchestrator : IIssueOrchestrator
         }
 
         await SyncMarkdownIssueSafeAsync(workspace, issue, cancellationToken);
+
+        if (_markdownSyncService != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+        {
+            try
+            {
+                await _markdownSyncService.ArchiveOrCleanupIssueFileAsync(issue, workspace.RepositoryPath, archive: true, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed archiving markdown file for closed issue #{IssueId}", issue.Id);
+            }
+        }
     }
 
     private static bool HasCustomHandler(IWorkflowStage stage)

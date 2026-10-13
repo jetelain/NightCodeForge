@@ -63,4 +63,26 @@ public class EfCoreIssueDependencyStore : IIssueDependencyStore
             await _context.SaveChangesAsync(cancellationToken);
         }
     }
+
+    public async Task<bool> IsIssueWaitingForHumanAsync(int issueId, CancellationToken cancellationToken = default)
+    {
+        var issue = await _context.Issues
+            .AsNoTracking()
+            .Where(i => i.Id == issueId)
+            .Select(i => new { i.IsWaitingForHuman })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return issue?.IsWaitingForHuman ?? false;
+    }
+
+    public async Task SetWaitingForHumanAsync(int issueId, bool isWaiting, CancellationToken cancellationToken = default)
+    {
+        var issue = await _context.Issues.FindAsync(new object[] { issueId }, cancellationToken);
+        if (issue != null)
+        {
+            issue.IsWaitingForHuman = isWaiting;
+            issue.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+    }
 }

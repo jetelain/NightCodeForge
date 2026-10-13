@@ -9,6 +9,7 @@ public class StageExecutionResult
 {
     public bool IsSuccess { get; init; }
     public string? TargetRoutingStageId { get; init; }
+    public string? LoopBackStageId => TargetRoutingStageId;
     public string? ErrorMessage { get; init; }
     public bool NeedsClarification { get; init; }
     public Question? ClarificationQuestion { get; init; }

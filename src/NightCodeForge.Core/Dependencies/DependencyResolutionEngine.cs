@@ -109,6 +109,18 @@ public class DependencyResolutionEngine : IDependencyResolutionEngine
 
     public async Task<bool> IsReadyForExecutionAsync(int issueId, CancellationToken cancellationToken = default)
     {
+        var status = await _store.GetIssueStatusAsync(issueId, cancellationToken);
+        if (status != IssueOverallStatus.Open && status != IssueOverallStatus.Reviewed && status != IssueOverallStatus.Implemented)
+        {
+            return false;
+        }
+
+        var isWaiting = await _store.IsIssueWaitingForHumanAsync(issueId, cancellationToken);
+        if (isWaiting)
+        {
+            return false;
+        }
+
         var prerequisites = await _store.GetPrerequisiteIssueIdsAsync(issueId, cancellationToken);
         if (prerequisites.Count == 0)
         {
@@ -117,8 +129,8 @@ public class DependencyResolutionEngine : IDependencyResolutionEngine
 
         foreach (var prereqId in prerequisites)
         {
-            var status = await _store.GetIssueStatusAsync(prereqId, cancellationToken);
-            if (status != IssueOverallStatus.Completed)
+            var prereqStatus = await _store.GetIssueStatusAsync(prereqId, cancellationToken);
+            if (prereqStatus != IssueOverallStatus.Closed)
             {
                 return false;
             }
@@ -134,15 +146,10 @@ public class DependencyResolutionEngine : IDependencyResolutionEngine
 
         foreach (var depId in dependentIssueIds)
         {
-            var currentStatus = await _store.GetIssueStatusAsync(depId);
-            if (currentStatus == IssueOverallStatus.WaitingOnDependencies || currentStatus == IssueOverallStatus.Pending)
+            var depStatus = await _store.GetIssueStatusAsync(depId);
+            if (depStatus == IssueOverallStatus.Open && await IsReadyForExecutionAsync(depId))
             {
-                var isReady = await IsReadyForExecutionAsync(depId);
-                if (isReady)
-                {
-                    await _store.UpdateIssueStatusAsync(depId, IssueOverallStatus.Pending);
-                    unblocked.Add(depId);
-                }
+                unblocked.Add(depId);
             }
         }
 

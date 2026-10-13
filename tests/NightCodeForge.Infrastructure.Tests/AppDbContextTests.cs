@@ -109,7 +109,7 @@ public class AppDbContextTests : IDisposable
             WorkspaceId = ws.Id,
             Title = "First Issue",
             Description = "Base issue",
-            Status = IssueOverallStatus.Completed
+            Status = IssueOverallStatus.Closed
         };
         await repo.CreateAsync(issue1);
 
@@ -118,7 +118,7 @@ public class AppDbContextTests : IDisposable
             WorkspaceId = ws.Id,
             Title = "Dependent Issue",
             Description = "Depends on First Issue",
-            Status = IssueOverallStatus.WaitingOnDependencies
+            Status = IssueOverallStatus.Open
         };
         await repo.CreateAsync(issue2, dependsOn: new[] { issue1.Id });
 
@@ -131,7 +131,7 @@ public class AppDbContextTests : IDisposable
         Assert.Equal(issue2.Id, dependents[0]);
 
         var status1 = await depStore.GetIssueStatusAsync(issue1.Id);
-        Assert.Equal(IssueOverallStatus.Completed, status1);
+        Assert.Equal(IssueOverallStatus.Closed, status1);
     }
 
     [Fact]

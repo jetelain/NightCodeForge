@@ -84,18 +84,18 @@ public class DependencyEngineTests
         var store = new InMemoryIssueDependencyStore();
         var engine = new DependencyResolutionEngine(store);
 
-        store.AddIssue(10, 1, IssueOverallStatus.Pending);
-        store.AddIssue(20, 1, IssueOverallStatus.WaitingOnDependencies);
+        store.AddIssue(10, 1, IssueOverallStatus.Open);
+        store.AddIssue(20, 1, IssueOverallStatus.Open);
         store.AddDependency(1, 20, 10);
 
         // 10 has no dependencies, should be ready
         Assert.True(engine.IsReadyForExecution(10));
 
-        // 20 depends on 10 which is Pending (not completed) -> not ready
+        // 20 depends on 10 which is Open (not closed) -> not ready
         Assert.False(engine.IsReadyForExecution(20));
 
-        // Complete 10
-        await store.UpdateIssueStatusAsync(10, IssueOverallStatus.Completed);
+        // Close 10
+        await store.UpdateIssueStatusAsync(10, IssueOverallStatus.Closed);
 
         // 20 should now be ready
         Assert.True(engine.IsReadyForExecution(20));
@@ -108,25 +108,25 @@ public class DependencyEngineTests
         var engine = new DependencyResolutionEngine(store);
 
         // Issue 30 depends on 10 and 20
-        store.AddIssue(10, 1, IssueOverallStatus.Completed);
-        store.AddIssue(20, 1, IssueOverallStatus.Running);
-        store.AddIssue(30, 1, IssueOverallStatus.WaitingOnDependencies);
+        store.AddIssue(10, 1, IssueOverallStatus.Closed);
+        store.AddIssue(20, 1, IssueOverallStatus.Open);
+        store.AddIssue(30, 1, IssueOverallStatus.Open);
 
         store.AddDependency(1, 30, 10);
         store.AddDependency(1, 30, 20);
 
-        // Completing 10 alone should not unblock 30 because 20 is still Running
+        // Closing 10 alone should not unblock 30 because 20 is still Open
         var unblocked = await engine.ResolveCascadeUnblockedIssuesAsync(10);
         Assert.Empty(unblocked);
 
-        // Complete 20
-        await store.UpdateIssueStatusAsync(20, IssueOverallStatus.Completed);
+        // Close 20
+        await store.UpdateIssueStatusAsync(20, IssueOverallStatus.Closed);
         unblocked = await engine.ResolveCascadeUnblockedIssuesAsync(20);
 
         Assert.Single(unblocked);
         Assert.Equal(30, unblocked[0]);
 
         var status30 = await store.GetIssueStatusAsync(30);
-        Assert.Equal(IssueOverallStatus.Pending, status30);
+        Assert.Equal(IssueOverallStatus.Open, status30);
     }
 }

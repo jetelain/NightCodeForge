@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using CliWrap;
 using CliWrap.Buffered;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Infrastructure.Git;
 
 namespace NightCodeForge.Infrastructure.Execution;
 
@@ -13,13 +14,21 @@ public class BareHostExecutionEnvironment : IExecutionEnvironment
 {
     private readonly ExecutionTier _tier;
     private readonly string? _defaultWorkingDirectory;
+    private readonly string? _distribution;
+    private readonly IWorkspacePathResolver? _pathResolver;
 
     public ExecutionTier Tier => _tier;
 
-    public BareHostExecutionEnvironment(ExecutionTier tier = ExecutionTier.BareHost, string? defaultWorkingDirectory = null)
+    public BareHostExecutionEnvironment(
+        ExecutionTier tier = ExecutionTier.BareHost,
+        string? defaultWorkingDirectory = null,
+        string? distribution = null,
+        IWorkspacePathResolver? pathResolver = null)
     {
         _tier = tier;
         _defaultWorkingDirectory = defaultWorkingDirectory;
+        _distribution = distribution;
+        _pathResolver = pathResolver;
     }
 
     public async Task<NightCodeForge.Core.Interfaces.CommandResult> ExecuteAsync(
@@ -39,18 +48,29 @@ public class BareHostExecutionEnvironment : IExecutionEnvironment
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            shell = "powershell.exe";
-            args = $"-NoProfile -NonInteractive -Command \"{command.Replace("\"", "`\"")}\"";
+            shell = "wsl.exe";
+            var distro = _distribution ?? _pathResolver?.GetWslDistributionName();
+            var wslTargetDir = WslPathConverter.ToWslPath(targetDir);
+            var wslCmd = $"cd \"{wslTargetDir}\" && {command}";
+
+            if (!string.IsNullOrWhiteSpace(distro))
+            {
+                args = $"-d \"{distro}\" -- bash -c \"{wslCmd.Replace("\"", "\\\"")}\"";
+            }
+            else
+            {
+                args = $"-- bash -c \"{wslCmd.Replace("\"", "\\\"")}\"";
+            }
         }
         else
         {
             shell = "/bin/bash";
-            args = $"-c \"{command.Replace("\"", "\\\"")}\"";
+            var unixCmd = $"cd \"{targetDir}\" && {command}";
+            args = $"-c \"{unixCmd.Replace("\"", "\\\"")}\"";
         }
 
         var cmd = Cli.Wrap(shell)
             .WithArguments(args)
-            .WithWorkingDirectory(targetDir)
             .WithValidation(CommandResultValidation.None);
 
         if (environmentVariables != null)

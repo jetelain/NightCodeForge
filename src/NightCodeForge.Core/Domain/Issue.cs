@@ -9,7 +9,11 @@ public class Issue
     public int WorkspaceId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
-    public IssueOverallStatus Status { get; set; } = IssueOverallStatus.Pending;
+    public IssueOverallStatus Status { get; set; } = IssueOverallStatus.Suggested;
+    public MergeMode MergeMode { get; set; } = MergeMode.ManualReviewRequired;
+    public bool IsWaitingForHuman { get; set; } = false;
+    public string? InterruptedAgentProfileId { get; set; }
+    public string? InterruptedStageId { get; set; }
     public string CurrentStageId { get; set; } = string.Empty;
     public int Priority { get; set; } = 1;
     public string BaseBranch { get; set; } = "main";

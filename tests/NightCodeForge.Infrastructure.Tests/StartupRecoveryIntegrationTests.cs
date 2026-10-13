@@ -69,7 +69,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
         {
             WorkspaceId = workspace.Id,
             Title = "Running Issue Interrupted",
-            Status = IssueOverallStatus.Running,
+            Status = IssueOverallStatus.Open,
             CurrentStageId = "issue-review"
         };
         _context.Issues.Add(issue);
@@ -100,10 +100,10 @@ public class StartupRecoveryIntegrationTests : IDisposable
         var log = await _runner.ExecuteAsync(_repo.RepositoryPath, "log -n 1 --oneline");
         Assert.Contains("WIP-RECOVERY", log.StandardOutput);
 
-        // Verify issue transitioned to Pending and re-enqueued to urgent
+        // Verify issue status remains Open and re-enqueued to urgent
         var updated = await issueRepo.GetByIdAsync(issue.Id);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Pending, updated.Status);
+        Assert.Equal(IssueOverallStatus.Open, updated.Status);
         Assert.Contains(issue.Id, jobQueue.UrgentQueue);
     }
 }

@@ -53,6 +53,8 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
             Status = issue.Status.ToString(),
             CurrentStage = issue.CurrentStageId,
             Priority = issue.Priority,
+            MergeMode = issue.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required",
+            WaitingForHuman = issue.IsWaitingForHuman,
             BaseBranch = issue.BaseBranch,
             FeatureBranch = string.IsNullOrWhiteSpace(issue.FeatureBranch) ? null : issue.FeatureBranch,
             DependsOn = dependencies != null ? dependencies.ToList() : issue.Dependencies?.Select(d => d.DependsOnIssueId).ToList() ?? new List<int>(),
@@ -231,6 +233,12 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
                     frontmatter.CurrentStage = issue.CurrentStageId;
                 }
 
+                if (frontmatter.WaitingForHuman != issue.IsWaitingForHuman)
+                {
+                    restoreProtected = true;
+                    frontmatter.WaitingForHuman = issue.IsWaitingForHuman;
+                }
+
                 // Update editable fields
                 if (!string.IsNullOrWhiteSpace(frontmatter.Title))
                 {
@@ -286,14 +294,20 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
         }
 
         // New issue dropped in without an ID
+        var mergeMode = string.Equals(frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
+            ? Domain.MergeMode.Automatic
+            : Domain.MergeMode.ManualReviewRequired;
+
         var newIssue = new Issue
         {
             WorkspaceId = workspaceId,
             Title = string.IsNullOrWhiteSpace(frontmatter.Title) ? Path.GetFileNameWithoutExtension(filePath) : frontmatter.Title,
             Description = string.IsNullOrWhiteSpace(description) ? body : description,
             Priority = frontmatter.Priority,
+            MergeMode = mergeMode,
+            IsWaitingForHuman = frontmatter.WaitingForHuman,
             BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? "main" : frontmatter.BaseBranch,
-            Status = IssueOverallStatus.Pending,
+            Status = IssueOverallStatus.Suggested,
             CurrentStageId = "issue-review",
             CreatedAt = frontmatter.CreatedAt ?? DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
@@ -305,6 +319,8 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
         frontmatter.Id = created.Id;
         frontmatter.CreatedAt = created.CreatedAt;
         frontmatter.Status = created.Status.ToString();
+        frontmatter.MergeMode = created.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required";
+        frontmatter.WaitingForHuman = created.IsWaitingForHuman;
         frontmatter.CurrentStage = created.CurrentStageId;
 
         var inPlaceMarkdown = GenerateMarkdown(created, frontmatter.DependsOn, frontmatter.AgentProfile);

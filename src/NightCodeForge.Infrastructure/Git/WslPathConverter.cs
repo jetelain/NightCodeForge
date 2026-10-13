@@ -75,4 +75,66 @@ public static partial class WslPathConverter
         if (string.IsNullOrWhiteSpace(path)) return false;
         return WslMountRegex().IsMatch(path.Replace('\\', '/'));
     }
+
+    [GeneratedRegex(@"^[\\/]{2}wsl(\.localhost|\$)?([\\/].*)$", RegexOptions.IgnoreCase)]
+    private static partial Regex WslUncPrefixRegex();
+
+    /// <summary>
+    /// Checks if the path represents a Windows UNC path to a WSL distribution (e.g. \\wsl.localhost\Ubuntu\... or \\wsl$\Ubuntu\...).
+    /// </summary>
+    public static bool IsWslUncPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        return WslUncPrefixRegex().IsMatch(path);
+    }
+
+    /// <summary>
+    /// Extracts the WSL distribution name and the inner Linux path from a WSL UNC path.
+    /// </summary>
+    public static bool TryExtractWslUnc(string path, out string distro, out string linuxPath)
+    {
+        distro = string.Empty;
+        linuxPath = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(path)) return false;
+
+        var normalized = path.Replace('/', '\\');
+        string remainder;
+
+        if (normalized.StartsWith(@"\\wsl.localhost\", StringComparison.OrdinalIgnoreCase))
+        {
+            remainder = normalized.Substring(@"\\wsl.localhost\".Length);
+        }
+        else if (normalized.StartsWith(@"\\wsl$\", StringComparison.OrdinalIgnoreCase))
+        {
+            remainder = normalized.Substring(@"\\wsl$\".Length);
+        }
+        else
+        {
+            return false;
+        }
+
+        var slashIndex = remainder.IndexOf('\\');
+        if (slashIndex < 0)
+        {
+            distro = remainder;
+            linuxPath = "/";
+            return true;
+        }
+
+        distro = remainder.Substring(0, slashIndex);
+        var rest = remainder.Substring(slashIndex).Replace('\\', '/');
+        linuxPath = string.IsNullOrWhiteSpace(rest) ? "/" : rest;
+        return true;
+    }
+
+    /// <summary>
+    /// Converts a WSL Linux path (/home/user/...) to a Windows UNC path (\\wsl.localhost\Ubuntu\home\user\...).
+    /// </summary>
+    public static string ToWslUncPath(string linuxPath, string distro = "Ubuntu")
+    {
+        if (string.IsNullOrWhiteSpace(linuxPath)) return linuxPath;
+        var trimmed = linuxPath.TrimStart('/', '\\');
+        return $@"\\wsl.localhost\{distro}\{trimmed.Replace('/', '\\')}";
+    }
 }

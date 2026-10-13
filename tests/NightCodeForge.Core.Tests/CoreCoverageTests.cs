@@ -33,17 +33,21 @@ public class CoreCoverageTests : IDisposable
     {
         var pipeline = Default3AgentPipeline.Create();
         Assert.NotNull(pipeline);
-        Assert.Equal(4, pipeline.Stages.Count);
+        Assert.Equal(6, pipeline.Stages.Count);
 
         Assert.IsType<IssueReviewStage>(pipeline.Stages[0]);
-        Assert.IsType<ImplementationStage>(pipeline.Stages[1]);
-        Assert.IsType<DeterministicCoverageGate>(pipeline.Stages[2]);
-        Assert.IsType<CodeReviewAndFixStage>(pipeline.Stages[3]);
+        Assert.IsType<DeterministicPreImplementationStage>(pipeline.Stages[1]);
+        Assert.IsType<ImplementationStage>(pipeline.Stages[2]);
+        Assert.IsType<DeterministicPostImplementationStage>(pipeline.Stages[3]);
+        Assert.IsType<CodeReviewAndFixStage>(pipeline.Stages[4]);
+        Assert.IsType<DeterministicPostReviewStage>(pipeline.Stages[5]);
 
-        Assert.Equal("issue-review", pipeline.Stages[0].StageId);
-        Assert.Equal("implementation", pipeline.Stages[1].StageId);
-        Assert.Equal("coverage-gate", pipeline.Stages[2].StageId);
-        Assert.Equal("code-review-fix", pipeline.Stages[3].StageId);
+        Assert.Equal(IssueReviewStage.DefaultStageId, pipeline.Stages[0].StageId);
+        Assert.Equal(DeterministicPreImplementationStage.DefaultStageId, pipeline.Stages[1].StageId);
+        Assert.Equal(ImplementationStage.DefaultStageId, pipeline.Stages[2].StageId);
+        Assert.Equal(DeterministicPostImplementationStage.DefaultStageId, pipeline.Stages[3].StageId);
+        Assert.Equal(CodeReviewAndFixStage.DefaultStageId, pipeline.Stages[4].StageId);
+        Assert.Equal(DeterministicPostReviewStage.DefaultStageId, pipeline.Stages[5].StageId);
     }
 
     [Fact]

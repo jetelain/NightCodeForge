@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
@@ -18,6 +19,7 @@ public class StartupRecoveryService : IStartupRecoveryService
     private readonly IGitCliRunner _gitCliRunner;
     private readonly IWorkflowPipelineProvider _pipelineProvider;
     private readonly IIssueJobQueue _jobQueue;
+    private readonly IWorkspacePathResolver? _pathResolver;
     private readonly ILogger<StartupRecoveryService> _logger;
 
     public StartupRecoveryService(
@@ -26,6 +28,7 @@ public class StartupRecoveryService : IStartupRecoveryService
         IGitCliRunner gitCliRunner,
         IWorkflowPipelineProvider pipelineProvider,
         IIssueJobQueue jobQueue,
+        IWorkspacePathResolver? pathResolver = null,
         ILogger<StartupRecoveryService>? logger = null)
     {
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
@@ -33,6 +36,7 @@ public class StartupRecoveryService : IStartupRecoveryService
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _pipelineProvider = pipelineProvider ?? throw new ArgumentNullException(nameof(pipelineProvider));
         _jobQueue = jobQueue ?? throw new ArgumentNullException(nameof(jobQueue));
+        _pathResolver = pathResolver;
         _logger = logger ?? NullLogger<StartupRecoveryService>.Instance;
     }
 
@@ -44,73 +48,94 @@ public class StartupRecoveryService : IStartupRecoveryService
 
         foreach (var workspace in workspaces)
         {
-            if (string.IsNullOrWhiteSpace(workspace.RepositoryPath) || !Directory.Exists(workspace.RepositoryPath))
+            var pathsToReconcile = new List<string>();
+            if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
             {
-                continue;
+                pathsToReconcile.Add(workspace.RepositoryPath);
             }
 
-            // 1. Purge stale .git/*.lock files
-            PurgeStaleGitLocks(workspace.RepositoryPath);
+            if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+            {
+                pathsToReconcile.Add(workspace.Ext4MirrorPath);
+            }
 
-            // 2. Rescue uncommitted working tree
-            await RescueUncommittedChangesAsync(workspace.RepositoryPath, cancellationToken);
+            foreach (var path in pathsToReconcile)
+            {
+                // 1. Purge stale .git/*.lock files
+                PurgeStaleGitLocks(path, workspace.Id);
+
+                // 2. Rescue uncommitted working tree
+                await RescueUncommittedChangesAsync(path, cancellationToken);
+            }
         }
 
-        // 3. Reconcile issues left in Running status
-        var runningIssues = await _issueRepository.GetByStatusAsync(IssueOverallStatus.Running, cancellationToken);
-        foreach (var issue in runningIssues)
+        // 3. Reconcile active issues left interrupted by restart (Open, Reviewed, Implemented without WaitingForHuman)
+        var activeMilestones = new[] { IssueOverallStatus.Open, IssueOverallStatus.Reviewed, IssueOverallStatus.Implemented };
+        var reconciledCount = 0;
+
+        foreach (var status in activeMilestones)
         {
-            var pipeline = _pipelineProvider.GetPipeline(issue);
-            var stage = (!string.IsNullOrWhiteSpace(issue.CurrentStageId)
-                ? pipeline.GetStage(issue.CurrentStageId)
-                : null) ?? pipeline.Stages.FirstOrDefault();
-
-            var bag = PipelineDataBag.FromJson(issue.PipelineDataJson);
-
-            if (stage != null && stage.Kind == WorkflowStageKind.Agentic)
+            var activeIssues = await _issueRepository.GetByStatusAsync(status, cancellationToken);
+            foreach (var issue in activeIssues.Where(i => !i.IsWaitingForHuman))
             {
-                // Agentic Stage: Rehydrate memory with recovery notice
-                var lastCheckpoint = issue.Checkpoints?.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
-                var memory = lastCheckpoint?.SerializedMemory ?? string.Empty;
-                var notice = "[System Notice: Host restarted unexpectedly; workspace restored]";
-                var restoredMemory = string.IsNullOrWhiteSpace(memory)
-                    ? notice
-                    : $"{memory}\n{notice}";
+                var pipeline = _pipelineProvider.GetPipeline(issue);
+                var stage = (!string.IsNullOrWhiteSpace(issue.CurrentStageId)
+                    ? pipeline.GetStage(issue.CurrentStageId)
+                    : null) ?? pipeline.Stages.FirstOrDefault();
 
-                bag.Set("SerializedMemory", restoredMemory);
-                _logger.LogWarning("Rehydrated agentic session memory for orphaned issue #{IssueId}.", issue.Id);
+                var bag = PipelineDataBag.FromJson(issue.PipelineDataJson);
+
+                if (stage != null && stage.Kind == WorkflowStageKind.Agentic)
+                {
+                    // Agentic Stage: Rehydrate memory with recovery notice
+                    var lastCheckpoint = issue.Checkpoints?.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
+                    var memory = lastCheckpoint?.SerializedMemory ?? string.Empty;
+                    var notice = "[System Notice: Host restarted unexpectedly; workspace restored]";
+                    var restoredMemory = string.IsNullOrWhiteSpace(memory)
+                        ? notice
+                        : $"{memory}\n{notice}";
+
+                    bag.Set("SerializedMemory", restoredMemory);
+                    _logger.LogWarning("Rehydrated agentic session memory for orphaned issue #{IssueId}.", issue.Id);
+                }
+                else
+                {
+                    // Deterministic Stage: Reset metrics and retries to execute freshly
+                    bag.Remove("DeterministicMetrics");
+                    _logger.LogWarning("Reset metrics for deterministic stage on orphaned issue #{IssueId}.", issue.Id);
+                }
+
+                issue.PipelineDataJson = bag.ToJson();
+
+                await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
+                await _issueRepository.AddExecutionLogAsync(new ExecutionLog
+                {
+                    IssueId = issue.Id,
+                    Level = LogLevel.Warning,
+                    Message = $"Host reboot recovery: Re-enqueued issue #{issue.Id} to llm-urgent.",
+                    Timestamp = DateTime.UtcNow
+                }, cancellationToken);
+
+                // Head-of-line priority re-enqueue
+                _jobQueue.EnqueueUrgent(issue.Id);
+                reconciledCount++;
             }
-            else
-            {
-                // Deterministic Stage: Reset metrics and retries to execute freshly
-                bag.Remove("DeterministicMetrics");
-                _logger.LogWarning("Reset metrics for deterministic stage on orphaned issue #{IssueId}.", issue.Id);
-            }
-
-            issue.PipelineDataJson = bag.ToJson();
-            issue.Status = IssueOverallStatus.Pending;
-
-            await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
-            await _issueRepository.AddExecutionLogAsync(new ExecutionLog
-            {
-                IssueId = issue.Id,
-                Level = LogLevel.Warning,
-                Message = $"Host reboot recovery: Re-enqueued issue #{issue.Id} to llm-urgent.",
-                Timestamp = DateTime.UtcNow
-            }, cancellationToken);
-
-            // Head-of-line priority re-enqueue
-            _jobQueue.EnqueueUrgent(issue.Id);
         }
 
-        _logger.LogInformation("Startup workspace reconciliation completed. Reconciled {Count} running issues.", runningIssues.Count);
+        _logger.LogInformation("Startup workspace reconciliation completed. Reconciled {Count} active issues.", reconciledCount);
     }
 
-    private void PurgeStaleGitLocks(string repoPath)
+    private void PurgeStaleGitLocks(string repoPath, int workspaceId)
     {
         try
         {
-            var gitDir = Path.Combine(repoPath, ".git");
+            var effectivePath = repoPath;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (repoPath.StartsWith('/') || repoPath.StartsWith('~')))
+            {
+                effectivePath = _pathResolver?.ResolveCruciblePath(workspaceId, string.Empty) ?? repoPath;
+            }
+
+            var gitDir = Path.Combine(effectivePath, ".git");
             if (!Directory.Exists(gitDir))
             {
                 return;

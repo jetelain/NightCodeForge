@@ -15,6 +15,12 @@ public class IssueFrontmatter
     [YamlMember(Alias = "current_stage")]
     public string? CurrentStage { get; set; }
     
+    [YamlMember(Alias = "merge_mode")]
+    public string? MergeMode { get; set; }
+
+    [YamlMember(Alias = "waiting_for_human")]
+    public bool WaitingForHuman { get; set; } = false;
+
     public int Priority { get; set; } = 1;
     
     [YamlMember(Alias = "base_branch")]

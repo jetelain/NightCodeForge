@@ -16,6 +16,7 @@ public class Question
     public DateTime AskedAt { get; set; } = DateTime.UtcNow;
     public DateTime? AnsweredAt { get; set; }
     public QuestionStatus Status { get; set; } = QuestionStatus.Pending;
+    public string? AgentProfileId { get; set; }
 
     public Issue? Issue { get; set; }
 }

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
@@ -11,13 +12,16 @@ namespace NightCodeForge.Infrastructure.Git;
 public class GitWorkspaceManager : IGitWorkspaceManager
 {
     private readonly IGitCliRunner _gitCliRunner;
+    private readonly IWorkspacePathResolver? _pathResolver;
     private readonly ILogger<GitWorkspaceManager> _logger;
 
     public GitWorkspaceManager(
         IGitCliRunner gitCliRunner,
+        IWorkspacePathResolver? pathResolver = null,
         ILogger<GitWorkspaceManager>? logger = null)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
+        _pathResolver = pathResolver;
         _logger = logger ?? NullLogger<GitWorkspaceManager>.Instance;
     }
 
@@ -180,13 +184,35 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         await _gitCliRunner.ExecuteAsync(workingPath, "clean -fd", cancellationToken: cancellationToken);
     }
 
-    private static string GetWorkingPath(Workspace workspace)
+    private string GetWorkingPath(Workspace workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
-        if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && Directory.Exists(workspace.Ext4MirrorPath))
+        if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
-            return workspace.Ext4MirrorPath;
+            if (Directory.Exists(workspace.Ext4MirrorPath))
+            {
+                return workspace.Ext4MirrorPath;
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                string checkPath;
+                if (WslPathConverter.IsWslUncPath(workspace.Ext4MirrorPath))
+                {
+                    checkPath = workspace.Ext4MirrorPath;
+                }
+                else
+                {
+                    var distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
+                    checkPath = WslPathConverter.ToWslUncPath(workspace.Ext4MirrorPath, distro);
+                }
+
+                if (Directory.Exists(checkPath))
+                {
+                    return workspace.Ext4MirrorPath;
+                }
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))

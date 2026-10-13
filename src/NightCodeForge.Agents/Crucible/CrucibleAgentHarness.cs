@@ -37,6 +37,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer? _activityStreamer;
     private readonly SessionTranscriptService? _transcriptService;
+    private readonly IWorkspacePathResolver? _pathResolver;
     private readonly ILogger<CrucibleAgentHarness> _logger;
 
     public string HarnessId => "crucible";
@@ -58,6 +59,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         AgentsMdService? agentsMdService = null,
         IAgentActivityStreamer? activityStreamer = null,
         SessionTranscriptService? transcriptService = null,
+        IWorkspacePathResolver? pathResolver = null,
         ILogger<CrucibleAgentHarness>? logger = null)
     {
         if (baseChatClient == null && chatClientFactory == null)
@@ -78,6 +80,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         _agentsMdService = agentsMdService ?? new AgentsMdService();
         _activityStreamer = activityStreamer;
         _transcriptService = transcriptService;
+        _pathResolver = pathResolver;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CrucibleAgentHarness>.Instance;
     }
 
@@ -113,7 +116,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
             _editorConfigFileApplier,
             _webSearchService,
             buildTimeoutSeconds: buildTimeout,
-            testTimeoutSeconds: testTimeout);
+            testTimeoutSeconds: testTimeout,
+            pathResolver: _pathResolver,
+            workspaceId: context.Workspace?.Id);
 
         var dispatcher = new LenientToolDispatcher(canonicalTools);
 

@@ -113,6 +113,10 @@ public class AppDbContext : DbContext
             b.HasKey(i => i.Id);
             b.Property(i => i.Title).IsRequired().HasMaxLength(512);
             b.Property(i => i.Status).HasConversion<int>();
+            b.Property(i => i.MergeMode).HasConversion<int>();
+            b.Property(i => i.IsWaitingForHuman).HasDefaultValue(false);
+            b.Property(i => i.InterruptedAgentProfileId).HasMaxLength(128);
+            b.Property(i => i.InterruptedStageId).HasMaxLength(128);
             b.Property(i => i.CurrentStageId).HasMaxLength(128);
             b.Property(i => i.BaseBranch).IsRequired().HasMaxLength(128);
             b.Property(i => i.FeatureBranch).HasMaxLength(256);
@@ -164,6 +168,7 @@ public class AppDbContext : DbContext
             b.Property(q => q.Prompt).IsRequired();
             b.Property(q => q.QuestionType).HasConversion<int>();
             b.Property(q => q.Status).HasConversion<int>();
+            b.Property(q => q.AgentProfileId).HasMaxLength(128);
         });
 
         // 6. StageCheckpoint

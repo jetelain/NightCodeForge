@@ -50,12 +50,12 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
             return StageExecutionResult.Failure(err);
         }
 
-        context.Issue.Status = IssueOverallStatus.Running;
         var result = await stage.ExecuteAsync(context, cancellationToken);
 
         if (result.NeedsClarification)
         {
-            context.Issue.Status = IssueOverallStatus.BlockedQuestion;
+            context.Issue.IsWaitingForHuman = true;
+            context.Issue.InterruptedStageId = stage.StageId;
             if (result.ClarificationQuestion != null)
             {
                 result.ClarificationQuestion.IssueId = context.Issue.Id;
@@ -70,6 +70,20 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
         {
             // Reset retry count on forward progression
             context.ResetRetries();
+
+            // Status stamps per stage
+            if (string.Equals(stage.StageId, "issue-review", StringComparison.OrdinalIgnoreCase))
+            {
+                context.Issue.Status = IssueOverallStatus.Reviewed;
+            }
+            else if (string.Equals(stage.StageId, "implementation", StringComparison.OrdinalIgnoreCase))
+            {
+                context.Issue.Status = IssueOverallStatus.Implemented;
+            }
+            else if (string.Equals(stage.StageId, "deterministic-post-review", StringComparison.OrdinalIgnoreCase))
+            {
+                context.Issue.Status = IssueOverallStatus.Ready;
+            }
 
             var nextStageId = result.TargetRoutingStageId;
             IWorkflowStage? nextStage;
@@ -90,7 +104,7 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
             else
             {
                 // Reached end of pipeline
-                context.Issue.Status = IssueOverallStatus.Completed;
+                context.Issue.Status = IssueOverallStatus.Ready;
             }
 
             context.SyncDataBagToIssue();

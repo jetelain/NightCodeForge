@@ -45,7 +45,8 @@ public class ResumptionTests
         {
             Id = 100,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.BlockedQuestion,
+            Status = IssueOverallStatus.Open,
+            IsWaitingForHuman = true,
             Questions = new List<Question>
             {
                 new()
@@ -57,7 +58,8 @@ public class ResumptionTests
                 }
             }
         });
-        _depStore.AddIssue(100, 1, IssueOverallStatus.BlockedQuestion);
+        _depStore.AddIssue(100, 1, IssueOverallStatus.Open);
+        _depStore.SetWaitingForHuman(100, true);
 
         var orchestrator = new IssueOrchestrator(
             _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
@@ -73,7 +75,8 @@ public class ResumptionTests
 
         var updatedIssue = await _issueRepo.GetByIdAsync(100);
         Assert.NotNull(updatedIssue);
-        Assert.Equal(IssueOverallStatus.Pending, updatedIssue.Status);
+        Assert.False(updatedIssue.IsWaitingForHuman);
+        Assert.Equal(IssueOverallStatus.Open, updatedIssue.Status);
 
         var bag = PipelineDataBag.FromJson(updatedIssue.PipelineDataJson);
         Assert.Equal("Port 8080", bag.Get<string>("LastHumanAnswer"));
@@ -90,7 +93,8 @@ public class ResumptionTests
         {
             Id = 101,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.BlockedQuestion,
+            Status = IssueOverallStatus.Reviewed,
+            IsWaitingForHuman = true,
             CurrentStageId = ImplementationStage.DefaultStageId,
             Questions = new List<Question>
             {
@@ -103,7 +107,8 @@ public class ResumptionTests
                 }
             }
         });
-        _depStore.AddIssue(101, 1, IssueOverallStatus.Pending);
+        _depStore.AddIssue(101, 1, IssueOverallStatus.Reviewed);
+        _depStore.SetWaitingForHuman(101, true);
 
         string? consumedAnswer = null;
         var stage = new ImplementationStage
@@ -129,8 +134,8 @@ public class ResumptionTests
         Assert.Equal("ASP.NET Core", consumedAnswer);
         var updated = await _issueRepo.GetByIdAsync(101);
         Assert.NotNull(updated);
-        // Stage completed (single stage pipeline reached end -> Review)
-        Assert.Equal(IssueOverallStatus.Review, updated.Status);
+        // Stage completed (single stage pipeline reached end -> Ready)
+        Assert.Equal(IssueOverallStatus.Ready, updated.Status);
     }
 
     [Fact]
@@ -140,10 +145,10 @@ public class ResumptionTests
         {
             Id = 102,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Review,
+            Status = IssueOverallStatus.Ready,
             CurrentStageId = "code-review-fix"
         });
-        _depStore.AddIssue(102, 1, IssueOverallStatus.Review);
+        _depStore.AddIssue(102, 1, IssueOverallStatus.Ready);
 
         var orchestrator = new IssueOrchestrator(
             _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
@@ -153,7 +158,7 @@ public class ResumptionTests
 
         var updated = await _issueRepo.GetByIdAsync(102);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Pending, updated.Status);
+        Assert.Equal(IssueOverallStatus.Reviewed, updated.Status);
         Assert.Equal(ImplementationStage.DefaultStageId, updated.CurrentStageId);
 
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);

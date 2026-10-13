@@ -26,6 +26,11 @@ public interface IIssueOrchestrator
     Task RequestChangesAsync(int issueId, string revisionNotes, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Promotes a suggested issue to Open (with priority and merge mode, enqueuing if dependencies closed) or Rejected.
+    /// </summary>
+    Task PromoteSuggestedIssueAsync(int issueId, Domain.IssueOverallStatus targetStatus, int priority, Domain.MergeMode mergeMode, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Completes an issue by squash-merging its branch into base branch and cascades unblocking to dependent DAG issues.
     /// </summary>
     Task CompleteIssueAndCascadeAsync(int issueId, string finalCommitMessage, CancellationToken cancellationToken = default);

@@ -84,7 +84,7 @@ public class DomainEntitiesTests
             WorkspaceId = 1,
             Title = "Title",
             Description = "Desc",
-            Status = IssueOverallStatus.Review,
+            Status = IssueOverallStatus.Reviewed,
             CurrentStageId = "code-review-fix",
             Priority = 2,
             BaseBranch = "main",
@@ -99,7 +99,7 @@ public class DomainEntitiesTests
         Assert.Equal(1, issue.WorkspaceId);
         Assert.Equal("Title", issue.Title);
         Assert.Equal("Desc", issue.Description);
-        Assert.Equal(IssueOverallStatus.Review, issue.Status);
+        Assert.Equal(IssueOverallStatus.Reviewed, issue.Status);
         Assert.Equal("code-review-fix", issue.CurrentStageId);
         Assert.Equal(2, issue.Priority);
         Assert.Equal("main", issue.BaseBranch);

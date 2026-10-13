@@ -39,14 +39,14 @@ public class IssueOrchestratorTests
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_WhenPrerequisitesNotReady_TransitionsToWaitingOnDependencies()
+    public async Task ProcessIssueAsync_WhenPrerequisitesNotReady_RemainsOpenAndDoesNotEnqueue()
     {
-        // Issue 2 depends on Issue 1 (which is still Pending)
-        var prereq = await _issueRepo.CreateAsync(new Issue { Id = 1, WorkspaceId = 1, Status = IssueOverallStatus.Pending });
-        var target = await _issueRepo.CreateAsync(new Issue { Id = 2, WorkspaceId = 1, Status = IssueOverallStatus.Pending });
+        // Issue 2 depends on Issue 1 (which is still Open, not Closed)
+        var prereq = await _issueRepo.CreateAsync(new Issue { Id = 1, WorkspaceId = 1, Status = IssueOverallStatus.Open });
+        var target = await _issueRepo.CreateAsync(new Issue { Id = 2, WorkspaceId = 1, Status = IssueOverallStatus.Open });
 
-        _depStore.AddIssue(1, 1, IssueOverallStatus.Pending);
-        _depStore.AddIssue(2, 1, IssueOverallStatus.Pending);
+        _depStore.AddIssue(1, 1, IssueOverallStatus.Open);
+        _depStore.AddIssue(2, 1, IssueOverallStatus.Open);
         _depStore.AddDependency(1, 2, 1);
 
         var orchestrator = new IssueOrchestrator(
@@ -57,7 +57,7 @@ public class IssueOrchestratorTests
 
         var updated = await _issueRepo.GetByIdAsync(target.Id);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.WaitingOnDependencies, updated.Status);
+        Assert.Equal(IssueOverallStatus.Open, updated.Status);
         Assert.Empty(_jobQueue.InferenceQueue);
     }
 
@@ -68,10 +68,10 @@ public class IssueOrchestratorTests
         {
             Id = 10,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Pending,
+            Status = IssueOverallStatus.Open,
             BaseBranch = "main"
         });
-        _depStore.AddIssue(10, 1, IssueOverallStatus.Pending);
+        _depStore.AddIssue(10, 1, IssueOverallStatus.Open);
 
         var reviewStage = new IssueReviewStage
         {
@@ -95,10 +95,10 @@ public class IssueOrchestratorTests
         {
             Id = 20,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Pending,
+            Status = IssueOverallStatus.Open,
             CurrentStageId = "stage-1"
         });
-        _depStore.AddIssue(20, 1, IssueOverallStatus.Pending);
+        _depStore.AddIssue(20, 1, IssueOverallStatus.Open);
 
         var stage1 = new TestWorkflowStage("stage-1") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
         var stage2 = new TestWorkflowStage("stage-2") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
@@ -113,21 +113,21 @@ public class IssueOrchestratorTests
         var updated = await _issueRepo.GetByIdAsync(20);
         Assert.NotNull(updated);
         Assert.Equal("stage-2", updated.CurrentStageId);
-        Assert.Equal(IssueOverallStatus.Pending, updated.Status);
+        Assert.Equal(IssueOverallStatus.Open, updated.Status);
         Assert.Contains(20, _jobQueue.InferenceQueue);
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_WhenFinalStageCompletes_TransitionsToReviewAndGeneratesDiff()
+    public async Task ProcessIssueAsync_WhenFinalStageCompletes_TransitionsToReadyAndGeneratesDiff()
     {
         var issue = await _issueRepo.CreateAsync(new Issue
         {
             Id = 30,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Pending,
+            Status = IssueOverallStatus.Open,
             CurrentStageId = "final-stage"
         });
-        _depStore.AddIssue(30, 1, IssueOverallStatus.Pending);
+        _depStore.AddIssue(30, 1, IssueOverallStatus.Open);
 
         var finalStage = new TestWorkflowStage("final-stage") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { finalStage });
@@ -142,7 +142,7 @@ public class IssueOrchestratorTests
 
         var updated = await _issueRepo.GetByIdAsync(30);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Review, updated.Status);
+        Assert.Equal(IssueOverallStatus.Ready, updated.Status);
 
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);
         Assert.Equal(_gitManager.GeneratedDiff, bag.Get<string>("ReviewDiff"));
@@ -155,10 +155,10 @@ public class IssueOrchestratorTests
         {
             Id = 40,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Pending,
+            Status = IssueOverallStatus.Open,
             CurrentStageId = "review-stage"
         });
-        _depStore.AddIssue(40, 1, IssueOverallStatus.Pending);
+        _depStore.AddIssue(40, 1, IssueOverallStatus.Open);
 
         var question = new Question
         {
@@ -185,7 +185,8 @@ public class IssueOrchestratorTests
 
         var updated = await _issueRepo.GetByIdAsync(40);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.BlockedQuestion, updated.Status);
+        Assert.True(updated.IsWaitingForHuman);
+        Assert.Equal(IssueOverallStatus.Open, updated.Status);
 
         // Checkpoint created
         Assert.Single(_gitManager.WipCheckpoints);
@@ -212,10 +213,10 @@ public class IssueOrchestratorTests
         {
             Id = 50,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Pending,
+            Status = IssueOverallStatus.Open,
             CurrentStageId = "impl-stage"
         });
-        _depStore.AddIssue(50, 1, IssueOverallStatus.Pending);
+        _depStore.AddIssue(50, 1, IssueOverallStatus.Open);
 
         var stage = new TestWorkflowStage("impl-stage")
         {
@@ -232,7 +233,8 @@ public class IssueOrchestratorTests
 
         var updated = await _issueRepo.GetByIdAsync(50);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.BlockedQuestion, updated.Status);
+        Assert.True(updated.IsWaitingForHuman);
+        Assert.Equal(IssueOverallStatus.Open, updated.Status);
         Assert.Contains(updated.Questions, q => q.Prompt.Contains("PostgreSQL"));
     }
 
@@ -243,10 +245,10 @@ public class IssueOrchestratorTests
         {
             Id = 60,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Pending,
+            Status = IssueOverallStatus.Open,
             CurrentStageId = "impl-stage"
         });
-        _depStore.AddIssue(60, 1, IssueOverallStatus.Pending);
+        _depStore.AddIssue(60, 1, IssueOverallStatus.Open);
 
         var stage = new TestWorkflowStage("impl-stage")
         {
@@ -275,10 +277,10 @@ public class IssueOrchestratorTests
         {
             Id = 70,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Pending,
+            Status = IssueOverallStatus.Open,
             CurrentStageId = "impl-stage"
         });
-        _depStore.AddIssue(70, 1, IssueOverallStatus.Pending);
+        _depStore.AddIssue(70, 1, IssueOverallStatus.Open);
 
         var stage = new TestWorkflowStage("impl-stage")
         {

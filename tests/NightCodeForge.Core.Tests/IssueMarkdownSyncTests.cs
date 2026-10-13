@@ -40,7 +40,8 @@ public class IssueMarkdownSyncTests : IDisposable
             Id = 42,
             Title = "Implement OAuth2 Flow",
             Description = "Full OAuth2 with PKCE implementation details.",
-            Status = IssueOverallStatus.BlockedQuestion,
+            Status = IssueOverallStatus.Open,
+            IsWaitingForHuman = true,
             CurrentStageId = "issue-review",
             Priority = 2,
             BaseBranch = "main",
@@ -54,7 +55,8 @@ public class IssueMarkdownSyncTests : IDisposable
 
         Assert.Equal(42, frontmatter.Id);
         Assert.Equal("Implement OAuth2 Flow", frontmatter.Title);
-        Assert.Equal("BlockedQuestion", frontmatter.Status);
+        Assert.Equal("Open", frontmatter.Status);
+        Assert.True(frontmatter.WaitingForHuman);
         Assert.Equal("issue-review", frontmatter.CurrentStage);
         Assert.Equal(2, frontmatter.Priority);
         Assert.Equal("main", frontmatter.BaseBranch);
@@ -108,7 +110,7 @@ public class IssueMarkdownSyncTests : IDisposable
             WorkspaceId = 1,
             Title = "Original Title",
             Description = "Original body",
-            Status = IssueOverallStatus.Running,
+            Status = IssueOverallStatus.Implemented,
             CurrentStageId = "implementation",
             Priority = 1
         };
@@ -120,7 +122,7 @@ public class IssueMarkdownSyncTests : IDisposable
         var tamperedMarkdown = @"---
 id: 200
 title: Updated User Title
-status: Completed
+status: Closed
 current_stage: code-review-fix
 priority: 5
 base_branch: develop
@@ -143,13 +145,13 @@ Updated user requirements on disk.
         Assert.Equal("Updated user requirements on disk.", updated.Description);
 
         // Verify protected fields were NOT modified in DB
-        Assert.Equal(IssueOverallStatus.Running, updated.Status);
+        Assert.Equal(IssueOverallStatus.Implemented, updated.Status);
         Assert.Equal("implementation", updated.CurrentStageId);
 
         // Verify file on disk was rewritten to restore protected fields
         var diskContent = await File.ReadAllTextAsync(filePath);
         var (restoredFm, _) = sync.ParseMarkdown(diskContent);
-        Assert.Equal("Running", restoredFm.Status);
+        Assert.Equal("Implemented", restoredFm.Status);
         Assert.Equal("implementation", restoredFm.CurrentStage);
         Assert.Equal("Updated User Title", restoredFm.Title);
     }
@@ -186,6 +188,7 @@ Detailed spec of drop-in feature.
         Assert.Equal("Brand New Feature", created.Title);
         Assert.Equal("Detailed spec of drop-in feature.", created.Description);
         Assert.Equal(3, created.Priority);
+        Assert.Equal(IssueOverallStatus.Suggested, created.Status);
 
         // Verify file rewritten with allocated ID in-place without renaming
         var diskContent = await File.ReadAllTextAsync(targetFile);
@@ -206,7 +209,7 @@ Detailed spec of drop-in feature.
             WorkspaceId = 1,
             Title = "Echo Test",
             Description = "Test echo suppression",
-            Status = IssueOverallStatus.Pending
+            Status = IssueOverallStatus.Open
         };
         await repo.CreateAsync(issue);
 

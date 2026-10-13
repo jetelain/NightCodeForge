@@ -113,7 +113,7 @@ public class StartupRecoveryTests : IDisposable
         {
             Id = 301,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Running,
+            Status = IssueOverallStatus.Open,
             CurrentStageId = IssueReviewStage.DefaultStageId,
             Checkpoints = new List<StageCheckpoint>
             {
@@ -138,7 +138,7 @@ public class StartupRecoveryTests : IDisposable
 
         var updated = await _issueRepo.GetByIdAsync(301);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Pending, updated.Status);
+        Assert.Equal(IssueOverallStatus.Open, updated.Status);
 
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);
         var memory = bag.Get<string>("SerializedMemory");
@@ -159,7 +159,7 @@ public class StartupRecoveryTests : IDisposable
         {
             Id = 302,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Running,
+            Status = IssueOverallStatus.Implemented,
             CurrentStageId = DeterministicCoverageGate.DefaultStageId,
             PipelineDataJson = bag.ToJson()
         });
@@ -175,7 +175,7 @@ public class StartupRecoveryTests : IDisposable
 
         var updated = await _issueRepo.GetByIdAsync(302);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Pending, updated.Status);
+        Assert.Equal(IssueOverallStatus.Implemented, updated.Status);
 
         var updatedBag = PipelineDataBag.FromJson(updated.PipelineDataJson);
         Assert.False(updatedBag.ContainsKey("DeterministicMetrics"));

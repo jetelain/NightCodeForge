@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
@@ -13,15 +14,18 @@ public class GitMirrorSyncService : IGitMirrorSyncService
 {
     private readonly IGitCliRunner _gitCliRunner;
     private readonly IGitAlertNotifier? _alertNotifier;
+    private readonly IWorkspacePathResolver? _pathResolver;
     private readonly ILogger<GitMirrorSyncService> _logger;
 
     public GitMirrorSyncService(
         IGitCliRunner gitCliRunner,
         IGitAlertNotifier? alertNotifier = null,
+        IWorkspacePathResolver? pathResolver = null,
         ILogger<GitMirrorSyncService>? logger = null)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _alertNotifier = alertNotifier;
+        _pathResolver = pathResolver;
         _logger = logger ?? NullLogger<GitMirrorSyncService>.Instance;
     }
 
@@ -51,8 +55,13 @@ public class GitMirrorSyncService : IGitMirrorSyncService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workspace);
-        ArgumentException.ThrowIfNullOrWhiteSpace(mirrorDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspace.RepositoryPath);
+
+        var targetMirrorDir = !string.IsNullOrWhiteSpace(mirrorDirectory)
+            ? mirrorDirectory
+            : (_pathResolver?.GetAgentWorkingClonePath(workspace.Id) ?? mirrorDirectory);
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetMirrorDir);
 
         if (!Directory.Exists(workspace.RepositoryPath))
         {
@@ -62,13 +71,25 @@ public class GitMirrorSyncService : IGitMirrorSyncService
         // 1. Configure receive.denyCurrentBranch updateInstead on host
         await ConfigureHostRepositoryAsync(workspace.RepositoryPath, cancellationToken);
 
-        // 2. Clone repository into mirrorDirectory if not already initialized
+        var remoteUrl = _pathResolver != null
+            ? _pathResolver.GetHostRemoteUrl(workspace.RepositoryPath)
+            : workspace.RepositoryPath;
+
+        // 2. Clone repository into targetMirrorDir if not already initialized
         var isAlreadyInitialized = false;
-        if (Directory.Exists(mirrorDirectory))
+        var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+        var checkPath = targetMirrorDir;
+        if (isWindows && (targetMirrorDir.StartsWith('/') || targetMirrorDir.StartsWith('~')))
+        {
+            var distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
+            checkPath = WslPathConverter.ToWslUncPath(targetMirrorDir, distro);
+        }
+
+        if (Directory.Exists(checkPath))
         {
             try
             {
-                var check = await _gitCliRunner.ExecuteAsync(mirrorDirectory, "rev-parse --is-inside-work-tree", cancellationToken: cancellationToken);
+                var check = await _gitCliRunner.ExecuteAsync(targetMirrorDir, "rev-parse --is-inside-work-tree", cancellationToken: cancellationToken);
                 isAlreadyInitialized = check.StandardOutput.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
             }
             catch (Exception)
@@ -80,47 +101,65 @@ public class GitMirrorSyncService : IGitMirrorSyncService
         if (!isAlreadyInitialized)
         {
             _logger.LogInformation("Cloning host repository '{HostRepo}' into ext4 mirror '{MirrorDir}'",
-                workspace.RepositoryPath, mirrorDirectory);
+                workspace.RepositoryPath, targetMirrorDir);
 
-            var parentDir = Path.GetDirectoryName(Path.GetFullPath(mirrorDirectory));
-            if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
+            if (isWindows && (targetMirrorDir.StartsWith('/') || targetMirrorDir.StartsWith('~')))
             {
-                Directory.CreateDirectory(parentDir);
-            }
+                var distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
+                var uncMirror = WslPathConverter.ToWslUncPath(targetMirrorDir, distro);
+                var parentUnc = Path.GetDirectoryName(uncMirror);
+                if (!string.IsNullOrEmpty(parentUnc) && !Directory.Exists(parentUnc))
+                {
+                    Directory.CreateDirectory(parentUnc);
+                }
 
-            // Clone from host repository
-            var cloneDir = Directory.Exists(parentDir) ? parentDir : workspace.RepositoryPath;
-            await _gitCliRunner.ExecuteAsync(
-                cloneDir,
-                $"clone \"{workspace.RepositoryPath}\" \"{mirrorDirectory}\"",
-                timeoutSeconds: 120,
-                cancellationToken: cancellationToken);
+                await _gitCliRunner.ExecuteAsync(
+                    "/tmp",
+                    $"clone \"{remoteUrl}\" \"{targetMirrorDir}\"",
+                    timeoutSeconds: 120,
+                    cancellationToken: cancellationToken);
+            }
+            else
+            {
+                var parentDir = Path.GetDirectoryName(Path.GetFullPath(targetMirrorDir));
+                if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
+                {
+                    Directory.CreateDirectory(parentDir);
+                }
+
+                var cloneDir = Directory.Exists(parentDir) ? parentDir : workspace.RepositoryPath;
+                await _gitCliRunner.ExecuteAsync(
+                    cloneDir,
+                    $"clone \"{remoteUrl}\" \"{targetMirrorDir}\"",
+                    timeoutSeconds: 120,
+                    cancellationToken: cancellationToken);
+            }
         }
 
         // 3. Ensure local remote 'host-origin' exists
-        var remoteResult = await _gitCliRunner.ExecuteAsync(mirrorDirectory, "remote", cancellationToken: cancellationToken);
+        var remoteResult = await _gitCliRunner.ExecuteAsync(targetMirrorDir, "remote", cancellationToken: cancellationToken);
         var remotes = remoteResult.StandardOutput
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         if (!remotes.Contains("host-origin", StringComparer.OrdinalIgnoreCase))
         {
-            _logger.LogInformation("Adding local remote 'host-origin' pointing to '{HostRepo}'", workspace.RepositoryPath);
+            _logger.LogInformation("Adding local remote 'host-origin' pointing to '{RemoteUrl}'", remoteUrl);
             await _gitCliRunner.ExecuteAsync(
-                mirrorDirectory,
-                $"remote add host-origin \"{workspace.RepositoryPath}\"",
+                targetMirrorDir,
+                $"remote add host-origin \"{remoteUrl}\"",
                 cancellationToken: cancellationToken);
         }
         else
         {
             // Ensure host-origin url is up to date
             await _gitCliRunner.ExecuteAsync(
-                mirrorDirectory,
-                $"remote set-url host-origin \"{workspace.RepositoryPath}\"",
+                targetMirrorDir,
+                $"remote set-url host-origin \"{remoteUrl}\"",
                 cancellationToken: cancellationToken);
         }
 
-        workspace.Ext4MirrorPath = mirrorDirectory;
-        return mirrorDirectory;
+        workspace.Ext4MirrorPath = targetMirrorDir;
+        return targetMirrorDir;
     }
 
     /// <inheritdoc />

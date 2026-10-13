@@ -27,6 +27,8 @@ public partial class CanonicalTools
     private readonly IEditorConfigService _editorConfigService;
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly IWebSearchService _webSearchService;
+    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly int? _workspaceId;
 
     private readonly int? _buildTimeoutSeconds;
     private readonly int? _testTimeoutSeconds;
@@ -38,7 +40,9 @@ public partial class CanonicalTools
         IEditorConfigFileApplier? editorConfigFileApplier = null,
         IWebSearchService? webSearchService = null,
         int? buildTimeoutSeconds = null,
-        int? testTimeoutSeconds = null)
+        int? testTimeoutSeconds = null,
+        IWorkspacePathResolver? pathResolver = null,
+        int? workspaceId = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _executionEnv = executionEnv;
@@ -47,10 +51,39 @@ public partial class CanonicalTools
         _webSearchService = webSearchService ?? new MockWebSearchService();
         _buildTimeoutSeconds = buildTimeoutSeconds;
         _testTimeoutSeconds = testTimeoutSeconds;
+        _pathResolver = pathResolver;
+        _workspaceId = workspaceId;
     }
 
     public string ResolveFullPath(string path)
     {
+        if (_pathResolver != null && _workspaceId.HasValue)
+        {
+            return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path);
+        }
+
+        var normalized = (path ?? string.Empty).Replace('\\', '/');
+        if (normalized.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
+        {
+            var rel = normalized.Substring("/workspace/".Length);
+            return Path.GetFullPath(Path.Combine(_workspaceRoot, rel));
+        }
+        if (string.Equals(normalized, "/workspace", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "workspace", StringComparison.OrdinalIgnoreCase))
+        {
+            return Path.GetFullPath(_workspaceRoot);
+        }
+        if (normalized.StartsWith("workspace/", StringComparison.OrdinalIgnoreCase))
+        {
+            var rel = normalized.Substring("workspace/".Length);
+            return Path.GetFullPath(Path.Combine(_workspaceRoot, rel));
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return Path.GetFullPath(_workspaceRoot);
+        }
+
         if (Path.IsPathRooted(path))
         {
             return Path.GetFullPath(path);

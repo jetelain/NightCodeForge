@@ -24,17 +24,18 @@ public class PipelineEngineTests
         var res1 = await engine.ExecuteStepAsync(pipeline, context);
         Assert.True(res1.IsSuccess);
         Assert.Equal("implementation", issue.CurrentStageId);
-        Assert.Equal(IssueOverallStatus.Running, issue.Status);
+        Assert.Equal(IssueOverallStatus.Reviewed, issue.Status);
 
         // Step 2: Implementation
         var res2 = await engine.ExecuteStepAsync(pipeline, context);
         Assert.True(res2.IsSuccess);
         Assert.Equal("code-review-fix", issue.CurrentStageId);
+        Assert.Equal(IssueOverallStatus.Implemented, issue.Status);
 
         // Step 3: CodeReviewAndFix (End of pipeline)
         var res3 = await engine.ExecuteStepAsync(pipeline, context);
         Assert.True(res3.IsSuccess);
-        Assert.Equal(IssueOverallStatus.Completed, issue.Status);
+        Assert.Equal(IssueOverallStatus.Ready, issue.Status);
     }
 
     [Fact]
@@ -55,7 +56,7 @@ public class PipelineEngineTests
             Id = 1,
             WorkspaceId = 1,
             CurrentStageId = "code-review-fix",
-            Status = IssueOverallStatus.Running
+            Status = IssueOverallStatus.Implemented
         };
         var workspace = new Workspace { Id = 1, Name = "WS1" };
         var context = new PipelineContext(issue, workspace);
@@ -101,7 +102,7 @@ public class PipelineEngineTests
     }
 
     [Fact]
-    public async Task Pipeline_TransitionsToBlockedQuestionWhenClarificationNeeded()
+    public async Task Pipeline_TransitionsToWaitingForHumanWhenClarificationNeeded()
     {
         var reviewStage = new IssueReviewStage
         {
@@ -119,7 +120,7 @@ public class PipelineEngineTests
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { reviewStage });
         var engine = new WorkflowPipelineEngine();
 
-        var issue = new Issue { Id = 5, WorkspaceId = 1, CurrentStageId = "issue-review" };
+        var issue = new Issue { Id = 5, WorkspaceId = 1, Status = IssueOverallStatus.Open, CurrentStageId = "issue-review" };
         var workspace = new Workspace { Id = 1, Name = "WS1" };
         var context = new PipelineContext(issue, workspace);
 
@@ -127,7 +128,8 @@ public class PipelineEngineTests
 
         Assert.False(result.IsSuccess);
         Assert.True(result.NeedsClarification);
-        Assert.Equal(IssueOverallStatus.BlockedQuestion, issue.Status);
+        Assert.True(issue.IsWaitingForHuman);
+        Assert.Equal(IssueOverallStatus.Open, issue.Status);
         Assert.Single(issue.Questions);
         Assert.Equal("Which authentication strategy?", issue.Questions.First().Prompt);
     }

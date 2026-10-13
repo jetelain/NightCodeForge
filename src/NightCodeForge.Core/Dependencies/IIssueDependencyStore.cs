@@ -12,6 +12,8 @@ public interface IIssueDependencyStore
     Task<IReadOnlyList<int>> GetDependentIssueIdsAsync(int prerequisiteIssueId, CancellationToken cancellationToken = default);
     Task<IssueOverallStatus?> GetIssueStatusAsync(int issueId, CancellationToken cancellationToken = default);
     Task UpdateIssueStatusAsync(int issueId, IssueOverallStatus newStatus, CancellationToken cancellationToken = default);
+    Task<bool> IsIssueWaitingForHumanAsync(int issueId, CancellationToken cancellationToken = default);
+    Task SetWaitingForHumanAsync(int issueId, bool isWaiting, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -22,15 +24,31 @@ public class InMemoryIssueDependencyStore : IIssueDependencyStore
     private readonly object _lock = new();
     private readonly Dictionary<int, IssueOverallStatus> _issueStatuses = new();
     private readonly Dictionary<int, int> _issueWorkspaces = new();
+    private readonly Dictionary<int, bool> _waitingForHuman = new();
     private readonly List<(int WorkspaceId, int IssueId, int DependsOnIssueId)> _dependencies = new();
 
-    public void AddIssue(int issueId, int workspaceId, IssueOverallStatus status = IssueOverallStatus.Pending)
+    public void AddIssue(int issueId, int workspaceId, IssueOverallStatus status = IssueOverallStatus.Open, bool isWaitingForHuman = false)
     {
         lock (_lock)
         {
             _issueStatuses[issueId] = status;
             _issueWorkspaces[issueId] = workspaceId;
+            _waitingForHuman[issueId] = isWaitingForHuman;
         }
+    }
+
+    public void SetWaitingForHuman(int issueId, bool isWaiting)
+    {
+        lock (_lock)
+        {
+            _waitingForHuman[issueId] = isWaiting;
+        }
+    }
+
+    public Task SetWaitingForHumanAsync(int issueId, bool isWaiting, CancellationToken cancellationToken = default)
+    {
+        SetWaitingForHuman(issueId, isWaiting);
+        return Task.CompletedTask;
     }
 
     public void AddDependency(int workspaceId, int issueId, int dependsOnIssueId)
@@ -108,6 +126,14 @@ public class InMemoryIssueDependencyStore : IIssueDependencyStore
         {
             _issueStatuses[issueId] = newStatus;
             return Task.CompletedTask;
+        }
+    }
+
+    public Task<bool> IsIssueWaitingForHumanAsync(int issueId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            return Task.FromResult(_waitingForHuman.TryGetValue(issueId, out var val) && val);
         }
     }
 }
