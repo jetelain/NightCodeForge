@@ -55,4 +55,24 @@ Build FAILED.
         Assert.Contains("Total test count dropped from 50 to 45 (-5)", regressionNotice);
         Assert.Contains("Code coverage dropped from 85.0% to 82.5% (-2.5%)", regressionNotice);
     }
+
+    [Fact]
+    public void ExtractDiagnostics_ParsesTypeScriptAndRustErrors()
+    {
+        var tsOutput = "src/index.ts:14:5 - error TS2322: Type 'string' is not assignable to type 'number'.";
+        var tsSummary = _extractor.ExtractDiagnostics(tsOutput, new LocalOptimizationFlags());
+
+        Assert.Single(tsSummary.CompilerErrors);
+        Assert.Equal("TS2322", tsSummary.CompilerErrors[0].Code);
+        Assert.Equal(14, tsSummary.CompilerErrors[0].Line);
+        Assert.Equal("src/index.ts", tsSummary.CompilerErrors[0].File);
+
+        var rustOutput = "error[E0308]: mismatched types\n  --> src/main.rs:22:9\n   | expected i32, found &str";
+        var rustSummary = _extractor.ExtractDiagnostics(rustOutput, new LocalOptimizationFlags());
+
+        Assert.Single(rustSummary.CompilerErrors);
+        Assert.Equal("E0308", rustSummary.CompilerErrors[0].Code);
+        Assert.Equal(22, rustSummary.CompilerErrors[0].Line);
+        Assert.Equal("src/main.rs", rustSummary.CompilerErrors[0].File);
+    }
 }

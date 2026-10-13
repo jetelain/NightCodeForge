@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\NightCodeForge.Core\NightCodeForge.Core.csproj" />
@@ -8,6 +8,8 @@
     <PackageReference Include="editorconfig" Version="0.18.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.10.0" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
+    <PackageReference Include="OllamaSharp" Version="5.5.0" />
   </ItemGroup>
 
   <PropertyGroup>

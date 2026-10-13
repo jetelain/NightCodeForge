@@ -46,10 +46,39 @@ public class PiRpcAgentHarness : IAgentHarness
         }
         else
         {
+            var exePath = _options.ExecutablePath;
+            var args = _options.Arguments;
+
+            if (!string.IsNullOrWhiteSpace(context.Profile.HarnessConfigurationJson))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(context.Profile.HarnessConfigurationJson);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("executablePath", out var exeProp) ||
+                        root.TryGetProperty("executable", out exeProp) ||
+                        root.TryGetProperty("command", out exeProp))
+                    {
+                        var val = exeProp.GetString();
+                        if (!string.IsNullOrWhiteSpace(val)) exePath = val;
+                    }
+                    if (root.TryGetProperty("arguments", out var argsProp) ||
+                        root.TryGetProperty("args", out argsProp))
+                    {
+                        var val = argsProp.GetString();
+                        if (val != null) args = val;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to parse HarnessConfigurationJson on AgentProfile '{ProfileName}', using defaults.", context.Profile.Name);
+                }
+            }
+
             var psi = new ProcessStartInfo
             {
-                FileName = _options.ExecutablePath,
-                Arguments = _options.Arguments,
+                FileName = exePath,
+                Arguments = args,
                 WorkingDirectory = !string.IsNullOrEmpty(context.WorkspacePath) ? context.WorkspacePath : Directory.GetCurrentDirectory(),
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
@@ -89,7 +118,11 @@ public class PiRpcAgentHarness : IAgentHarness
             }
 
             // 2. Dispatch prompt command
-            var promptText = !string.IsNullOrEmpty(context.BootstrapPrompt) ? context.BootstrapPrompt : context.Issue.Description;
+            var promptText = !string.IsNullOrEmpty(context.BootstrapPrompt)
+                ? context.BootstrapPrompt
+                : (!string.IsNullOrWhiteSpace(context.StageDirective)
+                    ? $"[Stage Directive]: {context.StageDirective}\n\n{context.Issue.Title}\n{context.Issue.Description}"
+                    : context.Issue.Description);
             var promptCmd = JsonSerializer.Serialize(new
             {
                 id = $"req-{Guid.NewGuid():N}",

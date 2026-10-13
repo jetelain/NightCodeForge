@@ -69,6 +69,15 @@ public class AppDbContext : DbContext
             c => c == null ? 0 : c.Aggregate(0, (a, v) => HashCode.Combine(a, v.GetHashCode())),
             c => c == null ? null : c.ToList().AsReadOnly());
 
+        var stageDirectivesConverter = new ValueConverter<Dictionary<string, string>?, string?>(
+            v => v == null ? null : JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+            v => string.IsNullOrWhiteSpace(v) ? null : JsonSerializer.Deserialize<Dictionary<string, string>>(v, (JsonSerializerOptions?)null));
+
+        var stageDirectivesComparer = new ValueComparer<Dictionary<string, string>?>(
+            (c1, c2) => JsonSerializer.Serialize(c1, (JsonSerializerOptions?)null) == JsonSerializer.Serialize(c2, (JsonSerializerOptions?)null),
+            c => c == null ? 0 : JsonSerializer.Serialize(c, (JsonSerializerOptions?)null).GetHashCode(),
+            c => c == null ? null : JsonSerializer.Deserialize<Dictionary<string, string>>(JsonSerializer.Serialize(c, (JsonSerializerOptions?)null), (JsonSerializerOptions?)null));
+
         modelBuilder.Entity<AgentProfile>(b =>
         {
             b.HasKey(p => p.Id);
@@ -77,6 +86,7 @@ public class AppDbContext : DbContext
             b.Property(p => p.HarnessId).IsRequired().HasMaxLength(64);
             b.Property(p => p.ModelName).IsRequired().HasMaxLength(256);
             b.Property(p => p.ThinkingEffort).HasConversion<int>();
+            b.Property(p => p.Mode).HasConversion<int>();
             b.Property(p => p.SecurityTier).HasConversion<int>();
 
             b.Property(p => p.OptimizationFlags)
@@ -86,6 +96,10 @@ public class AppDbContext : DbContext
             b.Property(p => p.PermittedTools)
                 .HasConversion(permittedToolsConverter)
                 .Metadata.SetValueComparer(permittedToolsComparer);
+
+            b.Property(p => p.StageDirectives)
+                .HasConversion(stageDirectivesConverter)
+                .Metadata.SetValueComparer(stageDirectivesComparer);
         });
 
         // 3. Issue

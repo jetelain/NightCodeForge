@@ -1,3 +1,4 @@
+using NightCodeForge.Agents;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Infrastructure;
 using NightCodeForge.Infrastructure.BackgroundJobs;
@@ -14,6 +15,8 @@ var dbConnection = builder.Configuration.GetConnectionString("DefaultConnection"
 var hangfireConnection = builder.Configuration.GetConnectionString("HangfireConnection") ?? "Data Source=nightcodeforge_hangfire.db;";
 
 builder.Services.AddNightCodeForgeCoreAndInfrastructure(dbConnection);
+builder.Services.Configure<NightCodeForge.Agents.Inference.LlmProviderOptions>(builder.Configuration.GetSection(NightCodeForge.Agents.Inference.LlmProviderOptions.SectionName));
+builder.Services.AddNightCodeForgeAgents();
 builder.Services.AddNightCodeForgeHangfire(hangfireConnection);
 builder.Services.AddNightCodeForgeHangfireServers();
 

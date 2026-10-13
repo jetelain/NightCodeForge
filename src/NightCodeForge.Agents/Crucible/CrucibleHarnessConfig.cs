@@ -21,4 +21,5 @@ public class CrucibleHarnessConfig
     public List<string>? AllowedTools { get; set; }
     public int MaxTurns { get; set; } = 20;
     public string? CustomSystemRules { get; set; }
+    public string? CustomPersona { get; set; }
 }

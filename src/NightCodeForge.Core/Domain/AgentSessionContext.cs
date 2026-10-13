@@ -13,6 +13,8 @@ public class AgentSessionContext
     public PipelineContext? PipelineContext { get; init; }
     public LocalOptimizationFlags OptimizationFlags { get; init; } = new();
     public string StageId { get; init; } = string.Empty;
+    public string StageDirective { get; init; } = string.Empty;
+    public AgentMode RequiredMode { get; init; } = AgentMode.Full;
     public string BootstrapPrompt { get; init; } = string.Empty;
     public string? SerializedStateJson { get; init; }
     public string WorkspacePath { get; init; } = string.Empty;

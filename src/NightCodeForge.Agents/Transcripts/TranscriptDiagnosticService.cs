@@ -26,6 +26,7 @@ public partial class TranscriptDiagnosticService
 
     public async Task<TranscriptDiagnosis> DiagnoseTranscriptAsync(
         string transcriptMarkdown,
+        string? customSystemPrompt = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(transcriptMarkdown))
@@ -33,7 +34,9 @@ public partial class TranscriptDiagnosticService
             return new TranscriptDiagnosis("Transcript is empty.", "Unknown", Array.Empty<string>());
         }
 
-        var systemPrompt = @"You are a senior AI agent systems diagnostician.
+        var systemPrompt = !string.IsNullOrWhiteSpace(customSystemPrompt)
+            ? customSystemPrompt
+            : @"You are a senior AI agent systems diagnostician.
 Analyze the following failed agent execution transcript from NightCodeForge.
 Identify:
 1. Root cause category (e.g. InfiniteLoop, MalformedToolPayload, CompilationFailure, TestRegression, ModelConfusion).

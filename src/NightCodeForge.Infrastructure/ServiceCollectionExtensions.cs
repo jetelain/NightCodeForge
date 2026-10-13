@@ -47,6 +47,17 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IIssueOrchestrator, IssueOrchestrator>();
         services.TryAddScoped<IStartupRecoveryService, StartupRecoveryService>();
 
+        // 6. Execution Environments
+        services.TryAddSingleton<IExecutionEnvironment, Execution.BareHostExecutionEnvironment>();
+        services.TryAddTransient<Execution.WslExecutionEnvironment>();
+
+        // 7. OllamaRouter Services
+        services.AddHttpClient<IOllamaModelCatalogService, Inference.OllamaModelCatalogService>();
+        services.AddHttpClient<IOllamaModelPreloadService, Inference.OllamaModelPreloadService>();
+
+        // 8. Markdown Issue Mirroring
+        services.TryAddScoped<IIssueMarkdownSyncService, IssueMarkdownSyncService>();
+
         return services;
     }
 }

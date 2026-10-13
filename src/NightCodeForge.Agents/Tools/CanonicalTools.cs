@@ -262,13 +262,14 @@ public partial class CanonicalTools
         return line.Substring(0, count);
     }
 
+    public static readonly HashSet<string> IndentationSignificantExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".py", ".yaml", ".yml", ".nim", ".pug", "makefile"
+    };
+
     private static bool IsIndentationSignificant(string extension)
     {
-        return extension switch
-        {
-            ".py" or ".yaml" or ".yml" or ".nim" or ".pug" or "makefile" => true,
-            _ => false
-        };
+        return IndentationSignificantExtensions.Contains(extension);
     }
 
     /// <summary>
@@ -290,6 +291,16 @@ public partial class CanonicalTools
             if (!string.IsNullOrWhiteSpace(res.StandardError) && !string.IsNullOrWhiteSpace(res.StandardOutput))
             {
                 output = res.StandardOutput + "\n[STDERR]\n" + res.StandardError;
+            }
+
+            if (command.Contains("build", StringComparison.OrdinalIgnoreCase) || command.Contains("test", StringComparison.OrdinalIgnoreCase))
+            {
+                var extractor = new Optimizations.StructuredDiagnosticExtractor();
+                var diag = extractor.ExtractDiagnostics(output);
+                if (diag.CompilerErrors.Count > 0 || diag.TestFailures.Count > 0)
+                {
+                    output = $"{output}\n\n[Structured Diagnostics Extracted]:\n{diag.FormattedMarkdown}";
+                }
             }
 
             return $"Exit Code: {res.ExitCode}\n{output}".TrimEnd();

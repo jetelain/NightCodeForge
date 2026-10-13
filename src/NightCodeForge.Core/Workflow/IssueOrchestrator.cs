@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Dependencies;
@@ -22,6 +23,9 @@ public class IssueOrchestrator : IIssueOrchestrator
     private readonly IWorkflowPipelineProvider _pipelineProvider;
     private readonly IIssueJobQueue _jobQueue;
     private readonly IIssueDependencyStore? _dependencyStore;
+    private readonly IHarnessRegistry? _harnessRegistry;
+    private readonly IGitMirrorSyncService? _gitMirrorSyncService;
+    private readonly Services.IIssueMarkdownSyncService? _markdownSyncService;
     private readonly ILogger<IssueOrchestrator> _logger;
 
     public IssueOrchestrator(
@@ -33,6 +37,9 @@ public class IssueOrchestrator : IIssueOrchestrator
         IWorkflowPipelineProvider pipelineProvider,
         IIssueJobQueue jobQueue,
         IIssueDependencyStore? dependencyStore = null,
+        IHarnessRegistry? harnessRegistry = null,
+        IGitMirrorSyncService? gitMirrorSyncService = null,
+        Services.IIssueMarkdownSyncService? markdownSyncService = null,
         ILogger<IssueOrchestrator>? logger = null)
     {
         _issueRepository = issueRepository ?? throw new ArgumentNullException(nameof(issueRepository));
@@ -43,6 +50,9 @@ public class IssueOrchestrator : IIssueOrchestrator
         _pipelineProvider = pipelineProvider ?? throw new ArgumentNullException(nameof(pipelineProvider));
         _jobQueue = jobQueue ?? throw new ArgumentNullException(nameof(jobQueue));
         _dependencyStore = dependencyStore;
+        _harnessRegistry = harnessRegistry;
+        _gitMirrorSyncService = gitMirrorSyncService;
+        _markdownSyncService = markdownSyncService;
         _logger = logger ?? NullLogger<IssueOrchestrator>.Instance;
     }
 
@@ -109,6 +119,19 @@ public class IssueOrchestrator : IIssueOrchestrator
         try
         {
             await _gitWorkspaceManager.CheckoutIssueBranchAsync(workspace, issue.Id, issue.BaseBranch, cancellationToken);
+
+            if (_gitMirrorSyncService != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+            {
+                try
+                {
+                    await _gitMirrorSyncService.ConfigureHostRepositoryAsync(workspace.RepositoryPath, cancellationToken);
+                    await _gitMirrorSyncService.FetchFromHostAsync(workspace.Ext4MirrorPath, issue.BaseBranch, cancellationToken);
+                }
+                catch (Exception mex)
+                {
+                    _logger.LogWarning(mex, "Ext4 mirror fetch synchronization failed for issue #{IssueId}", issueId);
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -184,7 +207,61 @@ public class IssueOrchestrator : IIssueOrchestrator
 
         try
         {
-            result = await stage.ExecuteAsync(pipelineContext, cancellationToken);
+            if (stage.Kind == WorkflowStageKind.Agentic && _harnessRegistry != null && !HasCustomHandler(stage))
+            {
+                var harnessId = profile?.HarnessId ?? "crucible";
+                if (_harnessRegistry.TryGetHarness(harnessId, out var harness) && harness != null)
+                {
+                    var lastCheckpoint = issue.Checkpoints?.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
+                    var lastHumanAnswer = pipelineContext.DataBag.Get<string>("LastHumanAnswer");
+
+                    var stageDirective = (profile?.StageDirectives != null && profile.StageDirectives.TryGetValue(stage.StageId, out var customDirective) && !string.IsNullOrWhiteSpace(customDirective))
+                        ? customDirective
+                        : stage.StageDirective;
+
+                    if (stage.RequiredMode == AgentMode.Full && profile != null && profile.Mode == AgentMode.ReadOnly)
+                    {
+                        var errorMsg = $"Stage '{stage.StageId}' requires AgentMode.Full capabilities, but profile '{profile.Id}' is configured as AgentMode.ReadOnly.";
+                        _logger.LogError(errorMsg);
+                        result = StageExecutionResult.Failure(errorMsg);
+                    }
+                    else
+                    {
+                        var agentContext = new AgentSessionContext
+                        {
+                            Issue = issue,
+                            Workspace = workspace,
+                            Profile = profile ?? new AgentProfile { Id = "default", HarnessId = harnessId, ModelName = "default" },
+                            StageId = stage.StageId,
+                            StageDirective = stageDirective,
+                            RequiredMode = stage.RequiredMode,
+                            WorkspacePath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) ? workspace.Ext4MirrorPath : workspace.RepositoryPath,
+                            SerializedStateJson = lastCheckpoint?.SerializedMemory,
+                            PendingHumanAnswer = lastHumanAnswer,
+                            BootstrapPrompt = BuildBootstrapPrompt(stage.StageId, issue, pipelineContext, stageDirective),
+                            OptimizationFlags = profile?.OptimizationFlags ?? new LocalOptimizationFlags(),
+                            PipelineContext = pipelineContext
+                        };
+
+                        var runResult = await harness.RunStageAsync(agentContext, cancellationToken);
+
+                        if (!string.IsNullOrEmpty(runResult.UpdatedState))
+                        {
+                            pipelineContext.DataBag.Set("SerializedMemory", runResult.UpdatedState);
+                        }
+
+                        result = MapAgentRunResultToStageResult(runResult, stage, profile, startedAt);
+                    }
+                }
+                else
+                {
+                    result = await stage.ExecuteAsync(pipelineContext, cancellationToken);
+                }
+            }
+            else
+            {
+                result = await stage.ExecuteAsync(pipelineContext, cancellationToken);
+            }
         }
         catch (HumanInterruptionException hex)
         {
@@ -265,6 +342,7 @@ public class IssueOrchestrator : IIssueOrchestrator
             {
                 await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.BlockedQuestion, cancellationToken);
             }
+            await SyncIssueMarkdownAndMirrorAsync(issue, workspace, cancellationToken);
 
             await _issueRepository.AddExecutionLogAsync(new ExecutionLog
             {
@@ -298,6 +376,7 @@ public class IssueOrchestrator : IIssueOrchestrator
                 {
                     await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Pending, cancellationToken);
                 }
+                await SyncIssueMarkdownAndMirrorAsync(issue, workspace, cancellationToken);
 
                 // Enqueue next stage to standard inference queue
                 _jobQueue.EnqueueInference(issue.Id);
@@ -324,6 +403,7 @@ public class IssueOrchestrator : IIssueOrchestrator
                 {
                     await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Review, cancellationToken);
                 }
+                await SyncIssueMarkdownAndMirrorAsync(issue, workspace, cancellationToken);
 
                 await _issueRepository.AddExecutionLogAsync(new ExecutionLog
                 {
@@ -344,6 +424,7 @@ public class IssueOrchestrator : IIssueOrchestrator
         {
             await _dependencyStore.UpdateIssueStatusAsync(issue.Id, IssueOverallStatus.Failed, cancellationToken);
         }
+        await SyncIssueMarkdownAndMirrorAsync(issue, workspace, cancellationToken);
         await _issueRepository.AddExecutionLogAsync(new ExecutionLog
         {
             IssueId = issue.Id,
@@ -475,6 +556,112 @@ public class IssueOrchestrator : IIssueOrchestrator
         {
             _logger.LogInformation("Issue #{PrereqId} completed; unblocked dependent issue #{UnblockedId}.", issue.Id, unblockedId);
             _jobQueue.EnqueueInference(unblockedId);
+        }
+
+        await SyncMarkdownIssueSafeAsync(workspace, issue, cancellationToken);
+    }
+
+    private static bool HasCustomHandler(IWorkflowStage stage)
+    {
+        var prop = stage.GetType().GetProperty("Handler");
+        return prop != null && prop.GetValue(stage) != null;
+    }
+
+    private static StageExecutionResult MapAgentRunResultToStageResult(
+        AgentRunResult runResult,
+        IWorkflowStage stage,
+        AgentProfile? profile,
+        DateTime startedAt)
+    {
+        var completedAt = DateTime.UtcNow;
+        var durationMs = (int)(completedAt - startedAt).TotalMilliseconds;
+        var metrics = runResult.Metrics ?? new AgentRunMetrics(durationMs);
+
+        var record = new StageExecutionRecord
+        {
+            StageId = stage.StageId,
+            StageKind = stage.Kind.ToString(),
+            AgentProfileId = profile?.Id ?? string.Empty,
+            HarnessId = profile?.HarnessId ?? string.Empty,
+            ModelName = profile?.ModelName ?? string.Empty,
+            StartedAt = startedAt,
+            CompletedAt = completedAt,
+            DurationMs = durationMs,
+            PromptTokens = (int)metrics.PromptTokens,
+            CompletionTokens = (int)metrics.CompletionTokens,
+            TotalTokens = (int)metrics.TotalTokens,
+            Status = runResult.Status == AgentRunStatus.Failed ? StageExecutionStatus.Failed : StageExecutionStatus.Completed
+        };
+
+        if (runResult.Status == AgentRunStatus.WaitingForHuman)
+        {
+            var question = new Question
+            {
+                StageId = stage.StageId,
+                Prompt = runResult.PendingQuestion ?? "Human clarification required.",
+                Rationale = runResult.Summary ?? string.Empty,
+                QuestionType = QuestionType.FreeText,
+                Status = QuestionStatus.Pending
+            };
+            return StageExecutionResult.WaitingForHuman(question, record);
+        }
+
+        if (runResult.Status == AgentRunStatus.Completed)
+        {
+            return StageExecutionResult.Success(record: record);
+        }
+
+        return StageExecutionResult.Failure(runResult.Error ?? "Stage failed.", record: record);
+    }
+
+    private static string BuildBootstrapPrompt(string stageId, Issue issue, PipelineContext context, string? stageDirective = null)
+    {
+        var reviewerFeedback = context.DataBag.Get<string>("ReviewerFeedback");
+        var feedbackSection = !string.IsNullOrWhiteSpace(reviewerFeedback)
+            ? $"\n\n[Reviewer Requested Changes / Feedback]:\n{reviewerFeedback}\n"
+            : string.Empty;
+
+        var compilerErrors = context.DataBag.Get<List<string>>("diagnostics.compiler_errors");
+        var diagnosticSection = compilerErrors != null && compilerErrors.Count > 0
+            ? $"\n\n[Prior Diagnostic Failures to Remediate]:\n{string.Join("\n", compilerErrors)}\n"
+            : string.Empty;
+
+        var directiveSection = !string.IsNullOrWhiteSpace(stageDirective)
+            ? $"\n\n[Stage Directive]:\n{stageDirective}\n"
+            : string.Empty;
+
+        return $"Execute stage '{stageId}' for issue #{issue.Id}: {issue.Title}\n{issue.Description}{directiveSection}{feedbackSection}{diagnosticSection}".Trim();
+    }
+
+    private async Task SyncMarkdownIssueSafeAsync(Workspace workspace, Issue issue, CancellationToken cancellationToken)
+    {
+        if (_markdownSyncService != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+        {
+            try
+            {
+                await _markdownSyncService.SyncIssueToDiskAsync(issue, workspace.RepositoryPath, cancellationToken: cancellationToken);
+            }
+            catch (Exception mex)
+            {
+                _logger.LogWarning(mex, "Failed to mirror issue #{IssueId} to docs/issues/*.md", issue.Id);
+            }
+        }
+    }
+
+    private async Task SyncIssueMarkdownAndMirrorAsync(Issue issue, Workspace workspace, CancellationToken cancellationToken)
+    {
+        await SyncMarkdownIssueSafeAsync(workspace, issue, cancellationToken);
+
+        if (_gitMirrorSyncService != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            try
+            {
+                await _gitMirrorSyncService.PushToHostAsync(workspace.Ext4MirrorPath, issue.Id, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed pushing ext4 mirror changes for issue #{IssueId} to host repository", issue.Id);
+            }
         }
     }
 }

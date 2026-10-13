@@ -16,7 +16,11 @@ public class AgentProfile
     public string? HarnessConfigurationJson { get; set; }
     public LocalOptimizationFlags? OptimizationFlags { get; set; }
     public IReadOnlyList<string>? PermittedTools { get; set; }
+    public Dictionary<string, string>? StageDirectives { get; set; }
+    public AgentMode Mode { get; set; } = AgentMode.Full;
     public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard;
+    public string? SystemPrompt { get; set; }
+    public int? MaxTurns { get; set; }
 
     public Workspace? Workspace { get; set; }
 }

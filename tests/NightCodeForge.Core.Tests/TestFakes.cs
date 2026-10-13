@@ -89,12 +89,14 @@ public class TestWorkflowStage : IWorkflowStage
     public string StageId { get; set; }
     public string DisplayName => StageId;
     public WorkflowStageKind Kind { get; set; } = WorkflowStageKind.Agentic;
+    public AgentMode RequiredMode { get; set; } = AgentMode.Full;
     public Func<PipelineContext, CancellationToken, Task<StageExecutionResult>>? Handler { get; set; }
 
-    public TestWorkflowStage(string stageId, WorkflowStageKind kind = WorkflowStageKind.Agentic)
+    public TestWorkflowStage(string stageId, WorkflowStageKind kind = WorkflowStageKind.Agentic, AgentMode mode = AgentMode.Full)
     {
         StageId = stageId;
         Kind = kind;
+        RequiredMode = mode;
     }
 
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)

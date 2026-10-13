@@ -30,6 +30,18 @@ public partial class StructuredDiagnosticExtractor
     [GeneratedRegex(@"(?<file>[^\r\n()]+\.cs)\((?<line>\d+),(?<col>\d+)\):\s*error\s*(?<code>CS\d+):\s*(?<msg>[^\r\n]+)", RegexOptions.IgnoreCase)]
     private static partial Regex RoslynErrorRegex();
 
+    [GeneratedRegex(@"(?<file>[^\r\n():]+\.tsx?)(?:\((?<line>\d+),(?<col>\d+)\)|:(?<line>\d+):(?<col>\d+))(?::|\s*-)?\s*error\s*(?<code>TS\d+):\s*(?<msg>[^\r\n]+)", RegexOptions.IgnoreCase)]
+    private static partial Regex TypeScriptErrorRegex();
+
+    [GeneratedRegex(@"error\[(?<code>E\d+)\]:\s*(?<msg>[^\r\n]+)[\r\n]+\s*-->\s*(?<file>[^:\r\n]+):(?<line>\d+):(?<col>\d+)", RegexOptions.IgnoreCase)]
+    private static partial Regex RustErrorRegex();
+
+    [GeneratedRegex(@"File ""(?<file>[^""]+)"", line (?<line>\d+).*?[\r\n]+(?<code>\w*Error|\w*Exception):\s*(?<msg>[^\r\n]+)", RegexOptions.Singleline)]
+    private static partial Regex PythonErrorRegex();
+
+    [GeneratedRegex(@"(?<file>[^\s:]+\.go):(?<line>\d+):(?<col>\d+):\s*(?<msg>[^\r\n]+)")]
+    private static partial Regex GoErrorRegex();
+
     [GeneratedRegex(@"Failed\s+(?<test>[^\r\n\s]+)(?:[\r\n]+(?:\s*Error Message:[\r\n]+\s*(?<msg>[^\r\n]+))?(?:[\r\n]+\s*Stack Trace:[\r\n]+\s*(?<stack>[^\r\n]+))?)?")]
     private static partial Regex TestFailedRegex();
 
@@ -46,6 +58,8 @@ public partial class StructuredDiagnosticExtractor
         }
 
         var errors = new List<CompilerDiagnostic>();
+
+        // 1. Roslyn (C#)
         foreach (Match m in RoslynErrorRegex().Matches(rawBuildOrTestOutput))
         {
             var msg = m.Groups["msg"].Value.Trim();
@@ -61,6 +75,54 @@ public partial class StructuredDiagnosticExtractor
                 Column: int.Parse(m.Groups["col"].Value),
                 Code: m.Groups["code"].Value.Trim(),
                 Message: msg
+            ));
+        }
+
+        // 2. TypeScript
+        foreach (Match m in TypeScriptErrorRegex().Matches(rawBuildOrTestOutput))
+        {
+            errors.Add(new CompilerDiagnostic(
+                File: m.Groups["file"].Value.Trim(),
+                Line: int.Parse(m.Groups["line"].Value),
+                Column: int.Parse(m.Groups["col"].Value),
+                Code: m.Groups["code"].Value.Trim(),
+                Message: m.Groups["msg"].Value.Trim()
+            ));
+        }
+
+        // 3. Rust
+        foreach (Match m in RustErrorRegex().Matches(rawBuildOrTestOutput))
+        {
+            errors.Add(new CompilerDiagnostic(
+                File: m.Groups["file"].Value.Trim(),
+                Line: int.Parse(m.Groups["line"].Value),
+                Column: int.Parse(m.Groups["col"].Value),
+                Code: m.Groups["code"].Value.Trim(),
+                Message: m.Groups["msg"].Value.Trim()
+            ));
+        }
+
+        // 4. Python
+        foreach (Match m in PythonErrorRegex().Matches(rawBuildOrTestOutput))
+        {
+            errors.Add(new CompilerDiagnostic(
+                File: m.Groups["file"].Value.Trim(),
+                Line: int.Parse(m.Groups["line"].Value),
+                Column: 1,
+                Code: m.Groups["code"].Value.Trim(),
+                Message: m.Groups["msg"].Value.Trim()
+            ));
+        }
+
+        // 5. Go
+        foreach (Match m in GoErrorRegex().Matches(rawBuildOrTestOutput))
+        {
+            errors.Add(new CompilerDiagnostic(
+                File: m.Groups["file"].Value.Trim(),
+                Line: int.Parse(m.Groups["line"].Value),
+                Column: int.Parse(m.Groups["col"].Value),
+                Code: "GO",
+                Message: m.Groups["msg"].Value.Trim()
             ));
         }
 

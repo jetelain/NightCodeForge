@@ -99,11 +99,12 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
 
         // Failure handling & loop circuit breaker
         var retries = context.IncrementRetry(stage.StageId);
-        if (retries > MaxRetries)
+        var effectiveMaxRetries = context.DataBag.Get<int?>("Workflow.MaxRetries") ?? MaxRetries;
+        if (retries > effectiveMaxRetries)
         {
             context.Issue.Status = IssueOverallStatus.Failed;
             context.SyncDataBagToIssue();
-            return StageExecutionResult.Failure($"Stage '{stage.StageId}' failed and exceeded maximum retry count of {MaxRetries}: {result.ErrorMessage}");
+            return StageExecutionResult.Failure($"Stage '{stage.StageId}' failed and exceeded maximum retry count of {effectiveMaxRetries}: {result.ErrorMessage}");
         }
 
         // Backward loop or retry routing

@@ -1,6 +1,15 @@
 namespace NightCodeForge.Core.Domain;
 
 /// <summary>
+/// Operational mode defining tool capabilities for an agent or requirements for a stage.
+/// </summary>
+public enum AgentMode
+{
+    ReadOnly = 0, // Read-only tools (inspection, triage, discovery)
+    Full = 1      // Full capabilities (editing, file writing, shell execution)
+}
+
+/// <summary>
 /// Execution environment mode for tasks within a workspace.
 /// </summary>
 public enum ExecutionMode

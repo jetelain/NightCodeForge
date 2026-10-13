@@ -35,7 +35,8 @@ public class DeterministicWarningRatchetStage : IWorkflowStage
                 var details = newWarnings.Count > 0 ? string.Join("; ", newWarnings) : $"{delta} new warning(s) found.";
                 var error = $"Warning ratchet violation: warning count increased from {baselineWarnings} to {currentWarnings} (Delta: +{delta}). Details: {details}";
                 bag.Set("ratchet.failure.reason", error);
-                return Task.FromResult(StageExecutionResult.Failure(error, LoopBackStageId));
+                var targetStage = bag.Get<string>("Stage.LoopBackId") ?? LoopBackStageId;
+                return Task.FromResult(StageExecutionResult.Failure(error, targetStage));
             }
         }
 

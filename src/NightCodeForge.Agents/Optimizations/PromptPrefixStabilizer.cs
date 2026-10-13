@@ -41,12 +41,15 @@ public class PromptPrefixStabilizer
         string? discoveredSymbols = null,
         LocalOptimizationFlags? flags = null,
         string? customToolsPrompt = null,
-        string? customRulesPrompt = null)
+        string? customRulesPrompt = null,
+        string? customRolePersona = null)
     {
         var sb = new StringBuilder();
 
         // LAYER 1: Immutable Global Rules & Guidelines (Byte-Identical across ALL turns & issues)
-        sb.AppendLine("You are an expert AI software engineer operating in NightCodeForge.");
+        sb.AppendLine(!string.IsNullOrWhiteSpace(customRolePersona)
+            ? customRolePersona
+            : "You are an expert AI software engineer operating in NightCodeForge.");
         sb.AppendLine(!string.IsNullOrWhiteSpace(customToolsPrompt) ? customToolsPrompt : CanonicalToolDefinitionsPrompt);
         sb.AppendLine(!string.IsNullOrWhiteSpace(customRulesPrompt) ? customRulesPrompt : CanonicalRulesPrompt);
 

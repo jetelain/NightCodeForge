@@ -73,4 +73,27 @@ public class AgentActivityAndCrucibleConfigTests
         Assert.Equal(AgentActivityKind.ToolStarted, sessionEvents[1].Kind);
         Assert.Equal("read", sessionEvents[1].Content);
     }
+
+    [Fact]
+    public void PromptPrefixStabilizer_UsesCustomRolePersona_WhenProvided()
+    {
+        var stabilizer = new Optimizations.PromptPrefixStabilizer();
+        var prefix = stabilizer.BuildStabilizedPrefix(
+            stagePersonaDirective: "Fix bug",
+            issueScopeAndPlan: "Issue #1",
+            customRolePersona: "Custom Persona Directive for Security Hardening");
+
+        Assert.StartsWith("Custom Persona Directive for Security Hardening", prefix);
+    }
+
+    [Fact]
+    public void CanonicalTools_IndentationSignificantExtensions_IsConfigurable()
+    {
+        Assert.Contains(".py", Tools.CanonicalTools.IndentationSignificantExtensions);
+        Assert.Contains(".yaml", Tools.CanonicalTools.IndentationSignificantExtensions);
+
+        // Can register custom extensions dynamically
+        Tools.CanonicalTools.IndentationSignificantExtensions.Add(".customlang");
+        Assert.Contains(".customlang", Tools.CanonicalTools.IndentationSignificantExtensions);
+    }
 }

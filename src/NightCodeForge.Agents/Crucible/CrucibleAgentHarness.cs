@@ -12,6 +12,7 @@ using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Tools.EditorConfig;
+using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
@@ -30,6 +31,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly SkillsService _skillsService;
     private readonly AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer? _activityStreamer;
+    private readonly SessionTranscriptService? _transcriptService;
     private readonly ILogger<CrucibleAgentHarness> _logger;
 
     public string HarnessId => "crucible";
@@ -47,6 +49,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         SkillsService? skillsService = null,
         AgentsMdService? agentsMdService = null,
         IAgentActivityStreamer? activityStreamer = null,
+        SessionTranscriptService? transcriptService = null,
         ILogger<CrucibleAgentHarness>? logger = null)
     {
         _baseChatClient = baseChatClient ?? throw new ArgumentNullException(nameof(baseChatClient));
@@ -58,6 +61,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         _skillsService = skillsService ?? new SkillsService();
         _agentsMdService = agentsMdService ?? new AgentsMdService();
         _activityStreamer = activityStreamer;
+        _transcriptService = transcriptService;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CrucibleAgentHarness>.Instance;
     }
 
@@ -121,15 +125,20 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
 
         // 4. Resolve Active Stage Permitted Tools (Database/Profile Configurable)
-        var permittedTools = ResolvePermittedTools(harnessConfig, context.Profile, context.StageId);
+        var permittedTools = ResolvePermittedTools(harnessConfig, context.Profile, context.RequiredMode);
 
         // 5. Build dynamic tool descriptions prompt
         var customToolsPrompt = BuildDynamicToolsPrompt(dispatcher, permittedTools, harnessConfig.ToolDirectives);
 
         // 6. Build 4-Layer Stabilized Prompt Prefix
         var prefixStabilizer = new PromptPrefixStabilizer();
-        var stageDirective = GetStageDirective(harnessConfig, context.StageId);
+        var stageDirective = !string.IsNullOrWhiteSpace(context.StageDirective)
+            ? context.StageDirective
+            : GetStageDirective(harnessConfig, context.StageId);
         var issueScope = $"<issue id=\"{context.Issue.Id}\" title=\"{context.Issue.Title}\">\n{context.Issue.Description}\n</issue>";
+        var customPersona = !string.IsNullOrWhiteSpace(context.Profile.SystemPrompt)
+            ? context.Profile.SystemPrompt
+            : harnessConfig.CustomPersona;
 
         var stabilizedPrefix = prefixStabilizer.BuildStabilizedPrefix(
             stageDirective,
@@ -139,7 +148,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
             discoveredSymbols,
             context.OptimizationFlags,
             customToolsPrompt: customToolsPrompt,
-            customRulesPrompt: harnessConfig.CustomSystemRules);
+            customRulesPrompt: harnessConfig.CustomSystemRules,
+            customRolePersona: customPersona);
 
         // 7. Restore or Initialize Conversation History
         List<ChatMessage> chatHistory;
@@ -176,7 +186,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
         IChatClient activeClient = new ThinkingTraceCompactionChatClient(persistingClient, context.OptimizationFlags);
 
         // 10. Main Agentic Reasoning Loop with Real-Time Streaming
-        int maxTurns = harnessConfig.MaxTurns > 0 ? harnessConfig.MaxTurns : 20;
+        int maxTurns = harnessConfig.MaxTurns > 0
+            ? harnessConfig.MaxTurns
+            : (context.Profile.MaxTurns.HasValue && context.Profile.MaxTurns.Value > 0
+                ? context.Profile.MaxTurns.Value
+                : 20);
         int currentTurn = 0;
 
         while (currentTurn < maxTurns && !cancellationToken.IsCancellationRequested)
@@ -187,6 +201,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 Temperature = (float?)context.Profile.Temperature,
                 Tools = BuildAIFunctionList(permittedTools)
             };
+
+            if (context.OptimizationFlags.GuidedGrammarDecoding)
+            {
+                GuidedGrammarHelper.ApplyGrammarConstraints(chatOptions, context.OptimizationFlags);
+            }
 
             var accumulatedText = new StringBuilder();
             var functionCalls = new List<FunctionCallContent>();
@@ -204,7 +223,18 @@ public partial class CrucibleAgentHarness : IAgentHarness
                             {
                                 functionCalls.Add(fc);
                             }
+                            else if (content is UsageContent uc && uc.Details != null)
+                            {
+                                if (uc.Details.InputTokenCount.HasValue) promptTokens = Math.Max(promptTokens, uc.Details.InputTokenCount.Value);
+                                if (uc.Details.OutputTokenCount.HasValue) completionTokens = Math.Max(completionTokens, uc.Details.OutputTokenCount.Value);
+                            }
                         }
+                    }
+
+                    if (update.AdditionalProperties != null && update.AdditionalProperties.TryGetValue("usage", out var rawUsage) && rawUsage is JsonElement usageJe)
+                    {
+                        if (usageJe.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt64(out var ptVal)) promptTokens = Math.Max(promptTokens, ptVal);
+                        if (usageJe.TryGetProperty("completion_tokens", out var ct) && ct.TryGetInt64(out var ctVal)) completionTokens = Math.Max(completionTokens, ctVal);
                     }
 
                     if (!string.IsNullOrEmpty(update.Text))
@@ -218,6 +248,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, kind, update.Text, cancellationToken);
 
                         if (update.Text.Contains("</think>")) isThinking = false;
+
+                        // Check circuit breaker repetition in streaming buffer
+                        if (context.OptimizationFlags.LoopCircuitBreaker && circuitBreaker.DetectStreamingRepetition(accumulatedText.ToString()))
+                        {
+                            _logger.LogWarning("Circuit breaker detected repeating n-gram monologue in streaming output. Aborting turn.");
+                            break;
+                        }
                     }
                 }
             }
@@ -325,6 +362,34 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageCompleted, lastAssistantMessage ?? "Stage finished", cancellationToken);
 
+        if (_transcriptService != null)
+        {
+            try
+            {
+                var entries = chatHistory.Select(m => new TranscriptEntry(
+                    DateTime.UtcNow,
+                    m.Role.Value,
+                    m.Text ?? string.Empty
+                )).ToList();
+
+                var meta = new TranscriptMetadata(
+                    context.Issue.Id,
+                    context.StageId,
+                    context.Profile.Name,
+                    context.Profile.ModelName,
+                    stopwatch.ElapsedMilliseconds,
+                    new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+                    context.OptimizationFlags,
+                    AgentRunStatus.Completed);
+
+                await _transcriptService.SaveTranscriptAsync(meta, entries, cancellationToken);
+            }
+            catch (Exception tex)
+            {
+                _logger.LogWarning(tex, "Failed to persist session transcript for issue #{IssueId}", context.Issue.Id);
+            }
+        }
+
         return AgentRunResult.Completed(
             new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
             commitHash: null,
@@ -358,7 +423,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
     }
 
-    private static IReadOnlyList<string> ResolvePermittedTools(CrucibleHarnessConfig config, AgentProfile profile, string stageId)
+    private static IReadOnlyList<string> ResolvePermittedTools(CrucibleHarnessConfig config, AgentProfile profile, AgentMode requiredMode)
     {
         // 1. Config override from database HarnessConfigurationJson
         if (config.AllowedTools != null && config.AllowedTools.Count > 0)
@@ -372,13 +437,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
             return profile.PermittedTools;
         }
 
-        // 3. Stage defaults
-        return stageId.ToLowerInvariant() switch
+        // 3. Two modes: ReadOnly vs Full
+        var effectiveMode = profile.Mode == AgentMode.ReadOnly ? AgentMode.ReadOnly : requiredMode;
+        return effectiveMode switch
         {
-            "triage" or "stage-0" => new[] { "read", "propose_issues" },
-            "issue-review" or "stage-1" => new[] { "read", "bash", "web_search", "ask" },
-            "implementation" or "stage-2" => new[] { "read", "edit", "write", "bash", "web_search", "ask" },
-            "code-review-fix" or "stage-3" => new[] { "read", "edit", "bash", "ask" },
+            AgentMode.ReadOnly => new[] { "read", "propose_issues", "web_search", "ask" },
             _ => new[] { "read", "edit", "write", "bash", "web_search", "ask", "propose_issues" }
         };
     }

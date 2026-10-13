@@ -10,5 +10,7 @@ public interface IWorkflowStage
     string StageId { get; }
     string DisplayName { get; }
     WorkflowStageKind Kind { get; }
+    string StageDirective => string.Empty;
+    AgentMode RequiredMode => AgentMode.Full;
     Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default);
 }
