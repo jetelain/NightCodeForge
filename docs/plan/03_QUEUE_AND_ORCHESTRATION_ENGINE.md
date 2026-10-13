@@ -85,7 +85,7 @@ flowchart TD
   ```
 * **Step-by-Step Execution Lifecycle:**
   1. **Readiness & Workspace Locking:**
-     - Checks DAG readiness: verifies all dependencies are `Completed`.
+     - Checks DAG readiness: verifies that `issue.Status == IssueOverallStatus.Open` and all dependencies in `DependsOnIssueId` have `Status == IssueOverallStatus.Closed`.
      - Acquires workspace lock via `IWorkspaceLockProvider.AcquireLockAsync(issue.WorkspaceId)`.
   2. **Branch & Environment Setup:**
      - Invokes `IGitWorkspaceManager.CheckoutIssueBranchAsync`.
@@ -94,34 +94,42 @@ flowchart TD
      - Records start timestamp; executes `stage.ExecuteAsync(pipelineContext)`.
      - Records end timestamp, calculates `DurationMs`, and extracts token counts (`PromptTokens`, `CompletionTokens`, `TotalTokens`).
      - Saves `StageExecutionRecord` to `AppDbContext`.
-  4. **Result Evaluation:**
+  4. **Result Evaluation & State Transitions:**
      - **`WaitingForHuman`:**
        - Intercepted from `HumanInterruptionException` (via `ask`).
        - Creates Git WIP commit via `IGitWorkspaceManager.CreateWipCheckpointAsync`.
-       - Persists `Question`, serialized memory in `StageCheckpoint`, and updates issue status to `BlockedQuestion`.
+       - Persists `Question` (with `AgentProfileId`), serialized memory in `StageCheckpoint`, sets `IsWaitingForHuman = true` and `InterruptedAgentProfileId = profile?.Id` while preserving `issue.Status`.
        - **Hangfire Clean Return:** Returns `StageExecutionResult.WaitingForHuman()`; Hangfire marks the job as `Succeeded`. **The single GPU worker is immediately freed for the next queued task.**
      - **`StageCompleted`:**
        - Saves stage checkpoint.
-       - Advances issue to the next stage in the pipeline.
-       - If the completed stage is the final pipeline stage: transitions issue to `Review` and generates review diff.
+       - Advances stage:
+         - After Stage 1 (Issue Review): sets `Status = IssueOverallStatus.Reviewed`.
+         - After Stage 2 (Deterministic Pre-Implementation): captures baseline metrics in `PipelineDataBag`.
+         - After Stage 3 (Implementation): sets `Status = IssueOverallStatus.Implemented`.
+         - After Stage 4 (Deterministic Post-Implementation): validates differential coverage gate and warning ratchet.
+         - After Stage 5 (Code Review): applies review patches.
+         - After Stage 6 (Deterministic Post-Review Verification): validates that review patches compile and pass tests. On pass, sets `Status = IssueOverallStatus.Ready`. On failure, loops back to Stage 5 with compiler/test diagnostics.
+       - **Merge Resolution:**
+         - If `issue.MergeMode == MergeMode.Automatic`: automatically calls `CompleteIssueAndCascadeAsync`, squashes and merges to `baseBranch`, sets `Status = IssueOverallStatus.Closed`, and cascades unblocking.
+         - If `issue.MergeMode == MergeMode.ManualReviewRequired`: retains `Ready`, notifies UI, and awaits maintainer approval in the Review Room before merging.
      - **`Failed`:**
        - Logs error in `ExecutionLog` and transitions issue to `Failed`.
 
 ### Step 3.3: Preemptive Resumption & Cascade Unblocking
 1. **`SubmitHumanAnswerAsync`:**
    - Persists human answer in `Question.Answer` and marks `Status = Answered`.
-   - Transitions issue status to `Pending`.
+   - Transitions issue status back to `Open`.
    - Enqueues job to **`llm-urgent`** queue. When the GPU worker finishes its active turn, it immediately resumes this issue before touching standard backlog items.
 2. **`RequestChangesAsync`:**
    - Reviewer enters revision notes in the Review Room modal.
-   - Transitions issue from `Review` back to Stage 2 (`ImplementationStage`).
+   - Transitions issue from `Ready` back to Stage 3 (`ImplementationStage`).
    - Injects revision notes into `PipelineContext.HandoverArtifacts.ReviewerFeedback`.
    - Enqueues to **`llm-urgent`**.
 3. **`CompleteIssueAndCascadeAsync`:**
    - Executes `IGitWorkspaceManager.SquashAndMergeAsync` to merge the feature branch into `baseBranch`.
-   - Sets issue status to `Completed`.
+   - Sets issue status to `Closed`.
    - Calls `IDependencyResolutionEngine.ResolveCascadeUnblockedIssuesAsync(issueId)`.
-   - Newly unblocked issues transition to `Pending` and are enqueued to `llm-inference`.
+   - Dependent issues that are in `Open` status and whose dependencies are now all `Closed` are enqueued to `llm-inference`.
 
 ### Step 3.4: Startup Recovery & Crash Resilience (`IStartupRecoveryService`)
 * **Contract:** `IStartupRecoveryService`
@@ -148,7 +156,7 @@ flowchart TD
 | :--- | :--- | :--- |
 | **`HangfireQueuePriorityTests`** | Concurrency | Priority ordering (`llm-urgent` dequeued before `llm-inference`), `WorkerCount = 1` serial execution across multiple issues. |
 | **`IssueOrchestratorTests`** | Lifecycle | Clean `WaitingForHuman` completion releasing worker, stage advancement, final diff generation on transition to `Review`. |
-| **`ResumptionTests`** | Human-in-the-Loop | Answer submission, transition from `BlockedQuestion` to `Pending`, prompt context rehydration with human reply. |
+| **`ResumptionTests`** | Human-in-the-Loop | Answer submission, clearing `IsWaitingForHuman` while preserving issue status, resuming with exact `InterruptedAgentProfileId` agent, prompt context rehydration with human reply. |
 | **`CascadeUnblockingTests`** | DAG Integration | Merge squashing, dependency state cascade, unlocking dependent tasks into `llm-inference`. |
 | **`StartupRecoveryTests`** | Crash Resilience | Stale `.git/index.lock` purging, dirty working tree rescue commit, re-enqueueing orphaned running tasks to `llm-urgent`. |
 

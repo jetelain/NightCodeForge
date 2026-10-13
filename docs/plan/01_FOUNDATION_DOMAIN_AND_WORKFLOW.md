@@ -69,18 +69,21 @@ Implement clean domain entities with explicit value types:
 2. **`AgentProfile`:**
    - Properties: `string Id`, `int? WorkspaceId`, `string Name`, `string HarnessId` (`crucible`, `pi-rpc`, `acp`), `string ModelName`, `ThinkingEffort ThinkingEffort`, `int? ThinkingTokenBudget`, `double? Temperature`, `string? HarnessConfigurationJson`, `LocalOptimizationFlags? OptimizationFlags`, `IReadOnlyList<string>? PermittedTools`, `SandboxSecurityTier SecurityTier`.
 3. **`Issue`:**
-   - Properties: `int Id`, `int WorkspaceId`, `string Title`, `string Description`, `IssueOverallStatus Status`, `string CurrentStageId`, `int Priority`, `string BaseBranch`, `string FeatureBranch`, `string? PipelineDataJson`, `DateTime CreatedAt`, `DateTime UpdatedAt`, `string? LastHangfireJobId`.
+   - Properties: `int Id`, `int WorkspaceId`, `string Title`, `string Description`, `IssueOverallStatus Status` (defaults to `Suggested`), `string CurrentStageId`, `int Priority`, `MergeMode MergeMode` (defaults to `ManualReviewRequired`), `bool IsWaitingForHuman` (defaults to `false`), `string? InterruptedAgentProfileId`, `string? InterruptedStageId`, `string BaseBranch`, `string FeatureBranch`, `string? PipelineDataJson`, `DateTime CreatedAt`, `DateTime UpdatedAt`, `string? LastHangfireJobId`.
 4. **`IssueDependency`:**
    - Properties: `int Id`, `int IssueId`, `int DependsOnIssueId`.
 5. **`Question`:**
-   - Properties: `int Id`, `int IssueId`, `string StageId`, `string Prompt`, `string Rationale`, `QuestionType QuestionType`, `string? OptionsJson`, `string? Answer`, `DateTime AskedAt`, `DateTime? AnsweredAt`, `QuestionStatus Status`.
+   - Properties: `int Id`, `int IssueId`, `string StageId`, `string? AgentProfileId`, `string Prompt`, `string Rationale`, `QuestionType QuestionType`, `string? OptionsJson`, `string? Answer`, `DateTime AskedAt`, `DateTime? AnsweredAt`, `QuestionStatus Status`.
 6. **`StageCheckpoint`:**
    - Properties: `int Id`, `int IssueId`, `string StageId`, `string SerializedMemory`, `string GitCommitHash`, `DateTime CreatedAt`.
 7. **`StageExecutionRecord`:**
    - Properties: `int Id`, `int IssueId`, `string StageId`, `string StageKind`, `string AgentProfileId`, `string HarnessId`, `string ModelName`, `DateTime StartedAt`, `DateTime? CompletedAt`, `int DurationMs`, `int PromptTokens`, `int CompletionTokens`, `int TotalTokens`, `string? TargetRouting`, `StageExecutionStatus Status`, `string? OutputDataJson`.
 8. **`ExecutionLog`:**
    - Properties: `int Id`, `int IssueId`, `string? StageId`, `DateTime Timestamp`, `LogLevel Level`, `string Source`, `string Message`, `string? PayloadJson`.
-9. **`LocalOptimizationFlags`:**
+9. **`Enums`:**
+   - `IssueOverallStatus`: `Suggested`, `Rejected`, `Open`, `Reviewed`, `Implemented`, `Ready`, `Closed`, `Cancelled`, `Failed`.
+   - `MergeMode`: `Automatic`, `ManualReviewRequired`.
+10. **`LocalOptimizationFlags`:**
    - Strongly-typed class containing boolean flags: `ThinkingTraceCompaction`, `LoopCircuitBreaker`, `GuidedGrammarDecoding`, `DeterministicSymbolMap`, `StructuredDiagnosticExtraction`, `PrefixStabilization`, `JitModelPreload`.
 
 ### Step 1.3: Directed Acyclic Graph (DAG) Dependency Engine
@@ -96,8 +99,8 @@ Implement clean domain entities with explicit value types:
   ```
 * **Algorithm Requirements:**
   - Cycle detection using DFS with 3-color graph traversal (White, Gray, Black). Throws `CircularDependencyException` on detection.
-  - Dependency readiness: An issue is ready if and only if all prerequisite issues in `DependsOnIssueId` have `Status == IssueOverallStatus.Completed`.
-  - Cascade unblocking: When Issue $A$ transitions to `Completed`, query all dependent issues $B_i$; if all prerequisites of $B_i$ are completed, transition $B_i$ to `Pending` and enqueue to `llm-inference`.
+  - Dependency readiness: An issue is ready if and only if `Status == IssueOverallStatus.Open` and all prerequisite issues in `DependsOnIssueId` have `Status == IssueOverallStatus.Closed`.
+  - Cascade unblocking: When Issue $A$ transitions to `Closed`, query all dependent issues $B_i$; if all prerequisites of $B_i$ are `Closed` and $B_i$ is `Open`, transition $B_i$ to the inference queue (`llm-inference`).
 
 ### Step 1.4: Workspace Concurrency Lock Provider
 * **Contract:** `IWorkspaceLockProvider` in `NightCodeForge.Core/Interfaces`:
@@ -140,11 +143,14 @@ Implement clean domain entities with explicit value types:
     - Verification phase: fails if `warnings.current > warnings.baseline`, outputting newly introduced warnings.
 * **Stage Handover & Zero-Memory Context Resets:**
   - Archives previous chat history to transcripts; passes only structured plan, diff, and diagnostic artifacts to subsequent stages.
-* **Built-in `Default3AgentPipeline`:**
-  - Stage 1: `IssueReviewStage` (Agentic - Deep reasoning)
-  - Stage 2: `ImplementationStage` (Agentic - Fast coding)
-  - Gate: `DeterministicCoverageGate` (Deterministic - CPU native)
-  - Stage 3: `CodeReviewAndFixStage` (Agentic - Strict auditor)
+* **Built-in Main Pipeline:**
+  - Stage 1: `IssueReviewStage` (Agentic - Deep reasoning) $\rightarrow$ `Reviewed`
+  - Stage 2: `DeterministicPreImplementationStage` (Deterministic - baseline build, test, coverage)
+  - Stage 3: `ImplementationStage` (Agentic - Fast coding) $\rightarrow$ `Implemented`
+  - Stage 4: `DeterministicPostImplementationStage` (Deterministic - coverage gate & warning ratchet)
+  - Stage 5: `CodeReviewAndFixStage` (Agentic - Strict auditor & direct fixes)
+  - Stage 6: `DeterministicPostReviewStage` (Deterministic - build & test verification of review edits) $\rightarrow$ `Ready`
+  - Stage 7: Merge Gate (`Automatic` auto-squash or `ManualReviewRequired` maintainer approval) $\rightarrow$ `Closed`
 
 ### Step 1.6: Markdown Issue Mirroring Subsystem (`IssueMarkdownSyncService`)
 * **File Location:** `<WorkspaceRoot>/docs/issues/YYYY-MM-DD-<slug>.md`
@@ -153,8 +159,9 @@ Implement clean domain entities with explicit value types:
   - Frontmatter schema parsing with YamlDotNet.
   - 300ms debouncing window on `FileSystemWatcher` to prevent duplicate events.
   - In-memory SHA-256 hash tracker to suppress self-triggering write loops.
-  - Field protection: protects `id`, `status`, `stage` from unauthorized disk changes while syncing `title`, `description`, `priority`, and `profile`.
-  - Auto-allocates ID for new markdown files dropped into the directory.
+  - Field protection: protects `id`, `status`, `stage` from unauthorized disk changes while syncing `title`, `description`, `priority`, `merge_mode`, and `profile`.
+  - Auto-allocates ID for new markdown files dropped into the directory with initial `status: suggested` and `merge_mode: manual_review_required`.
+  - Archives or cleans up files when issues reach `Closed` or `Cancelled`.
 
 ### Step 1.7: Entity Framework Core Persistence (`NightCodeForge.Infrastructure/Data`)
 * **Technology:** SQLite with Write-Ahead Logging (`PRAGMA journal_mode = WAL;`) for maximum local concurrent read/write throughput.

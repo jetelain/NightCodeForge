@@ -85,22 +85,30 @@ flowchart TD
   4. **Squash and Merge (`SquashAndMergeAsync`):**
      - Checks out `baseBranch`, executes `git merge --squash feature/issue-{id}`, and commits with the final approved summary message.
 
-### Step 2.3: Ext4 Workspace Mirroring Protocol (`GitMirrorSyncService`)
-* **The WSL2 9p Performance Problem:**
-  On Windows hosts, Docker containers mounting NTFS directories through `/mnt/c/` suffer from severe I/O penalties (up to 10x slower for `dotnet build` or `npm install`).
-* **The Mirror Architecture:**
-  1. **Mirror Initialization:**
-     - Clones an isolated working tree on ext4: `/var/ncf/workspaces/{workspaceId}/repo`.
-     - Adds the developer's Windows NTFS repository as a local remote named `host-origin`:
+### Step 2.3: Cross-Environment Working Clone Protocol (`GitMirrorSyncService`)
+* **The Performance & Cross-Platform Problem:**
+  Agents run strictly on Unix. On Windows hosts, direct access to NTFS via `/mnt/c/` suffers from the 9p latency bottleneck (up to 10x slower). NightCodeForge requires WSL2 on Windows and establishes isolated clones on ext4.
+* **The Canonical Clone Architecture:**
+  1. **Working Clone Path:**
+     - The clone repository where the agent works is **always** `~/.nightcodeforge/wks/{workspaceId}` (in WSL2 ext4 on Windows, host home on Unix).
+  2. **Remote URL Configuration (`host-origin`):**
+     - On Windows: The remote pointing to the developer's workspace is transformed to its WSL path `/mnt/{transformed_windows_path}`:
        `git remote add host-origin /mnt/c/Users/.../TargetProject`
-  2. **Host Configuration (`updateInstead`):**
-     - Configures the host repository: `git config receive.denyCurrentBranch updateInstead`.
+     - On Unix: The remote points directly to the developer's workspace path.
+  3. **Git Execution Context (`push`, `pull`, `merge` on `main`):**
+     - On Unix: Executed directly on the bare host.
+     - On Windows: Executed strictly inside plain WSL2 (`wsl.exe -d <distrib> -- git ...`).
+  4. **Crucible Host I/O Bridge (Windows):**
+     - Crucible runs in-process on the Windows host and accesses the working clone via UNC share:
+       `\\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{workspaceId}\`
+  5. **Host Configuration (`updateInstead`):**
+     - Configures the developer's host repository: `git config receive.denyCurrentBranch updateInstead`.
      - This allows `git push host-origin feature/issue-{id}` to update the branch on the host repository even if the developer has that branch currently checked out in Visual Studio or VS Code.
-  3. **Dirty Host Tree Fallback Protocol:**
+  6. **Dirty Host Tree Fallback Protocol:**
      - If the developer has uncommitted edits to tracked files in their host IDE, Git's `updateInstead` rejects the push with an error.
      - `GitMirrorSyncService` catches the push rejection, immediately pushes to `refs/heads/feature/issue-{id}-ncf`, and emits a high-priority SignalR alert to the web dashboard:
        > *"⚠️ Host Working Tree Dirty: Changes pushed to `feature/issue-{id}-ncf`. Please commit or stash local edits in your host IDE to reconcile with the active agent branch."*
-  4. **Synchronization Lifecycle:**
+  7. **Synchronization Lifecycle:**
      - **Stage Inception:** `git fetch host-origin <baseBranch>` ensures the agent works on the latest base commit.
      - **Stage Checkpoint / Completion:** `git push host-origin feature/issue-{id}` keeps the host repository in sync.
 

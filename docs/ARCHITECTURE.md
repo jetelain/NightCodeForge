@@ -87,40 +87,105 @@ flowchart TB
 
 ## 3. Extensible Multi-Agent Workflow Engine
 
-Rather than binding to a rigid, hardcoded state machine library, NightCodeForge uses a **composable, stage-based Workflow Pipeline Engine**. Each issue progresses through a sequence of discrete, pluggable stages executed by dedicated specialized agents.
+Rather than binding to a rigid, hardcoded state machine library, NightCodeForge uses a **composable, stage-based Workflow Pipeline Engine**. Each issue progresses through a sequence of discrete, pluggable stages executed by dedicated specialized agents and deterministic verification gates.
 
-### 3.1 Default 3-Agent Workflow Stages
+### 3.1 Issue Creation & Intake Channels
+Issues enter NightCodeForge through three distinct channels. In all cases, every newly created issue starts with the **`Suggested`** status:
+
+1. **External Triage Workflow:**
+   - External systems (GitHub issues, Jira, webhooks) trigger an isolated triage pipeline.
+   - Runs a dedicated **Triage Agent** on the base branch (`main` or `master`) in a `RestrictedReadOnly` sandbox (`:ro` workspace mount, `--network none`).
+   - Deeply analyzes the request, validates reproducibility, and invokes `propose_issues` if valid.
+   - Newly proposed issues enter the database in **`Suggested`** status.
+2. **Ideation & Discovery Chat:**
+   - The developer converses with the codebase exploration agent (`IIdeationService`) to explore features, refactorings, or architecture questions.
+   - Either the developer or the ideation agent creates issues with dependencies via `propose_issues`.
+   - Created in **`Suggested`** status.
+3. **Markdown Issue Synchronization (`docs/issues/*.md`):**
+   - The developer creates a new markdown specification directly in `<WorkspaceRoot>/docs/issues/YYYY-MM-DD-<slug>.md` on their real workspace.
+   - `IssueMarkdownSyncService` detects the file via `FileSystemWatcher`, allocates an ID, and injects frontmatter with initial `status: suggested` and `merge_mode: manual_review_required`.
+
+### 3.2 Manual Promotion & Merge Mode Selection
+An issue remains dormant in `Suggested` until a maintainer performs a **single manual action** via the Web UI or CLI:
+* **Promote to Open:**
+  - The maintainer specifies two mandatory properties in the same action:
+    1. **`Priority`** (1 to 5, default = 1).
+    2. **`MergeMode`**:
+       - `Automatic`: NightCodeForge will automatically squash and merge the verified branch to `baseBranch` once all quality checks pass.
+       - `ManualReviewRequired`: Once verified, the issue pauses at `Ready` so the maintainer can review diffs, test locally, and approve before merging.
+  - State transitions to **`Open`**.
+* **Reject:**
+  - State transitions to **`Rejected`**; the issue is archived and never executed.
+
+### 3.3 Main Workflow Execution Engine
+Once an issue has `Status == IssueOverallStatus.Open` and **all its dependencies have `Status == IssueOverallStatus.Closed`**, it is enqueued to `llm-inference` (`WorkerCount = 1`) and executes through the main workflow:
 
 ```mermaid
-flowchart LR
-    Pending(["Pending\n(Dependencies Met)"]) --> S1["1. Issue Review Agent\n(Scope, Ambiguities, Q&A)"]
-    S1 --> S2["2. Implementation Agent\n(Code Modifications & Tests)"]
-    S2 --> S3["3. Code Review & Fix Agent\n(Gap Analysis, Lint, Fixes)"]
-    S3 --> Review(["Human Review Room\n(Final Diff Approval)"])
-    Review --> Completed(["Completed & Merged"])
+flowchart TD
+    Suggested(["Suggested (Intake)"]) -->|Maintainer Action: Promote| Open(["Open (Dependencies Pending)"])
+    Open -->|All Dependencies Closed| S1["1. Issue Review Stage\n(Agentic - Scope & Q&A)"]
+    S1 --> Reviewed["Status: Reviewed"]
+    Reviewed --> S2["2. Deterministic Pre-Implementation\n(Baseline Build / Test / Coverage)"]
+    S2 --> S3["3. Implementation Stage\n(Agentic - Code & Test Generation)"]
+    S3 --> Implemented["Status: Implemented"]
+    Implemented --> S4["4. Deterministic Post-Implementation\n(Coverage Gate / Warning Ratchet)"]
+    S4 -->|Pass| S5["5. Code Review Stage\n(Agentic - Audit & Direct Polish)"]
+    S4 -.->|Regression| S3
+    S5 --> S6["6. Deterministic Post-Review\n(Build & Test Verification of Review Edits)"]
+    S6 -->|Pass| Ready["Status: Ready"]
+    S6 -.->|Review Introduced Failure| S5
 
-    Review -.->|Request Changes (with feedback)| UrgentQueue(["High-Priority Resume"])
-    S1 -.->|ask| Blocked["Blocked (Waiting for Human)"]
-    S2 -.->|ask| Blocked
+    Ready --> MergeGate{"MergeMode?"}
+    MergeGate -->|Automatic| AutoMerge["Auto-Squash & Merge to Base Branch"]
+    MergeGate -->|ManualReviewRequired| ManualWait["Maintainer Review & Local Testing in UI"]
+    ManualWait -->|Approved| ManualMerge["Maintainer Triggers Merge"]
+    AutoMerge --> Closed(["Status: Closed"])
+    ManualMerge --> Closed
+    Closed --> Cascade["Cascade Unblock Dependent Issues"]
+
+    S1 -.->|ask| Blocked["IsWaitingForHuman = true\n(Status preserved; GPU Freed Cleanly)"]
     S3 -.->|ask| Blocked
-    Blocked -.->|User Answers| UrgentQueue
-    UrgentQueue --> S1
-    UrgentQueue --> S2
-    UrgentQueue --> S3
+    S5 -.->|ask| Blocked
+    Blocked -.->|Developer Answers in UI| ResumeUrgent["Enqueue to llm-urgent\n(Resume with exact agent profile)"]
+    ResumeUrgent -.-> S1
+    ResumeUrgent -.-> S3
+    ResumeUrgent -.-> S5
 ```
 
-1. **Stage 1: Issue Review Agent (`IssueReviewStage`)**
-   - **Mission:** Deeply inspect the codebase against the issue request *before* any implementation begins.
-   - **Goals:** Detect ambiguities, uncover hidden constraints, identify impacted files, verify prerequisites, and proactively ask clarifying questions to avoid rework during coding.
-   - **Output:** Approved Technical Specification & Execution Plan.
-2. **Stage 2: Implementation Agent (`ImplementationStage`)**
-   - **Mission:** Implement the code changes outlined in the approved plan.
-   - **Goals:** Create/modify files, invoke workspace build tools (e.g. `dotnet build`), execute unit tests, and iterate until the code compiles and passes tests.
-   - **Output:** Working implementation with initial commit history.
-3. **Stage 3: Code Review and Fixes Agent (`CodeReviewAndFixStage`)**
-   - **Mission:** Act as a critical reviewer and automated fixer.
-   - **Goals:** Compare the `git diff` against the base branch, check coding standards, detect potential regression gaps, missing error handling, or performance traps, and make direct fixes.
-   - **Output:** Polished, review-ready code diff.
+#### Main Workflow Stages:
+1. **Stage 1: Issue Review Agent (`IssueReviewStage`):**
+   - **Mission:** Deeply inspect the codebase against the issue request *before* coding begins. Detect ambiguities, uncover hidden constraints, identify impacted files, verify prerequisites, and formulate an approved technical plan.
+   - **Transition:** On completion, updates `issue.Status = IssueOverallStatus.Reviewed`.
+2. **Stage 2: Deterministic Pre-Implementation:**
+   - **Mission:** Execute baseline compilation (`dotnet build`), run baseline test suite, and capture baseline coverage and warning metrics without consuming LLM tokens. Metrics are recorded in `PipelineDataBag`.
+3. **Stage 3: Implementation Agent (`ImplementationStage`):**
+   - **Mission:** Implement the code changes outlined in the approved plan. Modify files, generate unit tests, iterate on compiler/test feedback inside the sandbox.
+   - **Transition:** On completion, updates `issue.Status = IssueOverallStatus.Implemented`.
+4. **Stage 4: Deterministic Post-Implementation Quality Gates:**
+   - **Mission:** Run `DeterministicCoverageGate` ($\Delta \ge 0$) and `DeterministicWarningRatchetStage` ($\Delta \le 0$). If tests fail or coverage drops, loops back to Stage 3 with structured compiler and assertion diagnostics.
+5. **Stage 5: Code Review Agent (`CodeReviewAndFixStage`):**
+   - **Mission:** Act as a critical reviewer and automated fixer. Inspect the noise-filtered `git diff -U2`, check coding conventions, detect subtle regressions, and apply direct minor polish patches.
+6. **Stage 6: Deterministic Post-Review Verification:**
+   - **Mission:** Because the Code Review agent can modify code and introduce syntax or regression bugs, this deterministic step re-compiles and re-executes unit tests on the final changeset.
+   - **Transition:** On pass, updates `issue.Status = IssueOverallStatus.Ready`. On failure, loops back to Stage 5 with diagnostic output.
+7. **Stage 7: Merge Resolution Gate:**
+   - Evaluates `issue.MergeMode`:
+     - **Automatic Mode:** NightCodeForge automatically squashes WIP commits into a conventional commit, merges into `baseBranch`, sets `issue.Status = IssueOverallStatus.Closed`, and triggers cascade unblocking.
+     - **Manual Review Required Mode:** Issue remains in `Ready`. The maintainer inspects the diff in the Review Room, runs manual tests, and clicks "Approve & Merge" $\rightarrow$ sets `issue.Status = IssueOverallStatus.Closed`.
+8. **Universal Human Interruption (`ask`):**
+   - At any time during agentic stages (1, 3, or 5), an agent can invoke `ask` to request clarification.
+   - **Strict Architectural Invariant:** Human interruption **never mutates `issue.Status`**. The issue's overall lifecycle milestone (`Open`, `Reviewed`, or `Implemented`) is preserved completely intact.
+   - Instead, interruption state is captured via dedicated tracking fields:
+     - `issue.IsWaitingForHuman = true;`
+     - `issue.InterruptedStageId = stage.StageId;`
+     - `issue.InterruptedAgentProfileId = profile?.Id;`
+     - `question.AgentProfileId = profile?.Id;`
+   - The orchestrator creates a Git WIP checkpoint, records the question, and cleanly completes the Hangfire task, releasing the GPU worker immediately.
+   - When the user answers the question in the UI:
+     - `question.Status = QuestionStatus.Answered; question.Answer = answer;`
+     - `issue.IsWaitingForHuman = false;`
+     - The issue is enqueued to **`llm-urgent`** for immediate priority pickup.
+     - When dequeued, the orchestrator retrieves the original agent profile via `InterruptedAgentProfileId` and resumes the exact stage with the appropriate agent and injected answer context.
 
 ### 3.2 Agent Profiles: Specializing Intelligence per Stage
 Each step in a workflow pipeline is associated with an **Agent Profile** (`AgentProfile`). Different stages of software development demand different model capabilities, reasoning depths, and tool permissions:
@@ -233,10 +298,10 @@ public class StagePromptTemplate
 ### 3.5 Stage Interruption & Universal Context Switching
 At **any point** in **any stage**, an agent may invoke the `ask` tool. When this occurs:
 1. The stage returns `StageExecutionResult.WaitingForHuman(question)`.
-2. The orchestrator records the question in the database and updates the issue state to `BlockedQuestion(stageId)`.
+2. The orchestrator records the question in the database, associates `question.AgentProfileId = profile?.Id`, flags `issue.IsWaitingForHuman = true`, and preserves the original `issue.InterruptedAgentProfileId = profile?.Id`. **Crucially, `issue.Status` is never changed to `BlockedQuestion`**; the issue retains its current lifecycle status (`Open`, `Reviewed`, or `Implemented`).
 3. The orchestrator triggers a native Git WIP commit on `feature/issue-{id}`.
-4. The Hangfire job completes, releasing the single GPU worker.
-5. When the user submits the answer, the issue transitions back to `Pending` and is enqueued into `llm-urgent`. The active stage is resumed with the previous conversation memory and the newly supplied human answer.
+4. The Hangfire job completes cleanly (`Succeeded`), releasing the single GPU worker immediately.
+5. When the user submits the answer, `issue.IsWaitingForHuman = false`, and the issue is enqueued into `llm-urgent`. The active stage is resumed with the exact original agent profile (`InterruptedAgentProfileId`), the previous conversation memory checkpoint, and the newly supplied human answer.
 
 ### 3.6 Review Room Iteration & Change Requests
 If the developer inspects the diff in the Review Room and identifies issues or wants adjustments before merging:
@@ -466,9 +531,12 @@ To allow developers and agents to quickly sort issues chronologically in their f
 id: 123
 title: Implement OAuth2 Authorization Flow
 workspace: NightCodeForge
-status: BlockedQuestion
+status: Open
+waiting_for_human: true
+interrupted_agent_profile: deep-analyst
 current_stage: IssueReview
 priority: 1
+merge_mode: manual_review_required
 base_branch: main
 feature_branch: feature/issue-123
 depends_on: [101, 102]
@@ -650,34 +718,48 @@ To ensure zero data loss during context switches:
    ```
 3. When the issue passes all stages and is approved in the Review Room, the orchestrator squashes the WIP commits into a clean, conventional commit before merging.
 
-### 8.3 Cross-Environment Git Synchronization & Ext4 Mirroring (Solving the 9p Trap)
-When running on Windows hosts with containerized or WSL2 execution:
-1. **The 9p / DrvFs Bottleneck:** Accessing Windows NTFS files from WSL2 via `/mnt/c/...` uses the Plan 9 (9p) network filesystem. For recursive Git scans, `dotnet build`, `node_modules`, and code searches, 9p is **10x to 50x slower** than native Linux ext4.
-2. **Local Git Mirror Architecture:**
-   * The developer keeps their primary repo on Windows NTFS (e.g., `C:\Users\Julien\source\repos\MyProject`).
-   * The host repository is configured with `git config receive.denyCurrentBranch updateInstead` to ensure pushes to a branch that happens to be checked out in the host IDE succeed cleanly without refusal.
-   * NightCodeForge maintains an isolated clone on the WSL2/Linux ext4 filesystem (`/var/ncf/workspaces/{workspaceId}/repo`).
-   * A local Git remote is registered linking the ext4 mirror back to the host repository:
-     ```bash
-     git remote add host-origin file:///mnt/c/Users/Julien/source/repos/MyProject
-     ```
-3. **Synchronization Protocol:**
-   * **Stage Inception:** NightCodeForge fetches the latest base branch commits (`git fetch host-origin <baseBranch>`) and checks out `feature/issue-{id}` on ext4.
-   * **Active Reasoning & Build Loop:** All file inspections, edits, compiler builds (`dotnet build`), and test runs execute 100% on native ext4 at full SSD speeds.
-   * **WIP Checkpoint / Human Interruption / Stage Completion:**
-     NightCodeForge commits the WIP state on ext4 and pushes the branch directly back to the host repository:
-     ```bash
-     git push host-origin feature/issue-{id}
-     ```
-   * **Ergonomics & Safety:** The developer's Windows IDE sees the updated `feature/issue-{id}` branch immediately without touching the active `main` branch. Zero 9p disk overhead during compilation or code search.
-   * **Handling Host Working Tree Dirty Conflicts:**
-     If the developer happens to have `feature/issue-{id}` checked out in their host IDE with uncommitted changes to tracked files, Git's `updateInstead` policy will reject the push to prevent overwriting uncommitted host edits.
-     * When this occurs, NightCodeForge catches the push rejection and pushes to an isolated tracking reference instead:
-       ```bash
-       git push host-origin feature/issue-{id}:refs/heads/feature/issue-{id}-ncf
-       ```
-     * An informative alert is broadcasted via SignalR to the UI, notifying the developer that their local uncommitted changes prevented direct working tree checkout, and providing the diff command to reconcile.
-4. **WSL-Native Repositories:** If the developer's project already lives natively in WSL2 (e.g. `\\wsl.localhost\Ubuntu\home\...`), the container directly volume-mounts that directory on ext4, bypassing the mirror sync step.
+### 8.3 Cross-Environment Architecture & Working Clone Protocol
+
+#### 1. Operating System Separation & WSL2 Mandate
+* **Forge Host:** Runs natively on Windows, Linux, or macOS.
+* **Agent Confinement:** Agents work **strictly on Unix**. There is no Windows command execution for agents.
+* **Crucible Embedded Execution:** Crucible runs in-process inside the Forge application. Its actions will always impact WSL2 on Windows (through `wsl.exe` or the `\\wsl.localhost\` share).
+* **WSL2 Requirement:** When NightCodeForge runs on Windows, **WSL2 is strictly required**.
+
+#### 2. Canonical Working Clones (`~/.nightcodeforge/wks/{id}`)
+* The working clone repository where the agent performs all tasks is **always** located at:
+  ```text
+  ~/.nightcodeforge/wks/{workspaceId}
+  ```
+  - On Linux/macOS: Resolves to `$HOME/.nightcodeforge/wks/{workspaceId}` on the host ext4/APFS filesystem.
+  - On Windows: Resolves to `/home/{wslUser}/.nightcodeforge/wks/{workspaceId}` on the native ext4 filesystem inside WSL2.
+* This completely eliminates the notorious **WSL2 9p / DrvFs filesystem latency bottleneck** (`/mnt/c/...` Plan 9 network filesystem), allowing compiler builds, test suites, and file scans to run at native Linux SSD speeds.
+
+#### 3. Remote URL Resolution & Cross-Environment Git Operations
+* **Local Git Remote `host-origin`:**
+  - On Windows: The developer's Windows repository path is transformed to its WSL mount path:
+    ```bash
+    git remote add host-origin /mnt/c/Users/Julien/source/repos/MyProject
+    ```
+  - On Linux/macOS: The remote points directly to the developer's workspace path:
+    ```bash
+    git remote add host-origin /path/to/developer/workspace
+    ```
+* **Git Operations on `main` (`push`, `pull`, `merge`):**
+  - **On Unix:** Performed directly in the bare host environment.
+  - **On Windows:** Performed strictly inside plain WSL2 (`wsl.exe -d <distrib> -- git ...`).
+* **Host IDE Working Tree Synchronization (`updateInstead`):**
+  - The developer's repository is configured with `git config receive.denyCurrentBranch updateInstead`.
+  - Pushes from the working clone (`git push host-origin feature/issue-{id}`) update the developer's checked-out branch without conflict.
+  - **Dirty Host Tree Fallback:** If the developer has uncommitted changes to tracked files in their host IDE, `GitMirrorSyncService` catches the rejection, pushes to `refs/heads/feature/issue-{id}-ncf`, and sends a SignalR alert to the UI with reconciliation guidance.
+
+#### 4. Crucible Windows UNC Bridge
+Because Crucible runs in-process within the Windows Forge process:
+* Crucible file tools (`read`, `write`, `edit`) access the WSL2 working tree via the high-speed Windows UNC share:
+  ```text
+  \\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{workspaceId}\
+  ```
+* This ensures instant, direct file manipulation with full EditorConfig normalization without spawning intermediate shell processes.
 
 ---
 
@@ -1083,6 +1165,9 @@ erDiagram
         string Status
         string CurrentStageId
         int Priority
+        string MergeMode
+        bool IsWaitingForHuman
+        string InterruptedAgentProfileId
         datetime CreatedAt
         datetime UpdatedAt
         string LastHangfireJobId
@@ -1099,6 +1184,7 @@ erDiagram
         int Id PK
         int IssueId FK
         string StageId
+        string AgentProfileId
         string Prompt
         string Rationale
         string QuestionType
@@ -1186,30 +1272,31 @@ erDiagram
 Autonomous overnight coding agents cannot function effectively if every command (`rm`, `dotnet`, `npm`, `curl`, `pip`) triggers a human permission confirmation. Conversely, running autonomous agents on bare Windows or Linux hosts with unfettered system access introduces severe security and stability risks.
 
 To achieve **zero prompt fatigue** without compromising host safety:
-* Agents execute commands inside an isolated **Container Sandbox** or **WSL2 environment**.
-* Only necessary directories (the ext4 repository mirror and shared tool caches) are mounted.
+* **Agents work strictly on Unix.** When running on Windows, WSL2 is mandatory.
+* Commands execute inside an isolated **Container Sandbox** or **WSL2 environment**.
+* Only necessary directories (the agent's working clone at `~/.nightcodeforge/wks/{id}` and shared tool package caches) are mounted.
 * The container can safely run with elevated or unrestricted permissions inside its own isolated namespace because the host OS, registry, user directories, and credentials remain inaccessible.
 
 ```mermaid
 flowchart TD
     subgraph Host ["Host Machine (Windows / Linux / macOS)"]
-        UserRepo["Host Working Tree (NTFS / Native)\nC:/Users/.../MyProject"]
+        UserRepo["Developer Working Tree (NTFS / Native)\nC:/Users/.../MyProject"]
         Orchestrator["NightCodeForge Orchestrator\n(In-Process Engine & Central Config)"]
         GPU["Local GPU / OllamaRouter\n(Host Network localhost:11434)"]
     end
 
-    subgraph Sandbox ["Execution Sandbox (Docker / Podman in WSL2)"]
-        Ext4Repo["ext4 Working Tree Mirror\n(/var/ncf/workspaces/{id}/repo)"]
-        Runner["Agent Runner Container\n(Full command autonomy inside sandbox)"]
-        SharedCaches["Shared Package Caches\n(~/.nuget, ~/.npm, ~/.m2)"]
+    subgraph Sandbox ["Execution Sandbox (WSL2 / Container)"]
+        Ext4Repo["Agent Working Clone\n(~/.nightcodeforge/wks/{id})"]
+        Runner["Agent Runner Container\n(/workspace mount & full autonomy)"]
+        SharedCaches["Shared Package Caches\n(~/.nuget, ~/.npm, ~/.cache/uv)"]
     end
 
     Orchestrator -->|Direct Host Inference| GPU
     Orchestrator -->|Terminal Delegation via exec| Runner
     Orchestrator <-->|Git Push / Fetch Sync on Checkpoints| Ext4Repo
-    Ext4Repo -->|Volume Mount| Runner
+    Ext4Repo -->|Volume Mount /workspace| Runner
     SharedCaches -->|Bind Mounts (rw)| Runner
-    UserRepo <-->|Local Git Remote Sync| Ext4Repo
+    UserRepo <-->|Local Git Remote Sync (host-origin)| Ext4Repo
 ```
 
 ### 14.2 Pluggable Execution Environments (`IExecutionEnvironment`)
@@ -1235,36 +1322,49 @@ public interface IExecutionEnvironment : IAsyncDisposable
 public enum ExecutionMode
 {
     BareHost = 0,          // Direct host CLI (Opt-in for simple setups or bare Linux)
-    WslDirect = 1,         // Direct execution inside WSL2 distro (wsl.exe -d <distro>)
+    WslDirect = 1,         // Direct execution inside WSL2 distro (wsl.exe -d <distrib>)
     ContainerSandbox = 2   // Ephemeral Docker/Podman container running on ext4 (Default)
 }
 ```
+
+#### Detailed Execution Mode Behaviors:
+
+1. **"Bare Mode" (`BareHost` / `WslDirect`):**
+   - **Agents work strictly on Unix:** On Windows, the `bash` tool executes directly inside WSL2 (`wsl.exe -d <distrib> -- bash -c "cd ~/.nightcodeforge/wks/{id} && ..."`). On Linux/macOS, it executes via the host `/bin/bash`.
+   - **Zero PowerShell/CMD:** Windows command prompts are never used for agent tool executions.
+2. **"Container Mode" (`ContainerSandbox` - Default):**
+   - **Path Mapping:** The agent inside the container sees only `/workspace` mapped to the working clone `~/.nightcodeforge/wks/{id}`.
+   - **Crucible Tool Call Remapping:** Because Crucible runs outside the container (in-process on the host), every file I/O tool call (`read`, `write`, `edit`) referring to `/workspace/...` is dynamically remapped to the "real path":
+     - On Linux/macOS: `~/.nightcodeforge/wks/{id}/...`
+     - On Windows: `\\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{id}\...`
+   - **On-the-Fly Lightweight Container Image:** The container image itself is almost empty and generated on the fly (a minimal, tailored base layer with essential CLI utilities), relying on host-mounted caches and toolchains rather than multi-GB prebuilt images.
 
 #### Comparison of Execution Modes:
 
 | Feature | `BareHost` | `WslDirect` | `ContainerSandbox` *(Default)* |
 | :--- | :--- | :--- | :--- |
-| **Host OS** | Windows / Linux / macOS | Windows (WSL2) / Linux | Windows (WSL2 Docker) / Linux |
-| **Filesystem Speed** | Native host | **High** on ext4 | **High** on ext4 |
-| **Isolation Level** | None | User space isolation | **Full container isolation** |
-| **Prompt Fatigue** | High (must confirm risky commands) | Moderate | **Zero** (Autonomous within container) |
-| **Windows Sync** | Direct (Same filesystem) | Git local remote push/fetch | Git local remote push/fetch |
-| **Tooling & SDKs** | Uses host SDKs | Distro-installed SDKs | Shared cache mounts + Host SDK mounts |
+| **Host OS** | Windows (via WSL2 bash) / Linux | Windows (WSL2) / Linux | Windows (WSL2 Docker) / Linux |
+| **Filesystem Speed** | Native host / WSL2 ext4 | **High** on WSL2 ext4 | **High** on ext4 |
+| **Working Clone** | `~/.nightcodeforge/wks/{id}` | `~/.nightcodeforge/wks/{id}` | `~/.nightcodeforge/wks/{id}` $\rightarrow$ `/workspace` |
+| **Isolation Level** | Minimal (Process level) | User space isolation | **Full container isolation** |
+| **Prompt Fatigue** | High (caution required) | Moderate | **Zero** (Autonomous within container) |
+| **Path Mapping** | Real path | Real path in WSL | Transparent `/workspace` $\rightarrow$ Real UNC/Host |
+| **Tooling & SDKs** | Uses host/WSL SDKs | Distro-installed SDKs | Bind-mounted host package caches |
 
 ### 14.3 Shared SDKs & Persistent Package Caches
 To prevent containers from downloading gigabytes of SDKs and package dependencies for every issue:
 
 1. **Persistent Package Caches (Read-Write Bind Mounts):**
    Package managers write to host-mounted shared cache directories:
-   - **NuGet:** `/var/ncf/caches/nuget` $\rightarrow$ `/root/.nuget/packages`
-   - **npm / pnpm:** `/var/ncf/caches/npm` $\rightarrow$ `/root/.npm` and `/root/.local/share/pnpm/store`
-   - **Maven / Gradle:** `/var/ncf/caches/m2` $\rightarrow$ `/root/.m2/repository`
-   - **Python:** `/var/ncf/caches/uv` $\rightarrow$ `/root/.cache/uv`
+   - **NuGet:** Host `~/.nuget/packages` $\rightarrow$ Container `/root/.nuget/packages`
+   - **npm / pnpm:** Host `~/.npm` $\rightarrow$ Container `/root/.npm` and `/root/.local/share/pnpm/store`
+   - **Maven / Gradle:** Host `~/.m2` $\rightarrow$ Container `/root/.m2/repository`
+   - **Python:** Host `~/.cache/uv` $\rightarrow$ Container `/root/.cache/uv`
    *Result:* When Container 1 downloads a package, Container 2 gets an immediate local cache hit.
 
 2. **Heavy SDK Sharing (Read-Only Mounts or Base Images):**
    - **Strategy A (Host Toolchain Mounts):** On Linux/WSL2 hosts with existing toolchains, SDK directories (e.g. `/usr/share/dotnet`, `/usr/lib/jvm`, `/opt/android-sdk`) are mounted **read-only (`:ro`)** into the container.
-   - **Strategy B (Standard Multi-Tool Runner Image):** NightCodeForge ships a pre-built base image (`nightcodeforge/runner:latest`) containing LTS versions of .NET, Node.js, Python/uv, and Git, eliminating runtime provisioning.
+   - **Strategy B (On-the-Fly Slim Runner):** NightCodeForge synthesizes a minimal runtime layer on the fly, mounting the host toolchains where possible.
 
 ### 14.4 In-Process Harness vs. Sandboxed Tool Execution
 NightCodeForge adopts an **In-Process Harness + Sandboxed Tool Delegation** architecture:
@@ -1280,24 +1380,25 @@ flowchart LR
 
     subgraph Sandbox ["Container Sandbox"]
         Exec["docker exec -i / wsl.exe\n(dotnet, npm, tests)"]
-        Ext4FS["ext4 /workspace"]
+        Ext4FS["ext4 /workspace\n(mapped to ~/.nightcodeforge/wks/{id})"]
     end
 
     Harness --> CmdTool
     Harness --> FileTools
     CmdTool --> Exec
-    FileTools -->|"\\wsl.localhost (UNC) or container tar/cat"| Ext4FS
+    FileTools -->|"Real path via \\wsl.localhost (UNC) or Linux path"| Ext4FS
     CentralConfig --> Harness
 ```
 
 #### Why In-Process Orchestration is Superior:
 1. **Network Simplicity for Inference:** The LLM client runs directly on the host, communicating with OllamaRouter on `localhost:11434` or cloud providers without Docker-to-Host bridge networking issues.
 2. **Central Configuration for Pi & ACP:**
-   - **Pi JSON-RPC:** NightCodeForge spawns and monitors the Pi agent runner on the host, passing tool implementations that forward `bash` into the container sandbox.
+   - **Pi JSON-RPC:** NightCodeForge spawns and monitors the Pi agent runner on the host, passing tool implementations that forward `bash` into the container sandbox / WSL2.
    - **Agent Client Protocol (ACP):** NightCodeForge acts as the ACP client. When an ACP agent requests a terminal command execution, NightCodeForge routes the command into the container sandbox.
    - `mcp_config.json`, API credentials, and skills remain centralized on the host.
 3. **Optimized File Operations & EditorConfig Compliance:**
-   - Single-file reads and writes (`read`, `edit`, `write`) access the ext4 mirror directly via `\\wsl.localhost\Ubuntu\var\ncf\...` or fast exec streaming.
+   - Single-file reads and writes (`read`, `edit`, `write`) access the working clone directly via `\\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{id}\...` on Windows or native POSIX paths on Linux.
+   - In container mode, the tool dispatcher seamlessly strips `/workspace/` and maps to the real host/UNC path.
    - All `write` and `edit` file mutations pass through Crucible's `EditorConfigFileApplier`, strictly enforcing repository `.editorconfig` rules (`end_of_line` [LF/CRLF], `indent_style`, `indent_size`, `trim_trailing_whitespace`, `insert_final_newline`, `charset`) before writing to disk. This completely prevents cross-environment newline churn (Windows CRLF vs Linux LF) and eliminates phantom diffs in Git.
    - Heavy recursive operations (compilation, test runners, git status) run completely inside the container.
 
@@ -1322,7 +1423,7 @@ For untrusted external input (such as incoming GitHub issues processed by `Triag
 ### 14.6 Crash & Hang Protection
 * Every LLM step and Git command is bound to a strict timeout policy.
 * Hangfire automatic retry is disabled for LLM inference tasks (`[AutomaticRetry(Attempts = 0)]`) to prevent duplicate code edits on unexpected runtime exceptions; unhandled errors transition the issue cleanly to `Failed`.
-* **Clean Interruption Lifecycle:** Interruption via `ask` is intercepted internally: the checkpoint and question are persisted, the issue transitions to `BlockedQuestion`, and the background job returns `StageExecutionResult.WaitingForHuman()`, completing in a clean `Succeeded` status in Hangfire rather than an artificial failure.
+* **Clean Interruption Lifecycle:** Interruption via `ask` is intercepted internally: the checkpoint and question are persisted, `issue.IsWaitingForHuman = true` and `issue.InterruptedAgentProfileId` are set while preserving `issue.Status`, and the background job returns `StageExecutionResult.WaitingForHuman()`, completing in a clean `Succeeded` status in Hangfire rather than an artificial failure.
 
 ### 14.7 Graceful Restart & Crash Recovery System (`IStartupRecoveryService`)
 

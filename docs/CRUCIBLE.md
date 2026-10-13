@@ -55,6 +55,21 @@ Crucible is built in pure C# targeting .NET 9/.NET 10, consuming official **NuGe
 * **`editorconfig`:** Official .NET EditorConfig parser library for hierarchical directory traversal and glob rule matching.
 * **`OllamaRouter` Compatibility:** Native HTTP communication with local Ollama, vLLM, LM Studio, or OpenAI-compatible endpoints with dynamic GPU routing.
 
+### 1.3 Cross-Platform Execution Model & Windows WSL2 Bridge
+Crucible is "special" because it is embedded directly in the NightCodeForge host process. However, autonomous coding agents operate **strictly on Unix**.
+
+* **Windows Host & WSL2 Requirement:** When NightCodeForge runs on Windows, **WSL2 is strictly required**. Crucible interacts with the agent working clone at `~/.nightcodeforge/wks/{workspaceId}`:
+  - **Direct File I/O Bridge:** Crucible file tools (`read`, `write`, `edit`) execute directly from the Windows host via the high-speed UNC share:
+    ```text
+    \\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{workspaceId}\
+    ```
+  - **Bare Mode Shell Execution:** In Bare Mode, the `bash` tool executes directly inside WSL2 via `wsl.exe -d <distrib> -- bash -c "cd ~/.nightcodeforge/wks/{id} && ..."`. PowerShell or CMD are never used for agent commands.
+* **Linux/macOS Host:** Crucible tools access `$HOME/.nightcodeforge/wks/{workspaceId}` directly, with `bash` delegating to `/bin/bash`.
+* **Container Mode & `/workspace` Virtual Path Remapping:**
+  - Inside the container, the agent sees only `/workspace` (which is volume-mounted from `~/.nightcodeforge/wks/{id}`).
+  - Because Crucible tools operate outside the container on the host/WSL filesystem, the tool dispatcher transparently strips `/workspace` and remaps all file operations to the real filesystem path.
+* **On-the-Fly Slim Container Images:** NightCodeForge generates a minimal, lightweight container image on the fly, bind-mounting persistent host package caches (`~/.nuget/packages`, `~/.npm`, `~/.cache/uv`) to prevent downloading dependencies repeatedly.
+
 ---
 
 ## 2. Agent Profiles & Stage Persona Architecture
@@ -821,7 +836,7 @@ sequenceDiagram
 ```
 
 #### Zero Data-Loss & Clean Queue Lifecycle:
-* **Clean Hangfire Job Completion:** When an agent invokes `ask`, the resulting `HumanInterruptionException` is caught internally by the orchestrator. Rather than letting the exception bubble up to Hangfire (which would mark the background job as red/`Failed`), the job orchestrator records the checkpoint and pending question, transitions the issue status to `BlockedQuestion`, and cleanly returns `StageExecutionResult.WaitingForHuman()`. The Hangfire job completes in a clean `Succeeded` state, releasing the single GPU worker for the next waiting task.
+* **Clean Hangfire Job Completion:** When an agent invokes `ask`, the resulting `HumanInterruptionException` is caught internally by the orchestrator. Rather than letting the exception bubble up to Hangfire (which would mark the background job as red/`Failed`), the job orchestrator records the checkpoint and pending question, sets `issue.IsWaitingForHuman = true` and `issue.InterruptedAgentProfileId = profile?.Id` without altering `issue.Status`, and cleanly returns `StageExecutionResult.WaitingForHuman()`. The Hangfire job completes in a clean `Succeeded` state, releasing the single GPU worker for the next waiting task.
 * **`PerServiceCallChatHistoryPersistingChatClient`:** Persists message thread state after *every single tool call* inside the `FunctionInvokingChatClient` loop. If an unhandled crash or abort occurs, no intermediate reasoning is lost.
 * **`AIAgent.SerializeSessionAsync` / `DeserializeSessionAsync`:** Serializes all conversational memory, provider state bags, and reduction indices into a single standard `JsonElement` stored directly in `AppDbContext.IssueCheckpoints`.
 * **`MessageInjectingChatClient`:** Upon resumption from the dev-queue, the human's response is injected directly into the chat client stream as a fresh user turn, allowing the LLM to resume execution seamlessly without prompt re-bootstrapping or token waste.

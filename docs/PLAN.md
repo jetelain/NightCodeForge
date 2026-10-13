@@ -19,6 +19,7 @@ NightCodeForge/
 │       ├── 02_GIT_SUBSYSTEM_AND_EXT4_MIRROR.md
 │       ├── 03_QUEUE_AND_ORCHESTRATION_ENGINE.md
 │       ├── 04_HARNESSES_TOOLS_AND_LOCAL_OPTIMIZATIONS.md
+│       ├── 04B_EXECUTION_ENVIRONMENT_AND_WORKFLOW_ALIGNMENT.md
 │       ├── 05_BLAZOR_WEB_UI_AND_TELEMETRY.md
 │       └── 06_END_TO_END_TESTING_AND_HARDENING.md
 ├── src/
@@ -93,11 +94,12 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 
 | Phase | Dedicated Implementation Guide | Focus & Key Deliverables |
 | :--- | :--- | :--- |
-| **Phase 1** | [docs/plan/01_FOUNDATION_DOMAIN_AND_WORKFLOW.md](plan/01_FOUNDATION_DOMAIN_AND_WORKFLOW.md) | .NET 10 solution setup, domain entities, DAG dependency engine, workspace concurrency lock, extensible workflow engine with `PipelineDataBag`, differential quality gates (`DeterministicCoverageGate`), and `docs/issues/` markdown sync. |
-| **Phase 2** | [docs/plan/02_GIT_SUBSYSTEM_AND_EXT4_MIRROR.md](plan/02_GIT_SUBSYSTEM_AND_EXT4_MIRROR.md) | Native Git CLI (`CliWrap`), branch isolation, WIP commits, noise-filtered diffs (`-U2`), ext4 mirror sync (`receive.denyCurrentBranch updateInstead`), and dirty host tree fallback. |
-| **Phase 3** | [docs/plan/03_QUEUE_AND_ORCHESTRATION_ENGINE.md](plan/03_QUEUE_AND_ORCHESTRATION_ENGINE.md) | Hangfire single-worker GPU queue (`WorkerCount = 1`, `llm-urgent` vs `llm-inference`), clean `WaitingForHuman` interruption lifecycle, cascade unblocking, and startup crash recovery (`IStartupRecoveryService`). |
+| **Phase 1** | [docs/plan/01_FOUNDATION_DOMAIN_AND_WORKFLOW.md](plan/01_FOUNDATION_DOMAIN_AND_WORKFLOW.md) | .NET 10 solution setup, domain entities (`IssueOverallStatus` from `Suggested` to `Closed`, `MergeMode`), DAG dependency engine, workspace concurrency lock, extensible workflow engine with `PipelineDataBag`, differential quality gates (`DeterministicCoverageGate`), and `docs/issues/` markdown sync. |
+| **Phase 2** | [docs/plan/02_GIT_SUBSYSTEM_AND_EXT4_MIRROR.md](plan/02_GIT_SUBSYSTEM_AND_EXT4_MIRROR.md) | Native Git CLI (`CliWrap`), branch isolation, WIP commits, noise-filtered diffs (`-U2`), working clone at `~/.nightcodeforge/wks/{id}`, remote path translation (`/mnt/...`), bare host (Unix) vs plain WSL2 (Windows) Git execution, and dirty host tree fallback. |
+| **Phase 3** | [docs/plan/03_QUEUE_AND_ORCHESTRATION_ENGINE.md](plan/03_QUEUE_AND_ORCHESTRATION_ENGINE.md) | Hangfire single-worker GPU queue (`WorkerCount = 1`, `llm-urgent` vs `llm-inference`), clean `WaitingForHuman` interruption lifecycle, cascade unblocking when dependencies are `Closed`, and startup crash recovery (`IStartupRecoveryService`). |
 | **Phase 4** | [docs/plan/04_HARNESSES_TOOLS_AND_LOCAL_OPTIMIZATIONS.md](plan/04_HARNESSES_TOOLS_AND_LOCAL_OPTIMIZATIONS.md) | Unified harness abstraction, OllamaRouter integration, canonical tools & `EditorConfigFileApplier`, container sandbox sentinel REPL, Crucible / Pi / ACP engines, modular skills & MCP, and the 7 local LLM optimizations (`LocalOptimizationFlags`). |
-| **Phase 5** | [docs/plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md](plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | Blazor Interactive Server UI, obsidian/indigo dark theme, SignalR telemetry hub, ideation chat, visual DAG backlog, question inbox, review room with diffs, and A/B testing comparator. |
+| **Phase 4B** *(Intermediate)* | [docs/plan/04B_EXECUTION_ENVIRONMENT_AND_WORKFLOW_ALIGNMENT.md](plan/04B_EXECUTION_ENVIRONMENT_AND_WORKFLOW_ALIGNMENT.md) | **Cross-Platform & Lifecycle Realignment:** Unix-only agent enforcement, Windows WSL2 mandatory requirement, working clones at `~/.nightcodeforge/wks/{id}`, Windows Crucible UNC path access (`\\wsl.localhost\...`), bare mode bash in WSL2, container mode `/workspace` tool call remapping, on-the-fly slim container images, 3-channel issue intake (`Suggested`), manual promotion (`Open` / `Rejected`) with `Priority` & `MergeMode`, and main workflow status progression (`Reviewed` $\rightarrow$ `Implemented` $\rightarrow$ `Ready` $\rightarrow$ `Closed`). |
+| **Phase 5** | [docs/plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md](plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | Blazor Interactive Server UI, obsidian/indigo dark theme, SignalR telemetry hub, ideation chat, visual DAG backlog with Suggested/Open promotion actions, question inbox, review room with diffs and manual merge triggers, and A/B testing comparator. |
 | **Phase 6** | [docs/plan/06_END_TO_END_TESTING_AND_HARDENING.md](plan/06_END_TO_END_TESTING_AND_HARDENING.md) | End-to-end workflow simulation, chaos & sudden reboot resilience, multi-workspace VRAM protection validation, and empirical A/B benchmark validation. |
 
 ---
@@ -112,18 +114,18 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
   2. Implement domain entities and enumerations:
      * `Workspace` (Id, Name, RepositoryPath, DefaultBaseBranch, ExecutionMode [BareHost, WslDirect, ContainerSandbox], ContainerImage, Ext4MirrorPath, CreatedAt).
      * `AgentProfile` (Id, WorkspaceId, Name, HarnessId, ModelName, ThinkingEffort, ThinkingTokenBudget, Temperature, HarnessConfigurationJson, OptimizationFlags [LocalOptimizationFlags]).
-     * `Issue` (Id, WorkspaceId, Title, Description, Status, CurrentStageId, Priority, BaseBranch, FeatureBranch, PipelineDataJson [cross-stage persistent data bag]).
+     * `Issue` (Id, WorkspaceId, Title, Description, Status [defaults to Suggested], CurrentStageId, Priority, MergeMode [Automatic, ManualReviewRequired], BaseBranch, FeatureBranch, PipelineDataJson [cross-stage persistent data bag]).
      * `IssueDependency` (IssueId, DependsOnIssueId).
      * `Question` (IssueId, StageId, Prompt, Rationale, OptionsJson, Answer, Status).
      * `StageCheckpoint` (IssueId, StageId, SerializedMemory, GitCommitHash).
      * `StageExecutionRecord` (IssueId, StageId, AgentProfileId, HarnessId, ModelName, StartedAt, CompletedAt, DurationMs, PromptTokens, CompletionTokens, TotalTokens, TargetRouting, Status, OutputDataJson [stage output data snapshot]).
      * `ExecutionLog` (IssueId, StageId, Timestamp, Level, Source, Message).
-     * Enums: `IssueOverallStatus` (`WaitingOnDependencies`, `Pending`, `Running`, `BlockedQuestion`, `Review`, `Completed`, `Cancelled`, `Failed`), `ExecutionMode`, `ThinkingEffort`, `HarnessType`.
+     * Enums: `IssueOverallStatus` (`Suggested`, `Rejected`, `Open`, `Reviewed`, `Implemented`, `Ready`, `Closed`, `Cancelled`, `Failed`), `MergeMode` (`Automatic`, `ManualReviewRequired`), `ExecutionMode`, `ThinkingEffort`, `HarnessType`. Dedicated interruption fields: `Issue.IsWaitingForHuman`, `Issue.InterruptedAgentProfileId`, `Question.AgentProfileId`.
   3. Implement `DependencyResolutionEngine`:
      * Topological sorting of issues per workspace.
      * Cycle detection (reject circular dependencies).
-     * Dependency readiness evaluation: `IsReadyForExecution(issueId)`.
-     * Cascade activation when a prerequisite reaches `Completed`.
+     * Dependency readiness evaluation: `IsReadyForExecution(issueId)` (requires `Status == Open` and all dependencies `Status == Closed`).
+     * Cascade activation when a prerequisite reaches `Closed`.
   4. Implement **Workspace Concurrency Control (`IWorkspaceLockProvider`):**
      * Keyed async lock provider (`AsyncKeyedLock<int>` by `WorkspaceId`).
      * Guarantees that while the global inference queue processes sequentially (`WorkerCount = 1`), background utility jobs (`WorkerCount = 4`) and user UI actions do not execute concurrent Git operations or index modifications on the same workspace, preventing `.git/index.lock` race conditions.
@@ -145,9 +147,9 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
      * Generates and updates Markdown files with YAML frontmatter in `<WorkspaceRoot>/docs/issues/YYYY-MM-DD-<slug>.md` (date-prefixed without ID in filename to enable clean sorting and avoid renames; appends `-2`, `-3` on slug collisions for the same date).
      * Automatically syncs question/answer logs, stage transitions, and generated plans to disk.
      * Employs `FileSystemWatcher` event debouncing (300ms window) and an in-memory write-suppression tracker (recording expected file hashes) to prevent self-triggering echo loops when writing back protected fields.
-     * Enforces field protection: user edits to title, body, priority, profile, and dependencies sync to DB; system-managed fields (`status`, `stage`, `id`) are protected and restored if altered.
-     * Detects dropped new files, allocates a new database ID, and injects `id` into frontmatter in-place without renaming.
-     * Cleans up or archives files when issues reach `Completed` or `Cancelled`.
+     * Enforces field protection: user edits to title, body, priority, merge_mode, profile, and dependencies sync to DB; system-managed fields (`status`, `stage`, `id`) are protected and restored if altered.
+     * Detects dropped new files, allocates a new database ID, and injects `id` into frontmatter in-place with initial `status: suggested` and `merge_mode: manual_review_required`.
+     * Cleans up or archives files when issues reach `Closed` or `Cancelled`.
   7. Configure `AppDbContext` with SQLite and create initial migrations.
   8. Unit tests in `NightCodeForge.Core.Tests` for pipeline progression, pause/resume, token/duration tracking, DAG dependency graph resolution, echo loop suppression, and markdown issue sync.
 * **Deliverables:** Solution builds cleanly; workflow pipeline, metrics tracking, DAG dependency, and markdown sync unit tests pass 100%.
@@ -166,16 +168,17 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
      * `GenerateDiffAsync(Workspace workspace, int issueId, string baseBranch)`: Executes `git diff {baseBranch}...feature/issue-{id}`.
      * `RevertOrCleanAsync(Workspace workspace)`: Handles dirty states during crashes.
      * `SquashAndMergeAsync(Workspace workspace, int issueId, string baseBranch, string finalMessage)`: Squashes WIP commits upon approval.
-  3. Implement **`GitMirrorSyncService` (Ext4 Mirroring Protocol):**
-     * Solves the WSL2 9p filesystem performance bottleneck on Windows hosts.
-     * Establishes isolated clone on ext4 (`/var/ncf/workspaces/{workspaceId}/repo`) with local remote `host-origin` pointing to the developer's Windows repository.
-     * Configures the host repository with `git config receive.denyCurrentBranch updateInstead` to ensure `git push host-origin feature/issue-{id}` succeeds without rejection even when the developer has the branch checked out in their IDE on the host.
+  3. Implement **`GitMirrorSyncService` (Cross-Environment Working Clone Protocol):**
+     * Agent clone repositories, where agents work, will ALWAYS be `~/.nightcodeforge/wks/{id}` (ext4 in WSL2 on Windows, host home on Unix).
+     * On Windows, the remote pointing to the developer's workspace is `/mnt/{windows_path_transformed}`; on Unix, the remote is the raw developer workspace path.
+     * Git push, pull, and merge operations on `main` are ALWAYS executed on the bare host on Unix, and on plain WSL2 on Windows.
+     * On Windows, Crucible tools access working tree files via `\\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{id}\` for high-speed I/O.
+     * Configures the developer host repository with `git config receive.denyCurrentBranch updateInstead` to ensure `git push host-origin feature/issue-{id}` succeeds without rejection even when checked out in the host IDE.
      * **Host Working Tree Dirty Conflict Fallback:** If the developer has uncommitted changes to tracked files in their host IDE, Git rejects `updateInstead`; `GitMirrorSyncService` catches the rejection, pushes to `refs/heads/feature/issue-{id}-ncf` instead, and emits a SignalR alert informing the developer to reconcile local uncommitted files.
      * Performs `git fetch host-origin <baseBranch>` on stage inception.
      * Performs `git push host-origin feature/issue-{id}` upon WIP checkpointing, human questions, or stage completion to keep developer's IDE in sync.
-     * Directly mounts workspace when repo is already native to Linux/WSL2 ext4.
   4. Create integration tests in `NightCodeForge.Infrastructure.Tests` executing real Git commands on dynamically created temporary directories and verifying local remote fetch/push mirror sync.
-* **Deliverables:** Git operations verified with automated tests covering branch switching, dirty detection, WIP commits, diff generation, and bidirectional ext4 mirror synchronization.
+* **Deliverables:** Git operations verified with automated tests covering branch switching, dirty detection, WIP commits, diff generation, and bidirectional mirror synchronization.
 
 ---
 
@@ -188,25 +191,32 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
      * **LLM Inference Server:** `WorkerCount = 1`, `Queues = new[] { "llm-urgent", "llm-inference" }` (global across all workspaces to guard GPU VRAM; provides non-preemptive priority pick-up so resumed issues in `llm-urgent` are prioritized upon the next worker turn without concurrent VRAM oversubscription).
      * **Utility Server:** `WorkerCount = 4`, `Queues = new[] { "default" }`.
   3. Implement `IssueOrchestrator`:
-     * Dequeues issue, checks workspace and DAG dependencies.
+     * Dequeues issue, checks that `Status == Open` and all dependencies `Status == Closed`.
      * Acquires workspace lock via `IWorkspaceLockProvider` and checks out branch.
      * Loads current stage in the pipeline and invokes the selected harness (`IAgentHarness`).
      * Measures step performance (start/end timestamp, duration in ms, token usage).
      * Evaluates `StageExecutionResult`:
-       * If `WaitingForHuman`: records `Question`, `StageCheckpoint`, and `StageExecutionRecord`, performs Git WIP commit, sets status to `BlockedQuestion`, and cleanly completes the Hangfire job (`Succeeded`) to release the worker without false error alerts.
-       * If `StageCompleted`: saves `StageExecutionRecord` and checkpoint, advances to next stage in pipeline. If final stage completed, transitions to `Review` and generates diff.
+       * If `WaitingForHuman`: records `Question` (with `AgentProfileId`), `StageCheckpoint`, and `StageExecutionRecord`, performs Git WIP commit, sets `IsWaitingForHuman = true` and `InterruptedAgentProfileId = profile?.Id` without mutating `issue.Status`, and cleanly completes the Hangfire job (`Succeeded`) to release the worker without false error alerts.
+       * Stage Transitions:
+         - Stage 1 (Issue Review) completed $\rightarrow$ sets `Status = Reviewed`.
+         - Stage 2 (Deterministic Pre-Implementation) captures baseline metrics.
+         - Stage 3 (Implementation) completed $\rightarrow$ sets `Status = Implemented`.
+         - Stage 4 (Deterministic Post-Implementation) verifies coverage and warnings.
+         - Stage 5 (Code Review) applies review patches.
+         - Stage 6 (Deterministic Post-Review Verification) tests review patches; on pass $\rightarrow$ sets `Status = Ready`; on failure $\rightarrow$ loops back with compiler/test diagnostics.
+         - Final Merge Gate: If `MergeMode == Automatic`, executes squash & merge, sets `Status = Closed`, and cascades unblocking. If `MergeMode == ManualReviewRequired`, notifies UI and awaits maintainer approval before merging $\rightarrow$ `Closed`.
        * If `Failed`: logs error and metrics, transitions state to `Failed`.
   4. Implement `SubmitHumanAnswerAsync`:
-     * Saves answer in DB.
-     * Transitions state from `BlockedQuestion` to `Pending`.
-     * Enqueues job to `llm-urgent` queue for immediate priority resumption.
+     * Saves answer in DB (`question.Status = QuestionStatus.Answered; question.Answer = answer;`).
+     * Sets `issue.IsWaitingForHuman = false` (preserving `issue.Status` intact).
+     * Enqueues job to `llm-urgent` queue for immediate priority resumption with the exact interrupted agent profile (`InterruptedAgentProfileId`).
   5. Implement `RequestChangesAsync`:
      * Allows reviewer to provide revision feedback notes from the Review Room.
-     * Transitions issue from `Review` back to Stage 2 (`ImplementationStage`) with reviewer feedback injected into prompt context.
+     * Transitions issue from `Ready` back to Stage 3 (`ImplementationStage`) with reviewer feedback injected into prompt context.
      * Enqueues job to `llm-urgent` queue for priority iteration.
   6. Implement `CompleteIssueAndCascadeAsync`:
-     * On final human approval/merge, sets issue to `Completed`.
-     * Unlocks dependent issues in the same workspace and enqueues newly ready issues into `llm-inference`.
+     * On final approval/merge, sets issue to `Closed`.
+     * Unlocks dependent issues in the same workspace (where all dependencies have reached `Closed`) and enqueues newly ready `Open` issues into `llm-inference`.
   7. Implement `IStartupRecoveryService` (Graceful Restart & Windows Update Recovery):
      * Executes during host startup before Hangfire worker begins polling.
      * Purges dangling Git lock files (`.git/index.lock`, `.git/refs/...`) left by abrupt process termination.
@@ -304,6 +314,32 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 
 ---
 
+### Phase 4B: Execution Environment, Path Remapping & Issue Lifecycle Alignment (Intermediate)
+> 📖 **Detailed Implementation Guide:** [docs/plan/04B_EXECUTION_ENVIRONMENT_AND_WORKFLOW_ALIGNMENT.md](plan/04B_EXECUTION_ENVIRONMENT_AND_WORKFLOW_ALIGNMENT.md)
+* **Objective:** Align the backend with cross-platform realities (Unix-only agents, mandatory WSL2 on Windows, canonical clone at `~/.nightcodeforge/wks/{id}`, Windows Crucible UNC file bridge, container `/workspace` remapping) and establish the updated 3-channel issue intake, manual promotion action (`Priority`, `MergeMode`), and deterministic post-review verification.
+* **Tasks:**
+  1. Enforce Unix-only agent confinement: require WSL2 on Windows; execute bare mode `bash` via `wsl.exe -d <distrib> -- bash` on Windows and `/bin/bash` on Unix.
+  2. Implement `IWorkspacePathResolver` / `WorkspacePathResolver`:
+     * Canonical agent working clone: `~/.nightcodeforge/wks/{id}`.
+     * Remote URL resolution: `/mnt/{windows_path_transformed}` on Windows, raw developer path on Unix.
+     * Windows Crucible UNC path access: `\\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{id}\`.
+     * Container mode path remapping: transparently translate `/workspace/...` calls from Crucible tools into real host/WSL filesystem paths.
+  3. Implement on-the-fly container generator with shared package cache mounts (`~/.nuget/packages`, `~/.npm`, `~/.cache/uv`).
+  4. Implement 3-channel issue creation (External Triage workflow, Ideation chat, `docs/issues/*.md`), all initiating issues in `Suggested` status.
+  5. Implement manual promotion action: promotes `Suggested` $\rightarrow$ `Open` (setting `Priority` 1..5 and `MergeMode` [Automatic vs. ManualReviewRequired]) or `Rejected`.
+  6. Realize full main workflow stage sequence:
+     * Stage 1: `IssueReviewStage` $\rightarrow$ `Reviewed`.
+     * Stage 2: `DeterministicPreImplementationStage` (baseline build, test, coverage).
+     * Stage 3: `ImplementationStage` $\rightarrow$ `Implemented`.
+     * Stage 4: `DeterministicPostImplementationStage` (coverage & warning ratchet).
+     * Stage 5: `CodeReviewAndFixStage` (auditing and direct polish fixes).
+     * Stage 6: `DeterministicPostReviewStage` (compilation & test verification of review patches) $\rightarrow$ `Ready` on pass, loops back on failure.
+     * Stage 7: Merge Gate (`Closed` via auto-merge or maintainer manual review approval).
+  7. Support universal human clarification (`ask`) at any stage, pausing via `IsWaitingForHuman = true` and `InterruptedAgentProfileId` without mutating issue status, freeing the GPU worker; resuming with exact agent on answer.
+* **Deliverables:** Path resolver, cross-environment Git and Crucible UNC I/O, on-the-fly container sandbox, 3 issue intake channels, manual promotion action, and complete 7-step main workflow verified with automated tests.
+
+---
+
 ### Phase 5: Modern Blazor Web UI & SignalR Telemetry
 > 📖 **Detailed Implementation Guide:** [docs/plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md](plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md)
 * **Objective:** Build a sleek, responsive, developer-grade dashboard for ideation chat, backlog & dependency management, live monitoring, question answering, transcript inspection, and diff review.
@@ -319,16 +355,17 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
      * Issue proposal cards with editable scope and one-click "Add to Backlog" with dependency wiring.
   4. Implement **Backlog & Dependency DAG View:**
      * Issue submission dialog (title, requirements, base branch, dependencies).
-     * Dependency DAG graph / visual tree highlighting blocking relationships and current state.
+     * Dependency DAG graph / visual tree highlighting blocking relationships, lifecycle states (`Suggested`, `Open`, `Reviewed`, `Implemented`, `Ready`, `Closed`), and `WaitingForHuman` badges.
+     * One-click maintainer promotion dialog: transition `Suggested` $\rightarrow$ `Open` with `Priority` (1..5) and `MergeMode` (`Automatic` vs. `ManualReviewRequired`), or `Rejected`.
   5. Implement **Monitoring View:**
-     * Active worker dashboard: current issue, active stage (`Review ➔ Implement ➔ Fix`), elapsed time, GPU status.
+     * Active worker dashboard: current issue, active stage (`Issue Review ➔ Deterministic Pre-Impl ➔ Implementation ➔ Deterministic Post-Impl ➔ Code Review ➔ Deterministic Post-Review`), elapsed time, GPU status.
      * Streaming terminal/log console with auto-scroll and log level filtering.
   6. Implement **Inbox View:**
      * Grid of questions awaiting developer answers.
      * Rich answering card displaying prompt, rationale, file context, and response form.
   7. Implement **Review Room:**
      * Visual `git diff` viewer highlighting added/modified/deleted files.
-     * Action buttons: "Approve & Merge" (squash & merge to base branch, unblocking dependent tasks) or "Request Changes".
+     * Action buttons: for `ManualReviewRequired` issues, "Approve & Merge" (squashes WIP commits into base branch $\rightarrow$ `Closed`, unblocking dependent tasks) or "Request Changes" (re-routes back to Stage 3 `ImplementationStage` with reviewer feedback). Auto-merge issues report automatic merge completion.
   8. Implement **Workspace, Agent Profile, Execution & MCP Settings:**
      * Workspace creation/switching and target Git repository path configuration.
      * **Execution Sandbox Settings:** Selection between `BareHost`, `WslDirect`, and `ContainerSandbox` (Docker/Podman image selection, cache mount paths, read-only SDK mount paths).
