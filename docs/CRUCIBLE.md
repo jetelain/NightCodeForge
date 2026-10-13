@@ -73,6 +73,7 @@ public class AgentProfile
     public int? ThinkingTokenBudget { get; set; }
     public double? Temperature { get; set; }
     public string? HarnessConfigurationJson { get; set; } // Custom runtime options
+    public LocalOptimizationFlags? OptimizationFlags { get; set; } // Opt-out flags for A/B testing
     public IReadOnlyList<string>? PermittedTools { get; set; } // Whitelist: null = all stage tools; ["read", "propose_issues"]
     public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard; // Standard vs RestrictedReadOnly
     public int? WorkspaceId { get; set; }               // Nullable: workspace override
@@ -515,6 +516,20 @@ chatHistory.Add(new ChatMessage(ChatRole.User, "Please fix the compilation error
 When advancing from a successful `DeterministicTestStage` to `CodeReviewAndFixStage`:
 * Pre-seeds a synthetic `dotnet test` execution returning: `Test run successful. Total: 42. Passed: 42. Failed: 0.`
 * The Code Review agent recognizes that tests are already green and focuses immediately on diff analysis, code quality, and security rather than wasting turns re-running the test suite.
+
+### 6.6 Thinking Trace Compaction (`ThinkingTraceCompactionChatClient`)
+For reasoning models (DeepSeek-R1, QwQ), chain-of-thought `<think>...</think>` monologues are streamed live via SignalR to the developer console, but pruned or summarized in historical assistant turns when persisted to memory.
+* **Gating Flag:** Controlled by `LocalOptimizationFlags.ThinkingTraceCompaction` (default: `true`).
+* **Opt-Out Benefit:** When toggled to `false`, the exact verbatim `<think>` blocks are preserved for debugging or uncompressed benchmark comparisons.
+
+### 6.7 Degenerate Loop & Repetition Circuit Breakers (`ToolLoopCircuitBreaker`)
+Prevents local models from locking up the single-worker GPU queue in runaway token loops or ping-pong tool invocations:
+* **Token Stream Loop Abort:** Watches the SignalR token stream for 16-character n-gram cycles repeated $\ge 3$ times, canceling completion via `CancellationTokenSource`.
+* **Duplicate Tool Interception:** Intercepts identical tool calls with unchanged arguments on an unchanged Git working tree, returning a synthetic corrective steering message.
+* **Gating Flag:** Controlled by `LocalOptimizationFlags.LoopCircuitBreaker` (default: `true`).
+
+### 6.8 Opt-Out Architecture & A/B Testing Integration
+All 7 local LLM optimizations are strictly opt-out via `LocalOptimizationFlags`, enabling side-by-side **A/B benchmarking** across profiles and models. Full architecture, metrics comparisons, and configuration hierarchy are detailed in **[LOCAL_LLM_OPTIMIZATIONS.md](LOCAL_LLM_OPTIMIZATIONS.md)**.
 
 ---
 

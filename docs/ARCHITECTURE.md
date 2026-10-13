@@ -144,6 +144,7 @@ public class AgentProfile
     public int? ThinkingTokenBudget { get; set; }
     public double? Temperature { get; set; }
     public string? HarnessConfigurationJson { get; set; } // Harness-specific launch/runtime JSON options
+    public LocalOptimizationFlags? OptimizationFlags { get; set; } // Opt-out optimization flags for A/B testing
     public IReadOnlyList<string>? PermittedTools { get; set; } // Whitelist: null = all stage tools; ["read", "propose_issues"]
     public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard; // Standard vs RestrictedReadOnly
     public int? WorkspaceId { get; set; }               // Nullable: global profile or workspace override
@@ -313,6 +314,97 @@ flowchart LR
     S3 -->|Fail: Parse Diagnostics & Loop Back| S2Fix["2b. Fix Errors\n(Agentic LLM with Synthetic Priming)"]
     S2Fix --> S3
     S3 -.->|Exceeds Max Retries (3)| Blocked["Blocked: Human Q&A"]
+```
+
+### 3.8.1 Persistent Pipeline Data Bag & Differential Quality Gates
+
+Deterministic stages are not merely ephemeral shell runners; they serve as **persistent telemetry and baseline extractors**. NightCodeForge provides a thread-safe, serializable **Pipeline Data Bag** (`PipelineContext.DataBag`) that persists cross-stage data into `AppDbContext.Issues.PipelineDataJson` and records per-stage snapshots in `STAGE_EXECUTION_RECORD.OutputDataJson`.
+
+This architecture enables **differential quality gates**: capturing baseline repository metrics *before* code changes, and comparing them *after* implementation to prevent regressions, coverage erosion, or agent "cheating".
+
+```mermaid
+flowchart TD
+    subgraph BaselinePhase ["1. Baseline Extraction (Base Branch / Stage Inception)"]
+        RunBaseline["DeterministicBaselineStage\n(0 GPU Tokens / CPU Native)"]
+        ExtractBaseline["Extract: Coverage (85.2%), Total Tests (42), Warnings (7)"]
+        StoreBag["Store in PipelineContext.DataBag\n(Persisted to AppDbContext)"]
+    end
+
+    subgraph ImplementationPhase ["2. Agentic Coding & Test Modification"]
+        Agent["Stage 2: Implementation Agent\n(Modifies code & writes new unit tests)"]
+    end
+
+    subgraph DifferentialGate ["3. Differential Quality Gate Verification"]
+        RunCurrent["DeterministicCoverageGate\n(Executes dotnet test --collect:'XPlat Code Coverage')"]
+        Compare{"Differential Evaluation:\n- Coverage dropped > 0.5%?\n- Total tests decreased?\n- New warnings added?"}
+        PassGate["Advance to Stage 3: Code Review\n(Passes Coverage Diffs & Health Status)"]
+        FailGate["Loop Back to Stage 2 (Implementation)\n(Injects exact missing coverage files & line offsets)"]
+    end
+
+    RunBaseline --> ExtractBaseline --> StoreBag
+    StoreBag --> Agent
+    Agent --> RunCurrent
+    RunCurrent --> Compare
+    Compare -->|Clean / Improved| PassGate
+    Compare -->|Degraded / Cheating Detected| FailGate
+```
+
+#### Core Differential Gates Supported:
+
+1. **Test Coverage Degradation Gate (`DeterministicCoverageGate`):**
+   * **Mechanism:** Executes coverage toolchain (`dotnet test --collect:"XPlat Code Coverage"` / Coverlet / Istanbul / lcov) and parses Cobertura XML or JSON coverage reports.
+   * **Baseline:** Records `coverage.baseline.lineRate = 85.2%` and `coverage.baseline.branchRate = 78.4%`.
+   * **Post-Implementation:** Computes `coverage.current.lineRate = 81.0%` ($\Delta = -4.2\%$).
+   * **Enforcement:** If coverage drops beyond the configured tolerance (e.g. `allowedDrop = 0.0%`), the gate fails and synthesizes an actionable diagnostic:
+     > *"❌ Coverage Degradation Detected: Line coverage dropped from 85.2% to 81.0% (-4.2%). Uncovered methods detected: `OrderService.CalculateTax()` (Lines 45-62) and `OrderService.ApplyDiscount()` (Lines 80-95). Please add unit tests covering these paths."*
+
+2. **"No Cheating" Test Count Preservation Gate:**
+   * **The Problem:** Local models occasionally "fix" a broken test suite by deleting or commenting out failing test assertions (`[Fact]` $\rightarrow$ `// [Fact]`) rather than fixing the underlying business logic.
+   * **Enforcement:** The baseline stage records `tests.baseline.total = 42`. If post-implementation `tests.current.total < 42`, the gate fails immediately with a severe integrity violation error, rejecting the pull request.
+
+3. **Compiler & Linter Warning Ratchet (`DeterministicWarningRatchetStage`):**
+   * **The Problem:** Legacy repositories often contain dozens of preexisting compiler warnings. Enforcing `TreatWarningsAsErrors` globally breaks existing code, but allowing warnings permits agents to introduce fresh technical debt.
+   * **Mechanism:** Captures `warnings.baseline = 14`. If the new build produces `warnings.current = 16`, the ratchet triggers a failure reporting only the **2 newly introduced warnings** (with file and line numbers) for remediation.
+
+4. **Performance Benchmark & Binary Size Gates:**
+   * Tracks execution benchmarks (via BenchmarkDotNet / pytest-benchmark) or compiled bundle sizes (`dist/bundle.js`, output `.dll` size), preventing stealthy performance regressions.
+
+#### `PipelineDataBag` Data Contract:
+
+```csharp
+public class PipelineDataBag
+{
+    private readonly ConcurrentDictionary<string, JsonElement> _data = new();
+
+    public void Set<T>(string key, T value)
+    {
+        var json = JsonSerializer.SerializeToElement(value);
+        _data[key] = json;
+    }
+
+    public T? Get<T>(string key)
+    {
+        if (_data.TryGetValue(key, out var element))
+        {
+            return JsonSerializer.Deserialize<T>(element);
+        }
+        return default;
+    }
+
+    public bool TryGet<T>(string key, out T? value)
+    {
+        if (_data.TryGetValue(key, out var element))
+        {
+            value = JsonSerializer.Deserialize<T>(element);
+            return true;
+        }
+        value = default;
+        return false;
+    }
+
+    public string ToJson() => JsonSerializer.Serialize(_data);
+    public static PipelineDataBag FromJson(string? json) => ...;
+}
 ```
 
 ---
@@ -867,6 +959,15 @@ tokens:
   prompt: 3120
   completion: 1450
   total: 4570
+optimizations:
+  thinking_trace_compaction: true
+  loop_circuit_breaker: true
+  guided_grammar_decoding: true
+  deterministic_symbol_map: true
+  structured_diagnostic_extraction: true
+  prefix_stabilization: true
+  jit_model_preload: true
+kv_cache_hit_rate: 0.92
 status: Failed
 exit_reason: "Build failure not resolved after 3 attempts"
 created_at: 2026-10-12T22:25:00Z
@@ -969,6 +1070,7 @@ erDiagram
         int ThinkingTokenBudget
         double Temperature
         string HarnessConfigurationJson
+        string OptimizationFlagsJson
     }
 
     ISSUE {
@@ -984,6 +1086,7 @@ erDiagram
         datetime CreatedAt
         datetime UpdatedAt
         string LastHangfireJobId
+        string PipelineDataJson
     }
 
     ISSUE_DEPENDENCY {
@@ -1031,6 +1134,7 @@ erDiagram
         int TotalTokens
         string TargetRouting
         string Status
+        string OutputDataJson
     }
 
     EXECUTION_LOG {

@@ -27,7 +27,7 @@ In conventional interactive tools, the agent pauses and **blocks the process** w
 NightCodeForge eliminates idle GPU time through **automatic Git checkpointing and task context switching**:
 
 1. **Autonomous Execution:** NightCodeForge dequeues an issue and launches a specialized multi-agent pipeline on an isolated Git branch (`feature/issue-{id}`).
-2. **Instant Checkpoint on Human Interruption:** When any agent asks a question via `AskHumanQuestion`, the system:
+2. **Instant Checkpoint on Human Interruption:** When any agent asks a question via `ask` (or `AskHumanQuestion`), the system:
    - Captures and serializes the agent's memory and chat history into persistent storage.
    - Executes a native Git WIP commit (`git add -A && git commit -m "WIP: ..." --no-verify`) to ensure zero untracked files are lost.
    - Terminates the background worker, immediately freeing the GPU.
@@ -135,6 +135,7 @@ flowchart TD
 * 📐 **Forge System Architecture:** Detailed orchestrator specifications, dev-queue, Git context switching, sandboxing, and data schema in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 * 🔥 **Crucible Harness Specification:** In-process native C# agent harness, canonical tools, lenient dispatcher, and token minimization engine in [docs/CRUCIBLE.md](docs/CRUCIBLE.md).
 * 🗺️ **Implementation Roadmap:** Phased breakdown from solution scaffolding to full end-to-end testing in [docs/PLAN.md](docs/PLAN.md).
+* ⚡ **Local LLM Optimizations:** High-value strategies for KV-cache acceleration, reasoning trace pruning, loop breaking, and CPU diagnostic offloading in [docs/LOCAL_LLM_OPTIMIZATIONS.md](docs/LOCAL_LLM_OPTIMIZATIONS.md).
 
 ---
 

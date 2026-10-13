@@ -11,8 +11,16 @@ NightCodeForge/
 │   ├── CRUCIBLE.md              # Native Crucible agent harness specification
 │   ├── PI.md                    # Pi headless JSONL RPC daemon protocol & integration
 │   ├── ACP.md                   # Agent Client Protocol (ACP) specification & modernization
+│   ├── LOCAL_LLM_OPTIMIZATIONS.md # High-value local LLM optimization blueprint (<think> pruning, loop breakers, symbol index)
 │   ├── REFERENCES.md            # Source code mapping to MS Agent Framework, Pi & ACP
-│   └── PLAN.md                  # Step-by-step roadmap & execution guide
+│   ├── PLAN.md                  # Master roadmap & executive guide
+│   └── plan/                    # Detailed phase-by-phase implementation specifications:
+│       ├── 01_FOUNDATION_DOMAIN_AND_WORKFLOW.md
+│       ├── 02_GIT_SUBSYSTEM_AND_EXT4_MIRROR.md
+│       ├── 03_QUEUE_AND_ORCHESTRATION_ENGINE.md
+│       ├── 04_HARNESSES_TOOLS_AND_LOCAL_OPTIMIZATIONS.md
+│       ├── 05_BLAZOR_WEB_UI_AND_TELEMETRY.md
+│       └── 06_END_TO_END_TESTING_AND_HARDENING.md
 ├── src/
 │   ├── NightCodeForge.Core/
 │   │   ├── Domain/              # Entities: Issue, IssueDependency, Question, StageCheckpoint, ExecutionLog
@@ -79,20 +87,36 @@ NightCodeForge/
 
 ---
 
-## 3. Phased Implementation Roadmap
+## 3. Master Phased Implementation Guides
+
+To ensure thorough, battle-tested execution without ambiguity, each phase is decomposed into an exhaustive technical specification with explicit class contracts, test matrices, and Definition of Done (DoD) checklists:
+
+| Phase | Dedicated Implementation Guide | Focus & Key Deliverables |
+| :--- | :--- | :--- |
+| **Phase 1** | [docs/plan/01_FOUNDATION_DOMAIN_AND_WORKFLOW.md](plan/01_FOUNDATION_DOMAIN_AND_WORKFLOW.md) | .NET 10 solution setup, domain entities, DAG dependency engine, workspace concurrency lock, extensible workflow engine with `PipelineDataBag`, differential quality gates (`DeterministicCoverageGate`), and `docs/issues/` markdown sync. |
+| **Phase 2** | [docs/plan/02_GIT_SUBSYSTEM_AND_EXT4_MIRROR.md](plan/02_GIT_SUBSYSTEM_AND_EXT4_MIRROR.md) | Native Git CLI (`CliWrap`), branch isolation, WIP commits, noise-filtered diffs (`-U2`), ext4 mirror sync (`receive.denyCurrentBranch updateInstead`), and dirty host tree fallback. |
+| **Phase 3** | [docs/plan/03_QUEUE_AND_ORCHESTRATION_ENGINE.md](plan/03_QUEUE_AND_ORCHESTRATION_ENGINE.md) | Hangfire single-worker GPU queue (`WorkerCount = 1`, `llm-urgent` vs `llm-inference`), clean `WaitingForHuman` interruption lifecycle, cascade unblocking, and startup crash recovery (`IStartupRecoveryService`). |
+| **Phase 4** | [docs/plan/04_HARNESSES_TOOLS_AND_LOCAL_OPTIMIZATIONS.md](plan/04_HARNESSES_TOOLS_AND_LOCAL_OPTIMIZATIONS.md) | Unified harness abstraction, OllamaRouter integration, canonical tools & `EditorConfigFileApplier`, container sandbox sentinel REPL, Crucible / Pi / ACP engines, modular skills & MCP, and the 7 local LLM optimizations (`LocalOptimizationFlags`). |
+| **Phase 5** | [docs/plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md](plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | Blazor Interactive Server UI, obsidian/indigo dark theme, SignalR telemetry hub, ideation chat, visual DAG backlog, question inbox, review room with diffs, and A/B testing comparator. |
+| **Phase 6** | [docs/plan/06_END_TO_END_TESTING_AND_HARDENING.md](plan/06_END_TO_END_TESTING_AND_HARDENING.md) | End-to-end workflow simulation, chaos & sudden reboot resilience, multi-workspace VRAM protection validation, and empirical A/B benchmark validation. |
+
+---
+
+## 4. Executive Roadmap Summaries
 
 ### Phase 1: Foundation, Domain Models & Extensible Workflow Pipeline
+> 📖 **Detailed Implementation Guide:** [docs/plan/01_FOUNDATION_DOMAIN_AND_WORKFLOW.md](plan/01_FOUNDATION_DOMAIN_AND_WORKFLOW.md)
 * **Objective:** Establish the solution, multi-workspace support, domain entities, SQLite persistence, DAG dependency manager, and extensible workflow pipeline engine.
 * **Tasks:**
   1. Initialize .NET 10 solution and create project skeleton (`Core`, `Infrastructure`, `Agents`, `Web`, `Tests`).
   2. Implement domain entities and enumerations:
      * `Workspace` (Id, Name, RepositoryPath, DefaultBaseBranch, ExecutionMode [BareHost, WslDirect, ContainerSandbox], ContainerImage, Ext4MirrorPath, CreatedAt).
-     * `AgentProfile` (Id, WorkspaceId, Name, HarnessId, ModelName, ThinkingEffort, ThinkingTokenBudget, Temperature, HarnessConfigurationJson).
-     * `Issue` (Id, WorkspaceId, Title, Description, Status, CurrentStageId, Priority, BaseBranch, FeatureBranch).
+     * `AgentProfile` (Id, WorkspaceId, Name, HarnessId, ModelName, ThinkingEffort, ThinkingTokenBudget, Temperature, HarnessConfigurationJson, OptimizationFlags [LocalOptimizationFlags]).
+     * `Issue` (Id, WorkspaceId, Title, Description, Status, CurrentStageId, Priority, BaseBranch, FeatureBranch, PipelineDataJson [cross-stage persistent data bag]).
      * `IssueDependency` (IssueId, DependsOnIssueId).
      * `Question` (IssueId, StageId, Prompt, Rationale, OptionsJson, Answer, Status).
      * `StageCheckpoint` (IssueId, StageId, SerializedMemory, GitCommitHash).
-     * `StageExecutionRecord` (IssueId, StageId, AgentProfileId, HarnessId, ModelName, StartedAt, CompletedAt, DurationMs, PromptTokens, CompletionTokens, TotalTokens, TargetRouting, Status).
+     * `StageExecutionRecord` (IssueId, StageId, AgentProfileId, HarnessId, ModelName, StartedAt, CompletedAt, DurationMs, PromptTokens, CompletionTokens, TotalTokens, TargetRouting, Status, OutputDataJson [stage output data snapshot]).
      * `ExecutionLog` (IssueId, StageId, Timestamp, Level, Source, Message).
      * Enums: `IssueOverallStatus` (`WaitingOnDependencies`, `Pending`, `Running`, `BlockedQuestion`, `Review`, `Completed`, `Cancelled`, `Failed`), `ExecutionMode`, `ThinkingEffort`, `HarnessType`.
   3. Implement `DependencyResolutionEngine`:
@@ -105,7 +129,12 @@ NightCodeForge/
      * Guarantees that while the global inference queue processes sequentially (`WorkerCount = 1`), background utility jobs (`WorkerCount = 4`) and user UI actions do not execute concurrent Git operations or index modifications on the same workspace, preventing `.git/index.lock` race conditions.
   5. Implement `ExtensibleWorkflowEngine`:
      * `IWorkflowPipeline` and `IWorkflowStage` abstractions supporting both **Agentic** (LLM-driven with GPU allocation) and **Deterministic** (CPU-native builds, tests, SAST with 0 GPU/tokens) stages via `WorkflowStageKind`.
-      * **Deterministic Quality Gates & Outcome Routing:** Enables deterministic stages (`DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicSastStage`) to act as outcome-driven routers: advancing forward on pass, or looping backward to fix errors (with retry circuit breaker) paired with **Synthetic Conversation Priming** to prevent agents from re-running redundant builds/tests.
+      * **`PipelineDataBag` Cross-Stage Data Persistence:** Thread-safe, serializable key-value store in `PipelineContext` (persisted to `AppDbContext.Issues.PipelineDataJson`) enabling stages to record baseline metrics and share state across pipeline executions.
+      * **Deterministic Quality Gates & Differential Outcome Routing:**
+        - `DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicSastStage`.
+        - **`DeterministicCoverageGate`:** Captures baseline code coverage (e.g. via Coverlet / Cobertura XML) on base branch and evaluates differential after implementation. Fails and loops back if coverage degrades below tolerance or if total test count decreases ("anti-cheating" detection).
+        - **`DeterministicWarningRatchetStage`:** Captures baseline compiler/linter warning count; fails if newly introduced warnings exceed baseline ($\Delta > 0$).
+        - Advances forward on pass, or loops backward to Stage 2 with structured diagnostic artifacts and **Synthetic Conversation Priming** to prevent agents from re-running redundant builds/tests.
      * **Explicit Stage Boundary Handover Protocol:** Enforces zero-memory clean context resets at stage transitions (archives previous stage chat history to disk transcripts, injecting only structured plan/diff/diagnostic artifacts into next stage).
      * Built-in `Default3AgentPipeline`:
        1. `IssueReviewStage` (Agentic - Default Profile: Deep Reasoning / high thinking effort)
@@ -126,6 +155,7 @@ NightCodeForge/
 ---
 
 ### Phase 2: Git CLI Subsystem & Ext4 Workspace Mirroring (CliWrap)
+> 📖 **Detailed Implementation Guide:** [docs/plan/02_GIT_SUBSYSTEM_AND_EXT4_MIRROR.md](plan/02_GIT_SUBSYSTEM_AND_EXT4_MIRROR.md)
 * **Objective:** Deliver a bulletproof Git manager using native CLI only (no LibGit2Sharp) capable of safe context switching, WIP checkpointing, and cross-filesystem Git mirroring (solving the 9p latency trap on Windows/WSL2).
 * **Tasks:**
   1. Implement `GitCliRunner` wrapping `CliWrap` with command execution, timeout policies, stdout/stderr capture, and typed `GitCommandException`.
@@ -150,6 +180,7 @@ NightCodeForge/
 ---
 
 ### Phase 3: Hangfire Queue & Orchestration Engine
+> 📖 **Detailed Implementation Guide:** [docs/plan/03_QUEUE_AND_ORCHESTRATION_ENGINE.md](plan/03_QUEUE_AND_ORCHESTRATION_ENGINE.md)
 * **Objective:** Configure the single-worker GPU inference queue, step metrics recording, and background task coordinator.
 * **Tasks:**
   1. Configure Hangfire with SQLite storage.
@@ -186,6 +217,7 @@ NightCodeForge/
 ---
 
 ### Phase 4: AI Harness Abstraction & Implementations (Native, Pi, and ACP)
+> 📖 **Detailed Implementation Guide:** [docs/plan/04_HARNESSES_TOOLS_AND_LOCAL_OPTIMIZATIONS.md](plan/04_HARNESSES_TOOLS_AND_LOCAL_OPTIMIZATIONS.md)
 * **Objective:** Deliver the unified harness abstraction layer, first-class native & Pi engines, open **Agent Client Protocol (ACP)** adapter, and primary gateway integration with **OllamaRouter**.
 * **Tasks:**
   1. Define `IAgentHarness`, `IHarnessRegistry`, `AgentSessionContext`, `AgentRunResult`, `StepExecutionMetrics`, and `AgentTelemetryEvent`.
@@ -258,9 +290,14 @@ NightCodeForge/
      * `TranscriptDiagnosticService`: Evaluates failed or anomalous transcripts via either **Cloud LLMs** (fast, zero local VRAM consumption via OllamaRouter cloud models or external cloud API) or **Local LLMs** (100% private/offline, queued sequentially via `WorkerCount = 1`) to produce actionable remediation advice.
   10. **Interactive Ideation Agent Service (`IIdeationService`):**
       * Read-only exploration agent that converses with the developer, browses the workspace codebase, and proposes issues with dependencies via `propose_issues`.
-  11. Implement **Local LLM Token Minimization & Context Compaction Engine:**
-      * Static prompt prefix stabilization ensuring 100% byte-identical headers for KV cache hit rate maximization.
+  11. Implement **Local LLM Token Minimization & Context Compaction Engine (see docs/LOCAL_LLM_OPTIMIZATIONS.md):**
+      * Static prompt prefix stabilization enforcing a 4-layer immutable hierarchy for 100% KV cache hit rate across turns.
       * Native in-loop context compaction via `ToolResultCompactionStrategy` (`Microsoft.Agents.AI.Compaction`) with `MinimumPreservedGroups = 3` and custom `ToolCallFormatter` to compact older tool outputs into concise stubs.
+      * **Thinking Trace Compaction (`ThinkingTraceCompactionChatClient`):** Prunes `<think>` monologues from prior assistant turns in conversation memory, cutting multi-turn token re-ingestion by 60-80% for reasoning models (DeepSeek-R1, QwQ).
+      * **Degenerate Loop & Repetition Breakers (`ToolLoopCircuitBreaker`):** In-flight streaming n-gram repetition detector + duplicate tool invocation interceptor with synthetic steering alerts to prevent GPU lockup.
+      * **Deterministic Diagnostic Extraction:** Roslyn error parser (`error CS\d+`) and test assertion extractor replacing raw multi-line compiler dumps.
+      * **Deterministic Code Intelligence (`RoslynSymbolIndexProvider`):** Pre-indexes workspace symbols on branch creation, injecting exact class/interface file paths and line offsets into Stage 1 context (0 GPU tokens).
+      * **JIT Model Pre-Loading:** Asynchronously warms up next stage's model weights in OllamaRouter during CPU-bound deterministic stage execution.
       * Bounded command output streaming via `HeadTailBuffer` + compiler diagnostic extraction (extracting only failing `error CS\d+` lines and test assertions).
       * Synthetic conversation priming: pre-seeds active chat history with simulated prior tool execution pairs (e.g. deterministic test results) to eliminate exploratory agent tool round-trips.
 * **Deliverables:** Harness abstraction layer complete; Canonical tools & LenientToolDispatcher operational with EditorConfig compliance (EOL, tab/space, whitespace, charset); Crucible, Pi, and ACP adapter functional; token minimization & context compaction engine verified; MCP, Skills, and AGENTS.md integration verified; execution sandboxing and shared caches operational; session transcripts and hybrid failure diagnostics operational; 3 agent stages and discovery agent verified with mock/local LLMs and step metrics recorded.
@@ -268,6 +305,7 @@ NightCodeForge/
 ---
 
 ### Phase 5: Modern Blazor Web UI & SignalR Telemetry
+> 📖 **Detailed Implementation Guide:** [docs/plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md](plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md)
 * **Objective:** Build a sleek, responsive, developer-grade dashboard for ideation chat, backlog & dependency management, live monitoring, question answering, transcript inspection, and diff review.
 * **Tasks:**
   1. Setup Blazor Interactive Server with modern dark-mode aesthetic (custom CSS tokens, obsidian/indigo palette, crisp typography).
@@ -303,6 +341,7 @@ NightCodeForge/
 ---
 
 ### Phase 6: End-to-End Testing, Resilience & Hardening
+> 📖 **Detailed Implementation Guide:** [docs/plan/06_END_TO_END_TESTING_AND_HARDENING.md](plan/06_END_TO_END_TESTING_AND_HARDENING.md)
 * **Objective:** Validate the entire end-to-end flow under real-world conditions.
 * **Tasks:**
   1. Complete workflow simulation test:
