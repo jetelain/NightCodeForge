@@ -168,13 +168,13 @@ All optimizations respect [LocalOptimizationFlags](file:///c:/Users/Julien/sourc
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Unified `IAgentHarness` and `IHarnessRegistry` contracts implemented.
-- [ ] OllamaRouter gateway connected with dynamic catalog discovery and JIT model warmup.
-- [ ] Canonical tools (`read`, `edit`, `write`, `bash`, `web_search`, `ask`) and `LenientToolDispatcher` operational.
-- [ ] `EditorConfigFileApplier` strictly enforces `.editorconfig` rules across all file mutations.
-- [ ] `NightCodeForgeContainerExecutor` persistent sentinel REPL verified with timeout SIGINT handling.
-- [ ] Native Crucible harness implemented with zero data-loss persistence and clean interruption.
-- [ ] Pi JSON-RPC daemon and ACP modernized adapter operational.
-- [ ] All 7 local LLM optimizations implemented with `LocalOptimizationFlags` opt-out support.
-- [ ] Session transcripts and hybrid failure diagnostics operational.
-- [ ] 100% of unit/integration tests in `NightCodeForge.Agents.Tests` pass cleanly.
+- [x] Unified `IAgentHarness` and `IHarnessRegistry` contracts implemented.
+- [x] OllamaRouter gateway connected with dynamic catalog discovery and JIT model warmup.
+- [x] Canonical tools (`read`, `edit`, `write`, `bash`, `web_search`, `ask`) and `LenientToolDispatcher` operational.
+- [x] `EditorConfigFileApplier` strictly enforces `.editorconfig` rules across all file mutations.
+- [x] `NightCodeForgeContainerExecutor` persistent sentinel REPL verified with timeout SIGINT handling.
+- [x] Native Crucible harness implemented with zero data-loss persistence and clean interruption.
+- [x] Pi JSON-RPC daemon and ACP modernized adapter operational.
+- [x] All 7 local LLM optimizations implemented with `LocalOptimizationFlags` opt-out support.
+- [x] Session transcripts and hybrid failure diagnostics operational.
+- [x] 100% of unit/integration tests in `NightCodeForge.Agents.Tests` pass cleanly.

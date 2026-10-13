@@ -13,8 +13,11 @@ namespace NightCodeForge.Core.Services;
 /// <summary>
 /// Implements bidirectional mirroring of active issues to docs/issues/*.md with debouncing and echo loop suppression.
 /// </summary>
-public class IssueMarkdownSyncService : IIssueMarkdownSyncService
+public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
 {
+    [GeneratedRegex(@"[^a-z0-9]+")]
+    private static partial Regex NonAlphaNumericRegex();
+
     private readonly IIssueRepository _issueRepository;
     private readonly IDependencyResolutionEngine? _dependencyEngine;
     private readonly IDeserializer _yamlDeserializer;
@@ -129,7 +132,7 @@ public class IssueMarkdownSyncService : IIssueMarkdownSyncService
     public static string GenerateSlug(string title)
     {
         if (string.IsNullOrWhiteSpace(title)) return "issue";
-        var slug = Regex.Replace(title.ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-');
+        var slug = NonAlphaNumericRegex().Replace(title.ToLowerInvariant(), "-").Trim('-');
         return string.IsNullOrWhiteSpace(slug) ? "issue" : slug;
     }
 
