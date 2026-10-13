@@ -13,6 +13,7 @@ public class DeterministicSastStage : IWorkflowStage
     public const string FallbackLoopBackStageId = "implementation";
 
     private readonly IExecutionEnvironment? _executionEnv;
+    private readonly IExecutionEnvironmentProvider? _envProvider;
     private readonly string _sastCommand;
 
     public string StageId { get; }
@@ -24,9 +25,11 @@ public class DeterministicSastStage : IWorkflowStage
         IExecutionEnvironment? executionEnv = null,
         string? sastCommand = null,
         string stageId = DefaultStageId,
-        string displayName = "Deterministic SAST & Security Scan Gate")
+        string displayName = "Deterministic SAST & Security Scan Gate",
+        IExecutionEnvironmentProvider? envProvider = null)
     {
         _executionEnv = executionEnv;
+        _envProvider = envProvider;
         _sastCommand = sastCommand ?? "echo 'SAST check completed.'";
         StageId = stageId;
         DisplayName = displayName;
@@ -39,9 +42,13 @@ public class DeterministicSastStage : IWorkflowStage
         var command = config.SastCommand ?? _sastCommand;
         var workDir = context.Workspace.RepositoryPath;
 
-        if (_executionEnv != null)
+        var effectiveEnv = (context.Workspace != null && _envProvider != null)
+            ? _envProvider.GetEnvironment(context.Workspace)
+            : _executionEnv;
+
+        if (effectiveEnv != null)
         {
-            var res = await _executionEnv.ExecuteAsync(command, workDir, timeoutSeconds: 180, cancellationToken: cancellationToken);
+            var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: 180, cancellationToken: cancellationToken);
             if (!res.Success)
             {
                 var errorMsg = $"SAST analyzer failed with exit code {res.ExitCode}: {res.StandardError}";

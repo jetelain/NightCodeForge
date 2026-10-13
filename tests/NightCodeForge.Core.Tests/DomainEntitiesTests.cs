@@ -31,19 +31,26 @@ public class DomainEntitiesTests
         Assert.NotNull(workspace.Issues);
         Assert.NotNull(workspace.AgentProfiles);
 
+        var defaultFlags = new LocalOptimizationFlags();
+        Assert.True(defaultFlags.CompactOlderToolResults);
+        Assert.True(defaultFlags.ToolResultCompaction);
+
         var flags = new LocalOptimizationFlags
         {
             GuidedGrammarDecoding = false,
             DeterministicSymbolMap = false,
             StructuredDiagnosticExtraction = false,
             PrefixStabilization = false,
-            JitModelPreload = false
+            JitModelPreload = false,
+            CompactOlderToolResults = false
         };
         Assert.False(flags.GuidedGrammarDecoding);
         Assert.False(flags.DeterministicSymbolMap);
         Assert.False(flags.StructuredDiagnosticExtraction);
         Assert.False(flags.PrefixStabilization);
         Assert.False(flags.JitModelPreload);
+        Assert.False(flags.CompactOlderToolResults);
+        Assert.False(flags.ToolResultCompaction);
 
         var profile = new AgentProfile
         {

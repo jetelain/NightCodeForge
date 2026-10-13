@@ -20,6 +20,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
     private static partial Regex ErrorRegex();
 
     private readonly IExecutionEnvironment? _executionEnv;
+    private readonly IExecutionEnvironmentProvider? _envProvider;
     private readonly IOllamaModelPreloadService? _preloadService;
     private readonly string _buildCommand;
 
@@ -33,9 +34,11 @@ public partial class DeterministicBuildStage : IWorkflowStage
         IOllamaModelPreloadService? preloadService = null,
         string? buildCommand = null,
         string stageId = DefaultStageId,
-        string displayName = "Deterministic Build & Compilation Gate")
+        string displayName = "Deterministic Build & Compilation Gate",
+        IExecutionEnvironmentProvider? envProvider = null)
     {
         _executionEnv = executionEnv;
+        _envProvider = envProvider;
         _preloadService = preloadService;
         _buildCommand = buildCommand ?? "dotnet build";
         StageId = stageId;
@@ -55,9 +58,16 @@ public partial class DeterministicBuildStage : IWorkflowStage
             _ = _preloadService.PreloadModelAsync(context.CurrentProfile.ModelName, "15m", CancellationToken.None);
         }
 
-        if (_executionEnv != null)
+        var effectiveEnv = (context.Workspace != null && _envProvider != null)
+            ? _envProvider.GetEnvironment(context.Workspace)
+            : _executionEnv;
+
+        if (effectiveEnv != null)
         {
-            var res = await _executionEnv.ExecuteAsync(command, workDir, timeoutSeconds: 120, cancellationToken: cancellationToken);
+            var timeout = context.Workspace?.BuildTimeoutSeconds ?? config.BuildTimeoutSeconds ?? 120;
+            bag.Set("build.timeout_seconds", timeout);
+
+            var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: timeout, cancellationToken: cancellationToken);
 
             var fullOutput = string.IsNullOrWhiteSpace(res.StandardError)
                 ? res.StandardOutput
@@ -75,6 +85,19 @@ public partial class DeterministicBuildStage : IWorkflowStage
 
             if (!res.Success)
             {
+                bool isTimeout = res.ExitCode == 124 ||
+                                 res.Truncated && (res.StandardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+                                                   res.StandardOutput.Contains("timed out", StringComparison.OrdinalIgnoreCase));
+
+                if (isTimeout)
+                {
+                    var timeoutMsg = $"Deterministic build timed out after {timeout} seconds. Build failed to terminate within the configured limit.";
+                    bag.Set("diagnostics.compiler_errors", new List<string> { timeoutMsg });
+                    bag.Set("build.failure.reason", timeoutMsg);
+                    var target = bag.Get<string>("Stage.LoopBackId") ?? LoopBackStageId;
+                    return StageExecutionResult.Failure(timeoutMsg, target);
+                }
+
                 var errors = ErrorRegex().Matches(fullOutput);
                 var errorList = errors.Select(m => m.Value.Trim()).Take(10).ToList();
                 bag.Set("diagnostics.compiler_errors", errorList);

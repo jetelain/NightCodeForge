@@ -66,6 +66,16 @@ public class OllamaChatClient : IChatClient
         var response = await _httpClient.PostAsJsonAsync("api/chat", payload, cancellationToken);
         response.EnsureSuccessStatusCode();
 
+        string? targetRouting = null;
+        if (response.Headers.TryGetValues("x-ollama-router-target", out var targetVals))
+        {
+            targetRouting = targetVals.FirstOrDefault();
+        }
+        else if (response.Headers.TryGetValues("x-target-backend", out var backendVals))
+        {
+            targetRouting = backendVals.FirstOrDefault();
+        }
+
         var result = await response.Content.ReadFromJsonAsync<OllamaChatResponse>(cancellationToken: cancellationToken);
         var replyText = result?.Message?.Content ?? string.Empty;
 
@@ -79,6 +89,12 @@ public class OllamaChatClient : IChatClient
                 TotalTokenCount = result.PromptEvalCount + result.EvalCount
             } : null
         };
+
+        if (!string.IsNullOrEmpty(targetRouting))
+        {
+            chatResponse.AdditionalProperties ??= new AdditionalPropertiesDictionary();
+            chatResponse.AdditionalProperties["target_routing"] = targetRouting;
+        }
 
         return chatResponse;
     }
@@ -111,6 +127,16 @@ public class OllamaChatClient : IChatClient
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
 
+        string? targetRouting = null;
+        if (response.Headers.TryGetValues("x-ollama-router-target", out var targetVals))
+        {
+            targetRouting = targetVals.FirstOrDefault();
+        }
+        else if (response.Headers.TryGetValues("x-target-backend", out var backendVals))
+        {
+            targetRouting = backendVals.FirstOrDefault();
+        }
+
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
 
@@ -131,6 +157,12 @@ public class OllamaChatClient : IChatClient
             if (chunk == null) continue;
 
             var update = new ChatResponseUpdate(ChatRole.Assistant, chunk.Message?.Content);
+
+            if (!string.IsNullOrEmpty(targetRouting))
+            {
+                update.AdditionalProperties ??= new AdditionalPropertiesDictionary();
+                update.AdditionalProperties["target_routing"] = targetRouting;
+            }
 
             if (chunk.Done && (chunk.PromptEvalCount > 0 || chunk.EvalCount > 0))
             {

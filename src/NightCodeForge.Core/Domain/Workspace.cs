@@ -11,7 +11,12 @@ public class Workspace
     public string DefaultBaseBranch { get; set; } = "main";
     public ExecutionMode ExecutionMode { get; set; } = ExecutionMode.ContainerSandbox;
     public string? ContainerImage { get; set; }
+    public string? ContainerName { get; set; }
     public string? Ext4MirrorPath { get; set; }
+    public bool UseWslForContainers { get; set; }
+    public string? WslDistribution { get; set; }
+    public int? BuildTimeoutSeconds { get; set; }
+    public int? TestTimeoutSeconds { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public ICollection<Issue> Issues { get; set; } = new List<Issue>();

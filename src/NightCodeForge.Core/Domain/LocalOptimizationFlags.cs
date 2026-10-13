@@ -46,4 +46,22 @@ public class LocalOptimizationFlags
     /// Default: true. Opt-out enforces strictly sequential stage-by-stage model loading.
     /// </summary>
     public bool JitModelPreload { get; set; } = true;
+
+    /// <summary>
+    /// Compact older tool results in multi-turn conversation memory, replacing bulky historical outputs
+    /// outside the active window with concise summary stubs to minimize quadratic context inflation.
+    /// Default: true. Opt-out retains verbatim tool outputs across all prior turns.
+    /// </summary>
+    public bool CompactOlderToolResults { get; set; } = true;
+
+    /// <summary>
+    /// Alias for <see cref="CompactOlderToolResults"/> to align with ToolResultCompaction terminology.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool ToolResultCompaction
+    {
+        get => CompactOlderToolResults;
+        set => CompactOlderToolResults = value;
+    }
 }
+

@@ -30,15 +30,17 @@ public record AgentRunResult(
     string? PendingQuestion = null,
     string? Summary = null,
     string? Error = null,
-    IReadOnlyDictionary<string, string>? DiagnosticArtifacts = null)
+    IReadOnlyDictionary<string, string>? DiagnosticArtifacts = null,
+    string? TargetRouting = null)
 {
     public static AgentRunResult Completed(
         AgentRunMetrics metrics,
         string? commitHash = null,
         string? updatedState = null,
         string? summary = null,
-        IReadOnlyDictionary<string, string>? artifacts = null) =>
-        new(AgentRunStatus.Completed, metrics, commitHash, updatedState, null, summary, null, artifacts);
+        IReadOnlyDictionary<string, string>? artifacts = null,
+        string? targetRouting = null) =>
+        new(AgentRunStatus.Completed, metrics, commitHash, updatedState, null, summary, null, artifacts, targetRouting);
 
     public static AgentRunResult WaitingForHuman(
         string pendingQuestion,

@@ -8,12 +8,28 @@ namespace NightCodeForge.Infrastructure.Execution;
 public class ContainerExecutorOptions
 {
     public string ContainerNameOrId { get; set; } = "ncf-sandbox";
+    public string? ContainerImage { get; set; }
     public string ShellExecutable { get; set; } = "docker";
     public string DefaultWorkingDirectory { get; set; } = "/workspace";
     public int DefaultTimeoutSeconds { get; set; } = 300;
     public int MaxBufferBytes { get; set; } = HeadTailBuffer.DefaultMaxBytes;
     public bool IsRestrictedReadOnly { get; set; } = false;
     public Func<Process>? CustomProcessFactory { get; set; }
+
+    /// <summary>
+    /// If true, container operations (e.g. docker exec) are invoked via wsl.exe into a WSL2 environment.
+    /// </summary>
+    public bool UseWsl { get; set; } = false;
+
+    /// <summary>
+    /// Optional WSL2 distribution name to target (e.g. "Ubuntu", "docker-desktop"). If null, uses the default WSL distribution.
+    /// </summary>
+    public string? WslDistribution { get; set; }
+
+    /// <summary>
+    /// Path or name of the WSL2 executable on Windows (defaults to "wsl.exe").
+    /// </summary>
+    public string WslExecutable { get; set; } = "wsl.exe";
 }
 
 /// <summary>
@@ -58,15 +74,28 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             var timeout = timeoutSeconds ?? _options.DefaultTimeoutSeconds;
             var sentinel = $"__NCF_SENTINEL_{Guid.NewGuid():N}__";
             var workDir = workingDirectory ?? _options.DefaultWorkingDirectory;
+            if (_options.UseWsl && !string.IsNullOrWhiteSpace(workDir))
+            {
+                workDir = Git.WslPathConverter.ToWslPath(workDir);
+            }
             var stopwatch = Stopwatch.StartNew();
 
-            // Set environment variables if any
+            // Set environment variables if any (scrub secrets if RestrictedReadOnly)
             if (environmentVariables != null && environmentVariables.Count > 0)
             {
                 foreach (var (k, v) in environmentVariables)
                 {
+                    if (_options.IsRestrictedReadOnly && IsSensitiveEnvVar(k))
+                    {
+                        continue;
+                    }
                     await _stdin!.WriteLineAsync($"export {k}=\"{v.Replace("\"", "\\\"")}\"");
                 }
+            }
+
+            if (_options.IsRestrictedReadOnly)
+            {
+                await _stdin!.WriteLineAsync("export HTTP_PROXY=\"\" HTTPS_PROXY=\"\" ALL_PROXY=\"\"");
             }
 
             await _stdin!.WriteLineAsync($"cd \"{workDir}\" && {command}");
@@ -165,23 +194,72 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         }
         else
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = _options.ShellExecutable,
-                Arguments = $"exec -i {_options.ContainerNameOrId} bash --noprofile --norc",
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
+            var psi = BuildProcessStartInfo(_options);
             _shellProcess = new Process { StartInfo = psi };
         }
 
         _shellProcess.Start();
         _stdin = new StreamWriter(_shellProcess.StandardInput.BaseStream, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
         _stdout = _shellProcess.StandardOutput;
+    }
+
+    public static ProcessStartInfo BuildProcessStartInfo(ContainerExecutorOptions options)
+    {
+        var userArg = options.IsRestrictedReadOnly ? "--user 1000:1000 " : string.Empty;
+        var dockerArgs = $"exec -i {userArg}{options.ContainerNameOrId} bash --noprofile --norc";
+
+        if (options.UseWsl)
+        {
+            var wslArgs = new System.Text.StringBuilder();
+            if (!string.IsNullOrWhiteSpace(options.WslDistribution))
+            {
+                wslArgs.Append($"-d \"{options.WslDistribution}\" ");
+            }
+            wslArgs.Append($"-- {options.ShellExecutable} {dockerArgs}");
+
+            return new ProcessStartInfo
+            {
+                FileName = options.WslExecutable,
+                Arguments = wslArgs.ToString(),
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+        }
+
+        return new ProcessStartInfo
+        {
+            FileName = options.ShellExecutable,
+            Arguments = dockerArgs,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+    }
+
+    /// <summary>
+    /// Builds executable and arguments to invoke Docker either directly on the host or inside WSL2 via wsl.exe.
+    /// </summary>
+    public static (string Executable, string Arguments) BuildDockerCommand(
+        string dockerCommand,
+        bool useWsl = false,
+        string? wslDistribution = null,
+        string shellExecutable = "docker",
+        string wslExecutable = "wsl.exe")
+    {
+        if (useWsl)
+        {
+            var distroArg = !string.IsNullOrWhiteSpace(wslDistribution)
+                ? $"-d \"{wslDistribution}\" "
+                : string.Empty;
+            return (wslExecutable, $"{distroArg}-- {shellExecutable} {dockerCommand}".Trim());
+        }
+
+        return (shellExecutable, dockerCommand);
     }
 
     public void ForceRestartShellProcess()
@@ -232,5 +310,16 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
     {
         Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    private static bool IsSensitiveEnvVar(string key)
+    {
+        var upper = key.ToUpperInvariant();
+        return upper.Contains("KEY") ||
+               upper.Contains("TOKEN") ||
+               upper.Contains("SECRET") ||
+               upper.Contains("PASSWORD") ||
+               upper.Contains("AUTH") ||
+               upper.Contains("CREDENTIAL");
     }
 }

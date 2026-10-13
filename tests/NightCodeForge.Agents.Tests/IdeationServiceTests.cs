@@ -221,6 +221,55 @@ Let me know what you think!";
         Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.StageCompleted && e.StageId == "ideation");
     }
 
+    [Fact]
+    public async Task ConverseStreamingAsync_ExecutesToolCalls_AndIncorporatesPendingProposals()
+    {
+        var streamer = new CapturingActivityStreamer();
+        int callCount = 0;
+
+        var client = new MultiTurnChatClient((messages) =>
+        {
+            callCount++;
+            if (callCount == 1)
+            {
+                return new ChatResponse(new ChatMessage(ChatRole.Assistant, "<tool_call>{\"name\": \"propose_issues\", \"arguments\": {\"issues\": [{\"title\": \"Tool Generated Issue\", \"description\": \"From tool call\"}]}}</tool_call>"));
+            }
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "Proposals are submitted and finalized."));
+        });
+
+        var service = new IdeationService(defaultChatClient: client, activityStreamer: streamer);
+        var workspace = new Workspace { Id = 12, RepositoryPath = Directory.GetCurrentDirectory() };
+
+        var result = await service.ConverseAsync(workspace, "Create backlog issues");
+
+        Assert.NotNull(result);
+        Assert.Single(result.ProposedIssues);
+        Assert.Equal("Tool Generated Issue", result.ProposedIssues[0].Title);
+
+        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.ToolStarted && e.Content.Contains("propose_issues"));
+        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.ToolCompleted);
+    }
+
+    private class MultiTurnChatClient : IChatClient
+    {
+        private readonly Func<IEnumerable<ChatMessage>, ChatResponse> _handler;
+
+        public MultiTurnChatClient(Func<IEnumerable<ChatMessage>, ChatResponse> handler) => _handler = handler;
+
+        public ChatClientMetadata Metadata => new("MultiTurnMock");
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(_handler(chatMessages));
+        }
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+
     private class CapturingActivityStreamer : NightCodeForge.Core.Streaming.IAgentActivityStreamer
     {
         public List<NightCodeForge.Core.Streaming.AgentActivityEvent> Events { get; } = new();

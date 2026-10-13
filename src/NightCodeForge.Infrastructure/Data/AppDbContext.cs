@@ -37,7 +37,12 @@ public class AppDbContext : DbContext
             b.Property(w => w.DefaultBaseBranch).IsRequired().HasMaxLength(128);
             b.Property(w => w.ExecutionMode).HasConversion<int>();
             b.Property(w => w.ContainerImage).HasMaxLength(512);
+            b.Property(w => w.ContainerName).HasMaxLength(256);
             b.Property(w => w.Ext4MirrorPath).HasMaxLength(1024);
+            b.Property(w => w.UseWslForContainers).HasDefaultValue(false);
+            b.Property(w => w.WslDistribution).HasMaxLength(128);
+            b.Property(w => w.BuildTimeoutSeconds);
+            b.Property(w => w.TestTimeoutSeconds);
 
             b.HasMany(w => w.Issues)
                 .WithOne(i => i.Workspace)

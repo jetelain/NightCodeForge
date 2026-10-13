@@ -62,6 +62,55 @@ I have identified the missing namespace. Let me edit the file.";
         Assert.Equal("<think>Unpruned reasoning monologue</think>Result", innerClient.LastReceivedMessages?.FirstOrDefault()?.Text);
     }
 
+    [Fact]
+    public void CrucibleAgentHarness_CompactOlderToolResults_TruncatesOlderToolOutputs()
+    {
+        var messages = new List<ChatMessage>();
+        for (int i = 0; i < 6; i++)
+        {
+            var longOutput = new string('x', 500);
+            messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent($"call-{i}", longOutput)]));
+        }
+
+        Crucible.CrucibleAgentHarness.CompactOlderToolResults(messages, keepVerbatimCount: 2);
+
+        // First 4 messages should be truncated
+        for (int i = 0; i < 4; i++)
+        {
+            var frc = messages[i].Contents.OfType<FunctionResultContent>().First();
+            Assert.Contains("[Output truncated;", frc.Result?.ToString());
+        }
+
+        // Last 2 messages should be verbatim
+        for (int i = 4; i < 6; i++)
+        {
+            var frc = messages[i].Contents.OfType<FunctionResultContent>().First();
+            Assert.Equal(500, frc.Result?.ToString()?.Length);
+        }
+    }
+
+    [Fact]
+    public void CrucibleAgentHarness_CompactOlderToolResults_WhenOptedOut_DoesNotTruncate()
+    {
+        var messages = new List<ChatMessage>();
+        for (int i = 0; i < 6; i++)
+        {
+            var longOutput = new string('z', 500);
+            messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent($"call-{i}", longOutput)]));
+        }
+
+        var flags = new LocalOptimizationFlags { CompactOlderToolResults = false };
+        Crucible.CrucibleAgentHarness.CompactOlderToolResults(messages, keepVerbatimCount: 2, flags: flags);
+
+        // None should be truncated
+        for (int i = 0; i < 6; i++)
+        {
+            var frc = messages[i].Contents.OfType<FunctionResultContent>().First();
+            Assert.Equal(500, frc.Result?.ToString()?.Length);
+            Assert.DoesNotContain("[Output truncated;", frc.Result?.ToString());
+        }
+    }
+
     private class MockChatClient : IChatClient
     {
         private readonly ChatResponse _cannedResponse;

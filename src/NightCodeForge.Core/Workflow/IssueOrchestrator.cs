@@ -646,6 +646,7 @@ public class IssueOrchestrator : IIssueOrchestrator
             AgentProfileId = profile?.Id ?? string.Empty,
             HarnessId = profile?.HarnessId ?? string.Empty,
             ModelName = profile?.ModelName ?? string.Empty,
+            TargetRouting = runResult.TargetRouting,
             StartedAt = startedAt,
             CompletedAt = completedAt,
             DurationMs = durationMs,

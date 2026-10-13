@@ -13,6 +13,7 @@ public class DeterministicStageTests
         public CommandResult NextResult { get; set; } = new CommandResult(0, "Build succeeded.", string.Empty, TimeSpan.FromMilliseconds(10));
         public string? LastCommand { get; private set; }
         public string? LastWorkingDir { get; private set; }
+        public int? LastTimeoutSeconds { get; private set; }
 
         public Task<CommandResult> ExecuteAsync(
             string command,
@@ -23,6 +24,7 @@ public class DeterministicStageTests
         {
             LastCommand = command;
             LastWorkingDir = workingDirectory;
+            LastTimeoutSeconds = timeoutSeconds;
             return Task.FromResult(NextResult);
         }
     }
@@ -219,4 +221,126 @@ public class DeterministicStageTests
         Assert.Equal(14, context.DataBag.Get<int>("tests.current.total"));
         Assert.Equal(2, context.DataBag.Get<int>("tests.current.failed"));
     }
+
+    [Fact]
+    public void ParseCoberturaLineRate_ExtractsLineRate_FromXmlAttributes()
+    {
+        var xml = @"<?xml version=""1.0"" encoding=""utf-8""?>
+<coverage line-rate=""0.875"" branch-rate=""0.75"" version=""1.9"" timestamp=""1600000000"">
+  <packages />
+</coverage>";
+
+        var rate = DeterministicTestStage.ParseCoberturaLineRate(xml);
+        Assert.NotNull(rate);
+        Assert.Equal(0.875, rate.Value, 3);
+    }
+
+    [Fact]
+    public async Task DeterministicCoverageGate_ExecutesTestsAutomatically_WhenTestsMissingFromBag()
+    {
+        var fakeEnv = new FakeExecutionEnvironment
+        {
+            NextResult = new CommandResult(0, "Passed: 10\nFailed: 0\nTotal: 10\nPassed!", string.Empty, TimeSpan.FromMilliseconds(50))
+        };
+
+        var gate = new DeterministicCoverageGate(executionEnv: fakeEnv);
+        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var context = new PipelineContext(issue, workspace);
+
+        // DataBag has no tests yet
+        Assert.False(context.DataBag.TryGet<int>("tests.current.total", out _));
+
+        var result = await gate.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess, result.ErrorMessage);
+        Assert.True(context.DataBag.TryGet<int>("tests.current.total", out var total));
+        Assert.Equal(10, total);
+    }
+
+    [Fact]
+    public async Task DeterministicBuildStage_Timeout_RecordsTimeoutDiagnosticsAndLoopsBack()
+    {
+        var fakeEnv = new FakeExecutionEnvironment
+        {
+            NextResult = new CommandResult(124, string.Empty, "Command timed out after 30 seconds", TimeSpan.FromSeconds(30), Truncated: true)
+        };
+        var stage = new DeterministicBuildStage(fakeEnv);
+        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo", BuildTimeoutSeconds = 30 };
+        var context = new PipelineContext(issue, workspace);
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("implementation", result.TargetRoutingStageId);
+        Assert.Contains("timed out after 30 seconds", result.ErrorMessage);
+        Assert.Equal(30, fakeEnv.LastTimeoutSeconds);
+        Assert.Equal(30, context.DataBag.Get<int>("build.timeout_seconds"));
+        Assert.True(context.DataBag.TryGet<List<string>>("diagnostics.compiler_errors", out var errors));
+        Assert.Contains("timed out after 30 seconds", errors![0]);
+    }
+
+    [Fact]
+    public async Task DeterministicBuildStage_UsesWorkspaceTimeout_WhenConfigured()
+    {
+        var fakeEnv = new FakeExecutionEnvironment
+        {
+            NextResult = new CommandResult(0, "Build succeeded.", string.Empty, TimeSpan.FromSeconds(1))
+        };
+        var stage = new DeterministicBuildStage(fakeEnv);
+        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo", BuildTimeoutSeconds = 45 };
+        var context = new PipelineContext(issue, workspace);
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(45, fakeEnv.LastTimeoutSeconds);
+        Assert.Equal(45, context.DataBag.Get<int>("build.timeout_seconds"));
+    }
+
+    [Fact]
+    public async Task DeterministicTestStage_Timeout_RecordsTimeoutDiagnosticsAndLoopsBack()
+    {
+        var fakeEnv = new FakeExecutionEnvironment
+        {
+            NextResult = new CommandResult(124, "Tests running...\nExecution timed out", string.Empty, TimeSpan.FromSeconds(60), Truncated: true)
+        };
+        var stage = new DeterministicTestStage(fakeEnv);
+        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo", TestTimeoutSeconds = 60 };
+        var context = new PipelineContext(issue, workspace);
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("implementation", result.TargetRoutingStageId);
+        Assert.Contains("timed out after 60 seconds", result.ErrorMessage);
+        Assert.Contains("resource", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(60, fakeEnv.LastTimeoutSeconds);
+        Assert.Equal(60, context.DataBag.Get<int>("test.timeout_seconds"));
+        Assert.True(context.DataBag.TryGet<List<string>>("diagnostics.failed_tests", out var failedTests));
+        Assert.Contains("timed out after 60 seconds", failedTests![0]);
+    }
+
+    [Fact]
+    public async Task DeterministicTestStage_UsesWorkspaceTimeout_WhenConfigured()
+    {
+        var fakeEnv = new FakeExecutionEnvironment
+        {
+            NextResult = new CommandResult(0, "Passed: 5, Failed: 0, Total: 5", string.Empty, TimeSpan.FromSeconds(2))
+        };
+        var stage = new DeterministicTestStage(fakeEnv);
+        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo", TestTimeoutSeconds = 90 };
+        var context = new PipelineContext(issue, workspace);
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(90, fakeEnv.LastTimeoutSeconds);
+        Assert.Equal(90, context.DataBag.Get<int>("test.timeout_seconds"));
+    }
 }
+

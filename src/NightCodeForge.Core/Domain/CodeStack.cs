@@ -23,6 +23,8 @@ public class WorkspaceProjectConfig
     public string? TestCommand { get; set; }
     public string? SastCommand { get; set; }
     public string? CoverageCommand { get; set; }
+    public int? BuildTimeoutSeconds { get; set; }
+    public int? TestTimeoutSeconds { get; set; }
 }
 
 public static class CodeStackPresets
@@ -130,7 +132,14 @@ public static class CodeStackPresets
                 config.SastCommand = sCmd;
             if (dataBag.TryGet<string>("CoverageCommand", out var cCmd) && !string.IsNullOrWhiteSpace(cCmd))
                 config.CoverageCommand = cCmd;
+            if (dataBag.TryGet<int>("BuildTimeoutSeconds", out var bSec) && bSec > 0)
+                config.BuildTimeoutSeconds = bSec;
+            if (dataBag.TryGet<int>("TestTimeoutSeconds", out var tSec) && tSec > 0)
+                config.TestTimeoutSeconds = tSec;
         }
+
+        config.BuildTimeoutSeconds ??= 120;
+        config.TestTimeoutSeconds ??= 120;
 
         return config;
     }

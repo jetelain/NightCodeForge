@@ -11,6 +11,9 @@ using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 
+using NightCodeForge.Agents.Context;
+using NightCodeForge.Agents.Tools.EditorConfig;
+
 namespace NightCodeForge.Agents.Acp;
 
 public class AcpHarnessOptions
@@ -29,7 +32,11 @@ public class AcpAgentHarness : IAgentHarness
 {
     private readonly AcpHarnessOptions _options;
     private readonly IExecutionEnvironment? _executionEnv;
+    private readonly IExecutionEnvironmentProvider? _envProvider;
     private readonly IMcpClientManager? _mcpManager;
+    private readonly IEditorConfigService _editorConfigService;
+    private readonly IEditorConfigFileApplier _editorConfigFileApplier;
+    private readonly AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer? _activityStreamer;
     private readonly SessionTranscriptService? _transcriptService;
     private readonly ILogger<AcpAgentHarness> _logger;
@@ -39,14 +46,22 @@ public class AcpAgentHarness : IAgentHarness
     public AcpAgentHarness(
         AcpHarnessOptions? options = null,
         IExecutionEnvironment? executionEnv = null,
+        IExecutionEnvironmentProvider? envProvider = null,
         IMcpClientManager? mcpManager = null,
+        IEditorConfigService? editorConfigService = null,
+        IEditorConfigFileApplier? editorConfigFileApplier = null,
+        AgentsMdService? agentsMdService = null,
         IAgentActivityStreamer? activityStreamer = null,
         SessionTranscriptService? transcriptService = null,
         ILogger<AcpAgentHarness>? logger = null)
     {
         _options = options ?? new AcpHarnessOptions();
         _executionEnv = executionEnv;
+        _envProvider = envProvider;
         _mcpManager = mcpManager;
+        _editorConfigService = editorConfigService ?? new EditorConfigService();
+        _editorConfigFileApplier = editorConfigFileApplier ?? new EditorConfigFileApplier();
+        _agentsMdService = agentsMdService ?? new AgentsMdService();
         _activityStreamer = activityStreamer;
         _transcriptService = transcriptService;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<AcpAgentHarness>.Instance;
@@ -55,6 +70,10 @@ public class AcpAgentHarness : IAgentHarness
     public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
     {
         var sw = Stopwatch.StartNew();
+
+        var effectiveEnv = (context.Workspace != null && _envProvider != null)
+            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier)
+            : _executionEnv;
 
         Process process;
         if (_options.CustomProcessFactory != null)
@@ -160,6 +179,10 @@ public class AcpAgentHarness : IAgentHarness
             ? context.WorkspacePath
             : (context.Workspace?.RepositoryPath ?? Directory.GetCurrentDirectory());
 
+        var effectiveEnv = (context.Workspace != null && _envProvider != null)
+            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier)
+            : _executionEnv;
+
         try
         {
             // 1. Handshake & Protocol Negotiation (Negotiates v2, falls back to v1)
@@ -194,18 +217,26 @@ public class AcpAgentHarness : IAgentHarness
                     @params = new
                     {
                         cwd = workspacePath,
-                        mcpServers = _mcpManager != null ? await _mcpManager.GetAcpMcpServersAsync(context.Workspace?.Id, cancellationToken) : null
+                        mcpServers = _mcpManager != null ? await _mcpManager.GetAcpMcpServersAsync(context.Workspace?.Id, workspacePath, cancellationToken) : null
                     }
                 });
                 await stdin.WriteLineAsync(newSessionReq.AsMemory(), cancellationToken);
             }
 
             // 3. Dispatch Prompt Request (incorporating human answer if resuming from permission request)
+            var projectConfig = CodeStackPresets.ResolveConfig(workspacePath, null);
+            var guidelines = _agentsMdService.FormatExecutionGuidelines(projectConfig, context.Workspace);
+
             var basePromptText = !string.IsNullOrEmpty(context.BootstrapPrompt)
                 ? context.BootstrapPrompt
                 : (!string.IsNullOrWhiteSpace(context.StageDirective)
                     ? $"[Stage Directive]: {context.StageDirective}\n\n{context.Issue.Title}\n{context.Issue.Description}"
                     : context.Issue.Description);
+
+            if (!string.IsNullOrWhiteSpace(guidelines))
+            {
+                basePromptText = $"{basePromptText}\n\n{guidelines}";
+            }
 
             var promptText = !string.IsNullOrWhiteSpace(context.PendingHumanAnswer)
                 ? $"[Human Answer]: {context.PendingHumanAnswer}\n\n{basePromptText}"
@@ -286,9 +317,9 @@ public class AcpAgentHarness : IAgentHarness
 
                         string output = "";
                         int exitCode = 0;
-                        if (_executionEnv != null)
+                        if (effectiveEnv != null)
                         {
-                            var execRes = await _executionEnv.ExecuteAsync(cmd, cwd, 300, null, cancellationToken);
+                            var execRes = await effectiveEnv.ExecuteAsync(cmd, cwd, 300, null, cancellationToken);
                             output = execRes.StandardOutput;
                             if (!string.IsNullOrEmpty(execRes.StandardError))
                             {
@@ -392,7 +423,7 @@ public class AcpAgentHarness : IAgentHarness
 
                         try
                         {
-                            WriteWorkspaceFile(workspacePath, filePath, content);
+                            await WriteWorkspaceFileAsync(workspacePath, filePath, content, cancellationToken);
                             var writeResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { } });
                             await stdin.WriteLineAsync(writeResp.AsMemory(), cancellationToken);
                         }
@@ -498,7 +529,7 @@ public class AcpAgentHarness : IAgentHarness
         return string.Join(Environment.NewLine, slice);
     }
 
-    private static void WriteWorkspaceFile(string workspacePath, string filePath, string content)
+    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, CancellationToken ct)
     {
         var resolvedPath = Path.IsPathRooted(filePath) ? filePath : Path.Combine(workspacePath, filePath);
         var dir = Path.GetDirectoryName(resolvedPath);
@@ -506,7 +537,11 @@ public class AcpAgentHarness : IAgentHarness
         {
             Directory.CreateDirectory(dir);
         }
-        File.WriteAllText(resolvedPath, content);
+
+        var editorConfig = await _editorConfigService.GetSettingsForPathAsync(resolvedPath, ct);
+        string? existing = File.Exists(resolvedPath) ? await File.ReadAllTextAsync(resolvedPath, ct) : null;
+        var bytes = _editorConfigFileApplier.ApplyFormattingAndEncode(content, editorConfig, existing);
+        await File.WriteAllBytesAsync(resolvedPath, bytes, ct);
     }
 
     private async Task BroadcastAsync(string sessionId, int issueId, string stageId, AgentActivityKind kind, string content, CancellationToken ct)

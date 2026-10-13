@@ -1,11 +1,15 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Context;
+using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Inference;
+using NightCodeForge.Agents.Optimizations;
+using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
@@ -23,8 +27,14 @@ public partial class IdeationService : IIdeationService
     [GeneratedRegex(@"```(?:json)?\s*\[\s*\{.*?\}\s*\]\s*```", RegexOptions.Singleline)]
     private static partial Regex IssueJsonArrayRegex();
 
+    [GeneratedRegex(@"<tool_call>\s*({.*?})\s*</tool_call>", RegexOptions.Singleline)]
+    private static partial Regex ToolCallTagRegex();
+
     private readonly IChatClient? _defaultChatClient;
     private readonly IOllamaChatClientFactory? _chatClientFactory;
+    private readonly IExecutionEnvironmentProvider? _envProvider;
+    private readonly IExecutionEnvironment? _executionEnv;
+    private readonly IWebSearchService _webSearchService;
     private readonly AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer? _activityStreamer;
     private readonly ILogger<IdeationService> _logger;
@@ -32,6 +42,9 @@ public partial class IdeationService : IIdeationService
     public IdeationService(
         IChatClient? defaultChatClient = null,
         IOllamaChatClientFactory? chatClientFactory = null,
+        IExecutionEnvironmentProvider? envProvider = null,
+        IExecutionEnvironment? executionEnv = null,
+        IWebSearchService? webSearchService = null,
         AgentsMdService? agentsMdService = null,
         IAgentActivityStreamer? activityStreamer = null,
         ILogger<IdeationService>? logger = null)
@@ -43,6 +56,9 @@ public partial class IdeationService : IIdeationService
 
         _defaultChatClient = defaultChatClient;
         _chatClientFactory = chatClientFactory;
+        _envProvider = envProvider;
+        _executionEnv = executionEnv;
+        _webSearchService = webSearchService ?? new MockWebSearchService();
         _agentsMdService = agentsMdService ?? new AgentsMdService();
         _activityStreamer = activityStreamer;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<IdeationService>.Instance;
@@ -136,7 +152,8 @@ public partial class IdeationService : IIdeationService
 
         var repoPath = !string.IsNullOrEmpty(workspace.RepositoryPath) ? workspace.RepositoryPath : Directory.GetCurrentDirectory();
         var agentsRules = await _agentsMdService.IngestRulesAsync(repoPath, cancellationToken);
-        var projectContext = _agentsMdService.FormatProjectContextSection(agentsRules);
+        var projectConfig = CodeStackPresets.ResolveConfig(repoPath, null);
+        var projectContext = _agentsMdService.FormatProjectContextSection(agentsRules, projectConfig, workspace);
 
         var basePersona = !string.IsNullOrWhiteSpace(customSystemPrompt)
             ? customSystemPrompt
@@ -175,111 +192,231 @@ When you recommend one or more implementation tasks, format them as a structured
 
         messages.Add(new ChatMessage(ChatRole.User, userPrompt));
 
+        var permittedTools = profile.PermittedTools?.Count > 0
+            ? profile.PermittedTools
+            : (profile.Mode == AgentMode.ReadOnly
+                ? new[] { "read", "propose_issues", "web_search" }
+                : new[] { "read", "bash", "web_search", "propose_issues" });
+
+        var effectiveEnv = (workspace != null && _envProvider != null)
+            ? _envProvider.GetEnvironment(workspace, profile.SecurityTier)
+            : _executionEnv;
+
+        var buildTimeout = workspace?.BuildTimeoutSeconds ?? projectConfig.BuildTimeoutSeconds;
+        var testTimeout = workspace?.TestTimeoutSeconds ?? projectConfig.TestTimeoutSeconds;
+
+        var canonicalTools = new CanonicalTools(
+            repoPath,
+            effectiveEnv,
+            webSearchService: _webSearchService,
+            buildTimeoutSeconds: buildTimeout,
+            testTimeoutSeconds: testTimeout);
+
+        var dispatcher = new LenientToolDispatcher(canonicalTools);
+
+        var aiTools = new List<AITool>();
+        foreach (var t in permittedTools)
+        {
+            aiTools.Add(AIFunctionFactory.Create(() => "ok", t));
+        }
+
         var chatOptions = new ChatOptions
         {
             ModelId = !string.IsNullOrWhiteSpace(profile.ModelName) ? profile.ModelName : null,
-            Temperature = (float?)profile.Temperature ?? 0.3f
+            Temperature = (float?)profile.Temperature ?? 0.3f,
+            Tools = aiTools
         };
 
+        var toolResultCompactor = new ToolResultCompactor(profile.OptimizationFlags);
         var fullTextBuilder = new StringBuilder();
-        var inThinking = false;
-        bool streamingFailed = false;
+        int maxTurns = profile.MaxTurns.HasValue && profile.MaxTurns.Value > 0 ? profile.MaxTurns.Value : 5;
+        int currentTurn = 0;
 
-        IAsyncEnumerator<ChatResponseUpdate>? enumerator = null;
-        try
+        while (currentTurn < maxTurns && !cancellationToken.IsCancellationRequested)
         {
-            var stream = client.GetStreamingResponseAsync(messages, chatOptions, cancellationToken);
-            enumerator = stream.GetAsyncEnumerator(cancellationToken);
-        }
-        catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
-        {
-            streamingFailed = true;
-        }
+            currentTurn++;
+            toolResultCompactor.Compact(messages);
+            var inThinking = false;
+            bool streamingFailed = false;
+            var functionCalls = new List<FunctionCallContent>();
+            var turnTextBuilder = new StringBuilder();
 
-        if (!streamingFailed && enumerator != null)
-        {
+            IAsyncEnumerator<ChatResponseUpdate>? enumerator = null;
             try
             {
-                while (true)
+                var stream = client.GetStreamingResponseAsync(messages, chatOptions, cancellationToken);
+                enumerator = stream.GetAsyncEnumerator(cancellationToken);
+            }
+            catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
+            {
+                streamingFailed = true;
+            }
+
+            if (!streamingFailed && enumerator != null)
+            {
+                try
                 {
-                    ChatResponseUpdate? update = null;
-                    bool hasMore = false;
-                    try
+                    while (true)
                     {
-                        hasMore = await enumerator.MoveNextAsync();
-                        if (hasMore)
+                        ChatResponseUpdate? update = null;
+                        bool hasMore = false;
+                        try
                         {
-                            update = enumerator.Current;
+                            hasMore = await enumerator.MoveNextAsync();
+                            if (hasMore)
+                            {
+                                update = enumerator.Current;
+                            }
+                        }
+                        catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
+                        {
+                            streamingFailed = true;
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
+                            throw;
+                        }
+
+                        if (!hasMore || update == null) break;
+
+                        if (update.Contents != null)
+                        {
+                            foreach (var c in update.Contents)
+                            {
+                                if (c is FunctionCallContent fc) functionCalls.Add(fc);
+                            }
+                        }
+
+                        var text = update.Text;
+                        if (string.IsNullOrEmpty(text)) continue;
+
+                        turnTextBuilder.Append(text);
+
+                        foreach (var (isThinkingDelta, piece) in ParseStreamDeltas(text, ref inThinking))
+                        {
+                            if (string.IsNullOrEmpty(piece)) continue;
+
+                            var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
+                            await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
+
+                            var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
+                            yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
                         }
                     }
-                    catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
-                    {
-                        streamingFailed = true;
-                        break;
-                    }
-                    catch (Exception ex)
-                    {
-                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
-                        throw;
-                    }
-
-                    if (!hasMore || update == null) break;
-
-                    var text = update.Text;
-                    if (string.IsNullOrEmpty(text)) continue;
-
-                    fullTextBuilder.Append(text);
-
-                    foreach (var (isThinkingDelta, piece) in ParseStreamDeltas(text, ref inThinking))
-                    {
-                        if (string.IsNullOrEmpty(piece)) continue;
-
-                        var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
-                        await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
-
-                        var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
-                        yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
-                    }
+                }
+                finally
+                {
+                    await enumerator.DisposeAsync();
                 }
             }
-            finally
+
+            if (streamingFailed)
             {
-                await enumerator.DisposeAsync();
+                ChatResponse response;
+                try
+                {
+                    response = await client.GetResponseAsync(messages, chatOptions, cancellationToken: cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
+                    throw;
+                }
+
+                if (response.Messages != null)
+                {
+                    foreach (var msg in response.Messages)
+                    {
+                        if (msg.Contents != null)
+                        {
+                            foreach (var c in msg.Contents)
+                            {
+                                if (c is FunctionCallContent fc) functionCalls.Add(fc);
+                            }
+                        }
+                    }
+                }
+
+                var text = response.Text ?? string.Empty;
+                turnTextBuilder.Clear();
+                turnTextBuilder.Append(text);
+
+                inThinking = false;
+                foreach (var (isThinkingDelta, piece) in ParseStreamDeltas(text, ref inThinking))
+                {
+                    if (string.IsNullOrEmpty(piece)) continue;
+
+                    var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
+                    await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
+
+                    var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
+                    yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
+                }
             }
-        }
 
-        if (streamingFailed)
-        {
-            ChatResponse response;
-            try
+            var turnText = turnTextBuilder.ToString();
+            fullTextBuilder.Append(turnText);
+
+            var assistantMsg = new ChatMessage(ChatRole.Assistant, turnText);
+            foreach (var fc in functionCalls)
             {
-                response = await client.GetResponseAsync(messages, chatOptions, cancellationToken: cancellationToken);
+                assistantMsg.Contents.Add(fc);
             }
-            catch (Exception ex)
+            messages.Add(assistantMsg);
+
+            // Also check for raw text fallback tool call emitted by models without native tool tokens
+            if (functionCalls.Count == 0 && !string.IsNullOrEmpty(turnText))
             {
-                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
-                throw;
+                var fallbackCall = TryExtractTextToolCall(turnText);
+                if (fallbackCall != null)
+                {
+                    functionCalls.Add(fallbackCall);
+                }
             }
 
-            var text = response.Text ?? string.Empty;
-            fullTextBuilder.Clear();
-            fullTextBuilder.Append(text);
-
-            inThinking = false;
-            foreach (var (isThinkingDelta, piece) in ParseStreamDeltas(text, ref inThinking))
+            if (functionCalls.Count == 0)
             {
-                if (string.IsNullOrEmpty(piece)) continue;
+                break;
+            }
 
-                var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
-                await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
+            // Process tool calls
+            foreach (var call in functionCalls)
+            {
+                var canonicalName = dispatcher.ResolveToolName(call.Name);
+                var argsJson = call.Arguments != null ? JsonSerializer.Serialize(call.Arguments) : "{}";
 
-                var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
-                yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
+                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken, metadata);
+
+                string toolResult;
+                try
+                {
+                    toolResult = await dispatcher.DispatchAsync(canonicalName, argsJson, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    toolResult = $"Error executing tool '{canonicalName}': {ex.Message}";
+                }
+
+                messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent(call.CallId ?? Guid.NewGuid().ToString("N"), toolResult)]));
+                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, toolResult, cancellationToken, metadata);
             }
         }
 
         var fullText = fullTextBuilder.ToString();
         var proposals = ParseProposals(fullText);
+
+        if (canonicalTools.PendingProposals.Count > 0)
+        {
+            foreach (var p in canonicalTools.PendingProposals)
+            {
+                if (!proposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
+                {
+                    proposals.Add(new IdeationProposal(p.Title, p.Description, 1, p.AffectedFiles));
+                }
+            }
+        }
 
         foreach (var proposal in proposals)
         {
@@ -388,6 +525,71 @@ When you recommend one or more implementation tasks, format them as a structured
             var evt = new AgentActivityEvent(sessionId, issueId, stageId, kind, content, DateTime.UtcNow, metadata);
             await _activityStreamer.BroadcastAsync(evt, ct);
         }
+    }
+
+    private static IList<AITool> BuildAIFunctionList(IReadOnlyList<string> permittedTools)
+    {
+        var tools = new List<AITool>();
+        foreach (var tool in permittedTools)
+        {
+            tools.Add(AIFunctionFactory.Create(() => "ok", tool));
+        }
+        return tools;
+    }
+
+    private static FunctionCallContent? TryExtractTextToolCall(string text)
+    {
+        var match = ToolCallTagRegex().Match(text);
+        if (!match.Success) return null;
+
+        try
+        {
+            var node = JsonNode.Parse(match.Groups[1].Value);
+            var name = node?["name"]?.ToString();
+            if (string.IsNullOrEmpty(name)) return null;
+
+            var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            if (node?["arguments"] is JsonObject args)
+            {
+                foreach (var (k, v) in args)
+                {
+                    dict[k] = ParseJsonNodeValue(v);
+                }
+            }
+
+            return new FunctionCallContent(Guid.NewGuid().ToString("N"), name, dict);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static object? ParseJsonNodeValue(JsonNode? node)
+    {
+        if (node == null) return null;
+        if (node is JsonValue val)
+        {
+            if (val.TryGetValue<long>(out var l)) return l;
+            if (val.TryGetValue<double>(out var d)) return d;
+            if (val.TryGetValue<bool>(out var b)) return b;
+            if (val.TryGetValue<string>(out var s)) return s;
+            return val.ToString();
+        }
+        if (node is JsonArray arr)
+        {
+            return arr.Select(ParseJsonNodeValue).ToList();
+        }
+        if (node is JsonObject obj)
+        {
+            var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (k, v) in obj)
+            {
+                dict[k] = ParseJsonNodeValue(v);
+            }
+            return dict;
+        }
+        return node.ToString();
     }
 
     private class IdeationProposalDto

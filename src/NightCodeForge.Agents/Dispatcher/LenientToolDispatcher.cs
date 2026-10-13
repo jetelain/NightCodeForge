@@ -567,16 +567,39 @@ public partial class LenientToolDispatcher
     private static IReadOnlyList<IssueProposal> ExtractIssues(Dictionary<string, object?> args)
     {
         var issues = new List<IssueProposal>();
-        if (args.TryGetValue("issues", out var obj) && obj is IEnumerable<object?> list)
+        if (args.TryGetValue("issues", out var obj) && obj != null)
         {
-            foreach (var item in list)
+            if (obj is string str && str.TrimStart().StartsWith("["))
             {
-                if (item is Dictionary<string, object?> d)
+                try
                 {
-                    var title = d.TryGetValue("title", out var t) ? t?.ToString() ?? "" : "";
-                    var desc = d.TryGetValue("description", out var ds) ? ds?.ToString() ?? "" : "";
-                    var type = d.TryGetValue("type", out var tp) ? tp?.ToString() ?? "feature" : "feature";
-                    issues.Add(new IssueProposal(title, desc, type));
+                    var parsedNode = JsonNode.Parse(str);
+                    if (parsedNode is JsonArray arr)
+                    {
+                        obj = arr.Select(ConvertJsonNode).ToList();
+                    }
+                }
+                catch { }
+            }
+
+            if (obj is IEnumerable<object?> list)
+            {
+                foreach (var item in list)
+                {
+                    if (item is Dictionary<string, object?> d)
+                    {
+                        var title = d.TryGetValue("title", out var t) ? t?.ToString() ?? "" : "";
+                        var desc = d.TryGetValue("description", out var ds) ? ds?.ToString() ?? "" : "";
+                        var type = d.TryGetValue("type", out var tp) ? tp?.ToString() ?? "feature" : "feature";
+                        issues.Add(new IssueProposal(title, desc, type));
+                    }
+                    else if (item is JsonElement elem && elem.ValueKind == JsonValueKind.Object)
+                    {
+                        var title = elem.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+                        var desc = elem.TryGetProperty("description", out var ds) ? ds.GetString() ?? "" : "";
+                        var type = elem.TryGetProperty("type", out var tp) ? tp.GetString() ?? "feature" : "feature";
+                        issues.Add(new IssueProposal(title, desc, type));
+                    }
                 }
             }
         }

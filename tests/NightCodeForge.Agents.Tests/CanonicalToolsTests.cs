@@ -106,4 +106,60 @@ public class Service
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
         }
     }
+
+    private class FakeEnv : NightCodeForge.Core.Interfaces.IExecutionEnvironment
+    {
+        public NightCodeForge.Core.Interfaces.ExecutionTier Tier => NightCodeForge.Core.Interfaces.ExecutionTier.BareHost;
+        public NightCodeForge.Core.Interfaces.CommandResult NextResult { get; set; } = new(0, "Success", string.Empty, TimeSpan.Zero);
+        public int? LastTimeoutSeconds { get; private set; }
+        public string? LastCommand { get; private set; }
+
+        public Task<NightCodeForge.Core.Interfaces.CommandResult> ExecuteAsync(
+            string command,
+            string? workingDirectory = null,
+            int? timeoutSeconds = null,
+            IReadOnlyDictionary<string, string>? environmentVariables = null,
+            CancellationToken cancellationToken = default)
+        {
+            LastCommand = command;
+            LastTimeoutSeconds = timeoutSeconds;
+            return Task.FromResult(NextResult);
+        }
+    }
+
+    [Fact]
+    public async Task BashAsync_DefaultsTestCommandToConfiguredTimeout()
+    {
+        var env = new FakeEnv();
+        var tools = new CanonicalTools(
+            workspaceRoot: AppContext.BaseDirectory,
+            executionEnv: env,
+            testTimeoutSeconds: 75,
+            buildTimeoutSeconds: 45);
+
+        await tools.BashAsync("dotnet test");
+
+        Assert.Equal(75, env.LastTimeoutSeconds);
+        Assert.Equal("dotnet test", env.LastCommand);
+    }
+
+    [Fact]
+    public async Task BashAsync_DetectsExitCode124AsTimeout()
+    {
+        var env = new FakeEnv
+        {
+            NextResult = new NightCodeForge.Core.Interfaces.CommandResult(124, string.Empty, "Timed out", TimeSpan.FromSeconds(30))
+        };
+        var tools = new CanonicalTools(
+            workspaceRoot: AppContext.BaseDirectory,
+            executionEnv: env,
+            testTimeoutSeconds: 30);
+
+        var output = await tools.BashAsync("npm test");
+
+        Assert.Contains("[TIMEOUT]", output);
+        Assert.Contains("30s", output);
+        Assert.Contains("hanging tests", output);
+    }
 }
+

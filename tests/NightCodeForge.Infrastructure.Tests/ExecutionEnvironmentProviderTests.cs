@@ -62,4 +62,23 @@ public class ExecutionEnvironmentProviderTests
         Assert.NotNull(env);
         Assert.IsType<NightCodeForgeContainerExecutor>(env);
     }
+
+    [Fact]
+    public void GetEnvironment_ContainerSandbox_CachesDistinctInstancesBySecurityTier()
+    {
+        var envProvider = new ExecutionEnvironmentProvider();
+        var workspace = new Workspace
+        {
+            Id = 42,
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            ContainerImage = "alpine:latest"
+        };
+
+        var standardEnv = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard);
+        var readOnlyEnv = envProvider.GetEnvironment(workspace, SandboxSecurityTier.RestrictedReadOnly);
+        var standardEnv2 = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard);
+
+        Assert.NotSame(standardEnv, readOnlyEnv);
+        Assert.Same(standardEnv, standardEnv2);
+    }
 }

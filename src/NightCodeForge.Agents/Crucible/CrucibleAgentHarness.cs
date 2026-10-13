@@ -9,6 +9,7 @@ using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Crucible.ChatClients;
 using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Inference;
+using NightCodeForge.Agents.Mcp;
 using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tools;
@@ -26,6 +27,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly IChatClient? _baseChatClient;
     private readonly IOllamaChatClientFactory? _chatClientFactory;
     private readonly IExecutionEnvironment? _executionEnv;
+    private readonly IExecutionEnvironmentProvider? _envProvider;
+    private readonly IMcpClientManager? _mcpManager;
     private readonly IEditorConfigService _editorConfigService;
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly IWebSearchService _webSearchService;
@@ -45,6 +48,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         IChatClient? baseChatClient = null,
         IOllamaChatClientFactory? chatClientFactory = null,
         IExecutionEnvironment? executionEnv = null,
+        IExecutionEnvironmentProvider? envProvider = null,
+        IMcpClientManager? mcpManager = null,
         IEditorConfigService? editorConfigService = null,
         IEditorConfigFileApplier? editorConfigFileApplier = null,
         IWebSearchService? webSearchService = null,
@@ -63,6 +68,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         _baseChatClient = baseChatClient;
         _chatClientFactory = chatClientFactory;
         _executionEnv = executionEnv;
+        _envProvider = envProvider;
+        _mcpManager = mcpManager;
         _editorConfigService = editorConfigService ?? new EditorConfigService();
         _editorConfigFileApplier = editorConfigFileApplier ?? new EditorConfigFileApplier();
         _webSearchService = webSearchService ?? new MockWebSearchService();
@@ -90,13 +97,23 @@ public partial class CrucibleAgentHarness : IAgentHarness
         // 1. Parse database-driven HarnessConfigurationJson if provided
         var harnessConfig = ParseHarnessConfig(context.Profile.HarnessConfigurationJson);
 
+        var effectiveEnv = (context.Workspace != null && _envProvider != null)
+            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier)
+            : _executionEnv;
+
+        var projectConfig = CodeStackPresets.ResolveConfig(workspacePath, null);
+        var buildTimeout = context.Workspace?.BuildTimeoutSeconds ?? projectConfig.BuildTimeoutSeconds;
+        var testTimeout = context.Workspace?.TestTimeoutSeconds ?? projectConfig.TestTimeoutSeconds;
+
         // 2. Initialize Tools & Lenient Dispatcher
         var canonicalTools = new CanonicalTools(
             workspacePath,
-            _executionEnv,
+            effectiveEnv,
             _editorConfigService,
             _editorConfigFileApplier,
-            _webSearchService);
+            _webSearchService,
+            buildTimeoutSeconds: buildTimeout,
+            testTimeoutSeconds: testTimeout);
 
         var dispatcher = new LenientToolDispatcher(canonicalTools);
 
@@ -117,11 +134,39 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
         }
 
+        // Register external MCP tools if configured
+        if (_mcpManager != null)
+        {
+            var mcpServers = await _mcpManager.GetConfiguredServersAsync(workspacePath, cancellationToken);
+            foreach (var (serverName, def) in mcpServers)
+            {
+                var toolDef = new ToolDefinition
+                {
+                    Name = $"mcp_{serverName}",
+                    Description = $"External MCP server tool '{serverName}'. Command: {def.Command} {string.Join(" ", def.Args)}",
+                    Handler = async (args, ct) =>
+                    {
+                        if (effectiveEnv != null && !string.IsNullOrWhiteSpace(def.Command))
+                        {
+                            var cmd = $"{def.Command} {string.Join(" ", def.Args)}";
+                            var res = await effectiveEnv.ExecuteAsync(cmd, workspacePath, cancellationToken: ct);
+                            return string.IsNullOrEmpty(res.StandardError)
+                                ? res.StandardOutput
+                                : $"{res.StandardOutput}\n{res.StandardError}";
+                        }
+                        return $"MCP server '{serverName}' invoked with {args.Count} parameter(s).";
+                    }
+                };
+                dispatcher.RegisterTool(toolDef);
+            }
+        }
+
         var circuitBreaker = new ToolLoopCircuitBreaker(context.OptimizationFlags);
+        var toolResultCompactor = new ToolResultCompactor(context.OptimizationFlags);
 
         // 3. Discover context: AGENTS.md, Skills (Microsoft Agent Framework), Symbols
         var agentsMdRules = await _agentsMdService.IngestRulesAsync(workspacePath, cancellationToken);
-        var projectContext = _agentsMdService.FormatProjectContextSection(agentsMdRules);
+        var projectContext = _agentsMdService.FormatProjectContextSection(agentsMdRules, projectConfig, context.Workspace);
 
         // Discover skills and format catalog using minimalist Pi syntax (~25 tokens/skill)
         var skills = await _skillsService.DiscoverSkillsAsync(workspacePath, cancellationToken: cancellationToken);
@@ -217,10 +262,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 ? context.Profile.MaxTurns.Value
                 : 20);
         int currentTurn = 0;
+        string? targetRouting = null;
 
         while (currentTurn < maxTurns && !cancellationToken.IsCancellationRequested)
         {
             currentTurn++;
+            toolResultCompactor.Compact(chatHistory);
+
             var chatOptions = new ChatOptions
             {
                 ModelId = !string.IsNullOrWhiteSpace(effectiveModel) ? effectiveModel : null,
@@ -261,6 +309,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     {
                         if (usageJe.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt64(out var ptVal)) promptTokens = Math.Max(promptTokens, ptVal);
                         if (usageJe.TryGetProperty("completion_tokens", out var ct) && ct.TryGetInt64(out var ctVal)) completionTokens = Math.Max(completionTokens, ctVal);
+                    }
+
+                    if (update.AdditionalProperties != null && update.AdditionalProperties.TryGetValue("target_routing", out var trObj) && trObj is string trStr)
+                    {
+                        targetRouting = trStr;
                     }
 
                     if (!string.IsNullOrEmpty(update.Text))
@@ -398,7 +451,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
             new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
             commitHash: null,
             updatedState: latestSerializedState,
-            summary: lastAssistantMessage ?? "Stage completed successfully.");
+            summary: lastAssistantMessage ?? "Stage completed successfully.",
+            targetRouting: targetRouting);
     }
 
     private async Task BroadcastAsync(string sessionId, int issueId, string stageId, AgentActivityKind kind, string content, CancellationToken ct)
@@ -677,6 +731,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
         catch { }
 
         return result;
+    }
+
+    public static void CompactOlderToolResults(IList<ChatMessage> messages, int keepVerbatimCount = 4, LocalOptimizationFlags? flags = null)
+    {
+        ToolResultCompactor.Compact(messages, flags, keepVerbatimCount);
     }
 
     private record SerializedMessageItem(

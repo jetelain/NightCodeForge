@@ -28,18 +28,25 @@ public partial class CanonicalTools
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly IWebSearchService _webSearchService;
 
+    private readonly int? _buildTimeoutSeconds;
+    private readonly int? _testTimeoutSeconds;
+
     public CanonicalTools(
         string workspaceRoot,
         IExecutionEnvironment? executionEnv = null,
         IEditorConfigService? editorConfigService = null,
         IEditorConfigFileApplier? editorConfigFileApplier = null,
-        IWebSearchService? webSearchService = null)
+        IWebSearchService? webSearchService = null,
+        int? buildTimeoutSeconds = null,
+        int? testTimeoutSeconds = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _executionEnv = executionEnv;
         _editorConfigService = editorConfigService ?? new EditorConfigService();
         _editorConfigFileApplier = editorConfigFileApplier ?? new EditorConfigFileApplier();
         _webSearchService = webSearchService ?? new MockWebSearchService();
+        _buildTimeoutSeconds = buildTimeoutSeconds;
+        _testTimeoutSeconds = testTimeoutSeconds;
     }
 
     public string ResolveFullPath(string path)
@@ -284,13 +291,35 @@ public partial class CanonicalTools
 
         var workDir = !string.IsNullOrEmpty(workingDirectory) ? ResolveFullPath(workingDirectory) : _workspaceRoot;
 
+        int? effectiveTimeout = timeout;
+        if (!effectiveTimeout.HasValue)
+        {
+            if (command.Contains("test", StringComparison.OrdinalIgnoreCase))
+            {
+                effectiveTimeout = _testTimeoutSeconds ?? 120;
+            }
+            else if (command.Contains("build", StringComparison.OrdinalIgnoreCase))
+            {
+                effectiveTimeout = _buildTimeoutSeconds ?? 120;
+            }
+        }
+
         if (_executionEnv != null)
         {
-            var res = await _executionEnv.ExecuteAsync(command, workDir, timeout, null, cancellationToken);
+            var res = await _executionEnv.ExecuteAsync(command, workDir, effectiveTimeout, null, cancellationToken);
             var output = string.IsNullOrWhiteSpace(res.StandardOutput) ? res.StandardError : res.StandardOutput;
             if (!string.IsNullOrWhiteSpace(res.StandardError) && !string.IsNullOrWhiteSpace(res.StandardOutput))
             {
                 output = res.StandardOutput + "\n[STDERR]\n" + res.StandardError;
+            }
+
+            bool isTimeout = res.ExitCode == 124 ||
+                             res.Truncated && (res.StandardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+                                               res.StandardOutput.Contains("timed out", StringComparison.OrdinalIgnoreCase));
+
+            if (isTimeout)
+            {
+                return $"Exit Code: 124\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
             }
 
             if (command.Contains("build", StringComparison.OrdinalIgnoreCase) || command.Contains("test", StringComparison.OrdinalIgnoreCase))
@@ -341,6 +370,8 @@ public partial class CanonicalTools
         return sb.ToString().TrimEnd();
     }
 
+    public List<IssueProposal> PendingProposals { get; } = new();
+
     /// <summary>
     /// propose_issues: Propose structured backlog items for triage/discovery.
     /// </summary>
@@ -350,6 +381,8 @@ public partial class CanonicalTools
         {
             return "No issues proposed.";
         }
+
+        PendingProposals.AddRange(issues);
 
         var json = JsonSerializer.Serialize(issues, new JsonSerializerOptions { WriteIndented = true });
         return $"Proposed {issues.Count} backlog issue(s):\n{json}";

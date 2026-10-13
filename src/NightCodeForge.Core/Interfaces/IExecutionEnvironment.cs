@@ -37,6 +37,8 @@ public interface IExecutionEnvironment
 /// </summary>
 public interface IExecutionEnvironmentProvider
 {
-    IExecutionEnvironment GetEnvironment(NightCodeForge.Core.Domain.Workspace workspace);
+    IExecutionEnvironment GetEnvironment(
+        NightCodeForge.Core.Domain.Workspace workspace,
+        NightCodeForge.Core.Domain.SandboxSecurityTier securityTier = NightCodeForge.Core.Domain.SandboxSecurityTier.Standard);
 }
 

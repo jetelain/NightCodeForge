@@ -26,6 +26,7 @@ public class PiRpcAgentHarness : IAgentHarness
 {
     private readonly PiRpcHarnessOptions _options;
     private readonly Microsoft.Extensions.Options.IOptions<Inference.LlmProviderOptions>? _llmOptions;
+    private readonly Context.AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer? _activityStreamer;
     private readonly SessionTranscriptService? _transcriptService;
     private readonly ILogger<PiRpcAgentHarness> _logger;
@@ -35,12 +36,14 @@ public class PiRpcAgentHarness : IAgentHarness
     public PiRpcAgentHarness(
         PiRpcHarnessOptions? options = null,
         Microsoft.Extensions.Options.IOptions<Inference.LlmProviderOptions>? llmOptions = null,
+        Context.AgentsMdService? agentsMdService = null,
         IAgentActivityStreamer? activityStreamer = null,
         SessionTranscriptService? transcriptService = null,
         ILogger<PiRpcAgentHarness>? logger = null)
     {
         _options = options ?? new PiRpcHarnessOptions();
         _llmOptions = llmOptions;
+        _agentsMdService = agentsMdService ?? new Context.AgentsMdService();
         _activityStreamer = activityStreamer;
         _transcriptService = transcriptService;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<PiRpcAgentHarness>.Instance;
@@ -173,11 +176,19 @@ public class PiRpcAgentHarness : IAgentHarness
             }
 
             // 2. Dispatch prompt command (including pending human answer if resuming)
+            var projectConfig = CodeStackPresets.ResolveConfig(workspacePath, null);
+            var guidelines = _agentsMdService.FormatExecutionGuidelines(projectConfig, context.Workspace);
+
             var basePromptText = !string.IsNullOrEmpty(context.BootstrapPrompt)
                 ? context.BootstrapPrompt
                 : (!string.IsNullOrWhiteSpace(context.StageDirective)
                     ? $"[Stage Directive]: {context.StageDirective}\n\n{context.Issue.Title}\n{context.Issue.Description}"
                     : context.Issue.Description);
+
+            if (!string.IsNullOrWhiteSpace(guidelines))
+            {
+                basePromptText = $"{basePromptText}\n\n{guidelines}";
+            }
 
             var promptText = !string.IsNullOrWhiteSpace(context.PendingHumanAnswer)
                 ? $"[Human Answer]: {context.PendingHumanAnswer}\n\n{basePromptText}"

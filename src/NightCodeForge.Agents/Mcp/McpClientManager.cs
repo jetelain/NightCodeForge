@@ -27,7 +27,7 @@ public class McpConfigurationFile
 public interface IMcpClientManager
 {
     Task<IReadOnlyDictionary<string, McpServerDefinition>> GetConfiguredServersAsync(string workspaceRoot, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<object>> GetAcpMcpServersAsync(int? workspaceId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<object>> GetAcpMcpServersAsync(int? workspaceId, string? workspaceRoot = null, CancellationToken cancellationToken = default);
 }
 
 public class McpClientManager : IMcpClientManager
@@ -64,9 +64,28 @@ public class McpClientManager : IMcpClientManager
         return new Dictionary<string, McpServerDefinition>();
     }
 
-    public async Task<IReadOnlyList<object>> GetAcpMcpServersAsync(int? workspaceId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<object>> GetAcpMcpServersAsync(int? workspaceId, string? workspaceRoot = null, CancellationToken cancellationToken = default)
     {
-        // For ACP integration: returns ACP-compatible MCP server descriptors
-        return Array.Empty<object>();
+        if (string.IsNullOrWhiteSpace(workspaceRoot))
+        {
+            return Array.Empty<object>();
+        }
+
+        var servers = await GetConfiguredServersAsync(workspaceRoot, cancellationToken);
+        var result = new List<object>();
+
+        foreach (var (name, def) in servers)
+        {
+            result.Add(new
+            {
+                name = name,
+                command = def.Command,
+                args = def.Args,
+                env = def.Env,
+                url = def.Url
+            });
+        }
+
+        return result;
     }
 }
