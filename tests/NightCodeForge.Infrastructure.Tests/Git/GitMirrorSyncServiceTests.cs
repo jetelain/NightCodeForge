@@ -158,6 +158,73 @@ public class GitMirrorSyncServiceTests : IDisposable
         Assert.Contains("DIRTY DEVELOPER EDITS", File.ReadAllText(Path.Combine(_hostRepo.RepositoryPath, "shared_model.cs")));
     }
 
+    [Fact]
+    public async Task PushBaseBranchToHostAsync_CleanWorkingTree_PushesBaseBranchDirectly()
+    {
+        // Arrange
+        await _syncService.InitializeMirrorAsync(_workspace, _mirrorDir);
+
+        // Mirror commits a new squash change on main
+        await _runner.ExecuteAsync(_mirrorDir, "checkout main");
+        var featureFile = Path.Combine(_mirrorDir, "squash_feature.txt");
+        await File.WriteAllTextAsync(featureFile, "Squashed feature implementation");
+        await _runner.ExecuteAsync(_mirrorDir, "add -A");
+        await _runner.ExecuteAsync(_mirrorDir, "commit -m \"Squash: Issue #500 feature complete\" --no-verify");
+
+        // Act
+        var result = await _syncService.PushBaseBranchToHostAsync(_mirrorDir, "main");
+
+        // Assert
+        Assert.True(result.Success);
+        Assert.False(result.FallbackUsed);
+        Assert.Equal("main", result.BranchPushed);
+        Assert.Null(result.WarningMessage);
+
+        // Verify host repo main branch received commit
+        var hostLog = await _runner.ExecuteAsync(_hostRepo.RepositoryPath, "log main -1 --pretty=%B");
+        Assert.Contains("Squash: Issue #500 feature complete", hostLog.StandardOutput);
+    }
+
+    [Fact]
+    public async Task PushBaseBranchToHostAsync_DirtyWorkingTreeOnHost_FallsBackToNcfBranchAndAlerts()
+    {
+        // Arrange
+        await _syncService.InitializeMirrorAsync(_workspace, _mirrorDir);
+
+        // Create tracked file on host and mirror
+        _hostRepo.CreateFile("base_tracked.txt", "Original base line");
+        _hostRepo.CommitAll("Add base tracked file");
+
+        // Fetch to mirror and make commit
+        await _runner.ExecuteAsync(_mirrorDir, "fetch host-origin main");
+        await _runner.ExecuteAsync(_mirrorDir, "checkout main");
+        await _runner.ExecuteAsync(_mirrorDir, "reset --hard host-origin/main");
+        await File.AppendAllTextAsync(Path.Combine(_mirrorDir, "base_tracked.txt"), "\nAgent added line");
+        await _runner.ExecuteAsync(_mirrorDir, "add -A");
+        await _runner.ExecuteAsync(_mirrorDir, "commit -m \"Agent base branch update\" --no-verify");
+
+        // Introduce uncommitted edits on host main
+        await File.AppendAllTextAsync(Path.Combine(_hostRepo.RepositoryPath, "base_tracked.txt"), "\nDeveloper dirty edit on main");
+
+        // Act
+        var result = await _syncService.PushBaseBranchToHostAsync(_mirrorDir, "main");
+
+        // Assert
+        Assert.True(result.Success);
+        Assert.True(result.FallbackUsed);
+        Assert.Equal("main-ncf", result.BranchPushed);
+        Assert.NotNull(result.WarningMessage);
+        Assert.Contains("main-ncf", result.WarningMessage);
+
+        // Verify alert was sent
+        Assert.Single(_alertNotifier.Alerts);
+        Assert.Contains("main-ncf", _alertNotifier.Alerts[0].Message);
+
+        // Verify fallback branch exists on host with agent's commit
+        var hostBranchLog = await _runner.ExecuteAsync(_hostRepo.RepositoryPath, "log main-ncf -1 --pretty=%B");
+        Assert.Contains("Agent base branch update", hostBranchLog.StandardOutput);
+    }
+
     public void Dispose()
     {
         _hostRepo.Dispose();

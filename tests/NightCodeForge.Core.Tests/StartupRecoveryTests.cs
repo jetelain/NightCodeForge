@@ -182,4 +182,15 @@ public class StartupRecoveryTests : IDisposable
 
         Assert.Contains(302, _jobQueue.UrgentQueue);
     }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_PerformsWslCheck_DoesNotThrow()
+    {
+        var recovery = new StartupRecoveryService(
+            _workspaceRepo, _issueRepo, _gitCliRunner,
+            new DefaultWorkflowPipelineProvider(), _jobQueue);
+
+        var exception = await Record.ExceptionAsync(() => recovery.ReconcileWorkspacesAsync());
+        Assert.Null(exception);
+    }
 }

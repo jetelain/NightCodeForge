@@ -43,6 +43,13 @@ public sealed class SyntheticGitRepo
   </PropertyGroup>
 </Project>");
 
+        // 1b. .gitignore
+        CreateFile(".gitignore", @"bin/
+obj/
+*.user
+.vs/
+");
+
         // 2. Calculator.cs
         CreateFile("Calculator.cs", @"namespace SyntheticLib;
 
@@ -134,21 +141,36 @@ Contains Calculator arithmetic service and project configuration.
     /// <summary>
     /// Injects a deliberate C# syntax/compiler error into Calculator.cs.
     /// </summary>
-    public void InjectCompilerError()
+    public void InjectCompilerError(string? mirrorPath = null)
     {
         var path = Path.Combine(RepositoryPath, "Calculator.cs");
         var content = File.ReadAllText(path);
         content += "\n// Deliberate compiler error injected for quality gate test:\nthis is a syntax error;\n";
         File.WriteAllText(path, content, Encoding.UTF8);
+
+        if (!string.IsNullOrWhiteSpace(mirrorPath))
+        {
+            var target = mirrorPath;
+            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) &&
+                (mirrorPath.StartsWith('/') || mirrorPath.StartsWith('~')))
+            {
+                target = NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(mirrorPath, "Ubuntu");
+            }
+            var mirrorFile = Path.Combine(target, "Calculator.cs");
+            if (File.Exists(mirrorFile))
+            {
+                File.WriteAllText(mirrorFile, content, Encoding.UTF8);
+            }
+        }
     }
 
     /// <summary>
     /// Restores Calculator.cs to a clean, buildable state.
     /// </summary>
-    public void FixCompilerError()
+    public void FixCompilerError(string? mirrorPath = null)
     {
         var path = Path.Combine(RepositoryPath, "Calculator.cs");
-        File.WriteAllText(path, @"namespace SyntheticLib;
+        var content = @"namespace SyntheticLib;
 
 /// <summary>
 /// Arithmetic computation engine.
@@ -170,7 +192,23 @@ public class Calculator
     /// </summary>
     public int Multiply(int a, int b) => a * b;
 }
-", Encoding.UTF8);
+";
+        File.WriteAllText(path, content, Encoding.UTF8);
+
+        if (!string.IsNullOrWhiteSpace(mirrorPath))
+        {
+            var target = mirrorPath;
+            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) &&
+                (mirrorPath.StartsWith('/') || mirrorPath.StartsWith('~')))
+            {
+                target = NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(mirrorPath, "Ubuntu");
+            }
+            var mirrorFile = Path.Combine(target, "Calculator.cs");
+            if (File.Exists(mirrorFile))
+            {
+                File.WriteAllText(mirrorFile, content, Encoding.UTF8);
+            }
+        }
     }
 
     /// <summary>

@@ -108,7 +108,7 @@ public class InfraHealthScenario : IScenario
         }
 
         // Step 4: Execution Environment Provider Check
-        ConsoleFormatting.PrintStep("1.5", "Verifying BareHost execution environment resolution...");
+        ConsoleFormatting.PrintStep("1.5", $"Verifying {context.Environment.Workspace.ExecutionMode} execution environment resolution...");
         using (var scope = context.Environment.Services.CreateScope())
         {
             var envProvider = scope.ServiceProvider.GetRequiredService<IExecutionEnvironmentProvider>();

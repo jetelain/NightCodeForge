@@ -44,6 +44,11 @@ public class StartupRecoveryService : IStartupRecoveryService
     {
         _logger.LogInformation("Beginning startup recovery and workspace reconciliation...");
 
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            VerifyWslAvailability();
+        }
+
         var workspaces = await _workspaceRepository.GetAllAsync(cancellationToken);
 
         foreach (var workspace in workspaces)
@@ -179,6 +184,50 @@ public class StartupRecoveryService : IStartupRecoveryService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to rescue uncommitted changes in {RepoPath}", repoPath);
+        }
+    }
+    private void VerifyWslAvailability()
+    {
+        try
+        {
+            var wslPath = Path.Combine(Environment.SystemDirectory, "wsl.exe");
+            if (!File.Exists(wslPath))
+            {
+                _logger.LogWarning("⚠️ Windows WSL2 Requirement: wsl.exe was not found in system directory. WSL2 is mandatory for Unix agent execution. Please run 'wsl --install' in an administrative terminal.");
+                return;
+            }
+
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = wslPath,
+                Arguments = "--status",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = System.Diagnostics.Process.Start(psi);
+            if (process != null)
+            {
+                if (!process.WaitForExit(3000))
+                {
+                    process.Kill(entireProcessTree: true);
+                    _logger.LogWarning("⚠️ Windows WSL2 Requirement: 'wsl --status' timed out. Ensure WSL2 is responsive.");
+                }
+                else if (process.ExitCode != 0)
+                {
+                    _logger.LogWarning("⚠️ Windows WSL2 Requirement: 'wsl --status' exited with code {ExitCode}. If WSL2 is not installed, run 'wsl --install'.", process.ExitCode);
+                }
+                else
+                {
+                    _logger.LogInformation("Windows WSL2 environment verified and operational.");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "⚠️ Windows WSL2 check failed: {Message}. Please ensure WSL2 is installed ('wsl --install').", ex.Message);
         }
     }
 }

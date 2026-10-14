@@ -161,5 +161,64 @@ public class Service
         Assert.Contains("30s", output);
         Assert.Contains("hanging tests", output);
     }
+
+    private class FakePathResolver : NightCodeForge.Core.Interfaces.IWorkspacePathResolver
+    {
+        private readonly string _baseDir;
+        public FakePathResolver(string baseDir) => _baseDir = baseDir;
+
+        public string GetAgentWorkingClonePath(int workspaceId) => Path.Combine(_baseDir, workspaceId.ToString());
+        public string GetHostRemoteUrl(string repositoryPath) => repositoryPath;
+        public string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath)
+        {
+            var rel = relativeOrContainerPath.TrimStart('/', '\\').Replace('/', Path.DirectorySeparatorChar);
+            return Path.Combine(_baseDir, workspaceId.ToString(), rel);
+        }
+        public string GetWslDistributionName() => "Ubuntu";
+        public string GetWslUserName() => "user";
+    }
+
+    [Fact]
+    public void ResolveFullPath_WhenRootCrucibleDirectoryExists_ResolvesCruciblePathForNewFiles()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-crucible-resolve-" + Guid.NewGuid().ToString("N"));
+        var wksDir = Path.Combine(tempDir, "42");
+        Directory.CreateDirectory(wksDir);
+
+        try
+        {
+            var fakeResolver = new FakePathResolver(tempDir);
+            var tools = new CanonicalTools(
+                workspaceRoot: @"C:\host\repo",
+                pathResolver: fakeResolver,
+                workspaceId: 42);
+
+            var resolved = tools.ResolveFullPath("src/NewFile.cs");
+            Assert.Equal(Path.Combine(wksDir, "src", "NewFile.cs"), resolved);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ProposeIssues_AddsToPendingProposals_ReturnsFormattedJson()
+    {
+        var tools = new CanonicalTools(AppContext.BaseDirectory);
+        var proposals = new List<NightCodeForge.Core.Domain.IssueProposal>
+        {
+            new("Fix memory leak", "Disposed streams properly", "bug"),
+            new("Add XML doc comments", "Add summary tags to public methods", "chore")
+        };
+
+        var result = tools.ProposeIssues(proposals);
+
+        Assert.Equal(2, tools.PendingProposals.Count);
+        Assert.Equal("Fix memory leak", tools.PendingProposals[0].Title);
+        Assert.Equal("chore", tools.PendingProposals[1].Type);
+        Assert.Contains("Proposed 2 backlog issue(s)", result);
+        Assert.Contains("Fix memory leak", result);
+    }
 }
 

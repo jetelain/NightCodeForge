@@ -61,7 +61,7 @@ public class DeterministicQualityGatesScenario : IScenario
 
         // Step 2: Inject Deliberate Syntax Error
         ConsoleFormatting.PrintStep("5.2", "Injecting deliberate compiler syntax error into Calculator.cs...");
-        context.Environment.GitRepo.InjectCompilerError();
+        context.Environment.GitRepo.InjectCompilerError(context.Environment.Workspace.Ext4MirrorPath);
 
         // Step 3: Run DeterministicBuildStage (Expect Failure & Loopback)
         ConsoleFormatting.PrintStep("5.3", "Executing DeterministicBuildStage on corrupt codebase (0 GPU tokens)...");
@@ -84,7 +84,7 @@ public class DeterministicQualityGatesScenario : IScenario
 
         // Step 4: Fix Compiler Error
         ConsoleFormatting.PrintStep("5.4", "Fixing syntax error in Calculator.cs...");
-        context.Environment.GitRepo.FixCompilerError();
+        context.Environment.GitRepo.FixCompilerError(context.Environment.Workspace.Ext4MirrorPath);
 
         // Step 5: Re-run DeterministicBuildStage (Expect Success)
         ConsoleFormatting.PrintStep("5.5", "Re-executing DeterministicBuildStage on corrected code...");

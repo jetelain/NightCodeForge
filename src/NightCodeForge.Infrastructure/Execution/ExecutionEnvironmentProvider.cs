@@ -41,27 +41,44 @@ public class ExecutionEnvironmentProviderOptions
 public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
 {
     private readonly BareHostExecutionEnvironment _bareHost;
+    private readonly IProcessRunner _processRunner;
     private readonly ILogger<NightCodeForgeContainerExecutor> _containerLogger;
     private readonly ExecutionEnvironmentProviderOptions _options;
+    private readonly IWorkspacePathResolver? _pathResolver;
     private readonly ConcurrentDictionary<(int WorkspaceId, SandboxSecurityTier SecurityTier), IExecutionEnvironment> _cachedEnvironments = new();
 
     [ActivatorUtilitiesConstructor]
     public ExecutionEnvironmentProvider(
         BareHostExecutionEnvironment? bareHost = null,
+        IProcessRunner? processRunner = null,
         ILogger<NightCodeForgeContainerExecutor>? containerLogger = null,
-        IOptions<ExecutionEnvironmentProviderOptions>? options = null)
-        : this(options?.Value, bareHost, containerLogger)
+        IOptions<ExecutionEnvironmentProviderOptions>? options = null,
+        IWorkspacePathResolver? pathResolver = null)
+        : this(options?.Value, bareHost, processRunner, containerLogger, pathResolver)
+    {
+    }
+
+    public ExecutionEnvironmentProvider(
+        ExecutionEnvironmentProviderOptions? options,
+        BareHostExecutionEnvironment bareHost,
+        ILogger<NightCodeForgeContainerExecutor>? containerLogger = null,
+        IWorkspacePathResolver? pathResolver = null)
+        : this(options, bareHost, null, containerLogger, pathResolver)
     {
     }
 
     public ExecutionEnvironmentProvider(
         ExecutionEnvironmentProviderOptions? options,
         BareHostExecutionEnvironment? bareHost = null,
-        ILogger<NightCodeForgeContainerExecutor>? containerLogger = null)
+        IProcessRunner? processRunner = null,
+        ILogger<NightCodeForgeContainerExecutor>? containerLogger = null,
+        IWorkspacePathResolver? pathResolver = null)
     {
-        _bareHost = bareHost ?? new BareHostExecutionEnvironment();
+        _bareHost = bareHost ?? new BareHostExecutionEnvironment(pathResolver: pathResolver);
+        _processRunner = processRunner ?? new SystemProcessRunner();
         _containerLogger = containerLogger ?? NullLogger<NightCodeForgeContainerExecutor>.Instance;
         _options = options ?? new ExecutionEnvironmentProviderOptions();
+        _pathResolver = pathResolver;
     }
 
     public IExecutionEnvironment GetEnvironment(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard)
@@ -94,19 +111,32 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                             : workspace.ContainerImage)
                         : "ncf-sandbox");
 
+                var hostWorkspacePath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
+                    ? workspace.Ext4MirrorPath
+                    : (!string.IsNullOrWhiteSpace(workspace.RepositoryPath)
+                        ? workspace.RepositoryPath
+                        : _pathResolver?.GetAgentWorkingClonePath(workspace.Id));
+
                 var options = new ContainerExecutorOptions
                 {
                     ContainerNameOrId = containerName,
-                    ContainerImage = workspace.ContainerImage,
-                    DefaultWorkingDirectory = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
-                        ? workspace.Ext4MirrorPath
-                        : "/workspace",
+                    ContainerImage = !string.IsNullOrWhiteSpace(workspace.ContainerImage)
+                        ? workspace.ContainerImage
+                        : "ubuntu:24.04",
+                    HostWorkspacePath = hostWorkspacePath,
+                    ContainerWorkspacePath = "/workspace",
+                    DefaultWorkingDirectory = "/workspace",
+                    MountPackageCaches = true,
+                    MountHostSdks = true,
+                    AutoStartContainer = true,
                     IsRestrictedReadOnly = securityTier == SandboxSecurityTier.RestrictedReadOnly,
                     UseWsl = useWsl,
                     WslDistribution = workspace.WslDistribution ?? _options.DefaultWslDistribution,
-                    WslExecutable = _options.WslExecutable
+                    WslExecutable = _options.WslExecutable,
+                    WslUserName = _pathResolver?.GetWslUserName(),
+                    ExpandTildeInMounts = true
                 };
-                return new NightCodeForgeContainerExecutor(options, _containerLogger);
+                return new NightCodeForgeContainerExecutor(options, _processRunner, _containerLogger);
             }),
 
             _ => _bareHost

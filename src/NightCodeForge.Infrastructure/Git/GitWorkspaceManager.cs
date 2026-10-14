@@ -159,9 +159,39 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             branchName, baseBranch, workingPath);
 
         // 1. Checkout target base branch
-        await _gitCliRunner.ExecuteAsync(workingPath, $"checkout {baseBranch}", cancellationToken: cancellationToken);
+        try
+        {
+            await _gitCliRunner.ExecuteAsync(workingPath, $"checkout {baseBranch}", cancellationToken: cancellationToken);
+        }
+        catch (GitCommandException)
+        {
+            await _gitCliRunner.ExecuteAsync(workingPath, $"checkout -B {baseBranch}", cancellationToken: cancellationToken);
+        }
+
+        // Ensure feature branch exists locally (fetch from host-origin or origin if working in mirror)
+        var branchCheck = await _gitCliRunner.ExecuteAsync(workingPath, $"branch --list {branchName}", cancellationToken: cancellationToken);
+        var hasBranch = branchCheck.StandardOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(b => b.TrimStart('*', ' ').Equals(branchName, StringComparison.OrdinalIgnoreCase));
+
+        if (!hasBranch)
+        {
+            try
+            {
+                await _gitCliRunner.ExecuteAsync(workingPath, $"fetch host-origin {branchName}:{branchName}", cancellationToken: cancellationToken);
+            }
+            catch
+            {
+                try
+                {
+                    await _gitCliRunner.ExecuteAsync(workingPath, $"fetch origin {branchName}:{branchName}", cancellationToken: cancellationToken);
+                }
+                catch { }
+            }
+        }
 
         // 2. Perform squash merge
+        try { await _gitCliRunner.ExecuteAsync(workingPath, "clean -fd", cancellationToken: cancellationToken); } catch { }
         await _gitCliRunner.ExecuteAsync(workingPath, $"merge --squash {branchName}", cancellationToken: cancellationToken);
 
         // 3. Commit squashed changeset

@@ -5,6 +5,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
@@ -30,6 +31,7 @@ public class PiRpcAgentHarness : IAgentHarness
     private readonly IAgentActivityStreamer? _activityStreamer;
     private readonly SessionTranscriptService? _transcriptService;
     private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IProcessRunner _processRunner;
     private readonly ILogger<PiRpcAgentHarness> _logger;
 
     public string HarnessId => HarnessType.PiRpc;
@@ -41,6 +43,7 @@ public class PiRpcAgentHarness : IAgentHarness
         IAgentActivityStreamer? activityStreamer = null,
         SessionTranscriptService? transcriptService = null,
         IWorkspacePathResolver? pathResolver = null,
+        IProcessRunner? processRunner = null,
         ILogger<PiRpcAgentHarness>? logger = null)
     {
         _options = options ?? new PiRpcHarnessOptions();
@@ -49,98 +52,121 @@ public class PiRpcAgentHarness : IAgentHarness
         _activityStreamer = activityStreamer;
         _transcriptService = transcriptService;
         _pathResolver = pathResolver;
+        _processRunner = processRunner ?? new SystemProcessRunner();
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<PiRpcAgentHarness>.Instance;
     }
 
     public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
     {
         var sw = Stopwatch.StartNew();
+        var sessionId = Guid.NewGuid().ToString("N");
+        await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
 
-        Process process;
         if (_options.CustomProcessFactory != null)
         {
-            process = _options.CustomProcessFactory();
-        }
-        else
-        {
-            var exePath = _options.ExecutablePath;
-            var args = _options.Arguments;
+            Process process;
+            try
+            {
+                process = _options.CustomProcessFactory();
+                process.Start();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to launch Pi RPC daemon via custom factory");
+                await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+                return AgentRunResult.Failed($"Failed to launch Pi daemon: {ex.Message}", new AgentRunMetrics(sw.ElapsedMilliseconds));
+            }
 
-            if (!string.IsNullOrWhiteSpace(context.Profile.HarnessConfigurationJson))
+            using var stdin = new StreamWriter(process.StandardInput.BaseStream, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
+            using var stdout = process.StandardOutput;
+
+            try
+            {
+                return await RunSessionStreamAsync(stdin, stdout, context, sessionId, sw, cancellationToken);
+            }
+            finally
             {
                 try
                 {
-                    using var doc = JsonDocument.Parse(context.Profile.HarnessConfigurationJson);
-                    var root = doc.RootElement;
-                    if (root.TryGetProperty("executablePath", out var exeProp) ||
-                        root.TryGetProperty("executable", out exeProp) ||
-                        root.TryGetProperty("command", out exeProp))
+                    if (!process.HasExited)
                     {
-                        var val = exeProp.GetString();
-                        if (!string.IsNullOrWhiteSpace(val)) exePath = val;
-                    }
-                    if (root.TryGetProperty("arguments", out var argsProp) ||
-                        root.TryGetProperty("args", out argsProp))
-                    {
-                        var val = argsProp.GetString();
-                        if (val != null) args = val;
+                        process.Kill(entireProcessTree: true);
                     }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to parse HarnessConfigurationJson on AgentProfile '{ProfileName}', using defaults.", context.Profile.Name);
-                }
+                catch { }
+                process.Dispose();
             }
+        }
 
-            var workingDir = !string.IsNullOrEmpty(context.WorkspacePath) ? context.WorkspacePath : Directory.GetCurrentDirectory();
-            if (OperatingSystem.IsWindows() && (workingDir.StartsWith('/') || workingDir.StartsWith('~')))
+        var exePath = _options.ExecutablePath;
+        var args = _options.Arguments;
+
+        if (!string.IsNullOrWhiteSpace(context.Profile.HarnessConfigurationJson))
+        {
+            try
             {
-                if (_pathResolver != null && context.Workspace != null)
+                using var doc = JsonDocument.Parse(context.Profile.HarnessConfigurationJson);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("executablePath", out var exeProp) ||
+                    root.TryGetProperty("executable", out exeProp) ||
+                    root.TryGetProperty("command", out exeProp))
                 {
-                    workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty);
+                    var val = exeProp.GetString();
+                    if (!string.IsNullOrWhiteSpace(val)) exePath = val;
                 }
-                else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
+                if (root.TryGetProperty("arguments", out var argsProp) ||
+                    root.TryGetProperty("args", out argsProp))
                 {
-                    workingDir = context.Workspace.RepositoryPath;
-                }
-                else
-                {
-                    workingDir = Directory.GetCurrentDirectory();
+                    var val = argsProp.GetString();
+                    if (val != null) args = val;
                 }
             }
-
-            if (!Directory.Exists(workingDir))
+            catch (Exception ex)
             {
-                if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath) && Directory.Exists(context.Workspace.RepositoryPath))
-                {
-                    workingDir = context.Workspace.RepositoryPath;
-                }
-                else
-                {
-                    workingDir = Directory.GetCurrentDirectory();
-                }
+                _logger.LogWarning(ex, "Failed to parse HarnessConfigurationJson on AgentProfile '{ProfileName}', using defaults.", context.Profile.Name);
             }
+        }
 
-            var psi = new ProcessStartInfo
+        var workingDir = !string.IsNullOrEmpty(context.WorkspacePath) ? context.WorkspacePath : Directory.GetCurrentDirectory();
+        if (OperatingSystem.IsWindows() && (workingDir.StartsWith('/') || workingDir.StartsWith('~')))
+        {
+            if (_pathResolver != null && context.Workspace != null)
+            {
+                workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty);
+            }
+            else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
+            {
+                workingDir = context.Workspace.RepositoryPath;
+            }
+            else
+            {
+                workingDir = Directory.GetCurrentDirectory();
+            }
+        }
+
+        if (!Directory.Exists(workingDir))
+        {
+            if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath) && Directory.Exists(context.Workspace.RepositoryPath))
+            {
+                workingDir = context.Workspace.RepositoryPath;
+            }
+            else
+            {
+                workingDir = Directory.GetCurrentDirectory();
+            }
+        }
+
+        IProcessStreamSession session;
+        try
+        {
+            var spec = new ProcessStartSpec
             {
                 FileName = exePath,
                 Arguments = args,
                 WorkingDirectory = workingDir,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
+                TimeoutSeconds = 600
             };
-            process = new Process { StartInfo = psi };
-        }
-
-        var sessionId = Guid.NewGuid().ToString("N");
-        await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
-
-        try
-        {
-            process.Start();
+            session = _processRunner.StartSession(spec);
         }
         catch (Exception ex)
         {
@@ -149,24 +175,9 @@ public class PiRpcAgentHarness : IAgentHarness
             return AgentRunResult.Failed($"Failed to launch Pi daemon: {ex.Message}", new AgentRunMetrics(sw.ElapsedMilliseconds));
         }
 
-        using var stdin = new StreamWriter(process.StandardInput.BaseStream, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
-        using var stdout = process.StandardOutput;
-
-        try
+        await using (session.ConfigureAwait(false))
         {
-            return await RunSessionStreamAsync(stdin, stdout, context, sessionId, sw, cancellationToken);
-        }
-        finally
-        {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch { }
-            process.Dispose();
+            return await RunSessionStreamAsync(session.StandardInput, session.StandardOutput, context, sessionId, sw, cancellationToken);
         }
     }
 

@@ -79,9 +79,38 @@ public class SyntheticMockChatClient : IChatClient
         var lastUserMsg = messages.LastOrDefault(m => m.Role == ChatRole.User)?.Text ?? string.Empty;
         var lastToolMsg = messages.LastOrDefault(m => m.Role == ChatRole.Tool);
 
-        // If previous turn returned a tool result, produce final technical summary
+        // If previous turn returned a tool result, produce final technical summary or propose issues if in triage mode
         if (lastToolMsg != null)
         {
+            if (options?.Tools != null && options.Tools.Any(t => t.Name.Equals("propose_issues", StringComparison.OrdinalIgnoreCase)))
+            {
+                var toolNamesInHistory = messages
+                    .Where(m => m.Role == ChatRole.Assistant)
+                    .SelectMany(m => m.Contents.OfType<FunctionCallContent>())
+                    .Select(f => f.Name)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                if (!toolNamesInHistory.Contains("propose_issues"))
+                {
+                    var call = new FunctionCallContent("call_propose_1", "propose_issues", new Dictionary<string, object?>
+                    {
+                        ["issues"] = new List<object?>
+                        {
+                            new Dictionary<string, object?>
+                            {
+                                ["title"] = "Fix divide by zero handling in Calculator",
+                                ["description"] = "Ensure Calculator.Divide returns 0 or throws dedicated ValidationException when denominator is 0.",
+                                ["type"] = "bug"
+                            }
+                        }
+                    });
+
+                    var msg = new ChatMessage(ChatRole.Assistant, "Proposing structured backlog item based on triage analysis.");
+                    msg.Contents.Add(call);
+                    return new ChatResponse(msg);
+                }
+            }
+
             return new ChatResponse(new ChatMessage(ChatRole.Assistant,
                 "Codebase inspection verified. Calculator service is well-structured with Add and Subtract methods. All quality checks pass cleanly."));
         }

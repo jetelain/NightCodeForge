@@ -49,4 +49,10 @@ public interface IGitMirrorSyncService
     /// falls back to pushing to feature/issue-{id}-ncf and raises an alert.
     /// </summary>
     Task<GitSyncResult> PushToHostAsync(string mirrorRepoPath, int issueId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Pushes the merged base branch (e.g. main) from the mirror repository back to host-origin following squash and merge.
+    /// If the host working tree has uncommitted edits to tracked files, falls back to {baseBranch}-ncf and raises an alert.
+    /// </summary>
+    Task<GitSyncResult> PushBaseBranchToHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default);
 }

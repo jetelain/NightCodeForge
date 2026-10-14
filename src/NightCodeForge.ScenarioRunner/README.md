@@ -33,20 +33,32 @@ dotnet run --project src/NightCodeForge.ScenarioRunner -- -s 2
 dotnet run --project src/NightCodeForge.ScenarioRunner -- -s 2 --keep
 ```
 
+### 4. Run in Container Mode (Docker Sandbox)
+Executes scenarios inside an isolated Docker container sandbox (defaults to `ubuntu:24.04`) with bind-mounted workspace, toolchains, and package caches:
+```powershell
+# Run all scenarios in container mode with mock LLM:
+dotnet run --project src/NightCodeForge.ScenarioRunner -- --mock-llm --all --container
+
+# Run specific scenario in container mode with a custom image:
+dotnet run --project src/NightCodeForge.ScenarioRunner -- -s 1 --mock-llm -c --image ubuntu:24.04
+```
+
 ---
 
 ## Command-Line Arguments
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--scenario <id>` | `-s` | `0` | Run a specific scenario (1–8) |
-| `--all` | `-a` | `false` | Run all 8 scenarios sequentially |
+| `--scenario <id>` | `-s` | | Run a specific scenario (1–10) or scenario name filter |
+| `--all` | `-a` | `false` | Run all scenarios sequentially |
 | `--keep` | `-k` | `false` | Retain temporary Git repository and SQLite DB on disk |
-| `--mock-llm` | `-m` | `false` | Use synthetic deterministic LLM instead of live Ollama |
-| `--endpoint <url>` | `-e` | `http://localhost:11434/` | Ollama Router HTTP endpoint |
-| `--model <name>` | | `Qwen3.8-27B:latest` | Target Ollama model identifier |
-| `--timeout <sec>` | `-t` | `180` | Per-scenario execution timeout in seconds |
-| `--interactive` | `-i` | `false` | Force interactive console selection |
+| `--container` | `-c` | `false` | Run scenarios in Container mode (Docker sandbox) instead of BareHost |
+| `--image <name>` | | `ubuntu:24.04` | Container image for container mode |
+| `--mock-llm` | | `false` | Use synthetic deterministic LLM instead of live Ollama (`--offline`) |
+| `--endpoint <url>` | `-e` | `http://localhost:11434` | Ollama Router HTTP endpoint |
+| `--model <name>` | `-m` | `Qwen3.8-27B:latest` | Target Ollama model identifier |
+| `--timeout <min>` | `-t` | `15` | Request timeout in minutes |
+| `--interactive` | `-i` | `true` | Force interactive console selection menu |
 | `--help` | `-h` | | Display CLI options and usage |
 
 ---
@@ -55,7 +67,7 @@ dotnet run --project src/NightCodeForge.ScenarioRunner -- -s 2 --keep
 
 | # | Scenario Name | Description | Key Validations |
 |---|---|---|---|
-| **1** | **Health & Infrastructure** | Validates SQLite WAL mode, Git CLI, and Ollama connectivity | Preloads model into VRAM via `/api/generate` |
+| **1** | **Health & Infrastructure** | Validates SQLite WAL mode, Git CLI, Ollama connectivity, and execution environment resolution | Preloads model into VRAM via `/api/generate`; validates BareHost or ContainerSandbox resolution |
 | **2** | **Crucible Agent Reasoning** | Executes an agent turn with tool execution (`read`, `edit`, `bash`) | Streaming telemetry, reasoning loop, token metrics |
 | **3** | **Human Interruption** | Universal interruption via `ask` or prompt injection | WIP checkpoints, worker release, and `llm-urgent` resumption |
 | **4** | **Dependency DAG Engine** | Parent/child prerequisite blocking and cascade unblocking | Blocks premature execution, squash-merges, unblocks child |
@@ -63,6 +75,8 @@ dotnet run --project src/NightCodeForge.ScenarioRunner -- -s 2 --keep
 | **6** | **End-to-End Workflow** | Full 6-stage autonomous lifecycle with auto-squash-merge | Review -> Pre-impl -> Impl -> Post-impl -> Code Review -> Verify |
 | **7** | **Crash Resilience & Recovery** | Startup recovery for dirty workspaces and crashed jobs | Purges `.git/index.lock`, creates `WIP-RECOVERY` commits |
 | **8** | **Workspace Concurrency** | Per-workspace mutual exclusion & non-blocking multi-workspace | Workspace lock serialization, cross-workspace parallel locks |
+| **9** | **Untrusted Triage Execution** | Sandboxed evaluation of untrusted incoming issues and code | Restricted execution tier, secret scrubbing, network policy |
+| **10** | **Git Mirror Sync & Merge** | Git mirror push/pull and automatic squash-merge lifecycle | Isolated working clones (`~/.nightcodeforge/wks/{id}`), mirror sync |
 
 ---
 

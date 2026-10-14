@@ -82,6 +82,40 @@ public class WslDockerExecutionTests
     }
 
     [Fact]
+    public void BuildProcessStartSpec_NativeDocker_BuildsArgumentList()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "my-sandbox",
+            ShellExecutable = "docker",
+            UseWsl = false
+        };
+
+        var spec = NightCodeForgeContainerExecutor.BuildProcessStartSpec(options);
+
+        Assert.Equal("docker", spec.FileName);
+        Assert.Equal(new[] { "exec", "-i", "my-sandbox", "bash", "--noprofile", "--norc" }, spec.ArgumentList);
+    }
+
+    [Fact]
+    public void BuildProcessStartSpec_WslWithDistroAndRestricted_BuildsArgumentList()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "ncf-restricted",
+            ShellExecutable = "docker",
+            UseWsl = true,
+            WslDistribution = "Ubuntu-24.04",
+            IsRestrictedReadOnly = true
+        };
+
+        var spec = NightCodeForgeContainerExecutor.BuildProcessStartSpec(options);
+
+        Assert.Equal("wsl.exe", spec.FileName);
+        Assert.Equal(new[] { "-d", "Ubuntu-24.04", "--", "docker", "exec", "-i", "--user", "1000:1000", "ncf-restricted", "bash", "--noprofile", "--norc" }, spec.ArgumentList);
+    }
+
+    [Fact]
     public void BuildDockerCommand_GeneratesCorrectCommandPair()
     {
         var (nativeExe, nativeArgs) = NightCodeForgeContainerExecutor.BuildDockerCommand("ps -a", useWsl: false);
@@ -190,4 +224,133 @@ public class WslDockerExecutionTests
         Assert.NotNull(env);
         Assert.IsType<NightCodeForgeContainerExecutor>(env);
     }
+
+    [Fact]
+    public void BuildVolumeMounts_IncludesWorkspaceSdkAndPackageCacheMounts()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/home/developer/.nightcodeforge/wks/42",
+            ContainerWorkspacePath = "/workspace",
+            MountPackageCaches = true,
+            MountHostSdks = true
+        };
+
+        var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options);
+
+        // Workspace
+        Assert.Contains(mounts, m => m.HostPath == "/home/developer/.nightcodeforge/wks/42" && m.ContainerPath == "/workspace" && !m.IsReadOnly);
+
+        // Package caches (NuGet, npm, pnpm, uv, Maven)
+        Assert.Contains(mounts, m => m.HostPath == "~/.nuget/packages" && m.ContainerPath == "/root/.nuget/packages" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "~/.npm" && m.ContainerPath == "/root/.npm" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "~/.local/share/pnpm/store" && m.ContainerPath == "/root/.local/share/pnpm/store" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "~/.cache/uv" && m.ContainerPath == "/root/.cache/uv" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "~/.m2/repository" && m.ContainerPath == "/root/.m2/repository" && !m.IsReadOnly);
+
+        // SDK toolchains (read-only)
+        Assert.Contains(mounts, m => m.HostPath == "/usr/share/dotnet" && m.ContainerPath == "/usr/share/dotnet" && m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "/usr/lib/jvm" && m.ContainerPath == "/usr/lib/jvm" && m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "/opt/android-sdk" && m.ContainerPath == "/opt/android-sdk" && m.IsReadOnly);
+    }
+
+    [Fact]
+    public void BuildVolumeMounts_RestrictedReadOnly_MarksWorkspaceMountReadOnly()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/home/developer/.nightcodeforge/wks/99",
+            ContainerWorkspacePath = "/workspace",
+            IsRestrictedReadOnly = true
+        };
+
+        var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options);
+        var workspaceMount = Assert.Single(mounts, m => m.ContainerPath == "/workspace");
+        Assert.True(workspaceMount.IsReadOnly);
+        Assert.Equal("/home/developer/.nightcodeforge/wks/99:/workspace:ro", workspaceMount.ToString());
+    }
+
+    [Fact]
+    public void BuildVolumeMounts_ExpandTildeInMounts_ExpandsWslUserHome()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            UseWsl = true,
+            WslUserName = "testuser",
+            ExpandTildeInMounts = true,
+            HostWorkspacePath = "~/.nightcodeforge/wks/5"
+        };
+
+        var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options);
+
+        var wksMount = Assert.Single(mounts, m => m.ContainerPath == "/workspace");
+        Assert.Equal("/home/testuser/.nightcodeforge/wks/5", wksMount.HostPath);
+
+        var nugetMount = Assert.Single(mounts, m => m.ContainerPath == "/root/.nuget/packages");
+        Assert.Equal("/home/testuser/.nuget/packages", nugetMount.HostPath);
+    }
+
+    [Fact]
+    public void BuildDockerRunArgs_BuildsCompleteCommandWithMounts()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "ncf-sandbox-123",
+            ContainerImage = "azurelinux/base/core:3.0",
+            HostWorkspacePath = "/home/dev/.nightcodeforge/wks/123",
+            ContainerWorkspacePath = "/workspace",
+            DefaultWorkingDirectory = "/workspace",
+            MountPackageCaches = true,
+            MountHostSdks = true
+        };
+
+        var args = NightCodeForgeContainerExecutor.BuildDockerRunArgs(options);
+
+        Assert.Equal("run", args[0]);
+        Assert.Equal("-d", args[1]);
+        Assert.Equal("--name", args[2]);
+        Assert.Equal("ncf-sandbox-123", args[3]);
+
+        Assert.Contains("-v", args);
+        Assert.Contains("/home/dev/.nightcodeforge/wks/123:/workspace", args);
+        Assert.Contains("~/.nuget/packages:/root/.nuget/packages", args);
+        Assert.Contains("~/.npm:/root/.npm", args);
+        Assert.Contains("/usr/share/dotnet:/usr/share/dotnet:ro", args);
+
+        Assert.Contains("-w", args);
+        Assert.Contains("/workspace", args);
+
+        Assert.Contains("azurelinux/base/core:3.0", args);
+        Assert.Contains("tail", args);
+        Assert.Contains("/dev/null", args);
+    }
+
+    [Fact]
+    public void BuildDockerRunProcessSpec_WslEnabled_WrapsWithWslAndDistro()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "wsl-container",
+            ShellExecutable = "docker",
+            UseWsl = true,
+            WslDistribution = "Ubuntu-24.04",
+            WslExecutable = "wsl.exe",
+            HostWorkspacePath = "/home/wsluser/.nightcodeforge/wks/1"
+        };
+
+        var spec = NightCodeForgeContainerExecutor.BuildDockerRunProcessSpec(options);
+
+        Assert.Equal("wsl.exe", spec.FileName);
+        var argList = spec.ArgumentList!.ToList();
+        Assert.Equal("-d", argList[0]);
+        Assert.Equal("Ubuntu-24.04", argList[1]);
+        Assert.Equal("--", argList[2]);
+        Assert.Equal("docker", argList[3]);
+        Assert.Equal("run", argList[4]);
+        Assert.Equal("-d", argList[5]);
+        Assert.Equal("--name", argList[6]);
+        Assert.Equal("wsl-container", argList[7]);
+        Assert.Contains("/home/wsluser/.nightcodeforge/wks/1:/workspace", argList);
+    }
 }
+

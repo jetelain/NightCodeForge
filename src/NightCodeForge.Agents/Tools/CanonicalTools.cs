@@ -52,6 +52,12 @@ public partial class CanonicalTools
     {
         if (_pathResolver != null && _workspaceId.HasValue)
         {
+            var rootCrucibleDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty);
+            if (Directory.Exists(rootCrucibleDir))
+            {
+                return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path);
+            }
+
             var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path);
             if (File.Exists(cruciblePath) || Directory.Exists(cruciblePath))
             {

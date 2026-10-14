@@ -44,6 +44,7 @@ public class OrchestratorHarnessTests
     private class FakeMirrorSyncService : IGitMirrorSyncService
     {
         public int PushCount { get; private set; }
+        public int PushBaseBranchCount { get; private set; }
 
         public Task ConfigureHostRepositoryAsync(string hostRepoPath, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<string> InitializeMirrorAsync(Workspace workspace, string mirrorDirectory, CancellationToken cancellationToken = default) => Task.FromResult(mirrorDirectory);
@@ -53,6 +54,12 @@ public class OrchestratorHarnessTests
         {
             PushCount++;
             return Task.FromResult(new GitSyncResult(true, false, $"feature/issue-{issueId}", null));
+        }
+
+        public Task<GitSyncResult> PushBaseBranchToHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default)
+        {
+            PushBaseBranchCount++;
+            return Task.FromResult(new GitSyncResult(true, false, baseBranch, null));
         }
     }
 
@@ -568,5 +575,68 @@ public class OrchestratorHarnessTests
 
         // Verify markdown sync service archived the issue file
         Assert.Equal(1, markdownSync.ArchiveCount);
+    }
+
+    [Fact]
+    public async Task CompleteIssueAndCascadeAsync_WithExt4Mirror_CallsPushBaseBranchToHostAsync()
+    {
+        var issueRepo = new InMemoryIssueRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var depStore = new InMemoryIssueDependencyStore();
+        var depEngine = new DependencyResolutionEngine(depStore);
+        var lockProvider = new WorkspaceLockProvider();
+        var gitManager = new FakeGitWorkspaceManager();
+        var jobQueue = new FakeIssueJobQueue();
+        var mirrorService = new FakeMirrorSyncService();
+
+        var workspace = new Workspace
+        {
+            Id = 15,
+            Name = "Mirror Complete Test",
+            RepositoryPath = "C:/test/repo",
+            Ext4MirrorPath = "/home/user/.nightcodeforge/wks/15",
+            DefaultBaseBranch = "main"
+        };
+        await workspaceRepo.CreateAsync(workspace);
+
+        var issue = await issueRepo.CreateAsync(new Issue
+        {
+            Id = 105,
+            WorkspaceId = 15,
+            Status = IssueOverallStatus.Ready,
+            CurrentStageId = "deterministic-post-review",
+            BaseBranch = "main"
+        });
+        depStore.AddIssue(105, 15, IssueOverallStatus.Ready);
+
+        var pipeline = new WorkflowPipeline(Array.Empty<IWorkflowStage>());
+
+        var orchestrator = new IssueOrchestrator(
+            issueRepo, workspaceRepo, depEngine, lockProvider,
+            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
+            gitMirrorSyncService: mirrorService);
+
+        await orchestrator.CompleteIssueAndCascadeAsync(105, "Squash and merge to main");
+
+        var updated = await issueRepo.GetByIdAsync(105);
+        Assert.NotNull(updated);
+        Assert.Equal(IssueOverallStatus.Closed, updated.Status);
+
+        // Verify base branch was pushed to host-origin
+        Assert.Equal(1, mirrorService.PushBaseBranchCount);
+    }
+
+    [Fact]
+    public void ProcessIssueAsync_HasAutomaticRetryAttribute_ConfiguredToZeroAttempts()
+    {
+        var method = typeof(IssueOrchestrator).GetMethod(nameof(IssueOrchestrator.ProcessIssueAsync));
+        Assert.NotNull(method);
+
+        var attr = method.GetCustomAttributes(typeof(Hangfire.AutomaticRetryAttribute), false)
+            .FirstOrDefault() as Hangfire.AutomaticRetryAttribute;
+
+        Assert.NotNull(attr);
+        Assert.Equal(0, attr.Attempts);
+        Assert.Equal(Hangfire.AttemptsExceededAction.Fail, attr.OnAttemptsExceeded);
     }
 }

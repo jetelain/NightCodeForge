@@ -71,15 +71,16 @@ public class GitMirrorSyncService : IGitMirrorSyncService
         // 1. Configure receive.denyCurrentBranch updateInstead on host
         await ConfigureHostRepositoryAsync(workspace.RepositoryPath, cancellationToken);
 
-        var remoteUrl = _pathResolver != null
+        var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+        var isTargetWsl = isWindows && (targetMirrorDir.StartsWith('/') || targetMirrorDir.StartsWith('~'));
+        var remoteUrl = isTargetWsl && _pathResolver != null
             ? _pathResolver.GetHostRemoteUrl(workspace.RepositoryPath)
             : workspace.RepositoryPath;
 
         // 2. Clone repository into targetMirrorDir if not already initialized
         var isAlreadyInitialized = false;
-        var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         var checkPath = targetMirrorDir;
-        if (isWindows && (targetMirrorDir.StartsWith('/') || targetMirrorDir.StartsWith('~')))
+        if (isTargetWsl)
         {
             var distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
             checkPath = WslPathConverter.ToWslUncPath(targetMirrorDir, distro);
@@ -90,11 +91,29 @@ public class GitMirrorSyncService : IGitMirrorSyncService
             try
             {
                 var check = await _gitCliRunner.ExecuteAsync(targetMirrorDir, "rev-parse --is-inside-work-tree", cancellationToken: cancellationToken);
-                isAlreadyInitialized = check.StandardOutput.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+                if (check.StandardOutput.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))
+                {
+                    var remoteCheck = await _gitCliRunner.ExecuteAsync(targetMirrorDir, "remote get-url host-origin", cancellationToken: cancellationToken);
+                    var currentRemote = remoteCheck.StandardOutput.Trim().Replace('\\', '/');
+                    var expectedRemote = remoteUrl.Replace('\\', '/');
+                    if (string.Equals(currentRemote, expectedRemote, StringComparison.OrdinalIgnoreCase))
+                    {
+                        isAlreadyInitialized = true;
+                    }
+                }
             }
             catch (Exception)
             {
                 isAlreadyInitialized = false;
+            }
+
+            if (!isAlreadyInitialized)
+            {
+                try
+                {
+                    Directory.Delete(checkPath, true);
+                }
+                catch { }
             }
         }
 
@@ -157,6 +176,12 @@ public class GitMirrorSyncService : IGitMirrorSyncService
                 $"remote set-url host-origin \"{remoteUrl}\"",
                 cancellationToken: cancellationToken);
         }
+
+        // Configure default remote for checkouts to disambiguate branches when multiple remotes exist
+        await _gitCliRunner.ExecuteAsync(
+            targetMirrorDir,
+            "config checkout.defaultRemote host-origin",
+            cancellationToken: cancellationToken);
 
         workspace.Ext4MirrorPath = targetMirrorDir;
         return targetMirrorDir;
@@ -244,6 +269,74 @@ public class GitMirrorSyncService : IGitMirrorSyncService
                 throw new GitCommandException(
                     mirrorRepoPath,
                     $"push host-origin {branchName}:refs/heads/{fallbackBranch}",
+                    ex.ExitCode,
+                    ex.StandardOutput,
+                    $"Primary push failed: {ex.StandardError}\nFallback push failed: {fallbackEx.Message}");
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<GitSyncResult> PushBaseBranchToHostAsync(
+        string mirrorRepoPath,
+        string baseBranch,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(mirrorRepoPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseBranch);
+
+        _logger.LogInformation("Pushing merged base branch '{BaseBranch}' from mirror to host-origin", baseBranch);
+
+        try
+        {
+            await _gitCliRunner.ExecuteAsync(
+                mirrorRepoPath,
+                $"push host-origin {baseBranch}",
+                timeoutSeconds: 60,
+                cancellationToken: cancellationToken);
+
+            _logger.LogInformation("Successfully pushed merged '{BaseBranch}' to host-origin", baseBranch);
+            return new GitSyncResult(
+                Success: true,
+                FallbackUsed: false,
+                BranchPushed: baseBranch,
+                WarningMessage: null);
+        }
+        catch (GitCommandException ex)
+        {
+            _logger.LogWarning(ex, "Push of base branch '{BaseBranch}' to host-origin rejected. Initiating dirty host tree fallback.", baseBranch);
+
+            var fallbackBranch = $"{baseBranch}-ncf";
+            var warningMessage = $"⚠️ Host Working Tree Dirty on {baseBranch}: Merged changes pushed to '{fallbackBranch}'. Please commit or stash local edits in your host IDE to reconcile with the active branch.";
+
+            try
+            {
+                await _gitCliRunner.ExecuteAsync(
+                    mirrorRepoPath,
+                    $"push host-origin {baseBranch}:refs/heads/{fallbackBranch} --force",
+                    timeoutSeconds: 60,
+                    cancellationToken: cancellationToken);
+
+                _logger.LogInformation("Fallback push succeeded: '{BaseBranch}' pushed to 'refs/heads/{FallbackBranch}' on host",
+                    baseBranch, fallbackBranch);
+
+                if (_alertNotifier != null)
+                {
+                    await _alertNotifier.NotifyAlertAsync("Host Working Tree Dirty on Merge", warningMessage, cancellationToken);
+                }
+
+                return new GitSyncResult(
+                    Success: true,
+                    FallbackUsed: true,
+                    BranchPushed: fallbackBranch,
+                    WarningMessage: warningMessage);
+            }
+            catch (Exception fallbackEx)
+            {
+                _logger.LogError(fallbackEx, "Fallback push of '{BaseBranch}' to '{FallbackBranch}' also failed.", baseBranch, fallbackBranch);
+                throw new GitCommandException(
+                    mirrorRepoPath,
+                    $"push host-origin {baseBranch}:refs/heads/{fallbackBranch}",
                     ex.ExitCode,
                     ex.StandardOutput,
                     $"Primary push failed: {ex.StandardError}\nFallback push failed: {fallbackEx.Message}");

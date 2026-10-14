@@ -59,6 +59,7 @@ public class IssueOrchestrator : IIssueOrchestrator
         _logger = logger ?? NullLogger<IssueOrchestrator>.Instance;
     }
 
+    [Hangfire.AutomaticRetry(Attempts = 0, OnAttemptsExceeded = Hangfire.AttemptsExceededAction.Fail)]
     public async Task ProcessIssueAsync(int issueId, CancellationToken cancellationToken = default)
     {
         var issue = await _issueRepository.GetByIdAsync(issueId, cancellationToken);
@@ -117,7 +118,7 @@ public class IssueOrchestrator : IIssueOrchestrator
         {
             await _gitWorkspaceManager.CheckoutIssueBranchAsync(workspace, issue.Id, issue.BaseBranch, cancellationToken);
 
-            if (_gitMirrorSyncService != null)
+            if (_gitMirrorSyncService != null && workspace.ExecutionMode != ExecutionMode.BareHost)
             {
                 if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && _pathResolver != null)
                 {
@@ -775,6 +776,23 @@ public class IssueOrchestrator : IIssueOrchestrator
             issue.BaseBranch,
             finalCommitMessage,
             cancellationToken);
+
+        // If ext4 mirror is active, push the merged base branch back to host-origin so developer host repository is updated!
+        if (_gitMirrorSyncService != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            try
+            {
+                await _gitMirrorSyncService.PushBaseBranchToHostAsync(
+                    workspace.Ext4MirrorPath,
+                    issue.BaseBranch,
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed pushing merged base branch '{BaseBranch}' to host-origin for issue #{IssueId}",
+                    issue.BaseBranch, issue.Id);
+            }
+        }
 
         // 2. Mark issue as completed (Closed)
         issue.Status = IssueOverallStatus.Closed;

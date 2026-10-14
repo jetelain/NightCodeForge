@@ -79,4 +79,38 @@ public class WorkspacePathResolverTests
         var clonePath = resolver.GetAgentWorkingClonePath(42);
         Assert.Equal("/home/agentuser/.nightcodeforge/wks/42", clonePath);
     }
+
+    private class FakeWslMetadata : NightCodeForge.Core.Interfaces.IWslMetadataService
+    {
+        public string Distro { get; set; } = "openSUSE";
+        public string User { get; set; } = "linuxdev";
+
+        public string GetDefaultDistributionName() => Distro;
+        public string GetDefaultUserName() => User;
+        public void ClearCache() { }
+    }
+
+    [Fact]
+    public void GetWslDistributionName_And_UserName_DelegatesToMetadataService()
+    {
+        var meta = new FakeWslMetadata { Distro = "AlmaLinux", User = "almadev" };
+        var resolver = new WorkspacePathResolver(wslMetadataService: meta, isWindowsOverride: true);
+
+        Assert.Equal("AlmaLinux", resolver.GetWslDistributionName());
+        Assert.Equal("almadev", resolver.GetWslUserName());
+    }
+
+    [Fact]
+    public void ExplicitOverrides_TakePrecedenceOverMetadataService()
+    {
+        var meta = new FakeWslMetadata { Distro = "AlmaLinux", User = "almadev" };
+        var resolver = new WorkspacePathResolver(
+            wslMetadataService: meta,
+            isWindowsOverride: true,
+            distributionOverride: "Debian-Override",
+            userOverride: "root-override");
+
+        Assert.Equal("Debian-Override", resolver.GetWslDistributionName());
+        Assert.Equal("root-override", resolver.GetWslUserName());
+    }
 }

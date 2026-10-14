@@ -41,6 +41,16 @@ public class RunnerOptions
     public double TimeoutMinutes { get; set; } = 15.0;
 
     /// <summary>
+    /// If true, executes scenarios in Container Mode (Docker sandbox) instead of BareHost.
+    /// </summary>
+    public bool UseContainerMode { get; set; }
+
+    /// <summary>
+    /// Container image to use for Container Mode (defaults to ubuntu:24.04).
+    /// </summary>
+    public string ContainerImage { get; set; } = "ubuntu:24.04";
+
+    /// <summary>
     /// If true, launches the interactive scenario selection menu.
     /// </summary>
     public bool Interactive { get; set; } = true;
@@ -106,6 +116,17 @@ public class RunnerOptions
                     options.TimeoutMinutes = tVal;
                 }
             }
+            else if (arg.Equals("--container", StringComparison.OrdinalIgnoreCase) || arg.Equals("-c", StringComparison.OrdinalIgnoreCase))
+            {
+                options.UseContainerMode = true;
+            }
+            else if (arg.Equals("--image", StringComparison.OrdinalIgnoreCase))
+            {
+                if (i + 1 < args.Length)
+                {
+                    options.ContainerImage = args[++i];
+                }
+            }
             else if (arg.Equals("--interactive", StringComparison.OrdinalIgnoreCase) || arg.Equals("-i", StringComparison.OrdinalIgnoreCase))
             {
                 options.Interactive = true;
@@ -134,6 +155,8 @@ Options:
   -a, --all               Run all test scenarios sequentially
   -s, --scenario <id>     Run specific scenario by number (1..8) or name
   -k, --keep              Keep synthetic Git repos and SQLite databases on disk (default: ephemeral cleanup)
+  -c, --container         Run scenarios in Container mode (Docker sandbox) instead of BareHost
+  --image <name>          Docker image for container mode (default: ubuntu:24.04)
   --mock-llm, --offline   Use synthetic Mock LLM instead of Ollama (rapid offline test)
   -e, --endpoint <url>    Ollama Router endpoint (default: http://localhost:11434)
   -m, --model <id>        LLM model identifier (default: Qwen3.8-27B:latest)

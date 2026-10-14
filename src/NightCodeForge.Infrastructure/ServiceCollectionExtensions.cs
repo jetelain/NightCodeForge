@@ -47,7 +47,9 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IIssueOrchestrator, IssueOrchestrator>();
         services.TryAddScoped<IStartupRecoveryService, StartupRecoveryService>();
 
-        // 6. Execution Environments & Path Resolution
+        // 6. Execution Environments, Process Runner & Path Resolution
+        services.TryAddSingleton<IProcessRunner, Execution.SystemProcessRunner>();
+        services.TryAddSingleton<IWslMetadataService, Execution.WslMetadataService>();
         services.TryAddSingleton<IWorkspacePathResolver, Execution.WorkspacePathResolver>();
         services.TryAddSingleton<IExecutionEnvironment, Execution.BareHostExecutionEnvironment>();
         services.TryAddTransient<Execution.WslExecutionEnvironment>();

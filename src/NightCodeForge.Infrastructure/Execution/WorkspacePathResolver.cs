@@ -14,17 +14,20 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
     [GeneratedRegex(@"^([a-zA-Z]):[\\/]")]
     private static partial Regex WindowsDrivePrefixRegex();
 
+    private readonly IWslMetadataService? _wslMetadataService;
     private readonly ExecutionEnvironmentProviderOptions _options;
     private readonly bool? _isWindowsOverride;
     private readonly string? _distributionOverride;
     private readonly string? _userOverride;
 
     public WorkspacePathResolver(
+        IWslMetadataService? wslMetadataService = null,
         IOptions<ExecutionEnvironmentProviderOptions>? options = null,
         bool? isWindowsOverride = null,
         string? distributionOverride = null,
         string? userOverride = null)
     {
+        _wslMetadataService = wslMetadataService;
         _options = options?.Value ?? new ExecutionEnvironmentProviderOptions();
         _isWindowsOverride = isWindowsOverride;
         _distributionOverride = distributionOverride;
@@ -38,6 +41,11 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         if (!string.IsNullOrWhiteSpace(_distributionOverride))
         {
             return _distributionOverride;
+        }
+
+        if (_wslMetadataService != null)
+        {
+            return _wslMetadataService.GetDefaultDistributionName();
         }
 
         var envDistro = Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION");
@@ -59,6 +67,11 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         if (!string.IsNullOrWhiteSpace(_userOverride))
         {
             return _userOverride;
+        }
+
+        if (_wslMetadataService != null)
+        {
+            return _wslMetadataService.GetDefaultUserName();
         }
 
         var envUser = Environment.GetEnvironmentVariable("NCF_WSL_USER");
@@ -110,8 +123,20 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         var raw = (relativeOrContainerPath ?? string.Empty).Trim();
         var normalized = raw.Replace('\\', '/');
 
+        if (normalized.StartsWith("//wsl.localhost/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("\\\\wsl.localhost\\", StringComparison.OrdinalIgnoreCase))
+        {
+            return raw.Replace('/', '\\');
+        }
+
         string rel;
-        if (normalized.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
+        var agentWorkingPrefix = $".nightcodeforge/wks/{workspaceId}/";
+        var agentIdx = normalized.IndexOf(agentWorkingPrefix, StringComparison.OrdinalIgnoreCase);
+        if (agentIdx >= 0)
+        {
+            rel = normalized.Substring(agentIdx + agentWorkingPrefix.Length);
+        }
+        else if (normalized.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
         {
             rel = normalized.Substring("/workspace/".Length);
         }

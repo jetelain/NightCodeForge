@@ -15,7 +15,9 @@ public static class Program
         new DeterministicQualityGatesScenario(),
         new EndToEndWorkflowScenario(),
         new StartupCrashRecoveryScenario(),
-        new WorkspaceConcurrencyScenario()
+        new WorkspaceConcurrencyScenario(),
+        new UntrustedTriageScenario(),
+        new GitMirrorSyncScenario()
     };
 
     public static async Task<int> Main(string[] args)
@@ -47,6 +49,7 @@ public static class Program
         Console.WriteLine($"  {ConsoleFormatting.Bold}Ollama Endpoint:{ConsoleFormatting.Reset} {ConsoleFormatting.Cyan}{options.Endpoint}{ConsoleFormatting.Reset}");
         Console.WriteLine($"  {ConsoleFormatting.Bold}Target Model:{ConsoleFormatting.Reset}    {ConsoleFormatting.Cyan}{options.ModelId}{ConsoleFormatting.Reset}");
         Console.WriteLine($"  {ConsoleFormatting.Bold}Inference Mode:{ConsoleFormatting.Reset}  {(options.MockLlm ? $"{ConsoleFormatting.Yellow}Mock LLM (Offline){ConsoleFormatting.Reset}" : $"{ConsoleFormatting.Green}Live Ollama Router{ConsoleFormatting.Reset}")}");
+        Console.WriteLine($"  {ConsoleFormatting.Bold}Execution Mode:{ConsoleFormatting.Reset}  {(options.UseContainerMode ? $"{ConsoleFormatting.Magenta}Container Sandbox ({options.ContainerImage}){ConsoleFormatting.Reset}" : $"{ConsoleFormatting.Green}Bare Host{ConsoleFormatting.Reset}")}");
         Console.WriteLine($"  {ConsoleFormatting.Bold}Keep Artifacts:{ConsoleFormatting.Reset}  {(options.Keep ? $"{ConsoleFormatting.Yellow}YES (Inspectable){ConsoleFormatting.Reset}" : "NO (Ephemeral cleanup)")}");
         Console.WriteLine();
     }
@@ -65,6 +68,7 @@ public static class Program
             }
 
             Console.WriteLine($"  ─────────────────────────────────────────────────────────────────────────────");
+            Console.WriteLine($"  {ConsoleFormatting.Yellow}C{ConsoleFormatting.Reset}. Toggle Execution Mode (Currently: {(options.UseContainerMode ? $"Container ({options.ContainerImage})" : "Bare Host")})");
             Console.WriteLine($"  {ConsoleFormatting.Yellow}K{ConsoleFormatting.Reset}. Toggle Keep Ephemeral Artifacts (Currently: {(options.Keep ? $"{ConsoleFormatting.Yellow}ON{ConsoleFormatting.Reset}" : "OFF")})");
             Console.WriteLine($"  {ConsoleFormatting.Yellow}M{ConsoleFormatting.Reset}. Toggle LLM Mode (Currently: {(options.MockLlm ? "Mock LLM" : $"Live Ollama {options.ModelId}")})");
             Console.WriteLine($"  {ConsoleFormatting.Red}Q{ConsoleFormatting.Reset}. Quit");
@@ -76,6 +80,13 @@ public static class Program
             if (input.Equals("Q", StringComparison.OrdinalIgnoreCase))
             {
                 break;
+            }
+
+            if (input.Equals("C", StringComparison.OrdinalIgnoreCase))
+            {
+                options.UseContainerMode = !options.UseContainerMode;
+                Console.WriteLine($"\n{ConsoleFormatting.Yellow}Execution Mode toggled: {(options.UseContainerMode ? $"Container Mode ({options.ContainerImage})" : "Bare Host")}{ConsoleFormatting.Reset}\n");
+                continue;
             }
 
             if (input.Equals("K", StringComparison.OrdinalIgnoreCase))

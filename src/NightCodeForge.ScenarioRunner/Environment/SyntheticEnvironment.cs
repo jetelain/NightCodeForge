@@ -123,7 +123,8 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
                 Name = "Synthetic Workspace",
                 RepositoryPath = RepositoryPath,
                 DefaultBaseBranch = "main",
-                ExecutionMode = ExecutionMode.BareHost
+                ExecutionMode = Options.UseContainerMode ? ExecutionMode.ContainerSandbox : ExecutionMode.BareHost,
+                ContainerImage = Options.UseContainerMode ? Options.ContainerImage : null
             };
             db.Workspaces.Add(Workspace);
             await db.SaveChangesAsync(cancellationToken);
@@ -196,6 +197,23 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
         else
         {
             DeleteDirectorySafe(RootDirectory);
+        }
+
+        if (Options.UseContainerMode && Workspace != null)
+        {
+            try
+            {
+                var containerName = $"ncf-sandbox-{Workspace.Id}";
+                var (rmExe, rmArgs) = Infrastructure.Execution.NightCodeForgeContainerExecutor.BuildDockerCommand(
+                    $"rm -f {containerName}",
+                    useWsl: true,
+                    wslDistribution: null,
+                    shellExecutable: "docker",
+                    wslExecutable: "wsl.exe");
+                var runner = new Infrastructure.Execution.SystemProcessRunner();
+                runner.Run(rmExe, rmArgs, timeoutSeconds: 10);
+            }
+            catch { }
         }
     }
 

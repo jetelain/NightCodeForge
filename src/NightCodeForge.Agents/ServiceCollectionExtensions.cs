@@ -41,8 +41,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<SessionTranscriptService>();
         services.TryAddScoped<TranscriptDiagnosticService>();
 
-        // 4. Ideation Service
+        // 4. Ideation & Triage Services
         services.TryAddScoped<IIdeationService, IdeationService>();
+        services.TryAddScoped<NightCodeForge.Core.Workflow.ITriageService, NightCodeForge.Agents.Triage.TriageService>();
 
         // 5. Agent Harnesses
         services.TryAddScoped<CrucibleAgentHarness>();
