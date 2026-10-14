@@ -22,7 +22,12 @@ namespace NightCodeForge.Infrastructure.Migrations
                     DefaultBaseBranch = table.Column<string>(type: "TEXT", maxLength: 128, nullable: false),
                     ExecutionMode = table.Column<int>(type: "INTEGER", nullable: false),
                     ContainerImage = table.Column<string>(type: "TEXT", maxLength: 512, nullable: true),
+                    ContainerName = table.Column<string>(type: "TEXT", maxLength: 256, nullable: true),
                     Ext4MirrorPath = table.Column<string>(type: "TEXT", maxLength: 1024, nullable: true),
+                    UseWslForContainers = table.Column<bool>(type: "INTEGER", nullable: false, defaultValue: false),
+                    WslDistribution = table.Column<string>(type: "TEXT", maxLength: 128, nullable: true),
+                    BuildTimeoutSeconds = table.Column<int>(type: "INTEGER", nullable: true),
+                    TestTimeoutSeconds = table.Column<int>(type: "INTEGER", nullable: true),
                     CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
                 },
                 constraints: table =>
@@ -45,7 +50,11 @@ namespace NightCodeForge.Infrastructure.Migrations
                     HarnessConfigurationJson = table.Column<string>(type: "TEXT", nullable: true),
                     OptimizationFlags = table.Column<string>(type: "TEXT", nullable: true),
                     PermittedTools = table.Column<string>(type: "TEXT", nullable: true),
-                    SecurityTier = table.Column<int>(type: "INTEGER", nullable: false)
+                    StageDirectives = table.Column<string>(type: "TEXT", nullable: true),
+                    Mode = table.Column<int>(type: "INTEGER", nullable: false),
+                    SecurityTier = table.Column<int>(type: "INTEGER", nullable: false),
+                    SystemPrompt = table.Column<string>(type: "TEXT", nullable: true),
+                    MaxTurns = table.Column<int>(type: "INTEGER", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -68,6 +77,10 @@ namespace NightCodeForge.Infrastructure.Migrations
                     Title = table.Column<string>(type: "TEXT", maxLength: 512, nullable: false),
                     Description = table.Column<string>(type: "TEXT", nullable: false),
                     Status = table.Column<int>(type: "INTEGER", nullable: false),
+                    MergeMode = table.Column<int>(type: "INTEGER", nullable: false),
+                    IsWaitingForHuman = table.Column<bool>(type: "INTEGER", nullable: false, defaultValue: false),
+                    InterruptedAgentProfileId = table.Column<string>(type: "TEXT", maxLength: 128, nullable: true),
+                    InterruptedStageId = table.Column<string>(type: "TEXT", maxLength: 128, nullable: true),
                     CurrentStageId = table.Column<string>(type: "TEXT", maxLength: 128, nullable: false),
                     Priority = table.Column<int>(type: "INTEGER", nullable: false),
                     BaseBranch = table.Column<string>(type: "TEXT", maxLength: 128, nullable: false),
@@ -114,32 +127,6 @@ namespace NightCodeForge.Infrastructure.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "TaskDependencies",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "INTEGER", nullable: false)
-                        .Annotation("Sqlite:Autoincrement", true),
-                    TaskId = table.Column<int>(type: "INTEGER", nullable: false),
-                    DependsOnTaskId = table.Column<int>(type: "INTEGER", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_TaskDependencies", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_TaskDependencies_Tasks_DependsOnTaskId",
-                        column: x => x.DependsOnTaskId,
-                        principalTable: "Tasks",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_TaskDependencies_Tasks_TaskId",
-                        column: x => x.TaskId,
-                        principalTable: "Tasks",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "Questions",
                 columns: table => new
                 {
@@ -154,7 +141,8 @@ namespace NightCodeForge.Infrastructure.Migrations
                     Answer = table.Column<string>(type: "TEXT", nullable: true),
                     AskedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
                     AnsweredAt = table.Column<DateTime>(type: "TEXT", nullable: true),
-                    Status = table.Column<int>(type: "INTEGER", nullable: false)
+                    Status = table.Column<int>(type: "INTEGER", nullable: false),
+                    AgentProfileId = table.Column<string>(type: "TEXT", maxLength: 128, nullable: true)
                 },
                 constraints: table =>
                 {
@@ -223,6 +211,32 @@ namespace NightCodeForge.Infrastructure.Migrations
                         onDelete: ReferentialAction.Cascade);
                 });
 
+            migrationBuilder.CreateTable(
+                name: "TaskDependencies",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "INTEGER", nullable: false)
+                        .Annotation("Sqlite:Autoincrement", true),
+                    TaskId = table.Column<int>(type: "INTEGER", nullable: false),
+                    DependsOnTaskId = table.Column<int>(type: "INTEGER", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_TaskDependencies", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_TaskDependencies_Tasks_DependsOnTaskId",
+                        column: x => x.DependsOnTaskId,
+                        principalTable: "Tasks",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_TaskDependencies_Tasks_TaskId",
+                        column: x => x.TaskId,
+                        principalTable: "Tasks",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
             migrationBuilder.CreateIndex(
                 name: "IX_AgentProfiles_WorkspaceId",
                 table: "AgentProfiles",
@@ -231,6 +245,21 @@ namespace NightCodeForge.Infrastructure.Migrations
             migrationBuilder.CreateIndex(
                 name: "IX_ExecutionLogs_TaskId",
                 table: "ExecutionLogs",
+                column: "TaskId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Questions_TaskId",
+                table: "Questions",
+                column: "TaskId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_StageCheckpoints_TaskId",
+                table: "StageCheckpoints",
+                column: "TaskId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_StageExecutionRecords_TaskId",
+                table: "StageExecutionRecords",
                 column: "TaskId");
 
             migrationBuilder.CreateIndex(
@@ -248,21 +277,6 @@ namespace NightCodeForge.Infrastructure.Migrations
                 name: "IX_Tasks_WorkspaceId",
                 table: "Tasks",
                 column: "WorkspaceId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_Questions_TaskId",
-                table: "Questions",
-                column: "TaskId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_StageCheckpoints_TaskId",
-                table: "StageCheckpoints",
-                column: "TaskId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_StageExecutionRecords_TaskId",
-                table: "StageExecutionRecords",
-                column: "TaskId");
         }
 
         /// <inheritdoc />
@@ -275,9 +289,6 @@ namespace NightCodeForge.Infrastructure.Migrations
                 name: "ExecutionLogs");
 
             migrationBuilder.DropTable(
-                name: "TaskDependencies");
-
-            migrationBuilder.DropTable(
                 name: "Questions");
 
             migrationBuilder.DropTable(
@@ -285,6 +296,9 @@ namespace NightCodeForge.Infrastructure.Migrations
 
             migrationBuilder.DropTable(
                 name: "StageExecutionRecords");
+
+            migrationBuilder.DropTable(
+                name: "TaskDependencies");
 
             migrationBuilder.DropTable(
                 name: "Tasks");

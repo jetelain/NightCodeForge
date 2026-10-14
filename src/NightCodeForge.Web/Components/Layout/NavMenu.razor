@@ -1,30 +1,94 @@
-﻿<div class="top-row ps-3 navbar navbar-dark">
-    <div class="container-fluid">
-        <a class="navbar-brand" href="">NightCodeForge.Web</a>
+@inject WorkerStateService WorkerState
+@implements IDisposable
+
+<aside class="forge-sidebar">
+    <div class="brand-header">
+        <NavLink class="brand-logo-wrap" href="" Match="NavLinkMatch.All">
+            <div class="brand-icon">⚡</div>
+            <span class="brand-text">Night<span>CodeForge</span></span>
+        </NavLink>
+        <button class="sidebar-toggle-btn" @onclick="ToggleSidebar" title="Toggle Sidebar">
+            ☰
+        </button>
     </div>
-</div>
 
-<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+    <div class="sidebar-nav-container">
+        <div class="nav-section-label">Workflow</div>
 
-<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
-    <nav class="nav flex-column">
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Home
-            </NavLink>
-        </div>
+        <NavLink class="forge-nav-link" href="ideation">
+            <span class="nav-icon">💡</span>
+            <span>Ideation Chat</span>
+        </NavLink>
 
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="counter">
-                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> Counter
-            </NavLink>
-        </div>
+        <NavLink class="forge-nav-link" href="backlog">
+            <span class="nav-icon">📋</span>
+            <span>Backlog &amp; DAG</span>
+        </NavLink>
 
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="weather">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Weather
-            </NavLink>
-        </div>
-    </nav>
-</div>
+        <div class="nav-section-label">Execution</div>
 
+        <NavLink class="forge-nav-link" href="monitoring">
+            <span class="nav-icon">⚡</span>
+            <span>Live Telemetry</span>
+        </NavLink>
+
+        <NavLink class="forge-nav-link" href="inbox">
+            <span class="nav-icon">📬</span>
+            <span>Question Inbox</span>
+            @if (WorkerState.Current.PendingQuestionCount > 0)
+            {
+                <span class="nav-badge">@WorkerState.Current.PendingQuestionCount</span>
+            }
+        </NavLink>
+
+        <NavLink class="forge-nav-link" href="review">
+            <span class="nav-icon">🔍</span>
+            <span>Review Room</span>
+        </NavLink>
+
+        <div class="nav-section-label">System</div>
+
+        <NavLink class="forge-nav-link" href="settings">
+            <span class="nav-icon">⚙️</span>
+            <span>Settings &amp; A/B</span>
+        </NavLink>
+
+        <NavLink class="forge-nav-link" href="transcripts">
+            <span class="nav-icon">📜</span>
+            <span>Transcripts &amp; AI</span>
+        </NavLink>
+    </div>
+
+    <div class="sidebar-footer">
+        <span class="font-mono">v1.0.0-rc</span>
+        <span>Obsidian Theme</span>
+    </div>
+</aside>
+
+@code {
+    [Parameter]
+    public EventCallback OnToggleSidebar { get; set; }
+
+    protected override void OnInitialized()
+    {
+        WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
+    }
+
+    private void HandleWorkerStateChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ToggleSidebar()
+    {
+        if (OnToggleSidebar.HasDelegate)
+        {
+            await OnToggleSidebar.InvokeAsync();
+        }
+    }
+
+    public void Dispose()
+    {
+        WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
+    }
+}

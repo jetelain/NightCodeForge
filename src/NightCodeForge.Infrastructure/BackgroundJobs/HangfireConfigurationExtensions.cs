@@ -19,13 +19,28 @@ public static class HangfireConfigurationExtensions
         string sqliteConnectionString = "Data Source=nightcodeforge_hangfire.db;",
         SQLiteStorageOptions? storageOptions = null)
     {
+        var dbPath = sqliteConnectionString;
+        if (dbPath.Contains("Data Source=", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = dbPath.Split(';', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var part in parts)
+            {
+                var trimmed = part.Trim();
+                if (trimmed.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+                {
+                    dbPath = trimmed["Data Source=".Length..].Trim();
+                    break;
+                }
+            }
+        }
+
         services.AddHangfire(config =>
         {
             config
                 .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
                 .UseSimpleAssemblyNameTypeSerializer()
                 .UseRecommendedSerializerSettings()
-                .UseSQLiteStorage(sqliteConnectionString, storageOptions ?? new SQLiteStorageOptions
+                .UseSQLiteStorage(dbPath, storageOptions ?? new SQLiteStorageOptions
                 {
                     QueuePollInterval = TimeSpan.FromSeconds(1)
                 });

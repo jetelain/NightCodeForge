@@ -11,7 +11,7 @@ using NightCodeForge.Infrastructure.Data;
 namespace NightCodeForge.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20261013063818_InitialCreate")]
+    [Migration("20261014160618_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -34,6 +34,12 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("MaxTurns")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Mode")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("ModelName")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -52,6 +58,12 @@ namespace NightCodeForge.Infrastructure.Migrations
 
                     b.Property<int>("SecurityTier")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("StageDirectives")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SystemPrompt")
+                        .HasColumnType("TEXT");
 
                     b.Property<double?>("Temperature")
                         .HasColumnType("REAL");
@@ -78,9 +90,6 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
-                    b.Property<int>("TaskId")
-                        .HasColumnType("INTEGER");
-
                     b.Property<int>("Level")
                         .HasColumnType("INTEGER");
 
@@ -99,6 +108,9 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<string>("StageId")
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("TaskId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("Timestamp")
                         .HasColumnType("TEXT");
@@ -138,9 +150,25 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("InterruptedAgentProfileId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("InterruptedStageId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsWaitingForHuman")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("LastHangfireJobId")
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("MergeMode")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("PipelineDataJson")
                         .HasColumnType("TEXT");
@@ -169,33 +197,15 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.ToTable("Tasks");
                 });
 
-            modelBuilder.Entity("NightCodeForge.Core.Domain.TaskDependency", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("DependsOnTaskId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("TaskId")
-                        .HasColumnType("INTEGER");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DependsOnTaskId");
-
-                    b.HasIndex("TaskId", "DependsOnTaskId")
-                        .IsUnique();
-
-                    b.ToTable("TaskDependencies");
-                });
-
             modelBuilder.Entity("NightCodeForge.Core.Domain.Question", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("AgentProfileId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("Answer")
                         .HasColumnType("TEXT");
@@ -205,9 +215,6 @@ namespace NightCodeForge.Infrastructure.Migrations
 
                     b.Property<DateTime>("AskedAt")
                         .HasColumnType("TEXT");
-
-                    b.Property<int>("TaskId")
-                        .HasColumnType("INTEGER");
 
                     b.Property<string>("OptionsJson")
                         .HasColumnType("TEXT");
@@ -231,6 +238,9 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int>("TaskId")
+                        .HasColumnType("INTEGER");
+
                     b.HasKey("Id");
 
                     b.HasIndex("TaskId");
@@ -252,9 +262,6 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
-                    b.Property<int>("TaskId")
-                        .HasColumnType("INTEGER");
-
                     b.Property<string>("SerializedMemory")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -263,6 +270,9 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("TaskId")
+                        .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 
@@ -296,9 +306,6 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
-                    b.Property<int>("TaskId")
-                        .HasColumnType("INTEGER");
-
                     b.Property<string>("ModelName")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -329,6 +336,9 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<string>("TargetRouting")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("TaskId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("TotalTokens")
                         .HasColumnType("INTEGER");
 
@@ -339,14 +349,43 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.ToTable("StageExecutionRecords");
                 });
 
+            modelBuilder.Entity("NightCodeForge.Core.Domain.TaskDependency", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("DependsOnTaskId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TaskId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DependsOnTaskId");
+
+                    b.HasIndex("TaskId", "DependsOnTaskId")
+                        .IsUnique();
+
+                    b.ToTable("TaskDependencies");
+                });
+
             modelBuilder.Entity("NightCodeForge.Core.Domain.Workspace", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<int?>("BuildTimeoutSeconds")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("ContainerImage")
                         .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContainerName")
+                        .HasMaxLength(256)
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")
@@ -372,6 +411,18 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<string>("RepositoryPath")
                         .IsRequired()
                         .HasMaxLength(1024)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("TestTimeoutSeconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("UseWslForContainers")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("WslDistribution")
+                        .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
@@ -411,25 +462,6 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Navigation("Workspace");
                 });
 
-            modelBuilder.Entity("NightCodeForge.Core.Domain.TaskDependency", b =>
-                {
-                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "DependsOnTask")
-                        .WithMany("DependentTasks")
-                        .HasForeignKey("DependsOnTaskId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "ForgeTask")
-                        .WithMany("Dependencies")
-                        .HasForeignKey("TaskId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("DependsOnTask");
-
-                    b.Navigation("ForgeTask");
-                });
-
             modelBuilder.Entity("NightCodeForge.Core.Domain.Question", b =>
                 {
                     b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "ForgeTask")
@@ -459,6 +491,25 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasForeignKey("TaskId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("ForgeTask");
+                });
+
+            modelBuilder.Entity("NightCodeForge.Core.Domain.TaskDependency", b =>
+                {
+                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "DependsOnTask")
+                        .WithMany("DependentTasks")
+                        .HasForeignKey("DependsOnTaskId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "ForgeTask")
+                        .WithMany("Dependencies")
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("DependsOnTask");
 
                     b.Navigation("ForgeTask");
                 });

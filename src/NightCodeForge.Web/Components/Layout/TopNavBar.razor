@@ -1,0 +1,159 @@
+@inject IWorkspaceRepository WorkspaceRepo
+@inject WorkspaceStateService WorkspaceState
+@inject WorkerStateService WorkerState
+@inject NavigationManager Navigation
+@implements IDisposable
+
+<header class="top-navbar">
+    <div class="top-navbar-left">
+        <!-- Workspace Selector -->
+        <div class="workspace-select-wrapper">
+            <span class="workspace-select-icon">📁</span>
+            <select class="workspace-dropdown" 
+                    value="@(WorkspaceState.ActiveWorkspaceId?.ToString() ?? "")" 
+                    @onchange="OnWorkspaceSelected"
+                    aria-label="Select active workspace">
+                @if (_workspaces.Count == 0)
+                {
+                    <option value="" disabled selected>No Workspaces Found</option>
+                }
+                else
+                {
+                    @foreach (var ws in _workspaces)
+                    {
+                        <option value="@ws.Id">@ws.Name</option>
+                    }
+                }
+            </select>
+        </div>
+
+        <!-- Dynamic Breadcrumb Trail -->
+        <nav class="forge-breadcrumbs" aria-label="Breadcrumb">
+            <span class="breadcrumb-item font-mono">
+                @(WorkspaceState.ActiveWorkspace?.Name ?? "Default")
+            </span>
+            <span class="breadcrumb-separator">/</span>
+            <span class="breadcrumb-item active">@_currentSection</span>
+        </nav>
+    </div>
+
+    <div class="top-navbar-right">
+        <!-- Question Inbox Shortcut Pill -->
+        @{
+            var pendingQuestions = WorkerState.Current.PendingQuestionCount;
+        }
+        <NavLink href="inbox" class="@(pendingQuestions > 0 ? "question-inbox-pill" : "question-inbox-pill empty")" title="Pending Clarification Questions">
+            <span class="pill-icon">📬</span>
+            <span>@(pendingQuestions > 0 ? $"{pendingQuestions} Question{(pendingQuestions > 1 ? "s" : "")}" : "Inbox")</span>
+        </NavLink>
+
+        <!-- Reactive GPU Inference Status Badge -->
+        <div class="worker-status-badge" title="Worker Hardware & Execution Status">
+            @switch (WorkerState.Current.Status)
+            {
+                case WorkerExecutionStatus.Running:
+                    <span class="status-dot running"></span>
+                    <span>
+                        Running: @(WorkerState.Current.StageKind ?? "Agent")
+                        @if (WorkerState.Current.ActiveTaskId.HasValue)
+                        {
+                            <text> - Task #@WorkerState.Current.ActiveTaskId</text>
+                        }
+                        (@WorkerState.Current.HardwareTarget)
+                    </span>
+                    break;
+                case WorkerExecutionStatus.WaitingForHuman:
+                    <span class="status-dot waiting"></span>
+                    <span>Waiting for Clarification</span>
+                    break;
+                case WorkerExecutionStatus.Blocked:
+                    <span class="status-dot blocked"></span>
+                    <span>Worker Blocked</span>
+                    break;
+                case WorkerExecutionStatus.Idle:
+                default:
+                    <span class="status-dot idle"></span>
+                    <span>GPU Idle (@WorkerState.Current.HardwareTarget)</span>
+                    break;
+            }
+        </div>
+    </div>
+</header>
+
+@code {
+    private IReadOnlyList<Workspace> _workspaces = Array.Empty<Workspace>();
+    private string _currentSection = "Overview";
+
+    protected override async Task OnInitializedAsync()
+    {
+        WorkspaceState.OnWorkspaceChanged += HandleStateChanged;
+        WorkerState.OnWorkerStateChanged += HandleStateChanged;
+        Navigation.LocationChanged += HandleLocationChanged;
+
+        await LoadWorkspacesAsync();
+        UpdateCurrentSection(Navigation.Uri);
+    }
+
+    private async Task LoadWorkspacesAsync()
+    {
+        try
+        {
+            _workspaces = await WorkspaceRepo.GetAllAsync();
+            if (WorkspaceState.ActiveWorkspace == null && _workspaces.Count > 0)
+            {
+                WorkspaceState.SetActiveWorkspace(_workspaces[0]);
+            }
+        }
+        catch
+        {
+            _workspaces = Array.Empty<Workspace>();
+        }
+    }
+
+    private void OnWorkspaceSelected(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var selectedId))
+        {
+            var matched = _workspaces.FirstOrDefault(w => w.Id == selectedId);
+            if (matched != null)
+            {
+                WorkspaceState.SetActiveWorkspace(matched);
+            }
+        }
+    }
+
+    private void HandleLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        UpdateCurrentSection(e.Location);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void UpdateCurrentSection(string uri)
+    {
+        var relative = Navigation.ToBaseRelativePath(uri).Split('?')[0].Trim('/');
+        _currentSection = relative.ToLowerInvariant() switch
+        {
+            "" => "Overview",
+            "ideation" => "Ideation Chat",
+            "backlog" => "Backlog & DAG",
+            "monitoring" => "Live Telemetry",
+            "inbox" => "Question Inbox",
+            "review" => "Review Room",
+            "settings" => "Settings & A/B",
+            "transcripts" => "Transcripts & AI",
+            _ => char.ToUpper(relative[0]) + relative[1..]
+        };
+    }
+
+    private void HandleStateChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.OnWorkspaceChanged -= HandleStateChanged;
+        WorkerState.OnWorkerStateChanged -= HandleStateChanged;
+        Navigation.LocationChanged -= HandleLocationChanged;
+    }
+}

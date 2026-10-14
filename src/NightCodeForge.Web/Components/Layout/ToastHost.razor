@@ -1,0 +1,52 @@
+@inject ToastService ToastService
+@implements IDisposable
+
+<div class="toast-host" aria-live="polite" aria-atomic="true">
+    @foreach (var toast in ToastService.Toasts)
+    {
+        <div class="toast-item @GetToastClass(toast.Level)">
+            <span class="toast-icon">@GetToastIcon(toast.Level)</span>
+            <div class="toast-content">
+                <div class="toast-title">@toast.Title</div>
+                <div class="toast-message">@toast.Message</div>
+                <div class="toast-time">@toast.Timestamp.ToLocalTime().ToString("HH:mm:ss")</div>
+            </div>
+            <button class="toast-close-btn" @onclick="() => ToastService.Remove(toast.Id)" title="Dismiss notification">
+                ✕
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        ToastService.OnToastsChanged += HandleToastsChanged;
+    }
+
+    private void HandleToastsChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private static string GetToastClass(ToastLevel level) => level switch
+    {
+        ToastLevel.Success => "toast-success",
+        ToastLevel.Warning => "toast-warning",
+        ToastLevel.Error => "toast-error",
+        _ => "toast-info"
+    };
+
+    private static string GetToastIcon(ToastLevel level) => level switch
+    {
+        ToastLevel.Success => "✅",
+        ToastLevel.Warning => "⚠️",
+        ToastLevel.Error => "❌",
+        _ => "ℹ️"
+    };
+
+    public void Dispose()
+    {
+        ToastService.OnToastsChanged -= HandleToastsChanged;
+    }
+}

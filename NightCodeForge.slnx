@@ -10,5 +10,6 @@
     <Project Path="tests/NightCodeForge.Agents.Tests/NightCodeForge.Agents.Tests.csproj" />
     <Project Path="tests/NightCodeForge.Core.Tests/NightCodeForge.Core.Tests.csproj" />
     <Project Path="tests/NightCodeForge.Infrastructure.Tests/NightCodeForge.Infrastructure.Tests.csproj" />
+    <Project Path="tests/NightCodeForge.Web.Tests/NightCodeForge.Web.Tests.csproj" />
   </Folder>
 </Solution>

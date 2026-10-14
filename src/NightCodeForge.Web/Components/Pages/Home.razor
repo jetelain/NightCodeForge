@@ -1,7 +1,191 @@
-﻿@page "/"
+@page "/"
+@inject WorkspaceStateService WorkspaceState
+@inject WorkerStateService WorkerState
+@inject ToastService ToastService
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Overview - NightCodeForge</PageTitle>
 
-<h1>Hello, world!</h1>
+<div style="display: flex; flex-direction: column; gap: 2rem;">
+    <!-- Welcome Banner & Quick Status -->
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
+        <div>
+            <h1>NightCodeForge Console</h1>
+            <p>Autonomous AI Software Engineering Forge with Human-in-the-Loop Orchestration.</p>
+        </div>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <button class="forge-btn forge-btn-secondary" @onclick="TriggerInfoToast">
+                ℹ️ Test Info Toast
+            </button>
+            <button class="forge-btn forge-btn-primary" @onclick="TriggerSuccessToast">
+                ✅ Test Success Toast
+            </button>
+        </div>
+    </div>
 
-Welcome to your new app.
+    <!-- Active Workspace & Worker Summary Cards -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem;">
+        <!-- Workspace Card -->
+        <div class="forge-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <span style="font-size: 0.8rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Current Workspace</span>
+                <span class="forge-badge badge-indigo">Active Circuit</span>
+            </div>
+            <div style="font-size: 1.3rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--text-primary);">
+                @(WorkspaceState.ActiveWorkspace?.Name ?? "No workspace selected")
+            </div>
+            <div class="font-mono" style="font-size: 0.82rem; color: var(--text-secondary); word-break: break-all;">
+                @(WorkspaceState.ActiveWorkspace?.RepositoryPath ?? "Choose a workspace from the top-bar selector")
+            </div>
+            @if (WorkspaceState.ActiveWorkspace != null)
+            {
+                <div style="margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <span class="forge-badge badge-teal">Branch: @WorkspaceState.ActiveWorkspace.DefaultBaseBranch</span>
+                    <span class="forge-badge badge-agentic">Mode: @WorkspaceState.ActiveWorkspace.ExecutionMode</span>
+                </div>
+            }
+        </div>
+
+        <!-- Worker Status Telemetry Card -->
+        <div class="forge-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <span style="font-size: 0.8rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Worker Telemetry</span>
+                <span class="forge-badge @(WorkerState.Current.Status == WorkerExecutionStatus.Running ? "badge-indigo" : (WorkerState.Current.Status == WorkerExecutionStatus.WaitingForHuman ? "badge-amber" : "badge-deterministic"))">
+                    @WorkerState.Current.Status
+                </span>
+            </div>
+            <div style="font-size: 1.3rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.6rem;">
+                <span class="status-dot @(WorkerState.Current.Status.ToString().ToLowerInvariant())"></span>
+                <span>@WorkerState.Current.HardwareTarget</span>
+            </div>
+            <div style="font-size: 0.85rem; color: var(--text-secondary);">
+                Stage: <span class="font-mono" style="color: var(--text-primary);">@(WorkerState.Current.StageKind ?? "Idle")</span>
+                @if (WorkerState.Current.ActiveTaskId.HasValue)
+                {
+                    <text> | Task: <span class="font-mono" style="color: var(--accent-indigo);">#@WorkerState.Current.ActiveTaskId</span></text>
+                }
+            </div>
+            <div style="margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <button class="forge-btn forge-btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;" @onclick="SimulateWorkerIdle">
+                    Set Idle
+                </button>
+                <button class="forge-btn forge-btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;" @onclick="SimulateWorkerRunning">
+                    Set Running
+                </button>
+                <button class="forge-btn forge-btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;" @onclick="SimulateWorkerWaiting">
+                    Set Waiting
+                </button>
+                <button class="forge-btn forge-btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;" @onclick="IncrementQuestions">
+                    +1 Question (@WorkerState.Current.PendingQuestionCount)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Navigation Hub -->
+    <div>
+        <h2 style="margin-bottom: 1rem;">Workspace Workflows</h2>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+            <NavLink href="ideation" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                    <span style="font-size: 1.5rem;">💡</span>
+                    <div style="font-weight: 600; font-size: 1.05rem;">Ideation Chat</div>
+                </div>
+                <p style="font-size: 0.85rem; margin: 0;">Brainstorm and refine architectural features with the Architect Agent.</p>
+            </NavLink>
+
+            <NavLink href="backlog" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                    <span style="font-size: 1.5rem;">📋</span>
+                    <div style="font-weight: 600; font-size: 1.05rem;">Backlog &amp; Visual DAG</div>
+                </div>
+                <p style="font-size: 0.85rem; margin: 0;">Visualize task graphs, pipeline topological stages, and task gates.</p>
+            </NavLink>
+
+            <NavLink href="monitoring" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                    <span style="font-size: 1.5rem;">⚡</span>
+                    <div style="font-weight: 600; font-size: 1.05rem;">Live Telemetry</div>
+                </div>
+                <p style="font-size: 0.85rem; margin: 0;">Real-time GPU gauges, streaming agent thoughts, and tool dispatch logs.</p>
+            </NavLink>
+
+            <NavLink href="inbox" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                    <span style="font-size: 1.5rem;">📬</span>
+                    <div style="font-weight: 600; font-size: 1.05rem;">Question Inbox</div>
+                </div>
+                <p style="font-size: 0.85rem; margin: 0;">Human-in-the-loop decisions, approval gates, and clarifications.</p>
+            </NavLink>
+
+            <NavLink href="review" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                    <span style="font-size: 1.5rem;">🔍</span>
+                    <div style="font-weight: 600; font-size: 1.05rem;">Review Room</div>
+                </div>
+                <p style="font-size: 0.85rem; margin: 0;">Side-by-side git diff inspection, test reports, and squash merges.</p>
+            </NavLink>
+
+            <NavLink href="settings" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                    <span style="font-size: 1.5rem;">⚙️</span>
+                    <div style="font-weight: 600; font-size: 1.05rem;">Settings &amp; A/B</div>
+                </div>
+                <p style="font-size: 0.85rem; margin: 0;">Configure LLM inference models, temperature tournaments, and host SDKs.</p>
+            </NavLink>
+        </div>
+    </div>
+</div>
+
+@code {
+    private void TriggerInfoToast()
+    {
+        ToastService.Show("Workspace Telemetry", "Workspace state refreshed from local repository.", ToastLevel.Info);
+    }
+
+    private void TriggerSuccessToast()
+    {
+        ToastService.Show("Build Succeeded", "Deterministic test suite passed with 100% assertions green.", ToastLevel.Success);
+    }
+
+    private void SimulateWorkerIdle()
+    {
+        WorkerState.UpdateStatus(new WorkerStatusSnapshot(
+            WorkerExecutionStatus.Idle,
+            null,
+            null,
+            null,
+            null,
+            "Local GPU",
+            WorkerState.Current.PendingQuestionCount));
+    }
+
+    private void SimulateWorkerRunning()
+    {
+        WorkerState.UpdateStatus(new WorkerStatusSnapshot(
+            WorkerExecutionStatus.Running,
+            42,
+            "Step 5.1 Design System Verification",
+            "stage-impl-01",
+            "ImplementationStage",
+            "NVIDIA RTX 4090",
+            WorkerState.Current.PendingQuestionCount));
+    }
+
+    private void SimulateWorkerWaiting()
+    {
+        WorkerState.UpdateStatus(new WorkerStatusSnapshot(
+            WorkerExecutionStatus.WaitingForHuman,
+            42,
+            "Step 5.1 Design System Verification",
+            "stage-review-01",
+            "ClarificationGate",
+            "NVIDIA RTX 4090",
+            Math.Max(1, WorkerState.Current.PendingQuestionCount)));
+    }
+
+    private void IncrementQuestions()
+    {
+        WorkerState.UpdatePendingQuestions(WorkerState.Current.PendingQuestionCount + 1);
+        ToastService.Show("New Clarification", "An agent submitted a new question in the Question Inbox.", ToastLevel.Warning);
+    }
+}

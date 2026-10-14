@@ -3,12 +3,18 @@ using NightCodeForge.Core.Services;
 using NightCodeForge.Infrastructure;
 using NightCodeForge.Infrastructure.BackgroundJobs;
 using NightCodeForge.Web.Components;
+using NightCodeForge.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+
+// Register Web UI State Services
+builder.Services.AddScoped<WorkspaceStateService>();
+builder.Services.AddSingleton<WorkerStateService>();
+builder.Services.AddScoped<ToastService>();
 
 // Register NightCodeForge domain and infrastructure services
 var dbConnection = builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=nightcodeforge.db;";

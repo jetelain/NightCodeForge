@@ -1,0 +1,37 @@
+@page "/inbox"
+
+<PageTitle>Question Inbox - NightCodeForge</PageTitle>
+
+<div class="page-header" style="margin-bottom: 1.5rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <span style="font-size: 1.75rem;">📬</span>
+        <div>
+            <h1>Human-in-the-Loop Question Inbox</h1>
+            <p>Direct interaction portal for agent clarification requests, scope approvals, and escalations.</p>
+        </div>
+    </div>
+</div>
+
+<div class="forge-card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <div style="font-weight: 600; font-size: 1.1rem;">Pending Clarification Requests</div>
+        <span class="forge-badge badge-amber">@WorkerState.Current.PendingQuestionCount Pending</span>
+    </div>
+    @if (WorkerState.Current.PendingQuestionCount == 0)
+    {
+        <p style="color: var(--text-muted); font-style: italic;">
+            All clear! No agents currently waiting for human guidance or clarification.
+        </p>
+    }
+    else
+    {
+        <p style="color: var(--accent-amber); font-weight: 500;">
+            There are @WorkerState.Current.PendingQuestionCount questions requiring your decision or input.
+        </p>
+    }
+</div>
+
+@code {
+    [Inject]
+    private WorkerStateService WorkerState { get; set; } = default!;
+}

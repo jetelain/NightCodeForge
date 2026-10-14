@@ -1,0 +1,31 @@
+@page "/monitoring"
+
+<PageTitle>Live Telemetry - NightCodeForge</PageTitle>
+
+<div class="page-header" style="margin-bottom: 1.5rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <span style="font-size: 1.75rem;">⚡</span>
+        <div>
+            <h1>Live Telemetry &amp; Monitoring Console</h1>
+            <p>Real-time execution telemetry, agent thought logs, GPU gauges, and execution traces.</p>
+        </div>
+    </div>
+</div>
+
+<div class="forge-card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <div style="font-weight: 600; font-size: 1.1rem;">Hardware &amp; Execution Stream</div>
+        <span class="forge-badge badge-indigo">SignalR Live Telemetry</span>
+    </div>
+    <p style="margin-bottom: 1.25rem;">
+        Streaming logs, token velocity gauges, and tool invocation visualizer powered by SignalR hub.
+    </p>
+    <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-secondary);">
+        Worker Target: <span style="color: var(--accent-teal);">@WorkerState.Current.HardwareTarget</span> | Status: <span style="color: var(--accent-indigo);">@WorkerState.Current.Status</span>
+    </div>
+</div>
+
+@code {
+    [Inject]
+    private WorkerStateService WorkerState { get; set; } = default!;
+}

@@ -1,0 +1,31 @@
+@page "/transcripts"
+
+<PageTitle>Transcripts &amp; AI - NightCodeForge</PageTitle>
+
+<div class="page-header" style="margin-bottom: 1.5rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <span style="font-size: 1.75rem;">📜</span>
+        <div>
+            <h1>Transcripts &amp; AI Diagnostics</h1>
+            <p>Full-fidelity LLM conversational logs, tool execution history, token efficiency analysis, and replays.</p>
+        </div>
+    </div>
+</div>
+
+<div class="forge-card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <div style="font-weight: 600; font-size: 1.1rem;">Transcript Search &amp; Inspector</div>
+        <span class="forge-badge badge-deterministic">Audit Trail</span>
+    </div>
+    <p style="margin-bottom: 1.25rem;">
+        Inspect raw agent thoughts, tool dispatch parameters, stderr streams, and token consumption breakdowns.
+    </p>
+    <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-secondary);">
+        Active Workspace: <span style="color: var(--accent-indigo);">@(WorkspaceState.ActiveWorkspace?.Name ?? "None selected")</span>
+    </div>
+</div>
+
+@code {
+    [Inject]
+    private WorkspaceStateService WorkspaceState { get; set; } = default!;
+}

@@ -2,7 +2,7 @@
 
 > **Phase 5 Implementation Step**  
 > *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Next Step:* [Step 5.2: SignalR Telemetry Infrastructure](STEP_5_2_SIGNALR_TELEMETRY_INFRASTRUCTURE.md)  
-> *Project Target:* `src/NightCodeForge.Web` | *Status:* Ready for Implementation
+> *Project Target:* `src/NightCodeForge.Web` | *Status:* Completed
 
 ---
 
@@ -342,13 +342,13 @@ Subscribes to `ToastService.OnToastsChanged` and renders animated floating cards
 
 ## 6. Definition of Done (DoD) Checklist
 
-- [ ] `theme.css` created with complete CSS variable token specification.
-- [ ] `app.css` updated with dark theme reset, typography, cards, badges, and layout grid.
-- [ ] `App.razor` loads Google Fonts (`Inter`, `JetBrains Mono`) and theme stylesheets.
-- [ ] `WorkspaceStateService` implemented and registered in DI (`AddScoped`).
-- [ ] `WorkerStateService` implemented and registered in DI (`AddSingleton`).
-- [ ] `ToastService` implemented and registered in DI (`AddScoped`).
-- [ ] `TopNavBar.razor` renders workspace selector, breadcrumbs, question counter pill, and pulsing worker badge.
-- [ ] `NavMenu.razor` provides clean routing to all 7 core pages.
-- [ ] `MainLayout.razor` and `ToastHost.razor` integrated with zero layout jumping.
-- [ ] Unit tests for `WorkspaceStateService`, `WorkerStateService`, and `ToastService`.
+- [x] `theme.css` created with complete CSS variable token specification.
+- [x] `app.css` updated with dark theme reset, typography, cards, badges, and layout grid.
+- [x] `App.razor` loads Google Fonts (`Inter`, `JetBrains Mono`) and theme stylesheets.
+- [x] `WorkspaceStateService` implemented and registered in DI (`AddScoped`).
+- [x] `WorkerStateService` implemented and registered in DI (`AddSingleton`).
+- [x] `ToastService` implemented and registered in DI (`AddScoped`).
+- [x] `TopNavBar.razor` renders workspace selector, breadcrumbs, question counter pill, and pulsing worker badge.
+- [x] `NavMenu.razor` provides clean routing to all 7 core pages.
+- [x] `MainLayout.razor` and `ToastHost.razor` integrated with zero layout jumping.
+- [x] Unit tests for `WorkspaceStateService`, `WorkerStateService`, and `ToastService`.
