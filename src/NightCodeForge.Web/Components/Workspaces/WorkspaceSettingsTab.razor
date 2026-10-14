@@ -1,0 +1,59 @@
+@namespace NightCodeForge.Web.Components.Workspaces
+@using NightCodeForge.Web.Services
+@inject WorkspaceStateService WorkspaceState
+
+<div class="forge-card mt-4">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <div>
+            <h3 style="font-weight: 600; font-size: 1.1rem; margin: 0 0 0.25rem 0;">Workspace Onboarding &amp; Repositories</h3>
+            <p style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">Manage local repositories, branch targets, and execution confinement.</p>
+        </div>
+        <button type="button" class="forge-btn forge-btn-primary" @onclick="LaunchWizard">
+            🧙 Launch Workspace Creation Wizard
+        </button>
+    </div>
+
+    @if (WorkspaceState.ActiveWorkspace != null)
+    {
+        <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; margin-top: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <strong style="font-size: 1rem; color: var(--text-primary);">@WorkspaceState.ActiveWorkspace.Name</strong>
+                <span class="forge-badge badge-teal">Active</span>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; font-size: 0.85rem;">
+                <div>
+                    <span style="color: var(--text-muted); display: block;">Host Path</span>
+                    <span class="font-mono" style="color: var(--text-secondary); word-break: break-all;">@WorkspaceState.ActiveWorkspace.RepositoryPath</span>
+                </div>
+                <div>
+                    <span style="color: var(--text-muted); display: block;">Base Branch</span>
+                    <span class="font-mono" style="color: var(--text-secondary);">@WorkspaceState.ActiveWorkspace.DefaultBaseBranch</span>
+                </div>
+                <div>
+                    <span style="color: var(--text-muted); display: block;">Execution Mode</span>
+                    <span style="color: var(--text-secondary);">@WorkspaceState.ActiveWorkspace.ExecutionMode</span>
+                </div>
+                <div>
+                    <span style="color: var(--text-muted); display: block;">Ext4 Mirror Path</span>
+                    <span class="font-mono" style="color: var(--text-secondary); word-break: break-all;">@(WorkspaceState.ActiveWorkspace.Ext4MirrorPath ?? "Default Ext4 Mirror")</span>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div style="padding: 1.5rem; text-align: center; border: 1px dashed var(--border-subtle); border-radius: var(--radius-md); margin-top: 1rem;">
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">No active workspace selected.</p>
+            <button type="button" class="forge-btn forge-btn-outline" @onclick="LaunchWizard">
+                ➕ Onboard New Repository
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    private void LaunchWizard()
+    {
+        WorkspaceState.RequestOpenWizard();
+    }
+}

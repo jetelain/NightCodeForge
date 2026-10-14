@@ -1,0 +1,369 @@
+@namespace NightCodeForge.Web.Components.Workspaces
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Web.Models
+@using NightCodeForge.Web.Services
+@using NightCodeForge.Web.Components.Workspaces.Steps
+@inject IWorkspaceProvisioningService ProvisioningService
+@inject WorkspaceStateService WorkspaceState
+@inject ToastService ToastService
+@inject NavigationManager Navigation
+@implements IDisposable
+
+@if (IsOpen)
+{
+    <div class="forge-modal-backdrop" @onclick="HandleBackdropClick">
+        <div class="forge-modal-card wizard-card" @onclick:stopPropagation>
+            <!-- Wizard Header & Title -->
+            <div class="wizard-header">
+                <div class="wizard-header-title">
+                    <span class="wizard-title-icon">🧙</span>
+                    <div>
+                        <h3 class="wizard-main-title">Workspace Provisioning Wizard</h3>
+                        <p class="wizard-header-desc">Onboard a local Git repository into NightCodeForge.</p>
+                    </div>
+                </div>
+                <button type="button" class="forge-btn-close" @onclick="Close" title="Close wizard" disabled="@(_isProvisioningInProgress || (_currentStep == 4 && !_isProvisioningComplete && string.IsNullOrEmpty(_provisioningError)))">✕</button>
+            </div>
+
+            <!-- Stepper Progress Header -->
+            <div class="wizard-stepper">
+                <div class="step-node @(_currentStep >= 1 ? "active" : "") @(_currentStep > 1 ? "completed" : "")">
+                    <span class="step-num">1</span>
+                    <span class="step-label">Repository</span>
+                </div>
+                <div class="step-connector @(_currentStep > 1 ? "completed" : "")"></div>
+                <div class="step-node @(_currentStep >= 2 ? "active" : "") @(_currentStep > 2 ? "completed" : "")">
+                    <span class="step-num">2</span>
+                    <span class="step-label">Stack &amp; Branch</span>
+                </div>
+                <div class="step-connector @(_currentStep > 2 ? "completed" : "")"></div>
+                <div class="step-node @(_currentStep >= 3 ? "active" : "") @(_currentStep > 3 ? "completed" : "")">
+                    <span class="step-num">3</span>
+                    <span class="step-label">Environment</span>
+                </div>
+                <div class="step-connector @(_currentStep > 3 ? "completed" : "")"></div>
+                <div class="step-node @(_currentStep >= 4 ? "active" : "") @(_isProvisioningComplete ? "completed" : "")">
+                    <span class="step-num">4</span>
+                    <span class="step-label">Provision</span>
+                </div>
+            </div>
+
+            <!-- Wizard Step Body -->
+            <div class="wizard-body">
+                @switch (_currentStep)
+                {
+                    case 1:
+                        <WizardStep1PathProbe Model="_model" 
+                                              ProbeResult="_probeResult" 
+                                              IsProbing="_isProbing"
+                                              OnProbeRequested="HandleProbeAsync" 
+                                              OnInitGitRequested="HandleInitGitAsync" />
+                        break;
+                    case 2:
+                        <WizardStep2StackBranch Model="_model" 
+                                                ProbeResult="_probeResult" />
+                        break;
+                    case 3:
+                        <WizardStep3Environment Model="_model" />
+                        break;
+                    case 4:
+                        <WizardStep4Provisioning ProgressMessage="_provisioningMessage" 
+                                                 IsComplete="_isProvisioningComplete"
+                                                 CreatedWorkspace="_createdWorkspace"
+                                                 ErrorMessage="_provisioningError" />
+                        break;
+                }
+            </div>
+
+            <!-- Wizard Action Footer -->
+            <div class="wizard-footer">
+                @if (_currentStep > 1 && _currentStep < 4)
+                {
+                    <button type="button" class="forge-btn forge-btn-secondary" @onclick="GoPrevious" disabled="@_isProvisioningInProgress">
+                        ← Back
+                    </button>
+                }
+                else if (_currentStep == 4 && !string.IsNullOrEmpty(_provisioningError))
+                {
+                    <button type="button" class="forge-btn forge-btn-secondary" @onclick="() => _currentStep = 3" disabled="@_isProvisioningInProgress">
+                        ← Edit Configuration
+                    </button>
+                }
+                <div class="flex-spacer"></div>
+                @if (_currentStep < 3)
+                {
+                    <button type="button" 
+                            class="forge-btn forge-btn-primary" 
+                            @onclick="GoNext" 
+                            disabled="@(!CanProceedFromStep(_currentStep))">
+                        Continue →
+                    </button>
+                }
+                else if (_currentStep == 3)
+                {
+                    <button type="button" 
+                            class="forge-btn forge-btn-primary font-bold" 
+                            @onclick="ExecuteProvisioningAsync"
+                            disabled="@_isProvisioningInProgress">
+                        @if (_isProvisioningInProgress)
+                        {
+                            <span>⏳ Provisioning...</span>
+                        }
+                        else
+                        {
+                            <span>🚀 Provision Workspace</span>
+                        }
+                    </button>
+                }
+                else if (_currentStep == 4 && !string.IsNullOrEmpty(_provisioningError))
+                {
+                    <button type="button" 
+                            class="forge-btn forge-btn-primary" 
+                            @onclick="ExecuteProvisioningAsync"
+                            disabled="@_isProvisioningInProgress">
+                        🔄 Retry Provisioning
+                    </button>
+                }
+                else if (_isProvisioningComplete)
+                {
+                    <button type="button" class="forge-btn forge-btn-primary" @onclick="FinishAndOpenWorkspace">
+                        Open Workspace in Forge ➔
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public EventCallback<bool> IsOpenChanged { get; set; }
+
+    [Parameter]
+    public EventCallback<Workspace> OnWorkspaceCreated { get; set; }
+
+    private int _currentStep = 1;
+    private WorkspaceCreationModel _model = new();
+    private RepositoryProbeResult? _probeResult;
+    private bool _isProbing = false;
+
+    private string _provisioningMessage = string.Empty;
+    private bool _isProvisioningComplete = false;
+    private bool _isProvisioningInProgress = false;
+    private Workspace? _createdWorkspace;
+    private string? _provisioningError;
+
+    protected override void OnInitialized()
+    {
+        WorkspaceState.OnOpenWizardRequested += HandleOpenRequested;
+    }
+
+    private void HandleOpenRequested()
+    {
+        ResetWizard();
+        IsOpen = true;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Open()
+    {
+        ResetWizard();
+        IsOpen = true;
+        StateHasChanged();
+    }
+
+    public void Close()
+    {
+        IsOpen = false;
+        _ = IsOpenChanged.InvokeAsync(false);
+    }
+
+    private void ResetWizard()
+    {
+        _currentStep = 1;
+        _model = new WorkspaceCreationModel();
+        _probeResult = null;
+        _isProbing = false;
+        _provisioningMessage = string.Empty;
+        _isProvisioningComplete = false;
+        _isProvisioningInProgress = false;
+        _createdWorkspace = null;
+        _provisioningError = null;
+    }
+
+    private void HandleBackdropClick()
+    {
+        if (_isProvisioningInProgress || (_currentStep == 4 && !_isProvisioningComplete && string.IsNullOrEmpty(_provisioningError)))
+        {
+            // Do not dismiss while provisioning is in-flight
+            return;
+        }
+        Close();
+    }
+
+    private async Task HandleProbeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_model.RepositoryPath))
+            return;
+
+        _isProbing = true;
+        StateHasChanged();
+
+        try
+        {
+            _probeResult = await ProvisioningService.ProbeRepositoryAsync(_model.RepositoryPath);
+            if (_probeResult.IsGitRepository)
+            {
+                if (string.IsNullOrWhiteSpace(_model.Name) && !string.IsNullOrWhiteSpace(_probeResult.SuggestedName))
+                {
+                    _model.Name = _probeResult.SuggestedName;
+                }
+                if (!string.IsNullOrWhiteSpace(_probeResult.DetectedBaseBranch))
+                {
+                    _model.DefaultBaseBranch = _probeResult.DetectedBaseBranch;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Probe Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isProbing = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task HandleInitGitAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_model.RepositoryPath))
+            return;
+
+        _isProbing = true;
+        StateHasChanged();
+
+        try
+        {
+            var success = await ProvisioningService.InitializeGitRepositoryAsync(_model.RepositoryPath);
+            if (success)
+            {
+                ToastService.Show("Git Initialized", "Initialized empty Git repository.", ToastLevel.Success);
+                await HandleProbeAsync();
+            }
+            else
+            {
+                ToastService.Show("Git Init Failed", "Could not initialize Git repository in specified path.", ToastLevel.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Git Init Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isProbing = false;
+            StateHasChanged();
+        }
+    }
+
+    private bool CanProceedFromStep(int step) => step switch
+    {
+        1 => !string.IsNullOrWhiteSpace(_model.Name) &&
+             !string.IsNullOrWhiteSpace(_model.RepositoryPath) &&
+             (_probeResult?.IsGitRepository == true),
+        2 => !string.IsNullOrWhiteSpace(_model.DefaultBaseBranch),
+        3 => true,
+        _ => false
+    };
+
+    private void GoNext()
+    {
+        if (_currentStep < 3 && CanProceedFromStep(_currentStep))
+        {
+            _currentStep++;
+        }
+    }
+
+    private void GoPrevious()
+    {
+        if (_currentStep > 1)
+        {
+            _currentStep--;
+        }
+    }
+
+    private async Task ExecuteProvisioningAsync()
+    {
+        if (_isProvisioningInProgress)
+            return;
+
+        _isProvisioningInProgress = true;
+        _currentStep = 4;
+        _isProvisioningComplete = false;
+        _provisioningError = null;
+        _createdWorkspace = null;
+        _provisioningMessage = "Starting workspace onboarding pipeline...";
+        StateHasChanged();
+
+        var progress = new Progress<string>(msg =>
+        {
+            _provisioningMessage = msg;
+            _ = InvokeAsync(StateHasChanged);
+        });
+
+        try
+        {
+            _createdWorkspace = await ProvisioningService.ProvisionWorkspaceAsync(_model, progress);
+            _isProvisioningComplete = true;
+        }
+        catch (Exception ex)
+        {
+            _provisioningError = ex.Message;
+            ToastService.Show("Provisioning Failed", ex.Message, ToastLevel.Error);
+            return;
+        }
+        finally
+        {
+            _isProvisioningInProgress = false;
+            StateHasChanged();
+        }
+
+        // Post-provisioning activation and notifications are isolated from provisioning failure handling
+        if (_createdWorkspace != null)
+        {
+            try
+            {
+                WorkspaceState.SetActiveWorkspace(_createdWorkspace);
+                ToastService.Show("Workspace Created", $"Workspace '{_createdWorkspace.Name}' is ready.", ToastLevel.Success);
+                await OnWorkspaceCreated.InvokeAsync(_createdWorkspace);
+            }
+            catch
+            {
+                // Non-critical notification error; workspace is already provisioned
+            }
+            finally
+            {
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void FinishAndOpenWorkspace()
+    {
+        if (_createdWorkspace != null)
+        {
+            WorkspaceState.SetActiveWorkspace(_createdWorkspace);
+        }
+        Close();
+        Navigation.NavigateTo("/");
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.OnOpenWizardRequested -= HandleOpenRequested;
+    }
+}

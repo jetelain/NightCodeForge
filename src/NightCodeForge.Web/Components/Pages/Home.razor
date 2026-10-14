@@ -2,10 +2,16 @@
 @inject WorkspaceStateService WorkspaceState
 @inject WorkerStateService WorkerState
 @inject ToastService ToastService
+@implements IDisposable
 
 <PageTitle>Overview - NightCodeForge</PageTitle>
 
 <div style="display: flex; flex-direction: column; gap: 2rem;">
+    @if (WorkspaceState.ActiveWorkspace == null)
+    {
+        <WorkspaceEmptyStateHero />
+    }
+
     <!-- Welcome Banner & Quick Status -->
     <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
         <div>
@@ -137,6 +143,21 @@
 </div>
 
 @code {
+    protected override void OnInitialized()
+    {
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+    }
+
     private void TriggerInfoToast()
     {
         ToastService.Show("Workspace Telemetry", "Workspace state refreshed from local repository.", ToastLevel.Info);

@@ -2,7 +2,7 @@
 
 > **Phase 5 Implementation Step**  
 > *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.1: Design System & Layout](STEP_5_1_DESIGN_SYSTEM_AND_LAYOUT.md) | *Next Step:* [Step 5.2: SignalR Telemetry](STEP_5_2_SIGNALR_TELEMETRY_INFRASTRUCTURE.md)  
-> *Project Target:* `src/NightCodeForge.Web/Components/Workspaces` & `src/NightCodeForge.Web/Services` | *Status:* Ready for Implementation
+> *Project Target:* `src/NightCodeForge.Web/Components/Workspaces` & `src/NightCodeForge.Web/Services` | *Status:* Completed
 
 ---
 
@@ -432,10 +432,10 @@ Display a glassmorphic hero banner:
 
 ## 8. Definition of Done (DoD) Checklist
 
-- [ ] `WorkspaceCreationModel.cs`, `RepositoryProbeResult.cs`, and `IWorkspaceProvisioningService` created.
-- [ ] `WorkspaceProvisioningService.cs` implemented and registered in `Program.cs`.
-- [ ] `WorkspaceCreationWizardModal.razor` created with 4-step stepper and live validation.
-- [ ] `TopNavBar.razor` updated with `[➕]` new workspace button that opens the wizard.
-- [ ] `WorkspaceEmptyStateHero.razor` created and displayed on `/` and `/ideation` when `_workspaces.Count == 0`.
-- [ ] Settings tab (`WorkspaceSettingsTab.razor`) provides a direct shortcut to launch the wizard.
-- [ ] Unit tests in `WorkspaceProvisioningServiceTests.cs` pass with 100% assertions satisfied.
+- [x] `WorkspaceCreationModel.cs`, `RepositoryProbeResult.cs`, and `IWorkspaceProvisioningService` created.
+- [x] `WorkspaceProvisioningService.cs` implemented and registered in `Program.cs`.
+- [x] `WorkspaceCreationWizardModal.razor` created with 4-step stepper and live validation.
+- [x] `TopNavBar.razor` updated with `[➕]` new workspace button that opens the wizard.
+- [x] `WorkspaceEmptyStateHero.razor` created and displayed on `/` and `/ideation` when `_workspaces.Count == 0`.
+- [x] Settings tab (`WorkspaceSettingsTab.razor`) provides a direct shortcut to launch the wizard.
+- [x] Unit tests in `WorkspaceProvisioningServiceTests.cs` pass with 100% assertions satisfied.

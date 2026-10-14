@@ -1,0 +1,36 @@
+@namespace NightCodeForge.Web.Components.Workspaces
+@using NightCodeForge.Web.Services
+@inject WorkspaceStateService WorkspaceState
+
+<div class="workspace-empty-hero">
+    <div class="empty-hero-content">
+        <div class="empty-hero-badge">
+            <span class="sparkle-icon">✨</span>
+            <span>Welcome to NightCodeForge</span>
+        </div>
+        <h2 class="empty-hero-title">Start Engineering With Autonomous Agent Swarms</h2>
+        <p class="empty-hero-desc">
+            No workspace is currently selected or configured. Onboard your local code repository to begin autonomous software engineering, interactive ideation, and visual DAG dependency planning.
+        </p>
+
+        <div class="empty-hero-features">
+            <span class="feature-chip">🔍 Auto Stack &amp; Branch Detection</span>
+            <span class="feature-chip">🛡️ WSL2 &amp; Container Isolation</span>
+            <span class="feature-chip">🪞 Zero-Latency Ext4 Worktrees</span>
+            <span class="feature-chip">🤖 Multi-Agent Orchestration</span>
+        </div>
+
+        <div class="empty-hero-actions">
+            <button type="button" class="forge-btn forge-btn-primary hero-launch-btn" @onclick="LaunchWizard">
+                🧙 Launch Workspace Creation Wizard
+            </button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private void LaunchWizard()
+    {
+        WorkspaceState.RequestOpenWizard();
+    }
+}

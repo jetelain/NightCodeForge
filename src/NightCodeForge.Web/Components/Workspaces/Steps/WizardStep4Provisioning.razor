@@ -1,0 +1,134 @@
+@namespace NightCodeForge.Web.Components.Workspaces.Steps
+@using NightCodeForge.Core.Domain
+
+<div class="wizard-step-container">
+    @if (CreatedWorkspace != null && IsComplete)
+    {
+        <!-- Provisioning Complete Summary Card -->
+        <div class="provision-success-card">
+            <div class="provision-card-header text-success">
+                <span class="status-icon">🎉</span>
+                <div>
+                    <h4 class="status-title">Workspace Ready!</h4>
+                    <p class="status-subtitle">
+                        Repository <strong>@CreatedWorkspace.Name</strong> is now fully onboarded into NightCodeForge.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Workspace Details Grid -->
+            <div class="summary-details-grid">
+                <div class="summary-item">
+                    <span class="summary-label">Workspace ID</span>
+                    <span class="summary-value font-mono">#@CreatedWorkspace.Id</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">Display Name</span>
+                    <span class="summary-value">@CreatedWorkspace.Name</span>
+                </div>
+                <div class="summary-item span-2">
+                    <span class="summary-label">Host Repository Path</span>
+                    <span class="summary-value font-mono">@CreatedWorkspace.RepositoryPath</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">Default Base Branch</span>
+                    <span class="summary-value font-mono">@CreatedWorkspace.DefaultBaseBranch</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">Execution Mode</span>
+                    <span class="summary-value">@CreatedWorkspace.ExecutionMode</span>
+                </div>
+                <div class="summary-item span-2">
+                    <span class="summary-label">Isolated Ext4 Working Mirror</span>
+                    <span class="summary-value font-mono">@(CreatedWorkspace.Ext4MirrorPath ?? $"~/.nightcodeforge/wks/{CreatedWorkspace.Id}/clone")</span>
+                </div>
+            </div>
+
+            <div class="next-steps-banner mt-4">
+                <span class="next-icon">💡</span>
+                <div>
+                    <strong>Ready for Autonomous Engineering</strong>
+                    <p class="text-secondary text-sm">
+                        You can now formulate backlog tasks in the Ideation Chat, design visual DAG workflows, or start autonomous agent workers.
+                    </p>
+                </div>
+            </div>
+        </div>
+    }
+    else if (!string.IsNullOrEmpty(ErrorMessage))
+    {
+        <!-- Provisioning Error Card -->
+        <div class="provision-error-card">
+            <div class="provision-card-header text-danger">
+                <span class="status-icon">❌</span>
+                <div>
+                    <h4 class="status-title">Provisioning Failed</h4>
+                    <p class="status-subtitle">An error occurred while provisioning the workspace.</p>
+                </div>
+            </div>
+            <div class="error-detail-box font-mono">
+                @ErrorMessage
+            </div>
+            <p class="error-hint">
+                Please verify directory permissions, ensure Git is available on your PATH, and retry.
+            </p>
+        </div>
+    }
+    else
+    {
+        <!-- In-Progress Stepper & Progress Spinner -->
+        <div class="provision-progress-card">
+            <div class="provision-card-header">
+                <div class="spinner-large"></div>
+                <div>
+                    <h4 class="status-title">Provisioning Workspace...</h4>
+                    <p class="status-subtitle">Configuring repository boundaries, Git mirror clone, and agent environment.</p>
+                </div>
+            </div>
+
+            <!-- Current Progress Banner -->
+            <div class="current-task-pill font-mono">
+                <span class="pulsing-dot"></span>
+                <span>@(string.IsNullOrWhiteSpace(ProgressMessage) ? "Executing provisioning pipeline..." : ProgressMessage)</span>
+            </div>
+
+            <!-- Pipeline Checklist -->
+            <div class="provision-checklist">
+                <div class="checklist-item done">
+                    <span class="check-icon">✓</span>
+                    <span class="check-text">Validate local repository &amp; stack heuristics</span>
+                </div>
+                <div class="checklist-item done">
+                    <span class="check-icon">✓</span>
+                    <span class="check-text">Configure execution boundaries &amp; sandboxing</span>
+                </div>
+                <div class="checklist-item active">
+                    <span class="check-icon">⏳</span>
+                    <span class="check-text">Persist workspace &amp; initialize isolated Ext4 clone mirror</span>
+                </div>
+                <div class="checklist-item">
+                    <span class="check-icon">○</span>
+                    <span class="check-text">Scaffold <code>docs/tasks/</code> &amp; register markdown file watcher</span>
+                </div>
+                <div class="checklist-item">
+                    <span class="check-icon">○</span>
+                    <span class="check-text">Configure global &amp; dedicated agent profiles</span>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public string ProgressMessage { get; set; } = string.Empty;
+
+    [Parameter]
+    public bool IsComplete { get; set; }
+
+    [Parameter]
+    public Workspace? CreatedWorkspace { get; set; }
+
+    [Parameter]
+    public string? ErrorMessage { get; set; }
+}

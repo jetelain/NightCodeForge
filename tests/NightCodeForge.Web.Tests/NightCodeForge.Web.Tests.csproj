@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\NightCodeForge.Core\NightCodeForge.Core.csproj" />
+    <ProjectReference Include="..\..\src\NightCodeForge.Infrastructure\NightCodeForge.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\NightCodeForge.Web\NightCodeForge.Web.csproj" />
   </ItemGroup>
 

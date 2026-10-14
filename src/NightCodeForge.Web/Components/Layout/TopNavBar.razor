@@ -25,6 +25,12 @@
                     }
                 }
             </select>
+            <button type="button" 
+                    class="forge-btn-icon-addon" 
+                    title="Create or onboard a new workspace" 
+                    @onclick="() => WorkspaceState.RequestOpenWizard()">
+                ➕
+            </button>
         </div>
 
         <!-- Dynamic Breadcrumb Trail -->
@@ -145,9 +151,10 @@
         };
     }
 
-    private void HandleStateChanged()
+    private async void HandleStateChanged()
     {
-        _ = InvokeAsync(StateHasChanged);
+        await LoadWorkspacesAsync();
+        await InvokeAsync(StateHasChanged);
     }
 
     public void Dispose()

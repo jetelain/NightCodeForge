@@ -1,0 +1,239 @@
+@namespace NightCodeForge.Web.Components.Workspaces.Steps
+@using System.Runtime.InteropServices
+@using Microsoft.Extensions.Configuration
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Web.Models
+@inject IWslMetadataService WslService
+@inject IOllamaModelCatalogService ModelCatalogService
+@inject IConfiguration Configuration
+
+<div class="wizard-step-container">
+    <div class="step-intro">
+        <h4 class="step-title">🛡️ Execution Mode &amp; Environment Configuration</h4>
+        <p class="step-subtitle">Configure agent sandbox confinement, host execution boundaries, and profile overrides.</p>
+    </div>
+
+    <!-- Host Platform & WSL2 Banner (Windows Only) -->
+    @if (_isWindows)
+    {
+        <div class="wsl-platform-card mb-4">
+            <div class="wsl-platform-header">
+                <span class="platform-icon">🐧</span>
+                <div>
+                    <div class="platform-title-row">
+                        <strong class="platform-title">Windows Host Detected — WSL2 Confinement Active</strong>
+                        <span class="forge-badge badge-indigo">WSL2: @_defaultWslDistro</span>
+                    </div>
+                    <p class="platform-desc">
+                        Unix agent execution runs within WSL2 distribution <code>@_defaultWslDistro</code> for POSIX compliance and high-throughput Ext4 worktrees.
+                    </p>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- Execution Mode Selector Grid -->
+    <div class="form-group mb-4">
+        <label class="form-label">Confinement Mode</label>
+        <div class="execution-modes-grid">
+            <!-- Container Sandbox (Default / Recommended) -->
+            <div class="mode-card @(Model.ExecutionMode == ExecutionMode.ContainerSandbox ? "selected" : "")" 
+                 @onclick="() => SetMode(ExecutionMode.ContainerSandbox)">
+                <div class="mode-card-header">
+                    <span class="mode-icon">📦</span>
+                    <div class="mode-card-title">
+                        <strong>Container Sandbox</strong>
+                        <span class="forge-badge badge-indigo">Recommended</span>
+                    </div>
+                </div>
+                <p class="mode-desc">
+                    Isolated container with read-only root mounts and cached package bindings (<code>~/.nuget</code>, <code>~/.npm</code>).
+                </p>
+                @if (Model.ExecutionMode == ExecutionMode.ContainerSandbox)
+                {
+                    <div class="mode-field-subgroup" @onclick:stopPropagation>
+                        <label class="mode-sublabel">Container Image</label>
+                        <input type="text" class="form-control-dark font-mono text-sm" @bind="Model.ContainerImage" />
+                    </div>
+                }
+            </div>
+
+            <!-- WSL Direct Execution -->
+            <div class="mode-card @(Model.ExecutionMode == ExecutionMode.WslDirect ? "selected" : "")" 
+                 @onclick="() => SetMode(ExecutionMode.WslDirect)">
+                <div class="mode-card-header">
+                    <span class="mode-icon">⚡</span>
+                    <div class="mode-card-title">
+                        <strong>WSL2 Direct</strong>
+                        <span class="forge-badge badge-teal">Fast Native</span>
+                    </div>
+                </div>
+                <p class="mode-desc">
+                    Direct execution inside targeted WSL2 Linux distribution via <code>wsl.exe -d</code>.
+                </p>
+                @if (Model.ExecutionMode == ExecutionMode.WslDirect)
+                {
+                    <div class="mode-field-subgroup" @onclick:stopPropagation>
+                        <label class="mode-sublabel">Target Distribution</label>
+                        <input type="text" class="form-control-dark font-mono text-sm" @bind="Model.WslDistribution" placeholder="@_defaultWslDistro" />
+                    </div>
+                }
+            </div>
+
+            <!-- Bare Host Execution -->
+            <div class="mode-card @(Model.ExecutionMode == ExecutionMode.BareHost ? "selected" : "")" 
+                 @onclick="() => SetMode(ExecutionMode.BareHost)">
+                <div class="mode-card-header">
+                    <span class="mode-icon">💻</span>
+                    <div class="mode-card-title">
+                        <strong>Bare Host</strong>
+                        @if (_isWindows)
+                        {
+                            <span class="forge-badge badge-amber">Warning</span>
+                        }
+                    </div>
+                </div>
+                <p class="mode-desc">
+                    Direct execution on host OS shell without container isolation.
+                </p>
+                @if (_isWindows && Model.ExecutionMode == ExecutionMode.BareHost)
+                {
+                    <div class="mode-warning-note">
+                        ⚠️ Bare execution on Windows may fail if agent scripts invoke bash or Linux-specific utilities.
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- Build & Test Timeouts -->
+    <div class="form-row mb-4">
+        <div class="form-group flex-1">
+            <label class="form-label" for="build-timeout-input">Build Timeout (Seconds)</label>
+            <input id="build-timeout-input" 
+                   type="number" 
+                   min="30" 
+                   max="1800" 
+                   class="form-control-dark font-mono" 
+                   @bind="Model.BuildTimeoutSeconds" />
+            <span class="form-hint">Deterministic build timeout (30-1800s).</span>
+        </div>
+        <div class="form-group flex-1">
+            <label class="form-label" for="test-timeout-input">Test Timeout (Seconds)</label>
+            <input id="test-timeout-input" 
+                   type="number" 
+                   min="30" 
+                   max="1800" 
+                   class="form-control-dark font-mono" 
+                   @bind="Model.TestTimeoutSeconds" />
+            <span class="form-hint">Test suite execution timeout (30-1800s).</span>
+        </div>
+    </div>
+
+    <!-- Dedicated Agent Profiles Opt-In -->
+    <div class="agent-profile-optin-card">
+        <div class="checkbox-row" @onclick="ToggleDedicatedProfiles">
+            <input id="dedicated-profiles-check" 
+                   type="checkbox" 
+                   class="forge-checkbox" 
+                   checked="@Model.UseDedicatedAgentProfiles" 
+                   @onclick:stopPropagation
+                   @onchange="ToggleDedicatedProfiles" />
+            <label for="dedicated-profiles-check" class="checkbox-label" @onclick:stopPropagation>
+                <strong>Configure dedicated agent profiles for this workspace</strong>
+            </label>
+        </div>
+        <p class="checkbox-desc">
+            By default, workspaces inherit the <strong>Global System Agent Profiles</strong> (<code>triage</code>, <code>ideation</code>, <code>task-review</code>, <code>implementation</code>, <code>code-review-fix</code>). Check this only if you want private workspace-scoped profiles with an independent model.
+        </p>
+
+        @if (Model.UseDedicatedAgentProfiles)
+        {
+            <div class="dedicated-profile-panel mt-3">
+                <label class="form-label" for="dedicated-model-select">Dedicated Inference Model</label>
+                @if (_availableModels.Count > 0)
+                {
+                    <select id="dedicated-model-select" class="form-control-dark font-mono" @bind="Model.DedicatedModelName">
+                        @foreach (var m in _availableModels)
+                        {
+                            <option value="@m">@m</option>
+                        }
+                    </select>
+                }
+                else
+                {
+                    <input id="dedicated-model-select" 
+                           type="text" 
+                           class="form-control-dark font-mono" 
+                           placeholder="e.g. Qwen3.8-27B:latest" 
+                           @bind="Model.DedicatedModelName" />
+                }
+                <span class="form-hint">All 5 standard pipeline profiles will be customized with this model.</span>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public WorkspaceCreationModel Model { get; set; } = default!;
+
+    private bool _isWindows;
+    private string _defaultWslDistro = "Ubuntu";
+    private List<string> _availableModels = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+        if (_isWindows)
+        {
+            try
+            {
+                _defaultWslDistro = WslService.GetDefaultDistributionName();
+                if (string.IsNullOrWhiteSpace(Model.WslDistribution))
+                {
+                    Model.WslDistribution = _defaultWslDistro;
+                }
+            }
+            catch
+            {
+                _defaultWslDistro = "Ubuntu";
+            }
+        }
+
+        var defaultModel = Configuration["LlmProvider:ModelId"] ?? "Qwen3.8-27B:latest";
+        if (string.IsNullOrWhiteSpace(Model.DedicatedModelName))
+        {
+            Model.DedicatedModelName = defaultModel;
+        }
+
+        try
+        {
+            var models = await ModelCatalogService.GetAvailableModelsAsync();
+            if (models != null && models.Count > 0)
+            {
+                _availableModels = models.Select(m => m.Name).ToList();
+                if (!_availableModels.Contains(Model.DedicatedModelName))
+                {
+                    _availableModels.Insert(0, Model.DedicatedModelName);
+                }
+            }
+        }
+        catch
+        {
+            // Fallback if Ollama router is offline
+            _availableModels = new List<string> { Model.DedicatedModelName ?? defaultModel };
+        }
+    }
+
+    private void SetMode(ExecutionMode mode)
+    {
+        Model.ExecutionMode = mode;
+    }
+
+    private void ToggleDedicatedProfiles()
+    {
+        Model.UseDedicatedAgentProfiles = !Model.UseDedicatedAgentProfiles;
+    }
+}

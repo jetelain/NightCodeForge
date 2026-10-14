@@ -14,6 +14,12 @@ public class WorkspaceStateService
     public Workspace? ActiveWorkspace => _activeWorkspace;
 
     public event Action? OnWorkspaceChanged;
+    public event Action? OnOpenWizardRequested;
+
+    public void RequestOpenWizard()
+    {
+        OnOpenWizardRequested?.Invoke();
+    }
 
     public void SetActiveWorkspace(Workspace workspace)
     {

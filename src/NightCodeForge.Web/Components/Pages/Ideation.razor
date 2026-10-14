@@ -49,6 +49,13 @@
         </div>
     }
 
+    @if (WorkspaceState.ActiveWorkspace == null)
+    {
+        <div style="margin-bottom: 1.5rem;">
+            <WorkspaceEmptyStateHero />
+        </div>
+    }
+
     <!-- Two-Pane Main Workspace Grid -->
     <div class="ideation-grid">
         <!-- LEFT PANE: Conversational Stream & Chat Input (~60%) -->

@@ -1,0 +1,145 @@
+@namespace NightCodeForge.Web.Components.Workspaces.Steps
+@using NightCodeForge.Web.Models
+
+<div class="wizard-step-container">
+    <div class="step-intro">
+        <h4 class="step-title">📁 Repository Location &amp; Validation</h4>
+        <p class="step-subtitle">Point NightCodeForge to your local source code repository or initialize a new one.</p>
+    </div>
+
+    <!-- Repository Path Input Group -->
+    <div class="form-group mb-4">
+        <label class="form-label" for="repo-path-input">
+            Repository Directory Path <span class="text-danger">*</span>
+        </label>
+        <div class="input-action-row">
+            <input id="repo-path-input" 
+                   type="text" 
+                   class="form-control-dark font-mono flex-1" 
+                   placeholder="e.g. C:\Users\Dev\source\repos\my-app or /home/dev/repos/my-app"
+                   value="@Model.RepositoryPath" 
+                   @oninput="HandlePathInput"
+                   @onkeydown="HandleKeyDown" />
+            <button type="button" 
+                    class="forge-btn forge-btn-secondary" 
+                    @onclick="OnProbeRequested"
+                    disabled="@(string.IsNullOrWhiteSpace(Model.RepositoryPath) || IsProbing)">
+                @if (IsProbing)
+                {
+                    <span class="spinner-inline"></span>
+                    <span>Probing...</span>
+                }
+                else
+                {
+                    <span>🔍 Probe Directory</span>
+                }
+            </button>
+        </div>
+        <span class="form-hint">Absolute local path on the host operating system.</span>
+    </div>
+
+    <!-- Probe Feedback Panel -->
+    @if (ProbeResult != null)
+    {
+        <div class="probe-feedback-card @(ProbeResult.IsGitRepository ? "probe-success" : (ProbeResult.Exists ? "probe-warning" : "probe-error"))">
+            @if (!ProbeResult.Exists)
+            {
+                <div class="probe-feedback-header">
+                    <span class="feedback-icon">❌</span>
+                    <div>
+                        <strong class="feedback-title">Directory Not Found</strong>
+                        <p class="feedback-desc">@(ProbeResult.WarningMessage ?? "The specified path does not exist on disk.")</p>
+                    </div>
+                </div>
+                <div class="probe-action-row">
+                    <button type="button" class="forge-btn forge-btn-outline" @onclick="OnInitGitRequested" disabled="@IsProbing">
+                        📁 Create Directory &amp; Initialize Git
+                    </button>
+                </div>
+            }
+            else if (!ProbeResult.IsGitRepository)
+            {
+                <div class="probe-feedback-header">
+                    <span class="feedback-icon">⚠️</span>
+                    <div>
+                        <strong class="feedback-title">No Git Repository Found</strong>
+                        <p class="feedback-desc">Directory exists, but no Git worktree or <code>.git</code> metadata was detected.</p>
+                    </div>
+                </div>
+                <div class="probe-action-row">
+                    <button type="button" class="forge-btn forge-btn-primary" @onclick="OnInitGitRequested" disabled="@IsProbing">
+                        ⚡ Initialize Git Repository (git init)
+                    </button>
+                </div>
+            }
+            else
+            {
+                <div class="probe-feedback-header">
+                    <span class="feedback-icon">✅</span>
+                    <div>
+                        <strong class="feedback-title">Valid Git Repository Detected</strong>
+                        <p class="feedback-desc">
+                            Git worktree validated. Found @ProbeResult.AvailableBranches.Count local branch@(ProbeResult.AvailableBranches.Count == 1 ? "" : "es").
+                        </p>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- Workspace Friendly Name -->
+    <div class="form-group mt-4">
+        <label class="form-label" for="workspace-name-input">
+            Workspace Display Name <span class="text-danger">*</span>
+        </label>
+        <input id="workspace-name-input" 
+               type="text" 
+               class="form-control-dark" 
+               placeholder="e.g. My Application" 
+               @bind="Model.Name" 
+               @bind:event="oninput" />
+        <span class="form-hint">Friendly identifier displayed across top bar, telemetry dashboard, and task DAG.</span>
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public WorkspaceCreationModel Model { get; set; } = default!;
+
+    [Parameter]
+    public RepositoryProbeResult? ProbeResult { get; set; }
+
+    [Parameter]
+    public bool IsProbing { get; set; }
+
+    [Parameter]
+    public EventCallback OnProbeRequested { get; set; }
+
+    [Parameter]
+    public EventCallback OnInitGitRequested { get; set; }
+
+    private void HandlePathInput(ChangeEventArgs e)
+    {
+        Model.RepositoryPath = e.Value?.ToString() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(Model.Name) && !string.IsNullOrWhiteSpace(Model.RepositoryPath))
+        {
+            try
+            {
+                var trimmed = Model.RepositoryPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                Model.Name = Path.GetFileName(trimmed);
+            }
+            catch
+            {
+                // Ignored
+            }
+        }
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(Model.RepositoryPath) && !IsProbing)
+        {
+            await OnProbeRequested.InvokeAsync();
+        }
+    }
+}

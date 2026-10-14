@@ -1,0 +1,155 @@
+@namespace NightCodeForge.Web.Components.Workspaces.Steps
+@using NightCodeForge.Web.Models
+
+<div class="wizard-step-container">
+    <div class="step-intro">
+        <h4 class="step-title">🌿 Stack &amp; Branch Auto-Discovery</h4>
+        <p class="step-subtitle">Configure base git branch target and review auto-detected project toolchain heuristics.</p>
+    </div>
+
+    <!-- Default Base Branch Selection -->
+    <div class="form-group mb-4">
+        <label class="form-label" for="base-branch-select">
+            Default Base Branch <span class="text-danger">*</span>
+        </label>
+        @if (ProbeResult?.AvailableBranches != null && ProbeResult.AvailableBranches.Count > 0)
+        {
+            <div class="select-wrapper">
+                <select id="base-branch-select" class="form-control-dark" @bind="Model.DefaultBaseBranch">
+                    @foreach (var branch in ProbeResult.AvailableBranches)
+                    {
+                        <option value="@branch">@branch</option>
+                    }
+                </select>
+            </div>
+        }
+        else
+        {
+            <input id="base-branch-select" 
+                   type="text" 
+                   class="form-control-dark font-mono" 
+                   placeholder="main" 
+                   @bind="Model.DefaultBaseBranch" 
+                   @bind:event="oninput" />
+        }
+        <span class="form-hint">NightCodeForge creates isolated agent task worktrees branched from this base ref.</span>
+    </div>
+
+    <!-- Auto-Detected Tech Stack & Toolchain Heuristics Card -->
+    <div class="tech-stack-card mb-4">
+        <div class="tech-stack-header">
+            <span class="tech-stack-icon">@GetStackIcon(ProbeResult?.DetectedTechStack)</span>
+            <div>
+                <div class="tech-stack-title-row">
+                    <h5 class="tech-stack-title">@(ProbeResult?.DetectedTechStack ?? "General / Polyglot")</h5>
+                    <span class="forge-badge badge-teal">Auto-Detected</span>
+                </div>
+                <p class="tech-stack-desc">Toolchain and deterministic execution presets for this repository.</p>
+            </div>
+        </div>
+
+        <div class="tech-specs-grid">
+            <div class="tech-spec-item">
+                <span class="spec-label">Default Build Command</span>
+                <span class="spec-value font-mono">@GetSuggestedBuildCommand(ProbeResult?.DetectedTechStack)</span>
+            </div>
+            <div class="tech-spec-item">
+                <span class="spec-label">Default Test Command</span>
+                <span class="spec-value font-mono">@GetSuggestedTestCommand(ProbeResult?.DetectedTechStack)</span>
+            </div>
+            <div class="tech-spec-item">
+                <span class="spec-label">Suggested Timeout</span>
+                <span class="spec-value font-mono">@GetSuggestedTimeout(ProbeResult?.DetectedTechStack)s</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Agent Guidelines Status Card -->
+    <div class="guidelines-card @(ProbeResult?.HasAgentsMarkdown == true ? "guidelines-present" : "guidelines-none")">
+        <div class="guidelines-header">
+            <span class="guidelines-icon">@(ProbeResult?.HasAgentsMarkdown == true ? "📄" : "ℹ️")</span>
+            <div>
+                <strong class="guidelines-title">
+                    @(ProbeResult?.HasAgentsMarkdown == true 
+                        ? "Agent Guidelines Detected (AGENTS.md / CLAUDE.md)" 
+                        : "No Custom AGENTS.md Detected")
+                </strong>
+                <p class="guidelines-desc">
+                    @(ProbeResult?.HasAgentsMarkdown == true
+                        ? "Autonomous agents will automatically honor the repository rules, design conventions, and coding style specified in your markdown guidelines."
+                        : "Standard Crucible agent instructions will be applied. You can add an AGENTS.md file to the repository root at any time.")
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public WorkspaceCreationModel Model { get; set; } = default!;
+
+    [Parameter]
+    public RepositoryProbeResult? ProbeResult { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (ProbeResult != null)
+        {
+            if (string.IsNullOrWhiteSpace(Model.DefaultBaseBranch) || Model.DefaultBaseBranch == "main")
+            {
+                if (!string.IsNullOrWhiteSpace(ProbeResult.DetectedBaseBranch))
+                {
+                    Model.DefaultBaseBranch = ProbeResult.DetectedBaseBranch;
+                }
+            }
+
+            // Sync suggested timeout if currently default
+            if (Model.BuildTimeoutSeconds == 180 && Model.TestTimeoutSeconds == 180)
+            {
+                var timeout = GetSuggestedTimeout(ProbeResult.DetectedTechStack);
+                Model.BuildTimeoutSeconds = timeout;
+                Model.TestTimeoutSeconds = timeout;
+            }
+        }
+    }
+
+    private static string GetStackIcon(string? stack) => stack switch
+    {
+        ".NET / C#" => "🔷",
+        "Node.js / TypeScript" => "🟨",
+        "Rust" => "🦀",
+        "Python" => "🐍",
+        "Go" => "🐹",
+        _ => "📦"
+    };
+
+    private static string GetSuggestedBuildCommand(string? stack) => stack switch
+    {
+        ".NET / C#" => "dotnet build",
+        "Node.js / TypeScript" => "npm run build",
+        "Rust" => "cargo build",
+        "Python" => "python -m compileall .",
+        "Go" => "go build ./...",
+        _ => "(custom build command)"
+    };
+
+    private static string GetSuggestedTestCommand(string? stack) => stack switch
+    {
+        ".NET / C#" => "dotnet test",
+        "Node.js / TypeScript" => "npm test",
+        "Rust" => "cargo test",
+        "Python" => "pytest",
+        "Go" => "go test ./...",
+        _ => "(custom test runner)"
+    };
+
+    private static int GetSuggestedTimeout(string? stack) => stack switch
+    {
+        "Rust" => 240,
+        ".NET / C#" => 180,
+        "Node.js / TypeScript" => 120,
+        "Python" => 90,
+        "Go" => 90,
+        _ => 180
+    };
+}
