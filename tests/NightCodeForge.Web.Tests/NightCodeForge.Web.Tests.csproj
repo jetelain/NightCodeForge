@@ -23,4 +23,8 @@
     <ProjectReference Include="..\..\src\NightCodeForge.Web\NightCodeForge.Web.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
 </Project>

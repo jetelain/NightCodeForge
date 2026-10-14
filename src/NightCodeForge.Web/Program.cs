@@ -26,6 +26,11 @@ builder.Services.AddNightCodeForgeAgents();
 builder.Services.AddNightCodeForgeHangfire(hangfireConnection);
 builder.Services.AddNightCodeForgeHangfireServers();
 
+// Register SignalR Telemetry Hub & Streaming Infrastructure
+builder.Services.AddSignalR();
+builder.Services.AddHostedService<NightCodeForge.Infrastructure.Hubs.SignalRActivityBridgeService>();
+builder.Services.AddScoped<OrchestratorHubClientConnection>();
+
 var app = builder.Build();
 
 // Run startup DB initialization, recovery, crash reconciliation, and start markdown watchers
@@ -62,6 +67,7 @@ app.UseHttpsRedirection();
 app.UseAntiforgery();
 
 app.MapStaticAssets();
+app.MapHub<NightCodeForge.Infrastructure.Hubs.OrchestratorHub>("/hubs/orchestrator");
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 

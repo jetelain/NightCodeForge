@@ -82,6 +82,18 @@ public static class ServiceCollectionExtensions
             preloadService: sp.GetService<IOllamaModelPreloadService>()
         ));
 
+        // 10. Streaming & Activity Streamer
+        services.TryAddSingleton<NightCodeForge.Core.Streaming.IAgentActivityStreamer, NightCodeForge.Core.Streaming.InMemoryAgentActivityStreamer>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the SignalR real-time activity bridge hosted service.
+    /// </summary>
+    public static IServiceCollection AddNightCodeForgeSignalRBridge(this IServiceCollection services)
+    {
+        services.AddHostedService<Hubs.SignalRActivityBridgeService>();
         return services;
     }
 }

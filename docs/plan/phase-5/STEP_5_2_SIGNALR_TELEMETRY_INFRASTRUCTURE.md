@@ -2,7 +2,7 @@
 
 > **Phase 5 Implementation Step**  
 > *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.1: Design System & Layout](STEP_5_1_DESIGN_SYSTEM_AND_LAYOUT.md) | *Next Step:* [Step 5.3: Ideation & Discovery Chat](STEP_5_3_IDEATION_AND_DISCOVERY_CHAT.md)  
-> *Project Target:* `src/NightCodeForge.Infrastructure/Hubs` & `src/NightCodeForge.Web/Services` | *Status:* Ready for Implementation
+> *Project Target:* `src/NightCodeForge.Infrastructure/Hubs` & `src/NightCodeForge.Web/Services` | *Status:* Completed
 
 ---
 
@@ -373,9 +373,9 @@ app.MapHub<OrchestratorHub>("/hubs/orchestrator");
 
 ## 7. Definition of Done (DoD) Checklist
 
-- [ ] `IOrchestratorHubClient` interface defined with all 8 real-time callback methods.
-- [ ] `OrchestratorHub` created and mapped to `/hubs/orchestrator`.
-- [ ] `SignalRActivityBridgeService` hosted service running and forwarding `IAgentActivityStreamer` channel events.
-- [ ] `OrchestratorHubClientConnection` implemented with auto-reconnection and typed event delegates.
-- [ ] DI configuration in `NightCodeForge.Infrastructure` and `NightCodeForge.Web` wired.
-- [ ] Integration tests verify message dispatch and group filtering.
+- [x] `IOrchestratorHubClient` interface defined with all 8 real-time callback methods.
+- [x] `OrchestratorHub` created and mapped to `/hubs/orchestrator`.
+- [x] `SignalRActivityBridgeService` hosted service running and forwarding `IAgentActivityStreamer` channel events.
+- [x] `OrchestratorHubClientConnection` implemented with auto-reconnection and typed event delegates.
+- [x] DI configuration in `NightCodeForge.Infrastructure` and `NightCodeForge.Web` wired.
+- [x] Integration tests verify message dispatch and group filtering.

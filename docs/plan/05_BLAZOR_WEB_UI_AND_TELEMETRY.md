@@ -96,8 +96,8 @@ To ensure thorough, battle-tested execution without ambiguity, Phase 5 is decomp
 
 ## 4. Phase 5 Definition of Done (DoD) Checklist
 
-- [ ] **Step 5.1:** Design system tokens in `theme.css`, `app.css`, `App.razor`, and responsive shell (`TopNavBar`, `NavMenu`, `MainLayout`, `ToastHost`).
-- [ ] **Step 5.2:** `IOrchestratorHubClient`, `OrchestratorHub`, `SignalRActivityBridgeService`, and client-side `OrchestratorHubClientConnection` implemented and wired to DI.
+- [x] **Step 5.1:** Design system tokens in `theme.css`, `app.css`, `App.razor`, and responsive shell (`TopNavBar`, `NavMenu`, `MainLayout`, `ToastHost`).
+- [x] **Step 5.2:** `IOrchestratorHubClient`, `OrchestratorHub`, `SignalRActivityBridgeService`, and client-side `OrchestratorHubClientConnection` implemented and wired to DI.
 - [ ] **Step 5.3:** `Ideation.razor` conversing with `IIdeationService` in real time, proposing tasks with editable fields, and saving to SQLite as `Suggested`.
 - [ ] **Step 5.4:** `Backlog.razor` rendering Kanban columns and SVG DAG graph, with Maintainer Promotion modal (`Suggested` $\rightarrow$ `Open`/`Rejected`) and cycle prevention.
 - [ ] **Step 5.5:** `Monitoring.razor` displaying active worker state, 7-step pipeline (GPU vs CPU), and live terminal stream.

@@ -1,0 +1,136 @@
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using NightCodeForge.Core.Streaming;
+
+namespace NightCodeForge.Infrastructure.Hubs;
+
+/// <summary>
+/// Background hosted service that bridges in-memory agent activity events from
+/// <see cref="IAgentActivityStreamer"/> to SignalR clients and targeted task groups.
+/// </summary>
+public class SignalRActivityBridgeService : BackgroundService
+{
+    private readonly IAgentActivityStreamer _streamer;
+    private readonly IHubContext<OrchestratorHub, IOrchestratorHubClient> _hubContext;
+    private readonly ILogger<SignalRActivityBridgeService> _logger;
+
+    public SignalRActivityBridgeService(
+        IAgentActivityStreamer streamer,
+        IHubContext<OrchestratorHub, IOrchestratorHubClient> hubContext,
+        ILogger<SignalRActivityBridgeService> logger)
+    {
+        _streamer = streamer;
+        _hubContext = hubContext;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("SignalRActivityBridgeService starting event subscription loop.");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await foreach (var evt in _streamer.SubscribeAsync(cancellationToken: stoppingToken))
+                {
+                    await DispatchActivityEventAsync(evt);
+                }
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred in SignalRActivityBridgeService; retrying in 2 seconds.");
+                try
+                {
+                    await Task.Delay(2000, stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+        }
+
+        _logger.LogInformation("SignalRActivityBridgeService event subscription loop terminated.");
+    }
+
+    /// <summary>
+    /// Dispatches a single activity event to the appropriate SignalR clients or group.
+    /// Internal for unit test validation.
+    /// </summary>
+    public async Task DispatchActivityEventAsync(AgentActivityEvent evt)
+    {
+        var groupName = OrchestratorHub.GetTaskGroupName(evt.TaskId);
+
+        switch (evt.Kind)
+        {
+            case AgentActivityKind.ThinkingDelta:
+                await _hubContext.Clients.Group(groupName)
+                    .ReceiveTokenDelta(evt.TaskId, evt.Content, isThinking: true);
+                break;
+
+            case AgentActivityKind.MessageDelta:
+                await _hubContext.Clients.Group(groupName)
+                    .ReceiveTokenDelta(evt.TaskId, evt.Content, isThinking: false);
+                break;
+
+            case AgentActivityKind.ToolStarted:
+                var toolName = evt.Metadata?.TryGetValue("ToolName", out var tn) == true && tn != null
+                    ? tn.ToString()!
+                    : "tool";
+                await _hubContext.Clients.Group(groupName)
+                    .ReceiveToolExecution(evt.TaskId, toolName, evt.Content, "Running", null);
+                break;
+
+            case AgentActivityKind.ToolCompleted:
+                var completedTool = evt.Metadata?.TryGetValue("ToolName", out var ctn) == true && ctn != null
+                    ? ctn.ToString()!
+                    : "tool";
+                int? durationMs = null;
+                if (evt.Metadata?.TryGetValue("DurationMs", out var dur) == true && dur != null)
+                {
+                    if (dur is int iVal)
+                    {
+                        durationMs = iVal;
+                    }
+                    else if (int.TryParse(dur.ToString(), out var parsedDur))
+                    {
+                        durationMs = parsedDur;
+                    }
+                }
+                await _hubContext.Clients.Group(groupName)
+                    .ReceiveToolExecution(evt.TaskId, completedTool, evt.Content, "Completed", durationMs);
+                break;
+
+            case AgentActivityKind.StageStarted:
+            case AgentActivityKind.StageCompleted:
+                var status = evt.Kind == AgentActivityKind.StageStarted ? "Running" : "Completed";
+                var kind = evt.Metadata?.TryGetValue("StageKind", out var sk) == true && sk != null
+                    ? sk.ToString()!
+                    : "Agentic";
+                await _hubContext.Clients.All
+                    .ReceiveStageTransition(evt.TaskId, evt.StageId, kind, status);
+                break;
+
+            case AgentActivityKind.Interrupted:
+                await _hubContext.Clients.All
+                    .ReceiveWorkerStatus("WaitingForHuman", evt.TaskId, evt.StageId, "Local GPU");
+                break;
+
+            case AgentActivityKind.Error:
+                await _hubContext.Clients.Group(groupName)
+                    .ReceiveExecutionLog(evt.TaskId, evt.StageId, "Error", evt.Content, evt.Timestamp);
+                break;
+
+            case AgentActivityKind.TurnCompleted:
+                await _hubContext.Clients.Group(groupName)
+                    .ReceiveExecutionLog(evt.TaskId, evt.StageId, "Info", $"Turn completed: {evt.Content}", evt.Timestamp);
+                break;
+        }
+    }
+}
