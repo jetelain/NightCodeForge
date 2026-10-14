@@ -1,0 +1,16 @@
+@using NightCodeForge.Web.Services
+
+@if (!string.IsNullOrEmpty(Content))
+{
+    <div class="markdown-body @Class">
+        @MarkdownHelper.ToMarkupString(Content)
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string? Content { get; set; }
+
+    [Parameter]
+    public string? Class { get; set; }
+}

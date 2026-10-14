@@ -2,7 +2,7 @@
 
 > **Phase 5 Implementation Step**  
 > *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.2: SignalR Telemetry](STEP_5_2_SIGNALR_TELEMETRY_INFRASTRUCTURE.md) | *Next Step:* [Step 5.4: Backlog & Visual DAG](STEP_5_4_BACKLOG_AND_VISUAL_DAG.md)  
-> *Project Target:* `src/NightCodeForge.Web/Components/Ideation` & `Pages/Ideation.razor` | *Status:* Ready for Implementation
+> *Project Target:* `src/NightCodeForge.Web/Components/Ideation` & `Pages/Ideation.razor` | *Status:* Completed
 
 ---
 
@@ -253,10 +253,10 @@ private async Task AddProposalToBacklogAsync(IdeationProposalViewModel proposal)
 
 ## 6. Definition of Done (DoD) Checklist
 
-- [ ] `Pages/Ideation.razor` created with 2-pane responsive layout.
-- [ ] `IdeationProposalCard.razor` component implemented with in-place editable fields.
-- [ ] Collapsible thinking accordion `<details class="think-trace">` handles high-frequency `<think>` streaming.
-- [ ] Integration with `IIdeationService.ConverseStreamingAsync` complete with cancellation support.
-- [ ] Ingestion logic creates `TaskOverallStatus.Suggested` and writes `docs/tasks/` markdown file.
-- [ ] Dependency selector populates existing tasks for linking.
-- [ ] Unit & bUnit tests verifying streaming and task creation dispatch.
+- [x] `Pages/Ideation.razor` created with 2-pane responsive layout.
+- [x] `IdeationProposalCard.razor` component implemented with in-place editable fields.
+- [x] Collapsible thinking accordion `<details class="think-trace">` handles high-frequency `<think>` streaming.
+- [x] Integration with `IIdeationService.ConverseStreamingAsync` complete with cancellation support.
+- [x] Ingestion logic creates `TaskOverallStatus.Suggested` and writes `docs/tasks/` markdown file.
+- [x] Dependency selector populates existing tasks for linking.
+- [x] Unit & bUnit tests verifying streaming and task creation dispatch.

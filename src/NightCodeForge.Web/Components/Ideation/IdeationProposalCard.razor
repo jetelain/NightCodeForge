@@ -1,0 +1,192 @@
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Web.Services
+
+<div class="proposal-card @(Proposal.IsAdded ? "proposal-card-added" : "")">
+    <!-- Proposal Header: Title and Priority -->
+    <div class="proposal-card-header">
+        <div class="proposal-title-wrapper">
+            <span class="proposal-badge">Proposal</span>
+            @if (Proposal.IsAdded)
+            {
+                <span class="proposal-added-badge">ForgeTask #@Proposal.CreatedTaskId</span>
+            }
+        </div>
+        <div class="proposal-priority-wrapper">
+            <label class="form-label-sm">Priority:</label>
+            <select class="form-control-dark proposal-priority-select font-mono" 
+                    @bind="Proposal.Priority" 
+                    disabled="@Proposal.IsAdded"
+                    aria-label="Task Priority">
+                <option value="1">1 - Low</option>
+                <option value="2">2 - Normal</option>
+                <option value="3">3 - Medium</option>
+                <option value="4">4 - High</option>
+                <option value="5">5 - Critical</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Title Input -->
+    <div class="proposal-field">
+        <input class="form-control-dark proposal-title-input" 
+               @bind="Proposal.Title" 
+               placeholder="Task title..." 
+               disabled="@Proposal.IsAdded"
+               aria-label="Proposal Title" />
+    </div>
+
+    <!-- Description & Scope Editor/Preview Tabs -->
+    <div class="proposal-desc-container">
+        <div class="proposal-tab-bar">
+            <button type="button" 
+                    class="proposal-tab-btn @(!_isPreviewDescription ? "active" : "")" 
+                    @onclick="() => _isPreviewDescription = false">
+                ✏️ Edit Scope
+            </button>
+            <button type="button" 
+                    class="proposal-tab-btn @(_isPreviewDescription ? "active" : "")" 
+                    @onclick="() => _isPreviewDescription = true">
+                👁️ Preview
+            </button>
+        </div>
+
+        @if (!_isPreviewDescription)
+        {
+            <textarea class="form-control-dark proposal-desc-textarea" 
+                      rows="4" 
+                      @bind="Proposal.Description" 
+                      placeholder="Technical scope, implementation details, and acceptance criteria..." 
+                      disabled="@Proposal.IsAdded"
+                      aria-label="Proposal Description"></textarea>
+        }
+        else
+        {
+            <div class="proposal-desc-preview">
+                @if (string.IsNullOrWhiteSpace(Proposal.Description))
+                {
+                    <em class="text-muted" style="font-size: 0.82rem;">No description provided.</em>
+                }
+                else
+                {
+                    <MarkdownRenderer Content="@Proposal.Description" />
+                }
+            </div>
+        }
+    </div>
+
+    <!-- Dependency Multi-Select Accordion -->
+    <div class="proposal-dependencies-section">
+        <button type="button" 
+                class="dependency-toggle-btn" 
+                @onclick="() => _showDependencies = !_showDependencies"
+                disabled="@Proposal.IsAdded">
+            <span class="dependency-icon">🔗</span>
+            <span>Dependencies (@Proposal.SelectedDependencyIds.Count selected)</span>
+            <span class="dependency-arrow font-mono">@(_showDependencies ? "▲" : "▼")</span>
+        </button>
+
+        @if (_showDependencies && !Proposal.IsAdded)
+        {
+            <div class="dependency-list-panel">
+                @if (WorkspaceTasks == null || WorkspaceTasks.Count == 0)
+                {
+                    <div class="dependency-empty-hint">No existing workspace tasks available to link.</div>
+                }
+                else
+                {
+                    <div class="dependency-items-container">
+                        @foreach (var task in WorkspaceTasks)
+                        {
+                            var isSelected = Proposal.SelectedDependencyIds.Contains(task.Id);
+                            <label class="dependency-item-checkbox @(isSelected ? "selected" : "")">
+                                <input type="checkbox" 
+                                       checked="@isSelected" 
+                                       @onchange="@(e => OnDependencyToggled(task.Id, e.Value))" />
+                                <span class="font-mono task-id-tag">#@task.Id</span>
+                                <span class="task-title-text" title="@task.Title">@task.Title</span>
+                                <span class="badge badge-deterministic status-pill">@task.Status</span>
+                            </label>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    <!-- Actions / Added State Banner -->
+    <div class="proposal-card-footer">
+        @if (Proposal.IsAdded)
+        {
+            <div class="proposal-success-box">
+                <span class="success-icon">✅</span>
+                <span class="success-text">Added as ForgeTask #@Proposal.CreatedTaskId (Suggested)</span>
+                <a href="backlog" class="forge-btn forge-btn-outline font-mono backlog-link">View in Backlog ➔</a>
+            </div>
+        }
+        else
+        {
+            <div class="proposal-action-buttons">
+                <button type="button" 
+                        class="forge-btn forge-btn-primary add-backlog-btn" 
+                        @onclick="HandleAddToBacklogAsync" 
+                        disabled="@(string.IsNullOrWhiteSpace(Proposal.Title))">
+                    ➕ Add to Backlog
+                </button>
+                <button type="button" 
+                        class="forge-btn forge-btn-secondary dismiss-btn" 
+                        @onclick="HandleDismissAsync">
+                    🗑️ Dismiss
+                </button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public IdeationProposalViewModel Proposal { get; set; } = default!;
+
+    [Parameter]
+    public IReadOnlyList<ForgeTask> WorkspaceTasks { get; set; } = Array.Empty<ForgeTask>();
+
+    [Parameter]
+    public EventCallback<IdeationProposalViewModel> OnAddToBacklog { get; set; }
+
+    [Parameter]
+    public EventCallback<IdeationProposalViewModel> OnDismiss { get; set; }
+
+    private bool _showDependencies;
+    private bool _isPreviewDescription;
+
+    private void OnDependencyToggled(int taskId, object? isChecked)
+    {
+        var checkedValue = isChecked is bool b && b;
+        if (checkedValue)
+        {
+            if (!Proposal.SelectedDependencyIds.Contains(taskId))
+            {
+                Proposal.SelectedDependencyIds.Add(taskId);
+            }
+        }
+        else
+        {
+            Proposal.SelectedDependencyIds.Remove(taskId);
+        }
+    }
+
+    private async Task HandleAddToBacklogAsync()
+    {
+        if (OnAddToBacklog.HasDelegate)
+        {
+            await OnAddToBacklog.InvokeAsync(Proposal);
+        }
+    }
+
+    private async Task HandleDismissAsync()
+    {
+        if (OnDismiss.HasDelegate)
+        {
+            await OnDismiss.InvokeAsync(Proposal);
+        }
+    }
+}

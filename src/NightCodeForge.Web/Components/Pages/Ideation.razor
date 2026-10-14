@@ -1,31 +1,539 @@
 @page "/ideation"
+@inject IIdeationService IdeationService
+@inject WorkspaceStateService WorkspaceState
+@inject ITaskRepository TaskRepository
+@inject ITaskMarkdownSyncService MarkdownSync
+@inject ToastService ToastService
+@inject IdeationSessionState Session
+@inject IJSRuntime JS
+@implements IDisposable
 
 <PageTitle>Ideation Chat - NightCodeForge</PageTitle>
 
-<div class="page-header" style="margin-bottom: 1.5rem;">
-    <div style="display: flex; align-items: center; gap: 0.75rem;">
-        <span style="font-size: 1.75rem;">💡</span>
-        <div>
-            <h1>Ideation &amp; Discovery Chat</h1>
-            <p>Interactive requirement elicitation, architecture brainstorming, and specification refinement.</p>
+<div class="ideation-page-layout">
+    <!-- Page Header & Agent Config Toolbar -->
+    <div class="ideation-header">
+        <div class="ideation-header-title">
+            <span class="ideation-title-icon">💡</span>
+            <div>
+                <h1>Ideation &amp; Codebase Discovery Chat</h1>
+                <p>Interactive requirement elicitation, architecture brainstorming, and automatic backlog task formulation.</p>
+            </div>
+        </div>
+        <div class="ideation-header-status">
+            <span class="forge-badge @(Session.IsGenerating ? "badge-indigo" : "badge-agentic")">
+                <span class="status-dot @(Session.IsGenerating ? "running" : "idle")"></span>
+                @(Session.IsGenerating ? "Architect Deliberating..." : "Architect Agent Ready")
+            </span>
+            <button type="button" 
+                    class="forge-btn forge-btn-secondary prompt-config-toggle-btn" 
+                    @onclick="() => _showCustomPromptConfig = !_showCustomPromptConfig"
+                    title="Customize System Prompt">
+                ⚙️ Config
+            </button>
+        </div>
+    </div>
+
+    <!-- Optional Custom System Prompt Config Accordion -->
+    @if (_showCustomPromptConfig)
+    {
+        <div class="system-prompt-card">
+            <div class="system-prompt-header">
+                <span class="system-prompt-title">Custom Architect System Prompt (Optional)</span>
+                <span class="font-mono text-muted" style="font-size: 0.75rem;">Overrides default discovery instructions</span>
+            </div>
+            <textarea class="form-control-dark font-mono system-prompt-textarea" 
+                      rows="2" 
+                      @bind="Session.CustomSystemPrompt" 
+                      placeholder="e.g. Focus exclusively on performance optimizations in src/NightCodeForge.Core..."></textarea>
+        </div>
+    }
+
+    <!-- Two-Pane Main Workspace Grid -->
+    <div class="ideation-grid">
+        <!-- LEFT PANE: Conversational Stream & Chat Input (~60%) -->
+        <div class="chat-pane">
+            <!-- Quick Preset Prompts Bar -->
+            <div class="quick-prompts-bar">
+                <span class="quick-prompts-label">Quick Prompts:</span>
+                <button type="button" class="prompt-chip" @onclick='() => ApplyPresetPrompt("Explore the codebase architecture, project layout, and key entry points.")' disabled="@Session.IsGenerating">
+                    🏛️ Explore Architecture
+                </button>
+                <button type="button" class="prompt-chip" @onclick='() => ApplyPresetPrompt("Scan the repository for unused files, redundant dependencies, or dead code to clean up.")' disabled="@Session.IsGenerating">
+                    🔍 Find Dead Code
+                </button>
+                <button type="button" class="prompt-chip" @onclick='() => ApplyPresetPrompt("Identify technical debt, error handling gaps, and reliability risks, and propose tasks with dependencies.")' disabled="@Session.IsGenerating">
+                    🛡️ Propose Tech Debt
+                </button>
+                <button type="button" class="prompt-chip" @onclick='() => ApplyPresetPrompt("Help me plan and break down a new feature into modular, incremental backlog tasks with clear acceptance criteria.")' disabled="@Session.IsGenerating">
+                    ✨ Plan New Feature
+                </button>
+            </div>
+
+            <!-- Scrollable Message Transcript -->
+            <div id="chatMessagesContainer" class="chat-messages-container">
+                @if (Session.Messages.Count == 0 && !Session.IsGenerating)
+                {
+                    <div class="chat-empty-state">
+                        <div class="chat-empty-icon">💡</div>
+                        <div class="chat-empty-title">Codebase Discovery &amp; Ideation</div>
+                        <p class="chat-empty-desc">
+                            Ask architectural questions, explore code structure with read-only tools, or brainstorm new features.
+                            Any backlog tasks formulated by the agent will appear in the <strong>Discovered Proposals</strong> panel.
+                        </p>
+                        @if (WorkspaceState.ActiveWorkspace == null)
+                        {
+                            <div class="workspace-warning-callout">
+                                ⚠️ No active workspace selected. Please select a workspace from the top bar to begin.
+                            </div>
+                        }
+                    </div>
+                }
+
+                @foreach (var msg in Session.Messages)
+                {
+                    <div class="chat-bubble @(msg.Role.ToLowerInvariant())">
+                        <div class="chat-avatar">
+                            @(msg.Role.Equals("user", StringComparison.OrdinalIgnoreCase) ? "👤" : "💡")
+                        </div>
+                        <div class="chat-bubble-body">
+                            <div class="chat-bubble-header">
+                                <span class="chat-author">@(msg.Role.Equals("user", StringComparison.OrdinalIgnoreCase) ? "You" : "Architect Agent")</span>
+                                @if (msg.Timestamp.HasValue)
+                                {
+                                    <span class="chat-timestamp font-mono">@msg.Timestamp.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+                                }
+                            </div>
+
+                            @if (!string.IsNullOrEmpty(msg.ThinkingTrace))
+                            {
+                                <details class="think-trace">
+                                    <summary>
+                                        <span>🧠 Reasoning Trace</span>
+                                        <span class="font-mono text-muted">(@msg.ThinkingTrace.Length chars)</span>
+                                    </summary>
+                                    <div class="think-content font-mono">@msg.ThinkingTrace</div>
+                                </details>
+                            }
+
+                            <div class="chat-content-wrap">
+                                <MarkdownRenderer Content="@msg.Content" />
+                            </div>
+                        </div>
+                    </div>
+                }
+
+                <!-- Active Live Streaming Bubble -->
+                @if (Session.IsGenerating)
+                {
+                    <div class="chat-bubble assistant streaming">
+                        <div class="chat-avatar">💡</div>
+                        <div class="chat-bubble-body">
+                            <div class="chat-bubble-header">
+                                <span class="chat-author">Architect Agent</span>
+                                <span class="forge-badge badge-indigo live-badge">Streaming</span>
+                            </div>
+
+                            @if (!string.IsNullOrEmpty(Session.CurrentThinkingBuffer))
+                            {
+                                <details class="think-trace" open>
+                                    <summary>
+                                        <span>🧠 Reasoning Trace</span>
+                                        <span class="status-dot running" style="margin-left: 0.25rem;"></span>
+                                    </summary>
+                                    <div class="think-content font-mono">@Session.CurrentThinkingBuffer<span class="cursor-blink">▌</span></div>
+                                </details>
+                            }
+
+                            @if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer))
+                            {
+                                <div class="chat-content-wrap">
+                                    <MarkdownRenderer Content="@Session.CurrentMessageBuffer" />
+                                    <span class="cursor-blink">▌</span>
+                                </div>
+                            }
+                            else if (string.IsNullOrEmpty(Session.CurrentThinkingBuffer))
+                            {
+                                <div class="generating-wait-box">
+                                    <span class="status-dot running"></span>
+                                    <span>Agent is inspecting codebase files and deliberating...</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- Chat Input Area -->
+            <div class="chat-input-area">
+                <textarea class="form-control-dark chat-textarea" 
+                          rows="3" 
+                          @bind="_userInput" 
+                          @bind:event="oninput" 
+                          @onkeydown="HandleKeyDownAsync"
+                          placeholder="Ask the Architect agent or describe requirements... (Press Enter to send, Shift+Enter for new line)"
+                          disabled="@(Session.IsGenerating || WorkspaceState.ActiveWorkspace == null)"
+                          aria-label="Ideation Chat Prompt"></textarea>
+
+                <div class="chat-actions-row">
+                    <div class="chat-actions-left">
+                        <button type="button" 
+                                class="forge-btn forge-btn-secondary reset-session-btn" 
+                                @onclick="ResetSession" 
+                                disabled="@Session.IsGenerating"
+                                title="Clear conversation turns and proposals">
+                            🔄 Clear Chat
+                        </button>
+                        <span class="text-muted font-mono prompt-length-counter">
+                            @_userInput.Length chars
+                        </span>
+                    </div>
+
+                    <div class="chat-actions-right">
+                        @if (Session.IsGenerating)
+                        {
+                            <button type="button" class="forge-btn cancel-btn" @onclick="CancelGenerationAsync">
+                                ⏹️ Stop Generating
+                            </button>
+                        }
+                        else
+                        {
+                            <button type="button" 
+                                    class="forge-btn forge-btn-primary send-btn" 
+                                    @onclick="SendMessageAsync" 
+                                    disabled="@(string.IsNullOrWhiteSpace(_userInput) || WorkspaceState.ActiveWorkspace == null)">
+                                🚀 Send
+                            </button>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT PANE: Discovered Proposals Grid (~40%) -->
+        <div class="proposals-pane">
+            <div class="proposals-header">
+                <div class="proposals-header-left">
+                    <span class="proposals-header-icon">📋</span>
+                    <h2>Discovered Proposals</h2>
+                </div>
+                <div class="proposals-header-right">
+                    <span class="forge-badge badge-indigo font-mono">@Session.Proposals.Count</span>
+                    @if (Session.Proposals.Any(p => p.IsAdded))
+                    {
+                        <span class="forge-badge badge-teal font-mono">@Session.Proposals.Count(p => p.IsAdded) Ingested</span>
+                    }
+                </div>
+            </div>
+
+            <div class="proposals-list-scroll">
+                @if (Session.Proposals.Count == 0)
+                {
+                    <div class="proposals-empty-box">
+                        <div class="proposals-empty-icon">💡</div>
+                        <div class="proposals-empty-title">No Proposals Yet</div>
+                        <p class="proposals-empty-text">
+                            When the Architect Agent discovers backlog opportunities or you ask to formulate tasks, interactive proposal cards will appear here.
+                        </p>
+                        <div class="proposals-empty-hint">
+                            Try asking: <em>"Propose 3 backlog tasks to refactor error handling in src/NightCodeForge.Infrastructure"</em>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    @foreach (var proposal in Session.Proposals)
+                    {
+                        <IdeationProposalCard @key="proposal.ClientId" 
+                                              Proposal="proposal" 
+                                              WorkspaceTasks="_workspaceTasks" 
+                                              OnAddToBacklog="AddProposalToBacklogAsync" 
+                                              OnDismiss="DismissProposal" />
+                    }
+                }
+            </div>
         </div>
     </div>
 </div>
 
-<div class="forge-card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <div style="font-weight: 600; font-size: 1.1rem;">Phase 5.3 Workspace Session</div>
-        <span class="forge-badge badge-agentic">Architect Agent Ready</span>
-    </div>
-    <p style="margin-bottom: 1.25rem;">
-        The Ideation Chat engine enables asynchronous requirement discovery and automatic conversion of user intent into structured Backlog tasks.
-    </p>
-    <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-secondary);">
-        Active Workspace: <span style="color: var(--accent-indigo);">@(WorkspaceState.ActiveWorkspace?.Name ?? "None selected")</span>
-    </div>
-</div>
-
 @code {
-    [Inject]
-    private WorkspaceStateService WorkspaceState { get; set; } = default!;
+    private string _userInput = string.Empty;
+    private bool _showCustomPromptConfig;
+    private CancellationTokenSource? _cts;
+    private IReadOnlyList<ForgeTask> _workspaceTasks = Array.Empty<ForgeTask>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        Session.OnChange += HandleSessionChanged;
+
+        await ReloadWorkspaceContextAsync();
+    }
+
+    private async Task ReloadWorkspaceContextAsync()
+    {
+        var active = WorkspaceState.ActiveWorkspace;
+        if (active != null)
+        {
+            if (Session.BoundWorkspaceId != active.Id)
+            {
+                Session.Reset();
+                Session.BoundWorkspaceId = active.Id;
+            }
+
+            try
+            {
+                _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(active.Id);
+            }
+            catch
+            {
+                _workspaceTasks = Array.Empty<ForgeTask>();
+            }
+        }
+        else
+        {
+            _workspaceTasks = Array.Empty<ForgeTask>();
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        if (Session.IsGenerating)
+        {
+            _cts?.Cancel();
+        }
+
+        _ = InvokeAsync(ReloadWorkspaceContextAsync);
+    }
+
+    private void HandleSessionChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplyPresetPrompt(string promptText)
+    {
+        _userInput = promptText;
+    }
+
+    private async Task HandleKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey)
+        {
+            if (!Session.IsGenerating && !string.IsNullOrWhiteSpace(_userInput) && WorkspaceState.ActiveWorkspace != null)
+            {
+                await SendMessageAsync();
+            }
+        }
+    }
+
+    private async Task SendMessageAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_userInput) || WorkspaceState.ActiveWorkspace == null)
+            return;
+
+        var prompt = _userInput.Trim();
+        _userInput = string.Empty;
+
+        // Build history from existing completed turns
+        var history = Session.Messages
+            .Select(m => (m.Role, m.Content))
+            .ToList();
+
+        Session.Messages.Add(new ChatMessage("user", prompt, Timestamp: DateTime.UtcNow));
+        Session.IsGenerating = true;
+        Session.CurrentThinkingBuffer = string.Empty;
+        Session.CurrentMessageBuffer = string.Empty;
+
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+
+        await ScrollChatToBottomAsync();
+
+        try
+        {
+            await foreach (var update in IdeationService.ConverseStreamingAsync(
+                WorkspaceState.ActiveWorkspace,
+                prompt,
+                history,
+                customSystemPrompt: Session.CustomSystemPrompt,
+                cancellationToken: _cts.Token))
+            {
+                switch (update.Kind)
+                {
+                    case IdeationStreamUpdateKind.ThinkingDelta:
+                        if (!string.IsNullOrEmpty(update.TextDelta))
+                        {
+                            Session.CurrentThinkingBuffer += update.TextDelta;
+                            StateHasChanged();
+                        }
+                        break;
+
+                    case IdeationStreamUpdateKind.MessageDelta:
+                        if (!string.IsNullOrEmpty(update.TextDelta))
+                        {
+                            Session.CurrentMessageBuffer += update.TextDelta;
+                            StateHasChanged();
+                        }
+                        break;
+
+                    case IdeationStreamUpdateKind.ProposalDiscovered when update.Proposal != null:
+                        var newVm = IdeationProposalViewModel.FromProposal(update.Proposal, _workspaceTasks);
+                        if (!Session.Proposals.Any(p => string.Equals(p.Title, newVm.Title, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            Session.Proposals.Add(newVm);
+                            ToastService.Show("New Proposal Discovered", newVm.Title, ToastLevel.Info);
+                            StateHasChanged();
+                        }
+                        break;
+
+                    case IdeationStreamUpdateKind.Completed when update.FinalResult != null:
+                        if (update.FinalResult.ProposedTasks != null)
+                        {
+                            foreach (var p in update.FinalResult.ProposedTasks)
+                            {
+                                if (!Session.Proposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    Session.Proposals.Add(IdeationProposalViewModel.FromProposal(p, _workspaceTasks));
+                                }
+                            }
+                        }
+                        break;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer) || !string.IsNullOrEmpty(Session.CurrentThinkingBuffer))
+            {
+                Session.Messages.Add(new ChatMessage(
+                    "assistant",
+                    Session.CurrentMessageBuffer,
+                    string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
+                    DateTime.UtcNow));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ToastService.Show("Generation Cancelled", "Exploration agent stopped.", ToastLevel.Warning);
+            if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer))
+            {
+                Session.Messages.Add(new ChatMessage(
+                    "assistant",
+                    Session.CurrentMessageBuffer + "\n\n*(Generation stopped by user)*",
+                    string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
+                    DateTime.UtcNow));
+            }
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Generation Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            Session.IsGenerating = false;
+            Session.CurrentThinkingBuffer = string.Empty;
+            Session.CurrentMessageBuffer = string.Empty;
+            StateHasChanged();
+            await ScrollChatToBottomAsync();
+        }
+    }
+
+    private Task CancelGenerationAsync()
+    {
+        try
+        {
+            _cts?.Cancel();
+        }
+        catch
+        {
+            // Ignored
+        }
+        return Task.CompletedTask;
+    }
+
+    private void ResetSession()
+    {
+        _cts?.Cancel();
+        Session.Reset();
+        _userInput = string.Empty;
+    }
+
+    private async Task AddProposalToBacklogAsync(IdeationProposalViewModel proposal)
+    {
+        var workspace = WorkspaceState.ActiveWorkspace;
+        if (workspace == null) return;
+
+        try
+        {
+            var newTask = new ForgeTask
+            {
+                WorkspaceId = workspace.Id,
+                Title = proposal.Title.Trim(),
+                Description = proposal.Description.Trim(),
+                Status = TaskOverallStatus.Suggested,
+                Priority = proposal.Priority,
+                MergeMode = MergeMode.ManualReviewRequired,
+                BaseBranch = string.IsNullOrWhiteSpace(workspace.DefaultBaseBranch) ? "main" : workspace.DefaultBaseBranch,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            var created = await TaskRepository.CreateAsync(newTask, proposal.SelectedDependencyIds);
+            created.FeatureBranch = $"feature/task-{created.Id}";
+            await TaskRepository.UpdateAsync(created, proposal.SelectedDependencyIds);
+
+            // Sync markdown task file to docs/tasks/
+            if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
+            {
+                try
+                {
+                    await MarkdownSync.SyncTaskToDiskAsync(created, workspace.RepositoryPath, proposal.SelectedDependencyIds);
+                }
+                catch (Exception syncEx)
+                {
+                    ToastService.Show("Markdown Sync Warning", $"Created task #{created.Id} in DB but failed writing markdown: {syncEx.Message}", ToastLevel.Warning);
+                }
+            }
+
+            proposal.IsAdded = true;
+            proposal.CreatedTaskId = created.Id;
+
+            // Refresh existing workspace tasks so subsequent proposals can link to this new task
+            _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(workspace.Id);
+
+            ToastService.Show("Added to Backlog", $"ForgeTask #{created.Id} created with status Suggested.", ToastLevel.Success);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Creation Error", $"Failed to add proposal to backlog: {ex.Message}", ToastLevel.Error);
+        }
+    }
+
+    private void DismissProposal(IdeationProposalViewModel proposal)
+    {
+        Session.RemoveProposal(proposal);
+        ToastService.Show("Proposal Dismissed", $"Proposal '{proposal.Title}' removed.", ToastLevel.Info);
+    }
+
+    private async Task ScrollChatToBottomAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("NightCodeForge.scrollToBottom", "chatMessagesContainer");
+        }
+        catch
+        {
+            // Suppress JS error if in non-interactive or testing environment
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+        Session.OnChange -= HandleSessionChanged;
+    }
 }
