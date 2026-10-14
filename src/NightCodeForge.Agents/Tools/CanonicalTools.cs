@@ -22,6 +22,7 @@ public partial class CanonicalTools
     private readonly IWebSearchService _webSearchService;
     private readonly IWorkspacePathResolver? _pathResolver;
     private readonly int? _workspaceId;
+    private readonly int? _issueId;
 
     private readonly int? _buildTimeoutSeconds;
     private readonly int? _testTimeoutSeconds;
@@ -35,7 +36,8 @@ public partial class CanonicalTools
         int? buildTimeoutSeconds = null,
         int? testTimeoutSeconds = null,
         IWorkspacePathResolver? pathResolver = null,
-        int? workspaceId = null)
+        int? workspaceId = null,
+        int? issueId = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _executionEnv = executionEnv;
@@ -46,19 +48,20 @@ public partial class CanonicalTools
         _testTimeoutSeconds = testTimeoutSeconds;
         _pathResolver = pathResolver;
         _workspaceId = workspaceId;
+        _issueId = issueId;
     }
 
     public string ResolveFullPath(string path)
     {
         if (_pathResolver != null && _workspaceId.HasValue)
         {
-            var rootCrucibleDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty);
+            var rootCrucibleDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty, _issueId);
             if (Directory.Exists(rootCrucibleDir))
             {
-                return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path);
+                return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _issueId);
             }
 
-            var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path);
+            var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _issueId);
             if (File.Exists(cruciblePath) || Directory.Exists(cruciblePath))
             {
                 return cruciblePath;

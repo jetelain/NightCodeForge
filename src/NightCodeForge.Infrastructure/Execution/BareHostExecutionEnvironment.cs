@@ -1,14 +1,14 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using CliWrap;
-using CliWrap.Buffered;
+using Microsoft.Extensions.DependencyInjection;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Git;
 
 namespace NightCodeForge.Infrastructure.Execution;
 
 /// <summary>
-/// Execution environment directly executing on the host system or WSL.
+/// Execution environment directly executing on the host system or WSL via IProcessRunner.
 /// </summary>
 public class BareHostExecutionEnvironment : IExecutionEnvironment
 {
@@ -16,19 +16,32 @@ public class BareHostExecutionEnvironment : IExecutionEnvironment
     private readonly string? _defaultWorkingDirectory;
     private readonly string? _distribution;
     private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IProcessRunner _processRunner;
 
     public ExecutionTier Tier => _tier;
 
+    [ActivatorUtilitiesConstructor]
     public BareHostExecutionEnvironment(
+        IProcessRunner? processRunner = null,
         ExecutionTier tier = ExecutionTier.BareHost,
         string? defaultWorkingDirectory = null,
         string? distribution = null,
         IWorkspacePathResolver? pathResolver = null)
     {
+        _processRunner = processRunner ?? new SystemProcessRunner();
         _tier = tier;
         _defaultWorkingDirectory = defaultWorkingDirectory;
         _distribution = distribution;
         _pathResolver = pathResolver;
+    }
+
+    public BareHostExecutionEnvironment(
+        ExecutionTier tier,
+        string? defaultWorkingDirectory = null,
+        string? distribution = null,
+        IWorkspacePathResolver? pathResolver = null)
+        : this(new SystemProcessRunner(), tier, defaultWorkingDirectory, distribution, pathResolver)
+    {
     }
 
     public async Task<NightCodeForge.Core.Interfaces.CommandResult> ExecuteAsync(
@@ -43,46 +56,56 @@ public class BareHostExecutionEnvironment : IExecutionEnvironment
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(timeout);
 
-        string shell;
-        string args;
+        ProcessStartSpec spec;
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            shell = "wsl.exe";
             var distro = _distribution ?? _pathResolver?.GetWslDistributionName();
             var wslTargetDir = WslPathConverter.ToWslPath(targetDir);
             var wslCmd = $"cd \"{wslTargetDir}\" && {command}";
 
+            var args = new List<string>();
             if (!string.IsNullOrWhiteSpace(distro))
             {
-                args = $"-d \"{distro}\" -- bash -c \"{wslCmd.Replace("\"", "\\\"")}\"";
+                args.Add("-d");
+                args.Add(distro);
             }
-            else
+            args.Add("--");
+            args.Add("bash");
+            args.Add("-c");
+            args.Add(wslCmd);
+
+            spec = new ProcessStartSpec
             {
-                args = $"-- bash -c \"{wslCmd.Replace("\"", "\\\"")}\"";
-            }
+                FileName = "wsl.exe",
+                ArgumentList = args,
+                TimeoutSeconds = (int)timeout.TotalSeconds,
+                EnvironmentVariables = environmentVariables
+            };
         }
         else
         {
-            shell = "/bin/bash";
             var unixCmd = $"cd \"{targetDir}\" && {command}";
-            args = $"-c \"{unixCmd.Replace("\"", "\\\"")}\"";
-        }
-
-        var cmd = Cli.Wrap(shell)
-            .WithArguments(args)
-            .WithValidation(CommandResultValidation.None);
-
-        if (environmentVariables != null)
-        {
-            cmd = cmd.WithEnvironmentVariables(environmentVariables.ToDictionary(kvp => kvp.Key, kvp => (string?)kvp.Value));
+            spec = new ProcessStartSpec
+            {
+                FileName = "/bin/bash",
+                ArgumentList = ["-c", unixCmd],
+                WorkingDirectory = targetDir,
+                TimeoutSeconds = (int)timeout.TotalSeconds,
+                EnvironmentVariables = environmentVariables
+            };
         }
 
         var sw = Stopwatch.StartNew();
         try
         {
-            var res = await cmd.ExecuteBufferedAsync(cts.Token);
+            var res = await _processRunner.RunAsync(spec, cts.Token).ConfigureAwait(false);
             sw.Stop();
+
+            if (res.ExitCode == 124 && res.StandardError.Contains("Process timed out"))
+            {
+                throw new TimeoutException($"Command timed out after {timeout.TotalSeconds} seconds: {command}");
+            }
 
             var headTailOut = new HeadTailBuffer();
             headTailOut.Append(res.StandardOutput);

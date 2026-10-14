@@ -52,15 +52,17 @@ public partial class DeterministicTestStage : IWorkflowStage
     {
         var bag = context.DataBag;
         var repoPath = context.Workspace.RepositoryPath;
-        var workDir = !string.IsNullOrWhiteSpace(context.Workspace.Ext4MirrorPath)
-            ? context.Workspace.Ext4MirrorPath
-            : repoPath;
+        var workDir = !string.IsNullOrWhiteSpace(context.WorkingDirectory)
+            ? context.WorkingDirectory
+            : (!string.IsNullOrWhiteSpace(context.Workspace.Ext4MirrorPath)
+                ? context.Workspace.Ext4MirrorPath
+                : repoPath);
 
         var config = CodeStackPresets.ResolveConfig(repoPath, bag);
         var command = config.TestCommand ?? _testCommand;
 
         var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace)
+            ? _envProvider.GetEnvironment(context.Workspace, SandboxSecurityTier.Standard, context.Issue?.Id)
             : _executionEnv;
 
         if (effectiveEnv != null)

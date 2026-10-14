@@ -56,12 +56,17 @@ public class DeterministicQualityGatesScenario : IScenario
         using var testScope = context.Environment.Services.CreateScope();
         var envProvider = testScope.ServiceProvider.GetRequiredService<IExecutionEnvironmentProvider>();
         var buildStage = testScope.ServiceProvider.GetRequiredService<DeterministicBuildStage>();
+        var gitManager = testScope.ServiceProvider.GetRequiredService<IGitWorkspaceManager>();
 
-        var pipelineContext = new PipelineContext(issue, context.Environment.Workspace);
+        var worktreePath = await gitManager.EnsureWorktreeAsync(context.Environment.Workspace, issue.Id, issue.FeatureBranch, cancellationToken: context.CancellationToken);
+        var pipelineContext = new PipelineContext(issue, context.Environment.Workspace)
+        {
+            WorkingDirectory = worktreePath
+        };
 
         // Step 2: Inject Deliberate Syntax Error
         ConsoleFormatting.PrintStep("5.2", "Injecting deliberate compiler syntax error into Calculator.cs...");
-        context.Environment.GitRepo.InjectCompilerError(context.Environment.Workspace.Ext4MirrorPath);
+        context.Environment.GitRepo.InjectCompilerError(worktreePath);
 
         // Step 3: Run DeterministicBuildStage (Expect Failure & Loopback)
         ConsoleFormatting.PrintStep("5.3", "Executing DeterministicBuildStage on corrupt codebase (0 GPU tokens)...");
@@ -84,7 +89,7 @@ public class DeterministicQualityGatesScenario : IScenario
 
         // Step 4: Fix Compiler Error
         ConsoleFormatting.PrintStep("5.4", "Fixing syntax error in Calculator.cs...");
-        context.Environment.GitRepo.FixCompilerError(context.Environment.Workspace.Ext4MirrorPath);
+        context.Environment.GitRepo.FixCompilerError(worktreePath);
 
         // Step 5: Re-run DeterministicBuildStage (Expect Success)
         ConsoleFormatting.PrintStep("5.5", "Re-executing DeterministicBuildStage on corrected code...");
@@ -92,13 +97,16 @@ public class DeterministicQualityGatesScenario : IScenario
 
         if (!passResult.IsSuccess)
         {
-            return ScenarioResult.Fail(sw.Elapsed, $"DeterministicBuildStage failed after fix: {passResult.ErrorMessage}");
+            var diag = pipelineContext.DataBag.Get<List<string>>("diagnostics.compiler_errors");
+            var diagStr = diag != null ? string.Join("; ", diag) : "none";
+            return ScenarioResult.Fail(sw.Elapsed, $"DeterministicBuildStage failed after fix: {passResult.ErrorMessage} (Details: {diagStr})");
         }
 
         ConsoleFormatting.PrintSuccess("DeterministicBuildStage succeeded cleanly with 0 compiler errors!");
         details.Add("Compilation Gate: Passed cleanly on valid code");
 
-        // Checkout back to main
+        // Teardown worktree and checkout back to main
+        await gitManager.RemoveWorktreeAsync(context.Environment.Workspace, issue.Id, context.CancellationToken);
         await context.Environment.GitRepo.CheckoutBranchAsync("main", create: false, context.CancellationToken);
 
         sw.Stop();

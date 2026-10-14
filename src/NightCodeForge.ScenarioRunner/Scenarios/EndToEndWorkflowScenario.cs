@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
@@ -66,8 +67,8 @@ public class EndToEndWorkflowScenario : IScenario
         {
             Handler = (pipelineCtx, ct) =>
             {
-                // Implement Multiply in Calculator.cs
-                context.Environment.GitRepo.FixCompilerError(); // includes Multiply method
+                // Implement Multiply in Calculator.cs in the active issue worktree
+                context.Environment.GitRepo.FixCompilerError(pipelineCtx.WorkingDirectory); // includes Multiply method
                 return Task.FromResult(StageExecutionResult.Success());
             }
         };
@@ -153,7 +154,9 @@ public class EndToEndWorkflowScenario : IScenario
 
             if (finalIssue?.Status != IssueOverallStatus.Closed)
             {
-                return ScenarioResult.Fail(sw.Elapsed, $"Expected issue to be Closed after auto-merge, found {finalIssue?.Status}.");
+                var logs = await db.ExecutionLogs.Where(l => l.IssueId == issue.Id).ToListAsync(context.CancellationToken);
+                var lastErr = logs.LastOrDefault(l => l.Level == LogLevel.Warning || l.Level == LogLevel.Error);
+                return ScenarioResult.Fail(sw.Elapsed, $"Expected issue to be Closed after auto-merge, found {finalIssue?.Status}. Last log: {lastErr?.Message}");
             }
 
             // Verify Calculator.cs on main branch contains Multiply

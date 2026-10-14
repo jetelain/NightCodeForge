@@ -84,8 +84,8 @@ public class IssueOrchestrator : IIssueOrchestrator
             return;
         }
 
-        // 2. Workspace Lock Acquisition
-        using var lockReleaser = await _workspaceLockProvider.AcquireLockAsync(issue.WorkspaceId, cancellationToken);
+        // 2. Issue Lock Acquisition (Enables concurrent execution of different issues on the same workspace)
+        using var lockReleaser = await _workspaceLockProvider.AcquireIssueLockAsync(issue.WorkspaceId, issue.Id, cancellationToken);
 
         var workspace = issue.Workspace ?? await _workspaceRepository.GetByIdAsync(issue.WorkspaceId, cancellationToken);
         if (workspace == null)
@@ -116,8 +116,6 @@ public class IssueOrchestrator : IIssueOrchestrator
 
         try
         {
-            await _gitWorkspaceManager.CheckoutIssueBranchAsync(workspace, issue.Id, issue.BaseBranch, cancellationToken);
-
             if (_gitMirrorSyncService != null && workspace.ExecutionMode != ExecutionMode.BareHost)
             {
                 if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && _pathResolver != null)
@@ -151,6 +149,8 @@ public class IssueOrchestrator : IIssueOrchestrator
                     }
                 }
             }
+
+            await _gitWorkspaceManager.CheckoutIssueBranchAsync(workspace, issue.Id, issue.BaseBranch, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -238,9 +238,13 @@ public class IssueOrchestrator : IIssueOrchestrator
             issue.InterruptedStageId = null;
         }
 
-        var pipelineContext = new PipelineContext(issue, workspace);
-        pipelineContext.Pipeline = pipeline;
-        pipelineContext.CurrentProfile = profile;
+        var issueWorkingPath = _gitWorkspaceManager.GetWorktreePath(workspace, issue.Id);
+        var pipelineContext = new PipelineContext(issue, workspace)
+        {
+            WorkingDirectory = issueWorkingPath,
+            Pipeline = pipeline,
+            CurrentProfile = profile
+        };
 
         var startedAt = DateTime.UtcNow;
         StageExecutionResult result;
@@ -279,7 +283,7 @@ public class IssueOrchestrator : IIssueOrchestrator
                             StageId = stage.StageId,
                             StageDirective = stageDirective,
                             RequiredMode = stage.RequiredMode,
-                            WorkspacePath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) ? workspace.Ext4MirrorPath : workspace.RepositoryPath,
+                            WorkspacePath = issueWorkingPath,
                             SerializedStateJson = resumeMemory,
                             PendingHumanAnswer = lastHumanAnswer,
                             BootstrapPrompt = BuildBootstrapPrompt(stage.StageId, issue, pipelineContext, stageDirective),

@@ -50,6 +50,7 @@ public static class ServiceCollectionExtensions
         // 6. Execution Environments, Process Runner & Path Resolution
         services.TryAddSingleton<IProcessRunner, Execution.SystemProcessRunner>();
         services.TryAddSingleton<IWslMetadataService, Execution.WslMetadataService>();
+        services.TryAddSingleton<IHostSdkDiscoveryService, Execution.HostSdkDiscoveryService>();
         services.TryAddSingleton<IWorkspacePathResolver, Execution.WorkspacePathResolver>();
         services.TryAddSingleton<IExecutionEnvironment, Execution.BareHostExecutionEnvironment>();
         services.TryAddTransient<Execution.WslExecutionEnvironment>();

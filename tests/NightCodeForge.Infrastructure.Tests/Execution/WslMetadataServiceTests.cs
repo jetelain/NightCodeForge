@@ -13,48 +13,19 @@ public class WslMetadataServiceTests
 
         public Func<string, string, ProcessExecutionResult>? Handler { get; set; }
 
-        public ProcessExecutionResult Run(string fileName, string arguments, string? workingDirectory = null, int timeoutSeconds = 10)
-        {
-            CallCount++;
-            Invocations.Add((fileName, arguments, null));
-
-            if (Handler != null)
-            {
-                return Handler(fileName, arguments);
-            }
-
-            return new ProcessExecutionResult(0, string.Empty, string.Empty);
-        }
-
-        public ProcessExecutionResult Run(string fileName, IEnumerable<string> arguments, string? workingDirectory = null, int timeoutSeconds = 10)
-        {
-            CallCount++;
-            var list = arguments.ToList();
-            Invocations.Add((fileName, null, list));
-
-            if (Handler != null)
-            {
-                return Handler(fileName, string.Join(" ", list));
-            }
-
-            return new ProcessExecutionResult(0, string.Empty, string.Empty);
-        }
-
         public ProcessExecutionResult Run(ProcessStartSpec spec)
         {
-            if (spec.ArgumentList != null)
-                return Run(spec.FileName, spec.ArgumentList, spec.WorkingDirectory, spec.TimeoutSeconds);
-            return Run(spec.FileName, spec.Arguments ?? string.Empty, spec.WorkingDirectory, spec.TimeoutSeconds);
-        }
+            CallCount++;
+            var list = spec.ArgumentList?.ToList();
+            Invocations.Add((spec.FileName, spec.Arguments, list));
 
-        public Task<ProcessExecutionResult> RunAsync(string fileName, string arguments, string? workingDirectory = null, int timeoutSeconds = 10, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(Run(fileName, arguments, workingDirectory, timeoutSeconds));
-        }
+            if (Handler != null)
+            {
+                var args = spec.ArgumentList != null ? string.Join(" ", spec.ArgumentList) : (spec.Arguments ?? string.Empty);
+                return Handler(spec.FileName, args);
+            }
 
-        public Task<ProcessExecutionResult> RunAsync(string fileName, IEnumerable<string> arguments, string? workingDirectory = null, int timeoutSeconds = 10, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(Run(fileName, arguments, workingDirectory, timeoutSeconds));
+            return new ProcessExecutionResult(0, string.Empty, string.Empty);
         }
 
         public Task<ProcessExecutionResult> RunAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
@@ -62,35 +33,11 @@ public class WslMetadataServiceTests
             return Task.FromResult(Run(spec));
         }
 
-        public Task<ProcessExecutionResult> RunWithCallbacksAsync(string fileName, IEnumerable<string> arguments, Action<string>? onStandardOutput, Action<string>? onStandardError = null, string? workingDirectory = null, int timeoutSeconds = 10, string? standardInput = null, CancellationToken cancellationToken = default)
+        public async IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(ProcessStartSpec spec, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(Run(fileName, arguments, workingDirectory, timeoutSeconds));
-        }
-
-        public Task<ProcessExecutionResult> RunWithCallbacksAsync(string fileName, string arguments, Action<string>? onStandardOutput, Action<string>? onStandardError = null, string? workingDirectory = null, int timeoutSeconds = 10, string? standardInput = null, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(Run(fileName, arguments, workingDirectory, timeoutSeconds));
-        }
-
-        public async IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(string fileName, IEnumerable<string> arguments, string? workingDirectory = null, int timeoutSeconds = 300, string? standardInput = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            var res = Run(fileName, arguments, workingDirectory, timeoutSeconds);
+            var res = Run(spec);
             yield return new ProcessStreamChunk(ProcessStreamKind.StandardOutput, res.StandardOutput);
             yield return new ProcessStreamChunk(ProcessStreamKind.Exit, string.Empty, res.ExitCode);
-        }
-
-        public async IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(string fileName, string arguments, string? workingDirectory = null, int timeoutSeconds = 300, string? standardInput = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            var res = Run(fileName, arguments, workingDirectory, timeoutSeconds);
-            yield return new ProcessStreamChunk(ProcessStreamKind.StandardOutput, res.StandardOutput);
-            yield return new ProcessStreamChunk(ProcessStreamKind.Exit, string.Empty, res.ExitCode);
-        }
-
-        public IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
-        {
-            if (spec.ArgumentList != null)
-                return RunStreamingAsync(spec.FileName, spec.ArgumentList, spec.WorkingDirectory, spec.TimeoutSeconds, spec.StandardInput, cancellationToken);
-            return RunStreamingAsync(spec.FileName, spec.Arguments ?? string.Empty, spec.WorkingDirectory, spec.TimeoutSeconds, spec.StandardInput, cancellationToken);
         }
 
         public IProcessStreamSession StartSession(ProcessStartSpec spec) => throw new NotImplementedException();

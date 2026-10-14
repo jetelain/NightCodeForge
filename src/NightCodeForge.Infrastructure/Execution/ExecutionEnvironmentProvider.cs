@@ -32,6 +32,11 @@ public class ExecutionEnvironmentProviderOptions
     /// If true and running on Windows, automatically routes Docker commands through WSL2 if Docker is not found on Windows PATH.
     /// </summary>
     public bool AutoDetectWsl { get; set; } = true;
+
+    /// <summary>
+    /// Additional host SDK directories to mount into containers.
+    /// </summary>
+    public IList<string> AdditionalSdkMountPaths { get; set; } = new List<string>();
 }
 
 /// <summary>
@@ -45,7 +50,9 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
     private readonly ILogger<NightCodeForgeContainerExecutor> _containerLogger;
     private readonly ExecutionEnvironmentProviderOptions _options;
     private readonly IWorkspacePathResolver? _pathResolver;
-    private readonly ConcurrentDictionary<(int WorkspaceId, SandboxSecurityTier SecurityTier), IExecutionEnvironment> _cachedEnvironments = new();
+    private readonly IHostSdkDiscoveryService? _sdkDiscoveryService;
+    private readonly IGitWorkspaceManager? _gitWorkspaceManager;
+    private readonly ConcurrentDictionary<(int WorkspaceId, SandboxSecurityTier SecurityTier, int? IssueId), IExecutionEnvironment> _cachedEnvironments = new();
 
     [ActivatorUtilitiesConstructor]
     public ExecutionEnvironmentProvider(
@@ -53,8 +60,10 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         IProcessRunner? processRunner = null,
         ILogger<NightCodeForgeContainerExecutor>? containerLogger = null,
         IOptions<ExecutionEnvironmentProviderOptions>? options = null,
-        IWorkspacePathResolver? pathResolver = null)
-        : this(options?.Value, bareHost, processRunner, containerLogger, pathResolver)
+        IWorkspacePathResolver? pathResolver = null,
+        IHostSdkDiscoveryService? sdkDiscoveryService = null,
+        IGitWorkspaceManager? gitWorkspaceManager = null)
+        : this(options?.Value, bareHost, processRunner, containerLogger, pathResolver, sdkDiscoveryService, gitWorkspaceManager)
     {
     }
 
@@ -62,8 +71,10 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         ExecutionEnvironmentProviderOptions? options,
         BareHostExecutionEnvironment bareHost,
         ILogger<NightCodeForgeContainerExecutor>? containerLogger = null,
-        IWorkspacePathResolver? pathResolver = null)
-        : this(options, bareHost, null, containerLogger, pathResolver)
+        IWorkspacePathResolver? pathResolver = null,
+        IHostSdkDiscoveryService? sdkDiscoveryService = null,
+        IGitWorkspaceManager? gitWorkspaceManager = null)
+        : this(options, bareHost, null, containerLogger, pathResolver, sdkDiscoveryService, gitWorkspaceManager)
     {
     }
 
@@ -72,38 +83,60 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         BareHostExecutionEnvironment? bareHost = null,
         IProcessRunner? processRunner = null,
         ILogger<NightCodeForgeContainerExecutor>? containerLogger = null,
-        IWorkspacePathResolver? pathResolver = null)
+        IWorkspacePathResolver? pathResolver = null,
+        IHostSdkDiscoveryService? sdkDiscoveryService = null,
+        IGitWorkspaceManager? gitWorkspaceManager = null)
     {
-        _bareHost = bareHost ?? new BareHostExecutionEnvironment(pathResolver: pathResolver);
         _processRunner = processRunner ?? new SystemProcessRunner();
+        _bareHost = bareHost ?? new BareHostExecutionEnvironment(processRunner: _processRunner, pathResolver: pathResolver);
         _containerLogger = containerLogger ?? NullLogger<NightCodeForgeContainerExecutor>.Instance;
         _options = options ?? new ExecutionEnvironmentProviderOptions();
         _pathResolver = pathResolver;
+        _sdkDiscoveryService = sdkDiscoveryService;
+        _gitWorkspaceManager = gitWorkspaceManager;
     }
 
-    public IExecutionEnvironment GetEnvironment(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard)
+    public IExecutionEnvironment GetEnvironment(
+        Workspace workspace,
+        SandboxSecurityTier securityTier = SandboxSecurityTier.Standard,
+        int? issueId = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
+
+        var effectiveIssueId = issueId is > 0 ? issueId : null;
 
         return workspace.ExecutionMode switch
         {
             ExecutionMode.BareHost => _bareHost,
 
-            ExecutionMode.WslDirect => _cachedEnvironments.GetOrAdd((workspace.Id, securityTier), _ =>
-                new WslExecutionEnvironment(
-                    distribution: workspace.WslDistribution ?? _options.DefaultWslDistribution,
-                    defaultWorkingDirectory: !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
+            ExecutionMode.WslDirect => _cachedEnvironments.GetOrAdd((workspace.Id, securityTier, effectiveIssueId), _ =>
+            {
+                string defaultWorkingDir;
+                if (effectiveIssueId.HasValue)
+                {
+                    defaultWorkingDir = ResolveWorktreePath(workspace, effectiveIssueId.Value);
+                }
+                else
+                {
+                    defaultWorkingDir = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
                         ? workspace.Ext4MirrorPath
-                        : workspace.RepositoryPath)),
+                        : workspace.RepositoryPath;
+                }
 
-            ExecutionMode.ContainerSandbox => _cachedEnvironments.GetOrAdd((workspace.Id, securityTier), _ =>
+                return new WslExecutionEnvironment(
+                    _processRunner,
+                    distribution: workspace.WslDistribution ?? _options.DefaultWslDistribution,
+                    defaultWorkingDirectory: defaultWorkingDir);
+            }),
+
+            ExecutionMode.ContainerSandbox => _cachedEnvironments.GetOrAdd((workspace.Id, securityTier, effectiveIssueId), _ =>
             {
                 var useWsl = workspace.UseWslForContainers ||
                              !string.IsNullOrWhiteSpace(workspace.WslDistribution) ||
                              _options.UseWslForContainers ||
                              (_options.AutoDetectWsl && ShouldAutoUseWslForContainers(workspace));
 
-                var containerName = !string.IsNullOrWhiteSpace(workspace.ContainerName)
+                var baseContainerName = !string.IsNullOrWhiteSpace(workspace.ContainerName)
                     ? workspace.ContainerName
                     : (!string.IsNullOrWhiteSpace(workspace.ContainerImage)
                         ? (workspace.ContainerImage.Contains(':') || workspace.ContainerImage.Contains('/')
@@ -111,36 +144,106 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                             : workspace.ContainerImage)
                         : "ncf-sandbox");
 
-                var hostWorkspacePath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
+                var containerName = effectiveIssueId.HasValue
+                    ? $"{baseContainerName}-issue-{effectiveIssueId.Value}"
+                    : baseContainerName;
+
+                var rawPath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
                     ? workspace.Ext4MirrorPath
                     : (!string.IsNullOrWhiteSpace(workspace.RepositoryPath)
                         ? workspace.RepositoryPath
-                        : _pathResolver?.GetAgentWorkingClonePath(workspace.Id));
+                        : _pathResolver?.GetAgentWorkspaceRootPath(workspace.Id));
+
+                string? hostWorkspacePath = null;
+                string? canonicalClonePath = null;
+
+                if (!string.IsNullOrWhiteSpace(rawPath))
+                {
+                    var normRaw = rawPath.TrimEnd('/', '\\');
+                    var dirName = Path.GetFileName(normRaw);
+                    string parentDir;
+                    string cloneDir;
+
+                    if (dirName.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
+                        dirName.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
+                        dirName.Equals("mirror", StringComparison.OrdinalIgnoreCase))
+                    {
+                        cloneDir = normRaw;
+                        parentDir = Path.GetDirectoryName(normRaw) ?? normRaw;
+                    }
+                    else
+                    {
+                        parentDir = normRaw;
+                        cloneDir = $"{normRaw}/clone";
+                    }
+
+                    if (effectiveIssueId.HasValue)
+                    {
+                        hostWorkspacePath = ResolveWorktreePath(workspace, effectiveIssueId.Value, parentDir);
+                        canonicalClonePath = cloneDir;
+                    }
+                    else
+                    {
+                        hostWorkspacePath = parentDir;
+                    }
+                }
+
+                var targetDistro = workspace.WslDistribution ?? _options.DefaultWslDistribution;
+                var sdkMountPaths = _sdkDiscoveryService != null
+                    ? _sdkDiscoveryService.DiscoverSdkMountPaths(useWsl ? targetDistro : null)
+                    : ContainerExecutorOptions.DefaultSdkMountPaths;
 
                 var options = new ContainerExecutorOptions
                 {
                     ContainerNameOrId = containerName,
                     ContainerImage = !string.IsNullOrWhiteSpace(workspace.ContainerImage)
                         ? workspace.ContainerImage
-                        : "ubuntu:24.04",
+                        : ContainerExecutorOptions.DefaultAgentBaseImage,
                     HostWorkspacePath = hostWorkspacePath,
+                    CanonicalClonePath = canonicalClonePath,
                     ContainerWorkspacePath = "/workspace",
                     DefaultWorkingDirectory = "/workspace",
                     MountPackageCaches = true,
                     MountHostSdks = true,
+                    SdkMountPaths = sdkMountPaths.ToList(),
                     AutoStartContainer = true,
                     IsRestrictedReadOnly = securityTier == SandboxSecurityTier.RestrictedReadOnly,
                     UseWsl = useWsl,
-                    WslDistribution = workspace.WslDistribution ?? _options.DefaultWslDistribution,
+                    WslDistribution = targetDistro,
                     WslExecutable = _options.WslExecutable,
                     WslUserName = _pathResolver?.GetWslUserName(),
-                    ExpandTildeInMounts = true
+                    ExpandTildeInMounts = true,
+                    ProtectCloneWorkingTree = true
                 };
                 return new NightCodeForgeContainerExecutor(options, _processRunner, _containerLogger);
             }),
 
             _ => _bareHost
         };
+    }
+
+    private string ResolveWorktreePath(Workspace workspace, int issueId, string? parentDir = null)
+    {
+        if (_gitWorkspaceManager != null)
+        {
+            return _gitWorkspaceManager.GetWorktreePath(workspace, issueId);
+        }
+
+        if (_pathResolver != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            return _pathResolver.GetAgentWorktreePath(workspace.Id, issueId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(parentDir))
+        {
+            return parentDir.Contains('/') && !parentDir.Contains('\\')
+                ? $"{parentDir.TrimEnd('/')}/issue-{issueId}"
+                : Path.Combine(parentDir, $"issue-{issueId}");
+        }
+
+        return _pathResolver != null
+            ? _pathResolver.GetAgentWorktreePath(workspace.Id, issueId)
+            : $"issue-{issueId}";
     }
 
     private static bool ShouldAutoUseWslForContainers(Workspace workspace)

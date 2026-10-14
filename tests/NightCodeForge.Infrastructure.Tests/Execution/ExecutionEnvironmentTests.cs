@@ -15,7 +15,8 @@ public class ExecutionEnvironmentTests
 {
     private class FakePathResolver : IWorkspacePathResolver
     {
-        public string GetAgentWorkingClonePath(int workspaceId) => $"/home/wsluser/.nightcodeforge/wks/{workspaceId}";
+        public string GetAgentWorkspaceRootPath(int workspaceId) => $"/home/wsluser/.nightcodeforge/wks/{workspaceId}";
+        public string GetAgentWorkingClonePath(int workspaceId) => $"/home/wsluser/.nightcodeforge/wks/{workspaceId}/clone";
         public string GetHostRemoteUrl(string repositoryPath) => $"/mnt/c/repos/{repositoryPath}";
         public string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath) => $@"\\wsl.localhost\Ubuntu\home\wsluser\.nightcodeforge\wks\{workspaceId}\{relativeOrContainerPath.TrimStart('/', '\\')}";
         public string GetWslDistributionName() => "Ubuntu";
@@ -135,20 +136,20 @@ public class ExecutionEnvironmentTests
 
         Assert.Equal("/home/wsluser/.nightcodeforge/wks/42", containerExecutor.Options.HostWorkspacePath);
         Assert.Equal("/workspace", containerExecutor.Options.ContainerWorkspacePath);
-        Assert.Equal("ubuntu:24.04", containerExecutor.Options.ContainerImage);
+        Assert.Equal(ContainerExecutorOptions.DefaultAgentBaseImage, containerExecutor.Options.ContainerImage);
         Assert.True(containerExecutor.Options.MountPackageCaches);
         Assert.True(containerExecutor.Options.MountHostSdks);
         Assert.Equal("wsluser", containerExecutor.Options.WslUserName);
     }
 
     [Fact]
-    public void ContainerExecutor_DefaultsToUbuntuImage()
+    public void ContainerExecutor_DefaultsToNcfAgentBaseImage()
     {
         var options = new ContainerExecutorOptions();
-        Assert.Equal("ubuntu:24.04", options.ContainerImage);
+        Assert.Equal(ContainerExecutorOptions.DefaultAgentBaseImage, options.ContainerImage);
 
         var args = NightCodeForgeContainerExecutor.BuildDockerRunArgs(options);
-        Assert.Contains("ubuntu:24.04", args);
+        Assert.Contains(ContainerExecutorOptions.DefaultAgentBaseImage, args);
     }
 
     [Fact]
@@ -176,6 +177,29 @@ public class ExecutionEnvironmentTests
     }
 
     [Fact]
+    public void ContainerExecutor_ComputesPathEnvironmentVariable_WithGoNodeAndJvmSdks()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            MountHostSdks = true,
+            SdkMountPaths = new List<string>
+            {
+                "/usr/local/go",
+                "/home/user/.nvm/versions/node/v20.10.0",
+                "/usr/lib/jvm/java-17-openjdk-amd64",
+                "/custom/tools/bin"
+            }
+        };
+
+        var path = NightCodeForgeContainerExecutor.ComputePathEnvironmentVariable(options);
+
+        Assert.Contains("/usr/local/go/bin", path);
+        Assert.Contains("/home/user/.nvm/versions/node/v20.10.0/bin", path);
+        Assert.Contains("/usr/lib/jvm/java-17-openjdk-amd64/bin", path);
+        Assert.Contains("/custom/tools/bin", path);
+    }
+
+    [Fact]
     public void ContainerExecutor_BuildDockerRunArgs_PassesComputedPathAndUbuntuImage()
     {
         var options = new ContainerExecutorOptions
@@ -189,7 +213,176 @@ public class ExecutionEnvironmentTests
         var pathArg = Assert.Single(args, a => a.StartsWith("PATH="));
         Assert.Contains("/usr/share/dotnet", pathArg);
         Assert.Contains("/usr/bin", pathArg);
-        Assert.Contains("ubuntu:24.04", args);
+        Assert.Contains(ContainerExecutorOptions.DefaultAgentBaseImage, args);
+    }
+
+    [Fact]
+    public void ContainerExecutor_DefaultAgentBaseDockerfile_IncludesGitRipgrepAndPython()
+    {
+        var dockerfile = ContainerExecutorOptions.DefaultAgentBaseDockerfile;
+        Assert.Contains("git", dockerfile);
+        Assert.Contains("ripgrep", dockerfile);
+        Assert.Contains("python3", dockerfile);
+        Assert.Contains("python3-venv", dockerfile);
+        Assert.Contains("python3-pip", dockerfile);
+        Assert.Contains("build-essential", dockerfile);
+        Assert.Contains("curl", dockerfile);
+        Assert.Contains("jq", dockerfile);
+    }
+
+    [Fact]
+    public void ContainerExecutor_IsImageFresh_WhenRecent_ReturnsTrue()
+    {
+        var recentTime = DateTime.UtcNow.AddDays(-5).ToString("O");
+        var fakeRunner = new MockProcessRunner((exe, args) => new ProcessExecutionResult(0, recentTime, string.Empty));
+        var options = new ContainerExecutorOptions();
+
+        var fresh = NightCodeForgeContainerExecutor.IsImageFresh(fakeRunner, "ncf-agent-base:latest", options, TimeSpan.FromDays(30));
+        Assert.True(fresh);
+    }
+
+    [Fact]
+    public void ContainerExecutor_IsImageFresh_WhenOlderThanMaxAge_ReturnsFalse()
+    {
+        var oldTime = DateTime.UtcNow.AddDays(-45).ToString("O");
+        var fakeRunner = new MockProcessRunner((exe, args) => new ProcessExecutionResult(0, oldTime, string.Empty));
+        var options = new ContainerExecutorOptions();
+
+        var fresh = NightCodeForgeContainerExecutor.IsImageFresh(fakeRunner, "ncf-agent-base:latest", options, TimeSpan.FromDays(30));
+        Assert.False(fresh);
+    }
+
+    [Fact]
+    public void ContainerExecutor_IsImageFresh_WhenInspectFails_ReturnsFalse()
+    {
+        var fakeRunner = new MockProcessRunner((exe, args) => new ProcessExecutionResult(1, string.Empty, "Error: No such image"));
+        var options = new ContainerExecutorOptions();
+
+        var fresh = NightCodeForgeContainerExecutor.IsImageFresh(fakeRunner, "ncf-agent-base:latest", options, TimeSpan.FromDays(30));
+        Assert.False(fresh);
+    }
+
+    [Fact]
+    public async Task BareHostExecutionEnvironment_ExecutesViaProcessRunner_ReturnsCommandResult()
+    {
+        var fakeRunner = new MockProcessRunner((exe, args) =>
+        {
+            return new ProcessExecutionResult(0, "success output\n", string.Empty);
+        });
+
+        var env = new BareHostExecutionEnvironment(
+            processRunner: fakeRunner,
+            tier: ExecutionTier.BareHost,
+            distribution: "Ubuntu",
+            pathResolver: new FakePathResolver());
+
+        var result = await env.ExecuteAsync("echo 'hello'");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("success output\n", result.StandardOutput);
+        Assert.True(result.Duration >= TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task BareHostExecutionEnvironment_WhenTimedOut_ThrowsTimeoutException()
+    {
+        var fakeRunner = new MockProcessRunner((exe, args) =>
+        {
+            return new ProcessExecutionResult(124, string.Empty, "Process timed out after 5s.");
+        });
+
+        var env = new BareHostExecutionEnvironment(
+            processRunner: fakeRunner,
+            tier: ExecutionTier.BareHost);
+
+        await Assert.ThrowsAsync<TimeoutException>(async () =>
+        {
+            await env.ExecuteAsync("sleep 10", timeoutSeconds: 5);
+        });
+    }
+
+    [Fact]
+    public async Task WslExecutionEnvironment_ExecutesCommandViaProcessRunner_ReturnsExpectedResult()
+    {
+        string? capturedExe = null;
+        string? capturedArgs = null;
+
+        var fakeRunner = new MockProcessRunner((exe, args) =>
+        {
+            capturedExe = exe;
+            capturedArgs = args;
+            return new ProcessExecutionResult(0, "wsl output\n", string.Empty);
+        });
+
+        var env = new WslExecutionEnvironment(
+            processRunner: fakeRunner,
+            distribution: "Ubuntu-22.04",
+            defaultWorkingDirectory: @"C:\Work\Repo");
+
+        var result = await env.ExecuteAsync("dotnet --version");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("wsl output\n", result.StandardOutput);
+        Assert.NotNull(capturedExe);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            Assert.Equal("wsl.exe", capturedExe);
+            Assert.Contains("-d Ubuntu-22.04", capturedArgs);
+            Assert.Contains("bash -c cd \"/mnt/c/Work/Repo\" && dotnet --version", capturedArgs);
+        }
+    }
+
+    [Fact]
+    public async Task WslExecutionEnvironment_WhenTimedOut_ReturnsExitCode124WithTruncatedTrue()
+    {
+        var fakeRunner = new MockProcessRunner((exe, args) =>
+        {
+            return new ProcessExecutionResult(124, string.Empty, "Process timed out after 5s.");
+        });
+
+        var env = new WslExecutionEnvironment(
+            processRunner: fakeRunner,
+            distribution: "Ubuntu");
+
+        var result = await env.ExecuteAsync("long_running_job", timeoutSeconds: 5);
+
+        Assert.Equal(124, result.ExitCode);
+        Assert.True(result.Truncated);
+        Assert.Contains("WSL command execution timed out", result.StandardError);
+    }
+
+    [Fact]
+    public void WslExecutionEnvironment_Properties_ReflectConstructorParameters()
+    {
+        var env = new WslExecutionEnvironment(
+            distribution: "Debian",
+            defaultWorkingDirectory: "/mnt/c/project");
+
+        Assert.Equal(ExecutionTier.WslDirect, env.Tier);
+        Assert.Equal("Debian", env.Distribution);
+        Assert.Equal("/mnt/c/project", env.DefaultWorkingDirectory);
+    }
+
+    private class MockProcessRunner : IProcessRunner
+    {
+        private readonly Func<string, string, ProcessExecutionResult> _handler;
+
+        public MockProcessRunner(Func<string, string, ProcessExecutionResult> handler)
+        {
+            _handler = handler;
+        }
+
+        public ProcessExecutionResult Run(ProcessStartSpec spec)
+            => _handler(spec.FileName, spec.ArgumentList != null ? string.Join(" ", spec.ArgumentList) : (spec.Arguments ?? string.Empty));
+
+        public Task<ProcessExecutionResult> RunAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
+            => Task.FromResult(Run(spec));
+
+        public IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public IProcessStreamSession StartSession(ProcessStartSpec spec)
+            => throw new NotImplementedException();
     }
 }
 

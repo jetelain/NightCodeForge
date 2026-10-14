@@ -47,18 +47,18 @@ public class GitMirrorSyncScenario : IScenario
         }
 
         // Configure git identity on mirror repository for deterministic commits
-        await gitRunner.ExecuteAsync(mirrorRepo, "config user.name \"NightCodeForge Mirror\"", cancellationToken: context.CancellationToken);
-        await gitRunner.ExecuteAsync(mirrorRepo, "config user.email \"mirror@nightcodeforge.test\"", cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(mirrorRepo, ["config", "user.name", "NightCodeForge Mirror"], cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(mirrorRepo, ["config", "user.email", "mirror@nightcodeforge.test"], cancellationToken: context.CancellationToken);
 
         // Verify receive.denyCurrentBranch on host
-        var hostConfig = await gitRunner.ExecuteAsync(hostRepo, "config receive.denyCurrentBranch", cancellationToken: context.CancellationToken);
+        var hostConfig = await gitRunner.ExecuteAsync(hostRepo, ["config", "receive.denyCurrentBranch"], cancellationToken: context.CancellationToken);
         if (!hostConfig.StandardOutput.Trim().Equals("updateInstead", StringComparison.OrdinalIgnoreCase))
         {
             return ScenarioResult.Fail(sw.Elapsed, $"Expected 'receive.denyCurrentBranch' to be 'updateInstead' on host, found '{hostConfig.StandardOutput.Trim()}'.");
         }
 
         // Verify host-origin remote in mirror
-        var remotes = await gitRunner.ExecuteAsync(mirrorRepo, "remote -v", cancellationToken: context.CancellationToken);
+        var remotes = await gitRunner.ExecuteAsync(mirrorRepo, ["remote", "-v"], cancellationToken: context.CancellationToken);
         if (!remotes.StandardOutput.Contains("host-origin"))
         {
             return ScenarioResult.Fail(sw.Elapsed, "Local remote 'host-origin' missing from mirror repository.");
@@ -72,13 +72,13 @@ public class GitMirrorSyncScenario : IScenario
         var branchName = $"feature/issue-{issueId}";
         ConsoleFormatting.PrintStep("10.2", $"Creating branch '{branchName}' in mirror and committing feature file...");
 
-        await gitRunner.ExecuteAsync(mirrorRepo, $"checkout -b {branchName}", cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(mirrorRepo, ["checkout", "-b", branchName], cancellationToken: context.CancellationToken);
 
         var featureFilePath = Path.Combine(mirrorRepo, "FeatureSyncService.cs");
         await File.WriteAllTextAsync(featureFilePath, "// Initial Feature Code\npublic class FeatureSyncService { }\n", context.CancellationToken);
 
-        await gitRunner.ExecuteAsync(mirrorRepo, "add FeatureSyncService.cs", cancellationToken: context.CancellationToken);
-        await gitRunner.ExecuteAsync(mirrorRepo, "commit -m \"feat: add FeatureSyncService implementation\"", cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(mirrorRepo, ["add", "FeatureSyncService.cs"], cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(mirrorRepo, ["commit", "-m", "feat: add FeatureSyncService implementation"], cancellationToken: context.CancellationToken);
 
         ConsoleFormatting.PrintSuccess($"Committed feature implementation on '{branchName}' in mirror.");
 
@@ -92,7 +92,7 @@ public class GitMirrorSyncScenario : IScenario
         }
 
         // Verify host repository has branch
-        var hostBranches = await gitRunner.ExecuteAsync(hostRepo, "branch --list", cancellationToken: context.CancellationToken);
+        var hostBranches = await gitRunner.ExecuteAsync(hostRepo, ["branch", "--list"], cancellationToken: context.CancellationToken);
         if (!hostBranches.StandardOutput.Contains(branchName))
         {
             return ScenarioResult.Fail(sw.Elapsed, $"Branch '{branchName}' not found in host repository after primary push.");
@@ -105,14 +105,14 @@ public class GitMirrorSyncScenario : IScenario
         ConsoleFormatting.PrintStep("10.4", "Simulating dirty working tree on host to test '-ncf' fallback push...");
 
         // Checkout feature branch on host and make an uncommitted modification to simulate a developer editing locally
-        await gitRunner.ExecuteAsync(hostRepo, $"checkout {branchName}", cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(hostRepo, ["checkout", branchName], cancellationToken: context.CancellationToken);
         var hostFeaturePath = Path.Combine(hostRepo, "FeatureSyncService.cs");
         await File.AppendAllTextAsync(hostFeaturePath, "// Host developer uncommitted local edit\n", context.CancellationToken);
 
         // Make another commit in mirror
         await File.AppendAllTextAsync(featureFilePath, "// Agent secondary edit in mirror\n", context.CancellationToken);
-        await gitRunner.ExecuteAsync(mirrorRepo, "add FeatureSyncService.cs", cancellationToken: context.CancellationToken);
-        await gitRunner.ExecuteAsync(mirrorRepo, "commit -m \"feat: agent secondary update\"", cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(mirrorRepo, ["add", "FeatureSyncService.cs"], cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(mirrorRepo, ["commit", "-m", "feat: agent secondary update"], cancellationToken: context.CancellationToken);
 
         // Attempt push while host worktree is dirty on the same checked-out branch
         var dirtyPush = await syncService.PushToHostAsync(mirrorRepo, issueId, context.CancellationToken);
@@ -134,7 +134,7 @@ public class GitMirrorSyncScenario : IScenario
         }
 
         // Verify fallback branch exists in host
-        var hostBranchesAfterFallback = await gitRunner.ExecuteAsync(hostRepo, "branch --list", cancellationToken: context.CancellationToken);
+        var hostBranchesAfterFallback = await gitRunner.ExecuteAsync(hostRepo, ["branch", "--list"], cancellationToken: context.CancellationToken);
         if (!hostBranchesAfterFallback.StandardOutput.Contains(expectedFallbackBranch))
         {
             return ScenarioResult.Fail(sw.Elapsed, $"Fallback branch '{expectedFallbackBranch}' not found on host repository.");
@@ -147,12 +147,12 @@ public class GitMirrorSyncScenario : IScenario
         ConsoleFormatting.PrintStep("10.5", "Testing squash-merge and base branch host push synchronization...");
 
         // Reset host working tree and checkout main
-        await gitRunner.ExecuteAsync(hostRepo, "checkout -f main", cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(hostRepo, ["checkout", "-f", "main"], cancellationToken: context.CancellationToken);
 
         // In mirror: checkout main and squash-merge feature branch
-        await gitRunner.ExecuteAsync(mirrorRepo, "checkout main", cancellationToken: context.CancellationToken);
-        await gitRunner.ExecuteAsync(mirrorRepo, $"merge --squash {branchName}", cancellationToken: context.CancellationToken);
-        await gitRunner.ExecuteAsync(mirrorRepo, "commit -m \"Squash: Issue #10 Feature Complete\"", cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(mirrorRepo, ["checkout", "main"], cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(mirrorRepo, ["merge", "--squash", branchName], cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(mirrorRepo, ["commit", "-m", "Squash: Issue #10 Feature Complete"], cancellationToken: context.CancellationToken);
 
         // Push base branch to host
         var basePush = await syncService.PushBaseBranchToHostAsync(mirrorRepo, "main", context.CancellationToken);
@@ -162,7 +162,7 @@ public class GitMirrorSyncScenario : IScenario
         }
 
         // Inspect git log on host repository main branch
-        var hostLog = await gitRunner.ExecuteAsync(hostRepo, "log -1 --pretty=%B", cancellationToken: context.CancellationToken);
+        var hostLog = await gitRunner.ExecuteAsync(hostRepo, ["log", "-1", "--pretty=%B"], cancellationToken: context.CancellationToken);
         if (!hostLog.StandardOutput.Contains("Squash: Issue #10 Feature Complete"))
         {
             return ScenarioResult.Fail(sw.Elapsed, $"Host repository 'main' branch did not receive the squash commit. Host log: {hostLog.StandardOutput}");

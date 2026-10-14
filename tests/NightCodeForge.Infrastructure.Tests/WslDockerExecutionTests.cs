@@ -241,6 +241,10 @@ public class WslDockerExecutionTests
         // Workspace
         Assert.Contains(mounts, m => m.HostPath == "/home/developer/.nightcodeforge/wks/42" && m.ContainerPath == "/workspace" && !m.IsReadOnly);
 
+        // Layered clone protection
+        Assert.Contains(mounts, m => m.HostPath == "/home/developer/.nightcodeforge/wks/42/clone" && m.ContainerPath == "/workspace/clone" && m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "/home/developer/.nightcodeforge/wks/42/clone/.git" && m.ContainerPath == "/workspace/clone/.git" && !m.IsReadOnly);
+
         // Package caches (NuGet, npm, pnpm, uv, Maven)
         Assert.Contains(mounts, m => m.HostPath == "~/.nuget/packages" && m.ContainerPath == "/root/.nuget/packages" && !m.IsReadOnly);
         Assert.Contains(mounts, m => m.HostPath == "~/.npm" && m.ContainerPath == "/root/.npm" && !m.IsReadOnly);
@@ -288,6 +292,61 @@ public class WslDockerExecutionTests
 
         var nugetMount = Assert.Single(mounts, m => m.ContainerPath == "/root/.nuget/packages");
         Assert.Equal("/home/testuser/.nuget/packages", nugetMount.HostPath);
+    }
+
+    [Fact]
+    public void BuildVolumeMounts_WithIsolatedIssueWorktree_MountsWorktreeToWorkspaceAndCloneSeparately()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/home/developer/.nightcodeforge/wks/42/issue-7",
+            CanonicalClonePath = "/home/developer/.nightcodeforge/wks/42/clone",
+            ContainerWorkspacePath = "/workspace",
+            MountPackageCaches = false,
+            MountHostSdks = false
+        };
+
+        var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options);
+
+        // Active issue worktree mounted at /workspace
+        var wksMount = Assert.Single(mounts, m => m.ContainerPath == "/workspace");
+        Assert.Equal("/home/developer/.nightcodeforge/wks/42/issue-7", wksMount.HostPath);
+        Assert.False(wksMount.IsReadOnly);
+
+        // Canonical clone mounted at /clone as read-only
+        var cloneMount = Assert.Single(mounts, m => m.ContainerPath == "/clone");
+        Assert.Equal("/home/developer/.nightcodeforge/wks/42/clone", cloneMount.HostPath);
+        Assert.True(cloneMount.IsReadOnly);
+
+        // Canonical clone .git mounted at /clone/.git as read-write
+        var gitMount = Assert.Single(mounts, m => m.ContainerPath == "/clone/.git");
+        Assert.Equal("/home/developer/.nightcodeforge/wks/42/clone/.git", gitMount.HostPath);
+        Assert.False(gitMount.IsReadOnly);
+    }
+
+    [Fact]
+    public void BuildVolumeMounts_WithIsolatedIssueWorktree_RestrictedReadOnly_MountsGitReadOnly()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/home/developer/.nightcodeforge/wks/42/issue-7",
+            CanonicalClonePath = "/home/developer/.nightcodeforge/wks/42/clone",
+            ContainerWorkspacePath = "/workspace",
+            IsRestrictedReadOnly = true,
+            MountPackageCaches = false,
+            MountHostSdks = false
+        };
+
+        var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options);
+
+        var wksMount = Assert.Single(mounts, m => m.ContainerPath == "/workspace");
+        Assert.True(wksMount.IsReadOnly);
+
+        var cloneMount = Assert.Single(mounts, m => m.ContainerPath == "/clone");
+        Assert.True(cloneMount.IsReadOnly);
+
+        var gitMount = Assert.Single(mounts, m => m.ContainerPath == "/clone/.git");
+        Assert.True(gitMount.IsReadOnly);
     }
 
     [Fact]

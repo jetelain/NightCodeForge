@@ -35,7 +35,30 @@ public interface IGitWorkspaceManager
     Task SquashAndMergeAsync(Workspace workspace, int issueId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Hard resets and cleans the working tree to recover from interrupted or dirty operations.
+    /// Ensures that an isolated Git worktree exists for the given issue (issue-{id}) checked out on feature/issue-{id}.
+    /// If the worktree or branch does not yet exist, creates it branching from baseBranch.
     /// </summary>
-    Task RevertOrCleanAsync(Workspace workspace, CancellationToken cancellationToken = default);
+    Task<string> EnsureWorktreeAsync(Workspace workspace, int issueId, string baseBranch, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes the ephemeral Git worktree for the given issue and prunes worktree metadata.
+    /// </summary>
+    Task RemoveWorktreeAsync(Workspace workspace, int issueId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves the filesystem or UNC path for the given issue's isolated worktree.
+    /// </summary>
+    string GetWorktreePath(Workspace workspace, int issueId);
+
+    /// <summary>
+    /// Hard resets and cleans the working tree to recover from interrupted or dirty operations.
+    /// If issueId is specified, cleans the issue's worktree; otherwise cleans the canonical repository.
+    /// </summary>
+    Task RevertOrCleanAsync(Workspace workspace, int? issueId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Hard resets and cleans the canonical working tree.
+    /// </summary>
+    Task RevertOrCleanAsync(Workspace workspace, CancellationToken cancellationToken = default) =>
+        RevertOrCleanAsync(workspace, null, cancellationToken);
 }

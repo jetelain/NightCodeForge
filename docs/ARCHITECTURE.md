@@ -56,9 +56,10 @@ flowchart TB
     end
 
     subgraph Workspaces ["Workspace & Storage Layer"]
-        GitCli["Git CLI Engine (CliWrap)\n- Branch: feature/issue-{id}\n- WIP Commits"]
+        GitCli["Git CLI Engine (CliWrap)\n- Worktrees: issue-{id}\n- WIP Commits & Diff -U2"]
         EFCore["Entity Framework Core (SQLite/PostgreSQL)"]
-        LocalRepo["Target Git Working Tree"]
+        CanonicalClone["Canonical Clone on main/master\n(Read-Only Ideation & Triage)"]
+        Worktrees["Ephemeral Issue Worktrees\n(~/.nightcodeforge/wks/{id}/issue-{id})"]
     end
 
     UI --> SignalR
@@ -79,7 +80,8 @@ flowchart TB
 
     IHarness --> PipelineEngine
     IHarness --> GitCli
-    GitCli --> LocalRepo
+    GitCli --> CanonicalClone
+    GitCli --> Worktrees
     PipelineEngine --> EFCore
 ```
 
@@ -694,12 +696,51 @@ The background job system uses **Hangfire** backed by persistent storage. Hangfi
 > 1. At most **one** AI task runs on the GPU at any millisecond, strictly guarding VRAM against out-of-memory crashes.
 > 2. Resumed issues in `llm-urgent` receive **priority pick-up**: as soon as the single worker completes its active turn/task, jobs in `llm-urgent` are dequeued before standard items in `llm-inference` (non-preemptive priority dispatch without concurrent VRAM oversubscription).
 
-### 7.2 Workspace-Level Concurrency & Git Locking (`IWorkspaceLockProvider`)
-While GPU inference is strictly serialized globally (`WorkerCount = 1`), background utility tasks (the `default` queue with `WorkerCount = 4`) and interactive developer actions (e.g. diff inspections, status checks, ideation chat) can operate concurrently.
+### 7.2 Workspace & Issue-Level Concurrency: Dual-Tiered Git Locking (`IWorkspaceLockProvider`)
 
-To prevent race conditions, concurrent Git index mutations, and `.git/index.lock` collisions on a given working tree:
-* All workspace-level Git CLI commands and filesystem modifications are guarded by a workspace-keyed concurrency lock (`IWorkspaceLockProvider`, backed by `AsyncKeyedLock<int>` or named mutex per `WorkspaceId`).
-* Operations on independent workspaces execute in parallel without contention; operations targeting the same workspace are strictly serialized.
+While GPU inference is strictly serialized globally (`WorkerCount = 1` across `llm-urgent` and `llm-inference`), background utility tasks (`WorkerCount = 4` in the `default` queue), deterministic pipeline stages (compilation, unit tests, SAST scanning on CPU), and interactive developer actions (ideation chat, automated triage) can and should operate concurrently.
+
+To prevent race conditions, concurrent Git index mutations, and `.git/index.lock` collisions while maximizing throughput, `IWorkspaceLockProvider` enforces a **dual-tiered locking hierarchy**:
+
+```mermaid
+flowchart TD
+    subgraph WksLevel ["Workspace-Level Lock (wks:{workspaceId})"]
+        direction TB
+        WksLock["AcquireLockAsync(workspaceId)\n(Strictly Serialized & Atomic)"]
+        WksOps["Critical Operations:\n1. Squash-and-Merge into main\n2. Mirror Sync with Host IDE (GitMirrorSyncService)\n3. Base Branch Fast-Forward"]
+        WksLock --- WksOps
+    end
+
+    subgraph IssueLevel ["Issue-Level Locks (wks:{workspaceId}:issue:{issueId})"]
+        direction TB
+        Issue1Lock["AcquireIssueLockAsync(wks, 101)\nWorktree: issue-101"]
+        Issue2Lock["AcquireIssueLockAsync(wks, 102)\nWorktree: issue-102"]
+        Issue3Lock["AcquireIssueLockAsync(wks, 103)\nWorktree: issue-103"]
+
+        Issue1Task["Issue #101: Deterministic Tests & SAST\n(Runs on CPU via default queue)"]
+        Issue2Task["Issue #102: Agentic Implementation\n(Runs on GPU via llm-inference)"]
+        Issue3Task["Issue #103: Waiting for Human (ask)\n(Preserved in worktree on disk)"]
+
+        Issue1Lock --- Issue1Task
+        Issue2Lock --- Issue2Task
+        Issue3Lock --- Issue3Task
+    end
+
+    Canonical["Canonical Clone on main/master\n(Read-Only Ideation & Triage)"]
+```
+
+#### Dual-Tiered Locking Invariants:
+1. **Issue-Level Locks (`AcquireIssueLockAsync(workspaceId, issueId)`):**
+   - Key format: `$"wks:{workspaceId}:issue:{issueId}"`.
+   - **Isolation Guarantee:** Serializes multi-turn stage executions for the *same* issue to prevent overlapping pipeline actions on the same branch.
+   - **Concurrency Benefit:** Independent issues within the *same workspace* execute concurrently without blocking one another. Issue #101 can execute long-running deterministic compilation and unit tests (running on CPU) while Issue #102 executes reasoning and coding on the GPU.
+2. **Workspace-Level Locks (`AcquireLockAsync(workspaceId)`):**
+   - Key format: `$"wks:{workspaceId}"`.
+   - **Strictly Atomic & Short-Lived:** Held only during brief operations that touch the shared canonical clone:
+     - Merging a verified feature branch into `main` (`SquashAndMergeAsync`).
+     - Synchronizing the canonical ext4 clone with the developer's host repository (`GitMirrorSyncService`).
+3. **Non-Blocking Ideation & Triage:**
+   - Because the canonical clone stays checked out on `main`/`master` and normal issue execution happens in isolated worktrees, discovery chat (`IIdeationService`) and untrusted triage (`TriageStage`) inspect `main` without waiting for issue locks.
 
 ---
 
@@ -760,6 +801,170 @@ Because Crucible runs in-process within the Windows Forge process:
   \\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{workspaceId}\
   ```
 * This ensures instant, direct file manipulation with full EditorConfig normalization without spawning intermediate shell processes.
+
+### 8.4 Git Worktree Architecture & Ephemeral Working Trees
+
+#### 1. Architectural Motivation: Worktrees vs. Clones vs. Locks
+
+When designing concurrent multi-issue execution on a workspace, three primary models were evaluated:
+
+| Architecture | Mechanism | Disk Overhead | Concurrency | Ideation on `main` | Verdict |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **A. Single Clone + Global Lock** | Single clone, branches checked out sequentially under full workspace lock. | Low (1x clone) | **Zero concurrent tasks**; deterministic tests block GPU tasks and triage. | Blocked while any issue runs on a branch. | ❌ Rejected: severe throughput bottleneck. |
+| **B. Clone Reservation Pool** | Pool of N full clones (`wks/{id}/clone_1..N`), dynamically leased per task. | High (N x repository size + N x `.git` databases) | Parallel execution across leased clones. | Requires dedicated idle clone for `main`. | ❌ Rejected: massive disk duplication & mirror sync complexity. |
+| **C. Ephemeral Git Worktrees** *(Implemented)* | Single canonical clone on `main`; on-demand worktrees created per active issue. | Minimal (shared `.git` object database; only checked-out working files duplicated). | **Full parallelism**: concurrent deterministic & agentic tasks on distinct issues. | **Always available**: canonical clone remains permanently on `main`. | ✅ **Adopted Architectural Standard** |
+
+```mermaid
+flowchart TD
+    subgraph ObjectDB ["Shared Git Object Store (.git)"]
+        GitObjects["Commits, Blobs, Trees, Tags\n(~/.nightcodeforge/wks/{workspaceId}/clone/.git)"]
+    end
+
+    subgraph CanonicalClone ["Canonical Clone (Permanent)"]
+        MainTree["Working Tree on 'main'\n- Used by Ideation Agent\n- Used by Triage Agent (ro)\n- Target for Squash & Merge"]
+    end
+
+    subgraph Worktrees ["Ephemeral Issue Worktrees (~/.nightcodeforge/wks/{workspaceId}/issue-{id})"]
+        WT101["issue-101\nBranch: feature/issue-101\n(Running Stage 2: Tests)"]
+        WT102["issue-102\nBranch: feature/issue-102\n(Running Stage 3: Coding)"]
+        WT103["issue-103\nBranch: feature/issue-103\n(Awaiting Human Input)"]
+    end
+
+    GitObjects --- MainTree
+    GitObjects --- WT101
+    GitObjects --- WT102
+    GitObjects --- WT103
+```
+
+#### 2. Ephemeral Worktree Lifecycle
+
+Each active issue follows a strictly managed worktree lifecycle:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Orch as IssueOrchestrator
+    participant GWM as GitWorkspaceManager
+    participant Git as Native Git CLI
+    participant Stage as Pipeline Stages (1..6)
+    participant Host as Developer Host Repo
+
+    Note over Orch,GWM: 1. On-Demand Allocation
+    Orch->>GWM: EnsureWorktreeAsync(workspace, issueId, "main")
+    GWM->>Git: worktree list --porcelain
+    alt Worktree not registered
+        GWM->>Git: rev-parse --git-path info/exclude (Ensure issue-*/ excluded)
+        GWM->>Git: worktree add -b feature/issue-{id} issue-{id} main
+        GWM->>Git: Write relative gitdir to issue-{id}/.git for cross-environment portability
+    end
+    GWM-->>Orch: Worktree path: ~/.nightcodeforge/wks/{id}/issue-{id}
+
+    Note over Orch,Stage: 2. Multi-Stage Reuse & Execution
+    loop Pipeline Execution (Review, Pre-Impl, Impl, Gates, Review & Fix)
+        Orch->>Stage: ExecuteStageAsync(context with WorkingDirectory = worktreePath)
+        Stage->>Git: File edits, builds, tests inside issue-{id}
+        Orch->>GWM: CreateWipCheckpointAsync(issueId, stage, summary)
+        GWM->>Git: git -C issue-{id} commit -m "WIP: ..."
+    end
+
+    Note over Orch,Host: 3. Finalization & Teardown
+    Orch->>GWM: SquashAndMergeAsync(workspace, issueId, "main", commitMsg)
+    GWM->>Git: git -C canonical checkout main
+    GWM->>Git: git -C canonical merge --squash feature/issue-{id}
+    GWM->>Git: git -C canonical commit -m "{commitMsg}"
+    GWM->>GWM: RemoveWorktreeAsync(workspace, issueId)
+    GWM->>Git: git -C canonical worktree remove issue-{id} --force
+    GWM->>Git: git -C canonical worktree prune
+    Orch->>Host: git push host-origin main
+```
+
+1. **Allocation & Idempotency (`EnsureWorktreeAsync`):**
+   - When an issue begins processing, `EnsureWorktreeAsync` checks if the worktree is already listed in `git worktree list --porcelain`.
+   - If previously allocated (e.g. resuming from an interruption), it reuses the existing working directory without reinitializing.
+   - If new, it creates the worktree bound to `feature/issue-{id}`.
+   - Automatically writes `issue-*/` and `wt/` to `.git/info/exclude` in the canonical repository, guaranteeing that local worktrees never pollute `git status --porcelain` on the canonical repository.
+2. **Multi-Stage Reuse:**
+   - The same worktree directory persists across all stages of an issue. File edits made during `ImplementationStage` are immediately present for `DeterministicTestStage` and `CodeReviewAndFixStage` without checkout hops or stash pops.
+   - Deterministic stages execute with `context.WorkingDirectory` pointed to the worktree.
+   - AI agent tools (`view_file`, `write_to_file`, `replace_file_content`, `grep_search`) resolve relative paths against the worktree via `IWorkspacePathResolver.ResolveCruciblePath(workspaceId, path, issueId)`.
+   - Checkpoints (`CreateWipCheckpointAsync`) commit directly in the worktree.
+   - Noise-filtered diffs (`GenerateDiffAsync -U2`) compare `baseBranch...feature/issue-{id}` within the worktree.
+3. **Teardown & Clean Up (`RemoveWorktreeAsync`):**
+   - Once all stages pass and the issue is squashed and merged (or if rejected), `SquashAndMergeAsync` invokes `RemoveWorktreeAsync`.
+   - Executes `git worktree remove "<worktreePath>" --force` and `git worktree prune`.
+   - Disk space is reclaimed immediately.
+
+#### 3. Cross-Environment Path Resolution & Crucible UNC Bridge
+
+Because NightCodeForge supports cross-environment execution (Windows host with WSL2 agent confinement, Linux bare-host, and container sandboxes), worktree paths are resolved systematically across boundaries:
+
+| Environment | Canonical Repository Path | Issue Worktree Path |
+| :--- | :--- | :--- |
+| **Linux / macOS Bare Host** | `~/.nightcodeforge/wks/{id}/clone/` | `~/.nightcodeforge/wks/{id}/issue-{issueId}/` |
+| **WSL2 Ext4 Mirror (Linux Path)** | `/home/{user}/.nightcodeforge/wks/{id}/clone/` | `/home/{user}/.nightcodeforge/wks/{id}/issue-{issueId}/` |
+| **Windows Host via Crucible UNC Bridge** | `\\wsl.localhost\{distro}\home\{user}\.nightcodeforge\wks\{id}\clone\` | `\\wsl.localhost\{distro}\home\{user}\.nightcodeforge\wks\{id}\issue-{issueId}\` |
+| **Local Bare Host (e.g. Unit Tests)** | `<workspaceRoot>/clone/` | `<workspaceRoot>/issue-{issueId}/` |
+
+Agents inside containers or WSL access the worktree as their native root working directory (`/workspace/issue-{id}` or `~/.nightcodeforge/wks/{id}/issue-{id}`).
+Crucible running in-process on the Windows host seamlessly translates paths via `IWorkspacePathResolver.ResolveCruciblePath(workspaceId, relativeOrContainerPath, issueId)`, stripping container prefixes (`/workspace/`) and mounting to the high-speed WSL2 UNC network share.
+
+#### 4. Isolated Issue Worktree Mount (`/workspace`), Layered Clone Protection (`/clone:ro` & `/clone/.git:rw`) & LLM Cognitive Focus
+
+To eliminate LLM confusion and safeguard the canonical repository while maintaining native Git worktree functionality:
+
+1. **Per-Issue Isolated Worktree Container Mount:**
+   Instead of mounting the parent workspace directory (which would expose sibling `issue-*` worktrees and the canonical `clone` directory inside `/workspace`), the sandbox container mounts **strictly the active issue's worktree** directly at `/workspace`:
+   ```bash
+   # 1. Active issue worktree mounted at /workspace (read-write)
+   -v ~/.nightcodeforge/wks/{workspaceId}/issue-{id}:/workspace
+
+   # 2. Canonical clone repository (strictly read-only protection)
+   -v ~/.nightcodeforge/wks/{workspaceId}/clone:/clone:ro
+
+   # 3. Canonical clone Git database (read-write for worktree ref & object updates)
+   -v ~/.nightcodeforge/wks/{workspaceId}/clone/.git:/clone/.git
+   ```
+   *Cognitive & Security Benefits:*
+   - **Zero LLM Confusion:** Inside `/workspace`, the agent only sees the project files relevant to its assigned issue. No other issues (`issue-2`, `issue-3`) or the `clone` folder appear in directory listings, search tools, or file trees.
+   - **Cross-Environment Relative GitDir Resolution:** The worktree `.git` file contains `gitdir: ../clone/.git/worktrees/issue-{id}`. Inside the container, `/workspace/..` evaluates to `/`, so `../clone` cleanly resolves to `/clone/.git/worktrees/issue-{id}`. On the host/WSL filesystem, `../clone` is the sibling folder `~/.nightcodeforge/wks/{id}/clone`. Git operations (`git status`, `git add`, `git commit`) function flawlessly in both environments.
+   - **Canonical Working Tree Protection:** The canonical clone working tree at `/clone` is strictly read-only (`:ro`), preventing any container process from corrupting `main`. Worktree metadata and Git object writes to `/clone/.git` remain read-write (or read-only for untrusted triage).
+   - **Per-Issue Container Sandbox Naming:** Containers are named per issue (e.g. `ncf-sandbox-{workspaceId}-issue-{issueId}`), guaranteeing complete runtime isolation when multiple issues are worked in parallel.
+
+2. **Clean PWD & Environment Communication in Agent Prompts:**
+   `PromptPrefixStabilizer` injects an explicit `<environment>` block into Layer 3 of the prompt prefix:
+   ```markdown
+   <environment>
+   - Current Working Directory (PWD): /workspace (or local path in BareHost)
+   - All relative paths, file operations (read, edit, write), bash commands, builds, and test runs execute in this working directory.
+   - The canonical clone on 'main' is read-only. Do not attempt to modify files in other directories.
+   </environment>
+   ```
+   In container mode, the agent's working directory is simply `/workspace`, keeping commands and mental models concise. In BareHost mode, it reflects the native worktree path. Global Layer 1 rules reinforce boundary isolation.
+
+#### 5. Local Agent Base Image (`ncf-agent-base:latest`) & Auto-Generation Lifecycle
+
+To ensure consistent, secure, and offline-capable execution without requiring accounts or publishing to Docker Hub:
+
+1. **Zero External Registry Dependency:**
+   NightCodeForge maintains an embedded base Dockerfile (`ContainerExecutorOptions.DefaultAgentBaseDockerfile`) targeting `ubuntu:24.04`. The image is built and tagged locally as `ncf-agent-base:latest` directly inside the local Docker daemon.
+
+2. **Embedded Agent Toolset:**
+   The image includes the core tools needed by modern coding agents and deterministic stages:
+   - **Version Control:** `git` (with automatic `git config --global --add safe.directory '*'` configuration).
+   - **Fast Search:** `ripgrep` (`rg`) for rapid code navigation.
+   - **Networking & Utilities:** `curl`, `ca-certificates`, `jq`, `procps`, `unzip`, `tar`, `gzip`.
+   - **Native Build Prerequisites:** `build-essential` (gcc, make).
+   - **Python Runtime:** `python3`, `python3-venv`, `python3-pip`.
+
+3. **Python Runtime Architecture (Base Image vs. Host Mount):**
+   - **Why Python is Baked into the Base Image:** Python executables are dynamically linked against `glibc` and have a tightly-coupled standard library (`/usr/lib/python3.12`) with compiled C-extension shared objects (`.so`). Mounting Python directly from a host system (especially across different Linux distributions or Windows/WSL boundaries) frequently fails due to missing shared libraries or ABI mismatches (e.g., `_ssl`, `_ctypes`, `math`). Baking `python3` and `python3-venv` into the base image costs only ~35 MB uncompressed and guarantees rock-solid execution across any host.
+   - **Package Cache Mounting:** While the Python runtime is baked into the base image, package download caches (e.g., `~/.cache/uv`, `~/.cache/pip`) can be cleanly bind-mounted from the host because they are architecture-independent file trees.
+
+4. **Self-Healing 30-Day Freshness Lifecycle:**
+   `NightCodeForgeContainerExecutor.EnsureImageReady()` automatically checks the image age before launching containers:
+   - Uses `docker image inspect -f "{{.Created}}" ncf-agent-base:latest` to retrieve image creation timestamp.
+   - If the image does not exist or was created more than 30 days ago, it automatically compiles an isolated temporary Dockerfile and executes `docker build -t ncf-agent-base:latest`, keeping security patches and tools fresh.
+   - Builds execute in an isolated temp directory to prevent transmitting massive workspace context to the Docker daemon.
 
 ---
 

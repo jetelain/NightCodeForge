@@ -96,16 +96,8 @@ public class ContainerReplExecutorTests
             return new MockChannelStreamSession();
         }
 
-        public NightCodeForge.Core.Interfaces.ProcessExecutionResult Run(string fileName, string arguments, string? workingDirectory = null, int timeoutSeconds = 10) => throw new NotImplementedException();
-        public NightCodeForge.Core.Interfaces.ProcessExecutionResult Run(string fileName, IEnumerable<string> arguments, string? workingDirectory = null, int timeoutSeconds = 10) => throw new NotImplementedException();
         public NightCodeForge.Core.Interfaces.ProcessExecutionResult Run(NightCodeForge.Core.Interfaces.ProcessStartSpec spec) => throw new NotImplementedException();
-        public Task<NightCodeForge.Core.Interfaces.ProcessExecutionResult> RunAsync(string fileName, string arguments, string? workingDirectory = null, int timeoutSeconds = 10, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-        public Task<NightCodeForge.Core.Interfaces.ProcessExecutionResult> RunAsync(string fileName, IEnumerable<string> arguments, string? workingDirectory = null, int timeoutSeconds = 10, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<NightCodeForge.Core.Interfaces.ProcessExecutionResult> RunAsync(NightCodeForge.Core.Interfaces.ProcessStartSpec spec, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-        public Task<NightCodeForge.Core.Interfaces.ProcessExecutionResult> RunWithCallbacksAsync(string fileName, IEnumerable<string> arguments, Action<string>? onStandardOutput, Action<string>? onStandardError = null, string? workingDirectory = null, int timeoutSeconds = 10, string? standardInput = null, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-        public Task<NightCodeForge.Core.Interfaces.ProcessExecutionResult> RunWithCallbacksAsync(string fileName, string arguments, Action<string>? onStandardOutput, Action<string>? onStandardError = null, string? workingDirectory = null, int timeoutSeconds = 10, string? standardInput = null, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-        public IAsyncEnumerable<NightCodeForge.Core.Interfaces.ProcessStreamChunk> RunStreamingAsync(string fileName, IEnumerable<string> arguments, string? workingDirectory = null, int timeoutSeconds = 300, string? standardInput = null, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-        public IAsyncEnumerable<NightCodeForge.Core.Interfaces.ProcessStreamChunk> RunStreamingAsync(string fileName, string arguments, string? workingDirectory = null, int timeoutSeconds = 300, string? standardInput = null, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public IAsyncEnumerable<NightCodeForge.Core.Interfaces.ProcessStreamChunk> RunStreamingAsync(NightCodeForge.Core.Interfaces.ProcessStartSpec spec, CancellationToken cancellationToken = default) => throw new NotImplementedException();
     }
 

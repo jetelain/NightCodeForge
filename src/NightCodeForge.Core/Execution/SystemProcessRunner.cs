@@ -21,35 +21,6 @@ public class SystemProcessRunner : IProcessRunner
         _logger = logger ?? NullLogger<SystemProcessRunner>.Instance;
     }
 
-    public ProcessExecutionResult Run(
-        string fileName,
-        string arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10)
-    {
-        return Run(new ProcessStartSpec
-        {
-            FileName = fileName,
-            Arguments = arguments,
-            WorkingDirectory = workingDirectory,
-            TimeoutSeconds = timeoutSeconds
-        });
-    }
-
-    public ProcessExecutionResult Run(
-        string fileName,
-        IEnumerable<string> arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10)
-    {
-        return Run(new ProcessStartSpec
-        {
-            FileName = fileName,
-            ArgumentList = arguments,
-            WorkingDirectory = workingDirectory,
-            TimeoutSeconds = timeoutSeconds
-        });
-    }
 
     public ProcessExecutionResult Run(ProcessStartSpec spec)
     {
@@ -99,42 +70,13 @@ public class SystemProcessRunner : IProcessRunner
         }
     }
 
-    public Task<ProcessExecutionResult> RunAsync(
-        string fileName,
-        string arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10,
-        CancellationToken cancellationToken = default)
-    {
-        return RunAsync(new ProcessStartSpec
-        {
-            FileName = fileName,
-            Arguments = arguments,
-            WorkingDirectory = workingDirectory,
-            TimeoutSeconds = timeoutSeconds
-        }, cancellationToken);
-    }
-
-    public Task<ProcessExecutionResult> RunAsync(
-        string fileName,
-        IEnumerable<string> arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10,
-        CancellationToken cancellationToken = default)
-    {
-        return RunAsync(new ProcessStartSpec
-        {
-            FileName = fileName,
-            ArgumentList = arguments,
-            WorkingDirectory = workingDirectory,
-            TimeoutSeconds = timeoutSeconds
-        }, cancellationToken);
-    }
 
     public async Task<ProcessExecutionResult> RunAsync(
         ProcessStartSpec spec,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var psi = CreateStartInfo(spec);
 
         try
@@ -186,6 +128,10 @@ public class SystemProcessRunner : IProcessRunner
 
             return new ProcessExecutionResult(process.ExitCode, stdout, stderr);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to execute async process '{FileName}'", spec.FileName);
@@ -193,85 +139,6 @@ public class SystemProcessRunner : IProcessRunner
         }
     }
 
-    public Task<ProcessExecutionResult> RunWithCallbacksAsync(
-        string fileName,
-        IEnumerable<string> arguments,
-        Action<string>? onStandardOutput,
-        Action<string>? onStandardError = null,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10,
-        string? standardInput = null,
-        CancellationToken cancellationToken = default)
-    {
-        return RunAsync(new ProcessStartSpec
-        {
-            FileName = fileName,
-            ArgumentList = arguments,
-            OnStandardOutput = onStandardOutput,
-            OnStandardError = onStandardError,
-            WorkingDirectory = workingDirectory,
-            TimeoutSeconds = timeoutSeconds,
-            StandardInput = standardInput
-        }, cancellationToken);
-    }
-
-    public Task<ProcessExecutionResult> RunWithCallbacksAsync(
-        string fileName,
-        string arguments,
-        Action<string>? onStandardOutput,
-        Action<string>? onStandardError = null,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10,
-        string? standardInput = null,
-        CancellationToken cancellationToken = default)
-    {
-        return RunAsync(new ProcessStartSpec
-        {
-            FileName = fileName,
-            Arguments = arguments,
-            OnStandardOutput = onStandardOutput,
-            OnStandardError = onStandardError,
-            WorkingDirectory = workingDirectory,
-            TimeoutSeconds = timeoutSeconds,
-            StandardInput = standardInput
-        }, cancellationToken);
-    }
-
-    public IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(
-        string fileName,
-        IEnumerable<string> arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 300,
-        string? standardInput = null,
-        CancellationToken cancellationToken = default)
-    {
-        return RunStreamingAsync(new ProcessStartSpec
-        {
-            FileName = fileName,
-            ArgumentList = arguments,
-            WorkingDirectory = workingDirectory,
-            TimeoutSeconds = timeoutSeconds,
-            StandardInput = standardInput
-        }, cancellationToken);
-    }
-
-    public IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(
-        string fileName,
-        string arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 300,
-        string? standardInput = null,
-        CancellationToken cancellationToken = default)
-    {
-        return RunStreamingAsync(new ProcessStartSpec
-        {
-            FileName = fileName,
-            Arguments = arguments,
-            WorkingDirectory = workingDirectory,
-            TimeoutSeconds = timeoutSeconds,
-            StandardInput = standardInput
-        }, cancellationToken);
-    }
 
     public async IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(
         ProcessStartSpec spec,

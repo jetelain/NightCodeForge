@@ -382,13 +382,17 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 * **Objective:** Validate the entire end-to-end flow under real-world conditions.
 * **Tasks:**
   1. Complete workflow simulation test:
-     * User creates Issue A and dependent Issue B via ideation chat.
-     * Issue A enters Stage 1 (Issue Review) -> asks human question -> WIP committed -> releases GPU.
-     * User answers question -> Issue A resumes in `llm-urgent` -> proceeds through Stage 2 (Implementation) and Stage 3 (Code Review & Fix).
-     * Issue A approved in Review Room -> merges -> Issue B automatically unblocks and enters queue.
-  2. Resilience checks:
-      * Abrupt process crash / host reboot simulation (e.g. Windows Update mid-inference): verify stale lock purge, rescue commit, conversation rehydration, and automatic resumption via `llm-urgent`.
-     * Command timeout handling (long-running build commands).
-     * Malformed JSON or LLM errors handled gracefully without deadlocking the queue.
-  3. Documentation updates and quickstart instructions.
+     * User creates Issue A and dependent Issue B via ideation chat (both created as `Suggested`).
+     * Maintainer promotes Issue A (`Priority = 1`, `MergeMode = ManualReviewRequired`) and Issue B (`Priority = 2`, `MergeMode = Automatic`, depends on Issue A) to `Open`.
+     * Issue A enters Stage 1 (Issue Review) -> agent calls `ask` -> WIP checkpoint committed -> `IsWaitingForHuman = true` -> releases GPU worker cleanly.
+     * Developer answers question -> status preserved, `IsWaitingForHuman = false` -> Issue A resumes in `llm-urgent` with original agent profile and completes Stage 1 (`Reviewed`).
+     * Issue A advances through Stage 2 (`Deterministic Pre-Impl` baseline), Stage 3 (`ImplementationStage` $\rightarrow$ `Implemented`), Stage 4 (`Deterministic Post-Impl` coverage gate & warning ratchet), Stage 5 (`CodeReviewAndFixStage`), and Stage 6 (`Deterministic Post-Review Verification` $\rightarrow$ `Ready`).
+     * Issue A approved in Review Room -> squash-merged to `baseBranch` (`Closed`) -> Issue B automatically unblocks and enters `llm-inference`.
+  2. Resilience & cross-platform checks:
+     * Abrupt process crash / host reboot simulation (e.g. Windows Update mid-inference): verify stale lock purge, rescue commit (`WIP-RECOVERY`), conversation rehydration, and automatic resumption via `llm-urgent`.
+     * Windows WSL2 mandatory enforcement, Crucible Windows UNC path access (`\\wsl.localhost\...`), and container `/workspace` tool remapping.
+     * Container shell hang, timeout cancellation, and sentinel REPL recovery (`\x03` SIGINT, grace period).
+     * Host working tree dirty conflict fallback (`refs/heads/feature/issue-{id}-ncf`).
+     * Multi-workspace VRAM protection (`WorkerCount = 1`) and workspace concurrency locks (`IWorkspaceLockProvider`).
+  3. Documentation updates, WSL2 setup guide, and quickstart instructions.
 * **Deliverables:** Verified production-ready orchestrator.

@@ -21,9 +21,10 @@ public sealed class TestGitRepository : IDisposable
         RunGit("config commit.gpgsign false");
     }
 
-    public string CreateFile(string relativePath, string content)
+    public string CreateFile(string relativePath, string content, string? baseDirectory = null)
     {
-        var fullPath = Path.Combine(RepositoryPath, relativePath);
+        var targetDir = string.IsNullOrWhiteSpace(baseDirectory) ? RepositoryPath : baseDirectory;
+        var fullPath = Path.Combine(targetDir, relativePath);
         var dir = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {

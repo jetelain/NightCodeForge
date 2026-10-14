@@ -127,101 +127,15 @@ public interface IProcessStreamSession : IAsyncDisposable, IDisposable
 public interface IProcessRunner
 {
     /// <summary>
-    /// Executes a system process synchronously with command-line arguments string and returns captured stdout and stderr.
-    /// </summary>
-    ProcessExecutionResult Run(
-        string fileName,
-        string arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10);
-
-    /// <summary>
-    /// Executes a system process synchronously with an argument list (ProcessStartInfo.ArgumentList) to avoid escaping issues.
-    /// </summary>
-    ProcessExecutionResult Run(
-        string fileName,
-        IEnumerable<string> arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10);
-
-    /// <summary>
     /// Executes a system process synchronously using a structured specification.
     /// </summary>
     ProcessExecutionResult Run(ProcessStartSpec spec);
-
-    /// <summary>
-    /// Executes a system process asynchronously with command-line arguments string.
-    /// </summary>
-    Task<ProcessExecutionResult> RunAsync(
-        string fileName,
-        string arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Executes a system process asynchronously with an argument list (ProcessStartInfo.ArgumentList).
-    /// </summary>
-    Task<ProcessExecutionResult> RunAsync(
-        string fileName,
-        IEnumerable<string> arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10,
-        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Executes a system process asynchronously using a structured specification, supporting streaming callbacks.
     /// </summary>
     Task<ProcessExecutionResult> RunAsync(
         ProcessStartSpec spec,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Executes a process asynchronously while streaming standard output and standard error lines to callbacks.
-    /// </summary>
-    Task<ProcessExecutionResult> RunWithCallbacksAsync(
-        string fileName,
-        IEnumerable<string> arguments,
-        Action<string>? onStandardOutput,
-        Action<string>? onStandardError = null,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10,
-        string? standardInput = null,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Executes a process asynchronously while streaming standard output and standard error lines to callbacks.
-    /// </summary>
-    Task<ProcessExecutionResult> RunWithCallbacksAsync(
-        string fileName,
-        string arguments,
-        Action<string>? onStandardOutput,
-        Action<string>? onStandardError = null,
-        string? workingDirectory = null,
-        int timeoutSeconds = 10,
-        string? standardInput = null,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Streams process standard output and standard error chunks asynchronously as they arrive using an argument list.
-    /// </summary>
-    IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(
-        string fileName,
-        IEnumerable<string> arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 300,
-        string? standardInput = null,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Streams process standard output and standard error chunks asynchronously as they arrive using an arguments string.
-    /// </summary>
-    IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(
-        string fileName,
-        string arguments,
-        string? workingDirectory = null,
-        int timeoutSeconds = 300,
-        string? standardInput = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

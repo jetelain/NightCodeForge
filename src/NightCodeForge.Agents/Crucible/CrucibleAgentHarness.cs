@@ -101,7 +101,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var harnessConfig = ParseHarnessConfig(context.Profile.HarnessConfigurationJson);
 
         var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier)
+            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier, context.Issue.Id)
             : _executionEnv;
 
         var projectConfig = CodeStackPresets.ResolveConfig(workspacePath, null);
@@ -118,7 +118,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
             buildTimeoutSeconds: buildTimeout,
             testTimeoutSeconds: testTimeout,
             pathResolver: _pathResolver,
-            workspaceId: context.Workspace?.Id);
+            workspaceId: context.Workspace?.Id,
+            issueId: context.Issue.Id);
 
         var dispatcher = new LenientToolDispatcher(canonicalTools);
 
@@ -207,6 +208,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
             ? context.Profile.SystemPrompt
             : harnessConfig.CustomPersona;
 
+        var isContainer = context.Workspace?.ExecutionMode == ExecutionMode.ContainerSandbox;
+        var agentWorkingDir = isContainer
+            ? "/workspace"
+            : workspacePath;
+
         var stabilizedPrefix = prefixStabilizer.BuildStabilizedPrefix(
             stageDirective,
             issueScope,
@@ -216,7 +222,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
             context.OptimizationFlags,
             customToolsPrompt: customToolsPrompt,
             customRulesPrompt: harnessConfig.CustomSystemRules,
-            customRolePersona: customPersona);
+            customRolePersona: customPersona,
+            workingDirectory: agentWorkingDir);
 
         // 7. Restore or Initialize Conversation History
         List<ChatMessage> chatHistory;

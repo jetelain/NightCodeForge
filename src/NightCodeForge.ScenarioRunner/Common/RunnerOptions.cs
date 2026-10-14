@@ -46,9 +46,9 @@ public class RunnerOptions
     public bool UseContainerMode { get; set; }
 
     /// <summary>
-    /// Container image to use for Container Mode (defaults to ubuntu:24.04).
+    /// Container image to use for Container Mode (defaults to ncf-agent-base:latest).
     /// </summary>
-    public string ContainerImage { get; set; } = "ubuntu:24.04";
+    public string ContainerImage { get; set; } = Infrastructure.Execution.ContainerExecutorOptions.DefaultAgentBaseImage;
 
     /// <summary>
     /// If true, launches the interactive scenario selection menu.

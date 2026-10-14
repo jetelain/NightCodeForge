@@ -93,11 +93,11 @@ public class StartupRecoveryIntegrationTests : IDisposable
         Assert.False(File.Exists(lockFile));
 
         // Verify git status is clean now (rescue commit created)
-        var status = await _runner.ExecuteAsync(_repo.RepositoryPath, "status --porcelain");
+        var status = await _runner.ExecuteAsync(_repo.RepositoryPath, ["status", "--porcelain"]);
         Assert.True(string.IsNullOrWhiteSpace(status.StandardOutput));
 
         // Verify git log contains WIP-RECOVERY commit
-        var log = await _runner.ExecuteAsync(_repo.RepositoryPath, "log -n 1 --oneline");
+        var log = await _runner.ExecuteAsync(_repo.RepositoryPath, ["log", "-n", "1", "--oneline"]);
         Assert.Contains("WIP-RECOVERY", log.StandardOutput);
 
         // Verify issue status remains Open and re-enqueued to urgent

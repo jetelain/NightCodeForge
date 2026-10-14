@@ -32,8 +32,30 @@ public class ContainerVolumeMount
 
 public class ContainerExecutorOptions
 {
+    public const string DefaultAgentBaseImage = "ncf-agent-base:latest";
+
+    public const string DefaultAgentBaseDockerfile = """
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    ripgrep \
+    curl \
+    ca-certificates \
+    jq \
+    procps \
+    build-essential \
+    unzip \
+    tar \
+    gzip \
+    python3 \
+    python3-venv \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+""";
+
     public string ContainerNameOrId { get; set; } = "ncf-sandbox";
-    public string? ContainerImage { get; set; } = "ubuntu:24.04";
+    public string? ContainerImage { get; set; } = DefaultAgentBaseImage;
     public string ShellExecutable { get; set; } = "docker";
     public string DefaultWorkingDirectory { get; set; } = "/workspace";
     public int DefaultTimeoutSeconds { get; set; } = 300;
@@ -65,6 +87,13 @@ public class ContainerExecutorOptions
     /// Host path to the workspace clone (~/.nightcodeforge/wks/{workspaceId}) mapped to /workspace.
     /// </summary>
     public string? HostWorkspacePath { get; set; }
+
+    /// <summary>
+    /// Host path to the canonical clone (~/.nightcodeforge/wks/{workspaceId}/clone) mapped to /clone.
+    /// When specified alongside HostWorkspacePath (which points to an issue worktree), the issue worktree
+    /// is mounted at /workspace and the canonical clone is mounted at /clone:ro with .git at /clone/.git:rw.
+    /// </summary>
+    public string? CanonicalClonePath { get; set; }
 
     /// <summary>
     /// Virtual container path where the workspace is mounted (defaults to "/workspace").
@@ -107,10 +136,10 @@ public class ContainerExecutorOptions
     public bool MountHostSdks { get; set; } = true;
 
     /// <summary>
-    /// List of host SDK directories mounted read-only (:ro) into the container.
-    /// Defaults to .NET (/usr/share/dotnet), JVM (/usr/lib/jvm), and Android SDK (/opt/android-sdk).
+    /// <summary>
+    /// Default list of host SDK directories mounted read-only (:ro) into the container.
     /// </summary>
-    public IList<string> SdkMountPaths { get; set; } = new List<string>
+    public static readonly IReadOnlyList<string> DefaultSdkMountPaths = new[]
     {
         "/usr/share/dotnet",
         "/usr/lib/dotnet",
@@ -119,6 +148,12 @@ public class ContainerExecutorOptions
         "/opt/android-sdk",
         "/etc/ssl/certs"
     };
+
+    /// <summary>
+    /// List of host SDK directories mounted read-only (:ro) into the container.
+    /// Defaults to .NET (/usr/share/dotnet, /usr/lib/dotnet), JVM (/usr/lib/jvm), and Android SDK (/opt/android-sdk).
+    /// </summary>
+    public IList<string> SdkMountPaths { get; set; } = new List<string>(DefaultSdkMountPaths);
 
     /// <summary>
     /// Additional custom volume mounts to include when starting the container.
@@ -139,6 +174,13 @@ public class ContainerExecutorOptions
     /// If true, NightCodeForgeContainerExecutor checks if the container is running and starts it via docker run if not.
     /// </summary>
     public bool AutoStartContainer { get; set; } = false;
+
+    /// <summary>
+    /// When true and workspace is not restricted read-only, adds layered mounts for the canonical
+    /// clone (/workspace/clone as read-only, and /workspace/clone/.git as read-write) to protect
+    /// the canonical repository working tree from inadvertent modification by container processes.
+    /// </summary>
+    public bool ProtectCloneWorkingTree { get; set; } = true;
 }
 
 /// <summary>
@@ -206,6 +248,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 await _stdin!.WriteLineAsync($"export PATH=\"{computedPath}:$PATH\"");
             }
             await _stdin!.WriteLineAsync("export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1");
+            await _stdin!.WriteLineAsync("git config --global --add safe.directory '*' 2>/dev/null || true");
 
             // Set environment variables if any (scrub secrets if RestrictedReadOnly)
             if (environmentVariables != null && environmentVariables.Count > 0)
@@ -332,6 +375,8 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
         try
         {
+            EnsureImageReady();
+
             var inspectCmd = $"inspect -f \"{{{{.State.Running}}}}\" {_options.ContainerNameOrId}";
             var (inspectExe, inspectArgs) = BuildDockerCommand(
                 inspectCmd,
@@ -403,6 +448,134 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to ensure container {Container} is running; attempting to proceed with exec session", _options.ContainerNameOrId);
+        }
+    }
+
+    /// <summary>
+    /// Ensures that the local agent base container image (ncf-agent-base:latest) exists and is fresh (&lt; 30 days old).
+    /// If absent or expired, generates it locally via docker build using the embedded DefaultAgentBaseDockerfile.
+    /// </summary>
+    public void EnsureImageReady()
+    {
+        var image = !string.IsNullOrWhiteSpace(_options.ContainerImage)
+            ? _options.ContainerImage
+            : ContainerExecutorOptions.DefaultAgentBaseImage;
+
+        // Only manage/auto-build the local ncf-agent-base image
+        if (!image.StartsWith("ncf-agent-base", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            if (IsImageFresh(_processRunner, image, _options, TimeSpan.FromDays(30)))
+            {
+                return;
+            }
+
+            BuildLocalAgentBaseImage(_processRunner, image, _options, _logger);
+        }
+        catch (NotImplementedException)
+        {
+            // Unit test mock runner did not implement Run - ignore
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to ensure container image {Image} is ready; attempting to proceed", image);
+        }
+    }
+
+    /// <summary>
+    /// Checks if a container image exists locally and was created less than maxAge ago.
+    /// </summary>
+    public static bool IsImageFresh(
+        IProcessRunner processRunner,
+        string imageName,
+        ContainerExecutorOptions options,
+        TimeSpan maxAge)
+    {
+        try
+        {
+            var inspectCmd = $"image inspect -f \"{{{{.Created}}}}\" {imageName}";
+            var (inspectExe, inspectArgs) = BuildDockerCommand(
+                inspectCmd,
+                options.UseWsl,
+                options.WslDistribution,
+                options.ShellExecutable,
+                options.WslExecutable);
+
+            var inspectResult = processRunner.Run(inspectExe, inspectArgs, timeoutSeconds: 5);
+            if (inspectResult.ExitCode == 0)
+            {
+                var createdStr = inspectResult.StandardOutput.Trim();
+                if (DateTime.TryParse(createdStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var createdDate))
+                {
+                    var age = DateTime.UtcNow - createdDate.ToUniversalTime();
+                    return age >= TimeSpan.Zero && age < maxAge;
+                }
+            }
+        }
+        catch
+        {
+            // Fall through to false if inspect fails
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Builds the local agent base image containing git, ripgrep, python3, and essential tools using the embedded Dockerfile.
+    /// </summary>
+    public static void BuildLocalAgentBaseImage(
+        IProcessRunner processRunner,
+        string imageName,
+        ContainerExecutorOptions options,
+        ILogger logger)
+    {
+        string? tempDir = null;
+        try
+        {
+            tempDir = Path.Combine(Path.GetTempPath(), $"ncf-build-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(tempDir);
+            var dockerfilePath = Path.Combine(tempDir, "Dockerfile");
+            File.WriteAllText(dockerfilePath, ContainerExecutorOptions.DefaultAgentBaseDockerfile.Replace("\r\n", "\n"));
+
+            var buildContext = options.UseWsl
+                ? Git.WslPathConverter.ToWslPath(tempDir)
+                : tempDir;
+
+            var buildCmd = $"build -t {imageName} \"{buildContext}\"";
+            var (buildExe, buildArgs) = BuildDockerCommand(
+                buildCmd,
+                options.UseWsl,
+                options.WslDistribution,
+                options.ShellExecutable,
+                options.WslExecutable);
+
+            logger.LogInformation("Building local base container image {Image} with git, ripgrep, and python3...", imageName);
+            var buildResult = processRunner.Run(buildExe, buildArgs, timeoutSeconds: 600);
+
+            if (buildResult.ExitCode != 0)
+            {
+                logger.LogWarning("Failed to build local base image {Image} (exit code {ExitCode}): {Error}",
+                    imageName, buildResult.ExitCode, buildResult.StandardError);
+            }
+            else
+            {
+                logger.LogInformation("Successfully built local base image {Image}.", imageName);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Exception while building local base container image {Image}", imageName);
+        }
+        finally
+        {
+            if (!string.IsNullOrEmpty(tempDir) && Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
         }
     }
 
@@ -538,6 +711,21 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 ? options.ContainerWorkspacePath
                 : "/workspace";
             mounts.Add(new ContainerVolumeMount(hostWks, containerWks, isReadOnly: options.IsRestrictedReadOnly));
+
+            // Layered protection and isolated issue worktree support:
+            if (!string.IsNullOrWhiteSpace(options.CanonicalClonePath))
+            {
+                var normClone = ResolveHostPath(options.CanonicalClonePath, options).TrimEnd('/', '\\');
+                mounts.Add(new ContainerVolumeMount(normClone, "/clone", isReadOnly: true));
+                mounts.Add(new ContainerVolumeMount($"{normClone}/.git", "/clone/.git", isReadOnly: options.IsRestrictedReadOnly));
+            }
+            else if (options.ProtectCloneWorkingTree && !options.IsRestrictedReadOnly)
+            {
+                var normHost = hostWks.TrimEnd('/', '\\');
+                var normContainer = containerWks.TrimEnd('/', '\\');
+                mounts.Add(new ContainerVolumeMount($"{normHost}/clone", $"{normContainer}/clone", isReadOnly: true));
+                mounts.Add(new ContainerVolumeMount($"{normHost}/clone/.git", $"{normContainer}/clone/.git", isReadOnly: false));
+            }
         }
 
         // 2. Package caches (NuGet, npm, pnpm, uv, Maven)
@@ -733,11 +921,24 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 else if (sdk.Contains("jvm", StringComparison.OrdinalIgnoreCase))
                 {
                     pathEntries.Add($"{sdk.TrimEnd('/')}/bin");
+                    pathEntries.Add($"{sdk.TrimEnd('/')}/default-java/bin");
                 }
                 else if (sdk.Contains("android", StringComparison.OrdinalIgnoreCase))
                 {
                     pathEntries.Add($"{sdk.TrimEnd('/')}/platform-tools");
                     pathEntries.Add($"{sdk.TrimEnd('/')}/cmdline-tools/latest/bin");
+                }
+                else if (sdk.EndsWith("/bin", StringComparison.OrdinalIgnoreCase))
+                {
+                    pathEntries.Add(sdk);
+                }
+                else if (sdk.Contains("cargo", StringComparison.OrdinalIgnoreCase) ||
+                         sdk.Contains("go", StringComparison.OrdinalIgnoreCase) ||
+                         sdk.Contains("node", StringComparison.OrdinalIgnoreCase) ||
+                         sdk.Contains("nvm", StringComparison.OrdinalIgnoreCase))
+                {
+                    pathEntries.Add($"{sdk.TrimEnd('/')}/bin");
+                    pathEntries.Add(sdk);
                 }
                 else
                 {
@@ -816,7 +1017,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
         var image = !string.IsNullOrWhiteSpace(options.ContainerImage)
             ? options.ContainerImage
-            : "ubuntu:24.04";
+            : ContainerExecutorOptions.DefaultAgentBaseImage;
         args.Add(image);
 
         args.AddRange(["tail", "-f", "/dev/null"]);

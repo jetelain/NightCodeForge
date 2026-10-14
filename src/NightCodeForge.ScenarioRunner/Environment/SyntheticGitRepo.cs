@@ -143,25 +143,25 @@ Contains Calculator arithmetic service and project configuration.
     /// </summary>
     public void InjectCompilerError(string? mirrorPath = null)
     {
-        var path = Path.Combine(RepositoryPath, "Calculator.cs");
-        var content = File.ReadAllText(path);
-        content += "\n// Deliberate compiler error injected for quality gate test:\nthis is a syntax error;\n";
-        File.WriteAllText(path, content, Encoding.UTF8);
-
-        if (!string.IsNullOrWhiteSpace(mirrorPath))
+        var basePath = !string.IsNullOrWhiteSpace(mirrorPath) ? mirrorPath : RepositoryPath;
+        if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) &&
+            (basePath.StartsWith('/') || basePath.StartsWith('~')))
         {
-            var target = mirrorPath;
-            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) &&
-                (mirrorPath.StartsWith('/') || mirrorPath.StartsWith('~')))
-            {
-                target = NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(mirrorPath, "Ubuntu");
-            }
-            var mirrorFile = Path.Combine(target, "Calculator.cs");
-            if (File.Exists(mirrorFile))
-            {
-                File.WriteAllText(mirrorFile, content, Encoding.UTF8);
-            }
+            basePath = NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(basePath, "Ubuntu");
         }
+        var targetFile = Path.Combine(basePath, "Calculator.cs");
+        var sourceFile = File.Exists(targetFile) ? targetFile : Path.Combine(RepositoryPath, "Calculator.cs");
+        var content = File.ReadAllText(sourceFile);
+        content += "\n// Deliberate compiler error injected for quality gate test:\nthis is a syntax error;\n";
+        try
+        {
+            if (!Directory.Exists(basePath))
+            {
+                Directory.CreateDirectory(basePath);
+            }
+            File.WriteAllText(targetFile, content, Encoding.UTF8);
+        }
+        catch { }
     }
 
     /// <summary>
@@ -169,7 +169,6 @@ Contains Calculator arithmetic service and project configuration.
     /// </summary>
     public void FixCompilerError(string? mirrorPath = null)
     {
-        var path = Path.Combine(RepositoryPath, "Calculator.cs");
         var content = @"namespace SyntheticLib;
 
 /// <summary>
@@ -193,7 +192,6 @@ public class Calculator
     public int Multiply(int a, int b) => a * b;
 }
 ";
-        File.WriteAllText(path, content, Encoding.UTF8);
 
         if (!string.IsNullOrWhiteSpace(mirrorPath))
         {
@@ -203,11 +201,21 @@ public class Calculator
             {
                 target = NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(mirrorPath, "Ubuntu");
             }
-            var mirrorFile = Path.Combine(target, "Calculator.cs");
-            if (File.Exists(mirrorFile))
+            try
             {
+                if (!Directory.Exists(target))
+                {
+                    Directory.CreateDirectory(target);
+                }
+                var mirrorFile = Path.Combine(target, "Calculator.cs");
                 File.WriteAllText(mirrorFile, content, Encoding.UTF8);
             }
+            catch { }
+        }
+        else
+        {
+            var path = Path.Combine(RepositoryPath, "Calculator.cs");
+            File.WriteAllText(path, content, Encoding.UTF8);
         }
     }
 

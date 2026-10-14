@@ -19,4 +19,19 @@ public interface IWorkspaceLockProvider
     /// Asynchronously attempts to acquire an exclusive lock within the specified timeout.
     /// </summary>
     Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireLockAsync(int workspaceId, TimeSpan timeout, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Asynchronously acquires an exclusive lock for a specific issue within a workspace, allowing concurrent execution of different issues.
+    /// </summary>
+    Task<IDisposable> AcquireIssueLockAsync(int workspaceId, int issueId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Synchronously attempts to acquire an exclusive lock for a specific issue within a workspace.
+    /// </summary>
+    bool TryAcquireIssueLock(int workspaceId, int issueId, out IDisposable? lockReleaser);
+
+    /// <summary>
+    /// Asynchronously attempts to acquire an exclusive lock for a specific issue within the specified timeout.
+    /// </summary>
+    Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireIssueLockAsync(int workspaceId, int issueId, TimeSpan timeout, CancellationToken cancellationToken = default);
 }

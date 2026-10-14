@@ -14,105 +14,133 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
         public int RefCount;
     }
 
-    private readonly ConcurrentDictionary<int, SemaphoreItem> _locks = new();
+    private readonly ConcurrentDictionary<string, SemaphoreItem> _locks = new();
 
-    public async Task<IDisposable> AcquireLockAsync(int workspaceId, CancellationToken cancellationToken = default)
+    public Task<IDisposable> AcquireLockAsync(int workspaceId, CancellationToken cancellationToken = default)
+        => AcquireInternalAsync(GetWorkspaceKey(workspaceId), cancellationToken);
+
+    public bool TryAcquireLock(int workspaceId, out IDisposable? lockReleaser)
+        => TryAcquireInternal(GetWorkspaceKey(workspaceId), out lockReleaser);
+
+    public Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireLockAsync(
+        int workspaceId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+        => TryAcquireInternalAsync(GetWorkspaceKey(workspaceId), timeout, cancellationToken);
+
+    public Task<IDisposable> AcquireIssueLockAsync(int workspaceId, int issueId, CancellationToken cancellationToken = default)
+        => AcquireInternalAsync(GetIssueKey(workspaceId, issueId), cancellationToken);
+
+    public bool TryAcquireIssueLock(int workspaceId, int issueId, out IDisposable? lockReleaser)
+        => TryAcquireInternal(GetIssueKey(workspaceId, issueId), out lockReleaser);
+
+    public Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireIssueLockAsync(
+        int workspaceId,
+        int issueId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+        => TryAcquireInternalAsync(GetIssueKey(workspaceId, issueId), timeout, cancellationToken);
+
+    private static string GetWorkspaceKey(int workspaceId) => $"wks:{workspaceId}";
+    private static string GetIssueKey(int workspaceId, int issueId) => $"wks:{workspaceId}:issue:{issueId}";
+
+    private async Task<IDisposable> AcquireInternalAsync(string key, CancellationToken cancellationToken)
     {
-        var item = GetOrCreate(workspaceId);
+        var item = GetOrCreate(key);
         try
         {
             await item.Semaphore.WaitAsync(cancellationToken);
-            return new Releaser(this, workspaceId, item);
+            return new Releaser(this, key, item);
         }
         catch
         {
-            DecrementRef(workspaceId, item);
+            DecrementRef(key, item);
             throw;
         }
     }
 
-    public bool TryAcquireLock(int workspaceId, out IDisposable? lockReleaser)
+    private bool TryAcquireInternal(string key, out IDisposable? lockReleaser)
     {
-        var item = GetOrCreate(workspaceId);
+        var item = GetOrCreate(key);
         if (item.Semaphore.Wait(0))
         {
-            lockReleaser = new Releaser(this, workspaceId, item);
+            lockReleaser = new Releaser(this, key, item);
             return true;
         }
 
-        DecrementRef(workspaceId, item);
+        DecrementRef(key, item);
         lockReleaser = null;
         return false;
     }
 
-    public async Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireLockAsync(
-        int workspaceId,
+    private async Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireInternalAsync(
+        string key,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
-        var item = GetOrCreate(workspaceId);
+        var item = GetOrCreate(key);
         try
         {
             var acquired = await item.Semaphore.WaitAsync(timeout, cancellationToken);
             if (acquired)
             {
-                return (true, new Releaser(this, workspaceId, item));
+                return (true, new Releaser(this, key, item));
             }
 
-            DecrementRef(workspaceId, item);
+            DecrementRef(key, item);
             return (false, null);
         }
         catch
         {
-            DecrementRef(workspaceId, item);
+            DecrementRef(key, item);
             throw;
         }
     }
 
-    private SemaphoreItem GetOrCreate(int workspaceId)
+    private SemaphoreItem GetOrCreate(string key)
     {
         lock (_locks)
         {
-            if (!_locks.TryGetValue(workspaceId, out var item))
+            if (!_locks.TryGetValue(key, out var item))
             {
                 item = new SemaphoreItem();
-                _locks[workspaceId] = item;
+                _locks[key] = item;
             }
             item.RefCount++;
             return item;
         }
     }
 
-    private void DecrementRef(int workspaceId, SemaphoreItem item)
+    private void DecrementRef(string key, SemaphoreItem item)
     {
         lock (_locks)
         {
             item.RefCount--;
             if (item.RefCount <= 0)
             {
-                _locks.TryRemove(workspaceId, out _);
+                _locks.TryRemove(key, out _);
                 item.Semaphore.Dispose();
             }
         }
     }
 
-    private void Release(int workspaceId, SemaphoreItem item)
+    private void Release(string key, SemaphoreItem item)
     {
         item.Semaphore.Release();
-        DecrementRef(workspaceId, item);
+        DecrementRef(key, item);
     }
 
     private sealed class Releaser : IDisposable
     {
         private WorkspaceLockProvider? _provider;
-        private readonly int _workspaceId;
+        private readonly string _key;
         private readonly SemaphoreItem _item;
         private int _disposed;
 
-        public Releaser(WorkspaceLockProvider provider, int workspaceId, SemaphoreItem item)
+        public Releaser(WorkspaceLockProvider provider, string key, SemaphoreItem item)
         {
             _provider = provider;
-            _workspaceId = workspaceId;
+            _key = key;
             _item = item;
         }
 
@@ -120,7 +148,7 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 0 && _provider != null)
             {
-                _provider.Release(_workspaceId, _item);
+                _provider.Release(_key, _item);
                 _provider = null;
             }
         }

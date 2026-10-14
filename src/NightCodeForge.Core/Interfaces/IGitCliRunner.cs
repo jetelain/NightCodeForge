@@ -20,9 +20,26 @@ public class GitCommandException : Exception
 {
     public string WorkingDirectory { get; }
     public string Arguments { get; }
+    public IReadOnlyList<string> ArgumentsList { get; }
     public int ExitCode { get; }
     public string StandardOutput { get; }
     public string StandardError { get; }
+
+    public GitCommandException(
+        string workingDirectory,
+        IEnumerable<string> argumentsList,
+        int exitCode,
+        string standardOutput,
+        string standardError)
+        : base($"Git command 'git {string.Join(" ", argumentsList)}' failed with exit code {exitCode} in '{workingDirectory}'.\n{standardError}")
+    {
+        WorkingDirectory = workingDirectory;
+        ArgumentsList = argumentsList as IReadOnlyList<string> ?? argumentsList.ToList();
+        Arguments = string.Join(" ", ArgumentsList);
+        ExitCode = exitCode;
+        StandardOutput = standardOutput;
+        StandardError = standardError;
+    }
 
     public GitCommandException(
         string workingDirectory,
@@ -30,13 +47,9 @@ public class GitCommandException : Exception
         int exitCode,
         string standardOutput,
         string standardError)
-        : base($"Git command 'git {arguments}' failed with exit code {exitCode} in '{workingDirectory}'.\n{standardError}")
+        : this(workingDirectory, [arguments], exitCode, standardOutput, standardError)
     {
-        WorkingDirectory = workingDirectory;
         Arguments = arguments;
-        ExitCode = exitCode;
-        StandardOutput = standardOutput;
-        StandardError = standardError;
     }
 }
 
@@ -46,17 +59,17 @@ public class GitCommandException : Exception
 public interface IGitCliRunner
 {
     /// <summary>
-    /// Executes a native Git CLI command asynchronously.
+    /// Executes a native Git CLI command asynchronously using an arguments list.
     /// </summary>
     /// <param name="workingDirectory">Repository working directory.</param>
-    /// <param name="arguments">Git CLI arguments (without leading 'git').</param>
+    /// <param name="argumentsList">Git CLI arguments list (without leading 'git').</param>
     /// <param name="timeoutSeconds">Optional command timeout in seconds.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Execution result containing exit code, stdout, stderr, and duration.</returns>
     /// <exception cref="GitCommandException">Thrown if Git exits with a non-zero exit code.</exception>
     Task<GitCommandResult> ExecuteAsync(
         string workingDirectory,
-        string arguments,
+        IEnumerable<string> argumentsList,
         int? timeoutSeconds = null,
         CancellationToken cancellationToken = default);
 }

@@ -57,6 +57,27 @@ public class FakeGitWorkspaceManager : IGitWorkspaceManager
         return Task.CompletedTask;
     }
 
+    public Task<string> EnsureWorktreeAsync(Workspace workspace, int issueId, string baseBranch, CancellationToken cancellationToken = default)
+    {
+        CheckedOutBranches.Add((issueId, baseBranch));
+        return Task.FromResult(GetWorktreePath(workspace, issueId));
+    }
+
+    public Task RemoveWorktreeAsync(Workspace workspace, int issueId, CancellationToken cancellationToken = default)
+    {
+        return Task.CompletedTask;
+    }
+
+    public string GetWorktreePath(Workspace workspace, int issueId)
+    {
+        return $"{workspace.RepositoryPath}/issue-{issueId}";
+    }
+
+    public Task RevertOrCleanAsync(Workspace workspace, int? issueId, CancellationToken cancellationToken = default)
+    {
+        return Task.CompletedTask;
+    }
+
     public Task RevertOrCleanAsync(Workspace workspace, CancellationToken cancellationToken = default)
     {
         return Task.CompletedTask;
@@ -65,23 +86,44 @@ public class FakeGitWorkspaceManager : IGitWorkspaceManager
 
 public class FakeGitCliRunner : IGitCliRunner
 {
-    public List<(string WorkingDirectory, string Arguments)> ExecutedCommands { get; } = new();
+    public List<FakeGitExecutedCommand> ExecutedCommands { get; } = new();
     public Func<string, string, GitCommandResult>? Handler { get; set; }
+    public Func<string, IReadOnlyList<string>, GitCommandResult>? ListHandler { get; set; }
 
     public Task<GitCommandResult> ExecuteAsync(
         string workingDirectory,
-        string arguments,
+        IEnumerable<string> argumentsList,
         int? timeoutSeconds = null,
         CancellationToken cancellationToken = default)
     {
-        ExecutedCommands.Add((workingDirectory, arguments));
+        var list = argumentsList.ToList();
+        ExecutedCommands.Add(new FakeGitExecutedCommand(workingDirectory, list));
+        if (ListHandler != null)
+        {
+            return Task.FromResult(ListHandler(workingDirectory, list));
+        }
+
         if (Handler != null)
         {
-            return Task.FromResult(Handler(workingDirectory, arguments));
+            return Task.FromResult(Handler(workingDirectory, string.Join(" ", list)));
         }
 
         return Task.FromResult(new GitCommandResult(0, string.Empty, string.Empty, TimeSpan.FromMilliseconds(5)));
     }
+}
+
+public record FakeGitExecutedCommand(string WorkingDirectory, IReadOnlyList<string> ArgumentsList)
+{
+    public string Arguments => string.Join(" ", ArgumentsList);
+
+    public void Deconstruct(out string workingDirectory, out string arguments)
+    {
+        workingDirectory = WorkingDirectory;
+        arguments = Arguments;
+    }
+
+    public static implicit operator (string WorkingDirectory, string Arguments)(FakeGitExecutedCommand cmd)
+        => (cmd.WorkingDirectory, cmd.Arguments);
 }
 
 public class TestWorkflowStage : IWorkflowStage

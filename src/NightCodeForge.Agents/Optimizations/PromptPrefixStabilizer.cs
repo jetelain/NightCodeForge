@@ -31,6 +31,7 @@ public class PromptPrefixStabilizer
 - Use edit for precise changes; edits[].oldText must match target content.
 - When changing multiple separate locations in one file, use a single edit call with multiple entries in edits[].
 - Use write only for brand new files or complete rewrites.
+- Always execute within your assigned working directory; do not modify files in sibling directories or the canonical clone.
 - Be concise and focused in your responses.
 </rules>";
 
@@ -43,7 +44,8 @@ public class PromptPrefixStabilizer
         LocalOptimizationFlags? flags = null,
         string? customToolsPrompt = null,
         string? customRulesPrompt = null,
-        string? customRolePersona = null)
+        string? customRolePersona = null,
+        string? workingDirectory = null)
     {
         var sb = new StringBuilder();
 
@@ -76,6 +78,16 @@ public class PromptPrefixStabilizer
         // LAYER 3: Dynamic Issue Scope & Artifacts (Stable per issue stage)
         sb.AppendLine("<issue_scope>");
         sb.AppendLine(issueScopeAndPlan.Trim());
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            sb.AppendLine();
+            sb.AppendLine("<environment>");
+            sb.AppendLine($"- Current Working Directory (PWD): {workingDirectory}");
+            sb.AppendLine("- All relative paths, file operations (read, edit, write), bash commands, builds, and test runs execute in this working directory.");
+            sb.AppendLine("- The canonical clone on 'main' is read-only. Do not attempt to modify files in other directories.");
+            sb.AppendLine("</environment>");
+        }
 
         if (!string.IsNullOrWhiteSpace(discoveredSymbols))
         {

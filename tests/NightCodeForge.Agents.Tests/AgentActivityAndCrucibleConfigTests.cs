@@ -87,6 +87,21 @@ public class AgentActivityAndCrucibleConfigTests
     }
 
     [Fact]
+    public void PromptPrefixStabilizer_IncludesEnvironmentWorkingDirectory_WhenProvided()
+    {
+        var stabilizer = new Optimizations.PromptPrefixStabilizer();
+        var prefix = stabilizer.BuildStabilizedPrefix(
+            stagePersonaDirective: "Implement feature",
+            issueScopeAndPlan: "Issue #42",
+            workingDirectory: "/workspace/issue-42");
+
+        Assert.Contains("<environment>", prefix);
+        Assert.Contains("- Current Working Directory (PWD): /workspace/issue-42", prefix);
+        Assert.Contains("The canonical clone on 'main' is read-only", prefix);
+        Assert.Contains("</environment>", prefix);
+    }
+
+    [Fact]
     public void CanonicalTools_IndentationSignificantExtensions_IsConfigurable()
     {
         Assert.Contains(".py", Tools.CanonicalTools.IndentationSignificantExtensions);

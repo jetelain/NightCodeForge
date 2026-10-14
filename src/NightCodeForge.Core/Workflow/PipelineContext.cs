@@ -12,6 +12,7 @@ public class PipelineContext
     public PipelineDataBag DataBag { get; set; }
     public AgentProfile? CurrentProfile { get; set; }
     public IWorkflowPipeline? Pipeline { get; set; }
+    public string? WorkingDirectory { get; set; }
     public int RetryCount { get; set; }
     public Dictionary<string, int> StageRetries { get; } = new();
 

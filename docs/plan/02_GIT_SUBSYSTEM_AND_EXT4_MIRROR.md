@@ -49,15 +49,15 @@ flowchart TD
   {
       Task<GitCommandResult> ExecuteAsync(
           string workingDirectory, 
-          string arguments, 
+          IEnumerable<string> argumentsList, 
           int? timeoutSeconds = null, 
           CancellationToken cancellationToken = default);
   }
   ```
 * **Implementation Details:**
-  - Wraps `CliWrap.Cli.Wrap("git")` with buffered stdout and stderr.
+  - Delegates execution to `IProcessRunner` with structured `ArgumentList` (supports WSL2 path translation and native host execution).
   - Applies a default timeout policy (30 seconds for standard commands; 120 seconds for deep clones/fetches).
-  - Captures exact exit codes. Throws `GitCommandException` containing the full command string, working directory, exit code, and stderr on non-zero exit codes.
+  - Captures exact exit codes. Throws `GitCommandException` containing the full command string, argument list, working directory, exit code, and stderr on non-zero exit codes.
   - Enforces `PAGER=cat` and `GIT_TERMINAL_PROMPT=0` to guarantee commands never hang awaiting interactive terminal input.
 
 ### Step 2.2: Git Workspace Manager (`NightCodeForge.Infrastructure/Git`)

@@ -7,9 +7,20 @@ namespace NightCodeForge.Core.Interfaces;
 public interface IWorkspacePathResolver
 {
     /// <summary>
-    /// Gets the canonical path to the agent's isolated Git working clone (~/.nightcodeforge/wks/{workspaceId}).
+    /// Gets the base path to the agent's workspace directory (~/.nightcodeforge/wks/{workspaceId}).
     /// </summary>
-    string GetAgentWorkingClonePath(int workspaceId);
+    string GetAgentWorkspaceRootPath(int workspaceId) => $"~/.nightcodeforge/wks/{workspaceId}";
+
+    /// <summary>
+    /// Gets the canonical path to the agent's isolated Git working clone (~/.nightcodeforge/wks/{workspaceId}/clone).
+    /// </summary>
+    string GetAgentWorkingClonePath(int workspaceId) => $"{GetAgentWorkspaceRootPath(workspaceId)}/clone";
+
+    /// <summary>
+    /// Gets the path to an isolated Git worktree for a specific issue (~/.nightcodeforge/wks/{workspaceId}/issue-{issueId}).
+    /// </summary>
+    string GetAgentWorktreePath(int workspaceId, int issueId) =>
+        $"{GetAgentWorkspaceRootPath(workspaceId)}/issue-{issueId}";
 
     /// <summary>
     /// Gets the Git remote URL for host-origin (converts Windows path to /mnt/... mount path on Windows, raw path on Unix).
@@ -22,6 +33,13 @@ public interface IWorkspacePathResolver
     /// on Windows, or the user home directory on Unix.
     /// </summary>
     string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath);
+
+    /// <summary>
+    /// Resolves Crucible file tool paths (read/write/edit), optionally targeting a specific issue worktree.
+    /// If issueId is null, resolves to the canonical repository clone (used for ideation and triage on main).
+    /// </summary>
+    string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath, int? issueId) =>
+        ResolveCruciblePath(workspaceId, relativeOrContainerPath);
 
     /// <summary>
     /// Gets the targeted WSL2 distribution name.

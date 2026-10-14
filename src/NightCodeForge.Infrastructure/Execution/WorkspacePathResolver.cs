@@ -89,7 +89,7 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         return "user";
     }
 
-    public string GetAgentWorkingClonePath(int workspaceId)
+    public string GetAgentWorkspaceRootPath(int workspaceId)
     {
         if (IsWindows)
         {
@@ -103,6 +103,16 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         }
 
         return $"{userProfile.Replace('\\', '/')}/.nightcodeforge/wks/{workspaceId}";
+    }
+
+    public string GetAgentWorkingClonePath(int workspaceId)
+    {
+        return $"{GetAgentWorkspaceRootPath(workspaceId)}/clone";
+    }
+
+    public string GetAgentWorktreePath(int workspaceId, int issueId)
+    {
+        return $"{GetAgentWorkspaceRootPath(workspaceId)}/issue-{issueId}";
     }
 
     public string GetHostRemoteUrl(string repositoryPath)
@@ -119,6 +129,9 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
     }
 
     public string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath)
+        => ResolveCruciblePath(workspaceId, relativeOrContainerPath, null);
+
+    public string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath, int? issueId)
     {
         var raw = (relativeOrContainerPath ?? string.Empty).Trim();
         var normalized = raw.Replace('\\', '/');
@@ -131,14 +144,15 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
 
         string rel;
         var agentWorkingPrefix = $".nightcodeforge/wks/{workspaceId}/";
-        var agentIdx = normalized.IndexOf(agentWorkingPrefix, StringComparison.OrdinalIgnoreCase);
-        if (agentIdx >= 0)
+
+        if (normalized.IndexOf(agentWorkingPrefix, StringComparison.OrdinalIgnoreCase) >= 0)
         {
-            rel = normalized.Substring(agentIdx + agentWorkingPrefix.Length);
+            var idx = normalized.IndexOf(agentWorkingPrefix, StringComparison.OrdinalIgnoreCase);
+            rel = normalized[(idx + agentWorkingPrefix.Length)..];
         }
         else if (normalized.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
         {
-            rel = normalized.Substring("/workspace/".Length);
+            rel = normalized["/workspace/".Length..];
         }
         else if (string.Equals(normalized, "/workspace", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(normalized, "workspace", StringComparison.OrdinalIgnoreCase))
@@ -147,11 +161,11 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         }
         else if (normalized.StartsWith("workspace/", StringComparison.OrdinalIgnoreCase))
         {
-            rel = normalized.Substring("workspace/".Length);
+            rel = normalized["workspace/".Length..];
         }
         else if (normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase))
         {
-            rel = normalized.Substring("/workspace".Length);
+            rel = normalized["/workspace".Length..];
         }
         else
         {
@@ -160,9 +174,50 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
 
         rel = rel.TrimStart('/', '\\');
 
+        int? effectiveIssueId = issueId;
+        if (effectiveIssueId.HasValue)
+        {
+            if (rel.StartsWith($"issue-{effectiveIssueId.Value}/", StringComparison.OrdinalIgnoreCase))
+            {
+                rel = rel[($"issue-{effectiveIssueId.Value}/".Length)..];
+            }
+            else if (rel.StartsWith($"wt/issue-{effectiveIssueId.Value}/", StringComparison.OrdinalIgnoreCase))
+            {
+                rel = rel[($"wt/issue-{effectiveIssueId.Value}/".Length)..];
+            }
+            else if (string.Equals(rel, $"issue-{effectiveIssueId.Value}", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(rel, $"wt/issue-{effectiveIssueId.Value}", StringComparison.OrdinalIgnoreCase))
+            {
+                rel = string.Empty;
+            }
+        }
+        else
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(rel, @"^(?:wt/)?issue-(\d+)(?:/(.*)|$)");
+            if (match.Success && int.TryParse(match.Groups[1].Value, out var parsedId))
+            {
+                effectiveIssueId = parsedId;
+                rel = match.Groups[2].Success ? match.Groups[2].Value : string.Empty;
+            }
+        }
+
+        if (rel.StartsWith("clone/", StringComparison.OrdinalIgnoreCase))
+        {
+            rel = rel["clone/".Length..];
+        }
+        else if (string.Equals(rel, "clone", StringComparison.OrdinalIgnoreCase))
+        {
+            rel = string.Empty;
+        }
+
+        rel = rel.TrimStart('/', '\\');
+
         if (IsWindows)
         {
-            var baseUnc = $@"\\wsl.localhost\{GetWslDistributionName()}\home\{GetWslUserName()}\.nightcodeforge\wks\{workspaceId}";
+            var baseUnc = effectiveIssueId.HasValue
+                ? $@"\\wsl.localhost\{GetWslDistributionName()}\home\{GetWslUserName()}\.nightcodeforge\wks\{workspaceId}\issue-{effectiveIssueId.Value}"
+                : $@"\\wsl.localhost\{GetWslDistributionName()}\home\{GetWslUserName()}\.nightcodeforge\wks\{workspaceId}\clone";
+
             if (string.IsNullOrEmpty(rel))
             {
                 return baseUnc;
@@ -172,7 +227,10 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         }
         else
         {
-            var basePath = GetAgentWorkingClonePath(workspaceId);
+            var basePath = effectiveIssueId.HasValue
+                ? GetAgentWorktreePath(workspaceId, effectiveIssueId.Value)
+                : GetAgentWorkingClonePath(workspaceId);
+
             if (string.IsNullOrEmpty(rel))
             {
                 return basePath;

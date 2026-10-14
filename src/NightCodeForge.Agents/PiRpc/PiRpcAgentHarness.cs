@@ -132,7 +132,7 @@ public class PiRpcAgentHarness : IAgentHarness
         {
             if (_pathResolver != null && context.Workspace != null)
             {
-                workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty);
+                workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.Issue.Id);
             }
             else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
             {
@@ -204,7 +204,7 @@ public class PiRpcAgentHarness : IAgentHarness
         {
             if (_pathResolver != null && context.Workspace != null)
             {
-                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty);
+                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.Issue.Id);
             }
             else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
             {
@@ -245,6 +245,13 @@ public class PiRpcAgentHarness : IAgentHarness
             {
                 basePromptText = $"{basePromptText}\n\n{guidelines}";
             }
+
+            var isContainer = context.Workspace?.ExecutionMode == ExecutionMode.ContainerSandbox;
+            var agentWorkingDir = isContainer
+                ? "/workspace"
+                : localWorkspaceRoot;
+            var envInfo = $"<environment>\n- Current Working Directory (PWD): {agentWorkingDir}\n- Perform all edits, builds, and tests within this directory; the canonical clone on 'main' is read-only.\n</environment>";
+            basePromptText = $"{basePromptText}\n\n{envInfo}";
 
             var promptText = !string.IsNullOrWhiteSpace(context.PendingHumanAnswer)
                 ? $"[Human Answer]: {context.PendingHumanAnswer}\n\n{basePromptText}"

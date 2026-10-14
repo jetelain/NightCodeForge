@@ -170,14 +170,14 @@ public class StartupRecoveryService : IStartupRecoveryService
     {
         try
         {
-            var statusResult = await _gitCliRunner.ExecuteAsync(repoPath, "status --porcelain", cancellationToken: cancellationToken);
+            var statusResult = await _gitCliRunner.ExecuteAsync(repoPath, ["status", "--porcelain"], cancellationToken: cancellationToken);
             if (!string.IsNullOrWhiteSpace(statusResult.StandardOutput))
             {
                 _logger.LogWarning("Dirty working tree detected in {RepoPath}. Creating rescue commit.", repoPath);
-                await _gitCliRunner.ExecuteAsync(repoPath, "add -A", cancellationToken: cancellationToken);
+                await _gitCliRunner.ExecuteAsync(repoPath, ["add", "-A"], cancellationToken: cancellationToken);
                 await _gitCliRunner.ExecuteAsync(
                     repoPath,
-                    "commit -m \"WIP-RECOVERY: [Crash Recovery] Preserving uncommitted workspace changes\" --no-verify",
+                    ["commit", "-m", "WIP-RECOVERY: [Crash Recovery] Preserving uncommitted workspace changes", "--no-verify"],
                     cancellationToken: cancellationToken);
             }
         }

@@ -46,7 +46,7 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
         var runId = Guid.NewGuid().ToString("N")[..8];
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
         RootDirectory = Path.Combine(Path.GetTempPath(), $"NCF_Scenario_{timestamp}_{runId}");
-        RepositoryPath = Path.Combine(RootDirectory, "repo");
+        RepositoryPath = Path.Combine(RootDirectory, "clone");
         DatabasePath = Path.Combine(RootDirectory, "nightcodeforge.db");
     }
 

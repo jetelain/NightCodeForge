@@ -1,40 +1,53 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Text;
-using CliWrap;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Infrastructure.Git;
 
 /// <summary>
-/// Native Git CLI runner powered by CliWrap with timeout policies, buffered output capture, and typed exceptions.
+/// Native Git CLI runner powered by IProcessRunner with timeout policies, buffered output capture, and typed exceptions.
 /// Supports transparent execution on Windows host or routed through WSL2 (wsl.exe -d <distro> -- git -C <dir>)
 /// when targeting ext4 mirrors or Linux working trees.
 /// </summary>
 public class GitCliRunner : IGitCliRunner
 {
+    private readonly IProcessRunner _processRunner;
     private readonly IWorkspacePathResolver? _pathResolver;
     private readonly ILogger<GitCliRunner> _logger;
+
+    [ActivatorUtilitiesConstructor]
+    public GitCliRunner(
+        IProcessRunner processRunner,
+        IWorkspacePathResolver? pathResolver = null,
+        ILogger<GitCliRunner>? logger = null)
+    {
+        _processRunner = processRunner ?? new SystemProcessRunner();
+        _pathResolver = pathResolver;
+        _logger = logger ?? NullLogger<GitCliRunner>.Instance;
+    }
 
     public GitCliRunner(
         IWorkspacePathResolver? pathResolver = null,
         ILogger<GitCliRunner>? logger = null)
+        : this(new SystemProcessRunner(), pathResolver, logger)
     {
-        _pathResolver = pathResolver;
-        _logger = logger ?? NullLogger<GitCliRunner>.Instance;
     }
 
     /// <inheritdoc />
     public async Task<GitCommandResult> ExecuteAsync(
         string workingDirectory,
-        string arguments,
+        IEnumerable<string> argumentsList,
         int? timeoutSeconds = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
-        ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(argumentsList);
+
+        var argsArray = argumentsList as string[] ?? argumentsList.ToArray();
 
         var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         string distro = string.Empty;
@@ -53,48 +66,58 @@ public class GitCliRunner : IGitCliRunner
             }
         }
 
-        var timeoutDuration = ResolveTimeout(arguments, timeoutSeconds);
-        var stdOutBuffer = new StringBuilder();
-        var stdErrBuffer = new StringBuilder();
+        var timeoutDuration = ResolveTimeout(argsArray, timeoutSeconds);
         var stopwatch = Stopwatch.StartNew();
 
         using var timeoutCts = new CancellationTokenSource(timeoutDuration);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
+        var displayArgs = string.Join(" ", argsArray);
         _logger.LogDebug("Executing 'git {Arguments}' in '{WorkingDirectory}' (WSL: {IsWsl}, Timeout: {TimeoutSeconds}s)",
-            arguments, workingDirectory, isWslTarget, timeoutDuration.TotalSeconds);
+            displayArgs, workingDirectory, isWslTarget, timeoutDuration.TotalSeconds);
 
         try
         {
-            Command cmd;
+            ProcessStartSpec spec;
             if (isWslTarget)
             {
-                var wslArgs = $"-d {distro} -- git -c core.pager=cat -C \"{linuxDir}\" {arguments}";
-                cmd = Cli.Wrap("wsl.exe")
-                    .WithArguments(wslArgs)
-                    .WithStandardOutputPipe(PipeTarget.ToStringBuilder(stdOutBuffer))
-                    .WithStandardErrorPipe(PipeTarget.ToStringBuilder(stdErrBuffer))
-                    .WithValidation(CommandResultValidation.None);
+                var wslArgs = new List<string> { "-d", distro, "--", "git", "-c", "core.pager=cat", "-C", linuxDir };
+                wslArgs.AddRange(argsArray);
+
+                spec = new ProcessStartSpec
+                {
+                    FileName = "wsl.exe",
+                    ArgumentList = wslArgs,
+                    TimeoutSeconds = (int)Math.Max(1, timeoutDuration.TotalSeconds)
+                };
             }
             else
             {
-                cmd = Cli.Wrap("git")
-                    .WithWorkingDirectory(workingDirectory)
-                    .WithArguments(arguments)
-                    .WithEnvironmentVariables(env => env
-                        .Set("PAGER", "cat")
-                        .Set("GIT_PAGER", "cat")
-                        .Set("GIT_TERMINAL_PROMPT", "0"))
-                    .WithStandardOutputPipe(PipeTarget.ToStringBuilder(stdOutBuffer))
-                    .WithStandardErrorPipe(PipeTarget.ToStringBuilder(stdErrBuffer))
-                    .WithValidation(CommandResultValidation.None);
+                spec = new ProcessStartSpec
+                {
+                    FileName = "git",
+                    ArgumentList = argsArray,
+                    WorkingDirectory = workingDirectory,
+                    TimeoutSeconds = (int)Math.Max(1, timeoutDuration.TotalSeconds),
+                    EnvironmentVariables = new Dictionary<string, string>
+                    {
+                        ["PAGER"] = "cat",
+                        ["GIT_PAGER"] = "cat",
+                        ["GIT_TERMINAL_PROMPT"] = "0"
+                    }
+                };
             }
 
-            var result = await cmd.ExecuteAsync(linkedCts.Token);
+            var result = await _processRunner.RunAsync(spec, linkedCts.Token).ConfigureAwait(false);
             stopwatch.Stop();
 
-            var stdout = stdOutBuffer.ToString();
-            var stderr = stdErrBuffer.ToString();
+            var stdout = result.StandardOutput;
+            var stderr = result.StandardError;
+
+            if (result.ExitCode == 124 && stderr.Contains("Process timed out"))
+            {
+                throw new TimeoutException($"Git command 'git {displayArgs}' timed out after {timeoutDuration.TotalSeconds:F0}s in '{workingDirectory}'.");
+            }
 
             if (result.ExitCode != 0)
             {
@@ -104,9 +127,9 @@ public class GitCliRunner : IGitCliRunner
                 }
 
                 _logger.LogWarning("Git command 'git {Arguments}' failed with exit code {ExitCode}: {StdErr}",
-                    arguments, result.ExitCode, stderr);
+                    displayArgs, result.ExitCode, stderr);
 
-                throw new GitCommandException(workingDirectory, arguments, result.ExitCode, stdout, stderr);
+                throw new GitCommandException(workingDirectory, argsArray, result.ExitCode, stdout, stderr);
             }
 
             return new GitCommandResult(result.ExitCode, stdout, stderr, stopwatch.Elapsed);
@@ -115,9 +138,9 @@ public class GitCliRunner : IGitCliRunner
         {
             stopwatch.Stop();
             _logger.LogError("Git command 'git {Arguments}' timed out after {TimeoutSeconds}s in '{WorkingDirectory}'",
-                arguments, timeoutDuration.TotalSeconds, workingDirectory);
+                displayArgs, timeoutDuration.TotalSeconds, workingDirectory);
 
-            throw new TimeoutException($"Git command 'git {arguments}' timed out after {timeoutDuration.TotalSeconds:F0}s in '{workingDirectory}'.");
+            throw new TimeoutException($"Git command 'git {displayArgs}' timed out after {timeoutDuration.TotalSeconds:F0}s in '{workingDirectory}'.");
         }
     }
 
@@ -181,16 +204,16 @@ public class GitCliRunner : IGitCliRunner
         }
     }
 
-    private static TimeSpan ResolveTimeout(string arguments, int? timeoutSeconds)
+    private static TimeSpan ResolveTimeout(IReadOnlyList<string> args, int? timeoutSeconds)
     {
         if (timeoutSeconds.HasValue)
         {
             return TimeSpan.FromSeconds(timeoutSeconds.Value);
         }
 
-        var trimmed = arguments.TrimStart();
-        if (trimmed.StartsWith("clone", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Contains("fetch", StringComparison.OrdinalIgnoreCase))
+        var firstArg = args.Count > 0 ? args[0] : string.Empty;
+        if (string.Equals(firstArg, "clone", StringComparison.OrdinalIgnoreCase) ||
+            args.Any(a => a.Contains("fetch", StringComparison.OrdinalIgnoreCase)))
         {
             return TimeSpan.FromSeconds(120);
         }

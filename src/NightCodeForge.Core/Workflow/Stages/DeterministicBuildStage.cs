@@ -49,9 +49,11 @@ public partial class DeterministicBuildStage : IWorkflowStage
     {
         var bag = context.DataBag;
         var repoPath = context.Workspace.RepositoryPath;
-        var workDir = !string.IsNullOrWhiteSpace(context.Workspace.Ext4MirrorPath)
-            ? context.Workspace.Ext4MirrorPath
-            : repoPath;
+        var workDir = !string.IsNullOrWhiteSpace(context.WorkingDirectory)
+            ? context.WorkingDirectory
+            : (!string.IsNullOrWhiteSpace(context.Workspace.Ext4MirrorPath)
+                ? context.Workspace.Ext4MirrorPath
+                : repoPath);
 
         var config = CodeStackPresets.ResolveConfig(repoPath, bag);
         var command = config.BuildCommand ?? _buildCommand;
@@ -99,7 +101,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
         }
 
         var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace)
+            ? _envProvider.GetEnvironment(context.Workspace, SandboxSecurityTier.Standard, context.Issue?.Id)
             : _executionEnv;
 
         if (effectiveEnv != null)
@@ -142,7 +144,9 @@ public partial class DeterministicBuildStage : IWorkflowStage
                 var errorList = errors.Select(m => m.Value.Trim()).Take(10).ToList();
                 bag.Set("diagnostics.compiler_errors", errorList);
 
-                var errorMsg = $"Deterministic build failed with exit code {res.ExitCode}. {errorList.Count} compiler error(s) detected.";
+                var errorMsg = errorList.Count > 0
+                    ? $"Deterministic build failed with exit code {res.ExitCode}. {errorList.Count} compiler error(s) detected."
+                    : $"Deterministic build failed with exit code {res.ExitCode}. Output: {fullOutput.Trim()}";
                 bag.Set("build.failure.reason", errorMsg);
                 var targetStage = bag.Get<string>("Stage.LoopBackId") ?? LoopBackStageId;
                 return StageExecutionResult.Failure(errorMsg, targetStage);

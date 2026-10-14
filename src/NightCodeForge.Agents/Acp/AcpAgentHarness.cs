@@ -150,7 +150,7 @@ public class AcpAgentHarness : IAgentHarness
         {
             if (_pathResolver != null && context.Workspace != null)
             {
-                workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty);
+                workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.Issue.Id);
             }
             else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
             {
@@ -223,7 +223,7 @@ public class AcpAgentHarness : IAgentHarness
         {
             if (_pathResolver != null && context.Workspace != null)
             {
-                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty);
+                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.Issue.Id);
             }
             else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
             {
@@ -232,7 +232,7 @@ public class AcpAgentHarness : IAgentHarness
         }
 
         var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier)
+            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier, context.Issue.Id)
             : _executionEnv;
 
         try
@@ -289,6 +289,13 @@ public class AcpAgentHarness : IAgentHarness
             {
                 basePromptText = $"{basePromptText}\n\n{guidelines}";
             }
+
+            var isContainer = context.Workspace?.ExecutionMode == ExecutionMode.ContainerSandbox;
+            var agentWorkingDir = isContainer
+                ? "/workspace"
+                : localWorkspaceRoot;
+            var envInfo = $"<environment>\n- Current Working Directory (PWD): {agentWorkingDir}\n- Perform all edits, builds, and tests within this directory; the canonical clone on 'main' is read-only.\n</environment>";
+            basePromptText = $"{basePromptText}\n\n{envInfo}";
 
             var promptText = !string.IsNullOrWhiteSpace(context.PendingHumanAnswer)
                 ? $"[Human Answer]: {context.PendingHumanAnswer}\n\n{basePromptText}"
@@ -469,7 +476,7 @@ public class AcpAgentHarness : IAgentHarness
 
                         try
                         {
-                            var content = ReadWorkspaceFile(localWorkspaceRoot, filePath, offset, limit, context.Workspace?.Id);
+                            var content = ReadWorkspaceFile(localWorkspaceRoot, filePath, offset, limit, context.Workspace?.Id, context.Issue.Id);
                             var readResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { content } });
                             await stdin.WriteLineAsync(readResp.AsMemory(), cancellationToken);
                         }
@@ -487,7 +494,7 @@ public class AcpAgentHarness : IAgentHarness
 
                         try
                         {
-                            await WriteWorkspaceFileAsync(localWorkspaceRoot, filePath, content, context.Workspace?.Id, cancellationToken);
+                            await WriteWorkspaceFileAsync(localWorkspaceRoot, filePath, content, context.Workspace?.Id, context.Issue.Id, cancellationToken);
                             var writeResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { } });
                             await stdin.WriteLineAsync(writeResp.AsMemory(), cancellationToken);
                         }
@@ -573,13 +580,13 @@ public class AcpAgentHarness : IAgentHarness
         }
     }
 
-    private string ResolveFilePath(string workspacePath, string filePath, int? workspaceId)
+    private string ResolveFilePath(string workspacePath, string filePath, int? workspaceId, int? issueId = null)
     {
         if (string.IsNullOrWhiteSpace(filePath))
         {
             if (_pathResolver != null && workspaceId.HasValue)
             {
-                return _pathResolver.ResolveCruciblePath(workspaceId.Value, string.Empty);
+                return _pathResolver.ResolveCruciblePath(workspaceId.Value, string.Empty, issueId);
             }
             return workspacePath;
         }
@@ -591,7 +598,7 @@ public class AcpAgentHarness : IAgentHarness
 
         if (_pathResolver != null && workspaceId.HasValue)
         {
-            return _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath);
+            return _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath, issueId);
         }
 
         var normalized = filePath.Replace('\\', '/');
@@ -619,9 +626,9 @@ public class AcpAgentHarness : IAgentHarness
         return Path.GetFullPath(Path.Combine(workspacePath, filePath));
     }
 
-    private string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit, int? workspaceId)
+    private string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit, int? workspaceId, int? issueId = null)
     {
-        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId);
+        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, issueId);
         if (!File.Exists(resolvedPath))
         {
             throw new FileNotFoundException($"File not found: {filePath}", filePath);
@@ -639,9 +646,9 @@ public class AcpAgentHarness : IAgentHarness
         return string.Join(Environment.NewLine, slice);
     }
 
-    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, int? workspaceId, CancellationToken ct)
+    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, int? workspaceId, int? issueId, CancellationToken ct)
     {
-        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId);
+        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, issueId);
         var dir = Path.GetDirectoryName(resolvedPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {
