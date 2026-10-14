@@ -202,11 +202,16 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var prefixStabilizer = new PromptPrefixStabilizer();
         var stageDirective = !string.IsNullOrWhiteSpace(context.StageDirective)
             ? context.StageDirective
-            : GetStageDirective(harnessConfig, context.StageId);
-        var issueScope = $"<issue id=\"{context.Issue.Id}\" title=\"{context.Issue.Title}\">\n{context.Issue.Description}\n</issue>";
-        var customPersona = !string.IsNullOrWhiteSpace(context.Profile.SystemPrompt)
-            ? context.Profile.SystemPrompt
-            : harnessConfig.CustomPersona;
+            : WorkspacePromptResolver.ResolveStageDirective(workspacePath, context.StageId, GetStageDirective(harnessConfig, context.StageId));
+        var issueDocPath = context.PipelineContext?.DataBag.Get<string>("IssueMarkdownPath");
+        var issueDocAttr = !string.IsNullOrWhiteSpace(issueDocPath) ? $" path=\"{issueDocPath}\"" : string.Empty;
+        var issueScope = $"<issue id=\"{context.Issue.Id}\" title=\"{context.Issue.Title}\"{issueDocAttr}>\n{context.Issue.Description}\n</issue>";
+        var workspaceSystemPrompt = WorkspacePromptResolver.ResolveSystemPrompt(workspacePath);
+        var customPersona = !string.IsNullOrWhiteSpace(workspaceSystemPrompt)
+            ? workspaceSystemPrompt
+            : (!string.IsNullOrWhiteSpace(context.Profile.SystemPrompt)
+                ? context.Profile.SystemPrompt
+                : harnessConfig.CustomPersona);
 
         var isContainer = context.Workspace?.ExecutionMode == ExecutionMode.ContainerSandbox;
         var agentWorkingDir = isContainer
@@ -423,6 +428,28 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     toolResult = await dispatcher.DispatchAsync(canonicalName, argsJson, cancellationToken);
                     toolSw.Stop();
                 }
+                catch (RequestChangesException reqChange)
+                {
+                    toolSw.Stop();
+                    stopwatch.Stop();
+                    latestSerializedState = SerializeSession(chatHistory);
+
+                    if (context.PipelineContext != null)
+                    {
+                        context.PipelineContext.DataBag.Set("ReviewerFeedback", reqChange.Feedback);
+                    }
+
+                    await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageCompleted, $"Changes requested: {reqChange.Feedback}", cancellationToken);
+
+                    await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
+
+                    return AgentRunResult.Completed(
+                        new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+                        commitHash: null,
+                        updatedState: latestSerializedState,
+                        summary: $"Reviewer requested changes: {reqChange.Feedback}",
+                        targetRouting: reqChange.TargetStageId);
+                }
                 catch (HumanInterruptionException interruption)
                 {
                     toolSw.Stop();
@@ -454,6 +481,20 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         stopwatch.Stop();
         var lastAssistantMessage = chatHistory.LastOrDefault(m => m.Role == ChatRole.Assistant)?.Text;
+
+        if (string.IsNullOrEmpty(targetRouting) && !string.IsNullOrEmpty(lastAssistantMessage))
+        {
+            var match = Regex.Match(lastAssistantMessage, @"<request_changes>(.*?)</request_changes>", RegexOptions.Singleline);
+            if (match.Success)
+            {
+                var feedback = match.Groups[1].Value.Trim();
+                targetRouting = "implementation";
+                if (context.PipelineContext != null)
+                {
+                    context.PipelineContext.DataBag.Set("ReviewerFeedback", feedback);
+                }
+            }
+        }
 
         if (canonicalTools.PendingProposals.Count > 0 && context.PipelineContext != null)
         {
@@ -608,11 +649,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
             return profile.PermittedTools;
         }
 
-        // 3. Two modes: ReadOnly vs Full
+        // 3. Modes: ReadOnly, Review, Full
         var effectiveMode = profile.Mode == AgentMode.ReadOnly ? AgentMode.ReadOnly : requiredMode;
         return effectiveMode switch
         {
             AgentMode.ReadOnly => new[] { "read", "propose_issues", "web_search", "ask", "load_skill", "read_skill_resource" },
+            AgentMode.Review => new[] { "read", "edit", "write", "bash", "web_search", "ask", "propose_issues", "request_changes", "load_skill", "read_skill_resource", "run_skill_script" },
             _ => new[] { "read", "edit", "write", "bash", "web_search", "ask", "propose_issues", "load_skill", "read_skill_resource", "run_skill_script" }
         };
     }
@@ -653,11 +695,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
             "triage" or "stage-0" =>
                 "Analyze the reported issue against the repository base branch. Determine affected files and acceptance criteria. Call propose_issues to recommend structured backlog items. You have read-only access and cannot modify code or access external networks.",
             "issue-review" or "stage-1" =>
-                "Investigate requirements and codebase architecture. Proactively uncover ambiguities. If any design decision is ambiguous, invoke 'ask' immediately. Do not guess.",
+                "You are a Staff Software Architect & Requirements Investigator. Thoroughly investigate requirements and inspect the codebase using 'read' and 'bash'. MANDATORY FILE EDIT: Edit the issue specification document on disk in docs/issues/ using 'edit' or 'write' with your approved architecture, technical plan, and acceptance criteria. Your disk changes will be read back upon stage completion to update the issue specification. Proactively uncover ambiguities: invoke 'ask' immediately if needed. Do not guess. Do not write production code.",
             "implementation" or "stage-2" =>
-                "Implement clean code according to the approved plan. Run builds and tests incrementally with bash. Fix all compiler errors and test failures. If breaking blockers arise, call 'ask'.",
+                "You are a Senior Software Engineer & TDD Practitioner. Implement clean, robust code according to the issue specification in docs/issues/ and the approved plan. Keep blast radius minimal. Run builds and tests incrementally with bash. Fix all compiler errors and test failures. If breaking blockers arise, call 'ask'.",
             "code-review-fix" or "stage-3" =>
-                "Review the git diff against the base branch. Identify regressions or style violations and apply precision edits. Ensure builds and tests pass cleanly.",
+                "You are a Principal Code Reviewer and Quality Gatekeeper. Review the git diff against the base branch. Compare against the specification in docs/issues/ and the implementation claims. Apply precision polish directly using 'edit'. Rejection is strictly reserved for major issues or missing features: invoke 'request_changes' or conclude with <request_changes>[feedback]</request_changes>.",
             _ => "Execute assigned engineering tasks diligently using canonical tools."
         };
     }

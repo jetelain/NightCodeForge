@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Mcp;
@@ -552,6 +553,19 @@ public class AcpAgentHarness : IAgentHarness
 
             sw.Stop();
             var finalSummary = lastAgentSummary ?? "ACP agent completed successfully.";
+
+            string? targetRouting = null;
+            var match = Regex.Match(finalSummary, @"<request_changes>(.*?)</request_changes>", RegexOptions.Singleline);
+            if (match.Success)
+            {
+                var feedback = match.Groups[1].Value.Trim();
+                targetRouting = "implementation";
+                if (context.PipelineContext != null)
+                {
+                    context.PipelineContext.DataBag.Set("ReviewerFeedback", feedback);
+                }
+            }
+
             await BroadcastAsync(activeSessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageCompleted, finalSummary, cancellationToken);
 
             await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, finalSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
@@ -559,7 +573,8 @@ public class AcpAgentHarness : IAgentHarness
             return AgentRunResult.Completed(
                 new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
                 updatedState: activeSessionId,
-                summary: finalSummary);
+                summary: finalSummary,
+                targetRouting: targetRouting);
         }
         catch (OperationCanceledException)
         {

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -246,6 +247,31 @@ public class IssueOrchestrator : IIssueOrchestrator
             CurrentProfile = profile
         };
 
+        var targetSyncPath = (!string.IsNullOrWhiteSpace(issueWorkingPath) && Directory.Exists(issueWorkingPath))
+            ? issueWorkingPath
+            : workspace.RepositoryPath;
+
+        if (_markdownSyncService != null && !string.IsNullOrWhiteSpace(targetSyncPath) && Directory.Exists(targetSyncPath))
+        {
+            try
+            {
+                var syncedFile = await _markdownSyncService.SyncIssueToDiskAsync(issue, targetSyncPath, cancellationToken: cancellationToken);
+                var relPath = Path.GetRelativePath(targetSyncPath, syncedFile).Replace('\\', '/');
+                pipelineContext.DataBag.Set("IssueMarkdownPath", relPath);
+
+                if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
+                    Directory.Exists(workspace.RepositoryPath) &&
+                    !string.Equals(workspace.RepositoryPath, targetSyncPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    await _markdownSyncService.SyncIssueToDiskAsync(issue, workspace.RepositoryPath, cancellationToken: cancellationToken);
+                }
+            }
+            catch (Exception mex)
+            {
+                _logger.LogWarning(mex, "Failed pre-stage mirroring of issue #{IssueId} to docs/issues/*.md", issue.Id);
+            }
+        }
+
         var startedAt = DateTime.UtcNow;
         StageExecutionResult result;
 
@@ -259,13 +285,18 @@ public class IssueOrchestrator : IIssueOrchestrator
                     var lastCheckpoint = issue.Checkpoints?.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
                     var lastHumanAnswer = pipelineContext.DataBag.Get<string>("LastHumanAnswer");
 
-                    var stageDirective = (profile?.StageDirectives != null && profile.StageDirectives.TryGetValue(stage.StageId, out var customDirective) && !string.IsNullOrWhiteSpace(customDirective))
+                    var defaultDirective = (profile?.StageDirectives != null && profile.StageDirectives.TryGetValue(stage.StageId, out var customDirective) && !string.IsNullOrWhiteSpace(customDirective))
                         ? customDirective
                         : stage.StageDirective;
 
-                    if (stage.RequiredMode == AgentMode.Full && profile != null && profile.Mode == AgentMode.ReadOnly)
+                    var stageDirective = WorkspacePromptResolver.ResolveStageDirective(issueWorkingPath, stage.StageId, defaultDirective);
+
+                    bool isModeMismatch = profile != null && profile.Mode == AgentMode.ReadOnly &&
+                        (stage.RequiredMode == AgentMode.Full || stage.RequiredMode == AgentMode.Review);
+
+                    if (isModeMismatch)
                     {
-                        var errorMsg = $"Stage '{stage.StageId}' requires AgentMode.Full capabilities, but profile '{profile.Id}' is configured as AgentMode.ReadOnly.";
+                        var errorMsg = $"Stage '{stage.StageId}' requires AgentMode.{stage.RequiredMode} capabilities, but profile '{profile?.Id}' is configured as AgentMode.ReadOnly.";
                         _logger.LogError(errorMsg);
                         result = StageExecutionResult.Failure(errorMsg);
                     }
@@ -375,6 +406,9 @@ public class IssueOrchestrator : IIssueOrchestrator
             }
             pipelineContext.DataBag.Remove("PendingProposals");
         }
+
+        // Read back any disk modifications to the issue specification document
+        await ReadBackIssueMarkdownFromDiskAsync(stage, workspace, issue, pipelineContext, targetSyncPath, cancellationToken);
 
         // 5. Result Evaluation
         if (result.NeedsClarification)
@@ -885,6 +919,14 @@ public class IssueOrchestrator : IIssueOrchestrator
 
         if (runResult.Status == AgentRunStatus.Completed)
         {
+            if (!string.IsNullOrWhiteSpace(runResult.TargetRouting))
+            {
+                return StageExecutionResult.Failure(
+                    runResult.Summary ?? "Code reviewer requested changes.",
+                    loopBackStageId: runResult.TargetRouting,
+                    record: record);
+            }
+
             return StageExecutionResult.Success(record: record);
         }
 
@@ -903,6 +945,24 @@ public class IssueOrchestrator : IIssueOrchestrator
             ? $"\n\n[Prior Diagnostic Failures to Remediate]:\n{string.Join("\n", compilerErrors)}\n"
             : string.Empty;
 
+        var issuePath = context.DataBag.Get<string>("IssueMarkdownPath");
+        var issuePathSection = !string.IsNullOrWhiteSpace(issuePath)
+            ? (string.Equals(stageId, "issue-review", StringComparison.OrdinalIgnoreCase)
+                ? $"\n\n[Issue Specification Document]:\n{issuePath}\n(CRITICAL: You are required to edit this file directly on disk using 'edit' or 'write' to document your approved architecture, step-by-step implementation plan, and acceptance criteria. Your disk changes will be read back automatically upon stage completion to update the issue specification and guide the implementation agent.)\n"
+                : $"\n\n[Issue Specification Document]:\n{issuePath} (You can read or update this document with read/edit tools.)\n")
+            : string.Empty;
+
+        var implSummary = context.DataBag.Get<string>("StageSummary_implementation");
+        var implHandoffSection = !string.IsNullOrWhiteSpace(implSummary) && string.Equals(stageId, "code-review-fix", StringComparison.OrdinalIgnoreCase)
+            ? $"\n\n[Implementation Agent Completion Summary]:\n{TruncateText(implSummary, 1500)}\n(Note: Treat these reported achievements as claims to verify against the git diff and test results. Do not assume claims are true without checking the code.)\n"
+            : string.Empty;
+
+        var bootstrapOverride = WorkspacePromptResolver.ResolveBootstrapPromptOverride(context.WorkingDirectory, stageId);
+        if (!string.IsNullOrWhiteSpace(bootstrapOverride))
+        {
+            return $"{bootstrapOverride}{issuePathSection}{implHandoffSection}{feedbackSection}{diagnosticSection}".Trim();
+        }
+
         var approvedPlan = context.DataBag.Get<string>("Stage1.ApprovedPlan") ?? context.DataBag.Get<string>("StageSummary_issue-review");
         var planSection = !string.IsNullOrWhiteSpace(approvedPlan) && !string.Equals(stageId, "issue-review", StringComparison.OrdinalIgnoreCase)
             ? $"\n\n[Approved Implementation Plan]:\n{approvedPlan}\n"
@@ -917,7 +977,133 @@ public class IssueOrchestrator : IIssueOrchestrator
             ? $"\n\n[Stage Directive]:\n{stageDirective}\n"
             : string.Empty;
 
-        return $"Execute stage '{stageId}' for issue #{issue.Id}: {issue.Title}\n{issue.Description}{directiveSection}{planSection}{qaSection}{feedbackSection}{diagnosticSection}".Trim();
+        return $"Execute stage '{stageId}' for issue #{issue.Id}: {issue.Title}\n{issue.Description}{issuePathSection}{directiveSection}{planSection}{implHandoffSection}{qaSection}{feedbackSection}{diagnosticSection}".Trim();
+    }
+
+    private static string TruncateText(string text, int maxLength)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
+        {
+            return text;
+        }
+        return text.Substring(0, maxLength) + "\n... [truncated]";
+    }
+
+    private async Task ReadBackIssueMarkdownFromDiskAsync(
+        IWorkflowStage stage,
+        Workspace workspace,
+        Issue issue,
+        PipelineContext pipelineContext,
+        string targetSyncPath,
+        CancellationToken cancellationToken)
+    {
+        if (_markdownSyncService == null || string.IsNullOrWhiteSpace(targetSyncPath) || !Directory.Exists(targetSyncPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var relPath = pipelineContext.DataBag.Get<string>("IssueMarkdownPath");
+            string? targetFile = null;
+
+            if (!string.IsNullOrWhiteSpace(relPath))
+            {
+                var candidate = Path.Combine(targetSyncPath, relPath);
+                if (File.Exists(candidate))
+                {
+                    targetFile = candidate;
+                }
+            }
+
+            if (targetFile == null)
+            {
+                var issuesDir = Path.Combine(targetSyncPath, "docs", "issues");
+                if (Directory.Exists(issuesDir))
+                {
+                    var files = Directory.GetFiles(issuesDir, "*.md");
+                    foreach (var file in files)
+                    {
+                        try
+                        {
+                            var content = await File.ReadAllTextAsync(file, cancellationToken);
+                            var (fm, _) = _markdownSyncService.ParseMarkdown(content);
+                            if (fm.Id == issue.Id)
+                            {
+                                targetFile = file;
+                                break;
+                            }
+                        }
+                        catch
+                        {
+                            // Ignore unreadable files during scan
+                        }
+                    }
+                }
+            }
+
+            if (targetFile == null || !File.Exists(targetFile))
+            {
+                return;
+            }
+
+            // Sync modified file from disk into repository and database
+            await _markdownSyncService.ProcessFileChangedAsync(targetFile, workspace.Id, expectedIssueId: issue.Id, cancellationToken: cancellationToken);
+
+            // Refresh issue from repository to capture agent's updated description, title, and dependencies
+            var refreshedIssue = await _issueRepository.GetByIdAsync(issue.Id, cancellationToken);
+            if (refreshedIssue != null)
+            {
+                issue.Title = refreshedIssue.Title;
+                issue.Description = refreshedIssue.Description;
+                issue.Priority = refreshedIssue.Priority;
+                issue.BaseBranch = refreshedIssue.BaseBranch;
+                issue.FeatureBranch = refreshedIssue.FeatureBranch;
+                issue.UpdatedAt = refreshedIssue.UpdatedAt;
+            }
+
+            // If this is the issue-review stage, prioritize the disk description as the approved technical plan
+            if (string.Equals(stage.StageId, "issue-review", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(issue.Description))
+            {
+                pipelineContext.DataBag.Set("Stage1.ApprovedPlan", issue.Description);
+                if (pipelineContext.DataBag.Get<string>("StageSummary_issue-review") == null)
+                {
+                    pipelineContext.DataBag.Set("StageSummary_issue-review", issue.Description);
+                }
+            }
+
+            // Mirror the exact file to workspace RepositoryPath if different
+            if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
+                Directory.Exists(workspace.RepositoryPath) &&
+                !string.Equals(workspace.RepositoryPath, targetSyncPath, StringComparison.OrdinalIgnoreCase))
+            {
+                var destRelPath = !string.IsNullOrWhiteSpace(relPath) ? relPath : Path.GetRelativePath(targetSyncPath, targetFile);
+                var destFile = Path.Combine(workspace.RepositoryPath, destRelPath);
+                var destDir = Path.GetDirectoryName(destFile);
+                if (!string.IsNullOrWhiteSpace(destDir))
+                {
+                    Directory.CreateDirectory(destDir);
+                }
+
+                var diskContent = await File.ReadAllTextAsync(targetFile, cancellationToken);
+                _markdownSyncService.SuppressContentHash(diskContent);
+                await File.WriteAllTextAsync(destFile, diskContent, Encoding.UTF8, cancellationToken);
+            }
+
+            _logger.LogInformation("Read back modified issue specification for issue #{IssueId} from disk ({Path})", issue.Id, targetFile);
+            await _issueRepository.AddExecutionLogAsync(new ExecutionLog
+            {
+                IssueId = issue.Id,
+                Level = LogLevel.Information,
+                Message = $"Synchronized agent modifications to issue specification from {Path.GetFileName(targetFile)} into issue #{issue.Id}.",
+                Timestamp = DateTime.UtcNow
+            }, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed reading back modified issue specification for issue #{IssueId} from disk", issue.Id);
+        }
     }
 
     private async Task SyncMarkdownIssueSafeAsync(Workspace workspace, Issue issue, CancellationToken cancellationToken)

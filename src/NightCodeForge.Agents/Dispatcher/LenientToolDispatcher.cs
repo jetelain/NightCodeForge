@@ -469,6 +469,17 @@ public partial class LenientToolDispatcher
             },
             aliases: ["propose_issue", "proposeissues"]));
 
+        RegisterTool(new ToolDefinition(
+            "request_changes",
+            "Reject implementation and send issue back to the implementation agent for rework (feedback, reason)",
+            (args, _) =>
+            {
+                var feedback = GetRequiredString(args, "feedback");
+                var reason = args.TryGetValue("reason", out var r) ? r?.ToString() : null;
+                return Task.FromResult(tools.RequestChanges(feedback, reason));
+            },
+            aliases: ["reject_implementation", "requestchanges", "rejectimplementation", "send_back", "sendback"]));
+
         // Register default translation rules for dropped legacy tools
         RegisterTranslation(new ToolTranslationRule("list_dir", "bash", args =>
         {

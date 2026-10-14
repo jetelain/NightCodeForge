@@ -269,7 +269,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             }
 
             var cleanCommand = command.Replace("\r", "");
-            await _stdin!.WriteLineAsync($"cd \"{workDir}\" && {cleanCommand}");
+            await _stdin!.WriteLineAsync($"cd \"{workDir}\"; ( {cleanCommand}\n) < /dev/null");
             await _stdin.WriteLineAsync($"echo \"{sentinel} $?\"");
             await _stdin.FlushAsync();
 
@@ -300,7 +300,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                     _logger.LogError("Container shell process unresponsive after SIGINT grace period. Forcefully restarting shell.");
                     ForceRestartShellProcess();
                     stopwatch.Stop();
-                    throw new TimeoutException($"Command timed out after {timeout}s and the container shell was forcefully restarted.");
+                    return new CommandResult(124, string.Empty, $"Command timed out after {timeout}s and was terminated.", stopwatch.Elapsed, false);
                 }
             }
         }
@@ -316,13 +316,30 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         CancellationToken cancellationToken)
     {
         var buffer = new HeadTailBuffer(_options.MaxBufferBytes);
+        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        while (!cts.IsCancellationRequested)
+        while (true)
         {
-            var readLineTask = _stdout!.ReadLineAsync(cts.Token).AsTask();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                throw new TimeoutException($"Timed out waiting for sentinel '{sentinel}' after {timeoutSeconds}s.");
+            }
+
+            var readLineTask = _stdout!.ReadLineAsync(linkedCts.Token).AsTask();
+            var delayTask = Task.Delay(remaining, linkedCts.Token);
+
+            var completedTask = await Task.WhenAny(readLineTask, delayTask);
+            if (completedTask == delayTask)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new TimeoutException($"Timed out waiting for sentinel '{sentinel}' after {timeoutSeconds}s.");
+            }
+
             var line = await readLineTask;
 
             if (line == null)
@@ -337,14 +354,13 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 var match = SentinelExitCodeRegex().Match(suffix);
                 if (match.Success && int.TryParse(match.Groups[1].Value, out var exitCode))
                 {
+                    linkedCts.Cancel();
                     return (buffer, exitCode);
                 }
             }
 
             buffer.Append(line + "\n");
         }
-
-        throw new TimeoutException($"Timed out waiting for sentinel '{sentinel}'.");
     }
 
     private void EnsureShellProcessRunning()
@@ -848,9 +864,16 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
         if (string.IsNullOrWhiteSpace(targetDir) ||
             targetDir == "/workspace" ||
-            targetDir.StartsWith("/workspace/", StringComparison.Ordinal))
+            string.Equals(targetDir, options.ContainerWorkspacePath, StringComparison.OrdinalIgnoreCase))
         {
-            return string.IsNullOrWhiteSpace(targetDir) ? "/workspace" : targetDir;
+            return !string.IsNullOrWhiteSpace(options.DefaultWorkingDirectory)
+                ? options.DefaultWorkingDirectory
+                : "/workspace";
+        }
+
+        if (targetDir.StartsWith("/workspace/", StringComparison.Ordinal))
+        {
+            return targetDir;
         }
 
         var containerWks = !string.IsNullOrWhiteSpace(options.ContainerWorkspacePath)

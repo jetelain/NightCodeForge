@@ -53,48 +53,118 @@ public partial class CanonicalTools
 
     public string ResolveFullPath(string path)
     {
-        if (_pathResolver != null && _workspaceId.HasValue)
+        if (_pathResolver != null)
         {
-            var rootCrucibleDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty, _issueId);
-            if (Directory.Exists(rootCrucibleDir))
+            if (_workspaceId.HasValue)
             {
-                return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _issueId);
+                var rootCrucibleDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty, _issueId);
+                if (Directory.Exists(rootCrucibleDir))
+                {
+                    return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _issueId);
+                }
+
+                var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _issueId);
+                if (File.Exists(cruciblePath) || Directory.Exists(cruciblePath))
+                {
+                    return cruciblePath;
+                }
             }
 
-            var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _issueId);
-            if (File.Exists(cruciblePath) || Directory.Exists(cruciblePath))
-            {
-                return cruciblePath;
-            }
+            return _pathResolver.ResolveCruciblePath(_workspaceRoot, path, _issueId);
         }
 
-        var normalized = (path ?? string.Empty).Replace('\\', '/');
-        if (normalized.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
+        var raw = (path ?? string.Empty).Trim();
+        var normalized = raw.Replace('\\', '/');
+
+        if (Path.IsPathRooted(raw) && !normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase))
         {
-            var rel = normalized.Substring("/workspace/".Length);
+            return Path.GetFullPath(raw);
+        }
+
+        bool isWorkspacePrefixed =
+            normalized.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("workspace/", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "/workspace", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "workspace", StringComparison.OrdinalIgnoreCase);
+
+        if (isWorkspacePrefixed)
+        {
+            string rel;
+            if (normalized.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
+            {
+                rel = normalized["/workspace/".Length..];
+            }
+            else if (normalized.StartsWith("workspace/", StringComparison.OrdinalIgnoreCase))
+            {
+                rel = normalized["workspace/".Length..];
+            }
+            else
+            {
+                rel = string.Empty;
+            }
+
+            rel = rel.TrimStart('/', '\\');
+
+            var normRoot = _workspaceRoot.Replace('\\', '/').TrimEnd('/');
+            var rootLeaf = Path.GetFileName(normRoot);
+            string parentDir;
+            if (rootLeaf.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
+                rootLeaf.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
+                rootLeaf.Equals("mirror", StringComparison.OrdinalIgnoreCase) ||
+                rootLeaf.StartsWith("issue-", StringComparison.OrdinalIgnoreCase) ||
+                rootLeaf.StartsWith("wt-", StringComparison.OrdinalIgnoreCase))
+            {
+                parentDir = Path.GetDirectoryName(normRoot) ?? normRoot;
+            }
+            else
+            {
+                parentDir = normRoot;
+            }
+
+            if (string.IsNullOrEmpty(rel))
+            {
+                return Path.GetFullPath(_workspaceRoot);
+            }
+
+            if (rel.StartsWith("clone/", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(rel, "clone", StringComparison.OrdinalIgnoreCase))
+            {
+                var cloneRel = rel.Length > 5 ? rel[6..].TrimStart('/') : string.Empty;
+                var cloneDir = Path.Combine(parentDir, "clone");
+                return string.IsNullOrEmpty(cloneRel)
+                    ? Path.GetFullPath(cloneDir)
+                    : Path.GetFullPath(Path.Combine(cloneDir, cloneRel));
+            }
+
+            var issueMatch = System.Text.RegularExpressions.Regex.Match(rel, @"^(?:wt/)?issue-(\d+)(?:/(.*)|$)");
+            if (issueMatch.Success)
+            {
+                var issueNum = issueMatch.Groups[1].Value;
+                var issueRel = issueMatch.Groups[2].Success ? issueMatch.Groups[2].Value.TrimStart('/') : string.Empty;
+                var issueDir = Path.Combine(parentDir, $"issue-{issueNum}");
+                return string.IsNullOrEmpty(issueRel)
+                    ? Path.GetFullPath(issueDir)
+                    : Path.GetFullPath(Path.Combine(issueDir, issueRel));
+            }
+
+            if (_issueId.HasValue && _issueId.Value > 0)
+            {
+                var issueDir = Path.Combine(parentDir, $"issue-{_issueId.Value}");
+                if (Directory.Exists(issueDir))
+                {
+                    return Path.GetFullPath(Path.Combine(issueDir, rel));
+                }
+            }
+
             return Path.GetFullPath(Path.Combine(_workspaceRoot, rel));
         }
-        if (string.Equals(normalized, "/workspace", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "workspace", StringComparison.OrdinalIgnoreCase))
+
+        if (string.IsNullOrWhiteSpace(raw))
         {
             return Path.GetFullPath(_workspaceRoot);
         }
-        if (normalized.StartsWith("workspace/", StringComparison.OrdinalIgnoreCase))
-        {
-            var rel = normalized.Substring("workspace/".Length);
-            return Path.GetFullPath(Path.Combine(_workspaceRoot, rel));
-        }
 
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return Path.GetFullPath(_workspaceRoot);
-        }
-
-        if (Path.IsPathRooted(path))
-        {
-            return Path.GetFullPath(path);
-        }
-        return Path.GetFullPath(Path.Combine(_workspaceRoot, path));
+        return Path.GetFullPath(Path.Combine(_workspaceRoot, raw));
     }
 
     /// <summary>
@@ -341,11 +411,24 @@ public partial class CanonicalTools
             {
                 effectiveTimeout = _buildTimeoutSeconds ?? 120;
             }
+            else
+            {
+                effectiveTimeout = 60;
+            }
         }
 
         if (_executionEnv != null)
         {
-            var res = await _executionEnv.ExecuteAsync(command, workDir, effectiveTimeout, null, cancellationToken);
+            NightCodeForge.Core.Interfaces.CommandResult res;
+            try
+            {
+                res = await _executionEnv.ExecuteAsync(command, workDir, effectiveTimeout, null, cancellationToken);
+            }
+            catch (TimeoutException)
+            {
+                return $"Exit Code: 124\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
+            }
+
             var output = string.IsNullOrWhiteSpace(res.StandardOutput) ? res.StandardError : res.StandardOutput;
             if (!string.IsNullOrWhiteSpace(res.StandardError) && !string.IsNullOrWhiteSpace(res.StandardOutput))
             {
@@ -425,6 +508,14 @@ public partial class CanonicalTools
 
         var json = JsonSerializer.Serialize(issues, new JsonSerializerOptions { WriteIndented = true });
         return $"Proposed {issues.Count} backlog issue(s):\n{json}";
+    }
+
+    /// <summary>
+    /// request_changes: Reject implementation and send issue back to the implementation agent with detailed feedback.
+    /// </summary>
+    public string RequestChanges(string feedback, string? reason = null)
+    {
+        throw new RequestChangesException(feedback, reason);
     }
 }
 

@@ -224,4 +224,113 @@ Detailed spec of drop-in feature.
         Assert.NotNull(dbIssue);
         Assert.Equal("Echo Test", dbIssue.Title);
     }
+
+    [Fact]
+    public async Task ParseMarkdown_ExtractDescriptionFromBody_PreservesArchitectureAndAcceptanceCriteriaSections()
+    {
+        var repo = new InMemoryIssueRepository();
+        var sync = new IssueMarkdownSyncService(repo);
+
+        var markdown = @"---
+id: 50
+title: Refactor Payment Gateway
+---
+
+# Refactor Payment Gateway
+
+## 📋 Requirements & Description
+Support Stripe and PayPal with unified interface.
+
+## 🏛️ Architecture & Implementation Plan
+1. Create `IPaymentGateway` interface.
+2. Implement `StripeGateway` and `PayPalGateway`.
+3. Add factory resolution in DI.
+
+## 🧪 Acceptance Criteria
+- [ ] 100% test coverage for `StripeGateway`.
+- [ ] Graceful fallback on network timeout.
+
+## ❓ Human Clarifications (Q&A)
+### Question 1 (Asked during Stage: issue-review on 2026-10-14 10:00:00)
+**Prompt:** Should we support crypto?
+**Answer:** No.
+";
+
+        var (fm, body) = sync.ParseMarkdown(markdown);
+        Assert.Equal(50, fm.Id);
+
+        // Process file content to simulate disk ingest
+        await sync.ProcessFileContentAsync("dummy.md", markdown, 1);
+
+        // Check that description extracted preserves architecture and acceptance criteria but omits human clarifications
+        var (descFm, descBody) = sync.ParseMarkdown(markdown);
+        Assert.Equal("Refactor Payment Gateway", descFm.Title);
+
+        // Verify description extraction by calling ProcessFileContent on repo issue
+        var issue = new Issue
+        {
+            Id = 50,
+            WorkspaceId = 1,
+            Title = "Refactor Payment Gateway",
+            Description = "Old description"
+        };
+        await repo.CreateAsync(issue);
+
+        await sync.ProcessFileContentAsync("dummy.md", markdown, 1);
+
+        var updated = await repo.GetByIdAsync(50);
+        Assert.NotNull(updated);
+        Assert.Contains("Support Stripe and PayPal with unified interface.", updated.Description);
+        Assert.Contains("## 🏛️ Architecture & Implementation Plan", updated.Description);
+        Assert.Contains("1. Create `IPaymentGateway` interface.", updated.Description);
+        Assert.Contains("## 🧪 Acceptance Criteria", updated.Description);
+        Assert.Contains("- [ ] 100% test coverage for `StripeGateway`.", updated.Description);
+        Assert.DoesNotContain("Human Clarifications", updated.Description);
+        Assert.DoesNotContain("Should we support crypto?", updated.Description);
+    }
+
+    [Fact]
+    public async Task ProcessFileChangedAsync_WithExpectedIssueId_UpdatesExistingIssueWhenIdOmittedInFrontmatter()
+    {
+        var repo = new InMemoryIssueRepository();
+        var sync = new IssueMarkdownSyncService(repo);
+
+        var issue = new Issue
+        {
+            Id = 88,
+            WorkspaceId = 1,
+            Title = "Original Issue Title",
+            Description = "Initial requirement",
+            Status = IssueOverallStatus.Open
+        };
+        await repo.CreateAsync(issue);
+
+        // Agent accidentally stripped 'id: 88' from YAML frontmatter
+        var editedMarkdownWithoutId = @"---
+title: Enriched Title Without ID
+status: Open
+---
+
+# Enriched Title Without ID
+
+## 📋 Requirements & Description
+Enriched description formulated by review agent directly on disk.
+";
+
+        var filePath = Path.Combine(_tempWorkspaceDir, "2026-10-14-enriched.md");
+        await File.WriteAllTextAsync(filePath, editedMarkdownWithoutId);
+
+        // Pass expectedIssueId: 88
+        await sync.ProcessFileChangedAsync(filePath, 1, expectedIssueId: 88);
+
+        // Verify issue 88 was updated and NO duplicate issue was created
+        var updated = await repo.GetByIdAsync(88);
+        Assert.NotNull(updated);
+        Assert.Equal("Enriched Title Without ID", updated.Title);
+        Assert.Equal("Enriched description formulated by review agent directly on disk.", updated.Description);
+
+        // Verify no extra issue was created
+        var allIssues = await repo.GetByWorkspaceIdAsync(1);
+        Assert.Single(allIssues);
+    }
 }

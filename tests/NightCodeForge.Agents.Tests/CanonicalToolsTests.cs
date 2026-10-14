@@ -162,6 +162,48 @@ public class Service
         Assert.Contains("hanging tests", output);
     }
 
+    [Fact]
+    public async Task BashAsync_DefaultsGeneralCommandTo60SecondsTimeout()
+    {
+        var env = new FakeEnv();
+        var tools = new CanonicalTools(
+            workspaceRoot: AppContext.BaseDirectory,
+            executionEnv: env);
+
+        await tools.BashAsync("git status");
+
+        Assert.Equal(60, env.LastTimeoutSeconds);
+        Assert.Equal("git status", env.LastCommand);
+    }
+
+    private class TimeoutThrowingEnv : NightCodeForge.Core.Interfaces.IExecutionEnvironment
+    {
+        public NightCodeForge.Core.Interfaces.ExecutionTier Tier => NightCodeForge.Core.Interfaces.ExecutionTier.BareHost;
+        public Task<NightCodeForge.Core.Interfaces.CommandResult> ExecuteAsync(
+            string command,
+            string? workingDirectory = null,
+            int? timeoutSeconds = null,
+            IReadOnlyDictionary<string, string>? environmentVariables = null,
+            CancellationToken cancellationToken = default)
+        {
+            throw new TimeoutException("Simulated process hang");
+        }
+    }
+
+    [Fact]
+    public async Task BashAsync_HandlesTimeoutExceptionCleanly()
+    {
+        var tools = new CanonicalTools(
+            workspaceRoot: AppContext.BaseDirectory,
+            executionEnv: new TimeoutThrowingEnv());
+
+        var output = await tools.BashAsync("rg -n 'foo' -r .");
+
+        Assert.Contains("Exit Code: 124", output);
+        Assert.Contains("[TIMEOUT]", output);
+        Assert.Contains("60s", output);
+    }
+
     private class FakePathResolver : NightCodeForge.Core.Interfaces.IWorkspacePathResolver
     {
         private readonly string _baseDir;
@@ -219,6 +261,45 @@ public class Service
         Assert.Equal("chore", tools.PendingProposals[1].Type);
         Assert.Contains("Proposed 2 backlog issue(s)", result);
         Assert.Contains("Fix memory leak", result);
+    }
+
+    [Fact]
+    public void ResolveFullPath_OnlyRemapsWorkspacePrefix_AndResolvesCloneAndWorktree()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "test-repo-" + Guid.NewGuid().ToString("N"));
+        var cloneDir = Path.Combine(tempRoot, "clone");
+        var issueDir = Path.Combine(tempRoot, "issue-42");
+        Directory.CreateDirectory(cloneDir);
+        Directory.CreateDirectory(issueDir);
+
+        var cloneTools = new CanonicalTools(cloneDir);
+
+        // 1. /workspace/clone/Calculator.cs resolves to cloneDir/Calculator.cs
+        var res1 = cloneTools.ResolveFullPath("/workspace/clone/Calculator.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "Calculator.cs")), res1);
+
+        // 2. /workspace/Calculator.cs resolves to cloneDir/Calculator.cs
+        var res2 = cloneTools.ResolveFullPath("/workspace/Calculator.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "Calculator.cs")), res2);
+
+        // 3. Calculator.cs (pure relative) resolves to cloneDir/Calculator.cs
+        var res3 = cloneTools.ResolveFullPath("Calculator.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "Calculator.cs")), res3);
+
+        // 4. clone/Calculator.cs (relative without /workspace) is NOT stripped
+        var res4 = cloneTools.ResolveFullPath("clone/Calculator.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "clone", "Calculator.cs")), res4);
+
+        // 5. Worktree-scoped tools
+        var issueTools = new CanonicalTools(issueDir, issueId: 42);
+        var res5 = issueTools.ResolveFullPath("/workspace/issue-42/Calculator.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(issueDir, "Calculator.cs")), res5);
+
+        var res6 = issueTools.ResolveFullPath("/workspace/Calculator.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(issueDir, "Calculator.cs")), res6);
+
+        var res7 = issueTools.ResolveFullPath("/workspace/clone/Calculator.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "Calculator.cs")), res7);
     }
 }
 

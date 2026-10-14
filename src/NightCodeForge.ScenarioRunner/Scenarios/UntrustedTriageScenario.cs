@@ -2,6 +2,8 @@ using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Data;
 using NightCodeForge.ScenarioRunner.Common;
@@ -33,6 +35,7 @@ public class UntrustedTriageScenario : IScenario
         var triageService = scope.ServiceProvider.GetRequiredService<ITriageService>();
         var orchestrator = scope.ServiceProvider.GetRequiredService<IIssueOrchestrator>();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var streamer = scope.ServiceProvider.GetRequiredService<IAgentActivityStreamer>();
 
         // Step 1: Execute sandboxed triage on base branch
         ConsoleFormatting.PrintStep("9.1", "Executing sandboxed read-only intake triage for external bug report...");
@@ -41,10 +44,55 @@ public class UntrustedTriageScenario : IScenario
             Description: "When calling Calculator.Divide with denominator = 0, an unhandled DivideByZeroException is thrown. Please validate against the codebase and propose a fix.",
             BaseBranch: "main");
 
+        using var streamCts = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
+        var streamTask = Task.Run(async () =>
+        {
+            try
+            {
+                Console.WriteLine();
+                Console.WriteLine($"{ConsoleFormatting.Dim}─── Live Telemetry Stream ───────────────────────────────────────────{ConsoleFormatting.Reset}");
+                await foreach (var evt in streamer.SubscribeAsync(0, streamCts.Token))
+                {
+                    switch (evt.Kind)
+                    {
+                        case AgentActivityKind.ThinkingDelta:
+                            Console.Write($"{ConsoleFormatting.Magenta}{ConsoleFormatting.Dim}{evt.Content}{ConsoleFormatting.Reset}");
+                            break;
+                        case AgentActivityKind.MessageDelta:
+                            Console.Write($"{ConsoleFormatting.Cyan}{evt.Content}{ConsoleFormatting.Reset}");
+                            break;
+                        case AgentActivityKind.ToolStarted:
+                            Console.WriteLine($"\n{ConsoleFormatting.Yellow}⚙ [TOOL CALL] {evt.Content}{ConsoleFormatting.Reset}");
+                            break;
+                        case AgentActivityKind.ToolCompleted:
+                            var snippet = evt.Content.Length > 120 ? evt.Content[..117] + "..." : evt.Content;
+                            Console.WriteLine($"{ConsoleFormatting.Green}✔ [TOOL RESULT] {snippet}{ConsoleFormatting.Reset}");
+                            break;
+                        case AgentActivityKind.Interrupted:
+                            Console.WriteLine($"\n{ConsoleFormatting.Yellow}⏸ [INTERRUPTED] {evt.Content}{ConsoleFormatting.Reset}");
+                            break;
+                        case AgentActivityKind.Error:
+                            Console.WriteLine($"\n{ConsoleFormatting.Red}✖ [ERROR] {evt.Content}{ConsoleFormatting.Reset}");
+                            break;
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                Console.WriteLine();
+                Console.WriteLine($"{ConsoleFormatting.Dim}─── End Telemetry Stream ────────────────────────────────────────────{ConsoleFormatting.Reset}");
+                Console.WriteLine();
+            }
+        }, streamCts.Token);
+
         var createdIssues = await triageService.TriageExternalReportAsync(
             context.Environment.Workspace,
             externalReport,
             context.CancellationToken);
+
+        streamCts.Cancel();
+        try { await streamTask; } catch { }
 
         if (createdIssues == null || createdIssues.Count == 0)
         {

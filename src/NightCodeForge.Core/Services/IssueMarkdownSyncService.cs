@@ -182,7 +182,16 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
         return targetFile;
     }
 
-    public async Task ProcessFileChangedAsync(string filePath, int workspaceId, CancellationToken cancellationToken = default)
+    public void SuppressContentHash(string content)
+    {
+        var hash = ComputeContentHash(content);
+        _suppressedHashes[hash] = 1;
+    }
+
+    public Task ProcessFileChangedAsync(string filePath, int workspaceId, CancellationToken cancellationToken = default)
+        => ProcessFileChangedAsync(filePath, workspaceId, expectedIssueId: null, cancellationToken: cancellationToken);
+
+    public async Task ProcessFileChangedAsync(string filePath, int workspaceId, int? expectedIssueId, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(filePath)) return;
 
@@ -196,10 +205,13 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
             return;
         }
 
-        await ProcessFileContentAsync(filePath, content, workspaceId, cancellationToken);
+        await ProcessFileContentAsync(filePath, content, workspaceId, expectedIssueId, cancellationToken);
     }
 
-    public async Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default)
+    public Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default)
+        => ProcessFileContentAsync(filePath, content, workspaceId, expectedIssueId: null, cancellationToken: cancellationToken);
+
+    public async Task ProcessFileContentAsync(string filePath, string content, int workspaceId, int? expectedIssueId, CancellationToken cancellationToken = default)
     {
         var hash = ComputeContentHash(content);
         if (_suppressedHashes.TryRemove(hash, out _))
@@ -213,9 +225,13 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
         // Extract description from body (strip '# Title' and '## Requirements' if present)
         var description = ExtractDescriptionFromBody(body);
 
-        if (frontmatter.Id.HasValue && frontmatter.Id.Value > 0)
+        var targetIssueId = frontmatter.Id.HasValue && frontmatter.Id.Value > 0
+            ? frontmatter.Id.Value
+            : (expectedIssueId.HasValue && expectedIssueId.Value > 0 ? expectedIssueId.Value : (int?)null);
+
+        if (targetIssueId.HasValue)
         {
-            var issue = await _issueRepository.GetByIdAsync(frontmatter.Id.Value, cancellationToken);
+            var issue = await _issueRepository.GetByIdAsync(targetIssueId.Value, cancellationToken);
             if (issue != null)
             {
                 bool restoreProtected = false;
@@ -440,7 +456,7 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
                 inRequirements = true;
                 continue;
             }
-            if (inRequirements && line.StartsWith("## "))
+            if (inRequirements && line.StartsWith("## ❓ Human Clarifications", StringComparison.OrdinalIgnoreCase))
             {
                 break;
             }
@@ -455,7 +471,23 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
             return string.Join("\n", descLines).Trim();
         }
 
-        return body.Trim();
+        var qnaIndex = body.IndexOf("## ❓ Human Clarifications", StringComparison.OrdinalIgnoreCase);
+        var trimmedBody = qnaIndex >= 0 ? body.Substring(0, qnaIndex).Trim() : body.Trim();
+
+        if (trimmedBody.StartsWith("# "))
+        {
+            var newlineIdx = trimmedBody.IndexOf('\n');
+            if (newlineIdx >= 0)
+            {
+                trimmedBody = trimmedBody.Substring(newlineIdx + 1).Trim();
+            }
+            else
+            {
+                trimmedBody = string.Empty;
+            }
+        }
+
+        return trimmedBody;
     }
 
     public void Dispose()

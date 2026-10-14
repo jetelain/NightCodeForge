@@ -88,6 +88,37 @@ public class WorkspacePathResolverTests
         Assert.Equal("/home/agentuser/.nightcodeforge/wks/42/clone", clonePath);
     }
 
+    [Fact]
+    public void ResolveCruciblePath_WithWorkspaceRoot_RemapsWorkspacePrefix()
+    {
+        var resolver = new WorkspacePathResolver();
+        var tempRoot = Path.Combine(Path.GetTempPath(), "resolver-test-" + Guid.NewGuid().ToString("N"));
+        var cloneDir = Path.Combine(tempRoot, "clone");
+        var issueDir = Path.Combine(tempRoot, "issue-7");
+        Directory.CreateDirectory(cloneDir);
+        Directory.CreateDirectory(issueDir);
+
+        // /workspace/clone/... maps to cloneDir
+        var p1 = resolver.ResolveCruciblePath(cloneDir, "/workspace/clone/src/App.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "src", "App.cs")), p1);
+
+        // /workspace/issue-7/... maps to issueDir
+        var p2 = resolver.ResolveCruciblePath(cloneDir, "/workspace/issue-7/src/App.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(issueDir, "src", "App.cs")), p2);
+
+        // /workspace/... resolves to workspaceRoot (cloneDir)
+        var p3 = resolver.ResolveCruciblePath(cloneDir, "/workspace/src/App.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "src", "App.cs")), p3);
+
+        // Relative path without /workspace prefix resolves to workspaceRoot
+        var p4 = resolver.ResolveCruciblePath(cloneDir, "src/App.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "src", "App.cs")), p4);
+
+        // Relative path with "clone/" without /workspace prefix is NOT stripped
+        var p5 = resolver.ResolveCruciblePath(cloneDir, "clone/App.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "clone", "App.cs")), p5);
+    }
+
     private class FakeWslMetadata : NightCodeForge.Core.Interfaces.IWslMetadataService
     {
         public string Distro { get; set; } = "openSUSE";

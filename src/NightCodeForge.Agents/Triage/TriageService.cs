@@ -98,7 +98,7 @@ public class TriageService : ITriageService
         var pipelineContext = new PipelineContext(triageIssue, workspace);
         pipelineContext.CurrentProfile = profile;
 
-        var stageDirective = "Analyze the reported issue against the repository base branch. Determine affected files and acceptance criteria. Call propose_issues to recommend structured backlog items. You have read-only access and cannot modify code or access external networks.";
+        var stageDirective = "Analyze the reported issue against the repository base branch. Determine affected files and acceptance criteria. Call propose_issues to recommend structured backlog items. You have read-only access and cannot modify code or access external networks. If the reported issue or method is missing from the base branch, verify its absence in the codebase and promptly propose the needed feature or bug backlog item via propose_issues without exhaustively exploring other branches.";
 
         var workspacePath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
             ? workspace.Ext4MirrorPath

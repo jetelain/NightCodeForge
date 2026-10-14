@@ -1,0 +1,192 @@
+using NightCodeForge.Core.Concurrency;
+using NightCodeForge.Core.Dependencies;
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
+using NightCodeForge.Core.Workflow;
+using NightCodeForge.Core.Workflow.Stages;
+
+namespace NightCodeForge.Core.Tests;
+
+public class IssueReviewDiskReadBackTests : IDisposable
+{
+    private readonly string _tempWorkspaceDir;
+    private readonly string _tempWorktreeDir;
+
+    public IssueReviewDiskReadBackTests()
+    {
+        _tempWorkspaceDir = Path.Combine(Path.GetTempPath(), "NightCodeForge_Wks_" + Guid.NewGuid().ToString("N"));
+        _tempWorktreeDir = Path.Combine(Path.GetTempPath(), "NightCodeForge_Wkt_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tempWorkspaceDir);
+        Directory.CreateDirectory(_tempWorktreeDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempWorkspaceDir)) Directory.Delete(_tempWorkspaceDir, true);
+            if (Directory.Exists(_tempWorktreeDir)) Directory.Delete(_tempWorktreeDir, true);
+        }
+        catch { }
+    }
+
+    private class TestHarness : IAgentHarness
+    {
+        public string HarnessId => "crucible";
+        public string? CapturedBootstrapPrompt { get; private set; }
+        public string? CapturedStageDirective { get; private set; }
+
+        public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
+        {
+            CapturedBootstrapPrompt = context.BootstrapPrompt;
+            CapturedStageDirective = context.StageDirective;
+
+            var issueMarkdownRelPath = context.PipelineContext?.DataBag.Get<string>("IssueMarkdownPath");
+            if (!string.IsNullOrWhiteSpace(issueMarkdownRelPath) && !string.IsNullOrWhiteSpace(context.PipelineContext?.WorkingDirectory))
+            {
+                var fullPath = Path.Combine(context.PipelineContext.WorkingDirectory, issueMarkdownRelPath);
+                if (File.Exists(fullPath))
+                {
+                    var existingContent = await File.ReadAllTextAsync(fullPath, cancellationToken);
+                    var enrichedContent = existingContent.TrimEnd() + @"
+
+## 🏛️ Architecture & Implementation Plan
+1. Implement `RedisDistributedCache` implementing `IDistributedCache`.
+2. Add fallback in-memory cache on Redis connection failure.
+
+## 🧪 Acceptance Criteria
+- [ ] Redis timeout triggers circuit breaker.
+- [ ] Cache miss loads from database.
+";
+                    await File.WriteAllTextAsync(fullPath, enrichedContent, cancellationToken);
+                }
+            }
+
+            return AgentRunResult.Completed(
+                new AgentRunMetrics(100, 200, 100, 300),
+                summary: "Issue review complete; updated specification on disk.");
+        }
+    }
+
+    private class TestHarnessRegistry : IHarnessRegistry
+    {
+        private readonly IAgentHarness _harness;
+        public TestHarnessRegistry(IAgentHarness harness) => _harness = harness;
+        public IAgentHarness GetHarness(string harnessId) => _harness;
+        public void RegisterHarness(IAgentHarness harness) { }
+        public bool TryGetHarness(string harnessId, out IAgentHarness? harness)
+        {
+            harness = _harness;
+            return true;
+        }
+        public IEnumerable<IAgentHarness> GetAllHarnesses() => new[] { _harness };
+    }
+
+    private class TestGitWorkspaceManager : FakeGitWorkspaceManager, IGitWorkspaceManager
+    {
+        private readonly string _worktreePath;
+        public TestGitWorkspaceManager(string worktreePath) => _worktreePath = worktreePath;
+
+        string IGitWorkspaceManager.GetWorktreePath(Workspace workspace, int issueId) => _worktreePath;
+    }
+
+    [Fact]
+    public async Task ProcessIssueAsync_IssueReviewAgent_DirectsAgentToEditDisk_AndReadsBackDiskChangesIntoRepositoryAndPlan()
+    {
+        // Arrange
+        var issue = new Issue
+        {
+            Id = 42,
+            WorkspaceId = 1,
+            Title = "Implement Distributed Cache",
+            Description = "Basic cache requirements for session state.",
+            Status = IssueOverallStatus.Open,
+            CurrentStageId = "issue-review",
+            CreatedAt = new DateTime(2026, 10, 14, 0, 0, 0, DateTimeKind.Utc)
+        };
+
+        var workspace = new Workspace
+        {
+            Id = 1,
+            Name = "CacheWorkspace",
+            RepositoryPath = _tempWorkspaceDir,
+            ExecutionMode = ExecutionMode.BareHost
+        };
+
+        var issueRepo = new InMemoryIssueRepository();
+        await issueRepo.CreateAsync(issue);
+
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        await workspaceRepo.CreateAsync(workspace);
+
+        var depStore = new InMemoryIssueDependencyStore();
+        depStore.AddIssue(42, 1, IssueOverallStatus.Open);
+        var depEngine = new DependencyResolutionEngine(depStore);
+        var lockProvider = new WorkspaceLockProvider();
+        var jobQueue = new FakeIssueJobQueue();
+        var gitManager = new TestGitWorkspaceManager(_tempWorktreeDir);
+        var syncService = new IssueMarkdownSyncService(issueRepo);
+
+        var harness = new TestHarness();
+        var harnessRegistry = new TestHarnessRegistry(harness);
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[]
+        {
+            new IssueReviewStage(),
+            new ImplementationStage()
+        });
+
+        var orchestrator = new IssueOrchestrator(
+            issueRepo,
+            workspaceRepo,
+            depEngine,
+            lockProvider,
+            gitManager,
+            new DefaultWorkflowPipelineProvider(pipeline),
+            jobQueue,
+            depStore,
+            harnessRegistry: harnessRegistry,
+            markdownSyncService: syncService);
+
+        // Act: Process issue-review stage
+        await orchestrator.ProcessIssueAsync(issue.Id);
+
+        // Assert 1: Agent directive and bootstrap prompt explicitly instruct editing disk
+        Assert.NotNull(harness.CapturedStageDirective);
+        Assert.Contains("MANDATORY FILE EDIT", harness.CapturedStageDirective);
+        Assert.Contains("You must edit the issue specification document on disk", harness.CapturedStageDirective);
+        Assert.Contains("reads back the file from disk", harness.CapturedStageDirective);
+
+        Assert.NotNull(harness.CapturedBootstrapPrompt);
+        Assert.Contains("[Issue Specification Document]:", harness.CapturedBootstrapPrompt);
+        Assert.Contains("CRITICAL: You are required to edit this file directly on disk using 'edit' or 'write'", harness.CapturedBootstrapPrompt);
+        Assert.Contains("Your disk changes will be read back automatically upon stage completion", harness.CapturedBootstrapPrompt);
+
+        // Assert 2: The orchestrator read back the disk modifications into the issue entity in database
+        var updatedInDb = await issueRepo.GetByIdAsync(42);
+        Assert.NotNull(updatedInDb);
+        Assert.Equal(IssueOverallStatus.Reviewed, updatedInDb.Status);
+        Assert.Equal("implementation", updatedInDb.CurrentStageId);
+        Assert.Contains("RedisDistributedCache", updatedInDb.Description);
+        Assert.Contains("## 🏛️ Architecture & Implementation Plan", updatedInDb.Description);
+        Assert.Contains("## 🧪 Acceptance Criteria", updatedInDb.Description);
+
+        // Assert 3: Stage1.ApprovedPlan in DataBag was populated with the enriched specification from disk
+        var bag = PipelineDataBag.FromJson(updatedInDb.PipelineDataJson);
+        var approvedPlan = bag.Get<string>("Stage1.ApprovedPlan");
+        Assert.NotNull(approvedPlan);
+        Assert.Contains("RedisDistributedCache", approvedPlan);
+        Assert.Contains("## 🏛️ Architecture & Implementation Plan", approvedPlan);
+
+        // Assert 4: Git checkpoint commit was created capturing the completed stage
+        Assert.Contains(gitManager.WipCheckpoints, c => c.StageName == "issue-review");
+
+        // Assert 5: The changes were mirrored to host repository path
+        var mirroredFiles = Directory.GetFiles(_tempWorkspaceDir, "*.md", SearchOption.AllDirectories);
+        Assert.NotEmpty(mirroredFiles);
+        var mirroredContent = await File.ReadAllTextAsync(mirroredFiles[0]);
+        Assert.Contains("RedisDistributedCache", mirroredContent);
+    }
+}

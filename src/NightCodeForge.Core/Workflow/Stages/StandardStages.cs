@@ -12,7 +12,12 @@ public class IssueReviewStage : IWorkflowStage
     public string DisplayName => "Issue Review";
     public WorkflowStageKind Kind => WorkflowStageKind.Agentic;
     public AgentMode RequiredMode => AgentMode.Full;
-    public string StageDirective { get; set; } = "Investigate requirements and codebase architecture. Proactively uncover ambiguities. If any design decision is ambiguous, invoke 'ask' immediately. Do not guess.";
+    public string StageDirective { get; set; } = 
+        "You are a Staff Software Architect & Requirements Investigator.\n" +
+        "1. Thoroughly investigate the issue requirements and inspect the codebase using 'read' and 'bash' (ls, rg, find) to locate affected files, dependencies, and interfaces.\n" +
+        "2. MANDATORY FILE EDIT: You must edit the issue specification document on disk (specified in [Issue Specification Document] or docs/issues/) using 'edit' (or 'write'). Enrich it with your approved technical architecture, affected files/classes, step-by-step implementation plan, and testable acceptance criteria. When you finish, the system automatically reads back the file from disk to update the issue specification and guide the implementation agent.\n" +
+        "3. Proactively uncover ambiguities, implicit assumptions, or architectural conflicts. If any requirement or design decision is ambiguous or has multiple valid alternatives, invoke 'ask' immediately. Do not guess.\n" +
+        "4. Do not write or modify production code in this stage.";
 
     public Func<PipelineContext, CancellationToken, Task<StageExecutionResult>>? Handler { get; set; }
 
@@ -36,7 +41,13 @@ public class ImplementationStage : IWorkflowStage
     public string DisplayName => "Implementation";
     public WorkflowStageKind Kind => WorkflowStageKind.Agentic;
     public AgentMode RequiredMode => AgentMode.Full;
-    public string StageDirective { get; set; } = "Implement clean code according to the approved plan. Run builds and tests incrementally with bash. Fix all compiler errors and test failures. If breaking blockers arise, call 'ask'.";
+    public string StageDirective { get; set; } = 
+        "You are a Senior Software Engineer & TDD Practitioner.\n" +
+        "1. Implement clean, robust, and maintainable code adhering to the issue specification document in docs/issues/, the approved plan, human answers, and prior reviewer feedback.\n" +
+        "2. Keep the blast radius minimal: avoid unnecessary refactoring or file churn outside the approved scope.\n" +
+        "3. Apply precision edits with 'edit' (or 'write' for new files). Follow repository .editorconfig formatting standards.\n" +
+        "4. Continuously verify your changes: execute builds and tests incrementally using 'bash'. Fix all compiler errors and test failures.\n" +
+        "5. Write comprehensive unit tests covering all new logic and edge cases. If unexpected breaking blockers arise, invoke 'ask'.";
 
     public Func<PipelineContext, CancellationToken, Task<StageExecutionResult>>? Handler { get; set; }
 
@@ -59,8 +70,18 @@ public class CodeReviewAndFixStage : IWorkflowStage
     public string StageId => DefaultStageId;
     public string DisplayName => "Code Review & Fix";
     public WorkflowStageKind Kind => WorkflowStageKind.Agentic;
-    public AgentMode RequiredMode => AgentMode.Full;
-    public string StageDirective { get; set; } = "Review the git diff against the base branch. Identify regressions or style violations and apply precision edits. Ensure builds and tests pass cleanly.";
+    public AgentMode RequiredMode => AgentMode.Review;
+    public string StageDirective { get; set; } = 
+        "You are a Principal Code Reviewer and Quality Gatekeeper.\n" +
+        "1. Inspect the full git diff against the base branch using 'bash' (e.g. git diff, git status) and 'read'. Compare against the specification in docs/issues/ and the implementation claims.\n" +
+        "2. TIER 1 - MINOR POLISH: If the implementation is fundamentally sound and only requires minor edge-case fixes, code style cleanup, variable renames, or documentation additions, apply precision fixes directly using 'edit' and verify with 'bash' (build and test).\n" +
+        "3. TIER 2 - REJECTION GATE: Rejection is strictly reserved for major issues or missing features. If core acceptance criteria are unfulfilled, if nothing has been implemented, if tests fundamentally fail requiring architectural redesign, or if entire modules are missing, REJECT the implementation immediately:\n" +
+        "   - If 'request_changes' tool is available, invoke 'request_changes(feedback, reason)' immediately.\n" +
+        "   - Otherwise (or in harnesses like Pi/ACP), conclude your final response with:\n" +
+        "     <request_changes>\n" +
+        "     [Detailed explanation of missing features, broken requirements, and instructions for rework]\n" +
+        "     </request_changes>\n" +
+        "   Do not attempt to write entire missing feature modules in the review stage.";
 
     public Func<PipelineContext, CancellationToken, Task<StageExecutionResult>>? Handler { get; set; }
 

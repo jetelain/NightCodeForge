@@ -177,16 +177,16 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                         cloneDir = $"{normRaw}/clone";
                     }
 
-                    if (effectiveIssueId.HasValue)
-                    {
-                        hostWorkspacePath = ResolveWorktreePath(workspace, effectiveIssueId.Value, parentDir);
-                        canonicalClonePath = cloneDir;
-                    }
-                    else
-                    {
-                        hostWorkspacePath = parentDir;
-                    }
+                    // In container, agent has "/workspace/clone" and "/workspace/issue-nnn" (when working on issue).
+                    // The host workspace root (parentDir) is mounted to /workspace.
+                    hostWorkspacePath = parentDir;
+                    canonicalClonePath = cloneDir;
                 }
+
+                // When working on an issue PWD should be "/workspace/issue-nnn", and "/workspace/clone" if not scoped to an issue.
+                var defaultWorkingDir = effectiveIssueId.HasValue
+                    ? $"/workspace/issue-{effectiveIssueId.Value}"
+                    : "/workspace/clone";
 
                 var targetDistro = workspace.WslDistribution ?? _options.DefaultWslDistribution;
                 var sdkMountPaths = _sdkDiscoveryService != null
@@ -202,7 +202,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                     HostWorkspacePath = hostWorkspacePath,
                     CanonicalClonePath = canonicalClonePath,
                     ContainerWorkspacePath = "/workspace",
-                    DefaultWorkingDirectory = "/workspace",
+                    DefaultWorkingDirectory = defaultWorkingDir,
                     MountPackageCaches = true,
                     MountHostSdks = true,
                     SdkMountPaths = sdkMountPaths.ToList(),

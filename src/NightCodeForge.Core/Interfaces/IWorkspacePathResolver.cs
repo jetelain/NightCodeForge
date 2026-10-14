@@ -42,6 +42,14 @@ public interface IWorkspacePathResolver
         ResolveCruciblePath(workspaceId, relativeOrContainerPath);
 
     /// <summary>
+    /// Resolves Crucible file tool paths (read/write/edit) given a workspace root directory on the host.
+    /// Remaps /workspace virtual container paths to the host filesystem, taking into account
+    /// /workspace/clone and /workspace/issue-{id} worktrees.
+    /// </summary>
+    string ResolveCruciblePath(string workspaceRoot, string relativeOrContainerPath, int? issueId = null) =>
+        ResolveCruciblePath(0, relativeOrContainerPath, issueId);
+
+    /// <summary>
     /// Gets the targeted WSL2 distribution name.
     /// </summary>
     string GetWslDistributionName();

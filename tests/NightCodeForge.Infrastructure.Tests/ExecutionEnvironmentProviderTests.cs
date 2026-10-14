@@ -126,18 +126,21 @@ public class ExecutionEnvironmentProviderTests
 
         // Issue 1 options
         Assert.Equal("ncf-sandbox-55-issue-1", exec1.Options.ContainerNameOrId);
-        Assert.EndsWith("issue-1", exec1.Options.HostWorkspacePath?.Replace('\\', '/'));
+        Assert.EndsWith("55", exec1.Options.HostWorkspacePath?.Replace('\\', '/'));
+        Assert.Equal("/workspace/issue-1", exec1.Options.DefaultWorkingDirectory);
         Assert.EndsWith("clone", exec1.Options.CanonicalClonePath?.Replace('\\', '/'));
 
         // Issue 2 options
         Assert.Equal("ncf-sandbox-55-issue-2", exec2.Options.ContainerNameOrId);
-        Assert.EndsWith("issue-2", exec2.Options.HostWorkspacePath?.Replace('\\', '/'));
+        Assert.EndsWith("55", exec2.Options.HostWorkspacePath?.Replace('\\', '/'));
+        Assert.Equal("/workspace/issue-2", exec2.Options.DefaultWorkingDirectory);
         Assert.EndsWith("clone", exec2.Options.CanonicalClonePath?.Replace('\\', '/'));
 
         // No issue (e.g. Triage on main)
         Assert.Equal("ncf-sandbox-55", execNo.Options.ContainerNameOrId);
         Assert.EndsWith("55", execNo.Options.HostWorkspacePath?.Replace('\\', '/'));
-        Assert.Null(execNo.Options.CanonicalClonePath);
+        Assert.Equal("/workspace/clone", execNo.Options.DefaultWorkingDirectory);
+        Assert.EndsWith("clone", execNo.Options.CanonicalClonePath?.Replace('\\', '/'));
     }
 
     private class FakeHostSdkDiscoveryService : IHostSdkDiscoveryService

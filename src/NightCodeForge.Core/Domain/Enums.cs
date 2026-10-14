@@ -6,7 +6,8 @@ namespace NightCodeForge.Core.Domain;
 public enum AgentMode
 {
     ReadOnly = 0, // Read-only tools (inspection, triage, discovery)
-    Full = 1      // Full capabilities (editing, file writing, shell execution)
+    Full = 1,     // Full capabilities (editing, file writing, shell execution)
+    Review = 2    // Review & audit capabilities (diff inspection, requesting changes, targeted fixes)
 }
 
 /// <summary>

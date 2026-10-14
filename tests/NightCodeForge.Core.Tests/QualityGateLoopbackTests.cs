@@ -322,4 +322,77 @@ public class QualityGateLoopbackTests
         Assert.Equal("stage1", checkpoints[0].StageId);
         Assert.Equal("stage2", issue.CurrentStageId);
     }
+
+    [Fact]
+    public async Task Orchestrator_RoutesBackwardToImplementation_WhenReviewAgentReturnsTargetRouting()
+    {
+        // Arrange
+        var issue = new Issue
+        {
+            Id = 99,
+            WorkspaceId = 1,
+            Title = "Feature Z",
+            Description = "Implement feature Z",
+            CurrentStageId = "code-review-fix",
+            Status = IssueOverallStatus.Implemented
+        };
+
+        var workspace = new Workspace
+        {
+            Id = 1,
+            Name = "TestRepo",
+            RepositoryPath = Path.GetTempPath(),
+            ExecutionMode = ExecutionMode.BareHost
+        };
+
+        var issueRepo = new InMemoryIssueRepository();
+        await issueRepo.CreateAsync(issue);
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        await workspaceRepo.CreateAsync(workspace);
+        var depStore = new InMemoryIssueDependencyStore();
+        depStore.AddIssue(99, 1, IssueOverallStatus.Implemented);
+        var depEngine = new DependencyResolutionEngine(depStore);
+        var lockProvider = new WorkspaceLockProvider();
+        var jobQueue = new FakeIssueJobQueue();
+        var gitManager = new FakeGitWorkspaceManager();
+
+        var fakeHarness = new FakeAgentHarness
+        {
+            ResultToReturn = AgentRunResult.Completed(
+                new AgentRunMetrics(100),
+                summary: "Reviewer requested changes: AuthService incomplete",
+                targetRouting: "implementation")
+        };
+        var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[]
+        {
+            new TestWorkflowStage("implementation", WorkflowStageKind.Agentic),
+            new TestWorkflowStage("code-review-fix", WorkflowStageKind.Agentic, AgentMode.Review)
+        });
+
+        var orchestrator = new IssueOrchestrator(
+            issueRepo,
+            workspaceRepo,
+            depEngine,
+            lockProvider,
+            gitManager,
+            new DefaultWorkflowPipelineProvider(pipeline),
+            jobQueue,
+            depStore,
+            harnessRegistry: harnessRegistry);
+
+        // Act
+        await orchestrator.ProcessIssueAsync(issue.Id);
+
+        // Assert
+        Assert.Equal("implementation", issue.CurrentStageId);
+        Assert.Single(jobQueue.UrgentQueue);
+        Assert.Equal(99, jobQueue.UrgentQueue[0]);
+
+        var bag = PipelineDataBag.FromJson(issue.PipelineDataJson);
+        var stageRetries = bag.Get<Dictionary<string, int>>("Workflow.StageRetries");
+        Assert.NotNull(stageRetries);
+        Assert.Equal(1, stageRetries["code-review-fix"]);
+    }
 }
