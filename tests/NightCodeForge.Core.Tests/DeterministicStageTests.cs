@@ -53,9 +53,9 @@ public class DeterministicStageTests
             NextResult = new CommandResult(0, "warning CS0168: variable unused [proj.csproj]\nwarning CS0219: variable assigned [proj.csproj]\nBuild succeeded.", string.Empty, TimeSpan.FromSeconds(1))
         };
         var stage = new DeterministicBuildStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await stage.ExecuteAsync(context);
 
@@ -73,9 +73,9 @@ public class DeterministicStageTests
             NextResult = new CommandResult(1, "error CS1002: ; expected [proj.csproj]\nBuild FAILED.", "stderr", TimeSpan.FromSeconds(1))
         };
         var stage = new DeterministicBuildStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await stage.ExecuteAsync(context);
 
@@ -93,10 +93,10 @@ public class DeterministicStageTests
         var preload = new FakePreloadService();
         var stage = new DeterministicBuildStage(fakeEnv, preload);
 
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
         var profile = new AgentProfile { Id = "p1", ModelName = "qwen2.5-coder:32b" };
-        var context = new PipelineContext(issue, workspace) { CurrentProfile = profile };
+        var context = new PipelineContext(task, workspace) { CurrentProfile = profile };
 
         var result = await stage.ExecuteAsync(context);
 
@@ -113,9 +113,9 @@ public class DeterministicStageTests
             NextResult = new CommandResult(0, "Passed: 42, Failed: 0, Total: 42", string.Empty, TimeSpan.FromSeconds(2))
         };
         var stage = new DeterministicTestStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await stage.ExecuteAsync(context);
 
@@ -132,9 +132,9 @@ public class DeterministicStageTests
             NextResult = new CommandResult(1, "Failed TestNamespace.Tests.TestMethod1\nPassed: 10, Failed: 1, Total: 11", string.Empty, TimeSpan.FromSeconds(2))
         };
         var stage = new DeterministicTestStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await stage.ExecuteAsync(context);
 
@@ -154,9 +154,9 @@ public class DeterministicStageTests
             NextResult = new CommandResult(0, "All rules passed.", string.Empty, TimeSpan.FromMilliseconds(50))
         };
         var stage = new DeterministicSastStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var successRes = await stage.ExecuteAsync(context);
         Assert.True(successRes.IsSuccess);
@@ -171,9 +171,9 @@ public class DeterministicStageTests
     public async Task TriageStage_ExecutesDefaultOrHandler()
     {
         var stage = new TriageStage();
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var defaultRes = await stage.ExecuteAsync(context);
         Assert.True(defaultRes.IsSuccess);
@@ -191,9 +191,9 @@ public class DeterministicStageTests
             NextResult = new CommandResult(1, "error CS1002: ; expected", string.Empty, TimeSpan.FromMilliseconds(50))
         };
         var stage = new DeterministicBuildStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
         context.DataBag.Set("Stage.LoopBackId", "code-review");
 
         var result = await stage.ExecuteAsync(context);
@@ -210,9 +210,9 @@ public class DeterministicStageTests
             NextResult = new CommandResult(0, "=== 12 passed, 2 failed in 1.45s ===", string.Empty, TimeSpan.FromMilliseconds(50))
         };
         var stage = new DeterministicTestStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
         context.DataBag.Set("CodeStack.TestCommand", "pytest");
 
         var result = await stage.ExecuteAsync(context);
@@ -244,9 +244,9 @@ public class DeterministicStageTests
         };
 
         var gate = new DeterministicCoverageGate(executionEnv: fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         // DataBag has no tests yet
         Assert.False(context.DataBag.TryGet<int>("tests.current.total", out _));
@@ -266,9 +266,9 @@ public class DeterministicStageTests
             NextResult = new CommandResult(124, string.Empty, "Command timed out after 30 seconds", TimeSpan.FromSeconds(30), Truncated: true)
         };
         var stage = new DeterministicBuildStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo", BuildTimeoutSeconds = 30 };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await stage.ExecuteAsync(context);
 
@@ -289,9 +289,9 @@ public class DeterministicStageTests
             NextResult = new CommandResult(0, "Build succeeded.", string.Empty, TimeSpan.FromSeconds(1))
         };
         var stage = new DeterministicBuildStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo", BuildTimeoutSeconds = 45 };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await stage.ExecuteAsync(context);
 
@@ -308,9 +308,9 @@ public class DeterministicStageTests
             NextResult = new CommandResult(124, "Tests running...\nExecution timed out", string.Empty, TimeSpan.FromSeconds(60), Truncated: true)
         };
         var stage = new DeterministicTestStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo", TestTimeoutSeconds = 60 };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await stage.ExecuteAsync(context);
 
@@ -332,9 +332,9 @@ public class DeterministicStageTests
             NextResult = new CommandResult(0, "Passed: 5, Failed: 0, Total: 5", string.Empty, TimeSpan.FromSeconds(2))
         };
         var stage = new DeterministicTestStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo", TestTimeoutSeconds = 90 };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await stage.ExecuteAsync(context);
 
@@ -351,14 +351,14 @@ public class DeterministicStageTests
             NextResult = new CommandResult(0, "Build succeeded.", string.Empty, TimeSpan.FromSeconds(1))
         };
         var stage = new DeterministicBuildStage(fakeEnv);
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace
         {
             Id = 1,
             RepositoryPath = @"C:\host\repo",
             Ext4MirrorPath = "/home/user/.nightcodeforge/wks/1"
         };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await stage.ExecuteAsync(context);
 
@@ -376,13 +376,13 @@ public class DeterministicStageTests
         var preloadService = new FakePreloadService();
         var stage = new DeterministicBuildStage(fakeEnv, preloadService: preloadService);
 
-        var issue = new Issue { Id = 1, WorkspaceId = 1 };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
         var profile = new AgentProfile { Id = "implementation", Name = "qwen-coder", ModelName = "qwen2.5-coder:14b" };
         workspace.AgentProfiles.Add(profile);
 
         var pipeline = Default3AgentPipeline.Create(executionEnv: fakeEnv, preloadService: preloadService);
-        var context = new PipelineContext(issue, workspace)
+        var context = new PipelineContext(task, workspace)
         {
             Pipeline = pipeline
         };

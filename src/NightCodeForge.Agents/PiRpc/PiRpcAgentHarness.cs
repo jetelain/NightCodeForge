@@ -61,7 +61,7 @@ public class PiRpcAgentHarness : IAgentHarness
     {
         var sw = Stopwatch.StartNew();
         var sessionId = Guid.NewGuid().ToString("N");
-        await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
+        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
 
         if (_options.CustomProcessFactory != null)
         {
@@ -74,7 +74,7 @@ public class PiRpcAgentHarness : IAgentHarness
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to launch Pi RPC daemon via custom factory");
-                await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
                 return AgentRunResult.Failed($"Failed to launch Pi daemon: {ex.Message}", new AgentRunMetrics(sw.ElapsedMilliseconds));
             }
 
@@ -133,7 +133,7 @@ public class PiRpcAgentHarness : IAgentHarness
         {
             if (_pathResolver != null && context.Workspace != null)
             {
-                workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.Issue.Id);
+                workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.ForgeTask.Id);
             }
             else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
             {
@@ -172,7 +172,7 @@ public class PiRpcAgentHarness : IAgentHarness
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to launch Pi RPC daemon at {ExecutablePath}", _options.ExecutablePath);
-            await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
             return AgentRunResult.Failed($"Failed to launch Pi daemon: {ex.Message}", new AgentRunMetrics(sw.ElapsedMilliseconds));
         }
 
@@ -205,7 +205,7 @@ public class PiRpcAgentHarness : IAgentHarness
         {
             if (_pathResolver != null && context.Workspace != null)
             {
-                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.Issue.Id);
+                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.ForgeTask.Id);
             }
             else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
             {
@@ -239,8 +239,8 @@ public class PiRpcAgentHarness : IAgentHarness
             var basePromptText = !string.IsNullOrEmpty(context.BootstrapPrompt)
                 ? context.BootstrapPrompt
                 : (!string.IsNullOrWhiteSpace(context.StageDirective)
-                    ? $"[Stage Directive]: {context.StageDirective}\n\n{context.Issue.Title}\n{context.Issue.Description}"
-                    : context.Issue.Description);
+                    ? $"[Stage Directive]: {context.StageDirective}\n\n{context.ForgeTask.Title}\n{context.ForgeTask.Description}"
+                    : context.ForgeTask.Description);
 
             if (!string.IsNullOrWhiteSpace(guidelines))
             {
@@ -295,7 +295,7 @@ public class PiRpcAgentHarness : IAgentHarness
                         }
 
                         sw.Stop();
-                        await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Interrupted, prompt, cancellationToken);
+                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, prompt, cancellationToken);
 
                         await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, lastAgentSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
 
@@ -323,7 +323,7 @@ public class PiRpcAgentHarness : IAgentHarness
                             var thinkingText = ame?["delta"]?.ToString();
                             if (!string.IsNullOrEmpty(thinkingText))
                             {
-                                await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.ThinkingDelta, thinkingText, cancellationToken);
+                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ThinkingDelta, thinkingText, cancellationToken);
                             }
                         }
                         else if (ameType == "text_delta")
@@ -332,18 +332,18 @@ public class PiRpcAgentHarness : IAgentHarness
                             if (!string.IsNullOrEmpty(text))
                             {
                                 lastAgentSummary = (lastAgentSummary ?? "") + text;
-                                await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.MessageDelta, text, cancellationToken);
+                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.MessageDelta, text, cancellationToken);
                             }
                         }
                         else if (ameType == "toolcall_start")
                         {
                             var toolName = ame?["toolName"]?.ToString() ?? ame?["id"]?.ToString() ?? "tool";
-                            await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.ToolStarted, toolName, cancellationToken);
+                            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, toolName, cancellationToken);
                         }
                         else if (ameType == "toolcall_end")
                         {
                             var callId = ame?["id"]?.ToString() ?? "tool";
-                            await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.ToolCompleted, callId, cancellationToken);
+                            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, callId, cancellationToken);
                         }
                         else
                         {
@@ -352,7 +352,7 @@ public class PiRpcAgentHarness : IAgentHarness
                             if (!string.IsNullOrEmpty(delta))
                             {
                                 lastAgentSummary = (lastAgentSummary ?? "") + delta;
-                                await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.MessageDelta, delta, cancellationToken);
+                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.MessageDelta, delta, cancellationToken);
                             }
                         }
                     }
@@ -360,13 +360,13 @@ public class PiRpcAgentHarness : IAgentHarness
                     {
                         var tool = node?["toolName"]?.ToString() ?? node?["tool"]?.ToString() ?? "tool";
                         var args = node?["args"]?.ToString() ?? node?["arguments"]?.ToString() ?? "";
-                        await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.ToolStarted, $"{tool}: {args}", cancellationToken);
+                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{tool}: {args}", cancellationToken);
                     }
                     else if (type == "tool_execution_end")
                     {
                         var tool = node?["toolName"]?.ToString() ?? node?["tool"]?.ToString() ?? "tool";
                         var result = node?["result"]?.ToString() ?? node?["output"]?.ToString() ?? "";
-                        await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.ToolCompleted, $"{tool}: {result}", cancellationToken);
+                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, $"{tool}: {result}", cancellationToken);
                     }
                     else if (type == "usage")
                     {
@@ -404,7 +404,7 @@ public class PiRpcAgentHarness : IAgentHarness
                 }
             }
 
-            await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageCompleted, finalSummary, cancellationToken);
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, finalSummary, cancellationToken);
 
             await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, finalSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
 
@@ -428,17 +428,17 @@ public class PiRpcAgentHarness : IAgentHarness
         catch (Exception ex)
         {
             sw.Stop();
-            await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
             await SaveTranscriptAsync(context, localWorkspaceRoot, "", ex.Message, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken);
             throw;
         }
     }
 
-    private async Task BroadcastAsync(string sessionId, int issueId, string stageId, AgentActivityKind kind, string content, CancellationToken ct)
+    private async Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken ct)
     {
         if (_activityStreamer != null)
         {
-            var evt = new AgentActivityEvent(sessionId, issueId, stageId, kind, content, DateTime.UtcNow);
+            var evt = new AgentActivityEvent(sessionId, taskId, stageId, kind, content, DateTime.UtcNow);
             await _activityStreamer.BroadcastAsync(evt, ct);
         }
     }
@@ -470,7 +470,7 @@ public class PiRpcAgentHarness : IAgentHarness
             }
 
             var meta = new TranscriptMetadata(
-                context.Issue.Id,
+                context.ForgeTask.Id,
                 context.StageId,
                 context.Profile.Name,
                 context.Profile.ModelName,

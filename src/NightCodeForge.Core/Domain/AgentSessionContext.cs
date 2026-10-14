@@ -7,7 +7,7 @@ namespace NightCodeForge.Core.Domain;
 /// </summary>
 public class AgentSessionContext
 {
-    public required Issue Issue { get; init; }
+    public required ForgeTask ForgeTask { get; init; }
     public Workspace? Workspace { get; init; }
     public required AgentProfile Profile { get; init; }
     public PipelineContext? PipelineContext { get; init; }

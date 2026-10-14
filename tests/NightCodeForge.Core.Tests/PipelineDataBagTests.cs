@@ -54,25 +54,25 @@ public class PipelineDataBagTests
     }
 
     [Fact]
-    public void ContextSync_PersistsToIssueAndSurvivesReload()
+    public void ContextSync_PersistsToTaskAndSurvivesReload()
     {
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 1,
             WorkspaceId = 10,
-            Title = "Test Issue"
+            Title = "Test ForgeTask"
         };
         var workspace = new Workspace { Id = 10, Name = "MainWS" };
 
-        var context1 = new PipelineContext(issue, workspace);
+        var context1 = new PipelineContext(task, workspace);
         context1.DataBag.Set("warnings.baseline", 5);
-        context1.SyncDataBagToIssue();
+        context1.SyncDataBagToTask();
 
-        Assert.NotNull(issue.PipelineDataJson);
-        Assert.Contains("warnings.baseline", issue.PipelineDataJson);
+        Assert.NotNull(task.PipelineDataJson);
+        Assert.Contains("warnings.baseline", task.PipelineDataJson);
 
-        // Simulate reload from issue entity
-        var context2 = new PipelineContext(issue, workspace);
+        // Simulate reload from task entity
+        var context2 = new PipelineContext(task, workspace);
         Assert.True(context2.DataBag.TryGet<int>("warnings.baseline", out var baseline));
         Assert.Equal(5, baseline);
     }

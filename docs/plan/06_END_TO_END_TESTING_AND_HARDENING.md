@@ -44,24 +44,24 @@ flowchart TD
 
 ### Step 6.1: Full End-to-End Workflow Simulation Test
 * **Objective:** Validate the complete 7-step pipeline, 3-channel intake, maintainer promotion, status-preserving interruption, dual merge modes, and non-blocking dev-queue lifecycle:
-  1. **Ideation Intake:** Automated test submits a codebase query to `IIdeationService`; discovery agent analyzes code and proposes Issue #101 ("Implement Discount Service") and dependent Issue #102 ("Expose Discount API"). Both issues are created in `AppDbContext` with initial `Status = IssueOverallStatus.Suggested`.
+  1. **Ideation Intake:** Automated test submits a codebase query to `IIdeationService`; discovery agent analyzes code and proposes ForgeTask #101 ("Implement Discount Service") and dependent ForgeTask #102 ("Expose Discount API"). Both tasks are created in `AppDbContext` with initial `Status = TaskOverallStatus.Suggested`.
   2. **Maintainer Promotion & DAG Wiring:**
-     - Maintainer promotes Issue #101: sets `Priority = 1`, `MergeMode = MergeMode.ManualReviewRequired` $\rightarrow$ status transitions to `Open`.
-     - Maintainer promotes Issue #102: sets `Priority = 2`, `MergeMode = MergeMode.Automatic`, dependency on #101 $\rightarrow$ status transitions to `Open`.
-     - Dependency engine evaluates readiness: Issue #101 has 0 unclosed dependencies $\rightarrow$ ready for execution and enqueued to `llm-inference`. Issue #102 has prerequisite #101 which is not `Closed` $\rightarrow$ remains waiting in backlog.
-  3. **Stage 1 (Issue Review):** Issue #101 is dequeued into `llm-inference`. Agent analyzes code and calls `ask("Should discounts apply before or after VAT?")`.
-  4. **Clean Interruption Checkpoint:** Orchestrator intercepts interruption, creates Git WIP commit on `feature/issue-101`, saves serialized memory to `StageCheckpoint`, records `Question` (with `AgentProfileId`), sets `issue.IsWaitingForHuman = true`, `issue.InterruptedStageId = "stage-1"`, `issue.InterruptedAgentProfileId = profile.Id` without mutating `issue.Status` (remains `Open`). Hangfire completes job as `Succeeded`. **GPU is verified freed.**
-  5. **Human Answer & Resumption:** Test submits answer *"Apply discounts before VAT"*. Orchestrator sets `question.Status = Answered`, clears `issue.IsWaitingForHuman = false` (preserving `issue.Status = Open`), and enqueues Issue #101 into **`llm-urgent`**.
-  6. **Resumption & Stage 1 Handover:** Single worker picks up Issue #101 immediately; memory is rehydrated via `MessageInjectingChatClient` with original agent profile (`InterruptedAgentProfileId`). Agent finalizes Technical Plan and completes Stage 1 $\rightarrow$ orchestrator sets `issue.Status = IssueOverallStatus.Reviewed`.
-  7. **Stage 2 (Deterministic Pre-Implementation):** Executes baseline `dotnet build`, baseline test suite, and captures baseline code coverage and compiler warning counts into `PipelineDataBag` (0 GPU tokens). Issue remains `Reviewed`.
-  8. **Stage 3 (Implementation):** Coding agent implements Discount Service and writes unit tests. Verifies builds and unit tests in the sandbox. Stage 3 completes $\rightarrow$ orchestrator sets `issue.Status = IssueOverallStatus.Implemented`.
-  9. **Stage 4 (Deterministic Post-Implementation):** `DeterministicCoverageGate` executes test runner with coverage collection. Verifies line coverage did not drop ($\Delta \ge 0\%$) and total test count did not decrease. `DeterministicWarningRatchetStage` verifies newly introduced warnings ($\Delta \le 0$). Issue remains `Implemented`.
+     - Maintainer promotes ForgeTask #101: sets `Priority = 1`, `MergeMode = MergeMode.ManualReviewRequired` $\rightarrow$ status transitions to `Open`.
+     - Maintainer promotes ForgeTask #102: sets `Priority = 2`, `MergeMode = MergeMode.Automatic`, dependency on #101 $\rightarrow$ status transitions to `Open`.
+     - Dependency engine evaluates readiness: ForgeTask #101 has 0 unclosed dependencies $\rightarrow$ ready for execution and enqueued to `llm-inference`. ForgeTask #102 has prerequisite #101 which is not `Closed` $\rightarrow$ remains waiting in backlog.
+  3. **Stage 1 (ForgeTask Review):** ForgeTask #101 is dequeued into `llm-inference`. Agent analyzes code and calls `ask("Should discounts apply before or after VAT?")`.
+  4. **Clean Interruption Checkpoint:** Orchestrator intercepts interruption, creates Git WIP commit on `feature/task-101`, saves serialized memory to `StageCheckpoint`, records `Question` (with `AgentProfileId`), sets `task.IsWaitingForHuman = true`, `task.InterruptedStageId = "stage-1"`, `task.InterruptedAgentProfileId = profile.Id` without mutating `task.Status` (remains `Open`). Hangfire completes job as `Succeeded`. **GPU is verified freed.**
+  5. **Human Answer & Resumption:** Test submits answer *"Apply discounts before VAT"*. Orchestrator sets `question.Status = Answered`, clears `task.IsWaitingForHuman = false` (preserving `task.Status = Open`), and enqueues ForgeTask #101 into **`llm-urgent`**.
+  6. **Resumption & Stage 1 Handover:** Single worker picks up ForgeTask #101 immediately; memory is rehydrated via `MessageInjectingChatClient` with original agent profile (`InterruptedAgentProfileId`). Agent finalizes Technical Plan and completes Stage 1 $\rightarrow$ orchestrator sets `task.Status = TaskOverallStatus.Reviewed`.
+  7. **Stage 2 (Deterministic Pre-Implementation):** Executes baseline `dotnet build`, baseline test suite, and captures baseline code coverage and compiler warning counts into `PipelineDataBag` (0 GPU tokens). ForgeTask remains `Reviewed`.
+  8. **Stage 3 (Implementation):** Coding agent implements Discount Service and writes unit tests. Verifies builds and unit tests in the sandbox. Stage 3 completes $\rightarrow$ orchestrator sets `task.Status = TaskOverallStatus.Implemented`.
+  9. **Stage 4 (Deterministic Post-Implementation):** `DeterministicCoverageGate` executes test runner with coverage collection. Verifies line coverage did not drop ($\Delta \ge 0\%$) and total test count did not decrease. `DeterministicWarningRatchetStage` verifies newly introduced warnings ($\Delta \le 0$). ForgeTask remains `Implemented`.
   10. **Stage 5 (Code Review & Fixes):** Agent reviews noise-filtered `git diff -U2`, checks coding conventions, and applies minor formatting and documentation patches.
-  11. **Stage 6 (Deterministic Post-Review Verification):** Re-compiles and re-executes tests to ensure review patches introduced no regressions. Verification passes $\rightarrow$ orchestrator transitions `issue.Status = IssueOverallStatus.Ready`.
+  11. **Stage 6 (Deterministic Post-Review Verification):** Re-compiles and re-executes tests to ensure review patches introduced no regressions. Verification passes $\rightarrow$ orchestrator transitions `task.Status = TaskOverallStatus.Ready`.
   12. **Review Room, Merge & Cascade:**
-      - Because Issue #101 was configured with `MergeMode.ManualReviewRequired`, it pauses at `Ready`. Test simulates maintainer inspection in Review Room and clicks "Approve & Merge".
-      - Orchestrator invokes `CompleteIssueAndCascadeAsync`: squashes WIP commits into a clean conventional commit on `baseBranch` and sets Issue #101 status to `Closed`.
-      - Cascade unblocking triggers: dependency engine evaluates Issue #102 (which is in `Open` status). All dependencies (`#101`) are now `Closed` $\rightarrow$ Issue #102 is immediately enqueued to `llm-inference`!
+      - Because ForgeTask #101 was configured with `MergeMode.ManualReviewRequired`, it pauses at `Ready`. Test simulates maintainer inspection in Review Room and clicks "Approve & Merge".
+      - Orchestrator invokes `CompleteTaskAndCascadeAsync`: squashes WIP commits into a clean conventional commit on `baseBranch` and sets ForgeTask #101 status to `Closed`.
+      - Cascade unblocking triggers: dependency engine evaluates ForgeTask #102 (which is in `Open` status). All dependencies (`#101`) are now `Closed` $\rightarrow$ ForgeTask #102 is immediately enqueued to `llm-inference`!
 
 ### Step 6.2: Chaos & Resilience Testing
 1. **Simulated Sudden Host Crash / Windows Update Reboot:**
@@ -82,7 +82,7 @@ flowchart TD
    * Intentionally dirty tracked files on the host repository before an ext4 checkpoint sync.
    * Verify `GitMirrorSyncService`:
      - Catches `updateInstead` push rejection.
-     - Safely pushes to `refs/heads/feature/issue-{id}-ncf`.
+     - Safely pushes to `refs/heads/feature/task-{id}-ncf`.
      - Broadcasts SignalR alert to developer without crashing the pipeline.
 4. **Runaway LLM Loop Interception:**
    * Feed a mock local model that emits repetitive 16-character n-gram cycles or executes `read` on the same file 3 times.
@@ -98,8 +98,8 @@ flowchart TD
      - Verifies `IHostSdkDiscoveryService` discovered SDK mount paths bind correctly without permission errors.
 
 ### Step 6.3: Multi-Workspace VRAM Isolation & Concurrency Verification
-* **Setup:** Create 3 independent workspaces (`Workspace A`, `Workspace B`, `Workspace C`), each with 2 pending issues.
-* **Execution:** Enqueue all 6 issues simultaneously.
+* **Setup:** Create 3 independent workspaces (`Workspace A`, `Workspace B`, `Workspace C`), each with 2 pending tasks.
+* **Execution:** Enqueue all 6 tasks simultaneously.
 * **Verification:** Monitor Hangfire active worker and GPU VRAM telemetry:
   - Guarantees exactly **1 LLM inference task** runs at any given millisecond across all 3 workspaces (`WorkerCount = 1`).
   - Background utility jobs (`WorkerCount = 4`) and workspace concurrency locks (`IWorkspaceLockProvider`) operate safely without index lock race conditions across separate workspaces.
@@ -128,7 +128,7 @@ flowchart TD
 - [ ] Complete 7-step end-to-end workflow simulation test passes 100% (Ideation $\rightarrow$ Maintainer Promotion $\rightarrow$ Review $\rightarrow$ Checkpoint $\rightarrow$ Resumption $\rightarrow$ Pre-Impl $\rightarrow$ Implementation $\rightarrow$ Post-Impl Gates $\rightarrow$ Code Review $\rightarrow$ Post-Review Verification $\rightarrow$ Merge & Cascade).
 - [ ] Stale lock cleanup and uncommitted working tree rescue commit (`WIP-RECOVERY`) verified under crash simulation.
 - [ ] Sentinel REPL timeout and runaway process termination verified.
-- [ ] Dirty host working tree fallback (`refs/heads/feature/issue-{id}-ncf`) verified.
+- [ ] Dirty host working tree fallback (`refs/heads/feature/task-{id}-ncf`) verified.
 - [ ] Windows WSL2 mandatory check and Crucible UNC / container `/workspace` path remapping verified.
 - [ ] Multi-workspace single-worker VRAM protection (`WorkerCount = 1`) and workspace concurrency lock (`IWorkspaceLockProvider`) verified under high load.
 - [ ] A/B benchmark confirms $\ge 60\%$ token savings and $\ge 90\%$ KV cache hit rate.

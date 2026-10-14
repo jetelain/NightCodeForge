@@ -78,7 +78,7 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
-                    b.Property<int>("IssueId")
+                    b.Property<int>("TaskId")
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("Level")
@@ -105,12 +105,12 @@ namespace NightCodeForge.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("IssueId");
+                    b.HasIndex("TaskId");
 
                     b.ToTable("ExecutionLogs");
                 });
 
-            modelBuilder.Entity("NightCodeForge.Core.Domain.Issue", b =>
+            modelBuilder.Entity("NightCodeForge.Core.Domain.ForgeTask", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -166,29 +166,29 @@ namespace NightCodeForge.Infrastructure.Migrations
 
                     b.HasIndex("WorkspaceId");
 
-                    b.ToTable("Issues");
+                    b.ToTable("Tasks");
                 });
 
-            modelBuilder.Entity("NightCodeForge.Core.Domain.IssueDependency", b =>
+            modelBuilder.Entity("NightCodeForge.Core.Domain.TaskDependency", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
-                    b.Property<int>("DependsOnIssueId")
+                    b.Property<int>("DependsOnTaskId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<int>("IssueId")
+                    b.Property<int>("TaskId")
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("DependsOnIssueId");
+                    b.HasIndex("DependsOnTaskId");
 
-                    b.HasIndex("IssueId", "DependsOnIssueId")
+                    b.HasIndex("TaskId", "DependsOnTaskId")
                         .IsUnique();
 
-                    b.ToTable("IssueDependencies");
+                    b.ToTable("TaskDependencies");
                 });
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.Question", b =>
@@ -206,7 +206,7 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<DateTime>("AskedAt")
                         .HasColumnType("TEXT");
 
-                    b.Property<int>("IssueId")
+                    b.Property<int>("TaskId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("OptionsJson")
@@ -233,7 +233,7 @@ namespace NightCodeForge.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("IssueId");
+                    b.HasIndex("TaskId");
 
                     b.ToTable("Questions");
                 });
@@ -252,7 +252,7 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
-                    b.Property<int>("IssueId")
+                    b.Property<int>("TaskId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("SerializedMemory")
@@ -266,7 +266,7 @@ namespace NightCodeForge.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("IssueId");
+                    b.HasIndex("TaskId");
 
                     b.ToTable("StageCheckpoints");
                 });
@@ -296,7 +296,7 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
-                    b.Property<int>("IssueId")
+                    b.Property<int>("TaskId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("ModelName")
@@ -334,7 +334,7 @@ namespace NightCodeForge.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("IssueId");
+                    b.HasIndex("TaskId");
 
                     b.ToTable("StageExecutionRecords");
                 });
@@ -391,19 +391,19 @@ namespace NightCodeForge.Infrastructure.Migrations
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.ExecutionLog", b =>
                 {
-                    b.HasOne("NightCodeForge.Core.Domain.Issue", "Issue")
+                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "ForgeTask")
                         .WithMany("ExecutionLogs")
-                        .HasForeignKey("IssueId")
+                        .HasForeignKey("TaskId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("Issue");
+                    b.Navigation("ForgeTask");
                 });
 
-            modelBuilder.Entity("NightCodeForge.Core.Domain.Issue", b =>
+            modelBuilder.Entity("NightCodeForge.Core.Domain.ForgeTask", b =>
                 {
                     b.HasOne("NightCodeForge.Core.Domain.Workspace", "Workspace")
-                        .WithMany("Issues")
+                        .WithMany("Tasks")
                         .HasForeignKey("WorkspaceId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -411,65 +411,65 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Navigation("Workspace");
                 });
 
-            modelBuilder.Entity("NightCodeForge.Core.Domain.IssueDependency", b =>
+            modelBuilder.Entity("NightCodeForge.Core.Domain.TaskDependency", b =>
                 {
-                    b.HasOne("NightCodeForge.Core.Domain.Issue", "DependsOnIssue")
-                        .WithMany("DependentIssues")
-                        .HasForeignKey("DependsOnIssueId")
+                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "DependsOnTask")
+                        .WithMany("DependentTasks")
+                        .HasForeignKey("DependsOnTaskId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("NightCodeForge.Core.Domain.Issue", "Issue")
+                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "ForgeTask")
                         .WithMany("Dependencies")
-                        .HasForeignKey("IssueId")
+                        .HasForeignKey("TaskId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("DependsOnIssue");
+                    b.Navigation("DependsOnTask");
 
-                    b.Navigation("Issue");
+                    b.Navigation("ForgeTask");
                 });
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.Question", b =>
                 {
-                    b.HasOne("NightCodeForge.Core.Domain.Issue", "Issue")
+                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "ForgeTask")
                         .WithMany("Questions")
-                        .HasForeignKey("IssueId")
+                        .HasForeignKey("TaskId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("Issue");
+                    b.Navigation("ForgeTask");
                 });
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.StageCheckpoint", b =>
                 {
-                    b.HasOne("NightCodeForge.Core.Domain.Issue", "Issue")
+                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "ForgeTask")
                         .WithMany("Checkpoints")
-                        .HasForeignKey("IssueId")
+                        .HasForeignKey("TaskId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("Issue");
+                    b.Navigation("ForgeTask");
                 });
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.StageExecutionRecord", b =>
                 {
-                    b.HasOne("NightCodeForge.Core.Domain.Issue", "Issue")
+                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "ForgeTask")
                         .WithMany("ExecutionRecords")
-                        .HasForeignKey("IssueId")
+                        .HasForeignKey("TaskId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("Issue");
+                    b.Navigation("ForgeTask");
                 });
 
-            modelBuilder.Entity("NightCodeForge.Core.Domain.Issue", b =>
+            modelBuilder.Entity("NightCodeForge.Core.Domain.ForgeTask", b =>
                 {
                     b.Navigation("Checkpoints");
 
                     b.Navigation("Dependencies");
 
-                    b.Navigation("DependentIssues");
+                    b.Navigation("DependentTasks");
 
                     b.Navigation("ExecutionLogs");
 
@@ -482,7 +482,7 @@ namespace NightCodeForge.Infrastructure.Migrations
                 {
                     b.Navigation("AgentProfiles");
 
-                    b.Navigation("Issues");
+                    b.Navigation("Tasks");
                 });
 #pragma warning restore 612, 618
         }

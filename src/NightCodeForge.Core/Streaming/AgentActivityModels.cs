@@ -21,7 +21,7 @@ public enum AgentActivityKind
 /// </summary>
 public record AgentActivityEvent(
     string SessionId,
-    int IssueId,
+    int TaskId,
     string StageId,
     AgentActivityKind Kind,
     string Content,
@@ -34,5 +34,5 @@ public record AgentActivityEvent(
 public interface IAgentActivityStreamer
 {
     Task BroadcastAsync(AgentActivityEvent activityEvent, CancellationToken cancellationToken = default);
-    IAsyncEnumerable<AgentActivityEvent> SubscribeAsync(int? issueId = null, CancellationToken cancellationToken = default);
+    IAsyncEnumerable<AgentActivityEvent> SubscribeAsync(int? taskId = null, CancellationToken cancellationToken = default);
 }

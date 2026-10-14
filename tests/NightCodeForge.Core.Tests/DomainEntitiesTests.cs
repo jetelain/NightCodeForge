@@ -28,7 +28,7 @@ public class DomainEntitiesTests
         Assert.Equal("nightcodeforge/agent:latest", workspace.ContainerImage);
         Assert.Equal("/mnt/wsl/ext4", workspace.Ext4MirrorPath);
         Assert.Equal(now, workspace.CreatedAt);
-        Assert.NotNull(workspace.Issues);
+        Assert.NotNull(workspace.Tasks);
         Assert.NotNull(workspace.AgentProfiles);
 
         var defaultFlags = new LocalOptimizationFlags();
@@ -78,63 +78,63 @@ public class DomainEntitiesTests
         Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, profile.SecurityTier);
         Assert.Equal(workspace, profile.Workspace);
 
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 10,
             WorkspaceId = 1,
             Title = "Title",
             Description = "Desc",
-            Status = IssueOverallStatus.Reviewed,
+            Status = TaskOverallStatus.Reviewed,
             CurrentStageId = "code-review-fix",
             Priority = 2,
             BaseBranch = "main",
-            FeatureBranch = "feat/issue-10",
+            FeatureBranch = "feat/task-10",
             PipelineDataJson = "{}",
             CreatedAt = now,
             UpdatedAt = now,
             LastHangfireJobId = "job-99",
             Workspace = workspace
         };
-        Assert.Equal(10, issue.Id);
-        Assert.Equal(1, issue.WorkspaceId);
-        Assert.Equal("Title", issue.Title);
-        Assert.Equal("Desc", issue.Description);
-        Assert.Equal(IssueOverallStatus.Reviewed, issue.Status);
-        Assert.Equal("code-review-fix", issue.CurrentStageId);
-        Assert.Equal(2, issue.Priority);
-        Assert.Equal("main", issue.BaseBranch);
-        Assert.Equal("feat/issue-10", issue.FeatureBranch);
-        Assert.Equal("{}", issue.PipelineDataJson);
-        Assert.Equal(now, issue.CreatedAt);
-        Assert.Equal(now, issue.UpdatedAt);
-        Assert.Equal("job-99", issue.LastHangfireJobId);
-        Assert.Equal(workspace, issue.Workspace);
-        Assert.NotNull(issue.Dependencies);
-        Assert.NotNull(issue.DependentIssues);
-        Assert.NotNull(issue.Questions);
-        Assert.NotNull(issue.Checkpoints);
-        Assert.NotNull(issue.ExecutionRecords);
-        Assert.NotNull(issue.ExecutionLogs);
+        Assert.Equal(10, task.Id);
+        Assert.Equal(1, task.WorkspaceId);
+        Assert.Equal("Title", task.Title);
+        Assert.Equal("Desc", task.Description);
+        Assert.Equal(TaskOverallStatus.Reviewed, task.Status);
+        Assert.Equal("code-review-fix", task.CurrentStageId);
+        Assert.Equal(2, task.Priority);
+        Assert.Equal("main", task.BaseBranch);
+        Assert.Equal("feat/task-10", task.FeatureBranch);
+        Assert.Equal("{}", task.PipelineDataJson);
+        Assert.Equal(now, task.CreatedAt);
+        Assert.Equal(now, task.UpdatedAt);
+        Assert.Equal("job-99", task.LastHangfireJobId);
+        Assert.Equal(workspace, task.Workspace);
+        Assert.NotNull(task.Dependencies);
+        Assert.NotNull(task.DependentTasks);
+        Assert.NotNull(task.Questions);
+        Assert.NotNull(task.Checkpoints);
+        Assert.NotNull(task.ExecutionRecords);
+        Assert.NotNull(task.ExecutionLogs);
 
-        var dep = new IssueDependency
+        var dep = new TaskDependency
         {
             Id = 1,
-            IssueId = 10,
-            DependsOnIssueId = 5,
-            Issue = issue,
-            DependsOnIssue = new Issue { Id = 5 }
+            TaskId = 10,
+            DependsOnTaskId = 5,
+            ForgeTask = task,
+            DependsOnTask = new ForgeTask { Id = 5 }
         };
         Assert.Equal(1, dep.Id);
-        Assert.Equal(10, dep.IssueId);
-        Assert.Equal(5, dep.DependsOnIssueId);
-        Assert.Equal(issue, dep.Issue);
-        Assert.NotNull(dep.DependsOnIssue);
+        Assert.Equal(10, dep.TaskId);
+        Assert.Equal(5, dep.DependsOnTaskId);
+        Assert.Equal(task, dep.ForgeTask);
+        Assert.NotNull(dep.DependsOnTask);
 
         var question = new Question
         {
             Id = 2,
-            IssueId = 10,
-            StageId = "issue-review",
+            TaskId = 10,
+            StageId = "task-review",
             Prompt = "Prompt",
             Rationale = "Rationale",
             QuestionType = QuestionType.MultipleChoice,
@@ -143,11 +143,11 @@ public class DomainEntitiesTests
             AskedAt = now,
             AnsweredAt = now.AddMinutes(5),
             Status = QuestionStatus.Answered,
-            Issue = issue
+            ForgeTask = task
         };
         Assert.Equal(2, question.Id);
-        Assert.Equal(10, question.IssueId);
-        Assert.Equal("issue-review", question.StageId);
+        Assert.Equal(10, question.TaskId);
+        Assert.Equal("task-review", question.StageId);
         Assert.Equal("Prompt", question.Prompt);
         Assert.Equal("Rationale", question.Rationale);
         Assert.Equal(QuestionType.MultipleChoice, question.QuestionType);
@@ -156,30 +156,30 @@ public class DomainEntitiesTests
         Assert.Equal(now, question.AskedAt);
         Assert.Equal(now.AddMinutes(5), question.AnsweredAt);
         Assert.Equal(QuestionStatus.Answered, question.Status);
-        Assert.Equal(issue, question.Issue);
+        Assert.Equal(task, question.ForgeTask);
 
         var cp = new StageCheckpoint
         {
             Id = 3,
-            IssueId = 10,
+            TaskId = 10,
             StageId = "s1",
             SerializedMemory = "mem",
             GitCommitHash = "abcdef",
             CreatedAt = now,
-            Issue = issue
+            ForgeTask = task
         };
         Assert.Equal(3, cp.Id);
-        Assert.Equal(10, cp.IssueId);
+        Assert.Equal(10, cp.TaskId);
         Assert.Equal("s1", cp.StageId);
         Assert.Equal("mem", cp.SerializedMemory);
         Assert.Equal("abcdef", cp.GitCommitHash);
         Assert.Equal(now, cp.CreatedAt);
-        Assert.Equal(issue, cp.Issue);
+        Assert.Equal(task, cp.ForgeTask);
 
         var record = new StageExecutionRecord
         {
             Id = 4,
-            IssueId = 10,
+            TaskId = 10,
             StageId = "implementation",
             StageKind = "Agentic",
             AgentProfileId = "prof-1",
@@ -194,10 +194,10 @@ public class DomainEntitiesTests
             TargetRouting = "coverage-gate",
             Status = StageExecutionStatus.Completed,
             OutputDataJson = "{}",
-            Issue = issue
+            ForgeTask = task
         };
         Assert.Equal(4, record.Id);
-        Assert.Equal(10, record.IssueId);
+        Assert.Equal(10, record.TaskId);
         Assert.Equal("implementation", record.StageId);
         Assert.Equal("Agentic", record.StageKind);
         Assert.Equal("prof-1", record.AgentProfileId);
@@ -212,28 +212,28 @@ public class DomainEntitiesTests
         Assert.Equal("coverage-gate", record.TargetRouting);
         Assert.Equal(StageExecutionStatus.Completed, record.Status);
         Assert.Equal("{}", record.OutputDataJson);
-        Assert.Equal(issue, record.Issue);
+        Assert.Equal(task, record.ForgeTask);
 
         var log = new ExecutionLog
         {
             Id = 5,
-            IssueId = 10,
+            TaskId = 10,
             StageId = "s1",
             Timestamp = now,
             Level = Microsoft.Extensions.Logging.LogLevel.Warning,
             Source = "Compiler",
             Message = "Warning log",
             PayloadJson = "{}",
-            Issue = issue
+            ForgeTask = task
         };
         Assert.Equal(5, log.Id);
-        Assert.Equal(10, log.IssueId);
+        Assert.Equal(10, log.TaskId);
         Assert.Equal("s1", log.StageId);
         Assert.Equal(now, log.Timestamp);
         Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, log.Level);
         Assert.Equal("Compiler", log.Source);
         Assert.Equal("Warning log", log.Message);
         Assert.Equal("{}", log.PayloadJson);
-        Assert.Equal(issue, log.Issue);
+        Assert.Equal(task, log.ForgeTask);
     }
 }

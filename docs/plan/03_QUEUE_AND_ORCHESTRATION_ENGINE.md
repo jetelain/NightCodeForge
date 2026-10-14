@@ -19,8 +19,8 @@ flowchart TD
         Hangfire["Hangfire with SQLite Storage\n- LLM Inference: WorkerCount = 1 (llm-urgent, llm-inference)\n- Utility: WorkerCount = 4 (default)\n- AutomaticRetry = 0"]
     end
 
-    subgraph Step2 ["2. Central Issue Orchestrator"]
-        Orchestrator["IssueOrchestrator\n- DAG Readiness Check\n- Workspace Lock Acquisition\n- Stage Execution & Harness Invocation\n- Step Metrics Recording"]
+    subgraph Step2 ["2. Central ForgeTask Orchestrator"]
+        Orchestrator["TaskOrchestrator\n- DAG Readiness Check\n- Workspace Lock Acquisition\n- Stage Execution & Harness Invocation\n- Step Metrics Recording"]
         Lifecycle{"Stage Execution Result?"}
         Wait["WaitingForHuman:\n- Save Question & Checkpoint\n- Git WIP Commit\n- Clean Job Success (Free GPU!)"]
         Complete["StageCompleted:\n- Advance Pipeline / Transition to Review"]
@@ -30,7 +30,7 @@ flowchart TD
     subgraph Step3 ["3. Resumption & Review Lifecycle"]
         Answer["SubmitHumanAnswerAsync:\n- Save Answer -> Enqueue to llm-urgent"]
         RequestChanges["RequestChangesAsync:\n- Reviewer Notes -> Re-route to Stage 2 at llm-urgent"]
-        Approve["CompleteIssueAndCascadeAsync:\n- Squash & Merge -> Unlock DAG Dependents"]
+        Approve["CompleteTaskAndCascadeAsync:\n- Squash & Merge -> Unlock DAG Dependents"]
     end
 
     subgraph Step4 ["4. Startup Crash Recovery"]
@@ -70,25 +70,25 @@ flowchart TD
   ```
 * **Job Retry Policy:**
   - LLM inference jobs are decorated with `[AutomaticRetry(Attempts = 0)]`.
-  - Unhandled exceptions transition the issue cleanly to `Failed` to prevent duplicate code edits or runaway loops.
+  - Unhandled exceptions transition the task cleanly to `Failed` to prevent duplicate code edits or runaway loops.
 
-### Step 3.2: Central Issue Orchestrator (`NightCodeForge.Core/Workflow`)
-* **Contract:** `IIssueOrchestrator`
+### Step 3.2: Central ForgeTask Orchestrator (`NightCodeForge.Core/Workflow`)
+* **Contract:** `ITaskOrchestrator`
   ```csharp
-  public interface IIssueOrchestrator
+  public interface ITaskOrchestrator
   {
-      Task ProcessIssueAsync(int issueId, CancellationToken cancellationToken);
+      Task ProcessTaskAsync(int taskId, CancellationToken cancellationToken);
       Task SubmitHumanAnswerAsync(int questionId, string answer, CancellationToken cancellationToken);
-      Task RequestChangesAsync(int issueId, string revisionNotes, CancellationToken cancellationToken);
-      Task CompleteIssueAndCascadeAsync(int issueId, string finalCommitMessage, CancellationToken cancellationToken);
+      Task RequestChangesAsync(int taskId, string revisionNotes, CancellationToken cancellationToken);
+      Task CompleteTaskAndCascadeAsync(int taskId, string finalCommitMessage, CancellationToken cancellationToken);
   }
   ```
 * **Step-by-Step Execution Lifecycle:**
   1. **Readiness & Workspace Locking:**
-     - Checks DAG readiness: verifies that `issue.Status == IssueOverallStatus.Open` and all dependencies in `DependsOnIssueId` have `Status == IssueOverallStatus.Closed`.
-     - Acquires workspace lock via `IWorkspaceLockProvider.AcquireLockAsync(issue.WorkspaceId)`.
+     - Checks DAG readiness: verifies that `task.Status == TaskOverallStatus.Open` and all dependencies in `DependsOnTaskId` have `Status == TaskOverallStatus.Closed`.
+     - Acquires workspace lock via `IWorkspaceLockProvider.AcquireLockAsync(task.WorkspaceId)`.
   2. **Branch & Environment Setup:**
-     - Invokes `IGitWorkspaceManager.CheckoutIssueBranchAsync`.
+     - Invokes `IGitWorkspaceManager.CheckoutTaskBranchAsync`.
   3. **Stage Execution & Metric Capture:**
      - Loads current stage from `IWorkflowPipeline` and resolves the stage's `AgentProfile`.
      - Records start timestamp; executes `stage.ExecuteAsync(pipelineContext)`.
@@ -98,38 +98,38 @@ flowchart TD
      - **`WaitingForHuman`:**
        - Intercepted from `HumanInterruptionException` (via `ask`).
        - Creates Git WIP commit via `IGitWorkspaceManager.CreateWipCheckpointAsync`.
-       - Persists `Question` (with `AgentProfileId`), serialized memory in `StageCheckpoint`, sets `IsWaitingForHuman = true` and `InterruptedAgentProfileId = profile?.Id` while preserving `issue.Status`.
+       - Persists `Question` (with `AgentProfileId`), serialized memory in `StageCheckpoint`, sets `IsWaitingForHuman = true` and `InterruptedAgentProfileId = profile?.Id` while preserving `task.Status`.
        - **Hangfire Clean Return:** Returns `StageExecutionResult.WaitingForHuman()`; Hangfire marks the job as `Succeeded`. **The single GPU worker is immediately freed for the next queued task.**
      - **`StageCompleted`:**
        - Saves stage checkpoint.
        - Advances stage:
-         - After Stage 1 (Issue Review): sets `Status = IssueOverallStatus.Reviewed`.
+         - After Stage 1 (ForgeTask Review): sets `Status = TaskOverallStatus.Reviewed`.
          - After Stage 2 (Deterministic Pre-Implementation): captures baseline metrics in `PipelineDataBag`.
-         - After Stage 3 (Implementation): sets `Status = IssueOverallStatus.Implemented`.
+         - After Stage 3 (Implementation): sets `Status = TaskOverallStatus.Implemented`.
          - After Stage 4 (Deterministic Post-Implementation): validates differential coverage gate and warning ratchet.
          - After Stage 5 (Code Review): applies review patches.
-         - After Stage 6 (Deterministic Post-Review Verification): validates that review patches compile and pass tests. On pass, sets `Status = IssueOverallStatus.Ready`. On failure, loops back to Stage 5 with compiler/test diagnostics.
+         - After Stage 6 (Deterministic Post-Review Verification): validates that review patches compile and pass tests. On pass, sets `Status = TaskOverallStatus.Ready`. On failure, loops back to Stage 5 with compiler/test diagnostics.
        - **Merge Resolution:**
-         - If `issue.MergeMode == MergeMode.Automatic`: automatically calls `CompleteIssueAndCascadeAsync`, squashes and merges to `baseBranch`, sets `Status = IssueOverallStatus.Closed`, and cascades unblocking.
-         - If `issue.MergeMode == MergeMode.ManualReviewRequired`: retains `Ready`, notifies UI, and awaits maintainer approval in the Review Room before merging.
+         - If `task.MergeMode == MergeMode.Automatic`: automatically calls `CompleteTaskAndCascadeAsync`, squashes and merges to `baseBranch`, sets `Status = TaskOverallStatus.Closed`, and cascades unblocking.
+         - If `task.MergeMode == MergeMode.ManualReviewRequired`: retains `Ready`, notifies UI, and awaits maintainer approval in the Review Room before merging.
      - **`Failed`:**
-       - Logs error in `ExecutionLog` and transitions issue to `Failed`.
+       - Logs error in `ExecutionLog` and transitions task to `Failed`.
 
 ### Step 3.3: Preemptive Resumption & Cascade Unblocking
 1. **`SubmitHumanAnswerAsync`:**
    - Persists human answer in `Question.Answer` and marks `Status = Answered`.
-   - Transitions issue status back to `Open`.
-   - Enqueues job to **`llm-urgent`** queue. When the GPU worker finishes its active turn, it immediately resumes this issue before touching standard backlog items.
+   - Transitions task status back to `Open`.
+   - Enqueues job to **`llm-urgent`** queue. When the GPU worker finishes its active turn, it immediately resumes this task before touching standard backlog items.
 2. **`RequestChangesAsync`:**
    - Reviewer enters revision notes in the Review Room modal.
-   - Transitions issue from `Ready` back to Stage 3 (`ImplementationStage`).
+   - Transitions task from `Ready` back to Stage 3 (`ImplementationStage`).
    - Injects revision notes into `PipelineContext.HandoverArtifacts.ReviewerFeedback`.
    - Enqueues to **`llm-urgent`**.
-3. **`CompleteIssueAndCascadeAsync`:**
+3. **`CompleteTaskAndCascadeAsync`:**
    - Executes `IGitWorkspaceManager.SquashAndMergeAsync` to merge the feature branch into `baseBranch`.
-   - Sets issue status to `Closed`.
-   - Calls `IDependencyResolutionEngine.ResolveCascadeUnblockedIssuesAsync(issueId)`.
-   - Dependent issues that are in `Open` status and whose dependencies are now all `Closed` are enqueued to `llm-inference`.
+   - Sets task status to `Closed`.
+   - Calls `IDependencyResolutionEngine.ResolveCascadeUnblockedTasksAsync(taskId)`.
+   - Dependent tasks that are in `Open` status and whose dependencies are now all `Closed` are enqueued to `llm-inference`.
 
 ### Step 3.4: Startup Recovery & Crash Resilience (`IStartupRecoveryService`)
 * **Contract:** `IStartupRecoveryService`
@@ -143,7 +143,7 @@ flowchart TD
   1. **Stale Lock Cleanup:** Scans target repositories for dangling `.git/index.lock` or `.git/refs/heads/*.lock` files left by abrupt power loss or Windows Update reboot cycles, safely purging them.
   2. **Uncommitted Working Tree Rescue:** Inspects working tree with `git status --porcelain`. If dirty files exist, creates an automated rescue commit:
      `git add -A && git commit -m "WIP-RECOVERY: [Crash Recovery] Preserving uncommitted workspace changes" --no-verify`
-  3. **State Reconciliation:** Queries database for issues left in `Running` status:
+  3. **State Reconciliation:** Queries database for tasks left in `Running` status:
      - For **Agentic Stages:** Rehydrates conversation memory from `STAGE_CHECKPOINT.SerializedMemory`, appends a `[System Notice: Host restarted unexpectedly; workspace restored]`, and enqueues to `llm-urgent`.
      - For **Deterministic Stages:** Resets metrics and re-enqueues to `llm-urgent` to execute freshly.
   4. **Broadcast & Audit:** Logs recovery event in `ExecutionLog` and broadcasts status via SignalR.
@@ -154,9 +154,9 @@ flowchart TD
 
 | Test Class | Focus Area | Scenarios Covered |
 | :--- | :--- | :--- |
-| **`HangfireQueuePriorityTests`** | Concurrency | Priority ordering (`llm-urgent` dequeued before `llm-inference`), `WorkerCount = 1` serial execution across multiple issues. |
-| **`IssueOrchestratorTests`** | Lifecycle | Clean `WaitingForHuman` completion releasing worker, stage advancement, final diff generation on transition to `Review`. |
-| **`ResumptionTests`** | Human-in-the-Loop | Answer submission, clearing `IsWaitingForHuman` while preserving issue status, resuming with exact `InterruptedAgentProfileId` agent, prompt context rehydration with human reply. |
+| **`HangfireQueuePriorityTests`** | Concurrency | Priority ordering (`llm-urgent` dequeued before `llm-inference`), `WorkerCount = 1` serial execution across multiple tasks. |
+| **`TaskOrchestratorTests`** | Lifecycle | Clean `WaitingForHuman` completion releasing worker, stage advancement, final diff generation on transition to `Review`. |
+| **`ResumptionTests`** | Human-in-the-Loop | Answer submission, clearing `IsWaitingForHuman` while preserving task status, resuming with exact `InterruptedAgentProfileId` agent, prompt context rehydration with human reply. |
 | **`CascadeUnblockingTests`** | DAG Integration | Merge squashing, dependency state cascade, unlocking dependent tasks into `llm-inference`. |
 | **`StartupRecoveryTests`** | Crash Resilience | Stale `.git/index.lock` purging, dirty working tree rescue commit, re-enqueueing orphaned running tasks to `llm-urgent`. |
 
@@ -167,8 +167,8 @@ flowchart TD
 - [x] Hangfire configured with SQLite storage and two isolated background processing servers.
 - [x] `WorkerCount = 1` verified: zero concurrent LLM inference jobs across all workspaces.
 - [x] Human interruption (`ask`) cleanly completes Hangfire job as `Succeeded`, releasing GPU.
-- [x] Answering a question enqueues issue to `llm-urgent` with top priority.
-- [x] Requesting changes in review room routes issue back to Stage 2 at `llm-urgent`.
-- [x] Approving an issue merges branch and cascades unblocking to dependent tasks.
+- [x] Answering a question enqueues task to `llm-urgent` with top priority.
+- [x] Requesting changes in review room routes task back to Stage 2 at `llm-urgent`.
+- [x] Approving a task merges branch and cascades unblocking to dependent tasks.
 - [x] `IStartupRecoveryService` purges stale locks and rescues uncommitted files upon boot.
 - [x] All queue and orchestrator unit/integration tests pass 100%.

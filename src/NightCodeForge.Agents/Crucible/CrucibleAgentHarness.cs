@@ -91,7 +91,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         long completionTokens = 0;
         var sessionId = Guid.NewGuid().ToString("N");
 
-        await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
+        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
 
         var workspacePath = !string.IsNullOrEmpty(context.WorkspacePath)
             ? context.WorkspacePath
@@ -101,7 +101,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var harnessConfig = ParseHarnessConfig(context.Profile.HarnessConfigurationJson);
 
         var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier, context.Issue.Id)
+            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier, context.ForgeTask.Id)
             : _executionEnv;
 
         var projectConfig = CodeStackPresets.ResolveConfig(workspacePath, null);
@@ -119,7 +119,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             testTimeoutSeconds: testTimeout,
             pathResolver: _pathResolver,
             workspaceId: context.Workspace?.Id,
-            issueId: context.Issue.Id);
+            taskId: context.ForgeTask.Id);
 
         var dispatcher = new LenientToolDispatcher(canonicalTools);
 
@@ -188,8 +188,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         string discoveredSymbols = string.Empty;
         if (context.OptimizationFlags.DeterministicSymbolMap)
         {
-            var issueText = $"{context.Issue.Title} {context.Issue.Description}";
-            discoveredSymbols = await _symbolService.GetMatchingSymbolsPromptAsync(workspacePath, issueText, context.OptimizationFlags, cancellationToken);
+            var taskText = $"{context.ForgeTask.Title} {context.ForgeTask.Description}";
+            discoveredSymbols = await _symbolService.GetMatchingSymbolsPromptAsync(workspacePath, taskText, context.OptimizationFlags, cancellationToken);
         }
 
         // 4. Resolve Active Stage Permitted Tools (Database/Profile Configurable)
@@ -203,9 +203,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var stageDirective = !string.IsNullOrWhiteSpace(context.StageDirective)
             ? context.StageDirective
             : WorkspacePromptResolver.ResolveStageDirective(workspacePath, context.StageId, GetStageDirective(harnessConfig, context.StageId));
-        var issueDocPath = context.PipelineContext?.DataBag.Get<string>("IssueMarkdownPath");
-        var issueDocAttr = !string.IsNullOrWhiteSpace(issueDocPath) ? $" path=\"{issueDocPath}\"" : string.Empty;
-        var issueScope = $"<issue id=\"{context.Issue.Id}\" title=\"{context.Issue.Title}\"{issueDocAttr}>\n{context.Issue.Description}\n</issue>";
+        var taskDocPath = context.PipelineContext?.DataBag.Get<string>("TaskMarkdownPath");
+        var taskDocAttr = !string.IsNullOrWhiteSpace(taskDocPath) ? $" path=\"{taskDocPath}\"" : string.Empty;
+        var taskScope = $"<task id=\"{context.ForgeTask.Id}\" title=\"{context.ForgeTask.Title}\"{taskDocAttr}>\n{context.ForgeTask.Description}\n</task>";
         var workspaceSystemPrompt = WorkspacePromptResolver.ResolveSystemPrompt(workspacePath);
         var customPersona = !string.IsNullOrWhiteSpace(workspaceSystemPrompt)
             ? workspaceSystemPrompt
@@ -220,7 +220,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         var stabilizedPrefix = prefixStabilizer.BuildStabilizedPrefix(
             stageDirective,
-            issueScope,
+            taskScope,
             projectContext,
             skillsCatalog,
             discoveredSymbols,
@@ -341,7 +341,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         if (update.Text.Contains("<think>")) isThinking = true;
                         
                         var kind = isThinking ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
-                        await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, kind, update.Text, cancellationToken);
+                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, kind, update.Text, cancellationToken);
 
                         if (update.Text.Contains("</think>")) isThinking = false;
 
@@ -358,7 +358,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             {
                 _logger.LogError(ex, "Error during Crucible streaming LLM invocation");
                 stopwatch.Stop();
-                await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
 
                 await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken);
 
@@ -400,14 +400,14 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 var canonicalName = dispatcher.ResolveToolName(call.Name);
                 var argsJson = call.Arguments != null ? JsonSerializer.Serialize(call.Arguments) : "{}";
 
-                await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken);
+                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken);
 
                 // Enforce Tool Whitelist Security Gate
                 if (!permittedTools.Contains(canonicalName, StringComparer.OrdinalIgnoreCase))
                 {
                     var securityReject = $"Security Error: Tool '{canonicalName}' is prohibited in stage '{context.StageId}'. Permitted tools: {string.Join(", ", permittedTools)}";
                     chatHistory.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent(call.CallId ?? Guid.NewGuid().ToString("N"), securityReject)]));
-                    await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.ToolCompleted, securityReject, cancellationToken);
+                    await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, securityReject, cancellationToken);
                     continue;
                 }
 
@@ -416,7 +416,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 if (loopCheck.IsBlocked)
                 {
                     chatHistory.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent(call.CallId ?? Guid.NewGuid().ToString("N"), loopCheck.CorrectiveMessage!)]));
-                    await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.ToolCompleted, loopCheck.CorrectiveMessage!, cancellationToken);
+                    await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, loopCheck.CorrectiveMessage!, cancellationToken);
                     continue;
                 }
 
@@ -439,7 +439,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         context.PipelineContext.DataBag.Set("ReviewerFeedback", reqChange.Feedback);
                     }
 
-                    await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageCompleted, $"Changes requested: {reqChange.Feedback}", cancellationToken);
+                    await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, $"Changes requested: {reqChange.Feedback}", cancellationToken);
 
                     await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
 
@@ -456,7 +456,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     stopwatch.Stop();
                     latestSerializedState = SerializeSession(chatHistory);
 
-                    await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Interrupted, interruption.Question.Prompt, cancellationToken);
+                    await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, interruption.Question.Prompt, cancellationToken);
 
                     await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
 
@@ -475,7 +475,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 chatHistory.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent(call.CallId ?? Guid.NewGuid().ToString("N"), toolResult)]));
                 latestSerializedState = SerializeSession(chatHistory);
 
-                await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.ToolCompleted, $"Completed in {toolSw.ElapsedMilliseconds}ms: {toolResult}", cancellationToken);
+                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, $"Completed in {toolSw.ElapsedMilliseconds}ms: {toolResult}", cancellationToken);
             }
         }
 
@@ -498,12 +498,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         if (canonicalTools.PendingProposals.Count > 0 && context.PipelineContext != null)
         {
-            var existingProposals = context.PipelineContext.DataBag.Get<List<IssueProposal>>("PendingProposals") ?? new List<IssueProposal>();
+            var existingProposals = context.PipelineContext.DataBag.Get<List<TaskProposal>>("PendingProposals") ?? new List<TaskProposal>();
             existingProposals.AddRange(canonicalTools.PendingProposals);
             context.PipelineContext.DataBag.Set("PendingProposals", existingProposals);
         }
 
-        await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageCompleted, lastAssistantMessage ?? "Stage finished", cancellationToken);
+        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, lastAssistantMessage ?? "Stage finished", cancellationToken);
 
         await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
 
@@ -515,11 +515,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
             targetRouting: targetRouting);
     }
 
-    private async Task BroadcastAsync(string sessionId, int issueId, string stageId, AgentActivityKind kind, string content, CancellationToken ct)
+    private async Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken ct)
     {
         if (_activityStreamer != null)
         {
-            var evt = new AgentActivityEvent(sessionId, issueId, stageId, kind, content, DateTime.UtcNow);
+            var evt = new AgentActivityEvent(sessionId, taskId, stageId, kind, content, DateTime.UtcNow);
             await _activityStreamer.BroadcastAsync(evt, ct);
         }
     }
@@ -540,7 +540,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         {
             var entries = BuildTranscriptEntries(chatHistory);
             var meta = new TranscriptMetadata(
-                context.Issue.Id,
+                context.ForgeTask.Id,
                 context.StageId,
                 context.Profile.Name,
                 context.Profile.ModelName,
@@ -554,7 +554,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
         catch (Exception tex)
         {
-            _logger.LogWarning(tex, "Failed to persist session transcript for issue #{IssueId} with status {Status}", context.Issue.Id, status);
+            _logger.LogWarning(tex, "Failed to persist session transcript for task #{TaskId} with status {Status}", context.ForgeTask.Id, status);
         }
     }
 
@@ -653,9 +653,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var effectiveMode = profile.Mode == AgentMode.ReadOnly ? AgentMode.ReadOnly : requiredMode;
         return effectiveMode switch
         {
-            AgentMode.ReadOnly => new[] { "read", "propose_issues", "web_search", "ask", "load_skill", "read_skill_resource" },
-            AgentMode.Review => new[] { "read", "edit", "write", "bash", "web_search", "ask", "propose_issues", "request_changes", "load_skill", "read_skill_resource", "run_skill_script" },
-            _ => new[] { "read", "edit", "write", "bash", "web_search", "ask", "propose_issues", "load_skill", "read_skill_resource", "run_skill_script" }
+            AgentMode.ReadOnly => new[] { "read", "propose_tasks", "web_search", "ask", "load_skill", "read_skill_resource" },
+            AgentMode.Review => new[] { "read", "edit", "write", "bash", "web_search", "ask", "propose_tasks", "request_changes", "load_skill", "read_skill_resource", "run_skill_script" },
+            _ => new[] { "read", "edit", "write", "bash", "web_search", "ask", "propose_tasks", "load_skill", "read_skill_resource", "run_skill_script" }
         };
     }
 
@@ -693,13 +693,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
         return stageId.ToLowerInvariant() switch
         {
             "triage" or "stage-0" =>
-                "Analyze the reported issue against the repository base branch. Determine affected files and acceptance criteria. Call propose_issues to recommend structured backlog items. You have read-only access and cannot modify code or access external networks.",
-            "issue-review" or "stage-1" =>
-                "You are a Staff Software Architect & Requirements Investigator. Thoroughly investigate requirements and inspect the codebase using 'read' and 'bash'. MANDATORY FILE EDIT: Edit the issue specification document on disk in docs/issues/ using 'edit' or 'write' with your approved architecture, technical plan, and acceptance criteria. Your disk changes will be read back upon stage completion to update the issue specification. Proactively uncover ambiguities: invoke 'ask' immediately if needed. Do not guess. Do not write production code.",
+                "Analyze the reported task against the repository base branch. Determine affected files and acceptance criteria. Call propose_tasks to recommend structured backlog items. You have read-only access and cannot modify code or access external networks.",
+            "task-review" or "stage-1" =>
+                "You are a Staff Software Architect & Requirements Investigator. Thoroughly investigate requirements and inspect the codebase using 'read' and 'bash'. MANDATORY FILE EDIT: Edit the task specification document on disk in docs/tasks/ using 'edit' or 'write' with your approved architecture, technical plan, and acceptance criteria. Your disk changes will be read back upon stage completion to update the task specification. Proactively uncover ambiguities: invoke 'ask' immediately if needed. Do not guess. Do not write production code.",
             "implementation" or "stage-2" =>
-                "You are a Senior Software Engineer & TDD Practitioner. Implement clean, robust code according to the issue specification in docs/issues/ and the approved plan. Keep blast radius minimal. Run builds and tests incrementally with bash. Fix all compiler errors and test failures. If breaking blockers arise, call 'ask'.",
+                "You are a Senior Software Engineer & TDD Practitioner. Implement clean, robust code according to the task specification in docs/tasks/ and the approved plan. Keep blast radius minimal. Run builds and tests incrementally with bash. Fix all compiler errors and test failures. If breaking blockers arise, call 'ask'.",
             "code-review-fix" or "stage-3" =>
-                "You are a Principal Code Reviewer and Quality Gatekeeper. Review the git diff against the base branch. Compare against the specification in docs/issues/ and the implementation claims. Apply precision polish directly using 'edit'. Rejection is strictly reserved for major issues or missing features: invoke 'request_changes' or conclude with <request_changes>[feedback]</request_changes>.",
+                "You are a Principal Code Reviewer and Quality Gatekeeper. Review the git diff against the base branch. Compare against the specification in docs/tasks/ and the implementation claims. Apply precision polish directly using 'edit'. Rejection is strictly reserved for major tasks or missing features: invoke 'request_changes' or conclude with <request_changes>[feedback]</request_changes>.",
             _ => "Execute assigned engineering tasks diligently using canonical tools."
         };
     }

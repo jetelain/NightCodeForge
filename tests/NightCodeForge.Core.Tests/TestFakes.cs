@@ -4,29 +4,29 @@ using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Core.Tests;
 
-public class FakeIssueJobQueue : IIssueJobQueue
+public class FakeTaskJobQueue : ITaskJobQueue
 {
     public List<int> UrgentQueue { get; } = new();
     public List<int> InferenceQueue { get; } = new();
 
-    public string EnqueueUrgent(int issueId)
+    public string EnqueueUrgent(int taskId)
     {
-        UrgentQueue.Add(issueId);
-        return $"job-urgent-{issueId}-{Guid.NewGuid():N}";
+        UrgentQueue.Add(taskId);
+        return $"job-urgent-{taskId}-{Guid.NewGuid():N}";
     }
 
-    public string EnqueueInference(int issueId)
+    public string EnqueueInference(int taskId)
     {
-        InferenceQueue.Add(issueId);
-        return $"job-inference-{issueId}-{Guid.NewGuid():N}";
+        InferenceQueue.Add(taskId);
+        return $"job-inference-{taskId}-{Guid.NewGuid():N}";
     }
 }
 
 public class FakeGitWorkspaceManager : IGitWorkspaceManager
 {
-    public List<(int IssueId, string BaseBranch)> CheckedOutBranches { get; } = new();
-    public List<(int IssueId, string StageName, string Summary)> WipCheckpoints { get; } = new();
-    public List<(int IssueId, string BaseBranch, string CommitMessage)> SquashMerges { get; } = new();
+    public List<(int TaskId, string BaseBranch)> CheckedOutBranches { get; } = new();
+    public List<(int TaskId, string StageName, string Summary)> WipCheckpoints { get; } = new();
+    public List<(int TaskId, string BaseBranch, string CommitMessage)> SquashMerges { get; } = new();
     public string GeneratedDiff { get; set; } = "diff --git a/file.cs b/file.cs\n+Added line";
 
     public Task EnsureRepositoryValidAsync(string repoPath, CancellationToken cancellationToken = default)
@@ -34,46 +34,46 @@ public class FakeGitWorkspaceManager : IGitWorkspaceManager
         return Task.CompletedTask;
     }
 
-    public Task CheckoutIssueBranchAsync(Workspace workspace, int issueId, string baseBranch, CancellationToken cancellationToken = default)
+    public Task CheckoutTaskBranchAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default)
     {
-        CheckedOutBranches.Add((issueId, baseBranch));
+        CheckedOutBranches.Add((taskId, baseBranch));
         return Task.CompletedTask;
     }
 
-    public Task<string> CreateWipCheckpointAsync(Workspace workspace, int issueId, string stageName, string summary, CancellationToken cancellationToken = default)
+    public Task<string> CreateWipCheckpointAsync(Workspace workspace, int taskId, string stageName, string summary, CancellationToken cancellationToken = default)
     {
-        WipCheckpoints.Add((issueId, stageName, summary));
+        WipCheckpoints.Add((taskId, stageName, summary));
         return Task.FromResult($"commit-sha-{WipCheckpoints.Count:D4}");
     }
 
-    public Task<string> GenerateDiffAsync(Workspace workspace, int issueId, string baseBranch, CancellationToken cancellationToken = default)
+    public Task<string> GenerateDiffAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default)
     {
         return Task.FromResult(GeneratedDiff);
     }
 
-    public Task SquashAndMergeAsync(Workspace workspace, int issueId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default)
+    public Task SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default)
     {
-        SquashMerges.Add((issueId, baseBranch, commitMessage));
+        SquashMerges.Add((taskId, baseBranch, commitMessage));
         return Task.CompletedTask;
     }
 
-    public Task<string> EnsureWorktreeAsync(Workspace workspace, int issueId, string baseBranch, CancellationToken cancellationToken = default)
+    public Task<string> EnsureWorktreeAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default)
     {
-        CheckedOutBranches.Add((issueId, baseBranch));
-        return Task.FromResult(GetWorktreePath(workspace, issueId));
+        CheckedOutBranches.Add((taskId, baseBranch));
+        return Task.FromResult(GetWorktreePath(workspace, taskId));
     }
 
-    public Task RemoveWorktreeAsync(Workspace workspace, int issueId, CancellationToken cancellationToken = default)
+    public Task RemoveWorktreeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)
     {
         return Task.CompletedTask;
     }
 
-    public string GetWorktreePath(Workspace workspace, int issueId)
+    public string GetWorktreePath(Workspace workspace, int taskId)
     {
-        return $"{workspace.RepositoryPath}/issue-{issueId}";
+        return $"{workspace.RepositoryPath}/task-{taskId}";
     }
 
-    public Task RevertOrCleanAsync(Workspace workspace, int? issueId, CancellationToken cancellationToken = default)
+    public Task RevertOrCleanAsync(Workspace workspace, int? taskId, CancellationToken cancellationToken = default)
     {
         return Task.CompletedTask;
     }

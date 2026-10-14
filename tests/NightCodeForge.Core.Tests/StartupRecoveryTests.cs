@@ -10,20 +10,20 @@ namespace NightCodeForge.Core.Tests;
 public class StartupRecoveryTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly InMemoryIssueRepository _issueRepo;
+    private readonly InMemoryTaskRepository _taskRepo;
     private readonly InMemoryWorkspaceRepository _workspaceRepo;
     private readonly FakeGitCliRunner _gitCliRunner;
-    private readonly FakeIssueJobQueue _jobQueue;
+    private readonly FakeTaskJobQueue _jobQueue;
 
     public StartupRecoveryTests()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "ncf_recovery_test_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
 
-        _issueRepo = new InMemoryIssueRepository();
+        _taskRepo = new InMemoryTaskRepository();
         _workspaceRepo = new InMemoryWorkspaceRepository();
         _gitCliRunner = new FakeGitCliRunner();
-        _jobQueue = new FakeIssueJobQueue();
+        _jobQueue = new FakeTaskJobQueue();
     }
 
     public void Dispose()
@@ -65,7 +65,7 @@ public class StartupRecoveryTests : IDisposable
         });
 
         var recovery = new StartupRecoveryService(
-            _workspaceRepo, _issueRepo, _gitCliRunner,
+            _workspaceRepo, _taskRepo, _gitCliRunner,
             new DefaultWorkflowPipelineProvider(), _jobQueue);
 
         await recovery.ReconcileWorkspacesAsync();
@@ -97,7 +97,7 @@ public class StartupRecoveryTests : IDisposable
         };
 
         var recovery = new StartupRecoveryService(
-            _workspaceRepo, _issueRepo, _gitCliRunner,
+            _workspaceRepo, _taskRepo, _gitCliRunner,
             new DefaultWorkflowPipelineProvider(), _jobQueue);
 
         await recovery.ReconcileWorkspacesAsync();
@@ -109,36 +109,36 @@ public class StartupRecoveryTests : IDisposable
     [Fact]
     public async Task ReconcileWorkspacesAsync_ReconcilesOrphanedRunningAgenticStage_RehydratesMemoryAndEnqueuesUrgent()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 301,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Open,
-            CurrentStageId = IssueReviewStage.DefaultStageId,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = TaskReviewStage.DefaultStageId,
             Checkpoints = new List<StageCheckpoint>
             {
                 new()
                 {
-                    IssueId = 301,
-                    StageId = IssueReviewStage.DefaultStageId,
+                    TaskId = 301,
+                    StageId = TaskReviewStage.DefaultStageId,
                     SerializedMemory = "Prior conversation history...",
                     CreatedAt = DateTime.UtcNow.AddMinutes(-5)
                 }
             }
         });
 
-        var stage = new IssueReviewStage();
+        var stage = new TaskReviewStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var recovery = new StartupRecoveryService(
-            _workspaceRepo, _issueRepo, _gitCliRunner,
+            _workspaceRepo, _taskRepo, _gitCliRunner,
             new DefaultWorkflowPipelineProvider(pipeline), _jobQueue);
 
         await recovery.ReconcileWorkspacesAsync();
 
-        var updated = await _issueRepo.GetByIdAsync(301);
+        var updated = await _taskRepo.GetByIdAsync(301);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Open, updated.Status);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
 
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);
         var memory = bag.Get<string>("SerializedMemory");
@@ -155,11 +155,11 @@ public class StartupRecoveryTests : IDisposable
         var bag = new PipelineDataBag();
         bag.Set("DeterministicMetrics", "Partial metrics to discard");
 
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 302,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Implemented,
+            Status = TaskOverallStatus.Implemented,
             CurrentStageId = DeterministicCoverageGate.DefaultStageId,
             PipelineDataJson = bag.ToJson()
         });
@@ -168,14 +168,14 @@ public class StartupRecoveryTests : IDisposable
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var recovery = new StartupRecoveryService(
-            _workspaceRepo, _issueRepo, _gitCliRunner,
+            _workspaceRepo, _taskRepo, _gitCliRunner,
             new DefaultWorkflowPipelineProvider(pipeline), _jobQueue);
 
         await recovery.ReconcileWorkspacesAsync();
 
-        var updated = await _issueRepo.GetByIdAsync(302);
+        var updated = await _taskRepo.GetByIdAsync(302);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Implemented, updated.Status);
+        Assert.Equal(TaskOverallStatus.Implemented, updated.Status);
 
         var updatedBag = PipelineDataBag.FromJson(updated.PipelineDataJson);
         Assert.False(updatedBag.ContainsKey("DeterministicMetrics"));
@@ -187,7 +187,7 @@ public class StartupRecoveryTests : IDisposable
     public async Task ReconcileWorkspacesAsync_PerformsWslCheck_DoesNotThrow()
     {
         var recovery = new StartupRecoveryService(
-            _workspaceRepo, _issueRepo, _gitCliRunner,
+            _workspaceRepo, _taskRepo, _gitCliRunner,
             new DefaultWorkflowPipelineProvider(), _jobQueue);
 
         var exception = await Record.ExceptionAsync(() => recovery.ReconcileWorkspacesAsync());

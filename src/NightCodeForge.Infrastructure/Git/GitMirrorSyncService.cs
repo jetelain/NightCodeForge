@@ -209,12 +209,12 @@ public class GitMirrorSyncService : IGitMirrorSyncService
     /// <inheritdoc />
     public async Task<GitSyncResult> PushToHostAsync(
         string mirrorRepoPath,
-        int issueId,
+        int taskId,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mirrorRepoPath);
 
-        var branchName = $"feature/issue-{issueId}";
+        var branchName = $"feature/task-{taskId}";
         _logger.LogInformation("Pushing branch '{BranchName}' from mirror to host-origin", branchName);
 
         try

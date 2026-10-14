@@ -17,10 +17,10 @@ public interface IWorkspacePathResolver
     string GetAgentWorkingClonePath(int workspaceId) => $"{GetAgentWorkspaceRootPath(workspaceId)}/clone";
 
     /// <summary>
-    /// Gets the path to an isolated Git worktree for a specific issue (~/.nightcodeforge/wks/{workspaceId}/issue-{issueId}).
+    /// Gets the path to an isolated Git worktree for a specific task (~/.nightcodeforge/wks/{workspaceId}/task-{taskId}).
     /// </summary>
-    string GetAgentWorktreePath(int workspaceId, int issueId) =>
-        $"{GetAgentWorkspaceRootPath(workspaceId)}/issue-{issueId}";
+    string GetAgentWorktreePath(int workspaceId, int taskId) =>
+        $"{GetAgentWorkspaceRootPath(workspaceId)}/task-{taskId}";
 
     /// <summary>
     /// Gets the Git remote URL for host-origin (converts Windows path to /mnt/... mount path on Windows, raw path on Unix).
@@ -35,19 +35,19 @@ public interface IWorkspacePathResolver
     string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath);
 
     /// <summary>
-    /// Resolves Crucible file tool paths (read/write/edit), optionally targeting a specific issue worktree.
-    /// If issueId is null, resolves to the canonical repository clone (used for ideation and triage on main).
+    /// Resolves Crucible file tool paths (read/write/edit), optionally targeting a specific task worktree.
+    /// If taskId is null, resolves to the canonical repository clone (used for ideation and triage on main).
     /// </summary>
-    string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath, int? issueId) =>
+    string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath, int? taskId) =>
         ResolveCruciblePath(workspaceId, relativeOrContainerPath);
 
     /// <summary>
     /// Resolves Crucible file tool paths (read/write/edit) given a workspace root directory on the host.
     /// Remaps /workspace virtual container paths to the host filesystem, taking into account
-    /// /workspace/clone and /workspace/issue-{id} worktrees.
+    /// /workspace/clone and /workspace/task-{id} worktrees.
     /// </summary>
-    string ResolveCruciblePath(string workspaceRoot, string relativeOrContainerPath, int? issueId = null) =>
-        ResolveCruciblePath(0, relativeOrContainerPath, issueId);
+    string ResolveCruciblePath(string workspaceRoot, string relativeOrContainerPath, int? taskId = null) =>
+        ResolveCruciblePath(0, relativeOrContainerPath, taskId);
 
     /// <summary>
     /// Gets the targeted WSL2 distribution name.

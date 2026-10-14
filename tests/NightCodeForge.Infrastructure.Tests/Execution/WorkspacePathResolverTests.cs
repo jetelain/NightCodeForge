@@ -55,13 +55,13 @@ public class WorkspacePathResolverTests
         var path4 = resolver.ResolveCruciblePath(10, "src/Program.cs");
         Assert.Equal(@"\\wsl.localhost\Ubuntu-24.04\home\devuser\.nightcodeforge\wks\10\clone\src\Program.cs", path4);
 
-        // 5. With explicit issueId parameter resolves to issue worktree
-        var path5 = resolver.ResolveCruciblePath(10, "/workspace/src/Program.cs", issueId: 42);
-        Assert.Equal(@"\\wsl.localhost\Ubuntu-24.04\home\devuser\.nightcodeforge\wks\10\issue-42\src\Program.cs", path5);
+        // 5. With explicit taskId parameter resolves to task worktree
+        var path5 = resolver.ResolveCruciblePath(10, "/workspace/src/Program.cs", taskId: 42);
+        Assert.Equal(@"\\wsl.localhost\Ubuntu-24.04\home\devuser\.nightcodeforge\wks\10\task-42\src\Program.cs", path5);
 
-        // 6. Path embedded issue-{id} resolves to issue worktree even without issueId parameter
-        var path6 = resolver.ResolveCruciblePath(10, "/workspace/issue-42/src/Program.cs");
-        Assert.Equal(@"\\wsl.localhost\Ubuntu-24.04\home\devuser\.nightcodeforge\wks\10\issue-42\src\Program.cs", path6);
+        // 6. Path embedded task-{id} resolves to task worktree even without taskId parameter
+        var path6 = resolver.ResolveCruciblePath(10, "/workspace/task-42/src/Program.cs");
+        Assert.Equal(@"\\wsl.localhost\Ubuntu-24.04\home\devuser\.nightcodeforge\wks\10\task-42\src\Program.cs", path6);
     }
 
     [Fact]
@@ -94,17 +94,17 @@ public class WorkspacePathResolverTests
         var resolver = new WorkspacePathResolver();
         var tempRoot = Path.Combine(Path.GetTempPath(), "resolver-test-" + Guid.NewGuid().ToString("N"));
         var cloneDir = Path.Combine(tempRoot, "clone");
-        var issueDir = Path.Combine(tempRoot, "issue-7");
+        var taskDir = Path.Combine(tempRoot, "task-7");
         Directory.CreateDirectory(cloneDir);
-        Directory.CreateDirectory(issueDir);
+        Directory.CreateDirectory(taskDir);
 
         // /workspace/clone/... maps to cloneDir
         var p1 = resolver.ResolveCruciblePath(cloneDir, "/workspace/clone/src/App.cs");
         Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "src", "App.cs")), p1);
 
-        // /workspace/issue-7/... maps to issueDir
-        var p2 = resolver.ResolveCruciblePath(cloneDir, "/workspace/issue-7/src/App.cs");
-        Assert.Equal(Path.GetFullPath(Path.Combine(issueDir, "src", "App.cs")), p2);
+        // /workspace/task-7/... maps to taskDir
+        var p2 = resolver.ResolveCruciblePath(cloneDir, "/workspace/task-7/src/App.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(taskDir, "src", "App.cs")), p2);
 
         // /workspace/... resolves to workspaceRoot (cloneDir)
         var p3 = resolver.ResolveCruciblePath(cloneDir, "/workspace/src/App.cs");

@@ -28,29 +28,29 @@ public class DeterministicQualityGatesScenario : IScenario
         var sw = Stopwatch.StartNew();
         var details = new List<string>();
 
-        // Step 1: Create test issue on a feature branch
-        ConsoleFormatting.PrintStep("5.1", "Creating issue and feature branch for quality gate testing...");
-        Issue issue;
+        // Step 1: Create test task on a feature branch
+        ConsoleFormatting.PrintStep("5.1", "Creating task and feature branch for quality gate testing...");
+        ForgeTask task;
         using (var scope = context.Environment.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            issue = new Issue
+            task = new ForgeTask
             {
                 WorkspaceId = context.Environment.Workspace.Id,
                 Title = "Compiler Gate Test",
                 Description = "Validate deterministic build gate interception.",
-                Status = IssueOverallStatus.Open,
+                Status = TaskOverallStatus.Open,
                 CurrentStageId = DeterministicBuildStage.DefaultStageId,
                 BaseBranch = "main",
-                FeatureBranch = "feature/issue-compiler-gate",
+                FeatureBranch = "feature/task-compiler-gate",
                 Priority = 1,
                 MergeMode = MergeMode.ManualReviewRequired
             };
-            db.Issues.Add(issue);
+            db.Tasks.Add(task);
             await db.SaveChangesAsync(context.CancellationToken);
 
-            await context.Environment.GitRepo.CheckoutBranchAsync(issue.FeatureBranch, create: true, context.CancellationToken);
-            ConsoleFormatting.PrintSuccess($"Branch '{issue.FeatureBranch}' created and checked out.");
+            await context.Environment.GitRepo.CheckoutBranchAsync(task.FeatureBranch, create: true, context.CancellationToken);
+            ConsoleFormatting.PrintSuccess($"Branch '{task.FeatureBranch}' created and checked out.");
         }
 
         using var testScope = context.Environment.Services.CreateScope();
@@ -58,8 +58,8 @@ public class DeterministicQualityGatesScenario : IScenario
         var buildStage = testScope.ServiceProvider.GetRequiredService<DeterministicBuildStage>();
         var gitManager = testScope.ServiceProvider.GetRequiredService<IGitWorkspaceManager>();
 
-        var worktreePath = await gitManager.EnsureWorktreeAsync(context.Environment.Workspace, issue.Id, issue.FeatureBranch, cancellationToken: context.CancellationToken);
-        var pipelineContext = new PipelineContext(issue, context.Environment.Workspace)
+        var worktreePath = await gitManager.EnsureWorktreeAsync(context.Environment.Workspace, task.Id, task.FeatureBranch, cancellationToken: context.CancellationToken);
+        var pipelineContext = new PipelineContext(task, context.Environment.Workspace)
         {
             WorkingDirectory = worktreePath
         };
@@ -106,7 +106,7 @@ public class DeterministicQualityGatesScenario : IScenario
         details.Add("Compilation Gate: Passed cleanly on valid code");
 
         // Teardown worktree and checkout back to main
-        await gitManager.RemoveWorktreeAsync(context.Environment.Workspace, issue.Id, context.CancellationToken);
+        await gitManager.RemoveWorktreeAsync(context.Environment.Workspace, task.Id, context.CancellationToken);
         await context.Environment.GitRepo.CheckoutBranchAsync("main", create: false, context.CancellationToken);
 
         sw.Stop();

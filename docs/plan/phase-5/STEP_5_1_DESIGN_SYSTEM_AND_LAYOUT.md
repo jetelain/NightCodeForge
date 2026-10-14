@@ -89,7 +89,7 @@ public class WorkspaceStateService
 
 ### 3.2 Global Worker Telemetry State (`Services/WorkerStateService.cs`)
 
-Tracks the global GPU worker status, current active issue, stage ID, and human-in-the-loop pending count.
+Tracks the global GPU worker status, current active task, stage ID, and human-in-the-loop pending count.
 
 ```csharp
 namespace NightCodeForge.Web.Services;
@@ -104,8 +104,8 @@ public enum WorkerExecutionStatus
 
 public record WorkerStatusSnapshot(
     WorkerExecutionStatus Status,
-    int? ActiveIssueId,
-    string? ActiveIssueTitle,
+    int? ActiveTaskId,
+    string? ActiveTaskTitle,
     string? StageId,
     string? StageKind,
     string HardwareTarget,
@@ -288,10 +288,10 @@ Renders the obsidian glassmorphic header containing:
 - Workspace selector `<select>` with instant dispatch to `WorkspaceStateService`.
 - Reactive GPU inference status badge:
   - If `Idle`: muted grey dot + "GPU Idle"
-  - If `Running`: pulsating indigo dot + "Running: [StageKind] - Issue #{IssueId} ([HardwareTarget])"
+  - If `Running`: pulsating indigo dot + "Running: [StageKind] - ForgeTask #{TaskId} ([HardwareTarget])"
   - If `WaitingForHuman`: pulsating amber dot + "Waiting for Clarification"
 - Question Inbox shortcut pill showing count of pending questions with link to `/inbox`.
-- Active breadcrumbs showing `Workspace > Section > Issue`.
+- Active breadcrumbs showing `Workspace > Section > ForgeTask`.
 
 ### Step 4.4: Left Navigation Menu (`Components/Layout/NavMenu.razor`)
 

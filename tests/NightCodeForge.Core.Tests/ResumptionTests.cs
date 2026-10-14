@@ -9,24 +9,24 @@ namespace NightCodeForge.Core.Tests;
 
 public class ResumptionTests
 {
-    private readonly InMemoryIssueRepository _issueRepo;
+    private readonly InMemoryTaskRepository _taskRepo;
     private readonly InMemoryWorkspaceRepository _workspaceRepo;
-    private readonly InMemoryIssueDependencyStore _depStore;
+    private readonly InMemoryTaskDependencyStore _depStore;
     private readonly DependencyResolutionEngine _depEngine;
     private readonly WorkspaceLockProvider _lockProvider;
     private readonly FakeGitWorkspaceManager _gitManager;
-    private readonly FakeIssueJobQueue _jobQueue;
+    private readonly FakeTaskJobQueue _jobQueue;
     private readonly Workspace _workspace;
 
     public ResumptionTests()
     {
-        _issueRepo = new InMemoryIssueRepository();
+        _taskRepo = new InMemoryTaskRepository();
         _workspaceRepo = new InMemoryWorkspaceRepository();
-        _depStore = new InMemoryIssueDependencyStore();
+        _depStore = new InMemoryTaskDependencyStore();
         _depEngine = new DependencyResolutionEngine(_depStore);
         _lockProvider = new WorkspaceLockProvider();
         _gitManager = new FakeGitWorkspaceManager();
-        _jobQueue = new FakeIssueJobQueue();
+        _jobQueue = new FakeTaskJobQueue();
 
         _workspace = new Workspace
         {
@@ -41,44 +41,44 @@ public class ResumptionTests
     [Fact]
     public async Task SubmitHumanAnswerAsync_PersistsAnswerUpdatesStatusAndEnqueuesUrgent()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 100,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             IsWaitingForHuman = true,
             Questions = new List<Question>
             {
                 new()
                 {
                     Id = 1,
-                    IssueId = 100,
+                    TaskId = 100,
                     Prompt = "What port should the server listen on?",
                     Status = QuestionStatus.Pending
                 }
             }
         });
-        _depStore.AddIssue(100, 1, IssueOverallStatus.Open);
+        _depStore.AddTask(100, 1, TaskOverallStatus.Open);
         _depStore.SetWaitingForHuman(100, true);
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
 
         await orchestrator.SubmitHumanAnswerAsync(1, "Port 8080");
 
-        var question = await _issueRepo.GetQuestionByIdAsync(1);
+        var question = await _taskRepo.GetQuestionByIdAsync(1);
         Assert.NotNull(question);
         Assert.Equal("Port 8080", question.Answer);
         Assert.Equal(QuestionStatus.Answered, question.Status);
         Assert.NotNull(question.AnsweredAt);
 
-        var updatedIssue = await _issueRepo.GetByIdAsync(100);
-        Assert.NotNull(updatedIssue);
-        Assert.False(updatedIssue.IsWaitingForHuman);
-        Assert.Equal(IssueOverallStatus.Open, updatedIssue.Status);
+        var updatedTask = await _taskRepo.GetByIdAsync(100);
+        Assert.NotNull(updatedTask);
+        Assert.False(updatedTask.IsWaitingForHuman);
+        Assert.Equal(TaskOverallStatus.Open, updatedTask.Status);
 
-        var bag = PipelineDataBag.FromJson(updatedIssue.PipelineDataJson);
+        var bag = PipelineDataBag.FromJson(updatedTask.PipelineDataJson);
         Assert.Equal("Port 8080", bag.Get<string>("LastHumanAnswer"));
 
         // Enqueued to llm-urgent
@@ -87,13 +87,13 @@ public class ResumptionTests
     }
 
     [Fact]
-    public async Task SubmitHumanAnswerAsync_ThenProcessIssue_AllowsStageToConsumeAnswerAndSucceed()
+    public async Task SubmitHumanAnswerAsync_ThenProcessTask_AllowsStageToConsumeAnswerAndSucceed()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 101,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Reviewed,
+            Status = TaskOverallStatus.Reviewed,
             IsWaitingForHuman = true,
             CurrentStageId = ImplementationStage.DefaultStageId,
             Questions = new List<Question>
@@ -101,13 +101,13 @@ public class ResumptionTests
                 new()
                 {
                     Id = 2,
-                    IssueId = 101,
+                    TaskId = 101,
                     Prompt = "Which framework?",
                     Status = QuestionStatus.Pending
                 }
             }
         });
-        _depStore.AddIssue(101, 1, IssueOverallStatus.Reviewed);
+        _depStore.AddTask(101, 1, TaskOverallStatus.Reviewed);
         _depStore.SetWaitingForHuman(101, true);
 
         string? consumedAnswer = null;
@@ -121,44 +121,44 @@ public class ResumptionTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
 
         // Human answers
         await orchestrator.SubmitHumanAnswerAsync(2, "ASP.NET Core");
 
-        // Orchestrator processes resumed issue
-        await orchestrator.ProcessIssueAsync(101);
+        // Orchestrator processes resumed task
+        await orchestrator.ProcessTaskAsync(101);
 
         Assert.Equal("ASP.NET Core", consumedAnswer);
-        var updated = await _issueRepo.GetByIdAsync(101);
+        var updated = await _taskRepo.GetByIdAsync(101);
         Assert.NotNull(updated);
         // Stage completed (single stage pipeline reached end -> Ready)
-        Assert.Equal(IssueOverallStatus.Ready, updated.Status);
+        Assert.Equal(TaskOverallStatus.Ready, updated.Status);
     }
 
     [Fact]
     public async Task RequestChangesAsync_ReRoutesToStage2AndEnqueuesUrgent()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 102,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Ready,
+            Status = TaskOverallStatus.Ready,
             CurrentStageId = "code-review-fix"
         });
-        _depStore.AddIssue(102, 1, IssueOverallStatus.Ready);
+        _depStore.AddTask(102, 1, TaskOverallStatus.Ready);
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
 
         await orchestrator.RequestChangesAsync(102, "Please add XML documentation to all public interfaces and fix indentation.");
 
-        var updated = await _issueRepo.GetByIdAsync(102);
+        var updated = await _taskRepo.GetByIdAsync(102);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Reviewed, updated.Status);
+        Assert.Equal(TaskOverallStatus.Reviewed, updated.Status);
         Assert.Equal(ImplementationStage.DefaultStageId, updated.CurrentStageId);
 
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);

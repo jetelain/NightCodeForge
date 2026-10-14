@@ -88,11 +88,11 @@ public class GitMirrorSyncServiceTests : IDisposable
         // Arrange
         await _syncService.InitializeMirrorAsync(_workspace, _mirrorDir);
 
-        // Host creates and checks out feature/issue-301
-        await _runner.ExecuteAsync(_hostRepo.RepositoryPath, ["checkout", "-B", "feature/issue-301", "main"]);
+        // Host creates and checks out feature/task-301
+        await _runner.ExecuteAsync(_hostRepo.RepositoryPath, ["checkout", "-B", "feature/task-301", "main"]);
 
-        // Mirror also creates feature/issue-301 and makes a commit
-        await _runner.ExecuteAsync(_mirrorDir, ["checkout", "-B", "feature/issue-301"]);
+        // Mirror also creates feature/task-301 and makes a commit
+        await _runner.ExecuteAsync(_mirrorDir, ["checkout", "-B", "feature/task-301"]);
         File.WriteAllText(Path.Combine(_mirrorDir, "agent_solution.cs"), "public class Solution {}");
         await _runner.ExecuteAsync(_mirrorDir, ["add", "-A"]);
         await _runner.ExecuteAsync(_mirrorDir, ["commit", "-m", "Agent commit from mirror", "--no-verify"]);
@@ -103,7 +103,7 @@ public class GitMirrorSyncServiceTests : IDisposable
         // Assert
         Assert.True(result.Success);
         Assert.False(result.FallbackUsed);
-        Assert.Equal("feature/issue-301", result.BranchPushed);
+        Assert.Equal("feature/task-301", result.BranchPushed);
         Assert.Null(result.WarningMessage);
         Assert.Empty(_alertNotifier.Alerts);
 
@@ -123,12 +123,12 @@ public class GitMirrorSyncServiceTests : IDisposable
         _hostRepo.CreateFile("shared_model.cs", "public class Model { public int V1; }");
         _hostRepo.CommitAll("Add shared model");
 
-        // Host checks out feature/issue-302
-        await _runner.ExecuteAsync(_hostRepo.RepositoryPath, ["checkout", "-B", "feature/issue-302"]);
+        // Host checks out feature/task-302
+        await _runner.ExecuteAsync(_hostRepo.RepositoryPath, ["checkout", "-B", "feature/task-302"]);
 
-        // Mirror checks out feature/issue-302 and commits changes to shared_model.cs
-        await _runner.ExecuteAsync(_mirrorDir, ["fetch", "host-origin", "feature/issue-302"]);
-        await _runner.ExecuteAsync(_mirrorDir, ["checkout", "-B", "feature/issue-302", "host-origin/feature/issue-302"]);
+        // Mirror checks out feature/task-302 and commits changes to shared_model.cs
+        await _runner.ExecuteAsync(_mirrorDir, ["fetch", "host-origin", "feature/task-302"]);
+        await _runner.ExecuteAsync(_mirrorDir, ["checkout", "-B", "feature/task-302", "host-origin/feature/task-302"]);
         File.WriteAllText(Path.Combine(_mirrorDir, "shared_model.cs"), "public class Model { public int V1; public int V2; }");
         await _runner.ExecuteAsync(_mirrorDir, ["add", "-A"]);
         await _runner.ExecuteAsync(_mirrorDir, ["commit", "-m", "Agent modified shared_model", "--no-verify"]);
@@ -139,19 +139,19 @@ public class GitMirrorSyncServiceTests : IDisposable
         // Act: Mirror attempts to push to host
         var result = await _syncService.PushToHostAsync(_mirrorDir, 302);
 
-        // Assert: Push must catch updateInstead rejection and fallback to feature/issue-302-ncf
+        // Assert: Push must catch updateInstead rejection and fallback to feature/task-302-ncf
         Assert.True(result.Success);
         Assert.True(result.FallbackUsed);
-        Assert.Equal("feature/issue-302-ncf", result.BranchPushed);
+        Assert.Equal("feature/task-302-ncf", result.BranchPushed);
         Assert.NotNull(result.WarningMessage);
-        Assert.Contains("feature/issue-302-ncf", result.WarningMessage);
+        Assert.Contains("feature/task-302-ncf", result.WarningMessage);
 
         // Verify alert was raised
         Assert.Single(_alertNotifier.Alerts);
-        Assert.Contains("feature/issue-302-ncf", _alertNotifier.Alerts[0].Message);
+        Assert.Contains("feature/task-302-ncf", _alertNotifier.Alerts[0].Message);
 
-        // Verify that host now has the fallback branch refs/heads/feature/issue-302-ncf with agent's commit
-        var hostBranchLog = await _runner.ExecuteAsync(_hostRepo.RepositoryPath, ["log", "feature/issue-302-ncf", "-1", "--pretty=%B"]);
+        // Verify that host now has the fallback branch refs/heads/feature/task-302-ncf with agent's commit
+        var hostBranchLog = await _runner.ExecuteAsync(_hostRepo.RepositoryPath, ["log", "feature/task-302-ncf", "-1", "--pretty=%B"]);
         Assert.Contains("Agent modified shared_model", hostBranchLog.StandardOutput);
 
         // Developer's uncommitted edits on host remain intact and were NOT overwritten
@@ -169,7 +169,7 @@ public class GitMirrorSyncServiceTests : IDisposable
         var featureFile = Path.Combine(_mirrorDir, "squash_feature.txt");
         await File.WriteAllTextAsync(featureFile, "Squashed feature implementation");
         await _runner.ExecuteAsync(_mirrorDir, ["add", "-A"]);
-        await _runner.ExecuteAsync(_mirrorDir, ["commit", "-m", "Squash: Issue #500 feature complete", "--no-verify"]);
+        await _runner.ExecuteAsync(_mirrorDir, ["commit", "-m", "Squash: ForgeTask #500 feature complete", "--no-verify"]);
 
         // Act
         var result = await _syncService.PushBaseBranchToHostAsync(_mirrorDir, "main");
@@ -182,7 +182,7 @@ public class GitMirrorSyncServiceTests : IDisposable
 
         // Verify host repo main branch received commit
         var hostLog = await _runner.ExecuteAsync(_hostRepo.RepositoryPath, ["log", "main", "-1", "--pretty=%B"]);
-        Assert.Contains("Squash: Issue #500 feature complete", hostLog.StandardOutput);
+        Assert.Contains("Squash: ForgeTask #500 feature complete", hostLog.StandardOutput);
     }
 
     [Fact]

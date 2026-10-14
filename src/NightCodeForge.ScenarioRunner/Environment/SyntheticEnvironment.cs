@@ -30,7 +30,7 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
     public SyntheticGitRepo GitRepo { get; private set; } = null!;
     public ServiceProvider Services { get; private set; } = null!;
     public Workspace Workspace { get; private set; } = null!;
-    public InMemoryIssueJobQueue JobQueue { get; private set; } = null!;
+    public InMemoryTaskJobQueue JobQueue { get; private set; } = null!;
     public DynamicPipelineProvider PipelineProvider { get; private set; } = null!;
 
     public void SetCustomPipeline(IWorkflowPipeline? pipeline)
@@ -70,7 +70,7 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
         });
 
         // Dynamic Workflow Pipeline Provider
-        PipelineProvider = new DynamicPipelineProvider(issue => Default3AgentPipeline.Create());
+        PipelineProvider = new DynamicPipelineProvider(task => Default3AgentPipeline.Create());
         serviceCollection.AddSingleton(PipelineProvider);
         serviceCollection.AddSingleton<IWorkflowPipelineProvider>(PipelineProvider);
 
@@ -79,9 +79,9 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
         serviceCollection.AddNightCodeForgeCoreAndInfrastructure(connStr);
 
         // In-Memory Job Queue for inspection
-        JobQueue = new InMemoryIssueJobQueue();
+        JobQueue = new InMemoryTaskJobQueue();
         serviceCollection.AddSingleton(JobQueue);
-        serviceCollection.AddSingleton<IIssueJobQueue>(JobQueue);
+        serviceCollection.AddSingleton<ITaskJobQueue>(JobQueue);
 
         // Configure LLM inference
         if (Options.MockLlm)
@@ -144,9 +144,9 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
                 },
                 new()
                 {
-                    Id = "issue-review",
+                    Id = "task-review",
                     WorkspaceId = Workspace.Id,
-                    Name = "Issue Review Agent",
+                    Name = "ForgeTask Review Agent",
                     HarnessId = "crucible",
                     ModelName = Options.ModelId,
                     Mode = AgentMode.Full,
@@ -247,14 +247,14 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
 
     public class DynamicPipelineProvider : IWorkflowPipelineProvider
     {
-        private readonly Func<Issue, IWorkflowPipeline> _defaultPipelineFactory;
+        private readonly Func<ForgeTask, IWorkflowPipeline> _defaultPipelineFactory;
         public IWorkflowPipeline? CustomPipeline { get; set; }
 
-        public DynamicPipelineProvider(Func<Issue, IWorkflowPipeline> defaultPipelineFactory)
+        public DynamicPipelineProvider(Func<ForgeTask, IWorkflowPipeline> defaultPipelineFactory)
         {
             _defaultPipelineFactory = defaultPipelineFactory ?? throw new ArgumentNullException(nameof(defaultPipelineFactory));
         }
 
-        public IWorkflowPipeline GetPipeline(Issue issue) => CustomPipeline ?? _defaultPipelineFactory(issue);
+        public IWorkflowPipeline GetPipeline(ForgeTask task) => CustomPipeline ?? _defaultPipelineFactory(task);
     }
 }

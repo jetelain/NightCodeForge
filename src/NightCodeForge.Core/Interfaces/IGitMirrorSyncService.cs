@@ -6,7 +6,7 @@ namespace NightCodeForge.Core.Interfaces;
 /// Result of a Git mirror push/sync operation to the host repository.
 /// </summary>
 /// <param name="Success">Whether the push succeeded (either primary branch or fallback branch).</param>
-/// <param name="FallbackUsed">Whether the dirty host tree fallback branch (feature/issue-{id}-ncf) was used.</param>
+/// <param name="FallbackUsed">Whether the dirty host tree fallback branch (feature/task-{id}-ncf) was used.</param>
 /// <param name="BranchPushed">The actual branch name pushed to host-origin.</param>
 /// <param name="WarningMessage">Warning or guidance message if fallback occurred.</param>
 public record GitSyncResult(
@@ -45,10 +45,10 @@ public interface IGitMirrorSyncService
     Task FetchFromHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Pushes the issue branch to host-origin. If the host working tree has uncommitted edits to tracked files,
-    /// falls back to pushing to feature/issue-{id}-ncf and raises an alert.
+    /// Pushes the task branch to host-origin. If the host working tree has uncommitted edits to tracked files,
+    /// falls back to pushing to feature/task-{id}-ncf and raises an alert.
     /// </summary>
-    Task<GitSyncResult> PushToHostAsync(string mirrorRepoPath, int issueId, CancellationToken cancellationToken = default);
+    Task<GitSyncResult> PushToHostAsync(string mirrorRepoPath, int taskId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Pushes the merged base branch (e.g. main) from the mirror repository back to host-origin following squash and merge.

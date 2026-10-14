@@ -135,7 +135,7 @@ Use records for immutable data.
 
         var prefix = stabilizer.BuildStabilizedPrefix(
             stagePersonaDirective: "Implement task",
-            issueScopeAndPlan: "Issue #1",
+            taskScopeAndPlan: "ForgeTask #1",
             skillsCatalog: catalog);
 
         Assert.Contains("<tools>", prefix);

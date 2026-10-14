@@ -19,12 +19,12 @@ public class AcpAgentHarnessTests
             return Task.CompletedTask;
         }
 
-        public async IAsyncEnumerable<AgentActivityEvent> SubscribeAsync(int? issueId = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        public async IAsyncEnumerable<AgentActivityEvent> SubscribeAsync(int? taskId = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             await Task.Yield();
             foreach (var ev in Events)
             {
-                if (!issueId.HasValue || ev.IssueId == issueId.Value) yield return ev;
+                if (!taskId.HasValue || ev.TaskId == taskId.Value) yield return ev;
             }
         }
     }
@@ -47,7 +47,7 @@ public class AcpAgentHarnessTests
 
         var context = new AgentSessionContext
         {
-            Issue = new Issue { Id = 20, Title = "ACP Test", Description = "Implement feature" },
+            ForgeTask = new ForgeTask { Id = 20, Title = "ACP Test", Description = "Implement feature" },
             StageId = "stage-2",
             Profile = new AgentProfile { Name = "AcpAgent" }
         };
@@ -100,7 +100,7 @@ public class AcpAgentHarnessTests
 
         var context = new AgentSessionContext
         {
-            Issue = new Issue { Id = 21, Title = "Terminal Test", Description = "Run command" },
+            ForgeTask = new ForgeTask { Id = 21, Title = "Terminal Test", Description = "Run command" },
             StageId = "stage-2",
             Profile = new AgentProfile { Name = "AcpAgent" }
         };
@@ -134,7 +134,7 @@ public class AcpAgentHarnessTests
 
         var context = new AgentSessionContext
         {
-            Issue = new Issue { Id = 22, Title = "Perm Test", Description = "Need permission" },
+            ForgeTask = new ForgeTask { Id = 22, Title = "Perm Test", Description = "Need permission" },
             StageId = "stage-1",
             Profile = new AgentProfile { Name = "AcpAgent" }
         };
@@ -168,7 +168,7 @@ public class AcpAgentHarnessTests
 
         var context = new AgentSessionContext
         {
-            Issue = new Issue { Id = 23, Title = "Resume Test", Description = "Resume" },
+            ForgeTask = new ForgeTask { Id = 23, Title = "Resume Test", Description = "Resume" },
             StageId = "stage-2",
             Profile = new AgentProfile { Name = "AcpAgent" },
             SerializedStateJson = "saved-session-99",
@@ -209,7 +209,7 @@ public class AcpAgentHarnessTests
 
             var context = new AgentSessionContext
             {
-                Issue = new Issue { Id = 24, Title = "FS Test", Description = "Test file tools" },
+                ForgeTask = new ForgeTask { Id = 24, Title = "FS Test", Description = "Test file tools" },
                 StageId = "stage-2",
                 Profile = new AgentProfile { Name = "AcpAgent" },
                 Workspace = new Workspace { Id = 42, RepositoryPath = tempDir }

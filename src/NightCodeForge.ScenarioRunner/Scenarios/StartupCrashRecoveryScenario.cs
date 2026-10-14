@@ -46,26 +46,26 @@ public class StartupCrashRecoveryScenario : IScenario
         }
         ConsoleFormatting.PrintInfo($"Working tree is dirty:\n{status.Trim()}");
 
-        // 3. Orphaned issue left in Running state
-        Issue crashedIssue;
+        // 3. Orphaned task left in Running state
+        ForgeTask crashedTask;
         using (var scope = context.Environment.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            crashedIssue = new Issue
+            crashedTask = new ForgeTask
             {
                 WorkspaceId = context.Environment.Workspace.Id,
                 Title = "Orphaned In-Flight Task",
                 Description = "Task interrupted midway through inference by simulated host reboot.",
-                Status = IssueOverallStatus.Implemented,
+                Status = TaskOverallStatus.Implemented,
                 CurrentStageId = "implementation",
                 BaseBranch = "main",
-                FeatureBranch = "feature/issue-crashed",
+                FeatureBranch = "feature/task-crashed",
                 Priority = 1,
                 MergeMode = MergeMode.ManualReviewRequired
             };
-            db.Issues.Add(crashedIssue);
+            db.Tasks.Add(crashedTask);
             await db.SaveChangesAsync(context.CancellationToken);
-            ConsoleFormatting.PrintInfo($"Seeded orphaned issue #{crashedIssue.Id} with Status=Implemented.");
+            ConsoleFormatting.PrintInfo($"Seeded orphaned task #{crashedTask.Id} with Status=Implemented.");
         }
 
         // Step 2: Execute Startup Recovery Reconciliation
@@ -96,29 +96,29 @@ public class StartupCrashRecoveryScenario : IScenario
         ConsoleFormatting.PrintSuccess($"Rescue commit verified in Git log:\n{log.Trim()}");
         details.Add("Rescue Commit: Created WIP-RECOVERY commit");
 
-        // Step 5: Verify Orphaned Issue Reset & Re-Enqueued to Priority Queue
-        ConsoleFormatting.PrintStep("7.5", "Verifying orphaned issue reconciled and enqueued to llm-urgent...");
+        // Step 5: Verify Orphaned ForgeTask Reset & Re-Enqueued to Priority Queue
+        ConsoleFormatting.PrintStep("7.5", "Verifying orphaned task reconciled and enqueued to llm-urgent...");
         using (var scope = context.Environment.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var reloaded = await db.Issues.FindAsync([crashedIssue.Id], context.CancellationToken);
+            var reloaded = await db.Tasks.FindAsync([crashedTask.Id], context.CancellationToken);
 
             if (reloaded == null)
             {
-                return ScenarioResult.Fail(sw.Elapsed, "Orphaned issue was lost from database.");
+                return ScenarioResult.Fail(sw.Elapsed, "Orphaned task was lost from database.");
             }
 
-            ConsoleFormatting.PrintSuccess($"Orphaned issue reconciled (Status={reloaded.Status}).");
+            ConsoleFormatting.PrintSuccess($"Orphaned task reconciled (Status={reloaded.Status}).");
 
             var urgentJob = context.Environment.JobQueue.AllJobs
-                .FirstOrDefault(j => j.IssueId == crashedIssue.Id && j.QueueName == "llm-urgent");
+                .FirstOrDefault(j => j.TaskId == crashedTask.Id && j.QueueName == "llm-urgent");
 
             if (urgentJob == null)
             {
-                return ScenarioResult.Fail(sw.Elapsed, "Orphaned issue was not re-enqueued to priority queue 'llm-urgent'.");
+                return ScenarioResult.Fail(sw.Elapsed, "Orphaned task was not re-enqueued to priority queue 'llm-urgent'.");
             }
 
-            ConsoleFormatting.PrintSuccess($"Orphaned issue re-enqueued to head of queue '{urgentJob.QueueName}'.");
+            ConsoleFormatting.PrintSuccess($"Orphaned task re-enqueued to head of queue '{urgentJob.QueueName}'.");
             details.Add($"Task Re-Enqueued: {urgentJob.JobId} -> {urgentJob.QueueName}");
         }
 

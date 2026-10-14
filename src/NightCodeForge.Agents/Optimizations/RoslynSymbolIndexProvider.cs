@@ -17,7 +17,7 @@ public record CodeSymbol(
 public interface IWorkspaceSymbolService
 {
     Task<IReadOnlyList<CodeSymbol>> IndexWorkspaceAsync(string workspaceRoot, CancellationToken cancellationToken = default);
-    Task<string> GetMatchingSymbolsPromptAsync(string workspaceRoot, string issueText, LocalOptimizationFlags? flags = null, CancellationToken cancellationToken = default);
+    Task<string> GetMatchingSymbolsPromptAsync(string workspaceRoot, string taskText, LocalOptimizationFlags? flags = null, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -97,14 +97,14 @@ public partial class RoslynSymbolIndexProvider : IWorkspaceSymbolService
         return symbols;
     }
 
-    public async Task<string> GetMatchingSymbolsPromptAsync(string workspaceRoot, string issueText, LocalOptimizationFlags? flags = null, CancellationToken cancellationToken = default)
+    public async Task<string> GetMatchingSymbolsPromptAsync(string workspaceRoot, string taskText, LocalOptimizationFlags? flags = null, CancellationToken cancellationToken = default)
     {
         if (flags != null && !flags.DeterministicSymbolMap)
         {
             return string.Empty;
         }
 
-        if (string.IsNullOrWhiteSpace(issueText))
+        if (string.IsNullOrWhiteSpace(taskText))
         {
             return string.Empty;
         }
@@ -115,8 +115,8 @@ public partial class RoslynSymbolIndexProvider : IWorkspaceSymbolService
             return string.Empty;
         }
 
-        // Extract keywords from issue text
-        var words = KeywordWordRegex().Matches(issueText)
+        // Extract keywords from task text
+        var words = KeywordWordRegex().Matches(taskText)
             .Select(m => m.Value)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);

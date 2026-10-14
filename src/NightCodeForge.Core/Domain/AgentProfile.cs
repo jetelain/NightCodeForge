@@ -36,9 +36,9 @@ public class AgentProfile
         HarnessId = HarnessType.Crucible,
         ModelName = "", // Defaults to LlmProviderOptions.ModelId from appsettings.json
         Mode = AgentMode.ReadOnly,
-        PermittedTools = new[] { "read", "bash", "web_search", "propose_issues" },
+        PermittedTools = new[] { "read", "bash", "web_search", "propose_tasks" },
         SystemPrompt = @"You are the NightCodeForge Ideation & Codebase Discovery Agent.
-Your objective is to explore the codebase, discuss architectural features, and help the developer plan new issues.",
+Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.",
         Temperature = 0.3
     };
 }

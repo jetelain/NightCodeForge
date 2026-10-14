@@ -18,11 +18,11 @@ Because local LLM development is physically constrained to a single GPU, queue p
    - **`llm-inference` (Priority 2, WorkerCount = 1):** Main execution queue for ready backlog tasks whose prerequisite DAG dependencies are `Closed`.
    - **`default` (Priority 3, WorkerCount = 4):** Utility jobs (Git fetches, markdown sync, cache cleanup).
 2. **Queue Control Actions:**
-   - **Prioritize Task:** Move an issue from `llm-inference` to the head of `llm-urgent`.
+   - **Prioritize Task:** Move a task from `llm-inference` to the head of `llm-urgent`.
    - **Cancel Running Job:** Gracefully abort a running LLM inference task without corrupting Git state.
    - **Requeue Failed Job:** Retry a failed task with zero retries default.
 3. **Workspace Concurrency & Lock Provider Inspector (`IWorkspaceLockProvider`):**
-   - Active locks grid showing: Workspace ID, Issue ID, Lock Type (`WorkspaceLock` vs. `IssueLock`), Acquired At, and Holder Task.
+   - Active locks grid showing: Workspace ID, ForgeTask ID, Lock Type (`WorkspaceLock` vs. `TaskLock`), Acquired At, and Holder Task.
    - Prevents `.git/index.lock` collisions between user UI actions and background workers.
    - **Emergency Lock Release Action:** Purges orphaned locks resulting from unexpected process terminations.
 4. **Hangfire Dashboard Integration:**
@@ -44,7 +44,7 @@ flowchart TD
 
     subgraph LockProvider ["IWorkspaceLockProvider"]
         WsLock["Workspace Lock (AsyncKeyedLock<int>)"]
-        IssueLock["Issue Lock (AsyncKeyedLock<(int, int)>)"]
+        TaskLock["ForgeTask Lock (AsyncKeyedLock<(int, int)>)"]
         EmergencyPurge["Emergency Purge / Unlock"]
     end
 
@@ -73,9 +73,9 @@ namespace NightCodeForge.Core.Interfaces;
 public interface IWorkspaceLockProvider
 {
     Task<IDisposable> AcquireLockAsync(int workspaceId, CancellationToken cancellationToken = default);
-    Task<IDisposable> AcquireIssueLockAsync(int workspaceId, int issueId, CancellationToken cancellationToken = default);
+    Task<IDisposable> AcquireTaskLockAsync(int workspaceId, int taskId, CancellationToken cancellationToken = default);
     bool TryAcquireLock(int workspaceId, out IDisposable? lockReleaser);
-    bool TryAcquireIssueLock(int workspaceId, int issueId, out IDisposable? lockReleaser);
+    bool TryAcquireTaskLock(int workspaceId, int taskId, out IDisposable? lockReleaser);
 }
 ```
 
@@ -87,16 +87,16 @@ namespace NightCodeForge.Web.Services;
 public record QueuedJobItem(
     string JobId,
     string QueueName,
-    int IssueId,
-    string IssueTitle,
+    int TaskId,
+    string TaskTitle,
     string StageId,
     DateTime EnqueuedAt,
     string Status);
 
 public record ActiveLockSnapshot(
     int WorkspaceId,
-    int? IssueId,
-    string LockType, // "WorkspaceExclusive" or "IssueExclusive"
+    int? TaskId,
+    string LockType, // "WorkspaceExclusive" or "TaskExclusive"
     DateTime AcquiredAt,
     TimeSpan DurationHeld);
 ```
@@ -158,7 +158,7 @@ public record ActiveLockSnapshot(
                     <span class="fs-1 font-mono">@_inferenceJobs.Count</span>
                     <span class="text-muted ms-2">tasks waiting</span>
                 </div>
-                <small class="text-secondary">Ready backlog issues with all DAG prerequisites closed.</small>
+                <small class="text-secondary">Ready backlog tasks with all DAG prerequisites closed.</small>
             </div>
         </div>
 
@@ -194,7 +194,7 @@ public record ActiveLockSnapshot(
                 <thead>
                     <tr>
                         <th>Workspace</th>
-                        <th>Target Issue</th>
+                        <th>Target ForgeTask</th>
                         <th>Lock Type</th>
                         <th>Duration Held</th>
                         <th>Action</th>
@@ -205,7 +205,7 @@ public record ActiveLockSnapshot(
                     {
                         <tr>
                             <td>Workspace #@lockItem.WorkspaceId</td>
-                            <td>@(lockItem.IssueId.HasValue ? $"Issue #{lockItem.IssueId}" : "All Workspace Issues")</td>
+                            <td>@(lockItem.TaskId.HasValue ? $"ForgeTask #{lockItem.TaskId}" : "All Workspace Tasks")</td>
                             <td><span class="badge-tag">@lockItem.LockType</span></td>
                             <td>@lockItem.DurationHeld.ToString(@"mm\:ss")</td>
                             <td>
@@ -229,7 +229,7 @@ public record ActiveLockSnapshot(
                     <tr>
                         <th>Priority</th>
                         <th>Queue</th>
-                        <th>Issue</th>
+                        <th>ForgeTask</th>
                         <th>Stage</th>
                         <th>Enqueued</th>
                         <th>Actions</th>
@@ -250,7 +250,7 @@ public record ActiveLockSnapshot(
                                 }
                             </td>
                             <td><code>@job.QueueName</code></td>
-                            <td><a href="/monitoring/@job.IssueId">#@job.IssueId: @job.IssueTitle</a></td>
+                            <td><a href="/monitoring/@job.TaskId">#@job.TaskId: @job.TaskTitle</a></td>
                             <td>@job.StageId</td>
                             <td>@job.EnqueuedAt.ToString("HH:mm:ss")</td>
                             <td>
@@ -293,12 +293,12 @@ public record ActiveLockSnapshot(
 
     private void PromoteToUrgent(QueuedJobItem job)
     {
-        ToastService.Show("Prioritized", $"Issue #{job.IssueId} moved to head of llm-urgent.", ToastLevel.Success);
+        ToastService.Show("Prioritized", $"ForgeTask #{job.TaskId} moved to head of llm-urgent.", ToastLevel.Success);
     }
 
     private void CancelJob(QueuedJobItem job)
     {
-        ToastService.Show("Job Cancelled", $"Execution cancelled for Issue #{job.IssueId}.", ToastLevel.Warning);
+        ToastService.Show("Job Cancelled", $"Execution cancelled for ForgeTask #{job.TaskId}.", ToastLevel.Warning);
     }
 
     private void EmergencyReleaseLock(ActiveLockSnapshot lockItem)

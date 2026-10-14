@@ -55,7 +55,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
         // 2. Create dirty uncommitted changes
         _repo.CreateFile("DirtyFile.cs", "public class DirtyFile {}");
 
-        // 3. Register workspace and running issue in DB
+        // 3. Register workspace and running task in DB
         var workspace = new Workspace
         {
             Name = "Integration Workspace",
@@ -65,23 +65,23 @@ public class StartupRecoveryIntegrationTests : IDisposable
         _context.Workspaces.Add(workspace);
         await _context.SaveChangesAsync();
 
-        var issue = new Issue
+        var task = new ForgeTask
         {
             WorkspaceId = workspace.Id,
-            Title = "Running Issue Interrupted",
-            Status = IssueOverallStatus.Open,
-            CurrentStageId = "issue-review"
+            Title = "Running ForgeTask Interrupted",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "task-review"
         };
-        _context.Issues.Add(issue);
+        _context.Tasks.Add(task);
         await _context.SaveChangesAsync();
 
         var workspaceRepo = new EfCoreWorkspaceRepository(_context);
-        var issueRepo = new EfCoreIssueRepository(_context);
+        var taskRepo = new EfCoreTaskRepository(_context);
         var jobQueue = new FakeTestJobQueue();
 
         var recoveryService = new StartupRecoveryService(
             workspaceRepo,
-            issueRepo,
+            taskRepo,
             _runner,
             new DefaultWorkflowPipelineProvider(),
             jobQueue);
@@ -100,28 +100,28 @@ public class StartupRecoveryIntegrationTests : IDisposable
         var log = await _runner.ExecuteAsync(_repo.RepositoryPath, ["log", "-n", "1", "--oneline"]);
         Assert.Contains("WIP-RECOVERY", log.StandardOutput);
 
-        // Verify issue status remains Open and re-enqueued to urgent
-        var updated = await issueRepo.GetByIdAsync(issue.Id);
+        // Verify task status remains Open and re-enqueued to urgent
+        var updated = await taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Open, updated.Status);
-        Assert.Contains(issue.Id, jobQueue.UrgentQueue);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
+        Assert.Contains(task.Id, jobQueue.UrgentQueue);
     }
 }
 
-public class FakeTestJobQueue : IIssueJobQueue
+public class FakeTestJobQueue : ITaskJobQueue
 {
     public List<int> UrgentQueue { get; } = new();
     public List<int> InferenceQueue { get; } = new();
 
-    public string EnqueueUrgent(int issueId)
+    public string EnqueueUrgent(int taskId)
     {
-        UrgentQueue.Add(issueId);
-        return $"urgent-{issueId}";
+        UrgentQueue.Add(taskId);
+        return $"urgent-{taskId}";
     }
 
-    public string EnqueueInference(int issueId)
+    public string EnqueueInference(int taskId)
     {
-        InferenceQueue.Add(issueId);
-        return $"inference-{issueId}";
+        InferenceQueue.Add(taskId);
+        return $"inference-{taskId}";
     }
 }

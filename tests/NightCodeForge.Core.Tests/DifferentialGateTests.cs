@@ -10,9 +10,9 @@ public class DifferentialGateTests
     public async Task CoverageGate_Fails_WhenCoverageDrops()
     {
         var gate = new DeterministicCoverageGate();
-        var issue = new Issue { Id = 1, WorkspaceId = 1, CurrentStageId = "coverage-gate" };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1, CurrentStageId = "coverage-gate" };
         var workspace = new Workspace { Id = 1, Name = "WS" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         // Baseline: 85%, Current: 80% (drop of 5%)
         context.DataBag.Set("tests.baseline.total", 20);
@@ -31,9 +31,9 @@ public class DifferentialGateTests
     public async Task CoverageGate_FailsImmediately_WhenTestCountDecreases_AntiCheating()
     {
         var gate = new DeterministicCoverageGate();
-        var issue = new Issue { Id = 1, WorkspaceId = 1, CurrentStageId = "coverage-gate" };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1, CurrentStageId = "coverage-gate" };
         var workspace = new Workspace { Id = 1, Name = "WS" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         // Baseline: 42 tests, Current: 40 tests (2 tests deleted/commented out)
         context.DataBag.Set("tests.baseline.total", 42);
@@ -52,9 +52,9 @@ public class DifferentialGateTests
     public async Task CoverageGate_Passes_WhenCoverageMaintainedOrIncreased()
     {
         var gate = new DeterministicCoverageGate();
-        var issue = new Issue { Id = 1, WorkspaceId = 1, CurrentStageId = "coverage-gate" };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1, CurrentStageId = "coverage-gate" };
         var workspace = new Workspace { Id = 1, Name = "WS" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         context.DataBag.Set("tests.baseline.total", 50);
         context.DataBag.Set("tests.current.total", 55);
@@ -70,9 +70,9 @@ public class DifferentialGateTests
     public async Task WarningRatchet_Fails_WhenNewWarningsIntroduced()
     {
         var ratchet = new DeterministicWarningRatchetStage();
-        var issue = new Issue { Id = 1, WorkspaceId = 1, CurrentStageId = "warning-ratchet" };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1, CurrentStageId = "warning-ratchet" };
         var workspace = new Workspace { Id = 1, Name = "WS" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         // Baseline: 10, Current: 12
         context.DataBag.Set("warnings.baseline.total", 10);
@@ -91,9 +91,9 @@ public class DifferentialGateTests
     public async Task WarningRatchet_Passes_WhenWarningCountDecreasedOrEqual()
     {
         var ratchet = new DeterministicWarningRatchetStage();
-        var issue = new Issue { Id = 1, WorkspaceId = 1, CurrentStageId = "warning-ratchet" };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1, CurrentStageId = "warning-ratchet" };
         var workspace = new Workspace { Id = 1, Name = "WS" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         context.DataBag.Set("warnings.baseline.total", 10);
         context.DataBag.Set("warnings.current.total", 8);

@@ -26,28 +26,28 @@ In conventional interactive tools, the agent pauses and **blocks the process** w
 ### The Solution: Non-Blocking Context Switching
 NightCodeForge eliminates idle GPU time through **automatic Git checkpointing and task context switching**:
 
-1. **Autonomous Execution:** NightCodeForge dequeues an issue and launches a specialized multi-agent pipeline on an isolated Git branch (`feature/issue-{id}`).
+1. **Autonomous Execution:** NightCodeForge dequeues a task and launches a specialized multi-agent pipeline on an isolated Git branch (`feature/task-{id}`).
 2. **Instant Checkpoint on Human Interruption:** When any agent asks a question via `ask` (or `AskHumanQuestion`), the system:
    - Captures and serializes the agent's memory and chat history into persistent storage.
    - Executes a native Git WIP commit (`git add -A && git commit -m "WIP: ..." --no-verify`) to ensure zero untracked files are lost.
    - Terminates the background worker, immediately freeing the GPU.
 3. **Queue Progression:** The single-worker GPU queue instantly picks up the next task in the backlog.
-4. **Preemptive Resume:** When the developer answers the question via the web interface, the issue returns to the queue with **highest priority (`llm-urgent`)**. When the GPU is freed, the branch is checked out, the previous context is restored with the human answer injected, and execution resumes seamlessly.
+4. **Preemptive Resume:** When the developer answers the question via the web interface, the task returns to the queue with **highest priority (`llm-urgent`)**. When the GPU is freed, the branch is checked out, the previous context is restored with the human answer injected, and execution resumes seamlessly.
 
 ---
 
 ## ✨ Key Features
 
 * 🛡️ **Strict VRAM & Hardware Protection (`WorkerCount = 1`):** Dedicated inference queue guarantees sequential execution, preventing VRAM overflow across all projects.
-* 📁 **Multi-Workspace Architecture:** Manage multiple independent local repositories. Each issue is tied to a workspace with its own Git working tree, base branch, and preferred model settings.
+* 📁 **Multi-Workspace Architecture:** Manage multiple independent local repositories. Each task is tied to a workspace with its own Git working tree, base branch, and preferred model settings.
 * 🔀 **Native Git CLI Context Switching:** Pure command-line interaction via `CliWrap` (strictly no `LibGit2Sharp` wrappers). Safe branch isolation, WIP commits, and squash-on-merge diffs.
 * 🧩 **Extensible 3-Agent Workflow Pipeline:**
-  1. **Issue Review Agent:** Pre-inspects the codebase, clarifies requirements, and prompts the human proactively *before* any coding begins.
+  1. **ForgeTask Review Agent:** Pre-inspects the codebase, clarifies requirements, and prompts the human proactively *before* any coding begins.
   2. **Implementation Agent:** Modifies code, runs builds (`dotnet build`), executes unit tests, and iterates.
   3. **Code Review & Fixes Agent:** Inspects diffs, runs static checks, identifies gaps or regressions, and applies automated fixes.
 * 🎭 **Agent Profiles per Stage:** Customize the intelligence for each workflow step. Assign a specialized profile combining **Harness** (`Crucible`, `PiRpc`, or `Acp`), **Model Name** (e.g. `deepseek-r1:32b` for deep review vs `qwen2.5-coder:32b` for fast coding), **Thinking Effort** (None, Low, Medium, High, or custom token budget), and harness-specific launch configurations.
 * 📝 **Stage-Specific Bootstrap Prompts:** Every stage has its own tailored System Persona and Bootstrap Context injection:
-  - *Stage 1 (Review):* Focuses on architectural ambiguities, injecting issue requirements, with strict instructions to prompt the human before coding.
+  - *Stage 1 (Review):* Focuses on architectural ambiguities, injecting task requirements, with strict instructions to prompt the human before coding.
   - *Stage 2 (Implementation):* Injects the approved technical plan and prior human Q&A, driving test-driven coding and compilation loops.
   - *Stage 3 (Review & Fixes):* Injects the live `git diff` against the base branch, running critical audit checklists and applying direct patches.
 * 🛠️ **Model Context Protocol (MCP) & Modular Skills:**
@@ -60,9 +60,9 @@ NightCodeForge eliminates idle GPU time through **automatic Git checkpointing an
   - **[Agent Client Protocol (ACP)](https://agentclientprotocol.com/) Compatible:** Plug any existing or future ACP-compliant coding agent (from Zed, JetBrains, or the open ACP Registry) without altering core code.
 * ⏱️ **Fine-Grained Step Duration & Token Metrics:** Tracks exact elapsed execution time, prompt tokens, completion tokens, total tokens, and hardware target for every workflow stage.
 * 📜 **Session Transcripts & Hybrid AI Diagnostics:** Automatically saves turn-by-turn markdown execution logs (`docs/transcripts/`) capturing model thoughts, tool calls, and compiler outputs. If a local model fails or gets stuck in a reasoning loop, a one-click **"Diagnose with AI"** feature evaluates the transcript using either **Cloud LLMs** (fast, zero local VRAM impact via OllamaRouter cloud models or cloud APIs) or **Local LLMs** (100% private & offline, queued sequentially) to pinpoint root causes and recommend prompt/skill fixes.
-* 📁 **Markdown Issue Mirroring (`docs/issues/`):** Active non-resolved issues are automatically mirrored to the workspace filesystem as date-prefixed Markdown files with YAML frontmatter (`docs/issues/YYYY-MM-DD-<slug>.md`). Omitting the ID from the filename enables clean chronological sorting and avoids file renames when new files are dropped into the directory (the system simply injects the assigned `id` in-place). User edits to requirements, priority, or dependencies sync to the DB, while state and stage are protected by the orchestrator.
-* 🔗 **Issue Dependency Graph (DAG):** Define prerequisite dependencies between issues with automatic cycle detection. An issue stays locked until all its dependencies are completed and merged.
-* 💡 **Interactive Ideation & Codebase Discovery Chat:** Ask questions about your repository in real time. The read-only discovery agent analyzes the code and proposes structured issues with dependency links directly into the backlog.
+* 📁 **Markdown ForgeTask Mirroring (`docs/tasks/`):** Active non-resolved tasks are automatically mirrored to the workspace filesystem as date-prefixed Markdown files with YAML frontmatter (`docs/tasks/YYYY-MM-DD-<slug>.md`). Omitting the ID from the filename enables clean chronological sorting and avoids file renames when new files are dropped into the directory (the system simply injects the assigned `id` in-place). User edits to requirements, priority, or dependencies sync to the DB, while state and stage are protected by the orchestrator.
+* 🔗 **ForgeTask Dependency Graph (DAG):** Define prerequisite dependencies between tasks with automatic cycle detection. A task stays locked until all its dependencies are completed and merged.
+* 💡 **Interactive Ideation & Codebase Discovery Chat:** Ask questions about your repository in real time. The read-only discovery agent analyzes the code and proposes structured tasks with dependency links directly into the backlog.
 * 🔀 **First-Class [OllamaRouter](https://github.com/jetelain/OllamaRouter) Integration:**
   - Works with native Ollama (`/api/chat`) and OpenAI-compatible (`/v1/chat/completions`) endpoints.
   - Automatically routes tasks to the best GPU: **Fast Local GPU** (when context fits VRAM), **Remote Server** (for large contexts or heavy models), or **Cloud Overflow**.
@@ -100,7 +100,7 @@ flowchart TD
     end
 
     subgraph Workspace ["Target Codebase"]
-        GitCli["Native Git CLI (CliWrap)\nBranch: feature/issue-{id}"]
+        GitCli["Native Git CLI (CliWrap)\nBranch: feature/task-{id}"]
     end
 
     UI --> Core

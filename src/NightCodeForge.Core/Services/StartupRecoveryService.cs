@@ -15,24 +15,24 @@ namespace NightCodeForge.Core.Services;
 public class StartupRecoveryService : IStartupRecoveryService
 {
     private readonly IWorkspaceRepository _workspaceRepository;
-    private readonly IIssueRepository _issueRepository;
+    private readonly ITaskRepository _taskRepository;
     private readonly IGitCliRunner _gitCliRunner;
     private readonly IWorkflowPipelineProvider _pipelineProvider;
-    private readonly IIssueJobQueue _jobQueue;
+    private readonly ITaskJobQueue _jobQueue;
     private readonly IWorkspacePathResolver? _pathResolver;
     private readonly ILogger<StartupRecoveryService> _logger;
 
     public StartupRecoveryService(
         IWorkspaceRepository workspaceRepository,
-        IIssueRepository issueRepository,
+        ITaskRepository taskRepository,
         IGitCliRunner gitCliRunner,
         IWorkflowPipelineProvider pipelineProvider,
-        IIssueJobQueue jobQueue,
+        ITaskJobQueue jobQueue,
         IWorkspacePathResolver? pathResolver = null,
         ILogger<StartupRecoveryService>? logger = null)
     {
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
-        _issueRepository = issueRepository ?? throw new ArgumentNullException(nameof(issueRepository));
+        _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _pipelineProvider = pipelineProvider ?? throw new ArgumentNullException(nameof(pipelineProvider));
         _jobQueue = jobQueue ?? throw new ArgumentNullException(nameof(jobQueue));
@@ -74,26 +74,26 @@ public class StartupRecoveryService : IStartupRecoveryService
             }
         }
 
-        // 3. Reconcile active issues left interrupted by restart (Open, Reviewed, Implemented without WaitingForHuman)
-        var activeMilestones = new[] { IssueOverallStatus.Open, IssueOverallStatus.Reviewed, IssueOverallStatus.Implemented };
+        // 3. Reconcile active tasks left interrupted by restart (Open, Reviewed, Implemented without WaitingForHuman)
+        var activeMilestones = new[] { TaskOverallStatus.Open, TaskOverallStatus.Reviewed, TaskOverallStatus.Implemented };
         var reconciledCount = 0;
 
         foreach (var status in activeMilestones)
         {
-            var activeIssues = await _issueRepository.GetByStatusAsync(status, cancellationToken);
-            foreach (var issue in activeIssues.Where(i => !i.IsWaitingForHuman))
+            var activeTasks = await _taskRepository.GetByStatusAsync(status, cancellationToken);
+            foreach (var task in activeTasks.Where(i => !i.IsWaitingForHuman))
             {
-                var pipeline = _pipelineProvider.GetPipeline(issue);
-                var stage = (!string.IsNullOrWhiteSpace(issue.CurrentStageId)
-                    ? pipeline.GetStage(issue.CurrentStageId)
+                var pipeline = _pipelineProvider.GetPipeline(task);
+                var stage = (!string.IsNullOrWhiteSpace(task.CurrentStageId)
+                    ? pipeline.GetStage(task.CurrentStageId)
                     : null) ?? pipeline.Stages.FirstOrDefault();
 
-                var bag = PipelineDataBag.FromJson(issue.PipelineDataJson);
+                var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
 
                 if (stage != null && stage.Kind == WorkflowStageKind.Agentic)
                 {
                     // Agentic Stage: Rehydrate memory with recovery notice
-                    var lastCheckpoint = issue.Checkpoints?.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
+                    var lastCheckpoint = task.Checkpoints?.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
                     var memory = lastCheckpoint?.SerializedMemory ?? string.Empty;
                     var notice = "[System Notice: Host restarted unexpectedly; workspace restored]";
                     var restoredMemory = string.IsNullOrWhiteSpace(memory)
@@ -101,33 +101,33 @@ public class StartupRecoveryService : IStartupRecoveryService
                         : $"{memory}\n{notice}";
 
                     bag.Set("SerializedMemory", restoredMemory);
-                    _logger.LogWarning("Rehydrated agentic session memory for orphaned issue #{IssueId}.", issue.Id);
+                    _logger.LogWarning("Rehydrated agentic session memory for orphaned task #{TaskId}.", task.Id);
                 }
                 else
                 {
                     // Deterministic Stage: Reset metrics and retries to execute freshly
                     bag.Remove("DeterministicMetrics");
-                    _logger.LogWarning("Reset metrics for deterministic stage on orphaned issue #{IssueId}.", issue.Id);
+                    _logger.LogWarning("Reset metrics for deterministic stage on orphaned task #{TaskId}.", task.Id);
                 }
 
-                issue.PipelineDataJson = bag.ToJson();
+                task.PipelineDataJson = bag.ToJson();
 
-                await _issueRepository.UpdateAsync(issue, cancellationToken: cancellationToken);
-                await _issueRepository.AddExecutionLogAsync(new ExecutionLog
+                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
                 {
-                    IssueId = issue.Id,
+                    TaskId = task.Id,
                     Level = LogLevel.Warning,
-                    Message = $"Host reboot recovery: Re-enqueued issue #{issue.Id} to llm-urgent.",
+                    Message = $"Host reboot recovery: Re-enqueued task #{task.Id} to llm-urgent.",
                     Timestamp = DateTime.UtcNow
                 }, cancellationToken);
 
                 // Head-of-line priority re-enqueue
-                _jobQueue.EnqueueUrgent(issue.Id);
+                _jobQueue.EnqueueUrgent(task.Id);
                 reconciledCount++;
             }
         }
 
-        _logger.LogInformation("Startup workspace reconciliation completed. Reconciled {Count} active issues.", reconciledCount);
+        _logger.LogInformation("Startup workspace reconciliation completed. Reconciled {Count} active tasks.", reconciledCount);
     }
 
     private void PurgeStaleGitLocks(string repoPath, int workspaceId)

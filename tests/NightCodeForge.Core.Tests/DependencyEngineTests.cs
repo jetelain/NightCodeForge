@@ -8,10 +8,10 @@ public class DependencyEngineTests
     [Fact]
     public void HasCycle_ReturnsFalse_WhenAcyclic()
     {
-        var store = new InMemoryIssueDependencyStore();
+        var store = new InMemoryTaskDependencyStore();
         var engine = new DependencyResolutionEngine(store);
 
-        var dependencies = new List<(int IssueId, int DependsOnIssueId)>
+        var dependencies = new List<(int TaskId, int DependsOnTaskId)>
         {
             (2, 1),
             (3, 2),
@@ -25,10 +25,10 @@ public class DependencyEngineTests
     [Fact]
     public void HasCycle_ReturnsTrue_AndThrows_WhenCycleDetected()
     {
-        var store = new InMemoryIssueDependencyStore();
+        var store = new InMemoryTaskDependencyStore();
         var engine = new DependencyResolutionEngine(store);
 
-        var dependencies = new List<(int IssueId, int DependsOnIssueId)>
+        var dependencies = new List<(int TaskId, int DependsOnTaskId)>
         {
             (1, 2),
             (2, 3),
@@ -42,11 +42,11 @@ public class DependencyEngineTests
     [Fact]
     public void GetTopologicalOrder_ResolvesCorrectExecutionSequence()
     {
-        var store = new InMemoryIssueDependencyStore();
+        var store = new InMemoryTaskDependencyStore();
         var engine = new DependencyResolutionEngine(store);
 
-        // Issue 3 depends on 2; Issue 2 depends on 1
-        var dependencies = new List<(int IssueId, int DependsOnIssueId)>
+        // ForgeTask 3 depends on 2; ForgeTask 2 depends on 1
+        var dependencies = new List<(int TaskId, int DependsOnTaskId)>
         {
             (3, 2),
             (2, 1)
@@ -59,11 +59,11 @@ public class DependencyEngineTests
     [Fact]
     public void GetTopologicalOrder_ResolvesDiamondGraph()
     {
-        var store = new InMemoryIssueDependencyStore();
+        var store = new InMemoryTaskDependencyStore();
         var engine = new DependencyResolutionEngine(store);
 
         // 2 depends on 1; 3 depends on 1; 4 depends on 2 and 3
-        var dependencies = new List<(int IssueId, int DependsOnIssueId)>
+        var dependencies = new List<(int TaskId, int DependsOnTaskId)>
         {
             (2, 1),
             (3, 1),
@@ -81,11 +81,11 @@ public class DependencyEngineTests
     [Fact]
     public async Task IsReadyForExecution_ReturnsExpectedReadiness()
     {
-        var store = new InMemoryIssueDependencyStore();
+        var store = new InMemoryTaskDependencyStore();
         var engine = new DependencyResolutionEngine(store);
 
-        store.AddIssue(10, 1, IssueOverallStatus.Open);
-        store.AddIssue(20, 1, IssueOverallStatus.Open);
+        store.AddTask(10, 1, TaskOverallStatus.Open);
+        store.AddTask(20, 1, TaskOverallStatus.Open);
         store.AddDependency(1, 20, 10);
 
         // 10 has no dependencies, should be ready
@@ -95,38 +95,38 @@ public class DependencyEngineTests
         Assert.False(engine.IsReadyForExecution(20));
 
         // Close 10
-        await store.UpdateIssueStatusAsync(10, IssueOverallStatus.Closed);
+        await store.UpdateTaskStatusAsync(10, TaskOverallStatus.Closed);
 
         // 20 should now be ready
         Assert.True(engine.IsReadyForExecution(20));
     }
 
     [Fact]
-    public async Task ResolveCascadeUnblockedIssuesAsync_UnblocksDependentWhenAllPrerequisitesComplete()
+    public async Task ResolveCascadeUnblockedTasksAsync_UnblocksDependentWhenAllPrerequisitesComplete()
     {
-        var store = new InMemoryIssueDependencyStore();
+        var store = new InMemoryTaskDependencyStore();
         var engine = new DependencyResolutionEngine(store);
 
-        // Issue 30 depends on 10 and 20
-        store.AddIssue(10, 1, IssueOverallStatus.Closed);
-        store.AddIssue(20, 1, IssueOverallStatus.Open);
-        store.AddIssue(30, 1, IssueOverallStatus.Open);
+        // ForgeTask 30 depends on 10 and 20
+        store.AddTask(10, 1, TaskOverallStatus.Closed);
+        store.AddTask(20, 1, TaskOverallStatus.Open);
+        store.AddTask(30, 1, TaskOverallStatus.Open);
 
         store.AddDependency(1, 30, 10);
         store.AddDependency(1, 30, 20);
 
         // Closing 10 alone should not unblock 30 because 20 is still Open
-        var unblocked = await engine.ResolveCascadeUnblockedIssuesAsync(10);
+        var unblocked = await engine.ResolveCascadeUnblockedTasksAsync(10);
         Assert.Empty(unblocked);
 
         // Close 20
-        await store.UpdateIssueStatusAsync(20, IssueOverallStatus.Closed);
-        unblocked = await engine.ResolveCascadeUnblockedIssuesAsync(20);
+        await store.UpdateTaskStatusAsync(20, TaskOverallStatus.Closed);
+        unblocked = await engine.ResolveCascadeUnblockedTasksAsync(20);
 
         Assert.Single(unblocked);
         Assert.Equal(30, unblocked[0]);
 
-        var status30 = await store.GetIssueStatusAsync(30);
-        Assert.Equal(IssueOverallStatus.Open, status30);
+        var status30 = await store.GetTaskStatusAsync(30);
+        Assert.Equal(TaskOverallStatus.Open, status30);
     }
 }

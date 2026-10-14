@@ -7,7 +7,7 @@ namespace NightCodeForge.Core.Workflow;
 /// </summary>
 public class PipelineContext
 {
-    public Issue Issue { get; set; }
+    public ForgeTask ForgeTask { get; set; }
     public Workspace Workspace { get; set; }
     public PipelineDataBag DataBag { get; set; }
     public AgentProfile? CurrentProfile { get; set; }
@@ -16,11 +16,11 @@ public class PipelineContext
     public int RetryCount { get; set; }
     public Dictionary<string, int> StageRetries { get; } = new();
 
-    public PipelineContext(Issue issue, Workspace workspace, PipelineDataBag? dataBag = null)
+    public PipelineContext(ForgeTask task, Workspace workspace, PipelineDataBag? dataBag = null)
     {
-        Issue = issue ?? throw new ArgumentNullException(nameof(issue));
+        ForgeTask = task ?? throw new ArgumentNullException(nameof(task));
         Workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
-        DataBag = dataBag ?? PipelineDataBag.FromJson(issue.PipelineDataJson);
+        DataBag = dataBag ?? PipelineDataBag.FromJson(task.PipelineDataJson);
         RetryCount = DataBag.Get<int?>("Workflow.RetryCount") ?? 0;
         var savedRetries = DataBag.Get<Dictionary<string, int>>("Workflow.StageRetries");
         if (savedRetries != null)
@@ -32,11 +32,11 @@ public class PipelineContext
         }
     }
 
-    public void SyncDataBagToIssue()
+    public void SyncDataBagToTask()
     {
         DataBag.Set("Workflow.RetryCount", RetryCount);
         DataBag.Set("Workflow.StageRetries", new Dictionary<string, int>(StageRetries));
-        Issue.PipelineDataJson = DataBag.ToJson();
+        ForgeTask.PipelineDataJson = DataBag.ToJson();
     }
 
     public int IncrementRetry(string stageId)

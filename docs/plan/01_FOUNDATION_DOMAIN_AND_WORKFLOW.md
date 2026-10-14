@@ -7,7 +7,7 @@
 
 ## 1. Executive Objective
 
-Establish the core solution architecture for **NightCodeForge** targeting **.NET 10**, implementing clean domain entities, SQLite persistence via Entity Framework Core, the Directed Acyclic Graph (DAG) dependency engine, workspace concurrency control, the extensible stage-based workflow engine with **PipelineDataBag** cross-stage state persistence, differential quality gates, and the file-system issue mirroring service.
+Establish the core solution architecture for **NightCodeForge** targeting **.NET 10**, implementing clean domain entities, SQLite persistence via Entity Framework Core, the Directed Acyclic Graph (DAG) dependency engine, workspace concurrency control, the extensible stage-based workflow engine with **PipelineDataBag** cross-stage state persistence, differential quality gates, and the file-system task mirroring service.
 
 ---
 
@@ -30,7 +30,7 @@ flowchart TD
         Locks["Workspace Concurrency Lock Provider"]
         Pipeline["Extensible Workflow Engine & PipelineDataBag"]
         Gates["Deterministic Quality Gates (Coverage & Warning Ratchet)"]
-        Mirror["Markdown Issue Mirroring (docs/issues/)"]
+        Mirror["Markdown ForgeTask Mirroring (docs/tasks/)"]
     end
 
     subgraph Step4 ["4. Validation"]
@@ -68,20 +68,20 @@ Implement clean domain entities with explicit value types:
    - Properties: `int Id`, `string Name`, `string RepositoryPath`, `string DefaultBaseBranch`, `ExecutionMode ExecutionMode`, `string? ContainerImage`, `string? Ext4MirrorPath`, `DateTime CreatedAt`.
 2. **`AgentProfile`:**
    - Properties: `string Id`, `int? WorkspaceId`, `string Name`, `string HarnessId` (`crucible`, `pi-rpc`, `acp`), `string ModelName`, `ThinkingEffort ThinkingEffort`, `int? ThinkingTokenBudget`, `double? Temperature`, `string? HarnessConfigurationJson`, `LocalOptimizationFlags? OptimizationFlags`, `IReadOnlyList<string>? PermittedTools`, `SandboxSecurityTier SecurityTier`.
-3. **`Issue`:**
-   - Properties: `int Id`, `int WorkspaceId`, `string Title`, `string Description`, `IssueOverallStatus Status` (defaults to `Suggested`), `string CurrentStageId`, `int Priority`, `MergeMode MergeMode` (defaults to `ManualReviewRequired`), `bool IsWaitingForHuman` (defaults to `false`), `string? InterruptedAgentProfileId`, `string? InterruptedStageId`, `string BaseBranch`, `string FeatureBranch`, `string? PipelineDataJson`, `DateTime CreatedAt`, `DateTime UpdatedAt`, `string? LastHangfireJobId`.
-4. **`IssueDependency`:**
-   - Properties: `int Id`, `int IssueId`, `int DependsOnIssueId`.
+3. **`ForgeTask`:**
+   - Properties: `int Id`, `int WorkspaceId`, `string Title`, `string Description`, `TaskOverallStatus Status` (defaults to `Suggested`), `string CurrentStageId`, `int Priority`, `MergeMode MergeMode` (defaults to `ManualReviewRequired`), `bool IsWaitingForHuman` (defaults to `false`), `string? InterruptedAgentProfileId`, `string? InterruptedStageId`, `string BaseBranch`, `string FeatureBranch`, `string? PipelineDataJson`, `DateTime CreatedAt`, `DateTime UpdatedAt`, `string? LastHangfireJobId`.
+4. **`TaskDependency`:**
+   - Properties: `int Id`, `int TaskId`, `int DependsOnTaskId`.
 5. **`Question`:**
-   - Properties: `int Id`, `int IssueId`, `string StageId`, `string? AgentProfileId`, `string Prompt`, `string Rationale`, `QuestionType QuestionType`, `string? OptionsJson`, `string? Answer`, `DateTime AskedAt`, `DateTime? AnsweredAt`, `QuestionStatus Status`.
+   - Properties: `int Id`, `int TaskId`, `string StageId`, `string? AgentProfileId`, `string Prompt`, `string Rationale`, `QuestionType QuestionType`, `string? OptionsJson`, `string? Answer`, `DateTime AskedAt`, `DateTime? AnsweredAt`, `QuestionStatus Status`.
 6. **`StageCheckpoint`:**
-   - Properties: `int Id`, `int IssueId`, `string StageId`, `string SerializedMemory`, `string GitCommitHash`, `DateTime CreatedAt`.
+   - Properties: `int Id`, `int TaskId`, `string StageId`, `string SerializedMemory`, `string GitCommitHash`, `DateTime CreatedAt`.
 7. **`StageExecutionRecord`:**
-   - Properties: `int Id`, `int IssueId`, `string StageId`, `string StageKind`, `string AgentProfileId`, `string HarnessId`, `string ModelName`, `DateTime StartedAt`, `DateTime? CompletedAt`, `int DurationMs`, `int PromptTokens`, `int CompletionTokens`, `int TotalTokens`, `string? TargetRouting`, `StageExecutionStatus Status`, `string? OutputDataJson`.
+   - Properties: `int Id`, `int TaskId`, `string StageId`, `string StageKind`, `string AgentProfileId`, `string HarnessId`, `string ModelName`, `DateTime StartedAt`, `DateTime? CompletedAt`, `int DurationMs`, `int PromptTokens`, `int CompletionTokens`, `int TotalTokens`, `string? TargetRouting`, `StageExecutionStatus Status`, `string? OutputDataJson`.
 8. **`ExecutionLog`:**
-   - Properties: `int Id`, `int IssueId`, `string? StageId`, `DateTime Timestamp`, `LogLevel Level`, `string Source`, `string Message`, `string? PayloadJson`.
+   - Properties: `int Id`, `int TaskId`, `string? StageId`, `DateTime Timestamp`, `LogLevel Level`, `string Source`, `string Message`, `string? PayloadJson`.
 9. **`Enums`:**
-   - `IssueOverallStatus`: `Suggested`, `Rejected`, `Open`, `Reviewed`, `Implemented`, `Ready`, `Closed`, `Cancelled`, `Failed`.
+   - `TaskOverallStatus`: `Suggested`, `Rejected`, `Open`, `Reviewed`, `Implemented`, `Ready`, `Closed`, `Cancelled`, `Failed`.
    - `MergeMode`: `Automatic`, `ManualReviewRequired`.
 10. **`LocalOptimizationFlags`:**
    - Strongly-typed class containing boolean flags: `ThinkingTraceCompaction`, `LoopCircuitBreaker`, `GuidedGrammarDecoding`, `DeterministicSymbolMap`, `StructuredDiagnosticExtraction`, `PrefixStabilization`, `JitModelPreload`.
@@ -91,16 +91,16 @@ Implement clean domain entities with explicit value types:
   ```csharp
   public interface IDependencyResolutionEngine
   {
-      bool HasCycle(int workspaceId, IEnumerable<(int IssueId, int DependsOnIssueId)> dependencies);
+      bool HasCycle(int workspaceId, IEnumerable<(int TaskId, int DependsOnTaskId)> dependencies);
       IReadOnlyList<int> GetTopologicalOrder(int workspaceId);
-      bool IsReadyForExecution(int issueId);
-      Task<IReadOnlyList<int>> ResolveCascadeUnblockedIssuesAsync(int completedIssueId);
+      bool IsReadyForExecution(int taskId);
+      Task<IReadOnlyList<int>> ResolveCascadeUnblockedTasksAsync(int completedTaskId);
   }
   ```
 * **Algorithm Requirements:**
   - Cycle detection using DFS with 3-color graph traversal (White, Gray, Black). Throws `CircularDependencyException` on detection.
-  - Dependency readiness: An issue is ready if and only if `Status == IssueOverallStatus.Open` and all prerequisite issues in `DependsOnIssueId` have `Status == IssueOverallStatus.Closed`.
-  - Cascade unblocking: When Issue $A$ transitions to `Closed`, query all dependent issues $B_i$; if all prerequisites of $B_i$ are `Closed` and $B_i$ is `Open`, transition $B_i$ to the inference queue (`llm-inference`).
+  - Dependency readiness: A task is ready if and only if `Status == TaskOverallStatus.Open` and all prerequisite tasks in `DependsOnTaskId` have `Status == TaskOverallStatus.Closed`.
+  - Cascade unblocking: When ForgeTask $A$ transitions to `Closed`, query all dependent tasks $B_i$; if all prerequisites of $B_i$ are `Closed` and $B_i$ is `Open`, transition $B_i$ to the inference queue (`llm-inference`).
 
 ### Step 1.4: Workspace Concurrency Lock Provider
 * **Contract:** `IWorkspaceLockProvider` in `NightCodeForge.Core/Interfaces`:
@@ -132,7 +132,7 @@ Implement clean domain entities with explicit value types:
   }
   ```
 * **`PipelineDataBag` Implementation:**
-  - Thread-safe `ConcurrentDictionary<string, JsonElement>` serialized to/from `Issue.PipelineDataJson`.
+  - Thread-safe `ConcurrentDictionary<string, JsonElement>` serialized to/from `ForgeTask.PipelineDataJson`.
   - Methods: `Set<T>(key, value)`, `Get<T>(key)`, `TryGet<T>(key, out value)`.
 * **Differential Quality Gates:**
   - **`DeterministicCoverageGate`:**
@@ -144,7 +144,7 @@ Implement clean domain entities with explicit value types:
 * **Stage Handover & Zero-Memory Context Resets:**
   - Archives previous chat history to transcripts; passes only structured plan, diff, and diagnostic artifacts to subsequent stages.
 * **Built-in Main Pipeline:**
-  - Stage 1: `IssueReviewStage` (Agentic - Deep reasoning) $\rightarrow$ `Reviewed`
+  - Stage 1: `TaskReviewStage` (Agentic - Deep reasoning) $\rightarrow$ `Reviewed`
   - Stage 2: `DeterministicPreImplementationStage` (Deterministic - baseline build, test, coverage)
   - Stage 3: `ImplementationStage` (Agentic - Fast coding) $\rightarrow$ `Implemented`
   - Stage 4: `DeterministicPostImplementationStage` (Deterministic - coverage gate & warning ratchet)
@@ -152,8 +152,8 @@ Implement clean domain entities with explicit value types:
   - Stage 6: `DeterministicPostReviewStage` (Deterministic - build & test verification of review edits) $\rightarrow$ `Ready`
   - Stage 7: Merge Gate (`Automatic` auto-squash or `ManualReviewRequired` maintainer approval) $\rightarrow$ `Closed`
 
-### Step 1.6: Markdown Issue Mirroring Subsystem (`IssueMarkdownSyncService`)
-* **File Location:** `<WorkspaceRoot>/docs/issues/YYYY-MM-DD-<slug>.md`
+### Step 1.6: Markdown ForgeTask Mirroring Subsystem (`TaskMarkdownSyncService`)
+* **File Location:** `<WorkspaceRoot>/docs/tasks/YYYY-MM-DD-<slug>.md`
 * **Features:**
   - Date-prefixed naming without ID to allow clean chronological sorting without file renames.
   - Frontmatter schema parsing with YamlDotNet.
@@ -161,7 +161,7 @@ Implement clean domain entities with explicit value types:
   - In-memory SHA-256 hash tracker to suppress self-triggering write loops.
   - Field protection: protects `id`, `status`, `stage` from unauthorized disk changes while syncing `title`, `description`, `priority`, `merge_mode`, and `profile`.
   - Auto-allocates ID for new markdown files dropped into the directory with initial `status: suggested` and `merge_mode: manual_review_required`.
-  - Archives or cleans up files when issues reach `Closed` or `Cancelled`.
+  - Archives or cleans up files when tasks reach `Closed` or `Cancelled`.
 
 ### Step 1.7: Entity Framework Core Persistence (`NightCodeForge.Infrastructure/Data`)
 * **Technology:** SQLite with Write-Ahead Logging (`PRAGMA journal_mode = WAL;`) for maximum local concurrent read/write throughput.
@@ -177,9 +177,9 @@ Implement clean domain entities with explicit value types:
 | **`DependencyEngineTests`** | DAG Resolution | Circular dependency detection, topological sorting, prerequisite readiness, cascade unblocking. |
 | **`WorkspaceLockTests`** | Concurrency | Same workspace serialization, multi-workspace parallelism, timeout handling. |
 | **`PipelineEngineTests`** | Workflow Stages | Forward advancement, backward loop routing on failure, retry loop circuit breaker (max 3). |
-| **`PipelineDataBagTests`** | Cross-Stage State | Type-safe get/set, JSON serialization/deserialization, persistence across issue reloads. |
+| **`PipelineDataBagTests`** | Cross-Stage State | Type-safe get/set, JSON serialization/deserialization, persistence across task reloads. |
 | **`DifferentialGateTests`** | Quality Gates | Test coverage drop failure, test count reduction detection (anti-cheating), warning ratchet delta. |
-| **`IssueMarkdownSyncTests`** | Disk Mirroring | YAML frontmatter parsing, debounced file watcher, echo loop suppression, field protection. |
+| **`TaskMarkdownSyncTests`** | Disk Mirroring | YAML frontmatter parsing, debounced file watcher, echo loop suppression, field protection. |
 
 ---
 
@@ -191,5 +191,5 @@ Implement clean domain entities with explicit value types:
 - [x] Workspace concurrency provider serializes operations per workspace ID.
 - [x] `PipelineDataBag` stores and retrieves cross-stage state reliably.
 - [x] `DeterministicCoverageGate` detects coverage drops and deleted tests.
-- [x] `IssueMarkdownSyncService` mirrors issues to `docs/issues/` with echo loop suppression.
+- [x] `TaskMarkdownSyncService` mirrors tasks to `docs/tasks/` with echo loop suppression.
 - [x] 100% of unit tests in `NightCodeForge.Core.Tests` pass cleanly.

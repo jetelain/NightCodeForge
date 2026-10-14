@@ -50,20 +50,20 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     }
 
     /// <inheritdoc />
-    public async Task CheckoutIssueBranchAsync(Workspace workspace, int issueId, string baseBranch, CancellationToken cancellationToken = default)
+    public async Task CheckoutTaskBranchAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default)
     {
-        await EnsureWorktreeAsync(workspace, issueId, baseBranch, cancellationToken);
+        await EnsureWorktreeAsync(workspace, taskId, baseBranch, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<string> EnsureWorktreeAsync(Workspace workspace, int issueId, string baseBranch, CancellationToken cancellationToken = default)
+    public async Task<string> EnsureWorktreeAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default)
     {
         var canonicalPath = GetCanonicalWorkingPath(workspace);
-        var worktreePath = GetWorktreePath(workspace, issueId);
-        var branchName = $"feature/issue-{issueId}";
+        var worktreePath = GetWorktreePath(workspace, taskId);
+        var branchName = $"feature/task-{taskId}";
 
-        _logger.LogInformation("Ensuring worktree for Issue #{IssueId} at '{WorktreePath}' (branch: '{BranchName}', base: '{BaseBranch}')",
-            issueId, worktreePath, branchName, baseBranch);
+        _logger.LogInformation("Ensuring worktree for ForgeTask #{TaskId} at '{WorktreePath}' (branch: '{BranchName}', base: '{BaseBranch}')",
+            taskId, worktreePath, branchName, baseBranch);
 
         // Check if worktree is already registered
         try
@@ -77,7 +77,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
             if (isWorktreeRegistered)
             {
-                _logger.LogInformation("Worktree for Issue #{IssueId} is already registered at '{WorktreePath}'", issueId, worktreePath);
+                _logger.LogInformation("Worktree for ForgeTask #{TaskId} is already registered at '{WorktreePath}'", taskId, worktreePath);
                 return worktreePath;
             }
         }
@@ -140,13 +140,13 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                 string targetGitDir;
                 if (!string.IsNullOrEmpty(wtParent) && string.Equals(wtParent, canParent, StringComparison.OrdinalIgnoreCase))
                 {
-                    // Sibling layout: ~/.nightcodeforge/wks/{id}/clone and ~/.nightcodeforge/wks/{id}/issue-{id}
-                    targetGitDir = $"../{cloneDirName}/.git/worktrees/issue-{issueId}";
+                    // Sibling layout: ~/.nightcodeforge/wks/{id}/clone and ~/.nightcodeforge/wks/{id}/task-{id}
+                    targetGitDir = $"../{cloneDirName}/.git/worktrees/task-{taskId}";
                 }
                 else
                 {
-                    // Child layout fallback: <canonical>/issue-{id}
-                    targetGitDir = $"../.git/worktrees/issue-{issueId}";
+                    // Child layout fallback: <canonical>/task-{id}
+                    targetGitDir = $"../.git/worktrees/task-{taskId}";
                 }
 
                 File.SetAttributes(gitFile, FileAttributes.Normal);
@@ -158,17 +158,17 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             _logger.LogDebug(ex, "Could not rewrite relative gitdir in '{WorktreePath}'", worktreePath);
         }
 
-        _logger.LogInformation("Successfully created worktree for Issue #{IssueId} at '{WorktreePath}'", issueId, worktreePath);
+        _logger.LogInformation("Successfully created worktree for ForgeTask #{TaskId} at '{WorktreePath}'", taskId, worktreePath);
         return worktreePath;
     }
 
     /// <inheritdoc />
-    public async Task RemoveWorktreeAsync(Workspace workspace, int issueId, CancellationToken cancellationToken = default)
+    public async Task RemoveWorktreeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)
     {
         var canonicalPath = GetCanonicalWorkingPath(workspace);
-        var worktreePath = GetWorktreePath(workspace, issueId);
+        var worktreePath = GetWorktreePath(workspace, taskId);
 
-        _logger.LogInformation("Removing worktree for Issue #{IssueId} at '{WorktreePath}'", issueId, worktreePath);
+        _logger.LogInformation("Removing worktree for ForgeTask #{TaskId} at '{WorktreePath}'", taskId, worktreePath);
 
         try
         {
@@ -176,7 +176,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to remove worktree cleanly for Issue #{IssueId}; attempting prune", issueId);
+            _logger.LogWarning(ex, "Failed to remove worktree cleanly for ForgeTask #{TaskId}; attempting prune", taskId);
         }
 
         try
@@ -199,7 +199,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     }
 
     /// <inheritdoc />
-    public string GetWorktreePath(Workspace workspace, int issueId)
+    public string GetWorktreePath(Workspace workspace, int taskId)
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
@@ -207,13 +207,13 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         {
             if (_pathResolver != null)
             {
-                return _pathResolver.GetAgentWorktreePath(workspace.Id, issueId);
+                return _pathResolver.GetAgentWorktreePath(workspace.Id, taskId);
             }
             var mirrorTrimmed = workspace.Ext4MirrorPath.TrimEnd('/', '\\');
             var parentDir = Path.GetDirectoryName(mirrorTrimmed);
             return !string.IsNullOrEmpty(parentDir)
-                ? Path.Combine(parentDir, $"issue-{issueId}").Replace('\\', '/')
-                : $"{mirrorTrimmed}/issue-{issueId}";
+                ? Path.Combine(parentDir, $"task-{taskId}").Replace('\\', '/')
+                : $"{mirrorTrimmed}/task-{taskId}";
         }
 
         var canonical = GetCanonicalWorkingPath(workspace);
@@ -226,7 +226,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
              dirName.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
              dirName.Equals("mirror", StringComparison.OrdinalIgnoreCase)))
         {
-            var wt = Path.Combine(parent, $"issue-{issueId}");
+            var wt = Path.Combine(parent, $"task-{taskId}");
             return canonical.Contains('/') && !canonical.Contains('\\')
                 ? wt.Replace('\\', '/')
                 : wt;
@@ -234,26 +234,26 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         if (canonical.StartsWith('/') || canonical.StartsWith('~'))
         {
-            return $"{canonicalTrimmed}/issue-{issueId}";
+            return $"{canonicalTrimmed}/task-{taskId}";
         }
 
-        return Path.Combine(canonical, $"issue-{issueId}").Replace('\\', '/');
+        return Path.Combine(canonical, $"task-{taskId}").Replace('\\', '/');
     }
 
     /// <inheritdoc />
     public async Task<string> CreateWipCheckpointAsync(
         Workspace workspace,
-        int issueId,
+        int taskId,
         string stageName,
         string summary,
         CancellationToken cancellationToken = default)
     {
-        var workingPath = GetWorkingPath(workspace, issueId);
+        var workingPath = GetWorkingPath(workspace, taskId);
         var safeSummary = SanitizeMessage(summary);
-        var commitMessage = $"WIP: [Issue #{issueId}][Stage: {stageName}] {safeSummary}";
+        var commitMessage = $"WIP: [ForgeTask #{taskId}][Stage: {stageName}] {safeSummary}";
 
-        _logger.LogInformation("Creating WIP checkpoint for Issue #{IssueId} [Stage: {StageName}] in '{WorkingPath}'",
-            issueId, stageName, workingPath);
+        _logger.LogInformation("Creating WIP checkpoint for ForgeTask #{TaskId} [Stage: {StageName}] in '{WorkingPath}'",
+            taskId, stageName, workingPath);
 
         // Stage all changes
         await _gitCliRunner.ExecuteAsync(workingPath, ["add", "-A"], cancellationToken: cancellationToken);
@@ -280,22 +280,22 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         var revParseResult = await _gitCliRunner.ExecuteAsync(workingPath, ["rev-parse", "HEAD"], cancellationToken: cancellationToken);
         var sha = revParseResult.StandardOutput.Trim();
 
-        _logger.LogInformation("WIP checkpoint created for Issue #{IssueId}: {Sha}", issueId, sha);
+        _logger.LogInformation("WIP checkpoint created for ForgeTask #{TaskId}: {Sha}", taskId, sha);
         return sha;
     }
 
     /// <inheritdoc />
     public async Task<string> GenerateDiffAsync(
         Workspace workspace,
-        int issueId,
+        int taskId,
         string baseBranch,
         CancellationToken cancellationToken = default)
     {
-        var workingPath = GetWorkingPath(workspace, issueId);
-        var branchName = $"feature/issue-{issueId}";
+        var workingPath = GetWorkingPath(workspace, taskId);
+        var branchName = $"feature/task-{taskId}";
 
-        _logger.LogInformation("Generating noise-filtered diff for Issue #{IssueId} against '{BaseBranch}' in '{WorkingPath}'",
-            issueId, baseBranch, workingPath);
+        _logger.LogInformation("Generating noise-filtered diff for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorkingPath}'",
+            taskId, baseBranch, workingPath);
 
         // -U2 context window reduction and noisy artifact exclusions
         string[] diffArgs = [
@@ -318,13 +318,13 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     /// <inheritdoc />
     public async Task SquashAndMergeAsync(
         Workspace workspace,
-        int issueId,
+        int taskId,
         string baseBranch,
         string commitMessage,
         CancellationToken cancellationToken = default)
     {
         var canonicalPath = GetCanonicalWorkingPath(workspace);
-        var branchName = $"feature/issue-{issueId}";
+        var branchName = $"feature/task-{taskId}";
         var safeMessage = SanitizeMessage(commitMessage);
 
         _logger.LogInformation("Squashing and merging '{BranchName}' into '{BaseBranch}' in canonical repository '{CanonicalPath}'",
@@ -374,10 +374,10 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             ["commit", "-m", safeMessage],
             cancellationToken: cancellationToken);
 
-        _logger.LogInformation("Squash merge completed for Issue #{IssueId} on '{BaseBranch}'", issueId, baseBranch);
+        _logger.LogInformation("Squash merge completed for ForgeTask #{TaskId} on '{BaseBranch}'", taskId, baseBranch);
 
-        // 4. Remove the issue's ephemeral worktree
-        await RemoveWorktreeAsync(workspace, issueId, cancellationToken);
+        // 4. Remove the task's ephemeral worktree
+        await RemoveWorktreeAsync(workspace, taskId, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -385,9 +385,9 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         => RevertOrCleanAsync(workspace, null, cancellationToken);
 
     /// <inheritdoc />
-    public async Task RevertOrCleanAsync(Workspace workspace, int? issueId, CancellationToken cancellationToken = default)
+    public async Task RevertOrCleanAsync(Workspace workspace, int? taskId, CancellationToken cancellationToken = default)
     {
-        var workingPath = GetWorkingPath(workspace, issueId);
+        var workingPath = GetWorkingPath(workspace, taskId);
 
         _logger.LogWarning("Reverting and cleaning repository working tree in '{WorkingPath}'", workingPath);
 
@@ -395,11 +395,11 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         await _gitCliRunner.ExecuteAsync(workingPath, ["clean", "-fd"], cancellationToken: cancellationToken);
     }
 
-    private string GetWorkingPath(Workspace workspace, int? issueId = null)
+    private string GetWorkingPath(Workspace workspace, int? taskId = null)
     {
-        if (issueId.HasValue)
+        if (taskId.HasValue)
         {
-            var wt = GetWorktreePath(workspace, issueId.Value);
+            var wt = GetWorktreePath(workspace, taskId.Value);
             // If the worktree directory already exists or is in WSL/Linux, use it
             if (Directory.Exists(wt) || wt.StartsWith('/') || wt.StartsWith('~') || WslPathConverter.IsWslUncPath(wt))
             {
@@ -493,9 +493,9 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             {
                 var content = await File.ReadAllTextAsync(excludePath, cancellationToken);
                 var lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                if (!lines.Contains("issue-*/") && !lines.Contains("issue-*"))
+                if (!lines.Contains("task-*/") && !lines.Contains("task-*"))
                 {
-                    await File.AppendAllTextAsync(excludePath, "\nissue-*/\nwt/\n", cancellationToken);
+                    await File.AppendAllTextAsync(excludePath, "\ntask-*/\nwt/\n", cancellationToken);
                 }
             }
             else if (Directory.Exists(targetCanonical))
@@ -505,7 +505,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                 {
                     Directory.CreateDirectory(dir);
                 }
-                await File.WriteAllTextAsync(excludePath, "issue-*/\nwt/\n", cancellationToken);
+                await File.WriteAllTextAsync(excludePath, "task-*/\nwt/\n", cancellationToken);
             }
         }
         catch (Exception ex)

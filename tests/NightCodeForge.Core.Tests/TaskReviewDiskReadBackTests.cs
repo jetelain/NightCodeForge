@@ -9,12 +9,12 @@ using NightCodeForge.Core.Workflow.Stages;
 
 namespace NightCodeForge.Core.Tests;
 
-public class IssueReviewDiskReadBackTests : IDisposable
+public class TaskReviewDiskReadBackTests : IDisposable
 {
     private readonly string _tempWorkspaceDir;
     private readonly string _tempWorktreeDir;
 
-    public IssueReviewDiskReadBackTests()
+    public TaskReviewDiskReadBackTests()
     {
         _tempWorkspaceDir = Path.Combine(Path.GetTempPath(), "NightCodeForge_Wks_" + Guid.NewGuid().ToString("N"));
         _tempWorktreeDir = Path.Combine(Path.GetTempPath(), "NightCodeForge_Wkt_" + Guid.NewGuid().ToString("N"));
@@ -43,10 +43,10 @@ public class IssueReviewDiskReadBackTests : IDisposable
             CapturedBootstrapPrompt = context.BootstrapPrompt;
             CapturedStageDirective = context.StageDirective;
 
-            var issueMarkdownRelPath = context.PipelineContext?.DataBag.Get<string>("IssueMarkdownPath");
-            if (!string.IsNullOrWhiteSpace(issueMarkdownRelPath) && !string.IsNullOrWhiteSpace(context.PipelineContext?.WorkingDirectory))
+            var taskMarkdownRelPath = context.PipelineContext?.DataBag.Get<string>("TaskMarkdownPath");
+            if (!string.IsNullOrWhiteSpace(taskMarkdownRelPath) && !string.IsNullOrWhiteSpace(context.PipelineContext?.WorkingDirectory))
             {
-                var fullPath = Path.Combine(context.PipelineContext.WorkingDirectory, issueMarkdownRelPath);
+                var fullPath = Path.Combine(context.PipelineContext.WorkingDirectory, taskMarkdownRelPath);
                 if (File.Exists(fullPath))
                 {
                     var existingContent = await File.ReadAllTextAsync(fullPath, cancellationToken);
@@ -66,7 +66,7 @@ public class IssueReviewDiskReadBackTests : IDisposable
 
             return AgentRunResult.Completed(
                 new AgentRunMetrics(100, 200, 100, 300),
-                summary: "Issue review complete; updated specification on disk.");
+                summary: "ForgeTask review complete; updated specification on disk.");
         }
     }
 
@@ -89,21 +89,21 @@ public class IssueReviewDiskReadBackTests : IDisposable
         private readonly string _worktreePath;
         public TestGitWorkspaceManager(string worktreePath) => _worktreePath = worktreePath;
 
-        string IGitWorkspaceManager.GetWorktreePath(Workspace workspace, int issueId) => _worktreePath;
+        string IGitWorkspaceManager.GetWorktreePath(Workspace workspace, int taskId) => _worktreePath;
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_IssueReviewAgent_DirectsAgentToEditDisk_AndReadsBackDiskChangesIntoRepositoryAndPlan()
+    public async Task ProcessTaskAsync_TaskReviewAgent_DirectsAgentToEditDisk_AndReadsBackDiskChangesIntoRepositoryAndPlan()
     {
         // Arrange
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 42,
             WorkspaceId = 1,
             Title = "Implement Distributed Cache",
             Description = "Basic cache requirements for session state.",
-            Status = IssueOverallStatus.Open,
-            CurrentStageId = "issue-review",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "task-review",
             CreatedAt = new DateTime(2026, 10, 14, 0, 0, 0, DateTimeKind.Utc)
         };
 
@@ -115,31 +115,31 @@ public class IssueReviewDiskReadBackTests : IDisposable
             ExecutionMode = ExecutionMode.BareHost
         };
 
-        var issueRepo = new InMemoryIssueRepository();
-        await issueRepo.CreateAsync(issue);
+        var taskRepo = new InMemoryTaskRepository();
+        await taskRepo.CreateAsync(task);
 
         var workspaceRepo = new InMemoryWorkspaceRepository();
         await workspaceRepo.CreateAsync(workspace);
 
-        var depStore = new InMemoryIssueDependencyStore();
-        depStore.AddIssue(42, 1, IssueOverallStatus.Open);
+        var depStore = new InMemoryTaskDependencyStore();
+        depStore.AddTask(42, 1, TaskOverallStatus.Open);
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
         var gitManager = new TestGitWorkspaceManager(_tempWorktreeDir);
-        var syncService = new IssueMarkdownSyncService(issueRepo);
+        var syncService = new TaskMarkdownSyncService(taskRepo);
 
         var harness = new TestHarness();
         var harnessRegistry = new TestHarnessRegistry(harness);
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
         {
-            new IssueReviewStage(),
+            new TaskReviewStage(),
             new ImplementationStage()
         });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo,
             workspaceRepo,
             depEngine,
             lockProvider,
@@ -150,24 +150,24 @@ public class IssueReviewDiskReadBackTests : IDisposable
             harnessRegistry: harnessRegistry,
             markdownSyncService: syncService);
 
-        // Act: Process issue-review stage
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        // Act: Process task-review stage
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         // Assert 1: Agent directive and bootstrap prompt explicitly instruct editing disk
         Assert.NotNull(harness.CapturedStageDirective);
         Assert.Contains("MANDATORY FILE EDIT", harness.CapturedStageDirective);
-        Assert.Contains("You must edit the issue specification document on disk", harness.CapturedStageDirective);
+        Assert.Contains("You must edit the task specification document on disk", harness.CapturedStageDirective);
         Assert.Contains("reads back the file from disk", harness.CapturedStageDirective);
 
         Assert.NotNull(harness.CapturedBootstrapPrompt);
-        Assert.Contains("[Issue Specification Document]:", harness.CapturedBootstrapPrompt);
+        Assert.Contains("[ForgeTask Specification Document]:", harness.CapturedBootstrapPrompt);
         Assert.Contains("CRITICAL: You are required to edit this file directly on disk using 'edit' or 'write'", harness.CapturedBootstrapPrompt);
         Assert.Contains("Your disk changes will be read back automatically upon stage completion", harness.CapturedBootstrapPrompt);
 
-        // Assert 2: The orchestrator read back the disk modifications into the issue entity in database
-        var updatedInDb = await issueRepo.GetByIdAsync(42);
+        // Assert 2: The orchestrator read back the disk modifications into the task entity in database
+        var updatedInDb = await taskRepo.GetByIdAsync(42);
         Assert.NotNull(updatedInDb);
-        Assert.Equal(IssueOverallStatus.Reviewed, updatedInDb.Status);
+        Assert.Equal(TaskOverallStatus.Reviewed, updatedInDb.Status);
         Assert.Equal("implementation", updatedInDb.CurrentStageId);
         Assert.Contains("RedisDistributedCache", updatedInDb.Description);
         Assert.Contains("## 🏛️ Architecture & Implementation Plan", updatedInDb.Description);
@@ -181,7 +181,7 @@ public class IssueReviewDiskReadBackTests : IDisposable
         Assert.Contains("## 🏛️ Architecture & Implementation Plan", approvedPlan);
 
         // Assert 4: Git checkpoint commit was created capturing the completed stage
-        Assert.Contains(gitManager.WipCheckpoints, c => c.StageName == "issue-review");
+        Assert.Contains(gitManager.WipCheckpoints, c => c.StageName == "task-review");
 
         // Assert 5: The changes were mirrored to host repository path
         var mirroredFiles = Directory.GetFiles(_tempWorkspaceDir, "*.md", SearchOption.AllDirectories);

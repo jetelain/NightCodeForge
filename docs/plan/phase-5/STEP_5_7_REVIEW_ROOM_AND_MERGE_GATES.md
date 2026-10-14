@@ -10,11 +10,11 @@
 
 Provide an enterprise-grade code review environment where maintainers inspect noise-filtered Git diffs, evaluate deterministic quality gate outcomes, add **inline line-by-line code review comments**, and execute merge resolutions under both `Automatic` and `ManualReviewRequired` merge modes.
 
-When `MergeMode == MergeMode.ManualReviewRequired`, the issue pauses in `Status = IssueOverallStatus.Ready` after Stage 6. The maintainer can:
+When `MergeMode == MergeMode.ManualReviewRequired`, the task pauses in `Status = TaskOverallStatus.Ready` after Stage 6. The maintainer can:
 1. Conduct an interactive code review directly in the Web UI.
 2. Annotate specific lines of code in the diff viewer with targeted change requests.
-3. Submit the review, which automatically aggregates all inline comments and general revision notes into a structured payload and dispatches it via `IIssueOrchestrator.RequestChangesAsync`.
-4. The orchestrator routes the issue directly back to **Stage 3 (`ImplementationStage`)**, injects the reviewer comments into the agent's prompt context, and enqueues to the **`llm-urgent`** queue with top priority.
+3. Submit the review, which automatically aggregates all inline comments and general revision notes into a structured payload and dispatches it via `ITaskOrchestrator.RequestChangesAsync`.
+4. The orchestrator routes the task directly back to **Stage 3 (`ImplementationStage`)**, injects the reviewer comments into the agent's prompt context, and enqueues to the **`llm-urgent`** queue with top priority.
 
 ---
 
@@ -23,10 +23,10 @@ When `MergeMode == MergeMode.ManualReviewRequired`, the issue pauses in `Status 
 ```mermaid
 flowchart TD
     subgraph Stage6Ready ["Pipeline Completion (ManualReviewRequired)"]
-        Stage6["Stage 6: Post-Review Verification Passes"] --> ReadyStatus["Issue.Status = Ready\n(Awaiting Maintainer Review)"]
+        Stage6["Stage 6: Post-Review Verification Passes"] --> ReadyStatus["ForgeTask.Status = Ready\n(Awaiting Maintainer Review)"]
     end
 
-    subgraph ReviewRoomUI ["Review Room (/review/{IssueId})"]
+    subgraph ReviewRoomUI ["Review Room (/review/{TaskId})"]
         ReadyStatus --> DiffView["DiffPlex Side-by-Side / Unified Diff Viewer"]
         DiffView --> InlineAction["Hover Line ➔ Click [+] to Add Inline Comment\n(src/Services/Math.cs:42)"]
         InlineAction --> CommentStore["ReviewCommentStateService\n(Tracks Drafted Inline Comments)"]
@@ -36,13 +36,13 @@ flowchart TD
     subgraph ResolutionChoice ["Maintainer Decision"]
         BottomBar --> Decision{"Maintainer Decision"}
         
-        Decision -->|Approve & Merge| ApproveAction["CompleteIssueAndCascadeAsync()\n1. Squash-merge to Base Branch\n2. Issue.Status = Closed\n3. Cascade unblock DAG dependencies\n4. Archive docs/issues/*.md"]
+        Decision -->|Approve & Merge| ApproveAction["CompleteTaskAndCascadeAsync()\n1. Squash-merge to Base Branch\n2. ForgeTask.Status = Closed\n3. Cascade unblock DAG dependencies\n4. Archive docs/tasks/*.md"]
         
         Decision -->|Request Changes| AggregateModal["ChangeRequestModal.razor\n1. Overall Summary Notes\n2. Aggregates all file/line inline comments\n3. Previews formatted Markdown payload"]
     end
 
     subgraph ReworkDispatch ["Dispatch to Implementation Agent"]
-        AggregateModal -->|Submit| RequestChanges["IIssueOrchestrator.RequestChangesAsync()\n1. Sets Issue.Status = Reviewed\n2. Sets Issue.CurrentStageId = implementation\n3. Stores bag['ReviewerFeedback'] = Markdown\n4. Enqueues to 'llm-urgent' (Priority 1)"]
+        AggregateModal -->|Submit| RequestChanges["ITaskOrchestrator.RequestChangesAsync()\n1. Sets ForgeTask.Status = Reviewed\n2. Sets ForgeTask.CurrentStageId = implementation\n3. Stores bag['ReviewerFeedback'] = Markdown\n4. Enqueues to 'llm-urgent' (Priority 1)"]
         
         RequestChanges --> AgentWakeup["ImplementationStage Worker Boots on llm-urgent\n(BuildBootstrapPrompt injects [Reviewer Requested Changes / Feedback])"]
         AgentWakeup --> CodeFix["Agent reads exact line comments\nApplies targeted fixes & runs tests"]
@@ -153,13 +153,13 @@ public record FileDiffSummary(
     string OldContent,
     string NewContent);
 
-public record IssueReviewSnapshot(
-    int IssueId,
+public record TaskReviewSnapshot(
+    int TaskId,
     string Title,
     string FeatureBranch,
     string BaseBranch,
     MergeMode MergeMode,
-    IssueOverallStatus Status,
+    TaskOverallStatus Status,
     IReadOnlyList<FileDiffSummary> Files,
     QualityGateMetrics GateMetrics);
 
@@ -184,12 +184,12 @@ public record QualityGateMetrics(
 
 ```razor
 @page "/review"
-@page "/review/{IssueId:int}"
+@page "/review/{TaskId:int}"
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Services
-@inject IIssueOrchestrator IssueOrchestrator
-@inject IIssueRepository IssueRepository
+@inject ITaskOrchestrator TaskOrchestrator
+@inject ITaskRepository TaskRepository
 @inject IGitWorkspaceManager GitWorkspaceManager
 @inject ReviewCommentStateService CommentState
 @inject ToastService ToastService
@@ -205,17 +205,17 @@ public record QualityGateMetrics(
         <div class="review-header card-surface mb-3">
             <div class="d-flex justify-content-between align-items-center">
                 <div>
-                    <h2>Review: Issue #@_snapshot.IssueId - @_snapshot.Title</h2>
+                    <h2>Review: ForgeTask #@_snapshot.TaskId - @_snapshot.Title</h2>
                     <span class="badge-branch"><code>@_snapshot.FeatureBranch</code> ➔ <code>@_snapshot.BaseBranch</code></span>
                     <span class="badge-mode">Mode: @_snapshot.MergeMode</span>
                     <span class="badge-status @GetStatusBadgeClass(_snapshot.Status)">Status: @_snapshot.Status</span>
                 </div>
                 <div class="review-actions">
-                    @if (_snapshot.MergeMode == MergeMode.Automatic && _snapshot.Status == IssueOverallStatus.Closed)
+                    @if (_snapshot.MergeMode == MergeMode.Automatic && _snapshot.Status == TaskOverallStatus.Closed)
                     {
                         <span class="badge-success-large">✅ Auto-Merged to @_snapshot.BaseBranch</span>
                     }
-                    else if (_snapshot.Status == IssueOverallStatus.Ready || _snapshot.Status == IssueOverallStatus.Implemented)
+                    else if (_snapshot.Status == TaskOverallStatus.Ready || _snapshot.Status == TaskOverallStatus.Implemented)
                     {
                         <button class="btn btn-warning-outline me-2" @onclick="OpenChangeRequestModal">
                             📝 Request Changes @(CommentState.CommentCount > 0 ? $"({CommentState.CommentCount})" : "")
@@ -285,7 +285,7 @@ public record QualityGateMetrics(
 @if (_showChangeRequestModal && _snapshot != null)
 {
     <ChangeRequestModal
-        IssueId="_snapshot.IssueId"
+        TaskId="_snapshot.TaskId"
         OnSubmitted="HandleChangesRequestedAsync"
         OnClosed="() => _showChangeRequestModal = false" />
 }
@@ -293,7 +293,7 @@ public record QualityGateMetrics(
 @if (_showApproveModal && _snapshot != null)
 {
     <ApproveMergeModal
-        IssueId="_snapshot.IssueId"
+        TaskId="_snapshot.TaskId"
         BaseBranch="_snapshot.BaseBranch"
         OnApproved="HandleApprovedAsync"
         OnClosed="() => _showApproveModal = false" />
@@ -436,20 +436,20 @@ Aggregates all inline comments and overall notes into the `ReviewerFeedback` pay
 ```razor
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Services
-@inject IIssueOrchestrator IssueOrchestrator
+@inject ITaskOrchestrator TaskOrchestrator
 @inject ReviewCommentStateService CommentState
 @inject ToastService ToastService
 
 <div class="forge-modal-backdrop">
     <div class="forge-modal card-glass modal-lg">
         <div class="modal-header">
-            <h3>📝 Request Changes for Issue #@IssueId</h3>
+            <h3>📝 Request Changes for ForgeTask #@TaskId</h3>
             <button class="btn-icon" @onclick="Close">✕</button>
         </div>
 
         <div class="modal-body font-sans">
             <p class="text-secondary">
-                Submitting this review will route Issue #@IssueId back to <strong>Stage 3 (ImplementationStage)</strong>
+                Submitting this review will route ForgeTask #@TaskId back to <strong>Stage 3 (ImplementationStage)</strong>
                 and enqueue it to <strong><code>llm-urgent</code></strong> with top priority.
             </p>
 
@@ -509,7 +509,7 @@ Aggregates all inline comments and overall notes into the `ReviewerFeedback` pay
 </div>
 
 @code {
-    [Parameter] public int IssueId { get; set; }
+    [Parameter] public int TaskId { get; set; }
     [Parameter] public EventCallback OnSubmitted { get; set; }
     [Parameter] public EventCallback OnClosed { get; set; }
 
@@ -528,9 +528,9 @@ Aggregates all inline comments and overall notes into the `ReviewerFeedback` pay
         _isSubmitting = true;
         try
         {
-            await IssueOrchestrator.RequestChangesAsync(IssueId, feedback);
+            await TaskOrchestrator.RequestChangesAsync(TaskId, feedback);
             CommentState.Clear();
-            ToastService.Show("Changes Requested", $"Issue #{IssueId} routed to ImplementationStage on llm-urgent.", ToastLevel.Success);
+            ToastService.Show("Changes Requested", $"ForgeTask #{TaskId} routed to ImplementationStage on llm-urgent.", ToastLevel.Success);
             await OnSubmitted.InvokeAsync();
         }
         finally
@@ -557,12 +557,12 @@ Aggregates all inline comments and overall notes into the `ReviewerFeedback` pay
    - Verify `FormatAggregatedFeedback` generates structured Markdown with file paths, line numbers, code snippets, and review notes.
 3. **Change Request Rework Dispatch:**
    - Submit change request:
-     - Verify `IIssueOrchestrator.RequestChangesAsync` is invoked.
+     - Verify `ITaskOrchestrator.RequestChangesAsync` is invoked.
      - Verify `bag["ReviewerFeedback"]` contains the formatted markdown.
-     - Verify `Issue.Status` transitions to `Reviewed` and `CurrentStageId` is `implementation`.
-     - Verify issue is enqueued to `llm-urgent`.
+     - Verify `ForgeTask.Status` transitions to `Reviewed` and `CurrentStageId` is `implementation`.
+     - Verify task is enqueued to `llm-urgent`.
 4. **Approve & Merge Tests:**
-   - When satisfied, clicking "Approve & Merge" calls `CompleteIssueAndCascadeAsync`, squashing commits into base branch and closing the issue.
+   - When satisfied, clicking "Approve & Merge" calls `CompleteTaskAndCascadeAsync`, squashing commits into base branch and closing the task.
 
 ---
 
@@ -572,7 +572,7 @@ Aggregates all inline comments and overall notes into the `ReviewerFeedback` pay
 - [ ] `DiffViewer.razor` includes hover `[+]` button to open inline comment thread on any diff line.
 - [ ] Review header displays dynamic comment counter badge.
 - [ ] `ChangeRequestModal.razor` aggregates inline comments + general notes into formatted Markdown.
-- [ ] Dispatches to `IIssueOrchestrator.RequestChangesAsync` and routes to `ImplementationStage` on `llm-urgent`.
+- [ ] Dispatches to `ITaskOrchestrator.RequestChangesAsync` and routes to `ImplementationStage` on `llm-urgent`.
 - [ ] Implementation agent receives the structured line-by-line feedback in its bootstrap prompt context.
-- [ ] Approve & Merge modal completes issue, squashes commits, and cascades DAG unblocking.
+- [ ] Approve & Merge modal completes task, squashes commits, and cascades DAG unblocking.
 - [ ] Component unit tests verify inline comment persistence and feedback compilation.

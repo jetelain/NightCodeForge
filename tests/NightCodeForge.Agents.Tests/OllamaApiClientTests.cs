@@ -116,7 +116,7 @@ public class OllamaApiClientTests
         {
             Profile = profile,
             StageId = "stage-2",
-            Issue = new Core.Domain.Issue { Id = 1, Title = "Test Issue", Description = "Implement feature" }
+            ForgeTask = new Core.Domain.ForgeTask { Id = 1, Title = "Test ForgeTask", Description = "Implement feature" }
         };
 
         var result = await harness.RunStageAsync(sessionContext);

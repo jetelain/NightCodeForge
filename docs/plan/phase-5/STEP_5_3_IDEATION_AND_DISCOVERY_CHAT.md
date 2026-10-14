@@ -13,8 +13,8 @@ Provide an interactive conversational environment where developers brainstorm, e
 ### Core Capabilities:
 1. **Streaming Chat Interface:** Real-time token streaming separating model cognitive deliberation (`<think>...</think>`) into an expandable "Reasoning Trace" accordion, with final conversational responses rendered in formatted markdown.
 2. **Context-Aware Exploration:** Agent interacts with the codebase via read-only tools (`read`, `bash`, `web_search`) without mutating any files on disk.
-3. **Interactive Issue Proposal Cards:** As the agent discovers backlog opportunities or invokes `propose_issues`, proposals render as interactive cards with in-place editable fields (Title, Description/Scope, Priority, Dependencies).
-4. **One-Click Backlog Ingestion:** Ingesting an issue creates an entity in `AppDbContext` with initial `Status = IssueOverallStatus.Suggested`, links dependencies in `IssueDependency`, triggers `IIssueMarkdownSyncService` to write `docs/issues/*.md`, and transitions the proposal card to a confirmed state with a direct link to the Backlog.
+3. **Interactive ForgeTask Proposal Cards:** As the agent discovers backlog opportunities or invokes `propose_tasks`, proposals render as interactive cards with in-place editable fields (Title, Description/Scope, Priority, Dependencies).
+4. **One-Click Backlog Ingestion:** Ingesting a task creates an entity in `AppDbContext` with initial `Status = TaskOverallStatus.Suggested`, links dependencies in `TaskDependency`, triggers `ITaskMarkdownSyncService` to write `docs/tasks/*.md`, and transitions the proposal card to a confirmed state with a direct link to the Backlog.
 
 ---
 
@@ -26,14 +26,14 @@ flowchart TD
         ChatInput["Developer Chat Input & Preset Prompts"]
         ChatStream["Turn History & Streaming Bubble"]
         ThinkingAccordion["Collapsed <think> Reasoning Accordion"]
-        ProposalList["Proposed Issues Grid (IdeationProposalCard.razor)"]
+        ProposalList["Proposed Tasks Grid (IdeationProposalCard.razor)"]
     end
 
     subgraph ServiceLayer ["Core & Agents"]
         IdeationSvc["IIdeationService.ConverseStreamingAsync()"]
         ReadTools["Read-Only Exploration Tools\n(read, rg, git log)"]
-        MarkdownSync["IIssueMarkdownSyncService"]
-        IssueRepo["IIssueRepository / AppDbContext"]
+        MarkdownSync["ITaskMarkdownSyncService"]
+        TaskRepo["ITaskRepository / AppDbContext"]
     end
 
     ChatInput -->|Submit Prompt| IdeationSvc
@@ -41,9 +41,9 @@ flowchart TD
     IdeationSvc -->|ThinkingDelta| ThinkingAccordion
     IdeationSvc -->|MessageDelta| ChatStream
     IdeationSvc -->|ProposalDiscovered| ProposalList
-    ProposalList -->|Add to Backlog Clicked| IssueRepo
-    IssueRepo -->|Persist Suggested Issue| MarkdownSync
-    MarkdownSync -->|Write docs/issues/*.md| Disk["Local Repository Disk"]
+    ProposalList -->|Add to Backlog Clicked| TaskRepo
+    TaskRepo -->|Persist Suggested ForgeTask| MarkdownSync
+    MarkdownSync -->|Write docs/tasks/*.md| Disk["Local Repository Disk"]
 ```
 
 ---
@@ -53,7 +53,7 @@ flowchart TD
 ### 3.1 Page Route & View: `Pages/Ideation.razor`
 - **Route:** `@page "/ideation"`
 - **Layout Split:**
-  - **Left Pane (60%):** Conversational chat transcript, system instructions selector, quick prompt chips ("Explore Architecture", "Find Dead Code", "Propose Tech Debt Issues", "Plan New Feature"), and chat input box with Send/Cancel buttons.
+  - **Left Pane (60%):** Conversational chat transcript, system instructions selector, quick prompt chips ("Explore Architecture", "Find Dead Code", "Propose Tech Debt Tasks", "Plan New Feature"), and chat input box with Send/Cancel buttons.
   - **Right Pane (40%):** "Discovered Proposals" panel displaying active `IdeationProposalCard` components generated during the session.
 
 ### 3.2 Proposal Card Component: `Components/Ideation/IdeationProposalCard.razor`
@@ -61,12 +61,12 @@ flowchart TD
   - **Editable Title:** `<input class="form-control-dark" @bind="Proposal.Title" />`
   - **Priority Selector:** 1 (Low) to 5 (Critical) dropdown.
   - **Editable Description / Scope:** Multi-line markdown preview/edit toggle.
-  - **Dependency Multi-Select:** Dropdown listing existing workspace issues with checkboxes to wire prerequisite `DependsOnIssueId`.
+  - **Dependency Multi-Select:** Dropdown listing existing workspace tasks with checkboxes to wire prerequisite `DependsOnTaskId`.
   - **Actions:**
     - `[➕ Add to Backlog]` Button: Dispatches creation command.
     - `[🗑️ Dismiss]` Button: Removes proposal from session.
 - **Added State:**
-  - Once added, the button disables and displays: `✅ Added as Issue #12 (Suggested) - View in Backlog ➔`.
+  - Once added, the button disables and displays: `✅ Added as ForgeTask #12 (Suggested) - View in Backlog ➔`.
 
 ---
 
@@ -107,7 +107,7 @@ public class IdeationProposalViewModel
     public int Priority { get; set; } = 1;
     public List<int> SelectedDependencyIds { get; set; } = new();
     public bool IsAdded { get; set; }
-    public int? CreatedIssueId { get; set; }
+    public int? CreatedTaskId { get; set; }
 }
 ```
 
@@ -116,8 +116,8 @@ public class IdeationProposalViewModel
 ```csharp
 @inject IIdeationService IdeationService
 @inject WorkspaceStateService WorkspaceState
-@inject IIssueRepository IssueRepository
-@inject IIssueMarkdownSyncService MarkdownSync
+@inject ITaskRepository TaskRepository
+@inject ITaskMarkdownSyncService MarkdownSync
 @inject ToastService ToastService
 
 @code {
@@ -205,31 +205,31 @@ private async Task AddProposalToBacklogAsync(IdeationProposalViewModel proposal)
     var workspace = WorkspaceState.ActiveWorkspace;
     if (workspace == null) return;
 
-    var newIssue = new Issue
+    var newTask = new ForgeTask
     {
         WorkspaceId = workspace.Id,
         Title = proposal.Title,
         Description = proposal.Description,
-        Status = IssueOverallStatus.Suggested,
+        Status = TaskOverallStatus.Suggested,
         Priority = proposal.Priority,
         MergeMode = MergeMode.ManualReviewRequired,
         BaseBranch = workspace.DefaultBaseBranch,
         CreatedAt = DateTime.UtcNow
     };
 
-    var created = await IssueRepository.CreateAsync(newIssue, proposal.SelectedDependencyIds);
-    created.FeatureBranch = $"feature/issue-{created.Id}";
-    await IssueRepository.UpdateAsync(created);
+    var created = await TaskRepository.CreateAsync(newTask, proposal.SelectedDependencyIds);
+    created.FeatureBranch = $"feature/task-{created.Id}";
+    await TaskRepository.UpdateAsync(created);
 
-    // Sync markdown issue file to docs/issues/
+    // Sync markdown task file to docs/tasks/
     if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
     {
-        await MarkdownSync.SyncIssueToMarkdownAsync(workspace.RepositoryPath, created);
+        await MarkdownSync.SyncTaskToMarkdownAsync(workspace.RepositoryPath, created);
     }
 
     proposal.IsAdded = true;
-    proposal.CreatedIssueId = created.Id;
-    ToastService.Show("Added to Backlog", $"Issue #{created.Id} created with status Suggested.", ToastLevel.Success);
+    proposal.CreatedTaskId = created.Id;
+    ToastService.Show("Added to Backlog", $"ForgeTask #{created.Id} created with status Suggested.", ToastLevel.Success);
 }
 ```
 
@@ -242,9 +242,9 @@ private async Task AddProposalToBacklogAsync(IdeationProposalViewModel proposal)
    - Verify message markdown renders headers, code snippets, and bullet lists cleanly.
 2. **Proposal Ingestion Tests:**
    - Click "Add to Backlog":
-     - Verify domain `Issue` is created in SQLite with `Status = IssueOverallStatus.Suggested`.
-     - Verify `IssueDependency` records correspond to selected check-boxes.
-     - Verify file `docs/issues/issue-XX-....md` is generated on disk with valid YAML frontmatter.
+     - Verify domain `ForgeTask` is created in SQLite with `Status = TaskOverallStatus.Suggested`.
+     - Verify `TaskDependency` records correspond to selected check-boxes.
+     - Verify file `docs/tasks/task-XX-....md` is generated on disk with valid YAML frontmatter.
    - Verify duplicate addition is prevented (button disabled).
 3. **Workspace Isolation:**
    - Verify chat turns and proposals clear/reload when switching active workspace in `TopNavBar`.
@@ -257,6 +257,6 @@ private async Task AddProposalToBacklogAsync(IdeationProposalViewModel proposal)
 - [ ] `IdeationProposalCard.razor` component implemented with in-place editable fields.
 - [ ] Collapsible thinking accordion `<details class="think-trace">` handles high-frequency `<think>` streaming.
 - [ ] Integration with `IIdeationService.ConverseStreamingAsync` complete with cancellation support.
-- [ ] Ingestion logic creates `IssueOverallStatus.Suggested` and writes `docs/issues/` markdown file.
-- [ ] Dependency selector populates existing issues for linking.
-- [ ] Unit & bUnit tests verifying streaming and issue creation dispatch.
+- [ ] Ingestion logic creates `TaskOverallStatus.Suggested` and writes `docs/tasks/` markdown file.
+- [ ] Dependency selector populates existing tasks for linking.
+- [ ] Unit & bUnit tests verifying streaming and task creation dispatch.

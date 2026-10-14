@@ -79,7 +79,7 @@ public class AcpAgentHarness : IAgentHarness
     {
         var sw = Stopwatch.StartNew();
         var sessionId = Guid.NewGuid().ToString("N");
-        await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
+        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
 
         if (_options.CustomProcessFactory != null)
         {
@@ -92,7 +92,7 @@ public class AcpAgentHarness : IAgentHarness
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to launch ACP agent via custom factory");
-                await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
                 return AgentRunResult.Failed($"Failed to launch ACP agent: {ex.Message}", new AgentRunMetrics(sw.ElapsedMilliseconds));
             }
 
@@ -151,7 +151,7 @@ public class AcpAgentHarness : IAgentHarness
         {
             if (_pathResolver != null && context.Workspace != null)
             {
-                workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.Issue.Id);
+                workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.ForgeTask.Id);
             }
             else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
             {
@@ -190,7 +190,7 @@ public class AcpAgentHarness : IAgentHarness
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to launch ACP agent at {ExecutablePath}", _options.ExecutablePath);
-            await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
             return AgentRunResult.Failed($"Failed to launch ACP agent: {ex.Message}", new AgentRunMetrics(sw.ElapsedMilliseconds));
         }
 
@@ -224,7 +224,7 @@ public class AcpAgentHarness : IAgentHarness
         {
             if (_pathResolver != null && context.Workspace != null)
             {
-                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.Issue.Id);
+                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.ForgeTask.Id);
             }
             else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
             {
@@ -233,7 +233,7 @@ public class AcpAgentHarness : IAgentHarness
         }
 
         var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier, context.Issue.Id)
+            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier, context.ForgeTask.Id)
             : _executionEnv;
 
         try
@@ -283,8 +283,8 @@ public class AcpAgentHarness : IAgentHarness
             var basePromptText = !string.IsNullOrEmpty(context.BootstrapPrompt)
                 ? context.BootstrapPrompt
                 : (!string.IsNullOrWhiteSpace(context.StageDirective)
-                    ? $"[Stage Directive]: {context.StageDirective}\n\n{context.Issue.Title}\n{context.Issue.Description}"
-                    : context.Issue.Description);
+                    ? $"[Stage Directive]: {context.StageDirective}\n\n{context.ForgeTask.Title}\n{context.ForgeTask.Description}"
+                    : context.ForgeTask.Description);
 
             if (!string.IsNullOrWhiteSpace(guidelines))
             {
@@ -341,7 +341,7 @@ public class AcpAgentHarness : IAgentHarness
                             var thought = update?["content"]?["text"]?.ToString() ?? update?["text"]?.ToString();
                             if (!string.IsNullOrEmpty(thought))
                             {
-                                await BroadcastAsync(activeSessionId, context.Issue.Id, context.StageId, AgentActivityKind.ThinkingDelta, thought, cancellationToken);
+                                await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ThinkingDelta, thought, cancellationToken);
                             }
                         }
                         else if (updateType == "agent_message_chunk")
@@ -350,20 +350,20 @@ public class AcpAgentHarness : IAgentHarness
                             if (!string.IsNullOrEmpty(text))
                             {
                                 lastAgentSummary = (lastAgentSummary ?? "") + text;
-                                await BroadcastAsync(activeSessionId, context.Issue.Id, context.StageId, AgentActivityKind.MessageDelta, text, cancellationToken);
+                                await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.MessageDelta, text, cancellationToken);
                             }
                         }
                         else if (updateType == "tool_call")
                         {
                             var title = update?["title"]?.ToString() ?? update?["toolCallId"]?.ToString() ?? "tool";
                             var rawInput = update?["rawInput"]?.ToString() ?? "";
-                            await BroadcastAsync(activeSessionId, context.Issue.Id, context.StageId, AgentActivityKind.ToolStarted, $"{title}: {rawInput}", cancellationToken);
+                            await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{title}: {rawInput}", cancellationToken);
                         }
                         else if (updateType == "tool_call_update")
                         {
                             var status = update?["status"]?.ToString() ?? "completed";
                             var rawOutput = update?["rawOutput"]?.ToString() ?? "";
-                            await BroadcastAsync(activeSessionId, context.Issue.Id, context.StageId, AgentActivityKind.ToolCompleted, $"{status}: {rawOutput}", cancellationToken);
+                            await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, $"{status}: {rawOutput}", cancellationToken);
                         }
                         continue;
                     }
@@ -477,7 +477,7 @@ public class AcpAgentHarness : IAgentHarness
 
                         try
                         {
-                            var content = ReadWorkspaceFile(localWorkspaceRoot, filePath, offset, limit, context.Workspace?.Id, context.Issue.Id);
+                            var content = ReadWorkspaceFile(localWorkspaceRoot, filePath, offset, limit, context.Workspace?.Id, context.ForgeTask.Id);
                             var readResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { content } });
                             await stdin.WriteLineAsync(readResp.AsMemory(), cancellationToken);
                         }
@@ -495,7 +495,7 @@ public class AcpAgentHarness : IAgentHarness
 
                         try
                         {
-                            await WriteWorkspaceFileAsync(localWorkspaceRoot, filePath, content, context.Workspace?.Id, context.Issue.Id, cancellationToken);
+                            await WriteWorkspaceFileAsync(localWorkspaceRoot, filePath, content, context.Workspace?.Id, context.ForgeTask.Id, cancellationToken);
                             var writeResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { } });
                             await stdin.WriteLineAsync(writeResp.AsMemory(), cancellationToken);
                         }
@@ -526,7 +526,7 @@ public class AcpAgentHarness : IAgentHarness
                         }
 
                         sw.Stop();
-                        await BroadcastAsync(activeSessionId, context.Issue.Id, context.StageId, AgentActivityKind.Interrupted, finalPrompt, cancellationToken);
+                        await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, finalPrompt, cancellationToken);
 
                         await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, lastAgentSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
 
@@ -566,7 +566,7 @@ public class AcpAgentHarness : IAgentHarness
                 }
             }
 
-            await BroadcastAsync(activeSessionId, context.Issue.Id, context.StageId, AgentActivityKind.StageCompleted, finalSummary, cancellationToken);
+            await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, finalSummary, cancellationToken);
 
             await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, finalSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
 
@@ -589,19 +589,19 @@ public class AcpAgentHarness : IAgentHarness
         catch (Exception ex)
         {
             sw.Stop();
-            await BroadcastAsync(sessionId, context.Issue.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
             await SaveTranscriptAsync(context, localWorkspaceRoot, "", ex.Message, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken);
             throw;
         }
     }
 
-    private string ResolveFilePath(string workspacePath, string filePath, int? workspaceId, int? issueId = null)
+    private string ResolveFilePath(string workspacePath, string filePath, int? workspaceId, int? taskId = null)
     {
         if (string.IsNullOrWhiteSpace(filePath))
         {
             if (_pathResolver != null && workspaceId.HasValue)
             {
-                return _pathResolver.ResolveCruciblePath(workspaceId.Value, string.Empty, issueId);
+                return _pathResolver.ResolveCruciblePath(workspaceId.Value, string.Empty, taskId);
             }
             return workspacePath;
         }
@@ -613,7 +613,7 @@ public class AcpAgentHarness : IAgentHarness
 
         if (_pathResolver != null && workspaceId.HasValue)
         {
-            return _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath, issueId);
+            return _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath, taskId);
         }
 
         var normalized = filePath.Replace('\\', '/');
@@ -641,9 +641,9 @@ public class AcpAgentHarness : IAgentHarness
         return Path.GetFullPath(Path.Combine(workspacePath, filePath));
     }
 
-    private string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit, int? workspaceId, int? issueId = null)
+    private string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit, int? workspaceId, int? taskId = null)
     {
-        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, issueId);
+        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId);
         if (!File.Exists(resolvedPath))
         {
             throw new FileNotFoundException($"File not found: {filePath}", filePath);
@@ -661,9 +661,9 @@ public class AcpAgentHarness : IAgentHarness
         return string.Join(Environment.NewLine, slice);
     }
 
-    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, int? workspaceId, int? issueId, CancellationToken ct)
+    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, int? workspaceId, int? taskId, CancellationToken ct)
     {
-        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, issueId);
+        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId);
         var dir = Path.GetDirectoryName(resolvedPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {
@@ -676,11 +676,11 @@ public class AcpAgentHarness : IAgentHarness
         await File.WriteAllBytesAsync(resolvedPath, bytes, ct);
     }
 
-    private async Task BroadcastAsync(string sessionId, int issueId, string stageId, AgentActivityKind kind, string content, CancellationToken ct)
+    private async Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken ct)
     {
         if (_activityStreamer != null)
         {
-            var evt = new AgentActivityEvent(sessionId, issueId, stageId, kind, content, DateTime.UtcNow);
+            var evt = new AgentActivityEvent(sessionId, taskId, stageId, kind, content, DateTime.UtcNow);
             await _activityStreamer.BroadcastAsync(evt, ct);
         }
     }
@@ -712,7 +712,7 @@ public class AcpAgentHarness : IAgentHarness
             }
 
             var meta = new TranscriptMetadata(
-                context.Issue.Id,
+                context.ForgeTask.Id,
                 context.StageId,
                 context.Profile.Name,
                 context.Profile.ModelName,

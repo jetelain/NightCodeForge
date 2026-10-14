@@ -12,12 +12,12 @@ namespace NightCodeForge.ScenarioRunner.Scenarios;
 /// <summary>
 /// Scenario 3: Universal Human Interruption & Resumption.
 /// Verifies that when an agent calls 'ask', the orchestrator captures the interruption cleanly:
-/// - Preserves Issue.Status (never marks as Failed/Blocked)
-/// - Sets Issue.IsWaitingForHuman = true
+/// - Preserves ForgeTask.Status (never marks as Failed/Blocked)
+/// - Sets ForgeTask.IsWaitingForHuman = true
 /// - Creates a Git WIP checkpoint commit on feature branch
 /// - Persists Clarification Question with Pending status
 /// - Frees the GPU inference worker cleanly
-/// - Upon SubmitHumanAnswerAsync, unblocks issue, rehydrates context, and resumes execution on llm-urgent
+/// - Upon SubmitHumanAnswerAsync, unblocks task, rehydrates context, and resumes execution on llm-urgent
 /// </summary>
 public class HumanInterruptionScenario : IScenario
 {
@@ -30,31 +30,31 @@ public class HumanInterruptionScenario : IScenario
         var sw = Stopwatch.StartNew();
         var details = new List<string>();
 
-        // Step 1: Create Issue
-        ConsoleFormatting.PrintStep("3.1", "Seeding issue requiring human architectural clarification...");
-        Issue issue;
+        // Step 1: Create ForgeTask
+        ConsoleFormatting.PrintStep("3.1", "Seeding task requiring human architectural clarification...");
+        ForgeTask task;
         using (var scope = context.Environment.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            issue = new Issue
+            task = new ForgeTask
             {
                 WorkspaceId = context.Environment.Workspace.Id,
                 Title = "Add Modulo Operation to Calculator",
                 Description = "Implement Modulo(int a, int b) in Calculator. Ambiguity exists around zero division behavior.",
-                Status = IssueOverallStatus.Open,
-                CurrentStageId = "issue-review",
+                Status = TaskOverallStatus.Open,
+                CurrentStageId = "task-review",
                 BaseBranch = "main",
-                FeatureBranch = "feature/issue-modulo",
+                FeatureBranch = "feature/task-modulo",
                 Priority = 1,
                 MergeMode = MergeMode.ManualReviewRequired
             };
-            db.Issues.Add(issue);
+            db.Tasks.Add(task);
             await db.SaveChangesAsync(context.CancellationToken);
-            ConsoleFormatting.PrintSuccess($"Seeded Issue #{issue.Id}: '{issue.Title}'");
+            ConsoleFormatting.PrintSuccess($"Seeded ForgeTask #{task.Id}: '{task.Title}'");
         }
 
         // Step 2: Configure custom stage handler that triggers human interruption on turn 1
-        var reviewStage = new IssueReviewStage
+        var reviewStage = new TaskReviewStage
         {
             Handler = (pipelineContext, ct) =>
             {
@@ -84,12 +84,12 @@ public class HumanInterruptionScenario : IScenario
             using (var scope = context.Environment.Services.CreateScope())
             {
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                issue.FeatureBranch = $"feature/issue-{issue.Id}";
+                task.FeatureBranch = $"feature/task-{task.Id}";
                 await db.SaveChangesAsync(context.CancellationToken);
 
-                var orchestrator = scope.ServiceProvider.GetRequiredService<IIssueOrchestrator>();
-                ConsoleFormatting.PrintStep("3.2", "Executing IssueReviewStage (expecting human clarification pause)...");
-                await orchestrator.ProcessIssueAsync(issue.Id, context.CancellationToken);
+                var orchestrator = scope.ServiceProvider.GetRequiredService<ITaskOrchestrator>();
+                ConsoleFormatting.PrintStep("3.2", "Executing TaskReviewStage (expecting human clarification pause)...");
+                await orchestrator.ProcessTaskAsync(task.Id, context.CancellationToken);
             }
 
         // Step 3: Verify Interruption State in Database & Git
@@ -98,20 +98,20 @@ public class HumanInterruptionScenario : IScenario
         using (var scope = context.Environment.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var reloaded = await db.Issues
+            var reloaded = await db.Tasks
                 .Include(i => i.Questions)
                 .Include(i => i.Checkpoints)
-                .FirstOrDefaultAsync(i => i.Id == issue.Id, context.CancellationToken);
+                .FirstOrDefaultAsync(i => i.Id == task.Id, context.CancellationToken);
 
             if (reloaded == null)
             {
-                return ScenarioResult.Fail(sw.Elapsed, "Issue not found in database.");
+                return ScenarioResult.Fail(sw.Elapsed, "ForgeTask not found in database.");
             }
 
             // Status must NOT be Failed
-            if (reloaded.Status == IssueOverallStatus.Failed)
+            if (reloaded.Status == TaskOverallStatus.Failed)
             {
-                return ScenarioResult.Fail(sw.Elapsed, "Violation: Issue status was marked Failed upon human interruption.");
+                return ScenarioResult.Fail(sw.Elapsed, "Violation: ForgeTask status was marked Failed upon human interruption.");
             }
 
             if (!reloaded.IsWaitingForHuman)
@@ -125,7 +125,7 @@ public class HumanInterruptionScenario : IScenario
                 return ScenarioResult.Fail(sw.Elapsed, "No pending Question record found in database.");
             }
 
-            ConsoleFormatting.PrintSuccess($"Issue #{issue.Id} correctly paused: IsWaitingForHuman=true, Status={reloaded.Status}");
+            ConsoleFormatting.PrintSuccess($"ForgeTask #{task.Id} correctly paused: IsWaitingForHuman=true, Status={reloaded.Status}");
             ConsoleFormatting.PrintSuccess($"Pending question stored in DB: '{pendingQuestion.Prompt}'");
 
             // Verify WIP checkpoint commit was created on git branch
@@ -146,7 +146,7 @@ public class HumanInterruptionScenario : IScenario
 
         using (var scope = context.Environment.Services.CreateScope())
         {
-            var orchestrator = scope.ServiceProvider.GetRequiredService<IIssueOrchestrator>();
+            var orchestrator = scope.ServiceProvider.GetRequiredService<ITaskOrchestrator>();
             await orchestrator.SubmitHumanAnswerAsync(pendingQuestion!.Id, humanAnswer, context.CancellationToken);
             ConsoleFormatting.PrintSuccess($"Submitted answer: '{humanAnswer}'");
         }
@@ -156,9 +156,9 @@ public class HumanInterruptionScenario : IScenario
         using (var scope = context.Environment.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var reloaded = await db.Issues
+            var reloaded = await db.Tasks
                 .Include(i => i.Questions)
-                .FirstOrDefaultAsync(i => i.Id == issue.Id, context.CancellationToken);
+                .FirstOrDefaultAsync(i => i.Id == task.Id, context.CancellationToken);
 
             var answeredQ = reloaded?.Questions.FirstOrDefault(q => q.Id == pendingQuestion.Id);
             if (answeredQ?.Status != QuestionStatus.Answered)
@@ -168,14 +168,14 @@ public class HumanInterruptionScenario : IScenario
 
             if (reloaded?.IsWaitingForHuman == true)
             {
-                return ScenarioResult.Fail(sw.Elapsed, "Issue IsWaitingForHuman is still true after submitting answer.");
+                return ScenarioResult.Fail(sw.Elapsed, "ForgeTask IsWaitingForHuman is still true after submitting answer.");
             }
 
             ConsoleFormatting.PrintSuccess("Question marked Answered; IsWaitingForHuman reset to false.");
 
             // Verify urgent queue job was dispatched
             var urgentJob = context.Environment.JobQueue.AllJobs
-                .FirstOrDefault(j => j.IssueId == issue.Id && j.QueueName == "llm-urgent");
+                .FirstOrDefault(j => j.TaskId == task.Id && j.QueueName == "llm-urgent");
 
             if (urgentJob == null)
             {
@@ -188,20 +188,20 @@ public class HumanInterruptionScenario : IScenario
         }
 
         // Step 6: Process Resumed Turn
-        ConsoleFormatting.PrintStep("3.6", "Processing resumed issue execution turn...");
+        ConsoleFormatting.PrintStep("3.6", "Processing resumed task execution turn...");
         using (var scope = context.Environment.Services.CreateScope())
         {
-            var orchestrator = scope.ServiceProvider.GetRequiredService<IIssueOrchestrator>();
-            await orchestrator.ProcessIssueAsync(issue.Id, context.CancellationToken);
+            var orchestrator = scope.ServiceProvider.GetRequiredService<ITaskOrchestrator>();
+            await orchestrator.ProcessTaskAsync(task.Id, context.CancellationToken);
         }
 
-        // Verify stage advanced past issue-review
+        // Verify stage advanced past task-review
         using (var scope = context.Environment.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var completedIssue = await db.Issues.FindAsync([issue.Id], context.CancellationToken);
-            ConsoleFormatting.PrintSuccess($"Resumption completed. Current stage advanced to '{completedIssue?.CurrentStageId}', Status={completedIssue?.Status}");
-            details.Add($"Next Stage: {completedIssue?.CurrentStageId}");
+            var completedTask = await db.Tasks.FindAsync([task.Id], context.CancellationToken);
+            ConsoleFormatting.PrintSuccess($"Resumption completed. Current stage advanced to '{completedTask?.CurrentStageId}', Status={completedTask?.Status}");
+            details.Add($"Next Stage: {completedTask?.CurrentStageId}");
         }
 
             sw.Stop();

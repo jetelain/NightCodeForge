@@ -75,7 +75,7 @@ dotnet run --project src/NightCodeForge.ScenarioRunner -- -s 1 --mock-llm -c --i
 | **6** | **End-to-End Workflow** | Full 6-stage autonomous lifecycle with auto-squash-merge | Review -> Pre-impl -> Impl -> Post-impl -> Code Review -> Verify |
 | **7** | **Crash Resilience & Recovery** | Startup recovery for dirty workspaces and crashed jobs | Purges `.git/index.lock`, creates `WIP-RECOVERY` commits |
 | **8** | **Workspace Concurrency** | Per-workspace mutual exclusion & non-blocking multi-workspace | Workspace lock serialization, cross-workspace parallel locks |
-| **9** | **Untrusted Triage Execution** | Sandboxed evaluation of untrusted incoming issues and code | Restricted execution tier, secret scrubbing, network policy |
+| **9** | **Untrusted Triage Execution** | Sandboxed evaluation of untrusted incoming tasks and code | Restricted execution tier, secret scrubbing, network policy |
 | **10** | **Git Mirror Sync & Merge** | Git mirror push/pull and automatic squash-merge lifecycle | Isolated working clones (`~/.nightcodeforge/wks/{id}`), mirror sync |
 
 ---
@@ -91,6 +91,6 @@ git -C "<path-to-repo>" log --all --graph --oneline
 git -C "<path-to-repo>" branch -a
 
 # Inspect SQLite database state:
-sqlite3 "<path-to-db>" "SELECT Id, Title, Status, ReadyForExecution FROM Issues;"
+sqlite3 "<path-to-db>" "SELECT Id, Title, Status, ReadyForExecution FROM Tasks;"
 sqlite3 "<path-to-db>" "SELECT Id, StageId, Status, DurationMs FROM StageExecutionRecords;"
 ```

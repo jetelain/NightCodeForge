@@ -89,7 +89,7 @@ public class AgentProfile
     public double? Temperature { get; set; }
     public string? HarnessConfigurationJson { get; set; } // Custom runtime options
     public LocalOptimizationFlags? OptimizationFlags { get; set; } // Opt-out flags for A/B testing
-    public IReadOnlyList<string>? PermittedTools { get; set; } // Whitelist: null = all stage tools; ["read", "propose_issues"]
+    public IReadOnlyList<string>? PermittedTools { get; set; } // Whitelist: null = all stage tools; ["read", "propose_tasks"]
     public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard; // Standard vs RestrictedReadOnly
     public int? WorkspaceId { get; set; }               // Nullable: workspace override
 }
@@ -104,22 +104,22 @@ public enum SandboxSecurityTier
 ### 2.2 Stage Persona Prompts & Behavioral Directives
 Crucible specializes agent behavior per stage using tailored System Personas and dynamic Bootstrap Prompts:
 
-0. **Stage 0: Automated Triage (`TriageStage` - Untrusted Issue Intake):**
-   * **System Persona:** Untrusted Issue Triage & Bug Reproducibility Analyst.
-   * **Mission:** Automatically evaluate incoming issues from external trackers (e.g. GitHub issues, Jira, webhooks) directly on the base branch (`main` or `master`). Verify technical relevance, inspect candidate files, extract reproduction steps and acceptance criteria, and propose structured backlog items via `propose_issues`.
+0. **Stage 0: Automated Triage (`TriageStage` - Untrusted ForgeTask Intake):**
+   * **System Persona:** Untrusted ForgeTask Triage & Bug Reproducibility Analyst.
+   * **Mission:** Automatically evaluate incoming tasks from external trackers (e.g. GitHub tasks, Jira, webhooks) directly on the base branch (`main` or `master`). Verify technical relevance, inspect candidate files, extract reproduction steps and acceptance criteria, and propose structured backlog items via `propose_tasks`.
    * **Security Posture & Untrusted Content Guardrails:**
-     - External issue text may contain malicious **indirect prompt injections**.
-     - Tool access is strictly locked down: only `read` and `propose_issues` are registered.
+     - External task text may contain malicious **indirect prompt injections**.
+     - Tool access is strictly locked down: only `read` and `propose_tasks` are registered.
      - `write` and `edit` are **strictly prohibited** to prevent working tree tampering.
      - `ask` is **prohibited** to prevent external inputs from blocking the human dev-queue.
      - `web_search` is **prohibited** to eliminate SSRF and data exfiltration channels.
      - Runs exclusively in a **Restricted Read-Only Container Sandbox** (`--network none`, `:ro` workspace mount, `--read-only`, `--cap-drop=ALL`) on `main`/`master`.
      - *Crucible Exclusive:* Pi and ACP harnesses cannot be used for triage because their static tool architectures do not support fine-grained runtime tool restriction.
-   * **Directive:** *"Analyze the reported issue against the repository base branch. Determine affected files and acceptance criteria. Call propose_issues to recommend structured backlog items. You have read-only access and cannot modify code or access external networks."*
+   * **Directive:** *"Analyze the reported task against the repository base branch. Determine affected files and acceptance criteria. Call propose_tasks to recommend structured backlog items. You have read-only access and cannot modify code or access external networks."*
    * **Output:** Structured backlog proposal(s) awaiting human confirmation in the Web UI.
-1. **Stage 1: Issue Review (`IssueReviewStage`):**
+1. **Stage 1: ForgeTask Review (`TaskReviewStage`):**
    * **System Persona:** Architectural Analyst & Requirements Investigator.
-   * **Mission:** Deeply inspect the codebase against the issue request *before* coding. Proactively uncover ambiguities, implicit assumptions, and architectural conflicts.
+   * **Mission:** Deeply inspect the codebase against the task request *before* coding. Proactively uncover ambiguities, implicit assumptions, and architectural conflicts.
    * **Directive:** *"If any requirement or design decision is ambiguous or has multiple valid alternatives, invoke `ask` immediately to clarify. Do not guess."*
    * **Output:** Approved Technical Specification & Execution Plan.
 2. **Stage 2: Implementation (`ImplementationStage`):**
@@ -149,7 +149,7 @@ Crucible adopts the standard, minimalist tool names established by **Pi** (`read
 | **`bash`** | `command` (string)<br>`timeout` (int?, seconds)<br>`working_directory` (string?) | Executes commands in the container sandbox. Used for builds, tests, git CLI, and file operations (`ls`, `find`, `rg`). | Output streamed via `HeadTailBuffer` rune-safe truncation + compiler error extraction. Guideline: *"Use bash for file operations like ls, rg, find."* |
 | **`ask`** | `prompt` (string)<br>`rationale` (string)<br>`options` (string[]?) | Triggers non-blocking checkpoint & GPU worker release. | Persisted to DB & frontmatter; frees GPU instantly for dev-queue. |
 | **`web_search`** | `query` (string)<br>`max_results` (int?) | Live web search via pluggable search provider (default: Ollama Web Search). | Compact snippet extraction (default 5 results, ~250 tokens total). |
-| **`propose_issues`** | `issues` (List of issue proposals) | Read-only discovery agent outputs structured backlog items. | Schema-constrained for ideation chat. |
+| **`propose_tasks`** | `tasks` (List of task proposals) | Read-only discovery agent outputs structured backlog items. | Schema-constrained for ideation chat. |
 
 > [!NOTE]
 > **Why `list_dir`, `grep_search`, and `get_file_outline` were dropped:**
@@ -418,11 +418,11 @@ To avoid wasting prompt tokens on unused tool definitions, Crucible exposes only
 
 | Stage | Permitted Tools | Excluded / Prohibited | Rationale |
 | :--- | :--- | :--- | :--- |
-| **Stage 0: Automated Triage** *(Untrusted Intake)* | `read`, `propose_issues` | `write`, `edit`, `ask`, `web_search`, `bash` | Pre-analyses untrusted GitHub/GitLab issues directly on `main`/`master`. Strictly read-only; eliminates file mutations, human queue blocking (`ask`), and data exfiltration channels (`web_search`, `bash`). |
-| **Stage 1: Issue Review** | `read`, `bash`, `web_search`, `ask` | `write`, `edit`, `propose_issues` | Requirements and architectural analysis. `bash` is restricted by system persona to inspection only (`ls`, `find`, `rg`, `git log`). Code edits are prohibited. |
-| **Stage 2: Implementation** | `read`, `edit`, `write`, `bash`, `web_search`, `ask` | `propose_issues` | Full engineering tools for coding, building, running tests, and looking up API/compiler solutions. |
-| **Stage 3: Review & Fix** | `read`, `edit`, `bash`, `ask` | `write`, `web_search`, `propose_issues` | Code auditing and precision patching; strictly focused on internal diffs without external search distraction. |
-| **Ideation / Discovery** | `read`, `bash`, `web_search`, `propose_issues` | `write`, `edit` | Read-only codebase exploration + web research to propose structured backlog issues. |
+| **Stage 0: Automated Triage** *(Untrusted Intake)* | `read`, `propose_tasks` | `write`, `edit`, `ask`, `web_search`, `bash` | Pre-analyses untrusted GitHub/GitLab tasks directly on `main`/`master`. Strictly read-only; eliminates file mutations, human queue blocking (`ask`), and data exfiltration channels (`web_search`, `bash`). |
+| **Stage 1: ForgeTask Review** | `read`, `bash`, `web_search`, `ask` | `write`, `edit`, `propose_tasks` | Requirements and architectural analysis. `bash` is restricted by system persona to inspection only (`ls`, `find`, `rg`, `git log`). Code edits are prohibited. |
+| **Stage 2: Implementation** | `read`, `edit`, `write`, `bash`, `web_search`, `ask` | `propose_tasks` | Full engineering tools for coding, building, running tests, and looking up API/compiler solutions. |
+| **Stage 3: Review & Fix** | `read`, `edit`, `bash`, `ask` | `write`, `web_search`, `propose_tasks` | Code auditing and precision patching; strictly focused on internal diffs without external search distraction. |
+| **Ideation / Discovery** | `read`, `bash`, `web_search`, `propose_tasks` | `write`, `edit` | Read-only codebase exploration + web research to propose structured backlog tasks. |
 
 *Token Impact:* Reduces static tool schema overhead in the system prompt by **60%–70%** on every turn.
 
@@ -469,7 +469,7 @@ In local LLM workflows, token consumption directly impacts generation speed, VRA
 ### 6.1 Static Prompt Prefix Stabilization (KV Cache Optimization)
 `llama.cpp` and Ollama reuse computed KV cache states when prompt prefixes match byte-for-byte:
 * **Strict Message Ordering:**
-  `[System Prompt] ➔ [AGENTS.md Guidelines] ➔ [Tool Schemas] ➔ [Active Skills] ➔ [Issue Task Prompt] ➔ [Turn History]`
+  `[System Prompt] ➔ [AGENTS.md Guidelines] ➔ [Tool Schemas] ➔ [Active Skills] ➔ [ForgeTask Task Prompt] ➔ [Turn History]`
 * **Zero-Jitter Rule:** Never inject dynamic data (such as system clocks, volatile counters, or changing tool orders) into the system prompt or early prefix. Keeping top-level prefix tokens byte-identical allows Ollama to achieve immediate cache hits, cutting turn latency from seconds to milliseconds.
 
 ### 6.2 Ephemeral Tool Output Eviction (`ToolResultCompactionStrategy`)
@@ -590,7 +590,7 @@ MCP servers are defined globally or per workspace:
 ```
 
 ### 7.2 Dynamic Tool Registration & Discovery
-* When an issue session initializes, `IMcpClientManager` queries `tools/list` on configured MCP servers.
+* When a task session initializes, `IMcpClientManager` queries `tools/list` on configured MCP servers.
 * Discovered tools are wrapped as `AIFunction` instances and registered into the active stage session.
 * MCP tools pass through the `LenientToolDispatcher` for parameter normalization and resilient error handling.
 
@@ -648,7 +648,7 @@ flowchart TD
    * Only the skill name and concise description from frontmatter are injected into the system prompt.
    * A catalog of 15 skills consumes only ~350 tokens, rather than thousands of tokens for full instruction bodies.
 2. **On-Demand Load Phase (`load_skill`):**
-   * When an agent encounters an issue requiring specific expertise (e.g. database schema change), it invokes `load_skill("efcore-migrations")`.
+   * When an agent encounters a task requiring specific expertise (e.g. database schema change), it invokes `load_skill("efcore-migrations")`.
    * The provider loads the full markdown instructions dynamically into context for that reasoning phase.
 3. **Resource & Script Phases:**
    * `read_skill_resource`: Inspects templates, checklists, or schemas bundled with the skill.
@@ -700,7 +700,7 @@ flowchart TD
     end
 
     subgraph TranscriptStorage ["Session Transcript Service"]
-        DiskMD["docs/transcripts/\nYYYY-MM-DD-issue-123-stage-1.md"]
+        DiskMD["docs/transcripts/\nYYYY-MM-DD-task-123-stage-1.md"]
     end
 
     subgraph Diagnostics ["Hybrid Diagnostic Engine"]
@@ -719,8 +719,8 @@ flowchart TD
 ```
 
 ### 10.1 Transcript Schema (`docs/transcripts/`)
-When a stage completes, pauses for a human question, or fails, a transcript is saved to `docs/transcripts/YYYY-MM-DD-issue-{id}-{stage}-{status}.md`:
-* Frontmatter tracks issue ID, stage, profile, model, thinking effort, duration, prompt tokens, completion tokens, total tokens, status, and exit reason.
+When a stage completes, pauses for a human question, or fails, a transcript is saved to `docs/transcripts/YYYY-MM-DD-task-{id}-{stage}-{status}.md`:
+* Frontmatter tracks task ID, stage, profile, model, thinking effort, duration, prompt tokens, completion tokens, total tokens, status, and exit reason.
 * Body documents the turn-by-turn thought stream, tool calls, compiler outputs, and Q&A interactions.
 
 ### 10.2 Diagnostic Evaluation Modes
@@ -757,7 +757,7 @@ While inspired by the Microsoft Agent Framework's `DockerShellExecutor`, Crucibl
    * Stdout and stderr are streamed through a rune-safe bounded accumulator that preserves the head (first 16 KB) and rolling tail (last 16 KB) separated by `[... truncated N bytes ...]`.
    * Evaluates whole UTF-8 runes to prevent orphan surrogates or byte-stream corruption.
 3. **Session Lifecycle & Disposable Containers:**
-   * Each issue stage owns a dedicated container instance. When the stage completes or pauses, the container is stopped or checkpointed cleanly.
+   * Each task stage owns a dedicated container instance. When the stage completes or pauses, the container is stopped or checkpointed cleanly.
 
 ```csharp
 public class NightCodeForgeContainerExecutor : IExecutionEnvironment, IAsyncDisposable
@@ -829,16 +829,16 @@ sequenceDiagram
     Dev->>DB: Submits answer via Web UI
     DB->>Queue: Enqueues stage at Priority 1 (llm-urgent)
     Queue->>Stage: Resumes Stage Job
-    Stage->>Git: git checkout feature/issue-{id}
+    Stage->>Git: git checkout feature/task-{id}
     Stage->>Harness: DeserializeSessionAsync(sessionJson)
     Stage->>Harness: MessageInjectingChatClient.Inject(humanAnswer)
     Stage->>LLM: Resumes reasoning loop with exact context intact
 ```
 
 #### Zero Data-Loss & Clean Queue Lifecycle:
-* **Clean Hangfire Job Completion:** When an agent invokes `ask`, the resulting `HumanInterruptionException` is caught internally by the orchestrator. Rather than letting the exception bubble up to Hangfire (which would mark the background job as red/`Failed`), the job orchestrator records the checkpoint and pending question, sets `issue.IsWaitingForHuman = true` and `issue.InterruptedAgentProfileId = profile?.Id` without altering `issue.Status`, and cleanly returns `StageExecutionResult.WaitingForHuman()`. The Hangfire job completes in a clean `Succeeded` state, releasing the single GPU worker for the next waiting task.
+* **Clean Hangfire Job Completion:** When an agent invokes `ask`, the resulting `HumanInterruptionException` is caught internally by the orchestrator. Rather than letting the exception bubble up to Hangfire (which would mark the background job as red/`Failed`), the job orchestrator records the checkpoint and pending question, sets `task.IsWaitingForHuman = true` and `task.InterruptedAgentProfileId = profile?.Id` without altering `task.Status`, and cleanly returns `StageExecutionResult.WaitingForHuman()`. The Hangfire job completes in a clean `Succeeded` state, releasing the single GPU worker for the next waiting task.
 * **`PerServiceCallChatHistoryPersistingChatClient`:** Persists message thread state after *every single tool call* inside the `FunctionInvokingChatClient` loop. If an unhandled crash or abort occurs, no intermediate reasoning is lost.
-* **`AIAgent.SerializeSessionAsync` / `DeserializeSessionAsync`:** Serializes all conversational memory, provider state bags, and reduction indices into a single standard `JsonElement` stored directly in `AppDbContext.IssueCheckpoints`.
+* **`AIAgent.SerializeSessionAsync` / `DeserializeSessionAsync`:** Serializes all conversational memory, provider state bags, and reduction indices into a single standard `JsonElement` stored directly in `AppDbContext.TaskCheckpoints`.
 * **`MessageInjectingChatClient`:** Upon resumption from the dev-queue, the human's response is injected directly into the chat client stream as a fresh user turn, allowing the LLM to resume execution seamlessly without prompt re-bootstrapping or token waste.
 
 ---

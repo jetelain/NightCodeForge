@@ -142,16 +142,16 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             var mockClient = new MockChatClient(StreamGen);
             var harness = new CrucibleAgentHarness(baseChatClient: mockClient);
 
-            var issue = new Issue { Id = 1, Title = "Test Issue", Description = "Test" };
+            var task = new ForgeTask { Id = 1, Title = "Test ForgeTask", Description = "Test" };
             var bag = new PipelineDataBag();
-            var pipelineContext = new PipelineContext(issue, new Workspace { Id = 1 })
+            var pipelineContext = new PipelineContext(task, new Workspace { Id = 1 })
             {
                 DataBag = bag
             };
 
             var context = new AgentSessionContext
             {
-                Issue = issue,
+                ForgeTask = task,
                 Workspace = new Workspace { Id = 1, RepositoryPath = tempDir },
                 Profile = new AgentProfile { Id = "reviewer", Mode = AgentMode.Review },
                 StageId = CodeReviewAndFixStage.DefaultStageId,
@@ -192,16 +192,16 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             var mockClient = new MockChatClient(StreamGen);
             var harness = new CrucibleAgentHarness(baseChatClient: mockClient);
 
-            var issue = new Issue { Id = 2, Title = "Test Issue 2", Description = "Test" };
+            var task = new ForgeTask { Id = 2, Title = "Test ForgeTask 2", Description = "Test" };
             var bag = new PipelineDataBag();
-            var pipelineContext = new PipelineContext(issue, new Workspace { Id = 1 })
+            var pipelineContext = new PipelineContext(task, new Workspace { Id = 1 })
             {
                 DataBag = bag
             };
 
             var context = new AgentSessionContext
             {
-                Issue = issue,
+                ForgeTask = task,
                 Workspace = new Workspace { Id = 1, RepositoryPath = tempDir },
                 Profile = new AgentProfile { Id = "reviewer", Mode = AgentMode.Review },
                 StageId = CodeReviewAndFixStage.DefaultStageId,
@@ -268,12 +268,12 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             var mockClient = new MockChatClient(StreamGen);
             var harness = new CrucibleAgentHarness(baseChatClient: mockClient);
 
-            var issue = new Issue { Id = 3, Title = "Test Issue 3", Description = "Test" };
-            var pipelineContext = new PipelineContext(issue, new Workspace { Id = 1 });
+            var task = new ForgeTask { Id = 3, Title = "Test ForgeTask 3", Description = "Test" };
+            var pipelineContext = new PipelineContext(task, new Workspace { Id = 1 });
 
             var context = new AgentSessionContext
             {
-                Issue = issue,
+                ForgeTask = task,
                 Workspace = new Workspace { Id = 1, RepositoryPath = tempDir },
                 Profile = new AgentProfile { Id = "coder", Mode = AgentMode.Full },
                 StageId = ImplementationStage.DefaultStageId,
@@ -295,7 +295,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
     }
 
     [Fact]
-    public async Task CrucibleAgentHarness_WhenIssueMarkdownPathPresent_IncludesPathAttributeInIssueScope()
+    public async Task CrucibleAgentHarness_WhenTaskMarkdownPathPresent_IncludesPathAttributeInTaskScope()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "crucible-doc-path-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -316,17 +316,17 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             var mockClient = new MockChatClient(StreamGen);
             var harness = new CrucibleAgentHarness(baseChatClient: mockClient);
 
-            var issue = new Issue { Id = 4, Title = "Doc Path Issue", Description = "Testing doc path" };
+            var task = new ForgeTask { Id = 4, Title = "Doc Path ForgeTask", Description = "Testing doc path" };
             var bag = new PipelineDataBag();
-            bag.Set("IssueMarkdownPath", "docs/issues/2026-10-14-doc-path-issue.md");
-            var pipelineContext = new PipelineContext(issue, new Workspace { Id = 1 })
+            bag.Set("TaskMarkdownPath", "docs/tasks/2026-10-14-doc-path-task.md");
+            var pipelineContext = new PipelineContext(task, new Workspace { Id = 1 })
             {
                 DataBag = bag
             };
 
             var context = new AgentSessionContext
             {
-                Issue = issue,
+                ForgeTask = task,
                 Workspace = new Workspace { Id = 1, RepositoryPath = tempDir },
                 Profile = new AgentProfile { Id = "coder", Mode = AgentMode.Full },
                 StageId = ImplementationStage.DefaultStageId,
@@ -340,7 +340,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             Assert.NotNull(receivedMessages);
             var systemMsg = receivedMessages.FirstOrDefault(m => m.Role == ChatRole.System)?.Text;
             Assert.NotNull(systemMsg);
-            Assert.Contains("path=\"docs/issues/2026-10-14-doc-path-issue.md\"", systemMsg);
+            Assert.Contains("path=\"docs/tasks/2026-10-14-doc-path-task.md\"", systemMsg);
         }
         finally
         {
@@ -349,18 +349,18 @@ public class CodeReviewLoopbackAndPromptOverrideTests
     }
 
     [Fact]
-    public void StageDirectives_ReflectIssueDocumentEditing_AndTwoTierReviewPolicy()
+    public void StageDirectives_ReflectTaskDocumentEditing_AndTwoTierReviewPolicy()
     {
-        var reviewStage = new IssueReviewStage();
-        Assert.Contains("docs/issues/", reviewStage.StageDirective);
+        var reviewStage = new TaskReviewStage();
+        Assert.Contains("docs/tasks/", reviewStage.StageDirective);
         Assert.Contains("Do not write or modify production code", reviewStage.StageDirective);
 
         var implStage = new ImplementationStage();
-        Assert.Contains("docs/issues/", implStage.StageDirective);
+        Assert.Contains("docs/tasks/", implStage.StageDirective);
 
         var codeReviewStage = new CodeReviewAndFixStage();
         Assert.Contains("TIER 1 - MINOR POLISH", codeReviewStage.StageDirective);
         Assert.Contains("TIER 2 - REJECTION GATE", codeReviewStage.StageDirective);
-        Assert.Contains("Rejection is strictly reserved for major issues or missing features", codeReviewStage.StageDirective);
+        Assert.Contains("Rejection is strictly reserved for major tasks or missing features", codeReviewStage.StageDirective);
     }
 }

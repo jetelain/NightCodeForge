@@ -6,7 +6,7 @@ namespace NightCodeForge.Core.Domain;
 public class Question
 {
     public int Id { get; set; }
-    public int IssueId { get; set; }
+    public int TaskId { get; set; }
     public string StageId { get; set; } = string.Empty;
     public string Prompt { get; set; } = string.Empty;
     public string Rationale { get; set; } = string.Empty;
@@ -18,5 +18,5 @@ public class Question
     public QuestionStatus Status { get; set; } = QuestionStatus.Pending;
     public string? AgentProfileId { get; set; }
 
-    public Issue? Issue { get; set; }
+    public ForgeTask? ForgeTask { get; set; }
 }

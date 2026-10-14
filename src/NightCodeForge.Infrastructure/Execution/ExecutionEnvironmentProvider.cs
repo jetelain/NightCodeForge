@@ -52,7 +52,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
     private readonly IWorkspacePathResolver? _pathResolver;
     private readonly IHostSdkDiscoveryService? _sdkDiscoveryService;
     private readonly IGitWorkspaceManager? _gitWorkspaceManager;
-    private readonly ConcurrentDictionary<(int WorkspaceId, SandboxSecurityTier SecurityTier, int? IssueId), IExecutionEnvironment> _cachedEnvironments = new();
+    private readonly ConcurrentDictionary<(int WorkspaceId, SandboxSecurityTier SecurityTier, int? TaskId), IExecutionEnvironment> _cachedEnvironments = new();
 
     [ActivatorUtilitiesConstructor]
     public ExecutionEnvironmentProvider(
@@ -99,22 +99,22 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
     public IExecutionEnvironment GetEnvironment(
         Workspace workspace,
         SandboxSecurityTier securityTier = SandboxSecurityTier.Standard,
-        int? issueId = null)
+        int? taskId = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
-        var effectiveIssueId = issueId is > 0 ? issueId : null;
+        var effectiveTaskId = taskId is > 0 ? taskId : null;
 
         return workspace.ExecutionMode switch
         {
             ExecutionMode.BareHost => _bareHost,
 
-            ExecutionMode.WslDirect => _cachedEnvironments.GetOrAdd((workspace.Id, securityTier, effectiveIssueId), _ =>
+            ExecutionMode.WslDirect => _cachedEnvironments.GetOrAdd((workspace.Id, securityTier, effectiveTaskId), _ =>
             {
                 string defaultWorkingDir;
-                if (effectiveIssueId.HasValue)
+                if (effectiveTaskId.HasValue)
                 {
-                    defaultWorkingDir = ResolveWorktreePath(workspace, effectiveIssueId.Value);
+                    defaultWorkingDir = ResolveWorktreePath(workspace, effectiveTaskId.Value);
                 }
                 else
                 {
@@ -129,7 +129,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                     defaultWorkingDirectory: defaultWorkingDir);
             }),
 
-            ExecutionMode.ContainerSandbox => _cachedEnvironments.GetOrAdd((workspace.Id, securityTier, effectiveIssueId), _ =>
+            ExecutionMode.ContainerSandbox => _cachedEnvironments.GetOrAdd((workspace.Id, securityTier, effectiveTaskId), _ =>
             {
                 var useWsl = workspace.UseWslForContainers ||
                              !string.IsNullOrWhiteSpace(workspace.WslDistribution) ||
@@ -144,8 +144,8 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                             : workspace.ContainerImage)
                         : "ncf-sandbox");
 
-                var containerName = effectiveIssueId.HasValue
-                    ? $"{baseContainerName}-issue-{effectiveIssueId.Value}"
+                var containerName = effectiveTaskId.HasValue
+                    ? $"{baseContainerName}-task-{effectiveTaskId.Value}"
                     : baseContainerName;
 
                 var rawPath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
@@ -177,15 +177,15 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                         cloneDir = $"{normRaw}/clone";
                     }
 
-                    // In container, agent has "/workspace/clone" and "/workspace/issue-nnn" (when working on issue).
+                    // In container, agent has "/workspace/clone" and "/workspace/task-nnn" (when working on task).
                     // The host workspace root (parentDir) is mounted to /workspace.
                     hostWorkspacePath = parentDir;
                     canonicalClonePath = cloneDir;
                 }
 
-                // When working on an issue PWD should be "/workspace/issue-nnn", and "/workspace/clone" if not scoped to an issue.
-                var defaultWorkingDir = effectiveIssueId.HasValue
-                    ? $"/workspace/issue-{effectiveIssueId.Value}"
+                // When working on a task PWD should be "/workspace/task-nnn", and "/workspace/clone" if not scoped to a task.
+                var defaultWorkingDir = effectiveTaskId.HasValue
+                    ? $"/workspace/task-{effectiveTaskId.Value}"
                     : "/workspace/clone";
 
                 var targetDistro = workspace.WslDistribution ?? _options.DefaultWslDistribution;
@@ -222,28 +222,28 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         };
     }
 
-    private string ResolveWorktreePath(Workspace workspace, int issueId, string? parentDir = null)
+    private string ResolveWorktreePath(Workspace workspace, int taskId, string? parentDir = null)
     {
         if (_gitWorkspaceManager != null)
         {
-            return _gitWorkspaceManager.GetWorktreePath(workspace, issueId);
+            return _gitWorkspaceManager.GetWorktreePath(workspace, taskId);
         }
 
         if (_pathResolver != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
-            return _pathResolver.GetAgentWorktreePath(workspace.Id, issueId);
+            return _pathResolver.GetAgentWorktreePath(workspace.Id, taskId);
         }
 
         if (!string.IsNullOrWhiteSpace(parentDir))
         {
             return parentDir.Contains('/') && !parentDir.Contains('\\')
-                ? $"{parentDir.TrimEnd('/')}/issue-{issueId}"
-                : Path.Combine(parentDir, $"issue-{issueId}");
+                ? $"{parentDir.TrimEnd('/')}/task-{taskId}"
+                : Path.Combine(parentDir, $"task-{taskId}");
         }
 
         return _pathResolver != null
-            ? _pathResolver.GetAgentWorktreePath(workspace.Id, issueId)
-            : $"issue-{issueId}";
+            ? _pathResolver.GetAgentWorktreePath(workspace.Id, taskId)
+            : $"task-{taskId}";
     }
 
     private static bool ShouldAutoUseWslForContainers(Workspace workspace)

@@ -31,9 +31,9 @@ public static class ServiceCollectionExtensions
             options.UseSqlite(dbConnectionString));
 
         // 2. Repositories & Stores
-        services.TryAddScoped<IIssueRepository, EfCoreIssueRepository>();
+        services.TryAddScoped<ITaskRepository, EfCoreTaskRepository>();
         services.TryAddScoped<IWorkspaceRepository, EfCoreWorkspaceRepository>();
-        services.TryAddScoped<IIssueDependencyStore, EfCoreIssueDependencyStore>();
+        services.TryAddScoped<ITaskDependencyStore, EfCoreTaskDependencyStore>();
 
         // 3. Concurrency & DAG Engine
         services.TryAddSingleton<IWorkspaceLockProvider, WorkspaceLockProvider>();
@@ -44,7 +44,7 @@ public static class ServiceCollectionExtensions
 
         // 5. Workflow Pipeline & Orchestration
         services.TryAddScoped<IWorkflowPipelineProvider, DefaultWorkflowPipelineProvider>();
-        services.TryAddScoped<IIssueOrchestrator, IssueOrchestrator>();
+        services.TryAddScoped<ITaskOrchestrator, TaskOrchestrator>();
         services.TryAddScoped<IStartupRecoveryService, StartupRecoveryService>();
 
         // 6. Execution Environments, Process Runner & Path Resolution
@@ -60,8 +60,8 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IOllamaModelCatalogService, Inference.OllamaModelCatalogService>();
         services.AddHttpClient<IOllamaModelPreloadService, Inference.OllamaModelPreloadService>();
 
-        // 8. Markdown Issue Mirroring
-        services.TryAddScoped<IIssueMarkdownSyncService, IssueMarkdownSyncService>();
+        // 8. Markdown ForgeTask Mirroring
+        services.TryAddScoped<ITaskMarkdownSyncService, TaskMarkdownSyncService>();
 
         // 9. Deterministic Quality Gate Stages
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicBuildStage>();

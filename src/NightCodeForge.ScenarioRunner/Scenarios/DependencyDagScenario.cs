@@ -13,10 +13,10 @@ namespace NightCodeForge.ScenarioRunner.Scenarios;
 /// <summary>
 /// Scenario 4: Dependency DAG Resolution & Cascade Unblocking.
 /// Tests that:
-/// - A dependent issue is blocked until its prerequisites are completed
-/// - The orchestrator refuses to process issues prematurely
-/// - When a prerequisite completes via CompleteIssueAndCascadeAsync, its branch is squash-merged
-/// - Dependent issues are automatically unblocked and enqueued into the dev-queue
+/// - A dependent task is blocked until its prerequisites are completed
+/// - The orchestrator refuses to process tasks prematurely
+/// - When a prerequisite completes via CompleteTaskAndCascadeAsync, its branch is squash-merged
+/// - Dependent tasks are automatically unblocked and enqueued into the dev-queue
 /// </summary>
 public class DependencyDagScenario : IScenario
 {
@@ -29,56 +29,56 @@ public class DependencyDagScenario : IScenario
         var sw = Stopwatch.StartNew();
         var details = new List<string>();
 
-        // Step 1: Create Parent (Prerequisite) and Child (Dependent) Issues
-        ConsoleFormatting.PrintStep("4.1", "Seeding DAG issues: Issue A (Prerequisite) and Issue B (Dependent)...");
-        Issue issueA;
-        Issue issueB;
+        // Step 1: Create Parent (Prerequisite) and Child (Dependent) Tasks
+        ConsoleFormatting.PrintStep("4.1", "Seeding DAG tasks: ForgeTask A (Prerequisite) and ForgeTask B (Dependent)...");
+        ForgeTask taskA;
+        ForgeTask taskB;
 
         using (var scope = context.Environment.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var depStore = scope.ServiceProvider.GetRequiredService<IIssueDependencyStore>();
+            var depStore = scope.ServiceProvider.GetRequiredService<ITaskDependencyStore>();
 
-            issueA = new Issue
+            taskA = new ForgeTask
             {
                 WorkspaceId = context.Environment.Workspace.Id,
                 Title = "Core Calculation Service",
                 Description = "Implement the foundation math calculation service.",
-                Status = IssueOverallStatus.Open,
-                CurrentStageId = "issue-review",
+                Status = TaskOverallStatus.Open,
+                CurrentStageId = "task-review",
                 BaseBranch = "main",
                 Priority = 1,
                 MergeMode = MergeMode.ManualReviewRequired
             };
 
-            issueB = new Issue
+            taskB = new ForgeTask
             {
                 WorkspaceId = context.Environment.Workspace.Id,
                 Title = "Math HTTP API Endpoint",
                 Description = "Expose Calculation Service methods via REST controller.",
-                Status = IssueOverallStatus.Open,
-                CurrentStageId = "issue-review",
+                Status = TaskOverallStatus.Open,
+                CurrentStageId = "task-review",
                 BaseBranch = "main",
                 Priority = 2,
                 MergeMode = MergeMode.ManualReviewRequired
             };
 
-            db.Issues.AddRange(issueA, issueB);
+            db.Tasks.AddRange(taskA, taskB);
             await db.SaveChangesAsync(context.CancellationToken);
 
-            issueA.FeatureBranch = $"feature/issue-{issueA.Id}";
-            issueB.FeatureBranch = $"feature/issue-{issueB.Id}";
+            taskA.FeatureBranch = $"feature/task-{taskA.Id}";
+            taskB.FeatureBranch = $"feature/task-{taskB.Id}";
             await db.SaveChangesAsync(context.CancellationToken);
 
-            // Wire DAG: Issue B depends on Issue A
-            db.IssueDependencies.Add(new IssueDependency
+            // Wire DAG: ForgeTask B depends on ForgeTask A
+            db.TaskDependencies.Add(new TaskDependency
             {
-                IssueId = issueB.Id,
-                DependsOnIssueId = issueA.Id
+                TaskId = taskB.Id,
+                DependsOnTaskId = taskA.Id
             });
             await db.SaveChangesAsync(context.CancellationToken);
 
-            ConsoleFormatting.PrintSuccess($"Created Issue #{issueA.Id} (Parent) and Issue #{issueB.Id} (Child, depends on #{issueA.Id})");
+            ConsoleFormatting.PrintSuccess($"Created ForgeTask #{taskA.Id} (Parent) and ForgeTask #{taskB.Id} (Child, depends on #{taskA.Id})");
         }
 
         // Step 2: Validate Initial DAG Readiness
@@ -87,36 +87,36 @@ public class DependencyDagScenario : IScenario
         {
             var dagEngine = scope.ServiceProvider.GetRequiredService<IDependencyResolutionEngine>();
 
-            var readyA = await dagEngine.IsReadyForExecutionAsync(issueA.Id, context.CancellationToken);
-            var readyB = await dagEngine.IsReadyForExecutionAsync(issueB.Id, context.CancellationToken);
+            var readyA = await dagEngine.IsReadyForExecutionAsync(taskA.Id, context.CancellationToken);
+            var readyB = await dagEngine.IsReadyForExecutionAsync(taskB.Id, context.CancellationToken);
 
             if (!readyA)
             {
-                return ScenarioResult.Fail(sw.Elapsed, "Prerequisite Issue A should be ready for execution.");
+                return ScenarioResult.Fail(sw.Elapsed, "Prerequisite ForgeTask A should be ready for execution.");
             }
             if (readyB)
             {
-                return ScenarioResult.Fail(sw.Elapsed, "Violation: Dependent Issue B should NOT be ready while Issue A is open.");
+                return ScenarioResult.Fail(sw.Elapsed, "Violation: Dependent ForgeTask B should NOT be ready while ForgeTask A is open.");
             }
 
-            ConsoleFormatting.PrintSuccess($"DAG correctly blocks child: Issue A Ready={readyA}, Issue B Ready={readyB}");
-            details.Add($"Initial State: Issue #{issueA.Id} Ready=True, Issue #{issueB.Id} Ready=False");
+            ConsoleFormatting.PrintSuccess($"DAG correctly blocks child: ForgeTask A Ready={readyA}, ForgeTask B Ready={readyB}");
+            details.Add($"Initial State: ForgeTask #{taskA.Id} Ready=True, ForgeTask #{taskB.Id} Ready=False");
         }
 
         // Step 3: Test Premature Execution Interception
-        ConsoleFormatting.PrintStep("4.3", "Attempting premature execution of blocked child Issue B...");
+        ConsoleFormatting.PrintStep("4.3", "Attempting premature execution of blocked child ForgeTask B...");
         using (var scope = context.Environment.Services.CreateScope())
         {
-            var orchestrator = scope.ServiceProvider.GetRequiredService<IIssueOrchestrator>();
-            await orchestrator.ProcessIssueAsync(issueB.Id, context.CancellationToken);
+            var orchestrator = scope.ServiceProvider.GetRequiredService<ITaskOrchestrator>();
+            await orchestrator.ProcessTaskAsync(taskB.Id, context.CancellationToken);
 
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var logs = await db.ExecutionLogs
-                .Where(l => l.IssueId == issueB.Id)
+                .Where(l => l.TaskId == taskB.Id)
                 .OrderByDescending(l => l.Timestamp)
                 .ToListAsync(context.CancellationToken);
 
-            var waitingLog = logs.FirstOrDefault(l => l.Message.Contains("waiting on prerequisite issues"));
+            var waitingLog = logs.FirstOrDefault(l => l.Message.Contains("waiting on prerequisite tasks"));
             if (waitingLog == null)
             {
                 return ScenarioResult.Fail(sw.Elapsed, "Orchestrator did not record waiting on prerequisites log.");
@@ -125,50 +125,50 @@ public class DependencyDagScenario : IScenario
             ConsoleFormatting.PrintSuccess("Orchestrator intercepted execution: safely waited without branch checkout or GPU lock.");
         }
 
-        // Step 4: Advance and Complete Issue A with Squash-Merge
-        ConsoleFormatting.PrintStep("4.4", "Completing Issue A and triggering cascade unblocking...");
-        // Add a commit on Issue A's feature branch
-        await context.Environment.GitRepo.CheckoutBranchAsync(issueA.FeatureBranch, create: true, context.CancellationToken);
+        // Step 4: Advance and Complete ForgeTask A with Squash-Merge
+        ConsoleFormatting.PrintStep("4.4", "Completing ForgeTask A and triggering cascade unblocking...");
+        // Add a commit on ForgeTask A's feature branch
+        await context.Environment.GitRepo.CheckoutBranchAsync(taskA.FeatureBranch, create: true, context.CancellationToken);
         context.Environment.GitRepo.CreateFile("MathService.cs", "// MathService core implementation\npublic class MathService {}");
         await context.Environment.GitRepo.CommitAllAsync("Implement MathService", context.CancellationToken);
         await context.Environment.GitRepo.CheckoutBranchAsync("main", create: false, context.CancellationToken);
 
         using (var scope = context.Environment.Services.CreateScope())
         {
-            var orchestrator = scope.ServiceProvider.GetRequiredService<IIssueOrchestrator>();
-            await orchestrator.CompleteIssueAndCascadeAsync(issueA.Id, "Squash: Complete MathService", context.CancellationToken);
+            var orchestrator = scope.ServiceProvider.GetRequiredService<ITaskOrchestrator>();
+            await orchestrator.CompleteTaskAndCascadeAsync(taskA.Id, "Squash: Complete MathService", context.CancellationToken);
         }
 
-        // Step 5: Verify Issue A Closed & Child Issue B Unblocked
-        ConsoleFormatting.PrintStep("4.5", "Verifying Issue A closed and dependent Issue B cascade unblocked...");
+        // Step 5: Verify ForgeTask A Closed & Child ForgeTask B Unblocked
+        ConsoleFormatting.PrintStep("4.5", "Verifying ForgeTask A closed and dependent ForgeTask B cascade unblocked...");
         using (var scope = context.Environment.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var dagEngine = scope.ServiceProvider.GetRequiredService<IDependencyResolutionEngine>();
 
-            var reloadedA = await db.Issues.FindAsync([issueA.Id], context.CancellationToken);
-            var reloadedB = await db.Issues.FindAsync([issueB.Id], context.CancellationToken);
+            var reloadedA = await db.Tasks.FindAsync([taskA.Id], context.CancellationToken);
+            var reloadedB = await db.Tasks.FindAsync([taskB.Id], context.CancellationToken);
 
-            if (reloadedA?.Status != IssueOverallStatus.Closed)
+            if (reloadedA?.Status != TaskOverallStatus.Closed)
             {
-                return ScenarioResult.Fail(sw.Elapsed, $"Expected Issue A to be Closed, found {reloadedA?.Status}.");
+                return ScenarioResult.Fail(sw.Elapsed, $"Expected ForgeTask A to be Closed, found {reloadedA?.Status}.");
             }
-            ConsoleFormatting.PrintSuccess($"Issue #{issueA.Id} closed and squash-merged into main.");
+            ConsoleFormatting.PrintSuccess($"ForgeTask #{taskA.Id} closed and squash-merged into main.");
 
-            var readyBNow = await dagEngine.IsReadyForExecutionAsync(issueB.Id, context.CancellationToken);
+            var readyBNow = await dagEngine.IsReadyForExecutionAsync(taskB.Id, context.CancellationToken);
             if (!readyBNow)
             {
-                return ScenarioResult.Fail(sw.Elapsed, "Violation: Issue B was not unblocked after Issue A completed.");
+                return ScenarioResult.Fail(sw.Elapsed, "Violation: ForgeTask B was not unblocked after ForgeTask A completed.");
             }
 
-            ConsoleFormatting.PrintSuccess($"Cascade unblocking successful! Issue #{issueB.Id} status is now {reloadedB?.Status}, ReadyForExecution=true.");
+            ConsoleFormatting.PrintSuccess($"Cascade unblocking successful! ForgeTask #{taskB.Id} status is now {reloadedB?.Status}, ReadyForExecution=true.");
 
             // Verify git main branch contains the squashed commit
             var log = await context.Environment.GitRepo.GetCommitLogAsync(2, context.CancellationToken);
             ConsoleFormatting.PrintInfo($"Git main commit log:\n{log.Trim()}");
 
-            details.Add($"Squash Merge: Issue #{issueA.Id} merged to main");
-            details.Add($"Cascade Unblock: Issue #{issueB.Id} unblocked and ready");
+            details.Add($"Squash Merge: ForgeTask #{taskA.Id} merged to main");
+            details.Add($"Cascade Unblock: ForgeTask #{taskB.Id} unblocked and ready");
         }
 
         sw.Stop();

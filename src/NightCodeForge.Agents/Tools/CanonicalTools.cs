@@ -22,7 +22,7 @@ public partial class CanonicalTools
     private readonly IWebSearchService _webSearchService;
     private readonly IWorkspacePathResolver? _pathResolver;
     private readonly int? _workspaceId;
-    private readonly int? _issueId;
+    private readonly int? _taskId;
 
     private readonly int? _buildTimeoutSeconds;
     private readonly int? _testTimeoutSeconds;
@@ -37,7 +37,7 @@ public partial class CanonicalTools
         int? testTimeoutSeconds = null,
         IWorkspacePathResolver? pathResolver = null,
         int? workspaceId = null,
-        int? issueId = null)
+        int? taskId = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _executionEnv = executionEnv;
@@ -48,7 +48,7 @@ public partial class CanonicalTools
         _testTimeoutSeconds = testTimeoutSeconds;
         _pathResolver = pathResolver;
         _workspaceId = workspaceId;
-        _issueId = issueId;
+        _taskId = taskId;
     }
 
     public string ResolveFullPath(string path)
@@ -57,20 +57,20 @@ public partial class CanonicalTools
         {
             if (_workspaceId.HasValue)
             {
-                var rootCrucibleDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty, _issueId);
+                var rootCrucibleDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty, _taskId);
                 if (Directory.Exists(rootCrucibleDir))
                 {
-                    return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _issueId);
+                    return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
                 }
 
-                var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _issueId);
+                var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
                 if (File.Exists(cruciblePath) || Directory.Exists(cruciblePath))
                 {
                     return cruciblePath;
                 }
             }
 
-            return _pathResolver.ResolveCruciblePath(_workspaceRoot, path, _issueId);
+            return _pathResolver.ResolveCruciblePath(_workspaceRoot, path, _taskId);
         }
 
         var raw = (path ?? string.Empty).Trim();
@@ -111,7 +111,7 @@ public partial class CanonicalTools
             if (rootLeaf.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
                 rootLeaf.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
                 rootLeaf.Equals("mirror", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.StartsWith("issue-", StringComparison.OrdinalIgnoreCase) ||
+                rootLeaf.StartsWith("task-", StringComparison.OrdinalIgnoreCase) ||
                 rootLeaf.StartsWith("wt-", StringComparison.OrdinalIgnoreCase))
             {
                 parentDir = Path.GetDirectoryName(normRoot) ?? normRoot;
@@ -136,23 +136,23 @@ public partial class CanonicalTools
                     : Path.GetFullPath(Path.Combine(cloneDir, cloneRel));
             }
 
-            var issueMatch = System.Text.RegularExpressions.Regex.Match(rel, @"^(?:wt/)?issue-(\d+)(?:/(.*)|$)");
-            if (issueMatch.Success)
+            var taskMatch = System.Text.RegularExpressions.Regex.Match(rel, @"^(?:wt/)?task-(\d+)(?:/(.*)|$)");
+            if (taskMatch.Success)
             {
-                var issueNum = issueMatch.Groups[1].Value;
-                var issueRel = issueMatch.Groups[2].Success ? issueMatch.Groups[2].Value.TrimStart('/') : string.Empty;
-                var issueDir = Path.Combine(parentDir, $"issue-{issueNum}");
-                return string.IsNullOrEmpty(issueRel)
-                    ? Path.GetFullPath(issueDir)
-                    : Path.GetFullPath(Path.Combine(issueDir, issueRel));
+                var taskNum = taskMatch.Groups[1].Value;
+                var taskRel = taskMatch.Groups[2].Success ? taskMatch.Groups[2].Value.TrimStart('/') : string.Empty;
+                var taskDir = Path.Combine(parentDir, $"task-{taskNum}");
+                return string.IsNullOrEmpty(taskRel)
+                    ? Path.GetFullPath(taskDir)
+                    : Path.GetFullPath(Path.Combine(taskDir, taskRel));
             }
 
-            if (_issueId.HasValue && _issueId.Value > 0)
+            if (_taskId.HasValue && _taskId.Value > 0)
             {
-                var issueDir = Path.Combine(parentDir, $"issue-{_issueId.Value}");
-                if (Directory.Exists(issueDir))
+                var taskDir = Path.Combine(parentDir, $"task-{_taskId.Value}");
+                if (Directory.Exists(taskDir))
                 {
-                    return Path.GetFullPath(Path.Combine(issueDir, rel));
+                    return Path.GetFullPath(Path.Combine(taskDir, rel));
                 }
             }
 
@@ -492,26 +492,26 @@ public partial class CanonicalTools
         return sb.ToString().TrimEnd();
     }
 
-    public List<IssueProposal> PendingProposals { get; } = new();
+    public List<TaskProposal> PendingProposals { get; } = new();
 
     /// <summary>
-    /// propose_issues: Propose structured backlog items for triage/discovery.
+    /// propose_tasks: Propose structured backlog items for triage/discovery.
     /// </summary>
-    public string ProposeIssues(IReadOnlyList<IssueProposal> issues)
+    public string ProposeTasks(IReadOnlyList<TaskProposal> tasks)
     {
-        if (issues == null || issues.Count == 0)
+        if (tasks == null || tasks.Count == 0)
         {
-            return "No issues proposed.";
+            return "No tasks proposed.";
         }
 
-        PendingProposals.AddRange(issues);
+        PendingProposals.AddRange(tasks);
 
-        var json = JsonSerializer.Serialize(issues, new JsonSerializerOptions { WriteIndented = true });
-        return $"Proposed {issues.Count} backlog issue(s):\n{json}";
+        var json = JsonSerializer.Serialize(tasks, new JsonSerializerOptions { WriteIndented = true });
+        return $"Proposed {tasks.Count} backlog task(s):\n{json}";
     }
 
     /// <summary>
-    /// request_changes: Reject implementation and send issue back to the implementation agent with detailed feedback.
+    /// request_changes: Reject implementation and send task back to the implementation agent with detailed feedback.
     /// </summary>
     public string RequestChanges(string feedback, string? reason = null)
     {

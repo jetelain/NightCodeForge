@@ -21,12 +21,12 @@ public class PiRpcAgentHarnessTests
             return Task.CompletedTask;
         }
 
-        public async IAsyncEnumerable<AgentActivityEvent> SubscribeAsync(int? issueId = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        public async IAsyncEnumerable<AgentActivityEvent> SubscribeAsync(int? taskId = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             await Task.Yield();
             foreach (var ev in Events)
             {
-                if (!issueId.HasValue || ev.IssueId == issueId.Value) yield return ev;
+                if (!taskId.HasValue || ev.TaskId == taskId.Value) yield return ev;
             }
         }
     }
@@ -39,7 +39,7 @@ public class PiRpcAgentHarnessTests
 
         var context = new AgentSessionContext
         {
-            Issue = new Issue { Id = 10, Title = "Pi Test", Description = "Implement feature" },
+            ForgeTask = new ForgeTask { Id = 10, Title = "Pi Test", Description = "Implement feature" },
             StageId = "stage-2",
             Profile = new AgentProfile { Name = "PiAgent", ModelName = "qwen2.5-coder:7b" }
         };
@@ -88,7 +88,7 @@ public class PiRpcAgentHarnessTests
 
         var context = new AgentSessionContext
         {
-            Issue = new Issue { Id = 11, Title = "Pi Question", Description = "Ask question" },
+            ForgeTask = new ForgeTask { Id = 11, Title = "Pi Question", Description = "Ask question" },
             StageId = "stage-1",
             Profile = new AgentProfile { Name = "PiAgent" }
         };
@@ -121,7 +121,7 @@ public class PiRpcAgentHarnessTests
 
         var context = new AgentSessionContext
         {
-            Issue = new Issue { Id = 12, Title = "Resume Test", Description = "Resume execution" },
+            ForgeTask = new ForgeTask { Id = 12, Title = "Resume Test", Description = "Resume execution" },
             StageId = "stage-2",
             Profile = new AgentProfile { Name = "PiAgent" },
             PendingHumanAnswer = "Use SQLite for tests"
@@ -155,7 +155,7 @@ public class PiRpcAgentHarnessTests
 
             var context = new AgentSessionContext
             {
-                Issue = new Issue { Id = 33, Title = "Pi Path Test", Description = "Test path resolution" },
+                ForgeTask = new ForgeTask { Id = 33, Title = "Pi Path Test", Description = "Test path resolution" },
                 StageId = "stage-1",
                 Profile = new AgentProfile { Name = "PiAgent" },
                 Workspace = new Workspace { Id = 7, RepositoryPath = tempDir },

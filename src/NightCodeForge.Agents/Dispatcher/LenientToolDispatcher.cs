@@ -460,18 +460,18 @@ public partial class LenientToolDispatcher
             aliases: ["search_web", "google_search", "bing_search", "brave_search", "websearch", "internet_search", "search"]));
 
         RegisterTool(new ToolDefinition(
-            "propose_issues",
-            "Propose structured backlog items (issues: [{ title, description, type }])",
+            "propose_tasks",
+            "Propose structured backlog items (tasks: [{ title, description, type }])",
             (args, _) =>
             {
-                var issues = ExtractIssues(args);
-                return Task.FromResult(tools.ProposeIssues(issues));
+                var tasks = ExtractTasks(args);
+                return Task.FromResult(tools.ProposeTasks(tasks));
             },
-            aliases: ["propose_issue", "proposeissues"]));
+            aliases: ["propose_task", "proposetasks"]));
 
         RegisterTool(new ToolDefinition(
             "request_changes",
-            "Reject implementation and send issue back to the implementation agent for rework (feedback, reason)",
+            "Reject implementation and send task back to the implementation agent for rework (feedback, reason)",
             (args, _) =>
             {
                 var feedback = GetRequiredString(args, "feedback");
@@ -576,10 +576,10 @@ public partial class LenientToolDispatcher
         return null;
     }
 
-    private static IReadOnlyList<IssueProposal> ExtractIssues(Dictionary<string, object?> args)
+    private static IReadOnlyList<TaskProposal> ExtractTasks(Dictionary<string, object?> args)
     {
-        var issues = new List<IssueProposal>();
-        if (args.TryGetValue("issues", out var obj) && obj != null)
+        var tasks = new List<TaskProposal>();
+        if (args.TryGetValue("tasks", out var obj) && obj != null)
         {
             if (obj is string str && str.TrimStart().StartsWith("["))
             {
@@ -603,18 +603,18 @@ public partial class LenientToolDispatcher
                         var title = d.TryGetValue("title", out var t) ? t?.ToString() ?? "" : "";
                         var desc = d.TryGetValue("description", out var ds) ? ds?.ToString() ?? "" : "";
                         var type = d.TryGetValue("type", out var tp) ? tp?.ToString() ?? "feature" : "feature";
-                        issues.Add(new IssueProposal(title, desc, type));
+                        tasks.Add(new TaskProposal(title, desc, type));
                     }
                     else if (item is JsonElement elem && elem.ValueKind == JsonValueKind.Object)
                     {
                         var title = elem.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
                         var desc = elem.TryGetProperty("description", out var ds) ? ds.GetString() ?? "" : "";
                         var type = elem.TryGetProperty("type", out var tp) ? tp.GetString() ?? "feature" : "feature";
-                        issues.Add(new IssueProposal(title, desc, type));
+                        tasks.Add(new TaskProposal(title, desc, type));
                     }
                 }
             }
         }
-        return issues;
+        return tasks;
     }
 }

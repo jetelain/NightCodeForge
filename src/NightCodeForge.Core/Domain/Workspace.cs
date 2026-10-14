@@ -19,6 +19,6 @@ public class Workspace
     public int? TestTimeoutSeconds { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-    public ICollection<Issue> Issues { get; set; } = new List<Issue>();
+    public ICollection<ForgeTask> Tasks { get; set; } = new List<ForgeTask>();
     public ICollection<AgentProfile> AgentProfiles { get; set; } = new List<AgentProfile>();
 }

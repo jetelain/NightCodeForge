@@ -6,11 +6,11 @@ namespace NightCodeForge.Core.Domain;
 public class StageCheckpoint
 {
     public int Id { get; set; }
-    public int IssueId { get; set; }
+    public int TaskId { get; set; }
     public string StageId { get; set; } = string.Empty;
     public string SerializedMemory { get; set; } = string.Empty;
     public string GitCommitHash { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-    public Issue? Issue { get; set; }
+    public ForgeTask? ForgeTask { get; set; }
 }

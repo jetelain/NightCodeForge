@@ -295,11 +295,11 @@ public class WslDockerExecutionTests
     }
 
     [Fact]
-    public void BuildVolumeMounts_WithIsolatedIssueWorktree_MountsWorktreeToWorkspaceAndCloneSeparately()
+    public void BuildVolumeMounts_WithIsolatedTaskWorktree_MountsWorktreeToWorkspaceAndCloneSeparately()
     {
         var options = new ContainerExecutorOptions
         {
-            HostWorkspacePath = "/home/developer/.nightcodeforge/wks/42/issue-7",
+            HostWorkspacePath = "/home/developer/.nightcodeforge/wks/42/task-7",
             CanonicalClonePath = "/home/developer/.nightcodeforge/wks/42/clone",
             ContainerWorkspacePath = "/workspace",
             MountPackageCaches = false,
@@ -308,9 +308,9 @@ public class WslDockerExecutionTests
 
         var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options);
 
-        // Active issue worktree mounted at /workspace
+        // Active task worktree mounted at /workspace
         var wksMount = Assert.Single(mounts, m => m.ContainerPath == "/workspace");
-        Assert.Equal("/home/developer/.nightcodeforge/wks/42/issue-7", wksMount.HostPath);
+        Assert.Equal("/home/developer/.nightcodeforge/wks/42/task-7", wksMount.HostPath);
         Assert.False(wksMount.IsReadOnly);
 
         // Canonical clone mounted at /clone as read-only
@@ -325,11 +325,11 @@ public class WslDockerExecutionTests
     }
 
     [Fact]
-    public void BuildVolumeMounts_WithIsolatedIssueWorktree_RestrictedReadOnly_MountsGitReadOnly()
+    public void BuildVolumeMounts_WithIsolatedTaskWorktree_RestrictedReadOnly_MountsGitReadOnly()
     {
         var options = new ContainerExecutorOptions
         {
-            HostWorkspacePath = "/home/developer/.nightcodeforge/wks/42/issue-7",
+            HostWorkspacePath = "/home/developer/.nightcodeforge/wks/42/task-7",
             CanonicalClonePath = "/home/developer/.nightcodeforge/wks/42/clone",
             ContainerWorkspacePath = "/workspace",
             IsRestrictedReadOnly = true,

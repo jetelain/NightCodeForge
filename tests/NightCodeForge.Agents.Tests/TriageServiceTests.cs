@@ -10,7 +10,7 @@ namespace NightCodeForge.Agents.Tests;
 public class TriageServiceTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly InMemoryIssueRepository _issueRepo;
+    private readonly InMemoryTaskRepository _taskRepo;
     private readonly InMemoryWorkspaceRepository _workspaceRepo;
     private readonly FakeHarnessRegistry _harnessRegistry;
     private readonly FakeAgentHarness _fakeHarness;
@@ -22,7 +22,7 @@ public class TriageServiceTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), "ncf-triage-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
 
-        _issueRepo = new InMemoryIssueRepository();
+        _taskRepo = new InMemoryTaskRepository();
         _workspaceRepo = new InMemoryWorkspaceRepository();
         _fakeHarness = new FakeAgentHarness();
         _harnessRegistry = new FakeHarnessRegistry(_fakeHarness);
@@ -47,24 +47,24 @@ public class TriageServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task TriageExternalReportAsync_EnforcesReadOnlyAndRestrictedTier_CreatesSuggestedIssue()
+    public async Task TriageExternalReportAsync_EnforcesReadOnlyAndRestrictedTier_CreatesSuggestedTask()
     {
         // Arrange
         AgentSessionContext? capturedContext = null;
         _fakeHarness.OnRunStage = ctx =>
         {
             capturedContext = ctx;
-            ctx.PipelineContext?.DataBag.Set("PendingProposals", new List<IssueProposal>
+            ctx.PipelineContext?.DataBag.Set("PendingProposals", new List<TaskProposal>
             {
                 new("Fix null reference in Parser", "Check for null tokens before accessing properties", "bug")
             });
             return AgentRunResult.Completed(
                 new AgentRunMetrics(100, 50, 50, 100),
-                summary: "Triage completed, proposed 1 issue.");
+                summary: "Triage completed, proposed 1 task.");
         };
 
         var triageService = new TriageService(
-            _issueRepo,
+            _taskRepo,
             _workspaceRepo,
             _harnessRegistry,
             _markdownSyncService);
@@ -81,38 +81,38 @@ public class TriageServiceTests : IDisposable
         Assert.NotNull(capturedContext);
         Assert.Equal(AgentMode.ReadOnly, capturedContext.RequiredMode);
         Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, capturedContext.Profile.SecurityTier);
-        Assert.Equal("main", capturedContext.Issue.BaseBranch);
+        Assert.Equal("main", capturedContext.ForgeTask.BaseBranch);
 
         Assert.Single(result);
         var created = result[0];
         Assert.Equal("Fix null reference in Parser", created.Title);
-        Assert.Equal(IssueOverallStatus.Suggested, created.Status);
+        Assert.Equal(TaskOverallStatus.Suggested, created.Status);
         Assert.Equal(MergeMode.ManualReviewRequired, created.MergeMode);
         Assert.Equal("main", created.BaseBranch);
 
-        // Verify issue was persisted in repository
-        var inRepo = await _issueRepo.GetByIdAsync(created.Id);
+        // Verify task was persisted in repository
+        var inRepo = await _taskRepo.GetByIdAsync(created.Id);
         Assert.NotNull(inRepo);
-        Assert.Equal(IssueOverallStatus.Suggested, inRepo.Status);
+        Assert.Equal(TaskOverallStatus.Suggested, inRepo.Status);
     }
 
     [Fact]
-    public async Task TriageExternalReportAsync_MirrorsProposedIssuesToDocsIssuesFolder()
+    public async Task TriageExternalReportAsync_MirrorsProposedTasksToDocsTasksFolder()
     {
         // Arrange
         _fakeHarness.OnRunStage = ctx =>
         {
-            ctx.PipelineContext?.DataBag.Set("PendingProposals", new List<IssueProposal>
+            ctx.PipelineContext?.DataBag.Set("PendingProposals", new List<TaskProposal>
             {
                 new("Add timeout support to HTTP client", "Allow configuring connection and response timeout", "feature")
             });
             return AgentRunResult.Completed(
                 new AgentRunMetrics(100, 50, 50, 100),
-                summary: "Proposed feature issue.");
+                summary: "Proposed feature task.");
         };
 
         var triageService = new TriageService(
-            _issueRepo,
+            _taskRepo,
             _workspaceRepo,
             _harnessRegistry,
             _markdownSyncService);
@@ -126,10 +126,10 @@ public class TriageServiceTests : IDisposable
 
         // Assert
         Assert.Single(result);
-        var docsIssuesDir = Path.Combine(_tempDir, "docs", "issues");
-        Assert.True(Directory.Exists(docsIssuesDir));
+        var docsTasksDir = Path.Combine(_tempDir, "docs", "tasks");
+        Assert.True(Directory.Exists(docsTasksDir));
 
-        var mdFiles = Directory.GetFiles(docsIssuesDir, "*.md");
+        var mdFiles = Directory.GetFiles(docsTasksDir, "*.md");
         Assert.Single(mdFiles);
 
         var fileContent = await File.ReadAllTextAsync(mdFiles[0]);
@@ -149,7 +149,7 @@ public class TriageServiceTests : IDisposable
         };
 
         var triageService = new TriageService(
-            _issueRepo,
+            _taskRepo,
             _workspaceRepo,
             _harnessRegistry,
             _markdownSyncService);
@@ -163,8 +163,8 @@ public class TriageServiceTests : IDisposable
 
         // Assert
         Assert.Empty(result);
-        var allIssues = await _issueRepo.GetByWorkspaceIdAsync(_workspace.Id);
-        Assert.Empty(allIssues);
+        var allTasks = await _taskRepo.GetByWorkspaceIdAsync(_workspace.Id);
+        Assert.Empty(allTasks);
     }
 
     private class FakeAgentHarness : IAgentHarness
@@ -195,22 +195,22 @@ public class TriageServiceTests : IDisposable
         public IEnumerable<IAgentHarness> GetAllHarnesses() => new[] { _harness };
     }
 
-    private class FakeMarkdownSyncService : IIssueMarkdownSyncService
+    private class FakeMarkdownSyncService : ITaskMarkdownSyncService
     {
-        public string GenerateMarkdown(Issue issue, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null) =>
-            $"---\ntitle: \"{issue.Title}\"\nstatus: {issue.Status}\n---\n\n{issue.Description}";
+        public string GenerateMarkdown(ForgeTask task, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null) =>
+            $"---\ntitle: \"{task.Title}\"\nstatus: {task.Status}\n---\n\n{task.Description}";
 
-        public (IssueFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent) =>
-            (new IssueFrontmatter(), string.Empty);
+        public (TaskFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent) =>
+            (new TaskFrontmatter(), string.Empty);
 
         public string ComputeContentHash(string content) => string.Empty;
 
-        public Task<string> SyncIssueToDiskAsync(Issue issue, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Path.Combine(workspacePath, "issue.md"));
+        public Task<string> SyncTaskToDiskAsync(ForgeTask task, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Path.Combine(workspacePath, "task.md"));
 
         public Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task ProcessFileChangedAsync(string filePath, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task ArchiveOrCleanupIssueFileAsync(Issue issue, string workspacePath, bool archive = true, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive = true, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public void StartWatching(int workspaceId, string workspacePath) { }
         public void StopWatching(int workspaceId) { }
         public void Dispose() { }

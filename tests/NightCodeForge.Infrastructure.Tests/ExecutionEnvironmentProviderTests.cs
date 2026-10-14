@@ -102,7 +102,7 @@ public class ExecutionEnvironmentProviderTests
     }
 
     [Fact]
-    public void GetEnvironment_ContainerSandbox_WithIssueId_ConfiguresIsolatedWorktreeAndSeparateContainers()
+    public void GetEnvironment_ContainerSandbox_WithTaskId_ConfiguresIsolatedWorktreeAndSeparateContainers()
     {
         var envProvider = new ExecutionEnvironmentProvider();
         var workspace = new Workspace
@@ -113,30 +113,30 @@ public class ExecutionEnvironmentProviderTests
             ContainerName = "ncf-sandbox-55"
         };
 
-        var envIssue1 = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, issueId: 1);
-        var envIssue2 = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, issueId: 2);
-        var envNoIssue = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard);
+        var envTask1 = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, taskId: 1);
+        var envTask2 = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, taskId: 2);
+        var envNoTask = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard);
 
-        Assert.NotSame(envIssue1, envIssue2);
-        Assert.NotSame(envIssue1, envNoIssue);
+        Assert.NotSame(envTask1, envTask2);
+        Assert.NotSame(envTask1, envNoTask);
 
-        var exec1 = Assert.IsType<NightCodeForgeContainerExecutor>(envIssue1);
-        var exec2 = Assert.IsType<NightCodeForgeContainerExecutor>(envIssue2);
-        var execNo = Assert.IsType<NightCodeForgeContainerExecutor>(envNoIssue);
+        var exec1 = Assert.IsType<NightCodeForgeContainerExecutor>(envTask1);
+        var exec2 = Assert.IsType<NightCodeForgeContainerExecutor>(envTask2);
+        var execNo = Assert.IsType<NightCodeForgeContainerExecutor>(envNoTask);
 
-        // Issue 1 options
-        Assert.Equal("ncf-sandbox-55-issue-1", exec1.Options.ContainerNameOrId);
+        // ForgeTask 1 options
+        Assert.Equal("ncf-sandbox-55-task-1", exec1.Options.ContainerNameOrId);
         Assert.EndsWith("55", exec1.Options.HostWorkspacePath?.Replace('\\', '/'));
-        Assert.Equal("/workspace/issue-1", exec1.Options.DefaultWorkingDirectory);
+        Assert.Equal("/workspace/task-1", exec1.Options.DefaultWorkingDirectory);
         Assert.EndsWith("clone", exec1.Options.CanonicalClonePath?.Replace('\\', '/'));
 
-        // Issue 2 options
-        Assert.Equal("ncf-sandbox-55-issue-2", exec2.Options.ContainerNameOrId);
+        // ForgeTask 2 options
+        Assert.Equal("ncf-sandbox-55-task-2", exec2.Options.ContainerNameOrId);
         Assert.EndsWith("55", exec2.Options.HostWorkspacePath?.Replace('\\', '/'));
-        Assert.Equal("/workspace/issue-2", exec2.Options.DefaultWorkingDirectory);
+        Assert.Equal("/workspace/task-2", exec2.Options.DefaultWorkingDirectory);
         Assert.EndsWith("clone", exec2.Options.CanonicalClonePath?.Replace('\\', '/'));
 
-        // No issue (e.g. Triage on main)
+        // No task (e.g. Triage on main)
         Assert.Equal("ncf-sandbox-55", execNo.Options.ContainerNameOrId);
         Assert.EndsWith("55", execNo.Options.HostWorkspacePath?.Replace('\\', '/'));
         Assert.Equal("/workspace/clone", execNo.Options.DefaultWorkingDirectory);

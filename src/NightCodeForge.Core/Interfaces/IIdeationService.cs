@@ -10,7 +10,7 @@ public record IdeationProposal(
 
 public record IdeationResult(
     string AssistantMessage,
-    IReadOnlyList<IdeationProposal> ProposedIssues);
+    IReadOnlyList<IdeationProposal> ProposedTasks);
 
 public enum IdeationStreamUpdateKind
 {
@@ -27,7 +27,7 @@ public record IdeationStreamUpdate(
     IdeationResult? FinalResult = null);
 
 /// <summary>
-/// Service contract for interactive discovery chat and autonomous backlog issue formulation.
+/// Service contract for interactive discovery chat and autonomous backlog task formulation.
 /// </summary>
 public interface IIdeationService
 {

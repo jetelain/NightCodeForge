@@ -20,7 +20,7 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
     {
         return await _context.Workspaces
             .Include(w => w.AgentProfiles)
-            .Include(w => w.Issues)
+            .Include(w => w.Tasks)
             .FirstOrDefaultAsync(w => w.Id == id, cancellationToken);
     }
 

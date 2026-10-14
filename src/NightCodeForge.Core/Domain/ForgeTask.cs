@@ -1,15 +1,15 @@
 namespace NightCodeForge.Core.Domain;
 
 /// <summary>
-/// Represents a task or issue processed by NightCodeForge.
+/// Represents a task or task processed by NightCodeForge.
 /// </summary>
-public class Issue
+public class ForgeTask
 {
     public int Id { get; set; }
     public int WorkspaceId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
-    public IssueOverallStatus Status { get; set; } = IssueOverallStatus.Suggested;
+    public TaskOverallStatus Status { get; set; } = TaskOverallStatus.Suggested;
     public MergeMode MergeMode { get; set; } = MergeMode.ManualReviewRequired;
     public bool IsWaitingForHuman { get; set; } = false;
     public string? InterruptedAgentProfileId { get; set; }
@@ -24,8 +24,8 @@ public class Issue
     public string? LastHangfireJobId { get; set; }
 
     public Workspace? Workspace { get; set; }
-    public ICollection<IssueDependency> Dependencies { get; set; } = new List<IssueDependency>();
-    public ICollection<IssueDependency> DependentIssues { get; set; } = new List<IssueDependency>();
+    public ICollection<TaskDependency> Dependencies { get; set; } = new List<TaskDependency>();
+    public ICollection<TaskDependency> DependentTasks { get; set; } = new List<TaskDependency>();
     public ICollection<Question> Questions { get; set; } = new List<Question>();
     public ICollection<StageCheckpoint> Checkpoints { get; set; } = new List<StageCheckpoint>();
     public ICollection<StageExecutionRecord> ExecutionRecords { get; set; } = new List<StageExecutionRecord>();
@@ -33,9 +33,9 @@ public class Issue
 }
 
 /// <summary>
-/// Structured backlog proposal emitted by triage or discovery agents via propose_issues.
+/// Structured backlog proposal emitted by triage or discovery agents via propose_tasks.
 /// </summary>
-public record IssueProposal(
+public record TaskProposal(
     string Title,
     string Description,
     string? Type = "feature",

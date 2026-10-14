@@ -16,7 +16,7 @@ public class InMemoryAgentActivityStreamer : IAgentActivityStreamer
     {
         foreach (var (id, sub) in _subscriptions)
         {
-            if (sub.IssueId == null || sub.IssueId == activityEvent.IssueId)
+            if (sub.TaskId == null || sub.TaskId == activityEvent.TaskId)
             {
                 sub.Channel.Writer.TryWrite(activityEvent);
             }
@@ -26,7 +26,7 @@ public class InMemoryAgentActivityStreamer : IAgentActivityStreamer
     }
 
     public async IAsyncEnumerable<AgentActivityEvent> SubscribeAsync(
-        int? issueId = null,
+        int? taskId = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var subId = Guid.NewGuid();
@@ -36,7 +36,7 @@ public class InMemoryAgentActivityStreamer : IAgentActivityStreamer
             SingleWriter = false
         });
 
-        var subscription = new Subscription(issueId, channel);
+        var subscription = new Subscription(taskId, channel);
         _subscriptions[subId] = subscription;
 
         try
@@ -63,5 +63,5 @@ public class InMemoryAgentActivityStreamer : IAgentActivityStreamer
         }
     }
 
-    private record Subscription(int? IssueId, Channel<AgentActivityEvent> Channel);
+    private record Subscription(int? TaskId, Channel<AgentActivityEvent> Channel);
 }

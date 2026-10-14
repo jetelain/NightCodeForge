@@ -20,7 +20,7 @@ flowchart TD
     end
 
     subgraph Step2 ["2. Git Workspace Manager"]
-        Branches["Branch Isolation (feature/issue-{id})"]
+        Branches["Branch Isolation (feature/task-{id})"]
         Wip["WIP Checkpoint Commits (git add -A && git commit)"]
         Diffs["Noise-Filtered Diff Generation (-U2, lockfile exclusions)"]
         Squash["Squash & Merge Engine"]
@@ -30,7 +30,7 @@ flowchart TD
         MirrorSetup["Ext4 Mirror Creation (/var/ncf/workspaces/{id}/repo)"]
         ConfigUpdate["git config receive.denyCurrentBranch updateInstead"]
         SyncPush["Bidirectional Push/Fetch Sync"]
-        DirtyFallback["Dirty Host Tree Fallback (feature/issue-{id}-ncf)"]
+        DirtyFallback["Dirty Host Tree Fallback (feature/task-{id}-ncf)"]
     end
 
     subgraph Step4 ["4. Integration Tests"]
@@ -66,24 +66,24 @@ flowchart TD
   public interface IGitWorkspaceManager
   {
       Task EnsureRepositoryValidAsync(string repoPath, CancellationToken cancellationToken = default);
-      Task CheckoutIssueBranchAsync(Workspace workspace, int issueId, string baseBranch, CancellationToken cancellationToken = default);
-      Task<string> CreateWipCheckpointAsync(Workspace workspace, int issueId, string stageName, string summary, CancellationToken cancellationToken = default);
-      Task<string> GenerateDiffAsync(Workspace workspace, int issueId, string baseBranch, CancellationToken cancellationToken = default);
-      Task SquashAndMergeAsync(Workspace workspace, int issueId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default);
+      Task CheckoutTaskBranchAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default);
+      Task<string> CreateWipCheckpointAsync(Workspace workspace, int taskId, string stageName, string summary, CancellationToken cancellationToken = default);
+      Task<string> GenerateDiffAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default);
+      Task SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default);
       Task RevertOrCleanAsync(Workspace workspace, CancellationToken cancellationToken = default);
   }
   ```
 * **Core Operations:**
-  1. **Branch Checkout (`CheckoutIssueBranchAsync`):**
-     - Checks if `feature/issue-{id}` exists. If not, creates it branching from `baseBranch`: `git checkout -B feature/issue-{id} {baseBranch}`.
+  1. **Branch Checkout (`CheckoutTaskBranchAsync`):**
+     - Checks if `feature/task-{id}` exists. If not, creates it branching from `baseBranch`: `git checkout -B feature/task-{id} {baseBranch}`.
   2. **WIP Checkpoint (`CreateWipCheckpointAsync`):**
-     - Executes `git add -A` followed by `git commit -m "WIP: [Issue #{id}][Stage: {stageName}] {summary}" --no-verify`.
+     - Executes `git add -A` followed by `git commit -m "WIP: [ForgeTask #{id}][Stage: {stageName}] {summary}" --no-verify`.
      - Returns the 40-character SHA commit hash.
   3. **Noise-Filtered Diff Generation (`GenerateDiffAsync`):**
-     - Executes `git diff {baseBranch}...feature/issue-{id} -U2 -- . ":(exclude)package-lock.json" ":(exclude)pnpm-lock.yaml" ":(exclude)*.Designer.cs"`.
+     - Executes `git diff {baseBranch}...feature/task-{id} -U2 -- . ":(exclude)package-lock.json" ":(exclude)pnpm-lock.yaml" ":(exclude)*.Designer.cs"`.
      - Filters noisy build artifacts and generated files to keep review diffs readable for both humans and AI auditor agents.
   4. **Squash and Merge (`SquashAndMergeAsync`):**
-     - Checks out `baseBranch`, executes `git merge --squash feature/issue-{id}`, and commits with the final approved summary message.
+     - Checks out `baseBranch`, executes `git merge --squash feature/task-{id}`, and commits with the final approved summary message.
 
 ### Step 2.3: Cross-Environment Working Clone Protocol (`GitMirrorSyncService`)
 * **The Performance & Cross-Platform Problem:**
@@ -103,14 +103,14 @@ flowchart TD
        `\\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{workspaceId}\`
   5. **Host Configuration (`updateInstead`):**
      - Configures the developer's host repository: `git config receive.denyCurrentBranch updateInstead`.
-     - This allows `git push host-origin feature/issue-{id}` to update the branch on the host repository even if the developer has that branch currently checked out in Visual Studio or VS Code.
+     - This allows `git push host-origin feature/task-{id}` to update the branch on the host repository even if the developer has that branch currently checked out in Visual Studio or VS Code.
   6. **Dirty Host Tree Fallback Protocol:**
      - If the developer has uncommitted edits to tracked files in their host IDE, Git's `updateInstead` rejects the push with an error.
-     - `GitMirrorSyncService` catches the push rejection, immediately pushes to `refs/heads/feature/issue-{id}-ncf`, and emits a high-priority SignalR alert to the web dashboard:
-       > *"⚠️ Host Working Tree Dirty: Changes pushed to `feature/issue-{id}-ncf`. Please commit or stash local edits in your host IDE to reconcile with the active agent branch."*
+     - `GitMirrorSyncService` catches the push rejection, immediately pushes to `refs/heads/feature/task-{id}-ncf`, and emits a high-priority SignalR alert to the web dashboard:
+       > *"⚠️ Host Working Tree Dirty: Changes pushed to `feature/task-{id}-ncf`. Please commit or stash local edits in your host IDE to reconcile with the active agent branch."*
   7. **Synchronization Lifecycle:**
      - **Stage Inception:** `git fetch host-origin <baseBranch>` ensures the agent works on the latest base commit.
-     - **Stage Checkpoint / Completion:** `git push host-origin feature/issue-{id}` keeps the host repository in sync.
+     - **Stage Checkpoint / Completion:** `git push host-origin feature/task-{id}` keeps the host repository in sync.
 
 ---
 

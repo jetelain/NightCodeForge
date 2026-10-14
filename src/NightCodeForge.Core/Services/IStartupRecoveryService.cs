@@ -7,7 +7,7 @@ public interface IStartupRecoveryService
 {
     /// <summary>
     /// Scans workspaces for stale Git lockfiles, rescues uncommitted changes with WIP commits,
-    /// reconciles orphaned 'Running' issues, and enqueues them to llm-urgent.
+    /// reconciles orphaned 'Running' tasks, and enqueues them to llm-urgent.
     /// </summary>
     Task ReconcileWorkspacesAsync(CancellationToken cancellationToken = default);
 }

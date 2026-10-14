@@ -66,30 +66,30 @@ public class GitWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task CheckoutIssueBranchAsync_CreatesAndChecksOutIssueBranch()
+    public async Task CheckoutTaskBranchAsync_CreatesAndChecksOutTaskBranch()
     {
         // Act
-        await _manager.CheckoutIssueBranchAsync(_workspace, 101, "main");
+        await _manager.CheckoutTaskBranchAsync(_workspace, 101, "main");
         var wtPath = _manager.GetWorktreePath(_workspace, 101);
 
         // Assert: canonical repo remains on "main" for ideation and triage
         var canonicalBranch = await _runner.ExecuteAsync(_repo.RepositoryPath, ["branch", "--show-current"]);
         Assert.Equal("main", canonicalBranch.StandardOutput.Trim());
 
-        // Worktree directory is on feature/issue-101
+        // Worktree directory is on feature/task-101
         var wtBranch = await _runner.ExecuteAsync(wtPath, ["branch", "--show-current"]);
-        Assert.Equal("feature/issue-101", wtBranch.StandardOutput.Trim());
+        Assert.Equal("feature/task-101", wtBranch.StandardOutput.Trim());
     }
 
     [Fact]
-    public async Task CheckoutIssueBranchAsync_WhenBranchAlreadyExists_DoesNotResetCommits()
+    public async Task CheckoutTaskBranchAsync_WhenBranchAlreadyExists_DoesNotResetCommits()
     {
         // Arrange: Create branch worktree and commit a file in the worktree
         var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 102, "main");
         _repo.CreateFile("file_on_branch.txt", "Some work on branch", wtPath);
         var sha1 = await _manager.CreateWipCheckpointAsync(_workspace, 102, "Stage1", "Checkpoint 1");
 
-        // Act: Re-checkout / ensure issue branch worktree
+        // Act: Re-checkout / ensure task branch worktree
         var wtPath2 = await _manager.EnsureWorktreeAsync(_workspace, 102, "main");
         Assert.Equal(wtPath, wtPath2);
 
@@ -120,7 +120,7 @@ public class GitWorkspaceManagerTests : IDisposable
 
         // Verify commit log message format in the worktree
         var logResult = await _runner.ExecuteAsync(wtPath, ["log", "-1", "--pretty=%B"]);
-        Assert.Contains("WIP: [Issue #103][Stage: Implementation] Added App.cs and notes", logResult.StandardOutput);
+        Assert.Contains("WIP: [ForgeTask #103][Stage: Implementation] Added App.cs and notes", logResult.StandardOutput);
 
         // Verify status in worktree is clean
         var status = await _runner.ExecuteAsync(wtPath, ["status", "--porcelain"]);
@@ -141,7 +141,7 @@ public class GitWorkspaceManagerTests : IDisposable
         Assert.Equal(40, sha.Length);
 
         var logResult = await _runner.ExecuteAsync(wtPath, ["log", "-1", "--pretty=%B"]);
-        Assert.Contains("WIP: [Issue #104][Stage: Review] Clean checkpoint", logResult.StandardOutput);
+        Assert.Contains("WIP: [ForgeTask #104][Stage: Review] Clean checkpoint", logResult.StandardOutput);
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public class GitWorkspaceManagerTests : IDisposable
         await _manager.CreateWipCheckpointAsync(_workspace, 105, "Stage2", "WIP 2");
 
         // Act: Squash and merge into main
-        var finalMessage = "feat: Completed issue #105 with multi-part feature";
+        var finalMessage = "feat: Completed task #105 with multi-part feature";
         await _manager.SquashAndMergeAsync(_workspace, 105, "main", finalMessage);
 
         // Assert: on main branch
@@ -177,7 +177,7 @@ public class GitWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task RevertOrCleanAsync_WithIssueId_RestoresDirtyWorktreeToCleanState()
+    public async Task RevertOrCleanAsync_WithTaskId_RestoresDirtyWorktreeToCleanState()
     {
         // Arrange
         var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 106, "main");
@@ -191,10 +191,10 @@ public class GitWorkspaceManagerTests : IDisposable
         var statusBefore = await _runner.ExecuteAsync(wtPath, ["status", "--porcelain"]);
         Assert.NotEmpty(statusBefore.StandardOutput.Trim());
 
-        // Act: Revert worktree for issue 106
+        // Act: Revert worktree for task 106
         await _manager.RevertOrCleanAsync(_workspace, 106);
 
-        // Assert: issue worktree is clean
+        // Assert: task worktree is clean
         var statusAfter = await _runner.ExecuteAsync(wtPath, ["status", "--porcelain"]);
         Assert.Empty(statusAfter.StandardOutput.Trim());
         Assert.False(File.Exists(Path.Combine(wtPath, "untracked_file.tmp")));

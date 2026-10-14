@@ -6,7 +6,7 @@ namespace NightCodeForge.Core.Domain;
 public class StageExecutionRecord
 {
     public int Id { get; set; }
-    public int IssueId { get; set; }
+    public int TaskId { get; set; }
     public string StageId { get; set; } = string.Empty;
     public string StageKind { get; set; } = string.Empty;
     public string AgentProfileId { get; set; } = string.Empty;
@@ -22,5 +22,5 @@ public class StageExecutionRecord
     public StageExecutionStatus Status { get; set; } = StageExecutionStatus.Pending;
     public string? OutputDataJson { get; set; }
 
-    public Issue? Issue { get; set; }
+    public ForgeTask? ForgeTask { get; set; }
 }

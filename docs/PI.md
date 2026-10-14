@@ -180,7 +180,7 @@ Immediately aborts the current thinking turn and halts child processes:
 #### 5. Session State & Resumption
 ```json
 { "id": "req-6", "type": "get_state" }
-{ "id": "req-7", "type": "switch_session", "sessionPath": "/var/ncf/sessions/issue-42.json" }
+{ "id": "req-7", "type": "switch_session", "sessionPath": "/var/ncf/sessions/task-42.json" }
 { "id": "req-8", "type": "compact", "customInstructions": "Summarize file reads" }
 ```
 
@@ -223,13 +223,13 @@ sequenceDiagram
     Daemon-->>Bridge: {"type": "extension_ui_request", "id": "q-101", "method": "input", "title": "Which database library should we use?"}
     Bridge->>Forge: Maps to QuestionPrompt (Pending Question)
     Forge->>DB: Saves Session State & Question Record
-    Forge->>Forge: Takes Git WIP Commit on feature/issue branch
+    Forge->>Forge: Takes Git WIP Commit on feature/task branch
     Forge->>Queue: Yields Hangfire Worker (GPU freed for next task!)
     
     Note over Queue: GPU runs other queued tasks while human is away!
     
     Dev->>DB: Submits answer via Blazor UI
-    DB->>Queue: Re-enqueues issue to llm-urgent
+    DB->>Queue: Re-enqueues task to llm-urgent
     Queue->>Bridge: Resumes Stage Execution
     Bridge->>Daemon: {"type": "extension_ui_response", "id": "q-101", "value": "Use SQLite with EF Core"} (stdin)
     Daemon->>LLM: Delivers answer to waiting tool call
@@ -291,7 +291,7 @@ public class PiRpcAgentHarness : IAgentHarness, IAsyncDisposable
             // Real-Time Token Telemetry
             if (rpcMessage is MessageUpdateEvent update && update.Usage is not null)
             {
-                await _hubContext.Clients.Group(context.IssueId.ToString())
+                await _hubContext.Clients.Group(context.TaskId.ToString())
                     .SendAsync("OnTokenUsage", update.Usage);
             }
 

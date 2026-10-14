@@ -13,7 +13,7 @@ public record TranscriptEntry(
     string? ToolResult = null);
 
 public record TranscriptMetadata(
-    int IssueId,
+    int TaskId,
     string StageId,
     string AgentProfile,
     string ModelName,
@@ -52,14 +52,14 @@ public class SessionTranscriptService
 
         var dateStr = DateTime.UtcNow.ToString("yyyy-MM-dd");
         var statusStr = metadata.Status.ToString().ToLowerInvariant();
-        var fileName = $"{dateStr}-issue-{metadata.IssueId}-{metadata.StageId}-{statusStr}.md";
+        var fileName = $"{dateStr}-task-{metadata.TaskId}-{metadata.StageId}-{statusStr}.md";
         var filePath = Path.Combine(targetDir, fileName);
 
         var sb = new StringBuilder();
 
         // YAML Frontmatter
         sb.AppendLine("---");
-        sb.AppendLine(CultureInfo.InvariantCulture, $"issue_id: {metadata.IssueId}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"task_id: {metadata.TaskId}");
         sb.AppendLine(CultureInfo.InvariantCulture, $"stage_id: {metadata.StageId}");
         sb.AppendLine($"agent_profile: {metadata.AgentProfile}");
         sb.AppendLine($"model: {metadata.ModelName}");
@@ -86,7 +86,7 @@ public class SessionTranscriptService
         sb.AppendLine();
 
         // Turn-by-turn log
-        sb.AppendLine($"# Execution Transcript: Issue #{metadata.IssueId} ({metadata.StageId})");
+        sb.AppendLine($"# Execution Transcript: ForgeTask #{metadata.TaskId} ({metadata.StageId})");
         sb.AppendLine();
 
         foreach (var entry in entries)

@@ -35,14 +35,14 @@ public class CoreCoverageTests : IDisposable
         Assert.NotNull(pipeline);
         Assert.Equal(6, pipeline.Stages.Count);
 
-        Assert.IsType<IssueReviewStage>(pipeline.Stages[0]);
+        Assert.IsType<TaskReviewStage>(pipeline.Stages[0]);
         Assert.IsType<DeterministicPreImplementationStage>(pipeline.Stages[1]);
         Assert.IsType<ImplementationStage>(pipeline.Stages[2]);
         Assert.IsType<DeterministicPostImplementationStage>(pipeline.Stages[3]);
         Assert.IsType<CodeReviewAndFixStage>(pipeline.Stages[4]);
         Assert.IsType<DeterministicPostReviewStage>(pipeline.Stages[5]);
 
-        Assert.Equal(IssueReviewStage.DefaultStageId, pipeline.Stages[0].StageId);
+        Assert.Equal(TaskReviewStage.DefaultStageId, pipeline.Stages[0].StageId);
         Assert.Equal(DeterministicPreImplementationStage.DefaultStageId, pipeline.Stages[1].StageId);
         Assert.Equal(ImplementationStage.DefaultStageId, pipeline.Stages[2].StageId);
         Assert.Equal(DeterministicPostImplementationStage.DefaultStageId, pipeline.Stages[3].StageId);
@@ -83,33 +83,33 @@ public class CoreCoverageTests : IDisposable
     }
 
     [Fact]
-    public async Task ArchiveOrCleanupIssueFileAsync_ArchivesAndDeletesCorrectly()
+    public async Task ArchiveOrCleanupTaskFileAsync_ArchivesAndDeletesCorrectly()
     {
-        var repo = new InMemoryIssueRepository();
-        var sync = new IssueMarkdownSyncService(repo);
+        var repo = new InMemoryTaskRepository();
+        var sync = new TaskMarkdownSyncService(repo);
 
-        var issue = new Issue { Id = 500, Title = "Archival Test", Description = "Test" };
-        var filePath = await sync.SyncIssueToDiskAsync(issue, _tempDir);
+        var task = new ForgeTask { Id = 500, Title = "Archival Test", Description = "Test" };
+        var filePath = await sync.SyncTaskToDiskAsync(task, _tempDir);
         Assert.True(File.Exists(filePath));
 
         // Archive
-        await sync.ArchiveOrCleanupIssueFileAsync(issue, _tempDir, archive: true);
+        await sync.ArchiveOrCleanupTaskFileAsync(task, _tempDir, archive: true);
         Assert.False(File.Exists(filePath));
-        var archivedPath = Path.Combine(_tempDir, "docs", "issues", "archive", Path.GetFileName(filePath));
+        var archivedPath = Path.Combine(_tempDir, "docs", "tasks", "archive", Path.GetFileName(filePath));
         Assert.True(File.Exists(archivedPath));
 
         // Clean up from archive
-        await sync.SyncIssueToDiskAsync(issue, _tempDir);
+        await sync.SyncTaskToDiskAsync(task, _tempDir);
         Assert.True(File.Exists(filePath));
-        await sync.ArchiveOrCleanupIssueFileAsync(issue, _tempDir, archive: false);
+        await sync.ArchiveOrCleanupTaskFileAsync(task, _tempDir, archive: false);
         Assert.False(File.Exists(filePath));
     }
 
     [Fact]
     public void Watcher_StartAndStop_DoNotThrow()
     {
-        var repo = new InMemoryIssueRepository();
-        using var sync = new IssueMarkdownSyncService(repo);
+        var repo = new InMemoryTaskRepository();
+        using var sync = new TaskMarkdownSyncService(repo);
 
         sync.StartWatching(1, _tempDir);
         sync.StartWatching(1, _tempDir); // Idempotent call
@@ -120,9 +120,9 @@ public class CoreCoverageTests : IDisposable
     [Fact]
     public async Task DependencyResolutionEngine_WorkspaceTopologicalOrder_QueriesStore()
     {
-        var store = new InMemoryIssueDependencyStore();
-        store.AddIssue(1, 10);
-        store.AddIssue(2, 10);
+        var store = new InMemoryTaskDependencyStore();
+        store.AddTask(1, 10);
+        store.AddTask(2, 10);
         store.AddDependency(10, 2, 1);
 
         var engine = new DependencyResolutionEngine(store);
@@ -151,11 +151,11 @@ public class CoreCoverageTests : IDisposable
     }
 
     [Fact]
-    public async Task InMemoryIssueRepository_DeleteAsync_RemovesEntity()
+    public async Task InMemoryTaskRepository_DeleteAsync_RemovesEntity()
     {
-        var repo = new InMemoryIssueRepository();
-        var issue = new Issue { Title = "To Delete" };
-        var created = await repo.CreateAsync(issue);
+        var repo = new InMemoryTaskRepository();
+        var task = new ForgeTask { Title = "To Delete" };
+        var created = await repo.CreateAsync(task);
 
         var fetched = await repo.GetByIdAsync(created.Id);
         Assert.NotNull(fetched);
@@ -168,39 +168,39 @@ public class CoreCoverageTests : IDisposable
     [Fact]
     public void GenerateMarkdown_IncludesQuestionsWhenPresent()
     {
-        var repo = new InMemoryIssueRepository();
-        var sync = new IssueMarkdownSyncService(repo);
+        var repo = new InMemoryTaskRepository();
+        var sync = new TaskMarkdownSyncService(repo);
 
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 600,
-            Title = "Issue With Questions",
+            Title = "ForgeTask With Questions",
             Description = "Description here"
         };
-        issue.Questions.Add(new Question
+        task.Questions.Add(new Question
         {
             Id = 1,
-            StageId = "issue-review",
+            StageId = "task-review",
             Prompt = "Clarification prompt?",
             Answer = "Answered clarification."
         });
 
-        var md = sync.GenerateMarkdown(issue);
+        var md = sync.GenerateMarkdown(task);
         Assert.Contains("## ❓ Human Clarifications (Q&A)", md);
         Assert.Contains("Clarification prompt?", md);
         Assert.Contains("Answered clarification.", md);
     }
 
     [Fact]
-    public async Task WorkflowPipeline_StageNotFound_FailsIssue()
+    public async Task WorkflowPipeline_StageNotFound_FailsTask()
     {
         var pipeline = new WorkflowPipeline(Array.Empty<IWorkflowStage>());
         var engine = new WorkflowPipelineEngine();
-        var issue = new Issue { CurrentStageId = "non-existent" };
-        var context = new PipelineContext(issue, new Workspace());
+        var task = new ForgeTask { CurrentStageId = "non-existent" };
+        var context = new PipelineContext(task, new Workspace());
 
         var result = await engine.ExecuteStepAsync(pipeline, context);
         Assert.False(result.IsSuccess);
-        Assert.Equal(IssueOverallStatus.Failed, issue.Status);
+        Assert.Equal(TaskOverallStatus.Failed, task.Status);
     }
 }

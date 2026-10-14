@@ -27,7 +27,7 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
         if (context == null) throw new ArgumentNullException(nameof(context));
 
         // Determine stage to execute
-        var currentStageId = context.Issue.CurrentStageId;
+        var currentStageId = context.ForgeTask.CurrentStageId;
         IWorkflowStage? stage;
 
         if (string.IsNullOrWhiteSpace(currentStageId))
@@ -35,7 +35,7 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
             stage = pipeline.Stages.FirstOrDefault();
             if (stage != null)
             {
-                context.Issue.CurrentStageId = stage.StageId;
+                context.ForgeTask.CurrentStageId = stage.StageId;
             }
         }
         else
@@ -46,7 +46,7 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
         if (stage == null)
         {
             var err = $"Stage '{currentStageId}' not found in pipeline.";
-            context.Issue.Status = IssueOverallStatus.Failed;
+            context.ForgeTask.Status = TaskOverallStatus.Failed;
             return StageExecutionResult.Failure(err);
         }
 
@@ -54,15 +54,15 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
 
         if (result.NeedsClarification)
         {
-            context.Issue.IsWaitingForHuman = true;
-            context.Issue.InterruptedStageId = stage.StageId;
+            context.ForgeTask.IsWaitingForHuman = true;
+            context.ForgeTask.InterruptedStageId = stage.StageId;
             if (result.ClarificationQuestion != null)
             {
-                result.ClarificationQuestion.IssueId = context.Issue.Id;
+                result.ClarificationQuestion.TaskId = context.ForgeTask.Id;
                 result.ClarificationQuestion.StageId = stage.StageId;
-                context.Issue.Questions.Add(result.ClarificationQuestion);
+                context.ForgeTask.Questions.Add(result.ClarificationQuestion);
             }
-            context.SyncDataBagToIssue();
+            context.SyncDataBagToTask();
             return result;
         }
 
@@ -72,17 +72,17 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
             context.ResetRetries();
 
             // Status stamps per stage
-            if (string.Equals(stage.StageId, "issue-review", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(stage.StageId, "task-review", StringComparison.OrdinalIgnoreCase))
             {
-                context.Issue.Status = IssueOverallStatus.Reviewed;
+                context.ForgeTask.Status = TaskOverallStatus.Reviewed;
             }
             else if (string.Equals(stage.StageId, "implementation", StringComparison.OrdinalIgnoreCase))
             {
-                context.Issue.Status = IssueOverallStatus.Implemented;
+                context.ForgeTask.Status = TaskOverallStatus.Implemented;
             }
             else if (string.Equals(stage.StageId, "deterministic-post-review", StringComparison.OrdinalIgnoreCase))
             {
-                context.Issue.Status = IssueOverallStatus.Ready;
+                context.ForgeTask.Status = TaskOverallStatus.Ready;
             }
 
             var nextStageId = result.TargetRoutingStageId;
@@ -99,15 +99,15 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
 
             if (nextStage != null)
             {
-                context.Issue.CurrentStageId = nextStage.StageId;
+                context.ForgeTask.CurrentStageId = nextStage.StageId;
             }
             else
             {
                 // Reached end of pipeline
-                context.Issue.Status = IssueOverallStatus.Ready;
+                context.ForgeTask.Status = TaskOverallStatus.Ready;
             }
 
-            context.SyncDataBagToIssue();
+            context.SyncDataBagToTask();
             return result;
         }
 
@@ -116,18 +116,18 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
         var effectiveMaxRetries = context.DataBag.Get<int?>("Workflow.MaxRetries") ?? MaxRetries;
         if (retries > effectiveMaxRetries)
         {
-            context.Issue.Status = IssueOverallStatus.Failed;
-            context.SyncDataBagToIssue();
+            context.ForgeTask.Status = TaskOverallStatus.Failed;
+            context.SyncDataBagToTask();
             return StageExecutionResult.Failure($"Stage '{stage.StageId}' failed and exceeded maximum retry count of {effectiveMaxRetries}: {result.ErrorMessage}");
         }
 
         // Backward loop or retry routing
         if (!string.IsNullOrWhiteSpace(result.TargetRoutingStageId))
         {
-            context.Issue.CurrentStageId = result.TargetRoutingStageId;
+            context.ForgeTask.CurrentStageId = result.TargetRoutingStageId;
         }
 
-        context.SyncDataBagToIssue();
+        context.SyncDataBagToTask();
         return result;
     }
 }

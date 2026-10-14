@@ -25,26 +25,26 @@ public class AgentReasoningScenario : IScenario
         var sw = Stopwatch.StartNew();
         var details = new List<string>();
 
-        ConsoleFormatting.PrintStep("2.1", "Seeding test issue into database...");
-        Issue issue;
+        ConsoleFormatting.PrintStep("2.1", "Seeding test task into database...");
+        ForgeTask task;
         using (var scope = context.Environment.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            issue = new Issue
+            task = new ForgeTask
             {
                 WorkspaceId = context.Environment.Workspace.Id,
                 Title = "Inspect Calculator Codebase",
                 Description = "Inspect Calculator.cs and README.md. Analyze the available arithmetic methods and recommend next steps.",
-                Status = IssueOverallStatus.Open,
-                CurrentStageId = "issue-review",
+                Status = TaskOverallStatus.Open,
+                CurrentStageId = "task-review",
                 BaseBranch = "main",
-                FeatureBranch = "feature/issue-inspect",
+                FeatureBranch = "feature/task-inspect",
                 Priority = 1,
                 MergeMode = MergeMode.ManualReviewRequired
             };
-            db.Issues.Add(issue);
+            db.Tasks.Add(task);
             await db.SaveChangesAsync(context.CancellationToken);
-            ConsoleFormatting.PrintSuccess($"Created Issue #{issue.Id}: '{issue.Title}'");
+            ConsoleFormatting.PrintSuccess($"Created ForgeTask #{task.Id}: '{task.Title}'");
         }
 
         ConsoleFormatting.PrintStep("2.2", $"Preparing CrucibleAgentHarness with model '{context.Options.ModelId}'...");
@@ -52,10 +52,10 @@ public class AgentReasoningScenario : IScenario
         var harness = runScope.ServiceProvider.GetRequiredService<CrucibleAgentHarness>();
         var streamer = runScope.ServiceProvider.GetRequiredService<IAgentActivityStreamer>();
 
-        var profile = context.Environment.Workspace.AgentProfiles?.FirstOrDefault(p => p.Id == "issue-review")
+        var profile = context.Environment.Workspace.AgentProfiles?.FirstOrDefault(p => p.Id == "task-review")
             ?? new AgentProfile
             {
-                Id = "issue-review",
+                Id = "task-review",
                 Name = "Reviewer",
                 HarnessId = "crucible",
                 ModelName = context.Options.ModelId,
@@ -64,10 +64,10 @@ public class AgentReasoningScenario : IScenario
 
         var sessionContext = new AgentSessionContext
         {
-            Issue = issue,
+            ForgeTask = task,
             Workspace = context.Environment.Workspace,
             Profile = profile,
-            StageId = "issue-review",
+            StageId = "task-review",
             StageDirective = "Inspect Calculator.cs and README.md in the repository. Answer what methods are present and recommend 2 additional arithmetic operations.",
             RequiredMode = AgentMode.Full,
             WorkspacePath = context.Environment.RepositoryPath,
@@ -83,7 +83,7 @@ public class AgentReasoningScenario : IScenario
             {
                 Console.WriteLine();
                 Console.WriteLine($"{ConsoleFormatting.Dim}─── Live Telemetry Stream ───────────────────────────────────────────{ConsoleFormatting.Reset}");
-                await foreach (var evt in streamer.SubscribeAsync(issue.Id, streamCts.Token))
+                await foreach (var evt in streamer.SubscribeAsync(task.Id, streamCts.Token))
                 {
                     switch (evt.Kind)
                     {

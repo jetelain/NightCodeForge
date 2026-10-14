@@ -49,7 +49,7 @@ public class DeterministicSastStage : IWorkflowStage
         var command = config.SastCommand ?? _sastCommand;
 
         var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace, SandboxSecurityTier.Standard, context.Issue?.Id)
+            ? _envProvider.GetEnvironment(context.Workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id)
             : _executionEnv;
 
         if (effectiveEnv != null)

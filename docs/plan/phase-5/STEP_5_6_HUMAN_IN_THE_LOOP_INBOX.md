@@ -13,16 +13,16 @@ Provide a consolidated developer inbox for reviewing and answering human clarifi
 ### Core Capabilities:
 1. **Consolidated Pending Questions Feed:** Aggregates all unanswered questions (`question.Status == QuestionStatus.Pending`) across all workspaces or filtered by active workspace, with instant navigation from the global top-bar pill.
 2. **Rich Contextual Question Card:**
-   - Displays issue link, workspace name, current workflow stage context badge (`Issue Review`, `Implementation`, `Code Review`).
+   - Displays task link, workspace name, current workflow stage context badge (`ForgeTask Review`, `Implementation`, `Code Review`).
    - Displays prompt question, agent's detailed rationale, and interrupted agent profile identifier (`question.AgentProfileId`).
 3. **Versatile Answer Modalities:**
    - **Multiple-Choice Buttons:** If the agent provided predefined choices in `question.OptionsJson`, renders one-click selectable answer pills.
    - **Freeform Clarification Box:** Multi-line markdown editor for detailed instructions.
    - **Code Snippet Insert:** Formatted code block inserter for providing exact function signatures or patches.
 4. **Status-Preserving Resumption Workflow:**
-   - Submitting an answer invokes `IIssueOrchestrator.SubmitHumanAnswerAsync(questionId, answer)`.
-   - Backend persists the answer, marks `Question.Status = Answered`, and clears `issue.IsWaitingForHuman = false` **without mutating `issue.Status`** (preserving the exact milestone `Open`, `Reviewed`, or `Implemented`).
-   - Immediately enqueues the issue to the **`llm-urgent`** queue (`WorkerCount = 1`), taking priority over general backlog inference tasks, resuming with the exact original `InterruptedAgentProfileId`.
+   - Submitting an answer invokes `ITaskOrchestrator.SubmitHumanAnswerAsync(questionId, answer)`.
+   - Backend persists the answer, marks `Question.Status = Answered`, and clears `task.IsWaitingForHuman = false` **without mutating `task.Status`** (preserving the exact milestone `Open`, `Reviewed`, or `Implemented`).
+   - Immediately enqueues the task to the **`llm-urgent`** queue (`WorkerCount = 1`), taking priority over general backlog inference tasks, resuming with the exact original `InterruptedAgentProfileId`.
 
 ---
 
@@ -31,7 +31,7 @@ Provide a consolidated developer inbox for reviewing and answering human clarifi
 ```mermaid
 flowchart TD
     subgraph AgentInterruption ["Agent Interruption (ask tool)"]
-        Agent["Autonomous Agent\n(Stage 1, 3, or 5)"] -->|Invokes ask Tool| Interrupt["1. Save Question to DB\n2. Set Issue.IsWaitingForHuman = true\n3. Save InterruptedAgentProfileId\n4. Free GPU & Complete Job"]
+        Agent["Autonomous Agent\n(Stage 1, 3, or 5)"] -->|Invokes ask Tool| Interrupt["1. Save Question to DB\n2. Set ForgeTask.IsWaitingForHuman = true\n3. Save InterruptedAgentProfileId\n4. Free GPU & Complete Job"]
     end
 
     subgraph InboxUI ["Human Inbox (Pages/Inbox.razor)"]
@@ -41,7 +41,7 @@ flowchart TD
     end
 
     subgraph OrchestratorEngine ["Orchestrator Resumption Engine"]
-        SubmitAction --> RecordAnswer["1. Save Question.Answer\n2. Set Question.Status = Answered\n3. Set Issue.IsWaitingForHuman = false\n(Preserve Issue.Status!)"]
+        SubmitAction --> RecordAnswer["1. Save Question.Answer\n2. Set Question.Status = Answered\n3. Set ForgeTask.IsWaitingForHuman = false\n(Preserve ForgeTask.Status!)"]
         RecordAnswer --> EnqueueUrgent["Enqueue to Hangfire 'llm-urgent'\n(Priority Ahead of 'llm-inference')"]
         EnqueueUrgent --> ResumeWorker["Worker dequeues with\nInterruptedAgentProfileId"]
     end
@@ -60,8 +60,8 @@ namespace NightCodeForge.Core.Domain;
 public class Question
 {
     public int Id { get; set; }
-    public int IssueId { get; set; }
-    public Issue? Issue { get; set; }
+    public int TaskId { get; set; }
+    public ForgeTask? ForgeTask { get; set; }
     public string StageId { get; set; } = string.Empty;
     public string? AgentProfileId { get; set; }
     public string Prompt { get; set; } = string.Empty;
@@ -85,7 +85,7 @@ public class Question
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Repositories
 @using NightCodeForge.Core.Workflow
-@inject IIssueRepository IssueRepository
+@inject ITaskRepository TaskRepository
 @inject WorkspaceStateService WorkspaceState
 @inject ToastService ToastService
 
@@ -133,7 +133,7 @@ public class Question
 @using System.Text.Json
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Workflow
-@inject IIssueOrchestrator IssueOrchestrator
+@inject ITaskOrchestrator TaskOrchestrator
 @inject ToastService ToastService
 
 <div class="question-card card-surface mb-4">
@@ -141,8 +141,8 @@ public class Question
         <div class="header-left">
             <span class="badge-stage">@Question.StageId</span>
             <span class="badge-profile">🤖 @(Question.AgentProfileId ?? "Default Profile")</span>
-            <a href="/monitoring/@Question.IssueId" class="issue-link">
-                Issue #@Question.IssueId: @Question.Issue?.Title
+            <a href="/monitoring/@Question.TaskId" class="task-link">
+                ForgeTask #@Question.TaskId: @Question.ForgeTask?.Title
             </a>
         </div>
         <span class="timestamp">@Question.CreatedAt.ToString("g")</span>
@@ -195,7 +195,7 @@ public class Question
             }
             else
             {
-                <span>Submit & Resume Issue ➔</span>
+                <span>Submit & Resume ForgeTask ➔</span>
             }
         </button>
     </div>
@@ -230,8 +230,8 @@ public class Question
         _isSubmitting = true;
         try
         {
-            await IssueOrchestrator.SubmitHumanAnswerAsync(Question.Id, EffectiveAnswer);
-            ToastService.Show("Clarification Submitted", $"Issue #{Question.IssueId} resumed on llm-urgent queue.", ToastLevel.Success);
+            await TaskOrchestrator.SubmitHumanAnswerAsync(Question.Id, EffectiveAnswer);
+            ToastService.Show("Clarification Submitted", $"ForgeTask #{Question.TaskId} resumed on llm-urgent queue.", ToastLevel.Success);
             await OnAnswerSubmitted.InvokeAsync(Question.Id);
         }
         finally
@@ -247,13 +247,13 @@ public class Question
 ## 5. Verification & Test Plan
 
 1. **Status-Preserving Resumption Tests:**
-   - Arrange: Issue in `Status = IssueOverallStatus.Implemented`, `IsWaitingForHuman = true`.
+   - Arrange: ForgeTask in `Status = TaskOverallStatus.Implemented`, `IsWaitingForHuman = true`.
    - Act: Submit answer via `QuestionCard.razor`.
    - Assert:
      - `Question.Status` is `QuestionStatus.Answered`.
-     - `Issue.IsWaitingForHuman` is `false`.
-     - `Issue.Status` remains `IssueOverallStatus.Implemented` (NOT reset to `Open`!).
-     - Issue is queued to Hangfire queue `llm-urgent`.
+     - `ForgeTask.IsWaitingForHuman` is `false`.
+     - `ForgeTask.Status` remains `TaskOverallStatus.Implemented` (NOT reset to `Open`!).
+     - ForgeTask is queued to Hangfire queue `llm-urgent`.
 2. **Multiple-Choice Selection Tests:**
    - Question has `OptionsJson = "[\"Option A: SQLite\", \"Option B: PostgreSQL\"]"`.
    - Verify two buttons render; clicking "Option A" populates text area.
@@ -269,7 +269,7 @@ public class Question
 - [ ] `Pages/Inbox.razor` created with workspace filter toggle and empty state illustrations.
 - [ ] `QuestionCard.razor` component created with prompt, rationale, stage badges, and agent profile name.
 - [ ] Multiple-choice button selection and freeform markdown textarea support implemented.
-- [ ] Submitting answers invokes `IIssueOrchestrator.SubmitHumanAnswerAsync`.
-- [ ] Verification confirms `issue.Status` is preserved exactly and task is enqueued to `llm-urgent`.
+- [ ] Submitting answers invokes `ITaskOrchestrator.SubmitHumanAnswerAsync`.
+- [ ] Verification confirms `task.Status` is preserved exactly and task is enqueued to `llm-urgent`.
 - [ ] Reactive badge counters update in `TopNavBar` and `NavMenu`.
 - [ ] bUnit component tests verify submission and validation flows.

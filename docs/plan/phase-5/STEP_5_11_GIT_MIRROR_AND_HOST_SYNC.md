@@ -8,7 +8,7 @@
 
 ## 1. Executive Objective
 
-Provide a real-time Git synchronization management center that monitors the isolated Ext4 Git mirror repository (`~/.nightcodeforge/mirror/{workspaceId}`), inspects active issue worktrees, handles host repository synchronization (`host-origin`), and provides an interactive resolution drawer whenever a **dirty developer host working tree** triggers an `updateInstead` push rejection alert.
+Provide a real-time Git synchronization management center that monitors the isolated Ext4 Git mirror repository (`~/.nightcodeforge/mirror/{workspaceId}`), inspects active task worktrees, handles host repository synchronization (`host-origin`), and provides an interactive resolution drawer whenever a **dirty developer host working tree** triggers an `updateInstead` push rejection alert.
 
 ### Core Capabilities:
 1. **Ext4 Mirror & Remote Tracking Inspector:**
@@ -16,19 +16,19 @@ Provide a real-time Git synchronization management center that monitors the isol
    - "Fetch from Host" action invoking `IGitMirrorSyncService.FetchFromHostAsync`.
 2. **Reactive Host Dirty Alert Drawer (`ReceiveHostDirtyAlert`):**
    - When Forge attempts to push branch updates or squash-merges back to the developer host via `receive.denyCurrentBranch updateInstead`, Git rejects the push if the developer has uncommitted edits to tracked files on their host IDE.
-   - SignalR broadcasts `ReceiveHostDirtyAlert(issueId, branchName)`, opening a reactive alert drawer.
+   - SignalR broadcasts `ReceiveHostDirtyAlert(taskId, branchName)`, opening a reactive alert drawer.
 3. **Interactive Dirty Tree Reconciler & Rescue Branch Handler:**
    - Visualizes the automatic fallback: Forge automatically diverted the push to the rescue branch:
      ```text
-     feature/issue-{id}-ncf   or   {baseBranch}-ncf
+     feature/task-{id}-ncf   or   {baseBranch}-ncf
      ```
    - Interactive Guided Actions:
      - **Inspect Divergence:** Side-by-side DiffPlex view between the host working tree and the `-ncf` rescue branch.
      - **Stash Host & Fast-Forward:** Stashes developer's uncommitted edits on host and fast-forwards the branch.
      - **Force Sync:** Reconciles host branch with the verified mirror branch.
-     - **Manual Merge Guidance:** Copies the exact `git merge feature/issue-{id}-ncf` command to clipboard for developers to run in VS Code or Terminal.
+     - **Manual Merge Guidance:** Copies the exact `git merge feature/task-{id}-ncf` command to clipboard for developers to run in VS Code or Terminal.
 4. **Worktree Lifecycle & Pruning Console:**
-   - Visualizes all active agent worktrees under `~/.nightcodeforge/wks/{workspaceId}/issue-{id}`.
+   - Visualizes all active agent worktrees under `~/.nightcodeforge/wks/{workspaceId}/task-{id}`.
    - Prunes stale or closed worktrees to reclaim disk space.
 
 ---
@@ -38,13 +38,13 @@ Provide a real-time Git synchronization management center that monitors the isol
 ```mermaid
 flowchart TD
     subgraph SignalRStream ["SignalR Telemetry Hub"]
-        DirtyAlert["ReceiveHostDirtyAlert(issueId, branchName)"]
-        GitProgress["ReceiveGitProgress(issueId, operation, message)"]
+        DirtyAlert["ReceiveHostDirtyAlert(taskId, branchName)"]
+        GitProgress["ReceiveGitProgress(taskId, operation, message)"]
     end
 
     subgraph UI ["Git Sync Center (Pages/GitSync.razor)"]
         MirrorCard["Ext4 Mirror Status Card\n- Ahead/Behind Counts\n- Last Fetch Timestamp"]
-        WorktreeList["Active Worktrees Grid\n(Path, Issue, Stale Status)"]
+        WorktreeList["Active Worktrees Grid\n(Path, ForgeTask, Stale Status)"]
         ReconcileDrawer["Host Dirty Tree Reconcile Drawer\n- Fallback Branch Alert (-ncf)\n- Guided Resolution Actions"]
     end
 
@@ -83,7 +83,7 @@ public interface IGitMirrorSyncService
     Task ConfigureHostRepositoryAsync(string hostRepoPath, CancellationToken cancellationToken = default);
     Task<string> InitializeMirrorAsync(Workspace workspace, string mirrorDirectory, CancellationToken cancellationToken = default);
     Task FetchFromHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default);
-    Task<GitSyncResult> PushToHostAsync(string mirrorRepoPath, int issueId, CancellationToken cancellationToken = default);
+    Task<GitSyncResult> PushToHostAsync(string mirrorRepoPath, int taskId, CancellationToken cancellationToken = default);
     Task<GitSyncResult> PushBaseBranchToHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default);
 }
 ```
@@ -105,7 +105,7 @@ public record MirrorStatusSnapshot(
 
 public record WorktreeSnapshot(
     string Path,
-    int IssueId,
+    int TaskId,
     string BranchName,
     bool IsActive,
     DateTime CreatedAt);
@@ -187,7 +187,7 @@ public record WorktreeSnapshot(
             </div>
         </div>
 
-        <!-- 2. Active Issue Worktrees Card -->
+        <!-- 2. Active ForgeTask Worktrees Card -->
         <div class="col-md-6">
             <div class="card-surface p-4 h-100">
                 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -199,7 +199,7 @@ public record WorktreeSnapshot(
                     {
                         <div class="worktree-item p-2 mb-2 card-glass d-flex justify-content-between align-items-center">
                             <div>
-                                <span class="badge-tag">Issue #@wt.IssueId</span>
+                                <span class="badge-tag">ForgeTask #@wt.TaskId</span>
                                 <code>@wt.BranchName</code>
                             </div>
                             <span class="badge-status @(wt.IsActive ? "running" : "idle")">
@@ -229,16 +229,16 @@ public record WorktreeSnapshot(
     private bool _showReconcileDrawer;
     private bool _isFetching;
 
-    public record HostDirtyAlertEvent(int IssueId, string BranchName, DateTime Timestamp);
+    public record HostDirtyAlertEvent(int TaskId, string BranchName, DateTime Timestamp);
 
     protected override void OnInitialized()
     {
         HubConnection.OnHostDirtyAlertReceived += HandleHostDirtyAlert;
     }
 
-    private void HandleHostDirtyAlert(int issueId, string branchName)
+    private void HandleHostDirtyAlert(int taskId, string branchName)
     {
-        _activeDirtyAlert = new HostDirtyAlertEvent(issueId, branchName, DateTime.UtcNow);
+        _activeDirtyAlert = new HostDirtyAlertEvent(taskId, branchName, DateTime.UtcNow);
         ToastService.Show("Host Dirty Alert", $"Push diverted to {branchName}-ncf due to uncommitted host edits.", ToastLevel.Warning);
         InvokeAsync(StateHasChanged);
     }
@@ -369,12 +369,12 @@ public record WorktreeSnapshot(
 ## 5. Verification & Test Plan
 
 1. **Host Dirty Alert Triggering:**
-   - Simulate `ReceiveHostDirtyAlert(10, "feature/issue-10")`.
+   - Simulate `ReceiveHostDirtyAlert(10, "feature/task-10")`.
    - Verify banner immediately displays in yellow with branch name and `-ncf` rescue indicator.
    - Verify toast alert appears in the bottom right corner.
 2. **Reconcile Drawer Actions:**
    - Click "Resolve & Reconcile": drawer opens smoothly.
-   - Verify copy command copies `git merge feature/issue-10-ncf`.
+   - Verify copy command copies `git merge feature/task-10-ncf`.
    - Execute Stash & Merge: resolves alert and dismisses modal.
 3. **Fetch from Host:**
    - Click "Fetch from Host": executes `FetchFromHostAsync` and refreshes commit ahead/behind counters.

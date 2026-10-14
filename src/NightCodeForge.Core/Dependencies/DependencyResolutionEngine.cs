@@ -7,19 +7,19 @@ namespace NightCodeForge.Core.Dependencies;
 /// </summary>
 public class DependencyResolutionEngine : IDependencyResolutionEngine
 {
-    private readonly IIssueDependencyStore _store;
+    private readonly ITaskDependencyStore _store;
 
-    public DependencyResolutionEngine(IIssueDependencyStore store)
+    public DependencyResolutionEngine(ITaskDependencyStore store)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
     }
 
-    public bool HasCycle(int workspaceId, IEnumerable<(int IssueId, int DependsOnIssueId)> dependencies)
+    public bool HasCycle(int workspaceId, IEnumerable<(int TaskId, int DependsOnTaskId)> dependencies)
     {
         return TryFindCycle(dependencies, out _);
     }
 
-    public void ValidateNoCycles(int workspaceId, IEnumerable<(int IssueId, int DependsOnIssueId)> dependencies)
+    public void ValidateNoCycles(int workspaceId, IEnumerable<(int TaskId, int DependsOnTaskId)> dependencies)
     {
         if (TryFindCycle(dependencies, out var cyclePath))
         {
@@ -34,7 +34,7 @@ public class DependencyResolutionEngine : IDependencyResolutionEngine
         return GetTopologicalOrder(dependencies);
     }
 
-    public IReadOnlyList<int> GetTopologicalOrder(IEnumerable<(int IssueId, int DependsOnIssueId)> dependencies)
+    public IReadOnlyList<int> GetTopologicalOrder(IEnumerable<(int TaskId, int DependsOnTaskId)> dependencies)
     {
         var depList = dependencies.ToList();
         ValidateNoCycles(0, depList);
@@ -44,15 +44,15 @@ public class DependencyResolutionEngine : IDependencyResolutionEngine
         var adj = new Dictionary<int, List<int>>();
         var inDegree = new Dictionary<int, int>();
 
-        foreach (var (issueId, dependsOnId) in depList)
+        foreach (var (taskId, dependsOnId) in depList)
         {
-            allNodes.Add(issueId);
+            allNodes.Add(taskId);
             allNodes.Add(dependsOnId);
 
             if (!adj.ContainsKey(dependsOnId)) adj[dependsOnId] = new List<int>();
-            if (!adj.ContainsKey(issueId)) adj[issueId] = new List<int>();
+            if (!adj.ContainsKey(taskId)) adj[taskId] = new List<int>();
 
-            adj[dependsOnId].Add(issueId);
+            adj[dependsOnId].Add(taskId);
         }
 
         foreach (var node in allNodes)
@@ -102,26 +102,26 @@ public class DependencyResolutionEngine : IDependencyResolutionEngine
         return result.AsReadOnly();
     }
 
-    public bool IsReadyForExecution(int issueId)
+    public bool IsReadyForExecution(int taskId)
     {
-        return IsReadyForExecutionAsync(issueId).GetAwaiter().GetResult();
+        return IsReadyForExecutionAsync(taskId).GetAwaiter().GetResult();
     }
 
-    public async Task<bool> IsReadyForExecutionAsync(int issueId, CancellationToken cancellationToken = default)
+    public async Task<bool> IsReadyForExecutionAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        var status = await _store.GetIssueStatusAsync(issueId, cancellationToken);
-        if (status != IssueOverallStatus.Open && status != IssueOverallStatus.Reviewed && status != IssueOverallStatus.Implemented)
+        var status = await _store.GetTaskStatusAsync(taskId, cancellationToken);
+        if (status != TaskOverallStatus.Open && status != TaskOverallStatus.Reviewed && status != TaskOverallStatus.Implemented)
         {
             return false;
         }
 
-        var isWaiting = await _store.IsIssueWaitingForHumanAsync(issueId, cancellationToken);
+        var isWaiting = await _store.IsTaskWaitingForHumanAsync(taskId, cancellationToken);
         if (isWaiting)
         {
             return false;
         }
 
-        var prerequisites = await _store.GetPrerequisiteIssueIdsAsync(issueId, cancellationToken);
+        var prerequisites = await _store.GetPrerequisiteTaskIdsAsync(taskId, cancellationToken);
         if (prerequisites.Count == 0)
         {
             return true;
@@ -129,8 +129,8 @@ public class DependencyResolutionEngine : IDependencyResolutionEngine
 
         foreach (var prereqId in prerequisites)
         {
-            var prereqStatus = await _store.GetIssueStatusAsync(prereqId, cancellationToken);
-            if (prereqStatus != IssueOverallStatus.Closed)
+            var prereqStatus = await _store.GetTaskStatusAsync(prereqId, cancellationToken);
+            if (prereqStatus != TaskOverallStatus.Closed)
             {
                 return false;
             }
@@ -139,15 +139,15 @@ public class DependencyResolutionEngine : IDependencyResolutionEngine
         return true;
     }
 
-    public async Task<IReadOnlyList<int>> ResolveCascadeUnblockedIssuesAsync(int completedIssueId)
+    public async Task<IReadOnlyList<int>> ResolveCascadeUnblockedTasksAsync(int completedTaskId)
     {
-        var dependentIssueIds = await _store.GetDependentIssueIdsAsync(completedIssueId);
+        var dependentTaskIds = await _store.GetDependentTaskIdsAsync(completedTaskId);
         var unblocked = new List<int>();
 
-        foreach (var depId in dependentIssueIds)
+        foreach (var depId in dependentTaskIds)
         {
-            var depStatus = await _store.GetIssueStatusAsync(depId);
-            if (depStatus == IssueOverallStatus.Open && await IsReadyForExecutionAsync(depId))
+            var depStatus = await _store.GetTaskStatusAsync(depId);
+            if (depStatus == TaskOverallStatus.Open && await IsReadyForExecutionAsync(depId))
             {
                 unblocked.Add(depId);
             }
@@ -156,22 +156,22 @@ public class DependencyResolutionEngine : IDependencyResolutionEngine
         return unblocked.AsReadOnly();
     }
 
-    private static bool TryFindCycle(IEnumerable<(int IssueId, int DependsOnIssueId)> dependencies, out List<int> cyclePath)
+    private static bool TryFindCycle(IEnumerable<(int TaskId, int DependsOnTaskId)> dependencies, out List<int> cyclePath)
     {
         cyclePath = new List<int>();
         var graph = new Dictionary<int, List<int>>();
         var allNodes = new HashSet<int>();
 
-        foreach (var (issueId, dependsOnId) in dependencies)
+        foreach (var (taskId, dependsOnId) in dependencies)
         {
-            allNodes.Add(issueId);
+            allNodes.Add(taskId);
             allNodes.Add(dependsOnId);
 
-            if (!graph.ContainsKey(issueId))
+            if (!graph.ContainsKey(taskId))
             {
-                graph[issueId] = new List<int>();
+                graph[taskId] = new List<int>();
             }
-            graph[issueId].Add(dependsOnId);
+            graph[taskId].Add(dependsOnId);
         }
 
         // Colors: 0 = White (unvisited), 1 = Gray (visiting), 2 = Black (visited)

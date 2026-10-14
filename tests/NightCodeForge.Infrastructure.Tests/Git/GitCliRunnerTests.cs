@@ -79,7 +79,7 @@ public class GitCliRunnerTests : IDisposable
     }
 
     [Fact]
-    public async Task ExecuteAsync_WithArgumentsContainingSpacesAndQuotes_PassesCleanlyWithoutEscapingIssues()
+    public async Task ExecuteAsync_WithArgumentsContainingSpacesAndQuotes_PassesCleanlyWithoutEscapingTasks()
     {
         // Arrange
         _repo.CreateFile("file_with_spaces.txt", "Hello world");

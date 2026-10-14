@@ -11,14 +11,14 @@ using YamlDotNet.Serialization.NamingConventions;
 namespace NightCodeForge.Core.Services;
 
 /// <summary>
-/// Implements bidirectional mirroring of active issues to docs/issues/*.md with debouncing and echo loop suppression.
+/// Implements bidirectional mirroring of active tasks to docs/tasks/*.md with debouncing and echo loop suppression.
 /// </summary>
-public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
+public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 {
     [GeneratedRegex(@"[^a-z0-9]+")]
     private static partial Regex NonAlphaNumericRegex();
 
-    private readonly IIssueRepository _issueRepository;
+    private readonly ITaskRepository _taskRepository;
     private readonly IDependencyResolutionEngine? _dependencyEngine;
     private readonly IDeserializer _yamlDeserializer;
     private readonly ISerializer _yamlSerializer;
@@ -27,9 +27,9 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
     private readonly ConcurrentDictionary<int, FileSystemWatcher> _watchers = new();
     private readonly TimeSpan _debounceWindow = TimeSpan.FromMilliseconds(300);
 
-    public IssueMarkdownSyncService(IIssueRepository issueRepository, IDependencyResolutionEngine? dependencyEngine = null)
+    public TaskMarkdownSyncService(ITaskRepository taskRepository, IDependencyResolutionEngine? dependencyEngine = null)
     {
-        _issueRepository = issueRepository ?? throw new ArgumentNullException(nameof(issueRepository));
+        _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _dependencyEngine = dependencyEngine;
 
         _yamlDeserializer = new DeserializerBuilder()
@@ -43,24 +43,24 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
             .Build();
     }
 
-    public string GenerateMarkdown(Issue issue, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null)
+    public string GenerateMarkdown(ForgeTask task, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null)
     {
-        var frontmatter = new IssueFrontmatter
+        var frontmatter = new TaskFrontmatter
         {
-            Id = issue.Id > 0 ? issue.Id : null,
-            Title = issue.Title,
-            Workspace = issue.Workspace?.Name,
-            Status = issue.Status.ToString(),
-            CurrentStage = issue.CurrentStageId,
-            Priority = issue.Priority,
-            MergeMode = issue.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required",
-            WaitingForHuman = issue.IsWaitingForHuman,
-            BaseBranch = issue.BaseBranch,
-            FeatureBranch = string.IsNullOrWhiteSpace(issue.FeatureBranch) ? null : issue.FeatureBranch,
-            DependsOn = dependencies != null ? dependencies.ToList() : issue.Dependencies?.Select(d => d.DependsOnIssueId).ToList() ?? new List<int>(),
+            Id = task.Id > 0 ? task.Id : null,
+            Title = task.Title,
+            Workspace = task.Workspace?.Name,
+            Status = task.Status.ToString(),
+            CurrentStage = task.CurrentStageId,
+            Priority = task.Priority,
+            MergeMode = task.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required",
+            WaitingForHuman = task.IsWaitingForHuman,
+            BaseBranch = task.BaseBranch,
+            FeatureBranch = string.IsNullOrWhiteSpace(task.FeatureBranch) ? null : task.FeatureBranch,
+            DependsOn = dependencies != null ? dependencies.ToList() : task.Dependencies?.Select(d => d.DependsOnTaskId).ToList() ?? new List<int>(),
             AgentProfile = agentProfileId,
-            CreatedAt = issue.CreatedAt,
-            UpdatedAt = issue.UpdatedAt
+            CreatedAt = task.CreatedAt,
+            UpdatedAt = task.UpdatedAt
         };
 
         var yaml = _yamlSerializer.Serialize(frontmatter);
@@ -69,17 +69,17 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
         sb.Append(yaml);
         sb.AppendLine("---");
         sb.AppendLine();
-        sb.AppendLine($"# {issue.Title}");
+        sb.AppendLine($"# {task.Title}");
         sb.AppendLine();
         sb.AppendLine("## 📋 Requirements & Description");
-        sb.AppendLine(issue.Description);
+        sb.AppendLine(task.Description);
 
-        if (issue.Questions != null && issue.Questions.Count > 0)
+        if (task.Questions != null && task.Questions.Count > 0)
         {
             sb.AppendLine();
             sb.AppendLine("## ❓ Human Clarifications (Q&A)");
             int qIndex = 1;
-            foreach (var q in issue.Questions)
+            foreach (var q in task.Questions)
             {
                 sb.AppendLine($"### Question {qIndex++} (Asked during Stage: {q.StageId} on {q.AskedAt:yyyy-MM-dd HH:mm:ss})");
                 sb.AppendLine($"**Prompt:** {q.Prompt}");
@@ -91,11 +91,11 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
         return sb.ToString();
     }
 
-    public (IssueFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent)
+    public (TaskFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent)
     {
         if (string.IsNullOrWhiteSpace(markdownContent))
         {
-            return (new IssueFrontmatter(), string.Empty);
+            return (new TaskFrontmatter(), string.Empty);
         }
 
         var normalized = markdownContent.Replace("\r\n", "\n");
@@ -109,18 +109,18 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
 
                 try
                 {
-                    var frontmatter = _yamlDeserializer.Deserialize<IssueFrontmatter>(yamlPart) ?? new IssueFrontmatter();
+                    var frontmatter = _yamlDeserializer.Deserialize<TaskFrontmatter>(yamlPart) ?? new TaskFrontmatter();
                     return (frontmatter, bodyPart);
                 }
                 catch
                 {
                     // If frontmatter deserialization fails, return raw body
-                    return (new IssueFrontmatter(), normalized);
+                    return (new TaskFrontmatter(), normalized);
                 }
             }
         }
 
-        return (new IssueFrontmatter(), markdownContent);
+        return (new TaskFrontmatter(), markdownContent);
     }
 
     public string ComputeContentHash(string content)
@@ -133,26 +133,26 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
 
     public static string GenerateSlug(string title)
     {
-        if (string.IsNullOrWhiteSpace(title)) return "issue";
+        if (string.IsNullOrWhiteSpace(title)) return "task";
         var slug = NonAlphaNumericRegex().Replace(title.ToLowerInvariant(), "-").Trim('-');
-        return string.IsNullOrWhiteSpace(slug) ? "issue" : slug;
+        return string.IsNullOrWhiteSpace(slug) ? "task" : slug;
     }
 
-    public async Task<string> SyncIssueToDiskAsync(
-        Issue issue,
+    public async Task<string> SyncTaskToDiskAsync(
+        ForgeTask task,
         string workspacePath,
         IReadOnlyList<int>? dependencies = null,
         string? agentProfileId = null,
         CancellationToken cancellationToken = default)
     {
-        var issuesDir = Path.Combine(workspacePath, "docs", "issues");
-        Directory.CreateDirectory(issuesDir);
+        var tasksDir = Path.Combine(workspacePath, "docs", "tasks");
+        Directory.CreateDirectory(tasksDir);
 
-        var datePrefix = (issue.CreatedAt != default ? issue.CreatedAt : DateTime.UtcNow).ToString("yyyy-MM-dd");
-        var slug = GenerateSlug(issue.Title);
+        var datePrefix = (task.CreatedAt != default ? task.CreatedAt : DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var slug = GenerateSlug(task.Title);
 
         // Find or allocate target file path
-        var targetFile = Path.Combine(issuesDir, $"{datePrefix}-{slug}.md");
+        var targetFile = Path.Combine(tasksDir, $"{datePrefix}-{slug}.md");
         int suffix = 2;
 
         while (File.Exists(targetFile))
@@ -161,9 +161,9 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
             {
                 var existingContent = await File.ReadAllTextAsync(targetFile, cancellationToken);
                 var (existingFm, _) = ParseMarkdown(existingContent);
-                if (existingFm.Id == issue.Id)
+                if (existingFm.Id == task.Id)
                 {
-                    break; // Overwrite this issue's existing file
+                    break; // Overwrite this task's existing file
                 }
             }
             catch
@@ -171,10 +171,10 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
                 // Unreadable file, advance suffix
             }
 
-            targetFile = Path.Combine(issuesDir, $"{datePrefix}-{slug}-{suffix++}.md");
+            targetFile = Path.Combine(tasksDir, $"{datePrefix}-{slug}-{suffix++}.md");
         }
 
-        var markdown = GenerateMarkdown(issue, dependencies, agentProfileId);
+        var markdown = GenerateMarkdown(task, dependencies, agentProfileId);
         var hash = ComputeContentHash(markdown);
         _suppressedHashes[hash] = 1;
 
@@ -189,9 +189,9 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
     }
 
     public Task ProcessFileChangedAsync(string filePath, int workspaceId, CancellationToken cancellationToken = default)
-        => ProcessFileChangedAsync(filePath, workspaceId, expectedIssueId: null, cancellationToken: cancellationToken);
+        => ProcessFileChangedAsync(filePath, workspaceId, expectedTaskId: null, cancellationToken: cancellationToken);
 
-    public async Task ProcessFileChangedAsync(string filePath, int workspaceId, int? expectedIssueId, CancellationToken cancellationToken = default)
+    public async Task ProcessFileChangedAsync(string filePath, int workspaceId, int? expectedTaskId, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(filePath)) return;
 
@@ -205,13 +205,13 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
             return;
         }
 
-        await ProcessFileContentAsync(filePath, content, workspaceId, expectedIssueId, cancellationToken);
+        await ProcessFileContentAsync(filePath, content, workspaceId, expectedTaskId, cancellationToken);
     }
 
     public Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default)
-        => ProcessFileContentAsync(filePath, content, workspaceId, expectedIssueId: null, cancellationToken: cancellationToken);
+        => ProcessFileContentAsync(filePath, content, workspaceId, expectedTaskId: null, cancellationToken: cancellationToken);
 
-    public async Task ProcessFileContentAsync(string filePath, string content, int workspaceId, int? expectedIssueId, CancellationToken cancellationToken = default)
+    public async Task ProcessFileContentAsync(string filePath, string content, int workspaceId, int? expectedTaskId, CancellationToken cancellationToken = default)
     {
         var hash = ComputeContentHash(content);
         if (_suppressedHashes.TryRemove(hash, out _))
@@ -225,78 +225,78 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
         // Extract description from body (strip '# Title' and '## Requirements' if present)
         var description = ExtractDescriptionFromBody(body);
 
-        var targetIssueId = frontmatter.Id.HasValue && frontmatter.Id.Value > 0
+        var targetTaskId = frontmatter.Id.HasValue && frontmatter.Id.Value > 0
             ? frontmatter.Id.Value
-            : (expectedIssueId.HasValue && expectedIssueId.Value > 0 ? expectedIssueId.Value : (int?)null);
+            : (expectedTaskId.HasValue && expectedTaskId.Value > 0 ? expectedTaskId.Value : (int?)null);
 
-        if (targetIssueId.HasValue)
+        if (targetTaskId.HasValue)
         {
-            var issue = await _issueRepository.GetByIdAsync(targetIssueId.Value, cancellationToken);
-            if (issue != null)
+            var task = await _taskRepository.GetByIdAsync(targetTaskId.Value, cancellationToken);
+            if (task != null)
             {
                 bool restoreProtected = false;
 
                 // Validate system-managed fields
-                if (!string.Equals(frontmatter.Status, issue.Status.ToString(), StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(frontmatter.Status, task.Status.ToString(), StringComparison.OrdinalIgnoreCase))
                 {
                     restoreProtected = true;
-                    frontmatter.Status = issue.Status.ToString();
+                    frontmatter.Status = task.Status.ToString();
                 }
 
-                if (!string.Equals(frontmatter.CurrentStage, issue.CurrentStageId, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(frontmatter.CurrentStage, task.CurrentStageId, StringComparison.OrdinalIgnoreCase))
                 {
                     restoreProtected = true;
-                    frontmatter.CurrentStage = issue.CurrentStageId;
+                    frontmatter.CurrentStage = task.CurrentStageId;
                 }
 
-                if (frontmatter.WaitingForHuman != issue.IsWaitingForHuman)
+                if (frontmatter.WaitingForHuman != task.IsWaitingForHuman)
                 {
                     restoreProtected = true;
-                    frontmatter.WaitingForHuman = issue.IsWaitingForHuman;
+                    frontmatter.WaitingForHuman = task.IsWaitingForHuman;
                 }
 
                 // Update editable fields
                 if (!string.IsNullOrWhiteSpace(frontmatter.Title))
                 {
-                    issue.Title = frontmatter.Title;
+                    task.Title = frontmatter.Title;
                 }
                 if (!string.IsNullOrWhiteSpace(description))
                 {
-                    issue.Description = description;
+                    task.Description = description;
                 }
-                issue.Priority = frontmatter.Priority;
-                issue.BaseBranch = frontmatter.BaseBranch;
+                task.Priority = frontmatter.Priority;
+                task.BaseBranch = frontmatter.BaseBranch;
                 if (!string.IsNullOrWhiteSpace(frontmatter.FeatureBranch))
                 {
-                    issue.FeatureBranch = frontmatter.FeatureBranch;
+                    task.FeatureBranch = frontmatter.FeatureBranch;
                 }
-                issue.UpdatedAt = DateTime.UtcNow;
+                task.UpdatedAt = DateTime.UtcNow;
 
                 // Validate DAG cycles on dependency changes if engine is provided
                 if (_dependencyEngine != null && frontmatter.DependsOn != null)
                 {
-                    var testDependencies = frontmatter.DependsOn.Select(d => (issue.Id, d));
+                    var testDependencies = frontmatter.DependsOn.Select(d => (task.Id, d));
                     if (_dependencyEngine.HasCycle(workspaceId, testDependencies))
                     {
                         // Cycle detected, revert dependencies in frontmatter
                         restoreProtected = true;
-                        var existingDeps = await _issueRepository.GetDependenciesAsync(issue.Id, cancellationToken);
+                        var existingDeps = await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken);
                         frontmatter.DependsOn = existingDeps.ToList();
                     }
                     else
                     {
-                        await _issueRepository.UpdateAsync(issue, frontmatter.DependsOn, cancellationToken);
+                        await _taskRepository.UpdateAsync(task, frontmatter.DependsOn, cancellationToken);
                     }
                 }
                 else
                 {
-                    await _issueRepository.UpdateAsync(issue, frontmatter.DependsOn, cancellationToken);
+                    await _taskRepository.UpdateAsync(task, frontmatter.DependsOn, cancellationToken);
                 }
 
                 if (restoreProtected)
                 {
                     // Rewrite back authoritative state
-                    var rewritten = GenerateMarkdown(issue, frontmatter.DependsOn, frontmatter.AgentProfile);
+                    var rewritten = GenerateMarkdown(task, frontmatter.DependsOn, frontmatter.AgentProfile);
                     var newHash = ComputeContentHash(rewritten);
                     _suppressedHashes[newHash] = 1;
                     if (File.Exists(filePath))
@@ -309,12 +309,12 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
             }
         }
 
-        // New issue dropped in without an ID
+        // New task dropped in without an ID
         var mergeMode = string.Equals(frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
             ? Domain.MergeMode.Automatic
             : Domain.MergeMode.ManualReviewRequired;
 
-        var newIssue = new Issue
+        var newTask = new ForgeTask
         {
             WorkspaceId = workspaceId,
             Title = string.IsNullOrWhiteSpace(frontmatter.Title) ? Path.GetFileNameWithoutExtension(filePath) : frontmatter.Title,
@@ -323,13 +323,13 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
             MergeMode = mergeMode,
             IsWaitingForHuman = frontmatter.WaitingForHuman,
             BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? "main" : frontmatter.BaseBranch,
-            Status = IssueOverallStatus.Suggested,
-            CurrentStageId = "issue-review",
+            Status = TaskOverallStatus.Suggested,
+            CurrentStageId = "task-review",
             CreatedAt = frontmatter.CreatedAt ?? DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
 
-        var created = await _issueRepository.CreateAsync(newIssue, frontmatter.DependsOn, cancellationToken);
+        var created = await _taskRepository.CreateAsync(newTask, frontmatter.DependsOn, cancellationToken);
 
         // Update frontmatter in-place with allocated ID and creation timestamp
         frontmatter.Id = created.Id;
@@ -349,23 +349,23 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
         }
     }
 
-    public async Task ArchiveOrCleanupIssueFileAsync(Issue issue, string workspacePath, bool archive = true, CancellationToken cancellationToken = default)
+    public async Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive = true, CancellationToken cancellationToken = default)
     {
-        var issuesDir = Path.Combine(workspacePath, "docs", "issues");
-        if (!Directory.Exists(issuesDir)) return;
+        var tasksDir = Path.Combine(workspacePath, "docs", "tasks");
+        if (!Directory.Exists(tasksDir)) return;
 
-        var files = Directory.GetFiles(issuesDir, "*.md");
+        var files = Directory.GetFiles(tasksDir, "*.md");
         foreach (var file in files)
         {
             try
             {
                 var content = await File.ReadAllTextAsync(file, cancellationToken);
                 var (fm, _) = ParseMarkdown(content);
-                if (fm.Id == issue.Id)
+                if (fm.Id == task.Id)
                 {
                     if (archive)
                     {
-                        var archiveDir = Path.Combine(issuesDir, "archive");
+                        var archiveDir = Path.Combine(tasksDir, "archive");
                         Directory.CreateDirectory(archiveDir);
                         var target = Path.Combine(archiveDir, Path.GetFileName(file));
                         if (File.Exists(target)) File.Delete(target);
@@ -387,12 +387,12 @@ public partial class IssueMarkdownSyncService : IIssueMarkdownSyncService
 
     public void StartWatching(int workspaceId, string workspacePath)
     {
-        var issuesDir = Path.Combine(workspacePath, "docs", "issues");
-        Directory.CreateDirectory(issuesDir);
+        var tasksDir = Path.Combine(workspacePath, "docs", "tasks");
+        Directory.CreateDirectory(tasksDir);
 
         if (_watchers.ContainsKey(workspaceId)) return;
 
-        var watcher = new FileSystemWatcher(issuesDir, "*.md")
+        var watcher = new FileSystemWatcher(tasksDir, "*.md")
         {
             NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size
         };

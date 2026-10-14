@@ -4,11 +4,11 @@ using NightCodeForge.Core.Interfaces;
 namespace NightCodeForge.Core.Workflow;
 
 /// <summary>
-/// Provider interface for obtaining the workflow pipeline appropriate for a given issue or workspace.
+/// Provider interface for obtaining the workflow pipeline appropriate for a given task or workspace.
 /// </summary>
 public interface IWorkflowPipelineProvider
 {
-    IWorkflowPipeline GetPipeline(Issue issue);
+    IWorkflowPipeline GetPipeline(ForgeTask task);
 }
 
 /// <summary>
@@ -30,5 +30,5 @@ public class DefaultWorkflowPipelineProvider : IWorkflowPipelineProvider
             preloadService: preloadService);
     }
 
-    public IWorkflowPipeline GetPipeline(Issue issue) => _pipeline;
+    public IWorkflowPipeline GetPipeline(ForgeTask task) => _pipeline;
 }

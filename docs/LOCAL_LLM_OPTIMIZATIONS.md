@@ -20,7 +20,7 @@ A thorough, cross-document audit was conducted across all six core specification
 | **Dev-Queue & Concurrency** | `WorkerCount = 1` for LLM queues (`llm-urgent`, `llm-inference`), `WorkerCount = 4` for `default` utility. | ✅ **100% Unified** | Guarantees zero VRAM oversubscription across all multi-workspace tasks. Resumed questions take priority in `llm-urgent`. |
 | **Workspace Concurrency** | Keyed async lock provider (`IWorkspaceLockProvider`) per `WorkspaceId`. | ✅ **100% Unified** | Prevents concurrent Git operations on the same workspace between utility jobs and UI actions. |
 | **Interruption & Checkpoint** | Native `ask` tool yields `HumanInterruptionException`, caught cleanly by orchestrator. | ✅ **100% Unified** | Hangfire job completes as `Succeeded` (releasing GPU); branch state preserved via Git WIP commit; memory serialized to `STAGE_CHECKPOINT`. |
-| **Git & Filesystem Mirroring** | Native Git CLI (`CliWrap`), ext4 mirror `/var/ncf/workspaces/{id}/repo`, `receive.denyCurrentBranch updateInstead`. | ✅ **100% Unified** | Eliminates WSL2 9p latency; fallback push to `feature/issue-{id}-ncf` if host working tree has uncommitted edits. |
+| **Git & Filesystem Mirroring** | Native Git CLI (`CliWrap`), ext4 mirror `/var/ncf/workspaces/{id}/repo`, `receive.denyCurrentBranch updateInstead`. | ✅ **100% Unified** | Eliminates WSL2 9p latency; fallback push to `feature/task-{id}-ncf` if host working tree has uncommitted edits. |
 | **Container Sandboxing** | `NightCodeForgeContainerExecutor` persistent sentinel REPL (`__NCF_SENTINEL_<guid>__ $?`). | ✅ **100% Unified** | Eliminates per-command container startup overhead; handles hangs via `\x03` SIGINT + 2s grace period + shell restart. |
 | **Untrusted Triage Security** | `TriageStage` (`triage-guard`) with `RestrictedReadOnly` sandbox (`--network none`, `:ro`, immutability). | ✅ **100% Unified** | Neutralizes indirect prompt injection, data exfiltration, and repo tampering on `main`/`master`. |
 | **EditorConfig Compliance** | `IEditorConfigService` and `EditorConfigFileApplier` on `write` and `edit`. | ✅ **100% Unified** | Enforces EOL (`lf`/`crlf`), indent style, size, trimming, final newline, and charset. Eliminates cross-OS phantom diffs. |
@@ -171,7 +171,7 @@ Implement a **Multi-Layered Tool Defense** combining gateway auto-healing, lenie
 ### Optimization 4: Deterministic Code Intelligence Feeders (Zero-GPU Symbol Map)
 
 #### The Problem
-When given an issue like *"Add discount calculation to OrderService"*, a local model typically spends 2 to 4 turns running shell commands (`bash: find . -name "*Order*"`, `bash: rg "class OrderService"`) to locate the relevant files and inspect method signatures.
+When given a task like *"Add discount calculation to OrderService"*, a local model typically spends 2 to 4 turns running shell commands (`bash: find . -name "*Order*"`, `bash: rg "class OrderService"`) to locate the relevant files and inspect method signatures.
 Each turn requires:
 * Prompt serialization $\rightarrow$ GPU inference $\rightarrow$ Process dispatch $\rightarrow$ Output ingestion $\rightarrow$ Next prompt.
 This burns 3,000+ tokens and 45–60 seconds of GPU compute just to find a file path.
@@ -179,9 +179,9 @@ This burns 3,000+ tokens and 45–60 seconds of GPU compute just to find a file 
 #### The Solution
 NightCodeForge is built on .NET 10. We can execute **deterministic, instant code intelligence on the host CPU with zero GPU cost**:
 1. **Workspace Symbol Indexer (`IWorkspaceSymbolService`):**
-   * Uses Roslyn (`Microsoft.CodeAnalysis.CSharp`) or fast lightweight regex/ctags to index classes, interfaces, records, and methods when the issue branch is created.
+   * Uses Roslyn (`Microsoft.CodeAnalysis.CSharp`) or fast lightweight regex/ctags to index classes, interfaces, records, and methods when the task branch is created.
 2. **Targeted Symbol Map Injection:**
-   * In Stage 1 (`IssueReviewStage`) bootstrap prompt, NightCodeForge inspects the issue title/description and automatically resolves matching symbols:
+   * In Stage 1 (`TaskReviewStage`) bootstrap prompt, NightCodeForge inspects the task title/description and automatically resolves matching symbols:
      ```markdown
      <discovered_code_symbols>
      - Class OrderService: src/NightCodeForge.Core/Services/OrderService.cs (Lines 15-180)
@@ -236,14 +236,14 @@ Enforce strict **4-Layer Prompt Architecture** in Crucible:
 ┌─────────────────────────────────────────────────────────────┐
 │ LAYER 1: Immutable Global System Rules & Guidelines         │ <- 100% Byte-Identical
 │ - Persona definition & core constraints                     │    (Cached across ALL turns
-│ - Canonical tool definitions (read, edit, write, bash, ask) │     and ALL issues in repo)
+│ - Canonical tool definitions (read, edit, write, bash, ask) │     and ALL tasks in repo)
 │ - Repository AGENTS.md rules & skills index                 │
 ├─────────────────────────────────────────────────────────────┤
 │ LAYER 2: Stage-Specific Persona & Directives                │ <- Byte-Identical across
 │ - Stage guidelines (Review / Implement / Audit)             │    all turns of that stage
 ├─────────────────────────────────────────────────────────────┤
-│ LAYER 3: Dynamic Issue Scope & Artifacts                    │ <- Stable per issue stage
-│ - Issue Title, Requirements, Approved Plan, Git Diff        │
+│ LAYER 3: Dynamic ForgeTask Scope & Artifacts                    │ <- Stable per task stage
+│ - ForgeTask Title, Requirements, Approved Plan, Git Diff        │
 ├─────────────────────────────────────────────────────────────┤
 │ LAYER 4: Turn Conversation History & Tool Results           │ <- Only appending at the tail
 │ - User turns, Compacted tool calls, Human Q&A answers       │
@@ -266,7 +266,7 @@ Unloading a 32B model and loading another 32B model into 24GB VRAM over PCIe tak
 #### The Solution
 Take advantage of **Deterministic Stages (`DeterministicWorkflowStage`)**:
 * When Stage 1 completes, the orchestrator triggers a deterministic step (e.g., `DeterministicBuildStage` or initial environment preparation) that executes purely on the host CPU for 15–30 seconds (0 GPU tokens).
-* At the inception of the deterministic step, NightCodeForge issues an asynchronous background preload request to OllamaRouter:
+* At the inception of the deterministic step, NightCodeForge tasks an asynchronous background preload request to OllamaRouter:
   ```http
   POST http://localhost:11434/api/generate
   { "model": "qwen2.5-coder:32b", "keep_alive": "15m" }
@@ -280,7 +280,7 @@ Take advantage of **Deterministic Stages (`DeterministicWorkflowStage`)**:
 
 Every optimization described above provides substantial benefits for mainstream models like Qwen 2.5 Coder and DeepSeek-R1. However, to guarantee **scientific rigor, empirical validation, and compatibility with diverse open weights**, all optimizations are strictly **opt-out**.
 
-Developers can toggle any optimization on or off at the **Global**, **Workspace**, or **Agent Profile** level. This enables direct **A/B testing**: running the exact same issue on an unoptimized baseline profile vs. an optimized profile to benchmark token savings, latency differences, and success rates.
+Developers can toggle any optimization on or off at the **Global**, **Workspace**, or **Agent Profile** level. This enables direct **A/B testing**: running the exact same task on an unoptimized baseline profile vs. an optimized profile to benchmark token savings, latency differences, and success rates.
 
 ### 3.1 Strongly-Typed Optimization Flags (`LocalOptimizationFlags`)
 
@@ -347,7 +347,7 @@ Developers can register two profiles targeting the identical model and hardware:
 * **Profile A (`deepseek-r1-optimized`):** All 7 optimizations enabled (`true`).
 * **Profile B (`deepseek-r1-baseline`):** All optimizations disabled (`false`).
 
-When dispatching tasks or running benchmarks, assigning Profile A to Issue #101 and Profile B to Issue #102 produces exact empirical comparison telemetry.
+When dispatching tasks or running benchmarks, assigning Profile A to ForgeTask #101 and Profile B to ForgeTask #102 produces exact empirical comparison telemetry.
 
 ### 3.3 Session Transcript Telemetry Embedding
 
@@ -355,7 +355,7 @@ Every execution turn recorded in `docs/transcripts/` embeds the active optimizat
 
 ```markdown
 ---
-issue_id: 123
+task_id: 123
 stage_id: Implementation
 agent_profile: qwen2.5-coder-ab-test
 model: qwen2.5-coder:32b
@@ -387,7 +387,7 @@ NightCodeForge's database and UI evaluate the following metrics to quantify opti
 | **Prompt Token Re-ingestion** | High (grows linearly with `<think>` and raw logs) | Bounded & Compact | **60% - 80% reduction** in multi-turn reasoning tokens |
 | **Time to First Token (TTFT)** | 4.5s - 8.0s per turn (full prompt re-eval) | 0.08s - 0.2s per turn | **90%+ KV Cache Hit Rate** |
 | **Stage Transition Dead Time** | 12s - 18s (sequential model PCIe swap) | 0s (model preloaded during build) | **100% latency hiding** |
-| **Exploratory Tool Turns** | 3 - 5 turns running `find` and `rg` | 1 turn (direct `read` on indexed symbol) | **2 - 4 turns saved** per issue |
+| **Exploratory Tool Turns** | 3 - 5 turns running `find` and `rg` | 1 turn (direct `read` on indexed symbol) | **2 - 4 turns saved** per task |
 | **JSON Parse Failures** | Occasional (unescaped quotes, markdown fences) | 0% (grammar-guided decoding) | **Zero parse retry loops** |
 | **Runaway Loop Rate** | Vulnerable to 4,000-token infinite generations | Intercepted within 16-char n-gram cycle | **Zero GPU hang lockups** |
 

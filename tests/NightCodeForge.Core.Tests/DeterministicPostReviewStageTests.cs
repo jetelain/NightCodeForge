@@ -35,12 +35,12 @@ public class DeterministicPostReviewStageTests
 
         var postReviewStage = new DeterministicPostReviewStage(executionEnv: fakeEnv);
 
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 1,
             WorkspaceId = 1,
             CurrentStageId = DeterministicPostReviewStage.DefaultStageId,
-            Status = IssueOverallStatus.Implemented
+            Status = TaskOverallStatus.Implemented
         };
         var workspace = new Workspace
         {
@@ -48,7 +48,7 @@ public class DeterministicPostReviewStageTests
             Name = "TestRepo",
             RepositoryPath = "C:/fake/repo"
         };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await postReviewStage.ExecuteAsync(context);
 
@@ -84,12 +84,12 @@ public class DeterministicPostReviewStageTests
 
         var postReviewStage = new DeterministicPostReviewStage(buildStage: buildStage, testStage: failingTestStage);
 
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 2,
             WorkspaceId = 1,
             CurrentStageId = DeterministicPostReviewStage.DefaultStageId,
-            Status = IssueOverallStatus.Implemented
+            Status = TaskOverallStatus.Implemented
         };
         var workspace = new Workspace
         {
@@ -97,7 +97,7 @@ public class DeterministicPostReviewStageTests
             Name = "TestRepo",
             RepositoryPath = "C:/fake/repo"
         };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await postReviewStage.ExecuteAsync(context);
 
@@ -115,12 +115,12 @@ public class DeterministicPostReviewStageTests
 
         var postReviewStage = new DeterministicPostReviewStage(executionEnv: fakeEnv);
 
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 3,
             WorkspaceId = 1,
             CurrentStageId = DeterministicPostReviewStage.DefaultStageId,
-            Status = IssueOverallStatus.Implemented
+            Status = TaskOverallStatus.Implemented
         };
         var workspace = new Workspace
         {
@@ -128,7 +128,7 @@ public class DeterministicPostReviewStageTests
             Name = "TestRepo",
             RepositoryPath = "C:/fake/repo"
         };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await postReviewStage.ExecuteAsync(context);
 

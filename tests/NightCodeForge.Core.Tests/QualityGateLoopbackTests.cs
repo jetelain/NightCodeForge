@@ -44,14 +44,14 @@ public class QualityGateLoopbackTests
     public async Task Orchestrator_RoutesBackwardToTargetStage_OnQualityGateFailure()
     {
         // Arrange
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 10,
             WorkspaceId = 1,
             Title = "Feature X",
             Description = "Implement feature X",
             CurrentStageId = "quality-gate",
-            Status = IssueOverallStatus.Open
+            Status = TaskOverallStatus.Open
         };
 
         var workspace = new Workspace
@@ -62,15 +62,15 @@ public class QualityGateLoopbackTests
             ExecutionMode = ExecutionMode.BareHost
         };
 
-        var issueRepo = new InMemoryIssueRepository();
-        await issueRepo.CreateAsync(issue);
+        var taskRepo = new InMemoryTaskRepository();
+        await taskRepo.CreateAsync(task);
         var workspaceRepo = new InMemoryWorkspaceRepository();
         await workspaceRepo.CreateAsync(workspace);
-        var depStore = new InMemoryIssueDependencyStore();
-        depStore.AddIssue(10, 1, IssueOverallStatus.Open);
+        var depStore = new InMemoryTaskDependencyStore();
+        depStore.AddTask(10, 1, TaskOverallStatus.Open);
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
         var gitManager = new FakeGitWorkspaceManager();
 
         var harness = new FakeAgentHarness();
@@ -86,8 +86,8 @@ public class QualityGateLoopbackTests
             }
         });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo,
             workspaceRepo,
             depEngine,
             lockProvider,
@@ -98,15 +98,15 @@ public class QualityGateLoopbackTests
             harnessRegistry: harnessRegistry);
 
         // Act
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         // Assert
-        Assert.Equal("implementation", issue.CurrentStageId);
-        Assert.Equal(IssueOverallStatus.Open, issue.Status);
+        Assert.Equal("implementation", task.CurrentStageId);
+        Assert.Equal(TaskOverallStatus.Open, task.Status);
         Assert.Single(jobQueue.UrgentQueue);
         Assert.Equal(10, jobQueue.UrgentQueue[0]);
 
-        var bag = PipelineDataBag.FromJson(issue.PipelineDataJson);
+        var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
         var stageRetries = bag.Get<Dictionary<string, int>>("Workflow.StageRetries");
         Assert.NotNull(stageRetries);
         Assert.Equal(1, stageRetries["quality-gate"]);
@@ -121,20 +121,20 @@ public class QualityGateLoopbackTests
     public async Task Orchestrator_FailsPermanently_WhenMaxRetriesExceeded()
     {
         // Arrange
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 11,
             WorkspaceId = 1,
             Title = "Feature Y",
             Description = "Implement feature Y",
             CurrentStageId = "quality-gate",
-            Status = IssueOverallStatus.Open
+            Status = TaskOverallStatus.Open
         };
 
         var initialBag = new PipelineDataBag();
         initialBag.Set("Workflow.MaxRetries", 2);
         initialBag.Set("Workflow.StageRetries", new Dictionary<string, int> { ["quality-gate"] = 2 });
-        issue.PipelineDataJson = initialBag.ToJson();
+        task.PipelineDataJson = initialBag.ToJson();
 
         var workspace = new Workspace
         {
@@ -144,15 +144,15 @@ public class QualityGateLoopbackTests
             ExecutionMode = ExecutionMode.BareHost
         };
 
-        var issueRepo = new InMemoryIssueRepository();
-        await issueRepo.CreateAsync(issue);
+        var taskRepo = new InMemoryTaskRepository();
+        await taskRepo.CreateAsync(task);
         var workspaceRepo = new InMemoryWorkspaceRepository();
         await workspaceRepo.CreateAsync(workspace);
-        var depStore = new InMemoryIssueDependencyStore();
-        depStore.AddIssue(11, 1, IssueOverallStatus.Open);
+        var depStore = new InMemoryTaskDependencyStore();
+        depStore.AddTask(11, 1, TaskOverallStatus.Open);
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
         var gitManager = new FakeGitWorkspaceManager();
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
@@ -165,8 +165,8 @@ public class QualityGateLoopbackTests
             }
         });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo,
             workspaceRepo,
             depEngine,
             lockProvider,
@@ -176,10 +176,10 @@ public class QualityGateLoopbackTests
             depStore);
 
         // Act
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         // Assert
-        Assert.Equal(IssueOverallStatus.Failed, issue.Status);
+        Assert.Equal(TaskOverallStatus.Failed, task.Status);
         Assert.Empty(jobQueue.UrgentQueue);
     }
 
@@ -187,20 +187,20 @@ public class QualityGateLoopbackTests
     public async Task Orchestrator_InjectsStage1ApprovedPlanAndPriorQa_IntoBootstrapPrompt()
     {
         // Arrange
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 12,
             WorkspaceId = 1,
             Title = "Feature Z",
             Description = "Implement feature Z",
             CurrentStageId = "implementation",
-            Status = IssueOverallStatus.Open
+            Status = TaskOverallStatus.Open
         };
 
-        issue.Questions.Add(new Question
+        task.Questions.Add(new Question
         {
             Id = 1,
-            IssueId = 12,
+            TaskId = 12,
             Prompt = "Which database driver should we use?",
             Answer = "Use Microsoft.Data.Sqlite.",
             Status = QuestionStatus.Answered
@@ -208,7 +208,7 @@ public class QualityGateLoopbackTests
 
         var bag = new PipelineDataBag();
         bag.Set("Stage1.ApprovedPlan", "1. Create models\n2. Add repository\n3. Add tests");
-        issue.PipelineDataJson = bag.ToJson();
+        task.PipelineDataJson = bag.ToJson();
 
         var workspace = new Workspace
         {
@@ -218,15 +218,15 @@ public class QualityGateLoopbackTests
             ExecutionMode = ExecutionMode.BareHost
         };
 
-        var issueRepo = new InMemoryIssueRepository();
-        await issueRepo.CreateAsync(issue);
+        var taskRepo = new InMemoryTaskRepository();
+        await taskRepo.CreateAsync(task);
         var workspaceRepo = new InMemoryWorkspaceRepository();
         await workspaceRepo.CreateAsync(workspace);
-        var depStore = new InMemoryIssueDependencyStore();
-        depStore.AddIssue(12, 1, IssueOverallStatus.Open);
+        var depStore = new InMemoryTaskDependencyStore();
+        depStore.AddTask(12, 1, TaskOverallStatus.Open);
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
         var gitManager = new FakeGitWorkspaceManager();
 
         var harness = new FakeAgentHarness();
@@ -237,8 +237,8 @@ public class QualityGateLoopbackTests
             new TestWorkflowStage("implementation", WorkflowStageKind.Agentic)
         });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo,
             workspaceRepo,
             depEngine,
             lockProvider,
@@ -249,7 +249,7 @@ public class QualityGateLoopbackTests
             harnessRegistry: harnessRegistry);
 
         // Act
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         // Assert
         Assert.Single(harness.ExecutedSessions);
@@ -265,14 +265,14 @@ public class QualityGateLoopbackTests
     public async Task Orchestrator_SavesCheckpoint_OnStageSuccess()
     {
         // Arrange
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 13,
             WorkspaceId = 1,
             Title = "Feature Checkpoint",
             Description = "Testing checkpoints",
             CurrentStageId = "stage1",
-            Status = IssueOverallStatus.Open
+            Status = TaskOverallStatus.Open
         };
 
         var workspace = new Workspace
@@ -283,15 +283,15 @@ public class QualityGateLoopbackTests
             ExecutionMode = ExecutionMode.BareHost
         };
 
-        var issueRepo = new InMemoryIssueRepository();
-        await issueRepo.CreateAsync(issue);
+        var taskRepo = new InMemoryTaskRepository();
+        await taskRepo.CreateAsync(task);
         var workspaceRepo = new InMemoryWorkspaceRepository();
         await workspaceRepo.CreateAsync(workspace);
-        var depStore = new InMemoryIssueDependencyStore();
-        depStore.AddIssue(13, 1, IssueOverallStatus.Open);
+        var depStore = new InMemoryTaskDependencyStore();
+        depStore.AddTask(13, 1, TaskOverallStatus.Open);
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
         var gitManager = new FakeGitWorkspaceManager();
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
@@ -303,8 +303,8 @@ public class QualityGateLoopbackTests
             new TestWorkflowStage("stage2", WorkflowStageKind.Deterministic)
         });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo,
             workspaceRepo,
             depEngine,
             lockProvider,
@@ -314,27 +314,27 @@ public class QualityGateLoopbackTests
             depStore);
 
         // Act
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         // Assert
-        var checkpoints = issue.Checkpoints.ToList();
+        var checkpoints = task.Checkpoints.ToList();
         Assert.Single(checkpoints);
         Assert.Equal("stage1", checkpoints[0].StageId);
-        Assert.Equal("stage2", issue.CurrentStageId);
+        Assert.Equal("stage2", task.CurrentStageId);
     }
 
     [Fact]
     public async Task Orchestrator_RoutesBackwardToImplementation_WhenReviewAgentReturnsTargetRouting()
     {
         // Arrange
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 99,
             WorkspaceId = 1,
             Title = "Feature Z",
             Description = "Implement feature Z",
             CurrentStageId = "code-review-fix",
-            Status = IssueOverallStatus.Implemented
+            Status = TaskOverallStatus.Implemented
         };
 
         var workspace = new Workspace
@@ -345,15 +345,15 @@ public class QualityGateLoopbackTests
             ExecutionMode = ExecutionMode.BareHost
         };
 
-        var issueRepo = new InMemoryIssueRepository();
-        await issueRepo.CreateAsync(issue);
+        var taskRepo = new InMemoryTaskRepository();
+        await taskRepo.CreateAsync(task);
         var workspaceRepo = new InMemoryWorkspaceRepository();
         await workspaceRepo.CreateAsync(workspace);
-        var depStore = new InMemoryIssueDependencyStore();
-        depStore.AddIssue(99, 1, IssueOverallStatus.Implemented);
+        var depStore = new InMemoryTaskDependencyStore();
+        depStore.AddTask(99, 1, TaskOverallStatus.Implemented);
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
         var gitManager = new FakeGitWorkspaceManager();
 
         var fakeHarness = new FakeAgentHarness
@@ -371,8 +371,8 @@ public class QualityGateLoopbackTests
             new TestWorkflowStage("code-review-fix", WorkflowStageKind.Agentic, AgentMode.Review)
         });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo,
             workspaceRepo,
             depEngine,
             lockProvider,
@@ -383,14 +383,14 @@ public class QualityGateLoopbackTests
             harnessRegistry: harnessRegistry);
 
         // Act
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         // Assert
-        Assert.Equal("implementation", issue.CurrentStageId);
+        Assert.Equal("implementation", task.CurrentStageId);
         Assert.Single(jobQueue.UrgentQueue);
         Assert.Equal(99, jobQueue.UrgentQueue[0]);
 
-        var bag = PipelineDataBag.FromJson(issue.PipelineDataJson);
+        var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
         var stageRetries = bag.Get<Dictionary<string, int>>("Workflow.StageRetries");
         Assert.NotNull(stageRetries);
         Assert.Equal(1, stageRetries["code-review-fix"]);

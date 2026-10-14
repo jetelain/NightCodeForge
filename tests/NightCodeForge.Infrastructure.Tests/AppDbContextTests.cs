@@ -65,7 +65,7 @@ public class AppDbContextTests : IDisposable
                 LoopCircuitBreaker = true,
                 ThinkingTraceCompaction = false
             },
-            PermittedTools = new[] { "read", "grep", "propose_issues" },
+            PermittedTools = new[] { "read", "grep", "propose_tasks" },
             SecurityTier = SandboxSecurityTier.Standard
         };
 
@@ -83,11 +83,11 @@ public class AppDbContextTests : IDisposable
 
         Assert.NotNull(loaded.PermittedTools);
         Assert.Equal(3, loaded.PermittedTools.Count);
-        Assert.Contains("propose_issues", loaded.PermittedTools);
+        Assert.Contains("propose_tasks", loaded.PermittedTools);
     }
 
     [Fact]
-    public async Task EfCoreIssueRepository_And_DependencyStore_WorkCorrectly()
+    public async Task EfCoreTaskRepository_And_DependencyStore_WorkCorrectly()
     {
         using var context = new AppDbContext(_options);
         await context.Database.EnsureCreatedAsync();
@@ -101,41 +101,41 @@ public class AppDbContextTests : IDisposable
         context.Workspaces.Add(ws);
         await context.SaveChangesAsync();
 
-        var repo = new EfCoreIssueRepository(context);
-        var depStore = new EfCoreIssueDependencyStore(context);
+        var repo = new EfCoreTaskRepository(context);
+        var depStore = new EfCoreTaskDependencyStore(context);
 
-        var issue1 = new Issue
+        var task1 = new ForgeTask
         {
             WorkspaceId = ws.Id,
-            Title = "First Issue",
-            Description = "Base issue",
-            Status = IssueOverallStatus.Closed
+            Title = "First ForgeTask",
+            Description = "Base task",
+            Status = TaskOverallStatus.Closed
         };
-        await repo.CreateAsync(issue1);
+        await repo.CreateAsync(task1);
 
-        var issue2 = new Issue
+        var task2 = new ForgeTask
         {
             WorkspaceId = ws.Id,
-            Title = "Dependent Issue",
-            Description = "Depends on First Issue",
-            Status = IssueOverallStatus.Open
+            Title = "Dependent ForgeTask",
+            Description = "Depends on First ForgeTask",
+            Status = TaskOverallStatus.Open
         };
-        await repo.CreateAsync(issue2, dependsOn: new[] { issue1.Id });
+        await repo.CreateAsync(task2, dependsOn: new[] { task1.Id });
 
-        var prereqs = await depStore.GetPrerequisiteIssueIdsAsync(issue2.Id);
+        var prereqs = await depStore.GetPrerequisiteTaskIdsAsync(task2.Id);
         Assert.Single(prereqs);
-        Assert.Equal(issue1.Id, prereqs[0]);
+        Assert.Equal(task1.Id, prereqs[0]);
 
-        var dependents = await depStore.GetDependentIssueIdsAsync(issue1.Id);
+        var dependents = await depStore.GetDependentTaskIdsAsync(task1.Id);
         Assert.Single(dependents);
-        Assert.Equal(issue2.Id, dependents[0]);
+        Assert.Equal(task2.Id, dependents[0]);
 
-        var status1 = await depStore.GetIssueStatusAsync(issue1.Id);
-        Assert.Equal(IssueOverallStatus.Closed, status1);
+        var status1 = await depStore.GetTaskStatusAsync(task1.Id);
+        Assert.Equal(TaskOverallStatus.Closed, status1);
     }
 
     [Fact]
-    public async Task CascadeDelete_RemovesChildEntitiesWhenIssueDeleted()
+    public async Task CascadeDelete_RemovesChildEntitiesWhenTaskDeleted()
     {
         using var context = new AppDbContext(_options);
         await context.Database.EnsureCreatedAsync();
@@ -144,26 +144,26 @@ public class AppDbContextTests : IDisposable
         context.Workspaces.Add(ws);
         await context.SaveChangesAsync();
 
-        var issue = new Issue
+        var task = new ForgeTask
         {
             WorkspaceId = ws.Id,
-            Title = "Parent Issue"
+            Title = "Parent ForgeTask"
         };
-        context.Issues.Add(issue);
+        context.Tasks.Add(task);
         await context.SaveChangesAsync();
 
-        context.Questions.Add(new Question { IssueId = issue.Id, StageId = "s1", Prompt = "Q1?" });
-        context.ExecutionLogs.Add(new ExecutionLog { IssueId = issue.Id, Source = "Test", Message = "Log 1" });
-        context.StageCheckpoints.Add(new StageCheckpoint { IssueId = issue.Id, StageId = "s1", SerializedMemory = "{}", GitCommitHash = "abc" });
+        context.Questions.Add(new Question { TaskId = task.Id, StageId = "s1", Prompt = "Q1?" });
+        context.ExecutionLogs.Add(new ExecutionLog { TaskId = task.Id, Source = "Test", Message = "Log 1" });
+        context.StageCheckpoints.Add(new StageCheckpoint { TaskId = task.Id, StageId = "s1", SerializedMemory = "{}", GitCommitHash = "abc" });
         await context.SaveChangesAsync();
 
-        // Delete issue
-        context.Issues.Remove(issue);
+        // Delete task
+        context.Tasks.Remove(task);
         await context.SaveChangesAsync();
 
         // Verify child records cascaded
-        Assert.Empty(await context.Questions.Where(q => q.IssueId == issue.Id).ToListAsync());
-        Assert.Empty(await context.ExecutionLogs.Where(l => l.IssueId == issue.Id).ToListAsync());
-        Assert.Empty(await context.StageCheckpoints.Where(c => c.IssueId == issue.Id).ToListAsync());
+        Assert.Empty(await context.Questions.Where(q => q.TaskId == task.Id).ToListAsync());
+        Assert.Empty(await context.ExecutionLogs.Where(l => l.TaskId == task.Id).ToListAsync());
+        Assert.Empty(await context.StageCheckpoints.Where(c => c.TaskId == task.Id).ToListAsync());
     }
 }

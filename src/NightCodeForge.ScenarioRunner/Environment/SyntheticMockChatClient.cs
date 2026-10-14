@@ -79,10 +79,10 @@ public class SyntheticMockChatClient : IChatClient
         var lastUserMsg = messages.LastOrDefault(m => m.Role == ChatRole.User)?.Text ?? string.Empty;
         var lastToolMsg = messages.LastOrDefault(m => m.Role == ChatRole.Tool);
 
-        // If previous turn returned a tool result, produce final technical summary or propose issues if in triage mode
+        // If previous turn returned a tool result, produce final technical summary or propose tasks if in triage mode
         if (lastToolMsg != null)
         {
-            if (options?.Tools != null && options.Tools.Any(t => t.Name.Equals("propose_issues", StringComparison.OrdinalIgnoreCase)))
+            if (options?.Tools != null && options.Tools.Any(t => t.Name.Equals("propose_tasks", StringComparison.OrdinalIgnoreCase)))
             {
                 var toolNamesInHistory = messages
                     .Where(m => m.Role == ChatRole.Assistant)
@@ -90,11 +90,11 @@ public class SyntheticMockChatClient : IChatClient
                     .Select(f => f.Name)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-                if (!toolNamesInHistory.Contains("propose_issues"))
+                if (!toolNamesInHistory.Contains("propose_tasks"))
                 {
-                    var call = new FunctionCallContent("call_propose_1", "propose_issues", new Dictionary<string, object?>
+                    var call = new FunctionCallContent("call_propose_1", "propose_tasks", new Dictionary<string, object?>
                     {
-                        ["issues"] = new List<object?>
+                        ["tasks"] = new List<object?>
                         {
                             new Dictionary<string, object?>
                             {

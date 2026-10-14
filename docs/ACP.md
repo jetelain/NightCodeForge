@@ -10,7 +10,7 @@ While **Crucible** provides a native in-process C# engine (.NET 9/10 with Micros
 
 1. **Ecosystem Portability:** Any external AI agent implementing the [Agent Client Protocol](https://agentclientprotocol.com/) runs within NightCodeForge without custom adapter code.
 2. **Sandboxed Tool Delegation:** Even though external ACP agents run as standalone executables, NightCodeForge acts as the **ACP Client**, intercepting file and terminal requests and executing them inside `NightCodeForgeContainerExecutor` (Docker Sentinel REPL) or WSL2.
-3. **Queue & GPU Yielding:** Permission and prompt requests (`session/request_permission`) trigger NightCodeForge's non-blocking `WaitingForHuman` checkpointing, committing Git WIP and releasing the local GPU for the next waiting issue.
+3. **Queue & GPU Yielding:** Permission and prompt requests (`session/request_permission`) trigger NightCodeForge's non-blocking `WaitingForHuman` checkpointing, committing Git WIP and releasing the local GPU for the next waiting task.
 4. **Modernization & Forking Plan:** NightCodeForge incorporates and modernizes the `acp-csharp` SDK (`C:\Users\Julien\source\repos\acp-csharp-main`), upgrading its JSON-RPC engine from ACP v1 to support ACP v2 negotiation while maintaining backward-compatibility with v1 agents.
 
 ---
@@ -272,17 +272,17 @@ public async ValueTask SessionNotificationAsync(
     switch (notification.Update)
     {
         case AgentMessageChunkSessionUpdate msgChunk when msgChunk.Content is TextContentBlock text:
-            await _hubContext.Clients.Group(_issueId)
+            await _hubContext.Clients.Group(_taskId)
                 .SendAsync("OnTokenDelta", text.Text, cancellationToken);
             break;
 
         case ToolCallSessionUpdate toolCall:
-            await _hubContext.Clients.Group(_issueId)
+            await _hubContext.Clients.Group(_taskId)
                 .SendAsync("OnToolExecuting", toolCall.Title, toolCall.Status.ToString(), cancellationToken);
             break;
 
         case ToolCallUpdateSessionUpdate toolUpdate:
-            await _hubContext.Clients.Group(_issueId)
+            await _hubContext.Clients.Group(_taskId)
                 .SendAsync("OnToolCompleted", toolUpdate.ToolCallId, toolUpdate.Status.ToString(), cancellationToken);
             break;
     }
@@ -303,7 +303,7 @@ sequenceDiagram
     participant Agent as External ACP Agent Subprocess
     participant Sandbox as NightCodeForgeContainerExecutor
 
-    Queue->>Harness: RunStageAsync(IssueContext)
+    Queue->>Harness: RunStageAsync(TaskContext)
     Harness->>Agent: Spawn process & pipe stdio
     Harness->>Agent: initialize(protocolVersion: 1)
     Agent-->>Harness: initializeResult(capabilities)
@@ -329,7 +329,7 @@ sequenceDiagram
         Note over Queue: GPU is instantly freed for next waiting task!
         
         Dev->>Queue: Submits Answer via Web Dashboard
-        Queue->>Harness: Resumes Issue in llm-urgent Queue
+        Queue->>Harness: Resumes ForgeTask in llm-urgent Queue
         Harness->>Agent: session/load(sessionId)
         Harness->>Agent: session/prompt(humanAnswer)
     end

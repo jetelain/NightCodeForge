@@ -12,7 +12,7 @@ namespace NightCodeForge.Infrastructure.BackgroundJobs;
 public static class HangfireConfigurationExtensions
 {
     /// <summary>
-    /// Configures Hangfire with SQLite storage and registers the issue job queue service.
+    /// Configures Hangfire with SQLite storage and registers the task job queue service.
     /// </summary>
     public static IServiceCollection AddNightCodeForgeHangfire(
         this IServiceCollection services,
@@ -31,7 +31,7 @@ public static class HangfireConfigurationExtensions
                 });
         });
 
-        services.AddScoped<IIssueJobQueue, HangfireIssueJobQueue>();
+        services.AddScoped<ITaskJobQueue, HangfireTaskJobQueue>();
 
         return services;
     }

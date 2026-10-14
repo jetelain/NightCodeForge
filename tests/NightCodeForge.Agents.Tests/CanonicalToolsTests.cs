@@ -245,21 +245,21 @@ public class Service
     }
 
     [Fact]
-    public void ProposeIssues_AddsToPendingProposals_ReturnsFormattedJson()
+    public void ProposeTasks_AddsToPendingProposals_ReturnsFormattedJson()
     {
         var tools = new CanonicalTools(AppContext.BaseDirectory);
-        var proposals = new List<NightCodeForge.Core.Domain.IssueProposal>
+        var proposals = new List<NightCodeForge.Core.Domain.TaskProposal>
         {
             new("Fix memory leak", "Disposed streams properly", "bug"),
             new("Add XML doc comments", "Add summary tags to public methods", "chore")
         };
 
-        var result = tools.ProposeIssues(proposals);
+        var result = tools.ProposeTasks(proposals);
 
         Assert.Equal(2, tools.PendingProposals.Count);
         Assert.Equal("Fix memory leak", tools.PendingProposals[0].Title);
         Assert.Equal("chore", tools.PendingProposals[1].Type);
-        Assert.Contains("Proposed 2 backlog issue(s)", result);
+        Assert.Contains("Proposed 2 backlog task(s)", result);
         Assert.Contains("Fix memory leak", result);
     }
 
@@ -268,9 +268,9 @@ public class Service
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "test-repo-" + Guid.NewGuid().ToString("N"));
         var cloneDir = Path.Combine(tempRoot, "clone");
-        var issueDir = Path.Combine(tempRoot, "issue-42");
+        var taskDir = Path.Combine(tempRoot, "task-42");
         Directory.CreateDirectory(cloneDir);
-        Directory.CreateDirectory(issueDir);
+        Directory.CreateDirectory(taskDir);
 
         var cloneTools = new CanonicalTools(cloneDir);
 
@@ -291,14 +291,14 @@ public class Service
         Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "clone", "Calculator.cs")), res4);
 
         // 5. Worktree-scoped tools
-        var issueTools = new CanonicalTools(issueDir, issueId: 42);
-        var res5 = issueTools.ResolveFullPath("/workspace/issue-42/Calculator.cs");
-        Assert.Equal(Path.GetFullPath(Path.Combine(issueDir, "Calculator.cs")), res5);
+        var taskTools = new CanonicalTools(taskDir, taskId: 42);
+        var res5 = taskTools.ResolveFullPath("/workspace/task-42/Calculator.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(taskDir, "Calculator.cs")), res5);
 
-        var res6 = issueTools.ResolveFullPath("/workspace/Calculator.cs");
-        Assert.Equal(Path.GetFullPath(Path.Combine(issueDir, "Calculator.cs")), res6);
+        var res6 = taskTools.ResolveFullPath("/workspace/Calculator.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(taskDir, "Calculator.cs")), res6);
 
-        var res7 = issueTools.ResolveFullPath("/workspace/clone/Calculator.cs");
+        var res7 = taskTools.ResolveFullPath("/workspace/clone/Calculator.cs");
         Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "Calculator.cs")), res7);
     }
 }

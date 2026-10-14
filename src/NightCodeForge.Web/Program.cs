@@ -32,7 +32,7 @@ using (var scope = app.Services.CreateScope())
     await recoveryService.ReconcileWorkspacesAsync();
 
     var workspaceRepo = scope.ServiceProvider.GetRequiredService<NightCodeForge.Core.Repositories.IWorkspaceRepository>();
-    var markdownSync = scope.ServiceProvider.GetRequiredService<IIssueMarkdownSyncService>();
+    var markdownSync = scope.ServiceProvider.GetRequiredService<ITaskMarkdownSyncService>();
     var workspaces = await workspaceRepo.GetAllAsync();
     foreach (var ws in workspaces)
     {

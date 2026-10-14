@@ -39,7 +39,7 @@ public class AgentActivityAndCrucibleConfigTests
     }
 
     [Fact]
-    public async Task InMemoryAgentActivityStreamer_BroadcastsAndFiltersByIssue()
+    public async Task InMemoryAgentActivityStreamer_BroadcastsAndFiltersByTask()
     {
         var streamer = new InMemoryAgentActivityStreamer();
         var sessionEvents = new List<AgentActivityEvent>();
@@ -47,7 +47,7 @@ public class AgentActivityAndCrucibleConfigTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var subscriptionTask = Task.Run(async () =>
         {
-            await foreach (var ev in streamer.SubscribeAsync(issueId: 42, cts.Token))
+            await foreach (var ev in streamer.SubscribeAsync(taskId: 42, cts.Token))
             {
                 sessionEvents.Add(ev);
                 if (sessionEvents.Count == 2) break;
@@ -60,7 +60,7 @@ public class AgentActivityAndCrucibleConfigTests
             await Task.Delay(10);
         }
 
-        // Publish events for issue 42 and another issue
+        // Publish events for task 42 and another task
         await streamer.BroadcastAsync(new AgentActivityEvent("session-1", 42, "planning", AgentActivityKind.ThinkingDelta, "Thinking about step 1...", DateTime.UtcNow));
         await streamer.BroadcastAsync(new AgentActivityEvent("session-2", 99, "planning", AgentActivityKind.ThinkingDelta, "Should not be received", DateTime.UtcNow));
         await streamer.BroadcastAsync(new AgentActivityEvent("session-1", 42, "execution", AgentActivityKind.ToolStarted, "read", DateTime.UtcNow));
@@ -80,7 +80,7 @@ public class AgentActivityAndCrucibleConfigTests
         var stabilizer = new Optimizations.PromptPrefixStabilizer();
         var prefix = stabilizer.BuildStabilizedPrefix(
             stagePersonaDirective: "Fix bug",
-            issueScopeAndPlan: "Issue #1",
+            taskScopeAndPlan: "ForgeTask #1",
             customRolePersona: "Custom Persona Directive for Security Hardening");
 
         Assert.StartsWith("Custom Persona Directive for Security Hardening", prefix);
@@ -92,11 +92,11 @@ public class AgentActivityAndCrucibleConfigTests
         var stabilizer = new Optimizations.PromptPrefixStabilizer();
         var prefix = stabilizer.BuildStabilizedPrefix(
             stagePersonaDirective: "Implement feature",
-            issueScopeAndPlan: "Issue #42",
-            workingDirectory: "/workspace/issue-42");
+            taskScopeAndPlan: "ForgeTask #42",
+            workingDirectory: "/workspace/task-42");
 
         Assert.Contains("<environment>", prefix);
-        Assert.Contains("- Current Working Directory (PWD): /workspace/issue-42", prefix);
+        Assert.Contains("- Current Working Directory (PWD): /workspace/task-42", prefix);
         Assert.Contains("The canonical clone on 'main' is read-only", prefix);
         Assert.Contains("</environment>", prefix);
     }

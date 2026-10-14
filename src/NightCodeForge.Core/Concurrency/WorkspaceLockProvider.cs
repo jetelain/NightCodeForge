@@ -28,21 +28,21 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
         CancellationToken cancellationToken = default)
         => TryAcquireInternalAsync(GetWorkspaceKey(workspaceId), timeout, cancellationToken);
 
-    public Task<IDisposable> AcquireIssueLockAsync(int workspaceId, int issueId, CancellationToken cancellationToken = default)
-        => AcquireInternalAsync(GetIssueKey(workspaceId, issueId), cancellationToken);
+    public Task<IDisposable> AcquireTaskLockAsync(int workspaceId, int taskId, CancellationToken cancellationToken = default)
+        => AcquireInternalAsync(GetTaskKey(workspaceId, taskId), cancellationToken);
 
-    public bool TryAcquireIssueLock(int workspaceId, int issueId, out IDisposable? lockReleaser)
-        => TryAcquireInternal(GetIssueKey(workspaceId, issueId), out lockReleaser);
+    public bool TryAcquireTaskLock(int workspaceId, int taskId, out IDisposable? lockReleaser)
+        => TryAcquireInternal(GetTaskKey(workspaceId, taskId), out lockReleaser);
 
-    public Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireIssueLockAsync(
+    public Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireTaskLockAsync(
         int workspaceId,
-        int issueId,
+        int taskId,
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
-        => TryAcquireInternalAsync(GetIssueKey(workspaceId, issueId), timeout, cancellationToken);
+        => TryAcquireInternalAsync(GetTaskKey(workspaceId, taskId), timeout, cancellationToken);
 
     private static string GetWorkspaceKey(int workspaceId) => $"wks:{workspaceId}";
-    private static string GetIssueKey(int workspaceId, int issueId) => $"wks:{workspaceId}:issue:{issueId}";
+    private static string GetTaskKey(int workspaceId, int taskId) => $"wks:{workspaceId}:task:{taskId}";
 
     private async Task<IDisposable> AcquireInternalAsync(string key, CancellationToken cancellationToken)
     {

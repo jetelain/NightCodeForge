@@ -7,26 +7,26 @@ using NightCodeForge.Core.Workflow.Stages;
 
 namespace NightCodeForge.Core.Tests;
 
-public class IssueOrchestratorTests
+public class TaskOrchestratorTests
 {
-    private readonly InMemoryIssueRepository _issueRepo;
+    private readonly InMemoryTaskRepository _taskRepo;
     private readonly InMemoryWorkspaceRepository _workspaceRepo;
-    private readonly InMemoryIssueDependencyStore _depStore;
+    private readonly InMemoryTaskDependencyStore _depStore;
     private readonly DependencyResolutionEngine _depEngine;
     private readonly WorkspaceLockProvider _lockProvider;
     private readonly FakeGitWorkspaceManager _gitManager;
-    private readonly FakeIssueJobQueue _jobQueue;
+    private readonly FakeTaskJobQueue _jobQueue;
     private readonly Workspace _workspace;
 
-    public IssueOrchestratorTests()
+    public TaskOrchestratorTests()
     {
-        _issueRepo = new InMemoryIssueRepository();
+        _taskRepo = new InMemoryTaskRepository();
         _workspaceRepo = new InMemoryWorkspaceRepository();
-        _depStore = new InMemoryIssueDependencyStore();
+        _depStore = new InMemoryTaskDependencyStore();
         _depEngine = new DependencyResolutionEngine(_depStore);
         _lockProvider = new WorkspaceLockProvider();
         _gitManager = new FakeGitWorkspaceManager();
-        _jobQueue = new FakeIssueJobQueue();
+        _jobQueue = new FakeTaskJobQueue();
 
         _workspace = new Workspace
         {
@@ -39,126 +39,126 @@ public class IssueOrchestratorTests
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_WhenPrerequisitesNotReady_RemainsOpenAndDoesNotEnqueue()
+    public async Task ProcessTaskAsync_WhenPrerequisitesNotReady_RemainsOpenAndDoesNotEnqueue()
     {
-        // Issue 2 depends on Issue 1 (which is still Open, not Closed)
-        var prereq = await _issueRepo.CreateAsync(new Issue { Id = 1, WorkspaceId = 1, Status = IssueOverallStatus.Open });
-        var target = await _issueRepo.CreateAsync(new Issue { Id = 2, WorkspaceId = 1, Status = IssueOverallStatus.Open });
+        // ForgeTask 2 depends on ForgeTask 1 (which is still Open, not Closed)
+        var prereq = await _taskRepo.CreateAsync(new ForgeTask { Id = 1, WorkspaceId = 1, Status = TaskOverallStatus.Open });
+        var target = await _taskRepo.CreateAsync(new ForgeTask { Id = 2, WorkspaceId = 1, Status = TaskOverallStatus.Open });
 
-        _depStore.AddIssue(1, 1, IssueOverallStatus.Open);
-        _depStore.AddIssue(2, 1, IssueOverallStatus.Open);
+        _depStore.AddTask(1, 1, TaskOverallStatus.Open);
+        _depStore.AddTask(2, 1, TaskOverallStatus.Open);
         _depStore.AddDependency(1, 2, 1);
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
 
-        await orchestrator.ProcessIssueAsync(target.Id);
+        await orchestrator.ProcessTaskAsync(target.Id);
 
-        var updated = await _issueRepo.GetByIdAsync(target.Id);
+        var updated = await _taskRepo.GetByIdAsync(target.Id);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Open, updated.Status);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
         Assert.Empty(_jobQueue.InferenceQueue);
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_WhenValid_AcquiresLockAndChecksOutFeatureBranch()
+    public async Task ProcessTaskAsync_WhenValid_AcquiresLockAndChecksOutFeatureBranch()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 10,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             BaseBranch = "main"
         });
-        _depStore.AddIssue(10, 1, IssueOverallStatus.Open);
+        _depStore.AddTask(10, 1, TaskOverallStatus.Open);
 
-        var reviewStage = new IssueReviewStage
+        var reviewStage = new TaskReviewStage
         {
             Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success())
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { reviewStage });
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
-        Assert.Contains(_gitManager.CheckedOutBranches, b => b.IssueId == 10 && b.BaseBranch == "main");
+        Assert.Contains(_gitManager.CheckedOutBranches, b => b.TaskId == 10 && b.BaseBranch == "main");
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_WhenIntermediateStageCompletes_AdvancesToNextStageAndEnqueuesInference()
+    public async Task ProcessTaskAsync_WhenIntermediateStageCompletes_AdvancesToNextStageAndEnqueuesInference()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 20,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = "stage-1"
         });
-        _depStore.AddIssue(20, 1, IssueOverallStatus.Open);
+        _depStore.AddTask(20, 1, TaskOverallStatus.Open);
 
         var stage1 = new TestWorkflowStage("stage-1") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
         var stage2 = new TestWorkflowStage("stage-2") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2 });
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
-        var updated = await _issueRepo.GetByIdAsync(20);
+        var updated = await _taskRepo.GetByIdAsync(20);
         Assert.NotNull(updated);
         Assert.Equal("stage-2", updated.CurrentStageId);
-        Assert.Equal(IssueOverallStatus.Open, updated.Status);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
         Assert.Contains(20, _jobQueue.InferenceQueue);
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_WhenFinalStageCompletes_TransitionsToReadyAndGeneratesDiff()
+    public async Task ProcessTaskAsync_WhenFinalStageCompletes_TransitionsToReadyAndGeneratesDiff()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 30,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = "final-stage"
         });
-        _depStore.AddIssue(30, 1, IssueOverallStatus.Open);
+        _depStore.AddTask(30, 1, TaskOverallStatus.Open);
 
         var finalStage = new TestWorkflowStage("final-stage") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { finalStage });
 
         _gitManager.GeneratedDiff = "diff --git a/Program.cs b/Program.cs\n+Console.WriteLine(\"Done\");";
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
-        var updated = await _issueRepo.GetByIdAsync(30);
+        var updated = await _taskRepo.GetByIdAsync(30);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Ready, updated.Status);
+        Assert.Equal(TaskOverallStatus.Ready, updated.Status);
 
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);
         Assert.Equal(_gitManager.GeneratedDiff, bag.Get<string>("ReviewDiff"));
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_WhenWaitingForHuman_CreatesWipCheckpointSavesQuestionAndCleanReturn()
+    public async Task ProcessTaskAsync_WhenWaitingForHuman_CreatesWipCheckpointSavesQuestionAndCleanReturn()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 40,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = "review-stage"
         });
-        _depStore.AddIssue(40, 1, IssueOverallStatus.Open);
+        _depStore.AddTask(40, 1, TaskOverallStatus.Open);
 
         var question = new Question
         {
@@ -176,23 +176,23 @@ public class IssueOrchestratorTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
 
         // Process should return cleanly without throwing (freeing the GPU worker!)
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
-        var updated = await _issueRepo.GetByIdAsync(40);
+        var updated = await _taskRepo.GetByIdAsync(40);
         Assert.NotNull(updated);
         Assert.True(updated.IsWaitingForHuman);
-        Assert.Equal(IssueOverallStatus.Open, updated.Status);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
 
         // Checkpoint created
         Assert.Single(_gitManager.WipCheckpoints);
         Assert.Equal("review-stage", _gitManager.WipCheckpoints[0].StageName);
 
-        var checkpoints = _issueRepo.GetAllCheckpoints();
+        var checkpoints = _taskRepo.GetAllCheckpoints();
         Assert.Single(checkpoints);
         Assert.Equal("MemorySnapshot123", checkpoints[0].SerializedMemory);
 
@@ -207,16 +207,16 @@ public class IssueOrchestratorTests
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_WhenHumanInterruptionExceptionThrown_InterceptsCleanly()
+    public async Task ProcessTaskAsync_WhenHumanInterruptionExceptionThrown_InterceptsCleanly()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 50,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = "impl-stage"
         });
-        _depStore.AddIssue(50, 1, IssueOverallStatus.Open);
+        _depStore.AddTask(50, 1, TaskOverallStatus.Open);
 
         var stage = new TestWorkflowStage("impl-stage")
         {
@@ -224,31 +224,31 @@ public class IssueOrchestratorTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
 
         // Clean completion of job - no exception thrown to Hangfire
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
-        var updated = await _issueRepo.GetByIdAsync(50);
+        var updated = await _taskRepo.GetByIdAsync(50);
         Assert.NotNull(updated);
         Assert.True(updated.IsWaitingForHuman);
-        Assert.Equal(IssueOverallStatus.Open, updated.Status);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
         Assert.Contains(updated.Questions, q => q.Prompt.Contains("PostgreSQL"));
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_WhenStageFails_TransitionsToFailedAndLogsError()
+    public async Task ProcessTaskAsync_WhenStageFails_TransitionsToFailedAndLogsError()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 60,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = "impl-stage"
         });
-        _depStore.AddIssue(60, 1, IssueOverallStatus.Open);
+        _depStore.AddTask(60, 1, TaskOverallStatus.Open);
 
         var stage = new TestWorkflowStage("impl-stage")
         {
@@ -256,31 +256,31 @@ public class IssueOrchestratorTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
-        var updated = await _issueRepo.GetByIdAsync(60);
+        var updated = await _taskRepo.GetByIdAsync(60);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Failed, updated.Status);
+        Assert.Equal(TaskOverallStatus.Failed, updated.Status);
 
-        var logs = _issueRepo.GetAllLogs();
+        var logs = _taskRepo.GetAllLogs();
         Assert.Contains(logs, l => l.Message.Contains("error CS1002"));
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_CapturesExecutionMetricsAndTokens()
+    public async Task ProcessTaskAsync_CapturesExecutionMetricsAndTokens()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 70,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = "impl-stage"
         });
-        _depStore.AddIssue(70, 1, IssueOverallStatus.Open);
+        _depStore.AddTask(70, 1, TaskOverallStatus.Open);
 
         var stage = new TestWorkflowStage("impl-stage")
         {
@@ -297,15 +297,15 @@ public class IssueOrchestratorTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
-        var records = _issueRepo.GetAllExecutionRecords();
+        var records = _taskRepo.GetAllExecutionRecords();
         Assert.Single(records);
-        Assert.Equal(70, records[0].IssueId);
+        Assert.Equal(70, records[0].TaskId);
         Assert.Equal(1200, records[0].PromptTokens);
         Assert.Equal(350, records[0].CompletionTokens);
         Assert.Equal(1550, records[0].TotalTokens);
@@ -313,40 +313,40 @@ public class IssueOrchestratorTests
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_WhenPendingProposalsPresent_PersistsSuggestedIssues()
+    public async Task ProcessTaskAsync_WhenPendingProposalsPresent_PersistsSuggestedTasks()
     {
-        var issue = await _issueRepo.CreateAsync(new Issue
+        var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 80,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = "triage-stage"
         });
-        _depStore.AddIssue(80, 1, IssueOverallStatus.Open);
+        _depStore.AddTask(80, 1, TaskOverallStatus.Open);
 
         var stage = new TestWorkflowStage("triage-stage")
         {
             Handler = (ctx, ct) =>
             {
-                ctx.DataBag.Set("PendingProposals", new List<IssueProposal>
+                ctx.DataBag.Set("PendingProposals", new List<TaskProposal>
                 {
-                    new IssueProposal("Fix Memory Leak", "Found memory leak in parser", "bug")
+                    new TaskProposal("Fix Memory Leak", "Found memory leak in parser", "bug")
                 });
                 return Task.FromResult(StageExecutionResult.Success());
             }
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
-        var workspaceIssues = await _issueRepo.GetByWorkspaceIdAsync(_workspace.Id);
-        var proposal = workspaceIssues.FirstOrDefault(i => i.Title == "Fix Memory Leak");
+        var workspaceTasks = await _taskRepo.GetByWorkspaceIdAsync(_workspace.Id);
+        var proposal = workspaceTasks.FirstOrDefault(i => i.Title == "Fix Memory Leak");
         Assert.NotNull(proposal);
-        Assert.Equal(IssueOverallStatus.Suggested, proposal.Status);
+        Assert.Equal(TaskOverallStatus.Suggested, proposal.Status);
         Assert.Equal("Found memory leak in parser", proposal.Description);
         Assert.Equal(1, proposal.Priority);
     }

@@ -2,7 +2,7 @@ namespace NightCodeForge.Core.Workflow;
 
 /// <summary>
 /// Exception thrown when a review agent determines implementation is incomplete or requires rework,
-/// routing the issue back to the implementation stage with diagnostic feedback.
+/// routing the task back to the implementation stage with diagnostic feedback.
 /// </summary>
 public class RequestChangesException : Exception
 {

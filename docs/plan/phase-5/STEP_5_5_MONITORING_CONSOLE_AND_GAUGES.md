@@ -13,11 +13,11 @@ Provide a high-frequency, low-latency live observability dashboard that monitors
 ### Core Capabilities:
 1. **Active Worker Telemetry Card:**
    - Real-time status indicator (`Idle`, `Running`, `WaitingForHuman`, `Blocked`).
-   - Active issue title, ID, feature branch name, and elapsed execution stopwatch (`00:03:14`).
+   - Active task title, ID, feature branch name, and elapsed execution stopwatch (`00:03:14`).
    - Active Harness (`Crucible`, `PiRpc`, `Acp`), Model (`qwen2.5-coder:32b`), and hardware routing target (`Fast Local GPU`, `Remote Server`, `Cloud Overflow via OllamaRouter`).
 2. **7-Step Visual Pipeline Stepper:**
    - Visual sequence rendering the full workflow:
-     1. `Issue Review` (Agentic GPU - Indigo)
+     1. `ForgeTask Review` (Agentic GPU - Indigo)
      2. `Pre-Implementation Verification` (Deterministic CPU - Teal)
      3. `Implementation` (Agentic GPU - Indigo)
      4. `Post-Implementation Verification & Ratchets` (Deterministic CPU - Teal)
@@ -46,13 +46,13 @@ flowchart TD
         TokenEvt["ReceiveTokenDelta\n(Thinking vs Message)"]
         ToolEvt["ReceiveToolExecution\n(Tool, Args, Latency)"]
         StageEvt["ReceiveStageTransition\n(StageId, Kind, Status)"]
-        WorkerEvt["ReceiveWorkerStatus\n(Status, IssueId, Hardware)"]
+        WorkerEvt["ReceiveWorkerStatus\n(Status, TaskId, Hardware)"]
         GateEvt["ReceiveDeterministicGateResult\n(Gate, Passed, Metrics)"]
         LogEvt["ReceiveExecutionLog\n(Level, Message, Timestamp)"]
     end
 
     subgraph MonitoringPage ["Monitoring Dashboard (Pages/Monitoring.razor)"]
-        WorkerCard["WorkerStatusCard.razor\n- Active Issue\n- Model / Harness\n- Routing Gauge\n- Elapsed Timer"]
+        WorkerCard["WorkerStatusCard.razor\n- Active ForgeTask\n- Model / Harness\n- Routing Gauge\n- Elapsed Timer"]
         PipelineStepper["PipelineStepper.razor\n- 7-Stage Flow (GPU vs CPU)\n- Active Stage Pulse\n- Gate Summary Badges"]
         TerminalConsole["TerminalConsole.razor\n- Monospace Stream\n- Auto-Scroll Lock\n- Level Filters\n- Search & Clear"]
         ToolCallStrip["ToolActivityStrip.razor\n- Active Tool Stopwatch\n- Historical Call Pills"]
@@ -76,11 +76,11 @@ The stepper visualizes the 7 distinct stages defined across Phase 1, Phase 3, an
 
 | Stage # | Stage Name | Category | Primary Execution Type | Key Activity |
 | :---: | :--- | :--- | :--- | :--- |
-| **1** | **Issue Review** | Agentic | GPU Inference (LLM) | Analyzes scope, ambiguities, asks human clarifying questions if needed. |
+| **1** | **ForgeTask Review** | Agentic | GPU Inference (LLM) | Analyzes scope, ambiguities, asks human clarifying questions if needed. |
 | **2** | **Pre-Impl Baseline** | Deterministic | CPU Verification (0 GPU) | Runs baseline build, test suite, and coverage scan on clean base branch. |
 | **3** | **Implementation** | Agentic | GPU Inference (LLM) | Modifies source files, runs compilation checks, executes tests. |
 | **4** | **Post-Impl Gates** | Deterministic | CPU Verification (0 GPU) | Differential test check, coverage delta ($\Delta \ge 0\%$), compiler warning ratchet ($\Delta \le 0$). |
-| **5** | **Code Review** | Agentic | GPU Inference (LLM) | Gap analysis, style enforcement, automated fixes for lint/compiler issues. |
+| **5** | **Code Review** | Agentic | GPU Inference (LLM) | Gap analysis, style enforcement, automated fixes for lint/compiler tasks. |
 | **6** | **Post-Review Verification** | Deterministic | CPU Verification (0 GPU) | Re-validates build and test suite after reviewer fixes. Sets status to `Ready`. |
 | **7** | **Merge Resolution** | Gate | Git Subsystem | Auto-squashes or awaits human approval; cascades DAG unblocking. |
 
@@ -136,7 +136,7 @@ The stepper visualizes the 7 distinct stages defined across Phase 1, Phase 3, an
 </div>
 
 @code {
-    [Parameter] public int IssueId { get; set; }
+    [Parameter] public int TaskId { get; set; }
     [Parameter] public string? CurrentStageId { get; set; }
     [Parameter] public string? CurrentStageStatus { get; set; }
 
@@ -151,7 +151,7 @@ The stepper visualizes the 7 distinct stages defined across Phase 1, Phase 3, an
 
     private void InitializeStages()
     {
-        // 1. IssueReview (Agentic)
+        // 1. TaskReview (Agentic)
         // 2. PreImplementation (Deterministic)
         // 3. Implementation (Agentic)
         // 4. PostImplementation (Deterministic)
@@ -216,17 +216,17 @@ The stepper visualizes the 7 distinct stages defined across Phase 1, Phase 3, an
 ## 5. Verification & Test Plan
 
 1. **Pipeline Stepper Updates:**
-   - Simulate `ReceiveStageTransition(issueId, "ImplementationStage", "Agentic", "Running")`:
+   - Simulate `ReceiveStageTransition(taskId, "ImplementationStage", "Agentic", "Running")`:
      - Stage 3 displays pulsing indigo glow with `badge-gpu`.
      - Connector from Stage 2 to Stage 3 lights up.
-   - Simulate `ReceiveDeterministicGateResult(issueId, "CoverageGate", true, "+1.4% Coverage")`:
+   - Simulate `ReceiveDeterministicGateResult(taskId, "CoverageGate", true, "+1.4% Coverage")`:
      - Stage 4 shows green checkmark with metrics summary pill.
 2. **Terminal Stream Performance:**
    - Ingest 500 log lines per second via SignalR:
      - Verify smooth UI rendering without thread freezing.
      - Auto-scroll pins to bottom when enabled; preserves scroll offset when scrolled up.
 3. **Tool Call Latency Indicator:**
-   - Ingest `ReceiveToolExecution(issueId, "bash", "dotnet test", "Running", null)`:
+   - Ingest `ReceiveToolExecution(taskId, "bash", "dotnet test", "Running", null)`:
      - Floating tool call pill displays active elapsed stopwatch.
    - Ingest `ReceiveToolExecution(..., "Completed", 1450)`:
      - Pill transitions to completed state with `1.45s` duration badge.
@@ -237,7 +237,7 @@ The stepper visualizes the 7 distinct stages defined across Phase 1, Phase 3, an
 
 ## 6. Definition of Done (DoD) Checklist
 
-- [ ] `Pages/Monitoring.razor` created with real-time issue listener.
+- [ ] `Pages/Monitoring.razor` created with real-time task listener.
 - [ ] `WorkerStatusCard.razor` displays active worker state, elapsed stopwatch, and hardware routing gauge.
 - [ ] `PipelineStepper.razor` renders all 7 pipeline stages with distinct GPU/CPU badges and status icons.
 - [ ] `TerminalConsole.razor` renders high-frequency log streams with level filtering, auto-scroll toggle, and clear/export actions.

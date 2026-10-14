@@ -110,9 +110,9 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         return $"{GetAgentWorkspaceRootPath(workspaceId)}/clone";
     }
 
-    public string GetAgentWorktreePath(int workspaceId, int issueId)
+    public string GetAgentWorktreePath(int workspaceId, int taskId)
     {
-        return $"{GetAgentWorkspaceRootPath(workspaceId)}/issue-{issueId}";
+        return $"{GetAgentWorkspaceRootPath(workspaceId)}/task-{taskId}";
     }
 
     public string GetHostRemoteUrl(string repositoryPath)
@@ -131,7 +131,7 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
     public string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath)
         => ResolveCruciblePath(workspaceId, relativeOrContainerPath, null);
 
-    public string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath, int? issueId)
+    public string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath, int? taskId)
     {
         var raw = (relativeOrContainerPath ?? string.Empty).Trim();
         var normalized = raw.Replace('\\', '/');
@@ -142,7 +142,7 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             return raw.Replace('/', '\\');
         }
 
-        int? effectiveIssueId = issueId;
+        int? effectiveTaskId = taskId;
         var agentWorkingPrefix = $".nightcodeforge/wks/{workspaceId}/";
         int wksIdx = normalized.IndexOf(agentWorkingPrefix, StringComparison.OrdinalIgnoreCase);
         if (wksIdx >= 0)
@@ -154,21 +154,21 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         string baseWorkingRoot;
         if (IsWindows)
         {
-            baseWorkingRoot = effectiveIssueId.HasValue
-                ? $@"\\wsl.localhost\{GetWslDistributionName()}\home\{GetWslUserName()}\.nightcodeforge\wks\{workspaceId}\issue-{effectiveIssueId.Value}"
+            baseWorkingRoot = effectiveTaskId.HasValue
+                ? $@"\\wsl.localhost\{GetWslDistributionName()}\home\{GetWslUserName()}\.nightcodeforge\wks\{workspaceId}\task-{effectiveTaskId.Value}"
                 : $@"\\wsl.localhost\{GetWslDistributionName()}\home\{GetWslUserName()}\.nightcodeforge\wks\{workspaceId}\clone";
         }
         else
         {
-            baseWorkingRoot = effectiveIssueId.HasValue
-                ? GetAgentWorktreePath(workspaceId, effectiveIssueId.Value)
+            baseWorkingRoot = effectiveTaskId.HasValue
+                ? GetAgentWorktreePath(workspaceId, effectiveTaskId.Value)
                 : GetAgentWorkingClonePath(workspaceId);
         }
 
-        return ResolveCruciblePath(baseWorkingRoot, raw, effectiveIssueId);
+        return ResolveCruciblePath(baseWorkingRoot, raw, effectiveTaskId);
     }
 
-    public string ResolveCruciblePath(string workspaceRoot, string relativeOrContainerPath, int? issueId = null)
+    public string ResolveCruciblePath(string workspaceRoot, string relativeOrContainerPath, int? taskId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
@@ -218,7 +218,7 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             if (rootLeaf.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
                 rootLeaf.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
                 rootLeaf.Equals("mirror", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.StartsWith("issue-", StringComparison.OrdinalIgnoreCase) ||
+                rootLeaf.StartsWith("task-", StringComparison.OrdinalIgnoreCase) ||
                 rootLeaf.StartsWith("wt-", StringComparison.OrdinalIgnoreCase))
             {
                 parentDir = Path.GetDirectoryName(normRoot) ?? normRoot;
@@ -261,7 +261,7 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
                 return FormatPath(workspaceRoot, string.Empty);
             }
 
-            // In container, agent has "/workspace/clone" and "/workspace/issue-nnn"
+            // In container, agent has "/workspace/clone" and "/workspace/task-nnn"
             if (rel.StartsWith("clone/", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(rel, "clone", StringComparison.OrdinalIgnoreCase))
             {
@@ -270,22 +270,22 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
                 return FormatPath(cloneDir, cloneRel);
             }
 
-            var issueMatch = System.Text.RegularExpressions.Regex.Match(rel, @"^(?:wt/)?issue-(\d+)(?:/(.*)|$)");
-            if (issueMatch.Success)
+            var taskMatch = System.Text.RegularExpressions.Regex.Match(rel, @"^(?:wt/)?task-(\d+)(?:/(.*)|$)");
+            if (taskMatch.Success)
             {
-                var issueNum = issueMatch.Groups[1].Value;
-                var issueRel = issueMatch.Groups[2].Success ? issueMatch.Groups[2].Value.TrimStart('/') : string.Empty;
-                var issueDir = Path.Combine(parentDir, $"issue-{issueNum}");
-                return FormatPath(issueDir, issueRel);
+                var taskNum = taskMatch.Groups[1].Value;
+                var taskRel = taskMatch.Groups[2].Success ? taskMatch.Groups[2].Value.TrimStart('/') : string.Empty;
+                var taskDir = Path.Combine(parentDir, $"task-{taskNum}");
+                return FormatPath(taskDir, taskRel);
             }
 
-            // If not clone or issue-nnn, it's relative to the target working directory (worktree if issueId, else clone)
-            if (issueId.HasValue && issueId.Value > 0)
+            // If not clone or task-nnn, it's relative to the target working directory (worktree if taskId, else clone)
+            if (taskId.HasValue && taskId.Value > 0)
             {
-                var issueDir = Path.Combine(parentDir, $"issue-{issueId.Value}");
-                if (Directory.Exists(issueDir))
+                var taskDir = Path.Combine(parentDir, $"task-{taskId.Value}");
+                if (Directory.Exists(taskDir))
                 {
-                    return FormatPath(issueDir, rel);
+                    return FormatPath(taskDir, rel);
                 }
             }
 

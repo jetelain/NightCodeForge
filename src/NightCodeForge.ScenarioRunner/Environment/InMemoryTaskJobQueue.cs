@@ -4,12 +4,12 @@ using NightCodeForge.Core.Workflow;
 namespace NightCodeForge.ScenarioRunner.Environment;
 
 /// <summary>
-/// In-memory implementation of IIssueJobQueue capturing all enqueued jobs
+/// In-memory implementation of ITaskJobQueue capturing all enqueued jobs
 /// for inspection and synchronous/orchestrated execution during test scenarios.
 /// </summary>
-public class InMemoryIssueJobQueue : IIssueJobQueue
+public class InMemoryTaskJobQueue : ITaskJobQueue
 {
-    public record EnqueuedJob(string JobId, int IssueId, string QueueName, DateTime EnqueuedAt);
+    public record EnqueuedJob(string JobId, int TaskId, string QueueName, DateTime EnqueuedAt);
 
     private readonly ConcurrentQueue<EnqueuedJob> _urgentJobs = new();
     private readonly ConcurrentQueue<EnqueuedJob> _inferenceJobs = new();
@@ -27,19 +27,19 @@ public class InMemoryIssueJobQueue : IIssueJobQueue
         }
     }
 
-    public string EnqueueUrgent(int issueId)
+    public string EnqueueUrgent(int taskId)
     {
         var id = $"job-urgent-{Interlocked.Increment(ref _jobCounter)}";
-        var job = new EnqueuedJob(id, issueId, "llm-urgent", DateTime.UtcNow);
+        var job = new EnqueuedJob(id, taskId, "llm-urgent", DateTime.UtcNow);
         _urgentJobs.Enqueue(job);
         lock (_allJobs) { _allJobs.Add(job); }
         return id;
     }
 
-    public string EnqueueInference(int issueId)
+    public string EnqueueInference(int taskId)
     {
         var id = $"job-inference-{Interlocked.Increment(ref _jobCounter)}";
-        var job = new EnqueuedJob(id, issueId, "llm-inference", DateTime.UtcNow);
+        var job = new EnqueuedJob(id, taskId, "llm-inference", DateTime.UtcNow);
         _inferenceJobs.Enqueue(job);
         lock (_allJobs) { _allJobs.Add(job); }
         return id;

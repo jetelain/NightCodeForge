@@ -9,39 +9,39 @@ public class PipelineEngineTests
     [Fact]
     public async Task Pipeline_AdvancesSequentiallyToCompletion()
     {
-        var stage1 = new IssueReviewStage();
+        var stage1 = new TaskReviewStage();
         var stage2 = new ImplementationStage();
         var stage3 = new CodeReviewAndFixStage();
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2, stage3 });
         var engine = new WorkflowPipelineEngine();
 
-        var issue = new Issue { Id = 1, WorkspaceId = 1, Title = "Sequential Test" };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1, Title = "Sequential Test" };
         var workspace = new Workspace { Id = 1, Name = "WS1" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
-        // Step 1: IssueReview
+        // Step 1: TaskReview
         var res1 = await engine.ExecuteStepAsync(pipeline, context);
         Assert.True(res1.IsSuccess);
-        Assert.Equal("implementation", issue.CurrentStageId);
-        Assert.Equal(IssueOverallStatus.Reviewed, issue.Status);
+        Assert.Equal("implementation", task.CurrentStageId);
+        Assert.Equal(TaskOverallStatus.Reviewed, task.Status);
 
         // Step 2: Implementation
         var res2 = await engine.ExecuteStepAsync(pipeline, context);
         Assert.True(res2.IsSuccess);
-        Assert.Equal("code-review-fix", issue.CurrentStageId);
-        Assert.Equal(IssueOverallStatus.Implemented, issue.Status);
+        Assert.Equal("code-review-fix", task.CurrentStageId);
+        Assert.Equal(TaskOverallStatus.Implemented, task.Status);
 
         // Step 3: CodeReviewAndFix (End of pipeline)
         var res3 = await engine.ExecuteStepAsync(pipeline, context);
         Assert.True(res3.IsSuccess);
-        Assert.Equal(IssueOverallStatus.Ready, issue.Status);
+        Assert.Equal(TaskOverallStatus.Ready, task.Status);
     }
 
     [Fact]
     public async Task Pipeline_LoopsBackOnStageFailure()
     {
-        var stage1 = new IssueReviewStage();
+        var stage1 = new TaskReviewStage();
         var stage2 = new ImplementationStage();
         var stage3 = new CodeReviewAndFixStage
         {
@@ -51,20 +51,20 @@ public class PipelineEngineTests
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2, stage3 });
         var engine = new WorkflowPipelineEngine();
 
-        var issue = new Issue
+        var task = new ForgeTask
         {
             Id = 1,
             WorkspaceId = 1,
             CurrentStageId = "code-review-fix",
-            Status = IssueOverallStatus.Implemented
+            Status = TaskOverallStatus.Implemented
         };
         var workspace = new Workspace { Id = 1, Name = "WS1" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await engine.ExecuteStepAsync(pipeline, context);
 
         Assert.False(result.IsSuccess);
-        Assert.Equal("implementation", issue.CurrentStageId);
+        Assert.Equal("implementation", task.CurrentStageId);
         Assert.Equal(1, context.RetryCount);
     }
 
@@ -79,9 +79,9 @@ public class PipelineEngineTests
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { failingStage });
         var engine = new WorkflowPipelineEngine { MaxRetries = 3 };
 
-        var issue = new Issue { Id = 1, WorkspaceId = 1, CurrentStageId = "implementation" };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1, CurrentStageId = "implementation" };
         var workspace = new Workspace { Id = 1, Name = "WS1" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         // Retries 1, 2, 3
         await engine.ExecuteStepAsync(pipeline, context);
@@ -97,14 +97,14 @@ public class PipelineEngineTests
         var fatalResult = await engine.ExecuteStepAsync(pipeline, context);
 
         Assert.False(fatalResult.IsSuccess);
-        Assert.Equal(IssueOverallStatus.Failed, issue.Status);
+        Assert.Equal(TaskOverallStatus.Failed, task.Status);
         Assert.Contains("exceeded maximum retry count", fatalResult.ErrorMessage);
     }
 
     [Fact]
     public async Task Pipeline_TransitionsToWaitingForHumanWhenClarificationNeeded()
     {
-        var reviewStage = new IssueReviewStage
+        var reviewStage = new TaskReviewStage
         {
             Handler = (_, _) =>
             {
@@ -120,17 +120,17 @@ public class PipelineEngineTests
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { reviewStage });
         var engine = new WorkflowPipelineEngine();
 
-        var issue = new Issue { Id = 5, WorkspaceId = 1, Status = IssueOverallStatus.Open, CurrentStageId = "issue-review" };
+        var task = new ForgeTask { Id = 5, WorkspaceId = 1, Status = TaskOverallStatus.Open, CurrentStageId = "task-review" };
         var workspace = new Workspace { Id = 1, Name = "WS1" };
-        var context = new PipelineContext(issue, workspace);
+        var context = new PipelineContext(task, workspace);
 
         var result = await engine.ExecuteStepAsync(pipeline, context);
 
         Assert.False(result.IsSuccess);
         Assert.True(result.NeedsClarification);
-        Assert.True(issue.IsWaitingForHuman);
-        Assert.Equal(IssueOverallStatus.Open, issue.Status);
-        Assert.Single(issue.Questions);
-        Assert.Equal("Which authentication strategy?", issue.Questions.First().Prompt);
+        Assert.True(task.IsWaitingForHuman);
+        Assert.Equal(TaskOverallStatus.Open, task.Status);
+        Assert.Single(task.Questions);
+        Assert.Equal("Which authentication strategy?", task.Questions.First().Prompt);
     }
 }

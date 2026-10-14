@@ -42,14 +42,14 @@ public enum SandboxSecurityTier
 }
 
 /// <summary>
-/// Comprehensive lifecycle status of an issue in NightCodeForge.
+/// Comprehensive lifecycle status of a task in NightCodeForge.
 /// </summary>
-public enum IssueOverallStatus
+public enum TaskOverallStatus
 {
-    Suggested = 0,         // Newly created (via triage agent, ideation chat, or docs/issues/*.md)
+    Suggested = 0,         // Newly created (via triage agent, ideation chat, or docs/tasks/*.md)
     Rejected = 1,          // Manually rejected by maintainer
     Open = 2,              // Approved by maintainer; eligible for processing once dependencies are Closed
-    Reviewed = 3,          // Stage 1 (Issue Review) completed successfully
+    Reviewed = 3,          // Stage 1 (ForgeTask Review) completed successfully
     Implemented = 4,       // Stage 3 (Implementation) completed successfully
     Ready = 5,             // Stage 6 (Deterministic Post-Review Verification) completed; awaiting merge
     Closed = 6,            // Fully merged into base branch; terminal state
@@ -58,7 +58,7 @@ public enum IssueOverallStatus
 }
 
 /// <summary>
-/// Determines how an approved and verified issue is merged into the base branch.
+/// Determines how an approved and verified task is merged into the base branch.
 /// </summary>
 public enum MergeMode
 {

@@ -12,8 +12,8 @@ Provide a robust, low-latency, bidirectional real-time communication pipeline co
 
 ### Core Capabilities:
 1. **Strongly Typed Hub Contract (`IOrchestratorHubClient`):** Eliminates stringly-typed client invocation mistakes. All telemetry events are typed records.
-2. **Channel-to-SignalR Reactive Bridge:** A background hosted bridge that consumes events from `IAgentActivityStreamer` (the in-memory fan-out channel) and pushes them to SignalR clients and targeted issue groups.
-3. **Targeted Group Subscriptions:** Blazor pages subscribe to specific issue streams (`JoinIssueGroup(issueId)`) to avoid inundating inactive views with high-frequency LLM token deltas, while broadcasting global worker state changes globally.
+2. **Channel-to-SignalR Reactive Bridge:** A background hosted bridge that consumes events from `IAgentActivityStreamer` (the in-memory fan-out channel) and pushes them to SignalR clients and targeted task groups.
+3. **Targeted Group Subscriptions:** Blazor pages subscribe to specific task streams (`JoinTaskGroup(taskId)`) to avoid inundating inactive views with high-frequency LLM token deltas, while broadcasting global worker state changes globally.
 4. **Resilient Client Connection Wrapper (`OrchestratorHubClientConnection`):** Provides automated reconnection with exponential backoff, circuit breaking, connection state tracking (`Connected`, `Reconnecting`, `Disconnected`), and easy C# event delegates for Blazor components.
 
 ---
@@ -25,7 +25,7 @@ flowchart TD
     subgraph Producers ["Backend Event Producers"]
         AgentHarness["Crucible / Pi / ACP Harness\n(Tokens, Tool Calls)"]
         GitRunner["GitCliRunner / GitWorkspaceManager\n(Branching, Commits, Sync)"]
-        Workflow["IssueOrchestrator & Stages\n(Stage Transitions, Quality Gates)"]
+        Workflow["TaskOrchestrator & Stages\n(Stage Transitions, Quality Gates)"]
         Hangfire["Job Queue / Worker Monitor\n(Worker Status, Idle/Running)"]
     end
 
@@ -73,42 +73,42 @@ public interface IOrchestratorHubClient
     /// <summary>
     /// Live streaming of model reasoning thoughts (<think>) or answer text.
     /// </summary>
-    Task ReceiveTokenDelta(int issueId, string token, bool isThinking);
+    Task ReceiveTokenDelta(int taskId, string token, bool isThinking);
 
     /// <summary>
     /// Tool execution notification (e.g. read, write, edit, bash, ask).
     /// </summary>
-    Task ReceiveToolExecution(int issueId, string toolName, string arguments, string status, int? durationMs);
+    Task ReceiveToolExecution(int taskId, string toolName, string arguments, string status, int? durationMs);
 
     /// <summary>
     /// Git operation telemetry (e.g. branch creation, WIP commit, fetch, push).
     /// </summary>
-    Task ReceiveGitProgress(int issueId, string operation, string message);
+    Task ReceiveGitProgress(int taskId, string operation, string message);
 
     /// <summary>
     /// Global worker state change (Idle, Running, WaitingForHuman, Blocked).
     /// </summary>
-    Task ReceiveWorkerStatus(string status, int? activeIssueId, string? stageId, string hardwareTarget);
+    Task ReceiveWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget);
 
     /// <summary>
     /// Pipeline advancement across agentic and deterministic stages.
     /// </summary>
-    Task ReceiveStageTransition(int issueId, string stageId, string stageKind, string status);
+    Task ReceiveStageTransition(int taskId, string stageId, string stageKind, string status);
 
     /// <summary>
     /// Differential quality gate outcomes (Coverage delta, Warning ratchet delta, Test assertions).
     /// </summary>
-    Task ReceiveDeterministicGateResult(int issueId, string gateName, bool passed, string metricsSummary);
+    Task ReceiveDeterministicGateResult(int taskId, string gateName, bool passed, string metricsSummary);
 
     /// <summary>
     /// Developer host tree dirty alert preventing push/merge.
     /// </summary>
-    Task ReceiveHostDirtyAlert(int issueId, string branchName);
+    Task ReceiveHostDirtyAlert(int taskId, string branchName);
 
     /// <summary>
     /// Execution log line for real-time terminal streaming.
     /// </summary>
-    Task ReceiveExecutionLog(int issueId, string stageId, string level, string message, DateTime timestamp);
+    Task ReceiveExecutionLog(int taskId, string stageId, string level, string message, DateTime timestamp);
 }
 ```
 
@@ -121,16 +121,16 @@ namespace NightCodeForge.Infrastructure.Hubs;
 
 public class OrchestratorHub : Hub<IOrchestratorHubClient>
 {
-    public static string GetIssueGroupName(int issueId) => $"issue-{issueId}";
+    public static string GetTaskGroupName(int taskId) => $"task-{taskId}";
 
-    public async Task JoinIssueGroup(int issueId)
+    public async Task JoinTaskGroup(int taskId)
     {
-        await Groups.AddToGroupAsync(Context.ConnectionId, GetIssueGroupName(issueId));
+        await Groups.AddToGroupAsync(Context.ConnectionId, GetTaskGroupName(taskId));
     }
 
-    public async Task LeaveIssueGroup(int issueId)
+    public async Task LeaveTaskGroup(int taskId)
     {
-        await Groups.RemoveFromGroupAsync(Context.ConnectionId, GetIssueGroupName(issueId));
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, GetTaskGroupName(taskId));
     }
 }
 ```
@@ -173,31 +173,31 @@ public class SignalRActivityBridgeService : BackgroundService
             {
                 await foreach (var evt in _streamer.SubscribeAsync(cancellationToken: stoppingToken))
                 {
-                    var groupName = OrchestratorHub.GetIssueGroupName(evt.IssueId);
+                    var groupName = OrchestratorHub.GetTaskGroupName(evt.TaskId);
 
                     switch (evt.Kind)
                     {
                         case AgentActivityKind.ThinkingDelta:
                             await _hubContext.Clients.Group(groupName)
-                                .ReceiveTokenDelta(evt.IssueId, evt.Content, isThinking: true);
+                                .ReceiveTokenDelta(evt.TaskId, evt.Content, isThinking: true);
                             break;
 
                         case AgentActivityKind.MessageDelta:
                             await _hubContext.Clients.Group(groupName)
-                                .ReceiveTokenDelta(evt.IssueId, evt.Content, isThinking: false);
+                                .ReceiveTokenDelta(evt.TaskId, evt.Content, isThinking: false);
                             break;
 
                         case AgentActivityKind.ToolStarted:
                             var toolName = evt.Metadata?.GetValueOrDefault("ToolName")?.ToString() ?? "tool";
                             await _hubContext.Clients.Group(groupName)
-                                .ReceiveToolExecution(evt.IssueId, toolName, evt.Content, "Running", null);
+                                .ReceiveToolExecution(evt.TaskId, toolName, evt.Content, "Running", null);
                             break;
 
                         case AgentActivityKind.ToolCompleted:
                             var completedTool = evt.Metadata?.GetValueOrDefault("ToolName")?.ToString() ?? "tool";
                             var dur = evt.Metadata?.GetValueOrDefault("DurationMs") as int?;
                             await _hubContext.Clients.Group(groupName)
-                                .ReceiveToolExecution(evt.IssueId, completedTool, evt.Content, "Completed", dur);
+                                .ReceiveToolExecution(evt.TaskId, completedTool, evt.Content, "Completed", dur);
                             break;
 
                         case AgentActivityKind.StageStarted:
@@ -205,12 +205,12 @@ public class SignalRActivityBridgeService : BackgroundService
                             var status = evt.Kind == AgentActivityKind.StageStarted ? "Running" : "Completed";
                             var kind = evt.Metadata?.GetValueOrDefault("StageKind")?.ToString() ?? "Agentic";
                             await _hubContext.Clients.All
-                                .ReceiveStageTransition(evt.IssueId, evt.StageId, kind, status);
+                                .ReceiveStageTransition(evt.TaskId, evt.StageId, kind, status);
                             break;
 
                         case AgentActivityKind.Interrupted:
                             await _hubContext.Clients.All
-                                .ReceiveWorkerStatus("WaitingForHuman", evt.IssueId, evt.StageId, "Local GPU");
+                                .ReceiveWorkerStatus("WaitingForHuman", evt.TaskId, evt.StageId, "Local GPU");
                             break;
                     }
                 }
@@ -284,47 +284,47 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
         OnConnectionStateChanged?.Invoke(HubConnectionState.Connected);
     }
 
-    public async Task JoinIssueGroupAsync(int issueId)
+    public async Task JoinTaskGroupAsync(int taskId)
     {
         if (_hubConnection?.State == HubConnectionState.Connected)
         {
-            await _hubConnection.InvokeAsync("JoinIssueGroup", issueId);
+            await _hubConnection.InvokeAsync("JoinTaskGroup", taskId);
         }
     }
 
-    public async Task LeaveIssueGroupAsync(int issueId)
+    public async Task LeaveTaskGroupAsync(int taskId)
     {
         if (_hubConnection?.State == HubConnectionState.Connected)
         {
-            await _hubConnection.InvokeAsync("LeaveIssueGroup", issueId);
+            await _hubConnection.InvokeAsync("LeaveTaskGroup", taskId);
         }
     }
 
     private void RegisterHandlers(HubConnection hub)
     {
-        hub.On<int, string, bool>("ReceiveTokenDelta", (issueId, token, isThinking) =>
-            OnTokenDeltaReceived?.Invoke(issueId, token, isThinking));
+        hub.On<int, string, bool>("ReceiveTokenDelta", (taskId, token, isThinking) =>
+            OnTokenDeltaReceived?.Invoke(taskId, token, isThinking));
 
-        hub.On<int, string, string, string, int?>("ReceiveToolExecution", (issueId, tool, args, status, dur) =>
-            OnToolExecutionReceived?.Invoke(issueId, tool, args, status, dur));
+        hub.On<int, string, string, string, int?>("ReceiveToolExecution", (taskId, tool, args, status, dur) =>
+            OnToolExecutionReceived?.Invoke(taskId, tool, args, status, dur));
 
-        hub.On<int, string, string>("ReceiveGitProgress", (issueId, op, msg) =>
-            OnGitProgressReceived?.Invoke(issueId, op, msg));
+        hub.On<int, string, string>("ReceiveGitProgress", (taskId, op, msg) =>
+            OnGitProgressReceived?.Invoke(taskId, op, msg));
 
-        hub.On<string, int?, string?, string>("ReceiveWorkerStatus", (status, issueId, stageId, target) =>
-            OnWorkerStatusReceived?.Invoke(status, issueId, stageId, target));
+        hub.On<string, int?, string?, string>("ReceiveWorkerStatus", (status, taskId, stageId, target) =>
+            OnWorkerStatusReceived?.Invoke(status, taskId, stageId, target));
 
-        hub.On<int, string, string, string>("ReceiveStageTransition", (issueId, stageId, kind, status) =>
-            OnStageTransitionReceived?.Invoke(issueId, stageId, kind, status));
+        hub.On<int, string, string, string>("ReceiveStageTransition", (taskId, stageId, kind, status) =>
+            OnStageTransitionReceived?.Invoke(taskId, stageId, kind, status));
 
-        hub.On<int, string, bool, string>("ReceiveDeterministicGateResult", (issueId, gate, passed, summary) =>
-            OnDeterministicGateResultReceived?.Invoke(issueId, gate, passed, summary));
+        hub.On<int, string, bool, string>("ReceiveDeterministicGateResult", (taskId, gate, passed, summary) =>
+            OnDeterministicGateResultReceived?.Invoke(taskId, gate, passed, summary));
 
-        hub.On<int, string>("ReceiveHostDirtyAlert", (issueId, branch) =>
-            OnHostDirtyAlertReceived?.Invoke(issueId, branch));
+        hub.On<int, string>("ReceiveHostDirtyAlert", (taskId, branch) =>
+            OnHostDirtyAlertReceived?.Invoke(taskId, branch));
 
-        hub.On<int, string, string, string, DateTime>("ReceiveExecutionLog", (issueId, stage, lvl, msg, ts) =>
-            OnExecutionLogReceived?.Invoke(issueId, stage, lvl, msg, ts));
+        hub.On<int, string, string, string, DateTime>("ReceiveExecutionLog", (taskId, stage, lvl, msg, ts) =>
+            OnExecutionLogReceived?.Invoke(taskId, stage, lvl, msg, ts));
     }
 
     public async ValueTask DisposeAsync()
@@ -363,7 +363,7 @@ app.MapHub<OrchestratorHub>("/hubs/orchestrator");
    - Publish `AgentActivityEvent` to `IAgentActivityStreamer`.
    - Verify client receives `ReceiveTokenDelta` and `ReceiveToolExecution` for joined group.
 3. **Group Isolation:**
-   - Client A joined to `issue-1` does NOT receive tokens for `issue-2`.
+   - Client A joined to `task-1` does NOT receive tokens for `task-2`.
    - Global status events (`ReceiveWorkerStatus`) are broadcast to all clients regardless of group.
 4. **Unit & Integration Tests:**
    - `OrchestratorHubTests`: verify group management methods.

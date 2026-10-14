@@ -90,7 +90,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
     /// <summary>
     /// Host path to the canonical clone (~/.nightcodeforge/wks/{workspaceId}/clone) mapped to /clone.
-    /// When specified alongside HostWorkspacePath (which points to an issue worktree), the issue worktree
+    /// When specified alongside HostWorkspacePath (which points to a task worktree), the task worktree
     /// is mounted at /workspace and the canonical clone is mounted at /clone:ro with .git at /clone/.git:rw.
     /// </summary>
     public string? CanonicalClonePath { get; set; }
@@ -728,7 +728,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 : "/workspace";
             mounts.Add(new ContainerVolumeMount(hostWks, containerWks, isReadOnly: options.IsRestrictedReadOnly));
 
-            // Layered protection and isolated issue worktree support:
+            // Layered protection and isolated task worktree support:
             if (!string.IsNullOrWhiteSpace(options.CanonicalClonePath))
             {
                 var normClone = ResolveHostPath(options.CanonicalClonePath, options).TrimEnd('/', '\\');

@@ -6,7 +6,7 @@ namespace NightCodeForge.Agents.Optimizations;
 public record PromptLayers(
     string Layer1GlobalRules,
     string Layer2StagePersona,
-    string Layer3IssueScope);
+    string Layer3TaskScope);
 
 /// <summary>
 /// Enforces the strict 4-layer byte-identical prompt prefix architecture to maximize
@@ -21,8 +21,8 @@ public class PromptPrefixStabilizer
 - bash: Execute shell commands, builds, and file discovery (command, timeout, working_directory)
 - ask: Ask clarifying questions to the user when blocked (prompt, rationale, options)
 - web_search: Search technical web documentation for APIs, errors, or libraries (query, max_results)
-- propose_issues: Propose structured backlog items (issues: [{ title, description, type }])
-- request_changes: Reject implementation and send issue back to the implementation agent for rework (feedback, reason)
+- propose_tasks: Propose structured backlog items (tasks: [{ title, description, type }])
+- request_changes: Reject implementation and send task back to the implementation agent for rework (feedback, reason)
 - load_skill: Load full instructions and reference documentation for a modular skill (skillName)
 </tools>";
 
@@ -38,7 +38,7 @@ public class PromptPrefixStabilizer
 
     public string BuildStabilizedPrefix(
         string stagePersonaDirective,
-        string issueScopeAndPlan,
+        string taskScopeAndPlan,
         string? projectGuidelines = null,
         string? skillsCatalog = null,
         string? discoveredSymbols = null,
@@ -50,7 +50,7 @@ public class PromptPrefixStabilizer
     {
         var sb = new StringBuilder();
 
-        // LAYER 1: Immutable Global Rules & Guidelines (Byte-Identical across ALL turns & issues)
+        // LAYER 1: Immutable Global Rules & Guidelines (Byte-Identical across ALL turns & tasks)
         sb.AppendLine(!string.IsNullOrWhiteSpace(customRolePersona)
             ? customRolePersona
             : "You are an expert AI software engineer operating in NightCodeForge.");
@@ -76,9 +76,9 @@ public class PromptPrefixStabilizer
 
         sb.AppendLine("---");
 
-        // LAYER 3: Dynamic Issue Scope & Artifacts (Stable per issue stage)
-        sb.AppendLine("<issue_scope>");
-        sb.AppendLine(issueScopeAndPlan.Trim());
+        // LAYER 3: Dynamic ForgeTask Scope & Artifacts (Stable per task stage)
+        sb.AppendLine("<task_scope>");
+        sb.AppendLine(taskScopeAndPlan.Trim());
 
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
@@ -94,7 +94,7 @@ public class PromptPrefixStabilizer
         {
             sb.AppendLine(discoveredSymbols);
         }
-        sb.AppendLine("</issue_scope>");
+        sb.AppendLine("</task_scope>");
 
         return sb.ToString().TrimEnd();
     }

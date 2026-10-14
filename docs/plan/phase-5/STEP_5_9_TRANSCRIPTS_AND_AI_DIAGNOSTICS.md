@@ -12,7 +12,7 @@ Provide an in-depth audit trail browser that parses, renders, and analyzes histo
 
 ### Core Capabilities:
 1. **Markdown Session Transcript Browser:**
-   - Discovers and lists turn-by-turn markdown transcript logs under `docs/transcripts/` per issue and stage.
+   - Discovers and lists turn-by-turn markdown transcript logs under `docs/transcripts/` per task and stage.
    - Extracts and renders YAML frontmatter metadata into an executive summary card (Tokens consumed, Model, Harness, Stage, Duration, Final Status).
 2. **Interactive Conversation Viewer:**
    - Turn-by-turn dialogue rendering with syntax highlighting for code blocks and bash outputs.
@@ -24,8 +24,8 @@ Provide an in-depth audit trail browser that parses, renders, and analyzes histo
      - **Option B: Local Diagnostics:** 100% offline and private, enqueued sequentially via `WorkerCount = 1`.
    - Generates a structured **Diagnostic Report**:
      - **Root Cause Breakdown:** Categorizes failures (syntax error, tool hallucination, runaway loop, context rot).
-     - **Prompt & Skill Critique:** Evaluates prompt clarity, missing tools, or ambiguity in issue scope.
-     - **One-Click Remediation Actions:** Offers direct adjustments to the issue description or agent profile optimization flags.
+     - **Prompt & Skill Critique:** Evaluates prompt clarity, missing tools, or ambiguity in task scope.
+     - **One-Click Remediation Actions:** Offers direct adjustments to the task description or agent profile optimization flags.
 
 ---
 
@@ -74,7 +74,7 @@ namespace NightCodeForge.Web.Services;
 public record TranscriptSummary(
     string FileName,
     string FilePath,
-    int IssueId,
+    int TaskId,
     string StageId,
     string ModelName,
     DateTime Timestamp,
@@ -122,7 +122,7 @@ public record RemediationSuggestion(
                         @onclick="() => SelectTranscript(item)">
                         <span class="badge-status @item.Status.ToLower()">@item.Status</span>
                         <div class="file-info">
-                            <strong>Issue #@item.IssueId: @item.StageId</strong>
+                            <strong>ForgeTask #@item.TaskId: @item.StageId</strong>
                             <small class="text-muted">@item.ModelName - @(item.DurationMs / 1000)s</small>
                         </div>
                     </li>
@@ -277,7 +277,7 @@ public record RemediationSuggestion(
                 FailureCategory: "Runaway Tool Loop / Incomplete Context",
                 CritiquePoints: new[]
                 {
-                    "The issue description did not specify the target framework (net10.0), causing compiler assumption mismatch.",
+                    "The task description did not specify the target framework (net10.0), causing compiler assumption mismatch.",
                     "LoopCircuitBreaker was disabled for this profile, allowing 4 redundant edit attempts."
                 },
                 SuggestedActions: new[]

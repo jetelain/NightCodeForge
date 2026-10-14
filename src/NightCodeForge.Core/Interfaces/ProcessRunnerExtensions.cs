@@ -27,7 +27,7 @@ public static class ProcessRunnerExtensions
     }
 
     /// <summary>
-    /// Executes a system process synchronously with an argument list (ProcessStartInfo.ArgumentList) to avoid escaping issues.
+    /// Executes a system process synchronously with an argument list (ProcessStartInfo.ArgumentList) to avoid escaping tasks.
     /// </summary>
     public static ProcessExecutionResult Run(
         this IProcessRunner runner,

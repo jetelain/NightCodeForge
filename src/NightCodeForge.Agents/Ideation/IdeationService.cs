@@ -18,14 +18,14 @@ namespace NightCodeForge.Agents.Ideation;
 
 /// <summary>
 /// Interactive Ideation and Discovery Agent conversing with developers, exploring codebase structure,
-/// and proposing backlog issues with cross-dependencies.
+/// and proposing backlog tasks with cross-dependencies.
 /// Relies on an AgentProfile (not scheduled as a background pipeline workload).
 /// Provides live feedback via IAgentActivityStreamer and streaming updates.
 /// </summary>
 public partial class IdeationService : IIdeationService
 {
     [GeneratedRegex(@"```(?:json)?\s*\[\s*\{.*?\}\s*\]\s*```", RegexOptions.Singleline)]
-    private static partial Regex IssueJsonArrayRegex();
+    private static partial Regex TaskJsonArrayRegex();
 
     [GeneratedRegex(@"<tool_call>\s*({.*?})\s*</tool_call>", RegexOptions.Singleline)]
     private static partial Regex ToolCallTagRegex();
@@ -162,7 +162,7 @@ public partial class IdeationService : IIdeationService
             ? customSystemPrompt
             : (!string.IsNullOrWhiteSpace(profile.SystemPrompt)
                 ? profile.SystemPrompt
-                : "You are the NightCodeForge Ideation & Codebase Discovery Agent.\nYour objective is to explore the codebase, discuss architectural features, and help the developer plan new issues.");
+                : "You are the NightCodeForge Ideation & Codebase Discovery Agent.\nYour objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.");
 
         var systemPrompt = $@"{basePersona}
 {projectContext}
@@ -171,7 +171,7 @@ When you recommend one or more implementation tasks, format them as a structured
 ```json
 [
   {{
-    ""title"": ""Descriptive Issue Title"",
+    ""title"": ""Descriptive ForgeTask Title"",
     ""description"": ""Detailed technical specification and acceptance criteria"",
     ""priority"": 1,
     ""dependsOnTitles"": []
@@ -198,8 +198,8 @@ When you recommend one or more implementation tasks, format them as a structured
         var permittedTools = profile.PermittedTools?.Count > 0
             ? profile.PermittedTools
             : (profile.Mode == AgentMode.ReadOnly
-                ? new[] { "read", "propose_issues", "web_search" }
-                : new[] { "read", "bash", "web_search", "propose_issues" });
+                ? new[] { "read", "propose_tasks", "web_search" }
+                : new[] { "read", "bash", "web_search", "propose_tasks" });
 
         var effectiveEnv = (workspace != null && _envProvider != null)
             ? _envProvider.GetEnvironment(workspace, profile.SecurityTier)
@@ -482,7 +482,7 @@ When you recommend one or more implementation tasks, format them as a structured
     private List<IdeationProposal> ParseProposals(string text)
     {
         var proposals = new List<IdeationProposal>();
-        var match = IssueJsonArrayRegex().Match(text);
+        var match = TaskJsonArrayRegex().Match(text);
         if (!match.Success) return proposals;
 
         var rawJson = match.Value.Trim();
@@ -510,7 +510,7 @@ When you recommend one or more implementation tasks, format them as a structured
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to parse proposed issues JSON from ideation response.");
+            _logger.LogWarning(ex, "Failed to parse proposed tasks JSON from ideation response.");
         }
 
         return proposals;
@@ -518,7 +518,7 @@ When you recommend one or more implementation tasks, format them as a structured
 
     private async Task BroadcastAsync(
         string sessionId,
-        int issueId,
+        int taskId,
         string stageId,
         AgentActivityKind kind,
         string content,
@@ -527,7 +527,7 @@ When you recommend one or more implementation tasks, format them as a structured
     {
         if (_activityStreamer != null)
         {
-            var evt = new AgentActivityEvent(sessionId, issueId, stageId, kind, content, DateTime.UtcNow, metadata);
+            var evt = new AgentActivityEvent(sessionId, taskId, stageId, kind, content, DateTime.UtcNow, metadata);
             await _activityStreamer.BroadcastAsync(evt, ct);
         }
     }

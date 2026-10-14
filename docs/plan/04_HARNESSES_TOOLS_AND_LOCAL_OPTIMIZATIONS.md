@@ -72,7 +72,7 @@ flowchart TD
   }
   ```
 * **Context & Result Models (`NightCodeForge.Agents/Common`):**
-  - `AgentSessionContext`: Carrying `Issue`, `Workspace`, `AgentProfile`, `PipelineContext`, `OptimizationFlags`, and cancellation token.
+  - `AgentSessionContext`: Carrying `ForgeTask`, `Workspace`, `AgentProfile`, `PipelineContext`, `OptimizationFlags`, and cancellation token.
   - `AgentRunResult`: Capturing status (`Completed`, `WaitingForHuman`, `Failed`), step metrics (`DurationMs`, `PromptTokens`, `CompletionTokens`, `TotalTokens`), generated commit hash, and diagnostic handover artifacts.
 
 ### Step 4.2: OllamaRouter Gateway & JIT Model Preload
@@ -91,7 +91,7 @@ flowchart TD
    - `bash`: Shell execution with timeout governance and output compaction.
    - `web_search`: Extensible via `IWebSearchService` (Ollama Web Search / DuckDuckGo / SearXNG).
    - `ask`: Asynchronous human interruption yielding `HumanInterruptionException`.
-   - `propose_issues`: Structural backlog proposal tool for triage and discovery agents.
+   - `propose_tasks`: Structural backlog proposal tool for triage and discovery agents.
 2. **EditorConfig Compliance (`IEditorConfigService` & `EditorConfigFileApplier`):**
    - Resolves `.editorconfig` from target file path up to `root = true` using official `editorconfig` .NET parser.
    - Enforces `end_of_line` (`lf`, `crlf`), `indent_style` (`tab`, `space`), `indent_size`, `trim_trailing_whitespace`, `insert_final_newline`, and `charset` before writing mutations to disk.
@@ -146,7 +146,7 @@ All optimizations respect [LocalOptimizationFlags](file:///c:/Users/Julien/sourc
 6. **4-Layer Prompt Prefix Stabilization:** Immutably orders system rules and tools at the prompt head to achieve **90%+ KV cache hit rate**.
 
 ### Step 4.9: Session Transcripts & Hybrid Diagnostics Service
-* **Transcripts:** Saves turn-by-turn markdown execution logs to `docs/transcripts/YYYY-MM-DD-issue-{id}-{stage}-{status}.md` embedding active `optimizations:` flags in frontmatter.
+* **Transcripts:** Saves turn-by-turn markdown execution logs to `docs/transcripts/YYYY-MM-DD-task-{id}-{stage}-{status}.md` embedding active `optimizations:` flags in frontmatter.
 * **Hybrid Diagnostics:** One-click evaluation of failed transcripts using fast zero-VRAM Cloud LLMs or 100% offline Local LLMs.
 
 ---

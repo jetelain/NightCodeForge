@@ -8,24 +8,24 @@ namespace NightCodeForge.Core.Tests;
 
 public class CascadeUnblockingTests
 {
-    private readonly InMemoryIssueRepository _issueRepo;
+    private readonly InMemoryTaskRepository _taskRepo;
     private readonly InMemoryWorkspaceRepository _workspaceRepo;
-    private readonly InMemoryIssueDependencyStore _depStore;
+    private readonly InMemoryTaskDependencyStore _depStore;
     private readonly DependencyResolutionEngine _depEngine;
     private readonly WorkspaceLockProvider _lockProvider;
     private readonly FakeGitWorkspaceManager _gitManager;
-    private readonly FakeIssueJobQueue _jobQueue;
+    private readonly FakeTaskJobQueue _jobQueue;
     private readonly Workspace _workspace;
 
     public CascadeUnblockingTests()
     {
-        _issueRepo = new InMemoryIssueRepository();
+        _taskRepo = new InMemoryTaskRepository();
         _workspaceRepo = new InMemoryWorkspaceRepository();
-        _depStore = new InMemoryIssueDependencyStore();
+        _depStore = new InMemoryTaskDependencyStore();
         _depEngine = new DependencyResolutionEngine(_depStore);
         _lockProvider = new WorkspaceLockProvider();
         _gitManager = new FakeGitWorkspaceManager();
-        _jobQueue = new FakeIssueJobQueue();
+        _jobQueue = new FakeTaskJobQueue();
 
         _workspace = new Workspace
         {
@@ -38,48 +38,48 @@ public class CascadeUnblockingTests
     }
 
     [Fact]
-    public async Task CompleteIssueAndCascadeAsync_MergesBranchCompletesIssueAndUnblocksDependents()
+    public async Task CompleteTaskAndCascadeAsync_MergesBranchCompletesTaskAndUnblocksDependents()
     {
         // DAG structure:
-        // Issue 201 (Prerequisite)
-        // Issue 202 depends on 201
-        // Issue 203 depends on 201 AND 204 (where 204 is still Pending)
-        var issue201 = await _issueRepo.CreateAsync(new Issue { Id = 201, WorkspaceId = 1, Status = IssueOverallStatus.Ready, BaseBranch = "main" });
-        var issue202 = await _issueRepo.CreateAsync(new Issue { Id = 202, WorkspaceId = 1, Status = IssueOverallStatus.Open });
-        var issue203 = await _issueRepo.CreateAsync(new Issue { Id = 203, WorkspaceId = 1, Status = IssueOverallStatus.Open });
-        var issue204 = await _issueRepo.CreateAsync(new Issue { Id = 204, WorkspaceId = 1, Status = IssueOverallStatus.Open });
+        // ForgeTask 201 (Prerequisite)
+        // ForgeTask 202 depends on 201
+        // ForgeTask 203 depends on 201 AND 204 (where 204 is still Pending)
+        var task201 = await _taskRepo.CreateAsync(new ForgeTask { Id = 201, WorkspaceId = 1, Status = TaskOverallStatus.Ready, BaseBranch = "main" });
+        var task202 = await _taskRepo.CreateAsync(new ForgeTask { Id = 202, WorkspaceId = 1, Status = TaskOverallStatus.Open });
+        var task203 = await _taskRepo.CreateAsync(new ForgeTask { Id = 203, WorkspaceId = 1, Status = TaskOverallStatus.Open });
+        var task204 = await _taskRepo.CreateAsync(new ForgeTask { Id = 204, WorkspaceId = 1, Status = TaskOverallStatus.Open });
 
-        _depStore.AddIssue(201, 1, IssueOverallStatus.Ready);
-        _depStore.AddIssue(202, 1, IssueOverallStatus.Open);
-        _depStore.AddIssue(203, 1, IssueOverallStatus.Open);
-        _depStore.AddIssue(204, 1, IssueOverallStatus.Open);
+        _depStore.AddTask(201, 1, TaskOverallStatus.Ready);
+        _depStore.AddTask(202, 1, TaskOverallStatus.Open);
+        _depStore.AddTask(203, 1, TaskOverallStatus.Open);
+        _depStore.AddTask(204, 1, TaskOverallStatus.Open);
 
         _depStore.AddDependency(1, 202, 201);
         _depStore.AddDependency(1, 203, 201);
         _depStore.AddDependency(1, 203, 204);
 
-        var orchestrator = new IssueOrchestrator(
-            _issueRepo, _workspaceRepo, _depEngine, _lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
             _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
 
-        await orchestrator.CompleteIssueAndCascadeAsync(201, "feat(auth): Add JWT bearer token validation (#201)");
+        await orchestrator.CompleteTaskAndCascadeAsync(201, "feat(auth): Add JWT bearer token validation (#201)");
 
         // 1. Squash merge executed
         Assert.Single(_gitManager.SquashMerges);
         var merge = _gitManager.SquashMerges[0];
-        Assert.Equal(201, merge.IssueId);
+        Assert.Equal(201, merge.TaskId);
         Assert.Equal("main", merge.BaseBranch);
         Assert.Equal("feat(auth): Add JWT bearer token validation (#201)", merge.CommitMessage);
 
-        // 2. Issue 201 marked Closed
-        var updated201 = await _issueRepo.GetByIdAsync(201);
+        // 2. ForgeTask 201 marked Closed
+        var updated201 = await _taskRepo.GetByIdAsync(201);
         Assert.NotNull(updated201);
-        Assert.Equal(IssueOverallStatus.Closed, updated201.Status);
+        Assert.Equal(TaskOverallStatus.Closed, updated201.Status);
 
-        // 3. Issue 202 unblocked and enqueued to llm-inference
+        // 3. ForgeTask 202 unblocked and enqueued to llm-inference
         Assert.Contains(202, _jobQueue.InferenceQueue);
 
-        // 4. Issue 203 still waiting on 204
+        // 4. ForgeTask 203 still waiting on 204
         Assert.DoesNotContain(203, _jobQueue.InferenceQueue);
     }
 }

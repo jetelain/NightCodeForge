@@ -40,7 +40,7 @@ public class IdeationServiceTests
   },
   {
     ""title"": ""Integrate Token Cache into Pipeline"",
-    ""description"": ""Wire cache into IssueOrchestrator"",
+    ""description"": ""Wire cache into TaskOrchestrator"",
     ""priority"": 2,
     ""dependsOnTitles"": [""Implement Token Cache""]
   }
@@ -57,14 +57,14 @@ Let me know what you think!";
 
         Assert.NotNull(result);
         Assert.Contains("I recommend splitting this", result.AssistantMessage);
-        Assert.Equal(2, result.ProposedIssues.Count);
+        Assert.Equal(2, result.ProposedTasks.Count);
 
-        var p1 = result.ProposedIssues[0];
+        var p1 = result.ProposedTasks[0];
         Assert.Equal("Implement Token Cache", p1.Title);
         Assert.Equal("Add LRU cache for prompt tokens", p1.Description);
         Assert.Equal(1, p1.Priority);
 
-        var p2 = result.ProposedIssues[1];
+        var p2 = result.ProposedTasks[1];
         Assert.Equal("Integrate Token Cache into Pipeline", p2.Title);
         Assert.Equal(2, p2.Priority);
         Assert.NotNull(p2.DependsOnTitles);
@@ -148,7 +148,7 @@ Let me know what you think!";
         Assert.Equal("ideation", profile.Id);
         Assert.Equal(AgentMode.ReadOnly, profile.Mode);
         Assert.Contains("read", profile.PermittedTools!);
-        Assert.Contains("propose_issues", profile.PermittedTools!);
+        Assert.Contains("propose_tasks", profile.PermittedTools!);
     }
 
     [Fact]
@@ -182,8 +182,8 @@ Let me know what you think!";
         var completed = updates.FirstOrDefault(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.Completed);
         Assert.NotNull(completed);
         Assert.NotNull(completed.FinalResult);
-        Assert.Single(completed.FinalResult.ProposedIssues);
-        Assert.Equal("Live Stream Feature", completed.FinalResult.ProposedIssues[0].Title);
+        Assert.Single(completed.FinalResult.ProposedTasks);
+        Assert.Equal("Live Stream Feature", completed.FinalResult.ProposedTasks[0].Title);
 
         // 2. Verify live feedback via IAgentActivityStreamer
         Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.StageStarted && e.StageId == "ideation");
@@ -212,8 +212,8 @@ Let me know what you think!";
         var result = await service.ConverseAsync(workspace, "Suggest a fallback task");
 
         Assert.NotNull(result);
-        Assert.Single(result.ProposedIssues);
-        Assert.Equal("Fallback Task", result.ProposedIssues[0].Title);
+        Assert.Single(result.ProposedTasks);
+        Assert.Equal("Fallback Task", result.ProposedTasks[0].Title);
 
         Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.StageStarted && e.StageId == "ideation");
         Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.ThinkingDelta && e.Content.Contains("Fast thinking"));
@@ -232,7 +232,7 @@ Let me know what you think!";
             callCount++;
             if (callCount == 1)
             {
-                return new ChatResponse(new ChatMessage(ChatRole.Assistant, "<tool_call>{\"name\": \"propose_issues\", \"arguments\": {\"issues\": [{\"title\": \"Tool Generated Issue\", \"description\": \"From tool call\"}]}}</tool_call>"));
+                return new ChatResponse(new ChatMessage(ChatRole.Assistant, "<tool_call>{\"name\": \"propose_tasks\", \"arguments\": {\"tasks\": [{\"title\": \"Tool Generated ForgeTask\", \"description\": \"From tool call\"}]}}</tool_call>"));
             }
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, "Proposals are submitted and finalized."));
         });
@@ -240,13 +240,13 @@ Let me know what you think!";
         var service = new IdeationService(defaultChatClient: client, activityStreamer: streamer);
         var workspace = new Workspace { Id = 12, RepositoryPath = Directory.GetCurrentDirectory() };
 
-        var result = await service.ConverseAsync(workspace, "Create backlog issues");
+        var result = await service.ConverseAsync(workspace, "Create backlog tasks");
 
         Assert.NotNull(result);
-        Assert.Single(result.ProposedIssues);
-        Assert.Equal("Tool Generated Issue", result.ProposedIssues[0].Title);
+        Assert.Single(result.ProposedTasks);
+        Assert.Equal("Tool Generated ForgeTask", result.ProposedTasks[0].Title);
 
-        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.ToolStarted && e.Content.Contains("propose_issues"));
+        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.ToolStarted && e.Content.Contains("propose_tasks"));
         Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.ToolCompleted);
     }
 
@@ -280,7 +280,7 @@ Let me know what you think!";
             return Task.CompletedTask;
         }
 
-        public IAsyncEnumerable<NightCodeForge.Core.Streaming.AgentActivityEvent> SubscribeAsync(int? issueId = null, CancellationToken cancellationToken = default)
+        public IAsyncEnumerable<NightCodeForge.Core.Streaming.AgentActivityEvent> SubscribeAsync(int? taskId = null, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
     }
 

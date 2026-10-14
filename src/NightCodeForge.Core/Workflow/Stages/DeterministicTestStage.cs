@@ -62,7 +62,7 @@ public partial class DeterministicTestStage : IWorkflowStage
         var command = config.TestCommand ?? _testCommand;
 
         var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace, SandboxSecurityTier.Standard, context.Issue?.Id)
+            ? _envProvider.GetEnvironment(context.Workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id)
             : _executionEnv;
 
         if (effectiveEnv != null)

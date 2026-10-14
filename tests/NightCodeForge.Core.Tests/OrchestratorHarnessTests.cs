@@ -50,10 +50,10 @@ public class OrchestratorHarnessTests
         public Task<string> InitializeMirrorAsync(Workspace workspace, string mirrorDirectory, CancellationToken cancellationToken = default) => Task.FromResult(mirrorDirectory);
         public Task FetchFromHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public Task<GitSyncResult> PushToHostAsync(string mirrorRepoPath, int issueId, CancellationToken cancellationToken = default)
+        public Task<GitSyncResult> PushToHostAsync(string mirrorRepoPath, int taskId, CancellationToken cancellationToken = default)
         {
             PushCount++;
-            return Task.FromResult(new GitSyncResult(true, false, $"feature/issue-{issueId}", null));
+            return Task.FromResult(new GitSyncResult(true, false, $"feature/task-{taskId}", null));
         }
 
         public Task<GitSyncResult> PushBaseBranchToHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default)
@@ -63,24 +63,24 @@ public class OrchestratorHarnessTests
         }
     }
 
-    private class FakeMarkdownSyncService : IIssueMarkdownSyncService
+    private class FakeMarkdownSyncService : ITaskMarkdownSyncService
     {
         public int SyncCount { get; private set; }
         public int ArchiveCount { get; private set; }
 
-        public string GenerateMarkdown(Issue issue, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null) => string.Empty;
-        public (IssueFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent) => (new IssueFrontmatter(), string.Empty);
+        public string GenerateMarkdown(ForgeTask task, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null) => string.Empty;
+        public (TaskFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent) => (new TaskFrontmatter(), string.Empty);
         public string ComputeContentHash(string content) => string.Empty;
 
-        public Task<string> SyncIssueToDiskAsync(Issue issue, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default)
+        public Task<string> SyncTaskToDiskAsync(ForgeTask task, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default)
         {
             SyncCount++;
-            return Task.FromResult(Path.Combine(workspacePath, $"issue-{issue.Id}.md"));
+            return Task.FromResult(Path.Combine(workspacePath, $"task-{task.Id}.md"));
         }
 
         public Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task ProcessFileChangedAsync(string filePath, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task ArchiveOrCleanupIssueFileAsync(Issue issue, string workspacePath, bool archive = true, CancellationToken cancellationToken = default)
+        public Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive = true, CancellationToken cancellationToken = default)
         {
             ArchiveCount++;
             return Task.CompletedTask;
@@ -100,15 +100,15 @@ public class OrchestratorHarnessTests
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_DelegatesToHarness_ForAgenticStage()
+    public async Task ProcessTaskAsync_DelegatesToHarness_ForAgenticStage()
     {
-        var issueRepo = new InMemoryIssueRepository();
+        var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
-        var depStore = new InMemoryIssueDependencyStore();
+        var depStore = new InMemoryTaskDependencyStore();
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var gitManager = new FakeGitWorkspaceManager();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
 
         var workspace = new Workspace
         {
@@ -120,39 +120,39 @@ public class OrchestratorHarnessTests
         };
         await workspaceRepo.CreateAsync(workspace);
 
-        var issue = await issueRepo.CreateAsync(new Issue
+        var task = await taskRepo.CreateAsync(new ForgeTask
         {
             Id = 80,
             WorkspaceId = 1,
-            Status = IssueOverallStatus.Open,
-            CurrentStageId = "issue-review",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "task-review",
             BaseBranch = "main"
         });
-        depStore.AddIssue(80, 1, IssueOverallStatus.Open);
+        depStore.AddTask(80, 1, TaskOverallStatus.Open);
 
         var fakeHarness = new FakeAgentHarness();
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
         var mirrorSync = new FakeMirrorSyncService();
         var mdSync = new FakeMarkdownSyncService();
 
-        // Default IssueReviewStage without custom handler
-        var stage1 = new IssueReviewStage();
+        // Default TaskReviewStage without custom handler
+        var stage1 = new TaskReviewStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1 });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo, workspaceRepo, depEngine, lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo, workspaceRepo, depEngine, lockProvider,
             gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
             harnessRegistry: harnessRegistry,
             gitMirrorSyncService: mirrorSync,
             markdownSyncService: mdSync);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         // Harness should have been invoked
         Assert.Single(fakeHarness.ExecutedSessions);
         var session = fakeHarness.ExecutedSessions[0];
-        Assert.Equal(80, session.Issue.Id);
-        Assert.Equal("issue-review", session.StageId);
+        Assert.Equal(80, session.ForgeTask.Id);
+        Assert.Equal("task-review", session.StageId);
         Assert.Equal(stage1.StageDirective, session.StageDirective);
         Assert.Contains(stage1.StageDirective, session.BootstrapPrompt);
 
@@ -161,7 +161,7 @@ public class OrchestratorHarnessTests
         Assert.True(mdSync.SyncCount > 0);
 
         // Token tracking should be recorded
-        var records = issueRepo.GetAllExecutionRecords();
+        var records = taskRepo.GetAllExecutionRecords();
         Assert.Single(records);
         Assert.Equal(100, records[0].PromptTokens);
         Assert.Equal(50, records[0].CompletionTokens);
@@ -169,15 +169,15 @@ public class OrchestratorHarnessTests
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_UsesProfileStageDirectiveOverride_WhenConfigured()
+    public async Task ProcessTaskAsync_UsesProfileStageDirectiveOverride_WhenConfigured()
     {
-        var issueRepo = new InMemoryIssueRepository();
+        var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
-        var depStore = new InMemoryIssueDependencyStore();
+        var depStore = new InMemoryTaskDependencyStore();
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var gitManager = new FakeGitWorkspaceManager();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
 
         const string customDirective = "Custom profile directive: Always generate unit tests with FluentAssertions.";
 
@@ -203,15 +203,15 @@ public class OrchestratorHarnessTests
         };
         await workspaceRepo.CreateAsync(workspace);
 
-        var issue = await issueRepo.CreateAsync(new Issue
+        var task = await taskRepo.CreateAsync(new ForgeTask
         {
             Id = 90,
             WorkspaceId = 2,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = "implementation",
             BaseBranch = "main"
         });
-        depStore.AddIssue(90, 2, IssueOverallStatus.Open);
+        depStore.AddTask(90, 2, TaskOverallStatus.Open);
 
         var fakeHarness = new FakeAgentHarness();
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
@@ -219,12 +219,12 @@ public class OrchestratorHarnessTests
         var stage = new ImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo, workspaceRepo, depEngine, lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo, workspaceRepo, depEngine, lockProvider,
             gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
             harnessRegistry: harnessRegistry);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         Assert.Single(fakeHarness.ExecutedSessions);
         var session = fakeHarness.ExecutedSessions[0];
@@ -235,15 +235,15 @@ public class OrchestratorHarnessTests
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_WhenAgentModeMismatch_FailsStageWithValidationMessage()
+    public async Task ProcessTaskAsync_WhenAgentModeMismatch_FailsStageWithValidationMessage()
     {
-        var issueRepo = new InMemoryIssueRepository();
+        var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
-        var depStore = new InMemoryIssueDependencyStore();
+        var depStore = new InMemoryTaskDependencyStore();
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var gitManager = new FakeGitWorkspaceManager();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
 
         var workspace = new Workspace
         {
@@ -264,15 +264,15 @@ public class OrchestratorHarnessTests
         };
         await workspaceRepo.CreateAsync(workspace);
 
-        var issue = await issueRepo.CreateAsync(new Issue
+        var task = await taskRepo.CreateAsync(new ForgeTask
         {
             Id = 80,
             WorkspaceId = 3,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = "implementation",
             BaseBranch = "main"
         });
-        depStore.AddIssue(80, 3, IssueOverallStatus.Open);
+        depStore.AddTask(80, 3, TaskOverallStatus.Open);
 
         var fakeHarness = new FakeAgentHarness();
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
@@ -281,35 +281,35 @@ public class OrchestratorHarnessTests
         var stage = new ImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo, workspaceRepo, depEngine, lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo, workspaceRepo, depEngine, lockProvider,
             gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
             harnessRegistry: harnessRegistry);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         // The harness must NOT have been executed
         Assert.Empty(fakeHarness.ExecutedSessions);
 
-        // Issue must have failed
-        var updated = await issueRepo.GetByIdAsync(80);
+        // ForgeTask must have failed
+        var updated = await taskRepo.GetByIdAsync(80);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Failed, updated.Status);
+        Assert.Equal(TaskOverallStatus.Failed, updated.Status);
 
-        var logs = issueRepo.GetAllLogs();
+        var logs = taskRepo.GetAllLogs();
         Assert.Contains(logs, l => l.Message.Contains("requires AgentMode.Full capabilities"));
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_EnforcesZeroMemoryAcrossStageBoundaries()
+    public async Task ProcessTaskAsync_EnforcesZeroMemoryAcrossStageBoundaries()
     {
-        var issueRepo = new InMemoryIssueRepository();
+        var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
-        var depStore = new InMemoryIssueDependencyStore();
+        var depStore = new InMemoryTaskDependencyStore();
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var gitManager = new FakeGitWorkspaceManager();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
 
         var workspace = new Workspace
         {
@@ -320,21 +320,21 @@ public class OrchestratorHarnessTests
         };
         await workspaceRepo.CreateAsync(workspace);
 
-        var issue = await issueRepo.CreateAsync(new Issue
+        var task = await taskRepo.CreateAsync(new ForgeTask
         {
             Id = 100,
             WorkspaceId = 10,
-            Status = IssueOverallStatus.Reviewed,
+            Status = TaskOverallStatus.Reviewed,
             CurrentStageId = "implementation",
             BaseBranch = "main"
         });
-        depStore.AddIssue(100, 10, IssueOverallStatus.Reviewed);
+        depStore.AddTask(100, 10, TaskOverallStatus.Reviewed);
 
-        // Previous stage (issue-review) created a checkpoint with serialized memory
-        await issueRepo.AddCheckpointAsync(new StageCheckpoint
+        // Previous stage (task-review) created a checkpoint with serialized memory
+        await taskRepo.AddCheckpointAsync(new StageCheckpoint
         {
-            IssueId = 100,
-            StageId = "issue-review",
+            TaskId = 100,
+            StageId = "task-review",
             SerializedMemory = "{\"messages\": [\"Stage 1 chat history that must NOT leak to Stage 3\"]}",
             CreatedAt = DateTime.UtcNow.AddMinutes(-5)
         });
@@ -345,12 +345,12 @@ public class OrchestratorHarnessTests
         var stage = new ImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo, workspaceRepo, depEngine, lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo, workspaceRepo, depEngine, lockProvider,
             gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
             harnessRegistry: harnessRegistry);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         Assert.Single(fakeHarness.ExecutedSessions);
         var session = fakeHarness.ExecutedSessions[0];
@@ -360,15 +360,15 @@ public class OrchestratorHarnessTests
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_RestoresMemory_WhenResumingSameStage()
+    public async Task ProcessTaskAsync_RestoresMemory_WhenResumingSameStage()
     {
-        var issueRepo = new InMemoryIssueRepository();
+        var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
-        var depStore = new InMemoryIssueDependencyStore();
+        var depStore = new InMemoryTaskDependencyStore();
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var gitManager = new FakeGitWorkspaceManager();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
 
         var workspace = new Workspace
         {
@@ -379,21 +379,21 @@ public class OrchestratorHarnessTests
         };
         await workspaceRepo.CreateAsync(workspace);
 
-        var issue = await issueRepo.CreateAsync(new Issue
+        var task = await taskRepo.CreateAsync(new ForgeTask
         {
             Id = 101,
             WorkspaceId = 11,
-            Status = IssueOverallStatus.Reviewed,
+            Status = TaskOverallStatus.Reviewed,
             CurrentStageId = "implementation",
             BaseBranch = "main"
         });
-        depStore.AddIssue(101, 11, IssueOverallStatus.Reviewed);
+        depStore.AddTask(101, 11, TaskOverallStatus.Reviewed);
 
         // Checkpoint from the SAME stage (e.g. human interruption or retry)
         const string expectedMemory = "{\"messages\": [\"Implementation partial progress\"]}";
-        await issueRepo.AddCheckpointAsync(new StageCheckpoint
+        await taskRepo.AddCheckpointAsync(new StageCheckpoint
         {
-            IssueId = 101,
+            TaskId = 101,
             StageId = "implementation",
             SerializedMemory = expectedMemory,
             CreatedAt = DateTime.UtcNow.AddMinutes(-1)
@@ -405,12 +405,12 @@ public class OrchestratorHarnessTests
         var stage = new ImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo, workspaceRepo, depEngine, lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo, workspaceRepo, depEngine, lockProvider,
             gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
             harnessRegistry: harnessRegistry);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         Assert.Single(fakeHarness.ExecutedSessions);
         var session = fakeHarness.ExecutedSessions[0];
@@ -420,15 +420,15 @@ public class OrchestratorHarnessTests
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_CreatesWipCheckpointOnStageSuccess()
+    public async Task ProcessTaskAsync_CreatesWipCheckpointOnStageSuccess()
     {
-        var issueRepo = new InMemoryIssueRepository();
+        var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
-        var depStore = new InMemoryIssueDependencyStore();
+        var depStore = new InMemoryTaskDependencyStore();
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var gitManager = new FakeGitWorkspaceManager();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
 
         var workspace = new Workspace
         {
@@ -439,15 +439,15 @@ public class OrchestratorHarnessTests
         };
         await workspaceRepo.CreateAsync(workspace);
 
-        var issue = await issueRepo.CreateAsync(new Issue
+        var task = await taskRepo.CreateAsync(new ForgeTask
         {
             Id = 102,
             WorkspaceId = 12,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = "implementation",
             BaseBranch = "main"
         });
-        depStore.AddIssue(102, 12, IssueOverallStatus.Open);
+        depStore.AddTask(102, 12, TaskOverallStatus.Open);
 
         var fakeHarness = new FakeAgentHarness();
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
@@ -455,20 +455,20 @@ public class OrchestratorHarnessTests
         var stage = new ImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo, workspaceRepo, depEngine, lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo, workspaceRepo, depEngine, lockProvider,
             gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
             harnessRegistry: harnessRegistry);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         // Verify gitManager was invoked to create a WIP checkpoint for the completed stage
-        Assert.Contains(gitManager.WipCheckpoints, cp => cp.IssueId == 102 && cp.StageName == "implementation");
+        Assert.Contains(gitManager.WipCheckpoints, cp => cp.TaskId == 102 && cp.StageName == "implementation");
 
         // Verify checkpoint saved in repository has the git commit SHA
-        var updatedIssue = await issueRepo.GetByIdAsync(102);
-        Assert.NotNull(updatedIssue);
-        var latestCheckpoint = updatedIssue.Checkpoints.LastOrDefault();
+        var updatedTask = await taskRepo.GetByIdAsync(102);
+        Assert.NotNull(updatedTask);
+        var latestCheckpoint = updatedTask.Checkpoints.LastOrDefault();
         Assert.NotNull(latestCheckpoint);
         Assert.StartsWith("commit-sha-", latestCheckpoint.GitCommitHash);
         // Serialized memory is wiped clean at stage completion
@@ -476,15 +476,15 @@ public class OrchestratorHarnessTests
     }
 
     [Fact]
-    public async Task ProcessIssueAsync_AutoInitializesMirror_WhenExt4MirrorPathIsEmpty()
+    public async Task ProcessTaskAsync_AutoInitializesMirror_WhenExt4MirrorPathIsEmpty()
     {
-        var issueRepo = new InMemoryIssueRepository();
+        var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
-        var depStore = new InMemoryIssueDependencyStore();
+        var depStore = new InMemoryTaskDependencyStore();
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var gitManager = new FakeGitWorkspaceManager();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
         var mirrorService = new FakeMirrorSyncService();
         var pathResolver = new FakePathResolver();
 
@@ -498,15 +498,15 @@ public class OrchestratorHarnessTests
         };
         await workspaceRepo.CreateAsync(workspace);
 
-        var issue = await issueRepo.CreateAsync(new Issue
+        var task = await taskRepo.CreateAsync(new ForgeTask
         {
             Id = 103,
             WorkspaceId = 13,
-            Status = IssueOverallStatus.Open,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = "implementation",
             BaseBranch = "main"
         });
-        depStore.AddIssue(103, 13, IssueOverallStatus.Open);
+        depStore.AddTask(103, 13, TaskOverallStatus.Open);
 
         var fakeHarness = new FakeAgentHarness();
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
@@ -514,14 +514,14 @@ public class OrchestratorHarnessTests
         var stage = new ImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo, workspaceRepo, depEngine, lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo, workspaceRepo, depEngine, lockProvider,
             gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
             harnessRegistry: harnessRegistry,
             gitMirrorSyncService: mirrorService,
             pathResolver: pathResolver);
 
-        await orchestrator.ProcessIssueAsync(issue.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         // Verify workspace was updated with initialized mirror path
         var updatedWorkspace = await workspaceRepo.GetByIdAsync(13);
@@ -530,15 +530,15 @@ public class OrchestratorHarnessTests
     }
 
     [Fact]
-    public async Task CompleteIssueAndCascadeAsync_CallsArchiveOrCleanupIssueFileAsync()
+    public async Task CompleteTaskAndCascadeAsync_CallsArchiveOrCleanupTaskFileAsync()
     {
-        var issueRepo = new InMemoryIssueRepository();
+        var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
-        var depStore = new InMemoryIssueDependencyStore();
+        var depStore = new InMemoryTaskDependencyStore();
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var gitManager = new FakeGitWorkspaceManager();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
         var markdownSync = new FakeMarkdownSyncService();
 
         var workspace = new Workspace
@@ -550,43 +550,43 @@ public class OrchestratorHarnessTests
         };
         await workspaceRepo.CreateAsync(workspace);
 
-        var issue = await issueRepo.CreateAsync(new Issue
+        var task = await taskRepo.CreateAsync(new ForgeTask
         {
             Id = 104,
             WorkspaceId = 14,
-            Status = IssueOverallStatus.Ready,
+            Status = TaskOverallStatus.Ready,
             CurrentStageId = "deterministic-post-review",
             BaseBranch = "main"
         });
-        depStore.AddIssue(104, 14, IssueOverallStatus.Ready);
+        depStore.AddTask(104, 14, TaskOverallStatus.Ready);
 
         var pipeline = new WorkflowPipeline(Array.Empty<IWorkflowStage>());
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo, workspaceRepo, depEngine, lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo, workspaceRepo, depEngine, lockProvider,
             gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
             markdownSyncService: markdownSync);
 
-        await orchestrator.CompleteIssueAndCascadeAsync(104, "Final squash commit");
+        await orchestrator.CompleteTaskAndCascadeAsync(104, "Final squash commit");
 
-        var updated = await issueRepo.GetByIdAsync(104);
+        var updated = await taskRepo.GetByIdAsync(104);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Closed, updated.Status);
+        Assert.Equal(TaskOverallStatus.Closed, updated.Status);
 
-        // Verify markdown sync service archived the issue file
+        // Verify markdown sync service archived the task file
         Assert.Equal(1, markdownSync.ArchiveCount);
     }
 
     [Fact]
-    public async Task CompleteIssueAndCascadeAsync_WithExt4Mirror_CallsPushBaseBranchToHostAsync()
+    public async Task CompleteTaskAndCascadeAsync_WithExt4Mirror_CallsPushBaseBranchToHostAsync()
     {
-        var issueRepo = new InMemoryIssueRepository();
+        var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
-        var depStore = new InMemoryIssueDependencyStore();
+        var depStore = new InMemoryTaskDependencyStore();
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
         var gitManager = new FakeGitWorkspaceManager();
-        var jobQueue = new FakeIssueJobQueue();
+        var jobQueue = new FakeTaskJobQueue();
         var mirrorService = new FakeMirrorSyncService();
 
         var workspace = new Workspace
@@ -599,37 +599,37 @@ public class OrchestratorHarnessTests
         };
         await workspaceRepo.CreateAsync(workspace);
 
-        var issue = await issueRepo.CreateAsync(new Issue
+        var task = await taskRepo.CreateAsync(new ForgeTask
         {
             Id = 105,
             WorkspaceId = 15,
-            Status = IssueOverallStatus.Ready,
+            Status = TaskOverallStatus.Ready,
             CurrentStageId = "deterministic-post-review",
             BaseBranch = "main"
         });
-        depStore.AddIssue(105, 15, IssueOverallStatus.Ready);
+        depStore.AddTask(105, 15, TaskOverallStatus.Ready);
 
         var pipeline = new WorkflowPipeline(Array.Empty<IWorkflowStage>());
 
-        var orchestrator = new IssueOrchestrator(
-            issueRepo, workspaceRepo, depEngine, lockProvider,
+        var orchestrator = new TaskOrchestrator(
+            taskRepo, workspaceRepo, depEngine, lockProvider,
             gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
             gitMirrorSyncService: mirrorService);
 
-        await orchestrator.CompleteIssueAndCascadeAsync(105, "Squash and merge to main");
+        await orchestrator.CompleteTaskAndCascadeAsync(105, "Squash and merge to main");
 
-        var updated = await issueRepo.GetByIdAsync(105);
+        var updated = await taskRepo.GetByIdAsync(105);
         Assert.NotNull(updated);
-        Assert.Equal(IssueOverallStatus.Closed, updated.Status);
+        Assert.Equal(TaskOverallStatus.Closed, updated.Status);
 
         // Verify base branch was pushed to host-origin
         Assert.Equal(1, mirrorService.PushBaseBranchCount);
     }
 
     [Fact]
-    public void ProcessIssueAsync_HasAutomaticRetryAttribute_ConfiguredToZeroAttempts()
+    public void ProcessTaskAsync_HasAutomaticRetryAttribute_ConfiguredToZeroAttempts()
     {
-        var method = typeof(IssueOrchestrator).GetMethod(nameof(IssueOrchestrator.ProcessIssueAsync));
+        var method = typeof(TaskOrchestrator).GetMethod(nameof(TaskOrchestrator.ProcessTaskAsync));
         Assert.NotNull(method);
 
         var attr = method.GetCustomAttributes(typeof(Hangfire.AutomaticRetryAttribute), false)

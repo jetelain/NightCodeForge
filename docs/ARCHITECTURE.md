@@ -18,9 +18,9 @@ Standard autonomous coding agents operate in interactive synchronous loops:
 ### 1.3 The NightCodeForge Solution: Context-Switching Dev-Queue
 NightCodeForge decouples task execution from human availability through **asynchronous checkpointing and workspace context switching**:
 * When an agent needs human guidance, it invokes a specialized interruption tool (`ask`).
-* The orchestrator intercepts this call, captures the agent's memory/chat session into persistent storage, performs a Git WIP commit on the issue branch, and **terminates the worker task cleanly**.
+* The orchestrator intercepts this call, captures the agent's memory/chat session into persistent storage, performs a Git WIP commit on the task branch, and **terminates the worker task cleanly**.
 * The single-worker GPU queue immediately picks up the next task in line.
-* When the developer answers the pending question via the web interface, the issue transitions back to high-priority readiness. The orchestrator checks out the branch, restores the memory context with the human's answer, and resumes reasoning without loss of continuity.
+* When the developer answers the pending question via the web interface, the task transitions back to high-priority readiness. The orchestrator checks out the branch, restores the memory context with the human's answer, and resumes reasoning without loss of continuity.
 
 ---
 
@@ -56,15 +56,15 @@ flowchart TB
     end
 
     subgraph Workspaces ["Workspace & Storage Layer"]
-        GitCli["Git CLI Engine (CliWrap)\n- Worktrees: issue-{id}\n- WIP Commits & Diff -U2"]
+        GitCli["Git CLI Engine (CliWrap)\n- Worktrees: task-{id}\n- WIP Commits & Diff -U2"]
         EFCore["Entity Framework Core (SQLite/PostgreSQL)"]
         CanonicalClone["Canonical Clone on main/master\n(Read-Only Ideation & Triage)"]
-        Worktrees["Ephemeral Issue Worktrees\n(~/.nightcodeforge/wks/{id}/issue-{id})"]
+        Worktrees["Ephemeral ForgeTask Worktrees\n(~/.nightcodeforge/wks/{id}/task-{id})"]
     end
 
     UI --> SignalR
     SignalR --> Core
-    Ideation -.->|Spawns Issues with Dependencies| DepEngine
+    Ideation -.->|Spawns Tasks with Dependencies| DepEngine
     DepEngine --> PipelineEngine
     PipelineEngine --> HangfireEngine
     HangfireEngine --> QueueUrgent
@@ -89,43 +89,43 @@ flowchart TB
 
 ## 3. Extensible Multi-Agent Workflow Engine
 
-Rather than binding to a rigid, hardcoded state machine library, NightCodeForge uses a **composable, stage-based Workflow Pipeline Engine**. Each issue progresses through a sequence of discrete, pluggable stages executed by dedicated specialized agents and deterministic verification gates.
+Rather than binding to a rigid, hardcoded state machine library, NightCodeForge uses a **composable, stage-based Workflow Pipeline Engine**. Each task progresses through a sequence of discrete, pluggable stages executed by dedicated specialized agents and deterministic verification gates.
 
-### 3.1 Issue Creation & Intake Channels
-Issues enter NightCodeForge through three distinct channels. In all cases, every newly created issue starts with the **`Suggested`** status:
+### 3.1 ForgeTask Creation & Intake Channels
+Tasks enter NightCodeForge through three distinct channels. In all cases, every newly created task starts with the **`Suggested`** status:
 
 1. **External Triage Workflow:**
-   - External systems (GitHub issues, Jira, webhooks) trigger an isolated triage pipeline.
+   - External systems (GitHub tasks, Jira, webhooks) trigger an isolated triage pipeline.
    - Runs a dedicated **Triage Agent** on the base branch (`main` or `master`) in a `RestrictedReadOnly` sandbox (`:ro` workspace mount, `--network none`).
-   - Deeply analyzes the request, validates reproducibility, and invokes `propose_issues` if valid.
-   - Newly proposed issues enter the database in **`Suggested`** status.
+   - Deeply analyzes the request, validates reproducibility, and invokes `propose_tasks` if valid.
+   - Newly proposed tasks enter the database in **`Suggested`** status.
 2. **Ideation & Discovery Chat:**
    - The developer converses with the codebase exploration agent (`IIdeationService`) to explore features, refactorings, or architecture questions.
-   - Either the developer or the ideation agent creates issues with dependencies via `propose_issues`.
+   - Either the developer or the ideation agent creates tasks with dependencies via `propose_tasks`.
    - Created in **`Suggested`** status.
-3. **Markdown Issue Synchronization (`docs/issues/*.md`):**
-   - The developer creates a new markdown specification directly in `<WorkspaceRoot>/docs/issues/YYYY-MM-DD-<slug>.md` on their real workspace.
-   - `IssueMarkdownSyncService` detects the file via `FileSystemWatcher`, allocates an ID, and injects frontmatter with initial `status: suggested` and `merge_mode: manual_review_required`.
+3. **Markdown ForgeTask Synchronization (`docs/tasks/*.md`):**
+   - The developer creates a new markdown specification directly in `<WorkspaceRoot>/docs/tasks/YYYY-MM-DD-<slug>.md` on their real workspace.
+   - `TaskMarkdownSyncService` detects the file via `FileSystemWatcher`, allocates an ID, and injects frontmatter with initial `status: suggested` and `merge_mode: manual_review_required`.
 
 ### 3.2 Manual Promotion & Merge Mode Selection
-An issue remains dormant in `Suggested` until a maintainer performs a **single manual action** via the Web UI or CLI:
+A task remains dormant in `Suggested` until a maintainer performs a **single manual action** via the Web UI or CLI:
 * **Promote to Open:**
   - The maintainer specifies two mandatory properties in the same action:
     1. **`Priority`** (1 to 5, default = 1).
     2. **`MergeMode`**:
        - `Automatic`: NightCodeForge will automatically squash and merge the verified branch to `baseBranch` once all quality checks pass.
-       - `ManualReviewRequired`: Once verified, the issue pauses at `Ready` so the maintainer can review diffs, test locally, and approve before merging.
+       - `ManualReviewRequired`: Once verified, the task pauses at `Ready` so the maintainer can review diffs, test locally, and approve before merging.
   - State transitions to **`Open`**.
 * **Reject:**
-  - State transitions to **`Rejected`**; the issue is archived and never executed.
+  - State transitions to **`Rejected`**; the task is archived and never executed.
 
 ### 3.3 Main Workflow Execution Engine
-Once an issue has `Status == IssueOverallStatus.Open` and **all its dependencies have `Status == IssueOverallStatus.Closed`**, it is enqueued to `llm-inference` (`WorkerCount = 1`) and executes through the main workflow:
+Once a task has `Status == TaskOverallStatus.Open` and **all its dependencies have `Status == TaskOverallStatus.Closed`**, it is enqueued to `llm-inference` (`WorkerCount = 1`) and executes through the main workflow:
 
 ```mermaid
 flowchart TD
     Suggested(["Suggested (Intake)"]) -->|Maintainer Action: Promote| Open(["Open (Dependencies Pending)"])
-    Open -->|All Dependencies Closed| S1["1. Issue Review Stage\n(Agentic - Scope & Q&A)"]
+    Open -->|All Dependencies Closed| S1["1. ForgeTask Review Stage\n(Agentic - Scope & Q&A)"]
     S1 --> Reviewed["Status: Reviewed"]
     Reviewed --> S2["2. Deterministic Pre-Implementation\n(Baseline Build / Test / Coverage)"]
     S2 --> S3["3. Implementation Stage\n(Agentic - Code & Test Generation)"]
@@ -143,7 +143,7 @@ flowchart TD
     ManualWait -->|Approved| ManualMerge["Maintainer Triggers Merge"]
     AutoMerge --> Closed(["Status: Closed"])
     ManualMerge --> Closed
-    Closed --> Cascade["Cascade Unblock Dependent Issues"]
+    Closed --> Cascade["Cascade Unblock Dependent Tasks"]
 
     S1 -.->|ask| Blocked["IsWaitingForHuman = true\n(Status preserved; GPU Freed Cleanly)"]
     S3 -.->|ask| Blocked
@@ -155,38 +155,38 @@ flowchart TD
 ```
 
 #### Main Workflow Stages:
-1. **Stage 1: Issue Review Agent (`IssueReviewStage`):**
-   - **Mission:** Deeply inspect the codebase against the issue request *before* coding begins. Detect ambiguities, uncover hidden constraints, identify impacted files, verify prerequisites, and formulate an approved technical plan.
-   - **Transition:** On completion, updates `issue.Status = IssueOverallStatus.Reviewed`.
+1. **Stage 1: ForgeTask Review Agent (`TaskReviewStage`):**
+   - **Mission:** Deeply inspect the codebase against the task request *before* coding begins. Detect ambiguities, uncover hidden constraints, identify impacted files, verify prerequisites, and formulate an approved technical plan.
+   - **Transition:** On completion, updates `task.Status = TaskOverallStatus.Reviewed`.
 2. **Stage 2: Deterministic Pre-Implementation:**
    - **Mission:** Execute baseline compilation (`dotnet build`), run baseline test suite, and capture baseline coverage and warning metrics without consuming LLM tokens. Metrics are recorded in `PipelineDataBag`.
 3. **Stage 3: Implementation Agent (`ImplementationStage`):**
    - **Mission:** Implement the code changes outlined in the approved plan. Modify files, generate unit tests, iterate on compiler/test feedback inside the sandbox.
-   - **Transition:** On completion, updates `issue.Status = IssueOverallStatus.Implemented`.
+   - **Transition:** On completion, updates `task.Status = TaskOverallStatus.Implemented`.
 4. **Stage 4: Deterministic Post-Implementation Quality Gates:**
    - **Mission:** Run `DeterministicCoverageGate` ($\Delta \ge 0$) and `DeterministicWarningRatchetStage` ($\Delta \le 0$). If tests fail or coverage drops, loops back to Stage 3 with structured compiler and assertion diagnostics.
 5. **Stage 5: Code Review Agent (`CodeReviewAndFixStage`):**
    - **Mission:** Act as a critical reviewer and automated fixer. Inspect the noise-filtered `git diff -U2`, check coding conventions, detect subtle regressions, and apply direct minor polish patches.
 6. **Stage 6: Deterministic Post-Review Verification:**
    - **Mission:** Because the Code Review agent can modify code and introduce syntax or regression bugs, this deterministic step re-compiles and re-executes unit tests on the final changeset.
-   - **Transition:** On pass, updates `issue.Status = IssueOverallStatus.Ready`. On failure, loops back to Stage 5 with diagnostic output.
+   - **Transition:** On pass, updates `task.Status = TaskOverallStatus.Ready`. On failure, loops back to Stage 5 with diagnostic output.
 7. **Stage 7: Merge Resolution Gate:**
-   - Evaluates `issue.MergeMode`:
-     - **Automatic Mode:** NightCodeForge automatically squashes WIP commits into a conventional commit, merges into `baseBranch`, sets `issue.Status = IssueOverallStatus.Closed`, and triggers cascade unblocking.
-     - **Manual Review Required Mode:** Issue remains in `Ready`. The maintainer inspects the diff in the Review Room, runs manual tests, and clicks "Approve & Merge" $\rightarrow$ sets `issue.Status = IssueOverallStatus.Closed`.
+   - Evaluates `task.MergeMode`:
+     - **Automatic Mode:** NightCodeForge automatically squashes WIP commits into a conventional commit, merges into `baseBranch`, sets `task.Status = TaskOverallStatus.Closed`, and triggers cascade unblocking.
+     - **Manual Review Required Mode:** ForgeTask remains in `Ready`. The maintainer inspects the diff in the Review Room, runs manual tests, and clicks "Approve & Merge" $\rightarrow$ sets `task.Status = TaskOverallStatus.Closed`.
 8. **Universal Human Interruption (`ask`):**
    - At any time during agentic stages (1, 3, or 5), an agent can invoke `ask` to request clarification.
-   - **Strict Architectural Invariant:** Human interruption **never mutates `issue.Status`**. The issue's overall lifecycle milestone (`Open`, `Reviewed`, or `Implemented`) is preserved completely intact.
+   - **Strict Architectural Invariant:** Human interruption **never mutates `task.Status`**. The task's overall lifecycle milestone (`Open`, `Reviewed`, or `Implemented`) is preserved completely intact.
    - Instead, interruption state is captured via dedicated tracking fields:
-     - `issue.IsWaitingForHuman = true;`
-     - `issue.InterruptedStageId = stage.StageId;`
-     - `issue.InterruptedAgentProfileId = profile?.Id;`
+     - `task.IsWaitingForHuman = true;`
+     - `task.InterruptedStageId = stage.StageId;`
+     - `task.InterruptedAgentProfileId = profile?.Id;`
      - `question.AgentProfileId = profile?.Id;`
    - The orchestrator creates a Git WIP checkpoint, records the question, and cleanly completes the Hangfire task, releasing the GPU worker immediately.
    - When the user answers the question in the UI:
      - `question.Status = QuestionStatus.Answered; question.Answer = answer;`
-     - `issue.IsWaitingForHuman = false;`
-     - The issue is enqueued to **`llm-urgent`** for immediate priority pickup.
+     - `task.IsWaitingForHuman = false;`
+     - The task is enqueued to **`llm-urgent`** for immediate priority pickup.
      - When dequeued, the orchestrator retrieves the original agent profile via `InterruptedAgentProfileId` and resumes the exact stage with the appropriate agent and injected answer context.
 
 ### 3.2 Agent Profiles: Specializing Intelligence per Stage
@@ -194,8 +194,8 @@ Each step in a workflow pipeline is associated with an **Agent Profile** (`Agent
 
 | Stage | Typical Profile Needs | Example Configuration |
 | :--- | :--- | :--- |
-| **0. Automated Triage** *(Untrusted Intake)* | Autonomous pre-analysis of external issues/webhooks on `main`/`master`, strictly read-only, indirect injection defense. | **Harness:** `Crucible` *(Exclusive - Pi/ACP unsupported)*<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `Medium`<br>**Permitted Tools:** `["read", "propose_issues"]`<br>**Security:** `RestrictedReadOnly` (`--network none`, `:ro`) |
-| **1. Issue Review** | High reasoning capability, deep codebase comprehension, proactively questioning edge cases. | **Harness:** `Crucible` (or `PiRpc`)<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `High`<br>**Config:** `{ "proactiveAmbiguityCheck": true }` |
+| **0. Automated Triage** *(Untrusted Intake)* | Autonomous pre-analysis of external tasks/webhooks on `main`/`master`, strictly read-only, indirect injection defense. | **Harness:** `Crucible` *(Exclusive - Pi/ACP unsupported)*<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `Medium`<br>**Permitted Tools:** `["read", "propose_tasks"]`<br>**Security:** `RestrictedReadOnly` (`--network none`, `:ro`) |
+| **1. ForgeTask Review** | High reasoning capability, deep codebase comprehension, proactively questioning edge cases. | **Harness:** `Crucible` (or `PiRpc`)<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `High`<br>**Config:** `{ "proactiveAmbiguityCheck": true }` |
 | **2. Implementation** | Rapid tool execution, fast code generation, test iteration. | **Harness:** `Crucible`<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium` (or `Low`)<br>**Config:** `{ "autoCompile": true, "maxTestRetries": 3 }` |
 | **3. Code Review & Fixes** | Strict gap analysis, linting, regression auditing. | **Harness:** `Acp` (or `Crucible`)<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium`<br>**Config:** `{ "strictLinting": true, "temperature": 0.1 }` |
 
@@ -212,7 +212,7 @@ public class AgentProfile
     public double? Temperature { get; set; }
     public string? HarnessConfigurationJson { get; set; } // Harness-specific launch/runtime JSON options
     public LocalOptimizationFlags? OptimizationFlags { get; set; } // Opt-out optimization flags for A/B testing
-    public IReadOnlyList<string>? PermittedTools { get; set; } // Whitelist: null = all stage tools; ["read", "propose_issues"]
+    public IReadOnlyList<string>? PermittedTools { get; set; } // Whitelist: null = all stage tools; ["read", "propose_tasks"]
     public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard; // Standard vs RestrictedReadOnly
     public int? WorkspaceId { get; set; }               // Nullable: global profile or workspace override
 }
@@ -281,10 +281,10 @@ public class StagePromptTemplate
 ```
 
 #### Specialized Prompts for the 3 Default Stages:
-1. **Stage 1 (Issue Review):**
+1. **Stage 1 (ForgeTask Review):**
    - **System Persona:** Architectural Analyst & Requirements Investigator.
-   - **Mission:** Scrutinize the codebase against the issue description. Proactively uncover ambiguities, implicit assumptions, and architectural conflicts *before* any implementation begins.
-   - **Injected Context:** `{{Issue.Title}}`, `{{Issue.Description}}`, repository structure, guidelines.
+   - **Mission:** Scrutinize the codebase against the task description. Proactively uncover ambiguities, implicit assumptions, and architectural conflicts *before* any implementation begins.
+   - **Injected Context:** `{{ForgeTask.Title}}`, `{{ForgeTask.Description}}`, repository structure, guidelines.
    - **Behavioral Directive:** "If any requirement or design decision is ambiguous or has multiple valid alternatives, invoke `ask` immediately to clarify. Do not guess."
 2. **Stage 2 (Implementation):**
    - **System Persona:** Senior Software Engineer & TDD Practitioner.
@@ -300,16 +300,16 @@ public class StagePromptTemplate
 ### 3.5 Stage Interruption & Universal Context Switching
 At **any point** in **any stage**, an agent may invoke the `ask` tool. When this occurs:
 1. The stage returns `StageExecutionResult.WaitingForHuman(question)`.
-2. The orchestrator records the question in the database, associates `question.AgentProfileId = profile?.Id`, flags `issue.IsWaitingForHuman = true`, and preserves the original `issue.InterruptedAgentProfileId = profile?.Id`. **Crucially, `issue.Status` is never changed to `BlockedQuestion`**; the issue retains its current lifecycle status (`Open`, `Reviewed`, or `Implemented`).
-3. The orchestrator triggers a native Git WIP commit on `feature/issue-{id}`.
+2. The orchestrator records the question in the database, associates `question.AgentProfileId = profile?.Id`, flags `task.IsWaitingForHuman = true`, and preserves the original `task.InterruptedAgentProfileId = profile?.Id`. **Crucially, `task.Status` is never changed to `BlockedQuestion`**; the task retains its current lifecycle status (`Open`, `Reviewed`, or `Implemented`).
+3. The orchestrator triggers a native Git WIP commit on `feature/task-{id}`.
 4. The Hangfire job completes cleanly (`Succeeded`), releasing the single GPU worker immediately.
-5. When the user submits the answer, `issue.IsWaitingForHuman = false`, and the issue is enqueued into `llm-urgent`. The active stage is resumed with the exact original agent profile (`InterruptedAgentProfileId`), the previous conversation memory checkpoint, and the newly supplied human answer.
+5. When the user submits the answer, `task.IsWaitingForHuman = false`, and the task is enqueued into `llm-urgent`. The active stage is resumed with the exact original agent profile (`InterruptedAgentProfileId`), the previous conversation memory checkpoint, and the newly supplied human answer.
 
 ### 3.6 Review Room Iteration & Change Requests
-If the developer inspects the diff in the Review Room and identifies issues or wants adjustments before merging:
+If the developer inspects the diff in the Review Room and identifies tasks or wants adjustments before merging:
 1. The developer clicks **"Request Changes"** and provides revision notes / feedback.
 2. The orchestrator records the reviewer feedback.
-3. The issue transitions from `Review` back to **Stage 2 (`ImplementationStage`)**, with the reviewer feedback injected into the prompt context (`{{PriorAnswers}}` / `{{ReviewerFeedback}}`).
+3. The task transitions from `Review` back to **Stage 2 (`ImplementationStage`)**, with the reviewer feedback injected into the prompt context (`{{PriorAnswers}}` / `{{ReviewerFeedback}}`).
 4. The task is enqueued with highest priority into `llm-urgent` so the Implementation Agent directly addresses the feedback on the existing feature branch.
 
 ### 3.7 Explicit Stage Boundary Handover Protocol (Zero-Memory Clean Handoff)
@@ -317,9 +317,9 @@ Carrying forward raw multi-turn conversation histories across stage boundaries c
 
 ```mermaid
 flowchart TD
-    subgraph S1 ["Stage 1: Issue Review"]
+    subgraph S1 ["Stage 1: ForgeTask Review"]
         Turn1["Turn 1..N: Codebase exploration & Q&A"]
-        S1Artifact["📄 Output Artifact:\nApproved Technical Plan & Scope\n(docs/issues/YYYY-MM-DD-slug.md)"]
+        S1Artifact["📄 Output Artifact:\nApproved Technical Plan & Scope\n(docs/tasks/YYYY-MM-DD-slug.md)"]
         Turn1 --> S1Artifact
     end
 
@@ -330,7 +330,7 @@ flowchart TD
     subgraph S2 ["Stage 2: Implementation (Clean Reset at Turn 0)"]
         S2Prompt["Fresh Prompt:\n• Approved Plan from S1 (~350 tok)\n• Resolved Human Q&A (~150 tok)\n• Stage 2 System Persona"]
         Turn2["Turn 1..M: Code, Build & Test Loops"]
-        S2Commit["Git Commit on feature/issue-{id}"]
+        S2Commit["Git Commit on feature/task-{id}"]
         S2Prompt --> Turn2 --> S2Commit
     end
 
@@ -346,8 +346,8 @@ flowchart TD
 ```
 
 1. **Stage 1 $\rightarrow$ Stage 2 Handover:**
-   - When `IssueReviewStage` finishes, its complete turn-by-turn chat history (10–20 turns) is archived to disk under `docs/transcripts/`.
-   - `ImplementationStage` starts at **Turn 0 with an empty chat history**, receiving only the approved Technical Plan & Scope markdown artifact and the list of resolved Q&A pairs from `docs/issues/`.
+   - When `TaskReviewStage` finishes, its complete turn-by-turn chat history (10–20 turns) is archived to disk under `docs/transcripts/`.
+   - `ImplementationStage` starts at **Turn 0 with an empty chat history**, receiving only the approved Technical Plan & Scope markdown artifact and the list of resolved Q&A pairs from `docs/tasks/`.
 2. **Stage 2 $\rightarrow$ Stage 3 Handover:**
    - When `ImplementationStage` completes, all internal build attempts, compile errors, and test iterations are archived to disk.
    - `CodeReviewAndFixStage` starts at **Turn 0 with an empty chat history**, receiving only the base branch name, the clean `git diff` generated from the feature branch, and coding guidelines.
@@ -375,7 +375,7 @@ Workflows in NightCodeForge are not limited to purely agentic reasoning loops. A
 #### Pipeline Composition with Deterministic Steps & Feedback Loops:
 ```mermaid
 flowchart LR
-    S1["1. Issue Review\n(Agentic LLM)"] --> S2["2. Implementation\n(Agentic LLM)"]
+    S1["1. ForgeTask Review\n(Agentic LLM)"] --> S2["2. Implementation\n(Agentic LLM)"]
     S2 --> S3["3. Deterministic Build & Test\n(CPU Native / SAST Gate)"]
     S3 -->|Pass: Success Input| S4["4. Code Review & Fix\n(Agentic LLM)"]
     S3 -->|Fail: Parse Diagnostics & Loop Back| S2Fix["2b. Fix Errors\n(Agentic LLM with Synthetic Priming)"]
@@ -385,7 +385,7 @@ flowchart LR
 
 ### 3.8.1 Persistent Pipeline Data Bag & Differential Quality Gates
 
-Deterministic stages are not merely ephemeral shell runners; they serve as **persistent telemetry and baseline extractors**. NightCodeForge provides a thread-safe, serializable **Pipeline Data Bag** (`PipelineContext.DataBag`) that persists cross-stage data into `AppDbContext.Issues.PipelineDataJson` and records per-stage snapshots in `STAGE_EXECUTION_RECORD.OutputDataJson`.
+Deterministic stages are not merely ephemeral shell runners; they serve as **persistent telemetry and baseline extractors**. NightCodeForge provides a thread-safe, serializable **Pipeline Data Bag** (`PipelineContext.DataBag`) that persists cross-stage data into `AppDbContext.Tasks.PipelineDataJson` and records per-stage snapshots in `STAGE_EXECUTION_RECORD.OutputDataJson`.
 
 This architecture enables **differential quality gates**: capturing baseline repository metrics *before* code changes, and comparing them *after* implementation to prevent regressions, coverage erosion, or agent "cheating".
 
@@ -476,57 +476,57 @@ public class PipelineDataBag
 
 ---
 
-## 4. Issue Dependency Management (DAG)
+## 4. ForgeTask Dependency Management (DAG)
 
-Complex features and refactoring tasks naturally break down into interdependent issues. NightCodeForge natively manages dependencies via a **Directed Acyclic Graph (DAG)**.
+Complex features and refactoring tasks naturally break down into interdependent tasks. NightCodeForge natively manages dependencies via a **Directed Acyclic Graph (DAG)**.
 
 ### 4.1 Dependency Rules & State Propagation
-* An issue can declare one or more prerequisite issues (`DependsOnIssueIds`).
-* **Execution Gate:** An issue with unsatisfied dependencies remains in status `WaitingOnDependencies` and **will not be enqueued** to Hangfire.
-* **Cascade Activation:** When an issue reaches `Completed` state, the orchestrator evaluates all dependent issues. If all dependencies of a dependent issue are satisfied, its state automatically transitions to `Pending` and it enters the Hangfire queue.
+* A task can declare one or more prerequisite tasks (`DependsOnTaskIds`).
+* **Execution Gate:** A task with unsatisfied dependencies remains in status `WaitingOnDependencies` and **will not be enqueued** to Hangfire.
+* **Cascade Activation:** When a task reaches `Completed` state, the orchestrator evaluates all dependent tasks. If all dependencies of a dependent task are satisfied, its state automatically transitions to `Pending` and it enters the Hangfire queue.
 * **Cycle Prevention:** When creating or modifying dependencies, the `DependencyResolutionEngine` performs topological sorting to detect and reject circular references (cycles).
 
 ```mermaid
 flowchart TD
-    Issue101["Issue #101: Core Data Models\n(Status: Completed)"]
-    Issue102["Issue #102: Git CLI Engine\n(Status: Running Stage 2)"]
-    Issue103["Issue #103: Agent Harness\n(Status: Pending in Queue)"]
-    Issue104["Issue #104: Web Dashboard\n(Status: Waiting on Dependencies)"]
+    Task101["ForgeTask #101: Core Data Models\n(Status: Completed)"]
+    Task102["ForgeTask #102: Git CLI Engine\n(Status: Running Stage 2)"]
+    Task103["ForgeTask #103: Agent Harness\n(Status: Pending in Queue)"]
+    Task104["ForgeTask #104: Web Dashboard\n(Status: Waiting on Dependencies)"]
 
-    Issue101 --> Issue102
-    Issue101 --> Issue103
-    Issue102 --> Issue104
-    Issue103 --> Issue104
+    Task101 --> Task102
+    Task101 --> Task103
+    Task102 --> Task104
+    Task103 --> Task104
 ```
 
 ---
 
-## 5. File-System Issue Mirroring (`docs/issues/`)
+## 5. File-System ForgeTask Mirroring (`docs/tasks/`)
 
-To provide optimal ergonomics for AI agents, developers, and Git workflows, active (non-resolved) issues are mirrored directly in the workspace file system under **`docs/issues/`** as structured Markdown documents with YAML frontmatter.
+To provide optimal ergonomics for AI agents, developers, and Git workflows, active (non-resolved) tasks are mirrored directly in the workspace file system under **`docs/tasks/`** as structured Markdown documents with YAML frontmatter.
 
 ```mermaid
 flowchart LR
-    DB[("Database\n(Single Source of Truth)")] <-->|"Real-Time Bidirectional Sync"| SyncEngine["IssueMarkdownSyncService"]
-    SyncEngine <-->|"docs/issues/ISSUE-00123-title.md"| Disk["Workspace File System\n(docs/issues/)"]
+    DB[("Database\n(Single Source of Truth)")] <-->|"Real-Time Bidirectional Sync"| SyncEngine["TaskMarkdownSyncService"]
+    SyncEngine <-->|"docs/tasks/TASK-00123-title.md"| Disk["Workspace File System\n(docs/tasks/)"]
     Disk -->|"Native read tool"| Agent["Active AI Agent"]
     Disk -->|"Direct IDE editing / Git commit"| Developer["Developer / Git Repo"]
 ```
 
 ### 5.1 Why Markdown Files for Agents?
-1. **Native Agent Accessibility:** Agents inside the workspace can read issue specifications, requirements, and previous Q&A directly using basic file tools (`read`), without needing custom database query APIs or SDK dependencies.
-2. **Developer & IDE Transparency:** Developers can review, search, and edit issues directly in VS Code, Visual Studio, or Obsidian without leaving their editor.
-3. **Version Control Integration:** Active issue specifications live alongside the code on the issue branch, preserving the exact requirements snapshot in Git history.
+1. **Native Agent Accessibility:** Agents inside the workspace can read task specifications, requirements, and previous Q&A directly using basic file tools (`read`), without needing custom database query APIs or SDK dependencies.
+2. **Developer & IDE Transparency:** Developers can review, search, and edit tasks directly in VS Code, Visual Studio, or Obsidian without leaving their editor.
+3. **Version Control Integration:** Active task specifications live alongside the code on the task branch, preserving the exact requirements snapshot in Git history.
 
 ### 5.2 Document Naming & Frontmatter Schema
 
 #### Naming Convention: Chronological Date Prefix (`YYYY-MM-DD-slug.md`)
-To allow developers and agents to quickly sort issues chronologically in their file explorer without having to rename files when IDs are assigned, files are named:
-`docs/issues/YYYY-MM-DD-<slug>.md` (e.g. `docs/issues/2026-10-12-implement-oauth2-flow.md`).
+To allow developers and agents to quickly sort tasks chronologically in their file explorer without having to rename files when IDs are assigned, files are named:
+`docs/tasks/YYYY-MM-DD-<slug>.md` (e.g. `docs/tasks/2026-10-12-implement-oauth2-flow.md`).
 
 * The database `id` is stored exclusively **inside the frontmatter**, not in the filename.
 * Dropping a new file never requires a file rename when the system assigns an ID.
-* **Slug Collision Resolution:** If multiple issues created on the same date produce identical slugs, the sync service appends an incrementing numeric suffix (e.g. `YYYY-MM-DD-<slug>-2.md`, `YYYY-MM-DD-<slug>-3.md`).
+* **Slug Collision Resolution:** If multiple tasks created on the same date produce identical slugs, the sync service appends an incrementing numeric suffix (e.g. `YYYY-MM-DD-<slug>-2.md`, `YYYY-MM-DD-<slug>-3.md`).
 
 ```markdown
 ---
@@ -536,11 +536,11 @@ workspace: NightCodeForge
 status: Open
 waiting_for_human: true
 interrupted_agent_profile: deep-analyst
-current_stage: IssueReview
+current_stage: TaskReview
 priority: 1
 merge_mode: manual_review_required
 base_branch: main
-feature_branch: feature/issue-123
+feature_branch: feature/task-123
 depends_on: [101, 102]
 agent_profile: deep-analyst
 created_at: 2026-10-12T22:00:00Z
@@ -553,7 +553,7 @@ updated_at: 2026-10-12T22:05:00Z
 Implement authorization code flow with PKCE for local clients...
 
 ## ❓ Human Clarifications (Q&A)
-### Question 1 (Asked during Stage: IssueReview on 2026-10-12 22:03:00)
+### Question 1 (Asked during Stage: TaskReview on 2026-10-12 22:03:00)
 **Prompt:** Should refresh token rotation be enforced on every token exchange?
 **Answer:** Yes, rotate refresh tokens on every exchange and store revocations in SQLite.
 
@@ -567,8 +567,8 @@ Implement authorization code flow with PKCE for local clients...
 
 ```mermaid
 flowchart TD
-    FileEdit["File Edited on Disk\n(docs/issues/2026-10-12-feature.md)"]
-    Watcher["FileSystemWatcher\n(IssueMarkdownSyncService)"]
+    FileEdit["File Edited on Disk\n(docs/tasks/2026-10-12-feature.md)"]
+    Watcher["FileSystemWatcher\n(TaskMarkdownSyncService)"]
     Parser["Frontmatter & Markdown Parser"]
     DBSync["Database Update"]
     Guard["System-Managed Field Guard"]
@@ -587,22 +587,22 @@ flowchart TD
    * Changes to `title`, markdown body (`description`, requirements, technical plan), `priority`, `agent_profile`, `base_branch`, and `depends_on` are automatically detected and saved into the database.
    * Dependency changes via `depends_on` are passed through DAG cycle checks before being committed.
 3. **Drop-in Creation Without Renaming:**
-   * When a developer or agent drops a new file (e.g. `docs/issues/2026-10-13-add-dark-theme.md`) without an `id` field:
+   * When a developer or agent drops a new file (e.g. `docs/tasks/2026-10-13-add-dark-theme.md`) without an `id` field:
      1. The watcher detects the new file.
-     2. A new `Issue` entity is created in EF Core, allocating the next available `Id` (e.g. `124`).
+     2. A new `ForgeTask` entity is created in EF Core, allocating the next available `Id` (e.g. `124`).
      3. The sync service injects `id: 124` and `created_at` directly into the file's frontmatter **in-place**, without renaming the file.
 4. **Resolution Archival / Cleanup:**
-   * When an issue reaches `Completed` (or `Cancelled`), the markdown file is removed from `docs/issues/` (or archived to `docs/issues/archive/`), ensuring that `docs/issues/` contains only active and pending work.
+   * When a task reaches `Completed` (or `Cancelled`), the markdown file is removed from `docs/tasks/` (or archived to `docs/tasks/archive/`), ensuring that `docs/tasks/` contains only active and pending work.
 5. **FileSystemWatcher Debouncing & Echo Loop Prevention:**
    * Operating systems and IDEs emit multiple rapid events per save (e.g. `Created` followed by multiple `Changed` events within 50ms) and may hold temporary locks during atomic saves.
-   * `IssueMarkdownSyncService` applies a **300ms debounce window** to coalesce rapid I/O bursts.
+   * `TaskMarkdownSyncService` applies a **300ms debounce window** to coalesce rapid I/O bursts.
    * To prevent infinite echo loops (where the system writing back protected frontmatter fields triggers the watcher to fire again), the service maintains an in-memory **write-suppression tracker**: whenever the orchestrator writes a file, it registers the computed hash and ignores the subsequent event.
 
 ---
 
-## 6. Interactive Issue Discovery & Ideation Chat
+## 6. Interactive ForgeTask Discovery & Ideation Chat
 
-To prevent vague or poorly scoped issues from entering the queue, NightCodeForge provides an **Interactive Ideation & Codebase Discovery Chat**:
+To prevent vague or poorly scoped tasks from entering the queue, NightCodeForge provides an **Interactive Ideation & Codebase Discovery Chat**:
 
 ```mermaid
 sequenceDiagram
@@ -611,39 +611,39 @@ sequenceDiagram
     participant UI as Blazor Chat Interface
     participant Explorer as Discovery Agent (Read-Only)
     participant Git as Git Workspace
-    participant Engine as Dependency & Issue Engine
+    participant Engine as Dependency & ForgeTask Engine
 
     User->>UI: "How does our authentication handle JWT refresh tokens, and what's needed for OAuth2?"
     UI->>Explorer: Stream prompt + conversation context
     Explorer->>Git: Read relevant auth files & configuration
     Git-->>Explorer: File contents & symbols
     Explorer-->>UI: Explains architecture & highlights gaps
-    User->>UI: "Great, let's create issues to implement OAuth2 support."
-    Explorer->>UI: Proposes 2 structured issues with dependencies:<br>1. Issue A: Add OAuth2 client config & token model<br>2. Issue B: Add Google/GitHub provider handlers (Depends on A)
+    User->>UI: "Great, let's create tasks to implement OAuth2 support."
+    Explorer->>UI: Proposes 2 structured tasks with dependencies:<br>1. ForgeTask A: Add OAuth2 client config & token model<br>2. ForgeTask B: Add Google/GitHub provider handlers (Depends on A)
     User->>UI: Reviews, tweaks scope, and clicks "Create in Backlog"
-    UI->>Engine: Registers Issue A & Issue B with dependency link
-    Engine-->>UI: Issue A queued; Issue B waiting on A
+    UI->>Engine: Registers ForgeTask A & ForgeTask B with dependency link
+    Engine-->>UI: ForgeTask A queued; ForgeTask B waiting on A
 ```
 
 ### 6.1 Discovery Agent Capabilities
 * **Read-Only Access:** Equipped with search, file-reading, and code exploration tools (`bash` with ls/rg, `read`). Cannot modify working tree files.
-* **Issue Extraction Tool:** Agent has a function tool `propose_issues(List<IssueProposalDto>)` allowing it to output structured titles, acceptance criteria, affected components, and recommended dependencies directly into the UI for developer approval.
+* **ForgeTask Extraction Tool:** Agent has a function tool `propose_tasks(List<TaskProposalDto>)` allowing it to output structured titles, acceptance criteria, affected components, and recommended dependencies directly into the UI for developer approval.
 
-### 6.2 Automated Untrusted Issue Triage (`TriageProfile` & Security Sandbox)
-NightCodeForge supports automated intake pre-analysis triggered by external webhooks (e.g. GitHub Issues, GitLab Issues, Jira):
-* **Intake Trigger & Objective:** When a new external bug report or feature request arrives, NightCodeForge spawns an autonomous **Triage Stage** (`TriageStage`). The agent inspects the repository's default branch (`main` or `master`) directly (without creating or checking out a feature branch), verifies if the report is actionable, locates relevant source files, and suggests one or more structured backlog issues via `propose_issues` for human review.
+### 6.2 Automated Untrusted ForgeTask Triage (`TriageProfile` & Security Sandbox)
+NightCodeForge supports automated intake pre-analysis triggered by external webhooks (e.g. GitHub Tasks, GitLab Tasks, Jira):
+* **Intake Trigger & Objective:** When a new external bug report or feature request arrives, NightCodeForge spawns an autonomous **Triage Stage** (`TriageStage`). The agent inspects the repository's default branch (`main` or `master`) directly (without creating or checking out a feature branch), verifies if the report is actionable, locates relevant source files, and suggests one or more structured backlog tasks via `propose_tasks` for human review.
 * **Threat Model: Malicious External Content & Indirect Prompt Injections:**
-  External issues originate from unauthenticated or untrusted public users. Attackers can embed hidden prompt injections (e.g., instructions attempting to exfiltrate secrets, execute malicious shell scripts, or rewrite code).
+  External tasks originate from unauthenticated or untrusted public users. Attackers can embed hidden prompt injections (e.g., instructions attempting to exfiltrate secrets, execute malicious shell scripts, or rewrite code).
 * **Dual-Lock Defense Architecture:**
 
 ```mermaid
 flowchart TD
-    Webhook["1. External Webhook\n(GitHub / GitLab Issue created)"]
+    Webhook["1. External Webhook\n(GitHub / GitLab ForgeTask created)"]
     Queue["2. Hangfire Dev-Queue\n(Profile: triage-guard)"]
     
     subgraph Lock1 ["Lock 1: Crucible Dynamic Tool Whitelisting"]
         Crucible["CrucibleAgent\n(Microsoft Agent Framework)"]
-        AllowedTools["Permitted: read, propose_issues"]
+        AllowedTools["Permitted: read, propose_tasks"]
         StrippedTools["Revoked at Schema Level:\nwrite, edit, ask, web_search, bash"]
     end
 
@@ -652,7 +652,7 @@ flowchart TD
         Flags["- Mount: /workspace:ro\n- Network: --network none\n- Filesystem: --read-only\n- Caps: --cap-drop=ALL\n- Scrubbed Environment (No host secrets)"]
     end
 
-    BacklogUI["3. Backlog Review UI\n(Human approves / edits proposed issues)"]
+    BacklogUI["3. Backlog Review UI\n(Human approves / edits proposed tasks)"]
 
     Webhook --> Queue
     Queue --> Crucible
@@ -664,9 +664,9 @@ flowchart TD
 ```
 
 1. **Lock 1: In-Process Tool Restriction (Crucible Exclusive):**
-   * Crucible dynamically binds *only* the read-only tools defined in `AgentProfile.PermittedTools`: `read` and `propose_issues`.
+   * Crucible dynamically binds *only* the read-only tools defined in `AgentProfile.PermittedTools`: `read` and `propose_tasks`.
    * `write` and `edit` are excluded entirely from the tool schema—the agent cannot modify files.
-   * `ask` is excluded—an untrusted issue cannot stall or block the human dev-queue.
+   * `ask` is excluded—an untrusted task cannot stall or block the human dev-queue.
    * `web_search` is excluded—eliminating outbound SSRF and exfiltration channels.
    * *Harness Exclusion:* **Pi and ACP harnesses cannot be used for triage** because their static tool engines advertise all capabilities (`write`, `edit`, `bash`) unconditionally.
 2. **Lock 2: Restricted Read-Only Container Sandbox:**
@@ -685,8 +685,8 @@ The background job system uses **Hangfire** backed by persistent storage. Hangfi
 
 | Queue Name | Worker Count | Purpose | Constraints |
 | :--- | :--- | :--- | :--- |
-| `llm-urgent` | **1** (Shared pool) | Resumed issues that just received developer answers. | Highest priority for GPU inference. |
-| `llm-inference` | **1** (Shared pool) | Normal queued issues awaiting execution. | Strictly sequential to protect VRAM. |
+| `llm-urgent` | **1** (Shared pool) | Resumed tasks that just received developer answers. | Highest priority for GPU inference. |
+| `llm-inference` | **1** (Shared pool) | Normal queued tasks awaiting execution. | Strictly sequential to protect VRAM. |
 | `default` | **4** | Non-GPU background tasks: Git diff calculation, log cleanup, telemetry broadcasts. | Parallel execution allowed. |
 
 > [!IMPORTANT]
@@ -694,9 +694,9 @@ The background job system uses **Hangfire** backed by persistent storage. Hangfi
 > `Queues = new[] { "llm-urgent", "llm-inference" }`.
 > This guarantees that:
 > 1. At most **one** AI task runs on the GPU at any millisecond, strictly guarding VRAM against out-of-memory crashes.
-> 2. Resumed issues in `llm-urgent` receive **priority pick-up**: as soon as the single worker completes its active turn/task, jobs in `llm-urgent` are dequeued before standard items in `llm-inference` (non-preemptive priority dispatch without concurrent VRAM oversubscription).
+> 2. Resumed tasks in `llm-urgent` receive **priority pick-up**: as soon as the single worker completes its active turn/task, jobs in `llm-urgent` are dequeued before standard items in `llm-inference` (non-preemptive priority dispatch without concurrent VRAM oversubscription).
 
-### 7.2 Workspace & Issue-Level Concurrency: Dual-Tiered Git Locking (`IWorkspaceLockProvider`)
+### 7.2 Workspace & ForgeTask-Level Concurrency: Dual-Tiered Git Locking (`IWorkspaceLockProvider`)
 
 While GPU inference is strictly serialized globally (`WorkerCount = 1` across `llm-urgent` and `llm-inference`), background utility tasks (`WorkerCount = 4` in the `default` queue), deterministic pipeline stages (compilation, unit tests, SAST scanning on CPU), and interactive developer actions (ideation chat, automated triage) can and should operate concurrently.
 
@@ -711,36 +711,36 @@ flowchart TD
         WksLock --- WksOps
     end
 
-    subgraph IssueLevel ["Issue-Level Locks (wks:{workspaceId}:issue:{issueId})"]
+    subgraph TaskLevel ["ForgeTask-Level Locks (wks:{workspaceId}:task:{taskId})"]
         direction TB
-        Issue1Lock["AcquireIssueLockAsync(wks, 101)\nWorktree: issue-101"]
-        Issue2Lock["AcquireIssueLockAsync(wks, 102)\nWorktree: issue-102"]
-        Issue3Lock["AcquireIssueLockAsync(wks, 103)\nWorktree: issue-103"]
+        Task1Lock["AcquireTaskLockAsync(wks, 101)\nWorktree: task-101"]
+        Task2Lock["AcquireTaskLockAsync(wks, 102)\nWorktree: task-102"]
+        Task3Lock["AcquireTaskLockAsync(wks, 103)\nWorktree: task-103"]
 
-        Issue1Task["Issue #101: Deterministic Tests & SAST\n(Runs on CPU via default queue)"]
-        Issue2Task["Issue #102: Agentic Implementation\n(Runs on GPU via llm-inference)"]
-        Issue3Task["Issue #103: Waiting for Human (ask)\n(Preserved in worktree on disk)"]
+        Task1Task["ForgeTask #101: Deterministic Tests & SAST\n(Runs on CPU via default queue)"]
+        Task2Task["ForgeTask #102: Agentic Implementation\n(Runs on GPU via llm-inference)"]
+        Task3Task["ForgeTask #103: Waiting for Human (ask)\n(Preserved in worktree on disk)"]
 
-        Issue1Lock --- Issue1Task
-        Issue2Lock --- Issue2Task
-        Issue3Lock --- Issue3Task
+        Task1Lock --- Task1Task
+        Task2Lock --- Task2Task
+        Task3Lock --- Task3Task
     end
 
     Canonical["Canonical Clone on main/master\n(Read-Only Ideation & Triage)"]
 ```
 
 #### Dual-Tiered Locking Invariants:
-1. **Issue-Level Locks (`AcquireIssueLockAsync(workspaceId, issueId)`):**
-   - Key format: `$"wks:{workspaceId}:issue:{issueId}"`.
-   - **Isolation Guarantee:** Serializes multi-turn stage executions for the *same* issue to prevent overlapping pipeline actions on the same branch.
-   - **Concurrency Benefit:** Independent issues within the *same workspace* execute concurrently without blocking one another. Issue #101 can execute long-running deterministic compilation and unit tests (running on CPU) while Issue #102 executes reasoning and coding on the GPU.
+1. **ForgeTask-Level Locks (`AcquireTaskLockAsync(workspaceId, taskId)`):**
+   - Key format: `$"wks:{workspaceId}:task:{taskId}"`.
+   - **Isolation Guarantee:** Serializes multi-turn stage executions for the *same* task to prevent overlapping pipeline actions on the same branch.
+   - **Concurrency Benefit:** Independent tasks within the *same workspace* execute concurrently without blocking one another. ForgeTask #101 can execute long-running deterministic compilation and unit tests (running on CPU) while ForgeTask #102 executes reasoning and coding on the GPU.
 2. **Workspace-Level Locks (`AcquireLockAsync(workspaceId)`):**
    - Key format: `$"wks:{workspaceId}"`.
    - **Strictly Atomic & Short-Lived:** Held only during brief operations that touch the shared canonical clone:
      - Merging a verified feature branch into `main` (`SquashAndMergeAsync`).
      - Synchronizing the canonical ext4 clone with the developer's host repository (`GitMirrorSyncService`).
 3. **Non-Blocking Ideation & Triage:**
-   - Because the canonical clone stays checked out on `main`/`master` and normal issue execution happens in isolated worktrees, discovery chat (`IIdeationService`) and untrusted triage (`TriageStage`) inspect `main` without waiting for issue locks.
+   - Because the canonical clone stays checked out on `main`/`master` and normal task execution happens in isolated worktrees, discovery chat (`IIdeationService`) and untrusted triage (`TriageStage`) inspect `main` without waiting for task locks.
 
 ---
 
@@ -755,9 +755,9 @@ To ensure zero data loss during context switches:
 2. The orchestrator uses **WIP Commits**:
    ```bash
    git add -A
-   git commit -m "WIP: [Issue #{id}][Stage: {stageName}] Awaiting human input: {QuestionSummary}" --no-verify
+   git commit -m "WIP: [ForgeTask #{id}][Stage: {stageName}] Awaiting human input: {QuestionSummary}" --no-verify
    ```
-3. When the issue passes all stages and is approved in the Review Room, the orchestrator squashes the WIP commits into a clean, conventional commit before merging.
+3. When the task passes all stages and is approved in the Review Room, the orchestrator squashes the WIP commits into a clean, conventional commit before merging.
 
 ### 8.3 Cross-Environment Architecture & Working Clone Protocol
 
@@ -791,8 +791,8 @@ To ensure zero data loss during context switches:
   - **On Windows:** Performed strictly inside plain WSL2 (`wsl.exe -d <distrib> -- git ...`).
 * **Host IDE Working Tree Synchronization (`updateInstead`):**
   - The developer's repository is configured with `git config receive.denyCurrentBranch updateInstead`.
-  - Pushes from the working clone (`git push host-origin feature/issue-{id}`) update the developer's checked-out branch without conflict.
-  - **Dirty Host Tree Fallback:** If the developer has uncommitted changes to tracked files in their host IDE, `GitMirrorSyncService` catches the rejection, pushes to `refs/heads/feature/issue-{id}-ncf`, and sends a SignalR alert to the UI with reconciliation guidance.
+  - Pushes from the working clone (`git push host-origin feature/task-{id}`) update the developer's checked-out branch without conflict.
+  - **Dirty Host Tree Fallback:** If the developer has uncommitted changes to tracked files in their host IDE, `GitMirrorSyncService` catches the rejection, pushes to `refs/heads/feature/task-{id}-ncf`, and sends a SignalR alert to the UI with reconciliation guidance.
 
 #### 4. Crucible Windows UNC Bridge
 Because Crucible runs in-process within the Windows Forge process:
@@ -806,13 +806,13 @@ Because Crucible runs in-process within the Windows Forge process:
 
 #### 1. Architectural Motivation: Worktrees vs. Clones vs. Locks
 
-When designing concurrent multi-issue execution on a workspace, three primary models were evaluated:
+When designing concurrent multi-task execution on a workspace, three primary models were evaluated:
 
 | Architecture | Mechanism | Disk Overhead | Concurrency | Ideation on `main` | Verdict |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **A. Single Clone + Global Lock** | Single clone, branches checked out sequentially under full workspace lock. | Low (1x clone) | **Zero concurrent tasks**; deterministic tests block GPU tasks and triage. | Blocked while any issue runs on a branch. | ❌ Rejected: severe throughput bottleneck. |
+| **A. Single Clone + Global Lock** | Single clone, branches checked out sequentially under full workspace lock. | Low (1x clone) | **Zero concurrent tasks**; deterministic tests block GPU tasks and triage. | Blocked while any task runs on a branch. | ❌ Rejected: severe throughput bottleneck. |
 | **B. Clone Reservation Pool** | Pool of N full clones (`wks/{id}/clone_1..N`), dynamically leased per task. | High (N x repository size + N x `.git` databases) | Parallel execution across leased clones. | Requires dedicated idle clone for `main`. | ❌ Rejected: massive disk duplication & mirror sync complexity. |
-| **C. Ephemeral Git Worktrees** *(Implemented)* | Single canonical clone on `main`; on-demand worktrees created per active issue. | Minimal (shared `.git` object database; only checked-out working files duplicated). | **Full parallelism**: concurrent deterministic & agentic tasks on distinct issues. | **Always available**: canonical clone remains permanently on `main`. | ✅ **Adopted Architectural Standard** |
+| **C. Ephemeral Git Worktrees** *(Implemented)* | Single canonical clone on `main`; on-demand worktrees created per active task. | Minimal (shared `.git` object database; only checked-out working files duplicated). | **Full parallelism**: concurrent deterministic & agentic tasks on distinct tasks. | **Always available**: canonical clone remains permanently on `main`. | ✅ **Adopted Architectural Standard** |
 
 ```mermaid
 flowchart TD
@@ -824,10 +824,10 @@ flowchart TD
         MainTree["Working Tree on 'main'\n- Used by Ideation Agent\n- Used by Triage Agent (ro)\n- Target for Squash & Merge"]
     end
 
-    subgraph Worktrees ["Ephemeral Issue Worktrees (~/.nightcodeforge/wks/{workspaceId}/issue-{id})"]
-        WT101["issue-101\nBranch: feature/issue-101\n(Running Stage 2: Tests)"]
-        WT102["issue-102\nBranch: feature/issue-102\n(Running Stage 3: Coding)"]
-        WT103["issue-103\nBranch: feature/issue-103\n(Awaiting Human Input)"]
+    subgraph Worktrees ["Ephemeral ForgeTask Worktrees (~/.nightcodeforge/wks/{workspaceId}/task-{id})"]
+        WT101["task-101\nBranch: feature/task-101\n(Running Stage 2: Tests)"]
+        WT102["task-102\nBranch: feature/task-102\n(Running Stage 3: Coding)"]
+        WT103["task-103\nBranch: feature/task-103\n(Awaiting Human Input)"]
     end
 
     GitObjects --- MainTree
@@ -838,59 +838,59 @@ flowchart TD
 
 #### 2. Ephemeral Worktree Lifecycle
 
-Each active issue follows a strictly managed worktree lifecycle:
+Each active task follows a strictly managed worktree lifecycle:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Orch as IssueOrchestrator
+    actor Orch as TaskOrchestrator
     participant GWM as GitWorkspaceManager
     participant Git as Native Git CLI
     participant Stage as Pipeline Stages (1..6)
     participant Host as Developer Host Repo
 
     Note over Orch,GWM: 1. On-Demand Allocation
-    Orch->>GWM: EnsureWorktreeAsync(workspace, issueId, "main")
+    Orch->>GWM: EnsureWorktreeAsync(workspace, taskId, "main")
     GWM->>Git: worktree list --porcelain
     alt Worktree not registered
-        GWM->>Git: rev-parse --git-path info/exclude (Ensure issue-*/ excluded)
-        GWM->>Git: worktree add -b feature/issue-{id} issue-{id} main
-        GWM->>Git: Write relative gitdir to issue-{id}/.git for cross-environment portability
+        GWM->>Git: rev-parse --git-path info/exclude (Ensure task-*/ excluded)
+        GWM->>Git: worktree add -b feature/task-{id} task-{id} main
+        GWM->>Git: Write relative gitdir to task-{id}/.git for cross-environment portability
     end
-    GWM-->>Orch: Worktree path: ~/.nightcodeforge/wks/{id}/issue-{id}
+    GWM-->>Orch: Worktree path: ~/.nightcodeforge/wks/{id}/task-{id}
 
     Note over Orch,Stage: 2. Multi-Stage Reuse & Execution
     loop Pipeline Execution (Review, Pre-Impl, Impl, Gates, Review & Fix)
         Orch->>Stage: ExecuteStageAsync(context with WorkingDirectory = worktreePath)
-        Stage->>Git: File edits, builds, tests inside issue-{id}
-        Orch->>GWM: CreateWipCheckpointAsync(issueId, stage, summary)
-        GWM->>Git: git -C issue-{id} commit -m "WIP: ..."
+        Stage->>Git: File edits, builds, tests inside task-{id}
+        Orch->>GWM: CreateWipCheckpointAsync(taskId, stage, summary)
+        GWM->>Git: git -C task-{id} commit -m "WIP: ..."
     end
 
     Note over Orch,Host: 3. Finalization & Teardown
-    Orch->>GWM: SquashAndMergeAsync(workspace, issueId, "main", commitMsg)
+    Orch->>GWM: SquashAndMergeAsync(workspace, taskId, "main", commitMsg)
     GWM->>Git: git -C canonical checkout main
-    GWM->>Git: git -C canonical merge --squash feature/issue-{id}
+    GWM->>Git: git -C canonical merge --squash feature/task-{id}
     GWM->>Git: git -C canonical commit -m "{commitMsg}"
-    GWM->>GWM: RemoveWorktreeAsync(workspace, issueId)
-    GWM->>Git: git -C canonical worktree remove issue-{id} --force
+    GWM->>GWM: RemoveWorktreeAsync(workspace, taskId)
+    GWM->>Git: git -C canonical worktree remove task-{id} --force
     GWM->>Git: git -C canonical worktree prune
     Orch->>Host: git push host-origin main
 ```
 
 1. **Allocation & Idempotency (`EnsureWorktreeAsync`):**
-   - When an issue begins processing, `EnsureWorktreeAsync` checks if the worktree is already listed in `git worktree list --porcelain`.
+   - When a task begins processing, `EnsureWorktreeAsync` checks if the worktree is already listed in `git worktree list --porcelain`.
    - If previously allocated (e.g. resuming from an interruption), it reuses the existing working directory without reinitializing.
-   - If new, it creates the worktree bound to `feature/issue-{id}`.
-   - Automatically writes `issue-*/` and `wt/` to `.git/info/exclude` in the canonical repository, guaranteeing that local worktrees never pollute `git status --porcelain` on the canonical repository.
+   - If new, it creates the worktree bound to `feature/task-{id}`.
+   - Automatically writes `task-*/` and `wt/` to `.git/info/exclude` in the canonical repository, guaranteeing that local worktrees never pollute `git status --porcelain` on the canonical repository.
 2. **Multi-Stage Reuse:**
-   - The same worktree directory persists across all stages of an issue. File edits made during `ImplementationStage` are immediately present for `DeterministicTestStage` and `CodeReviewAndFixStage` without checkout hops or stash pops.
+   - The same worktree directory persists across all stages of a task. File edits made during `ImplementationStage` are immediately present for `DeterministicTestStage` and `CodeReviewAndFixStage` without checkout hops or stash pops.
    - Deterministic stages execute with `context.WorkingDirectory` pointed to the worktree.
-   - AI agent tools (`view_file`, `write_to_file`, `replace_file_content`, `grep_search`) resolve relative paths against the worktree via `IWorkspacePathResolver.ResolveCruciblePath(workspaceId, path, issueId)`.
+   - AI agent tools (`view_file`, `write_to_file`, `replace_file_content`, `grep_search`) resolve relative paths against the worktree via `IWorkspacePathResolver.ResolveCruciblePath(workspaceId, path, taskId)`.
    - Checkpoints (`CreateWipCheckpointAsync`) commit directly in the worktree.
-   - Noise-filtered diffs (`GenerateDiffAsync -U2`) compare `baseBranch...feature/issue-{id}` within the worktree.
+   - Noise-filtered diffs (`GenerateDiffAsync -U2`) compare `baseBranch...feature/task-{id}` within the worktree.
 3. **Teardown & Clean Up (`RemoveWorktreeAsync`):**
-   - Once all stages pass and the issue is squashed and merged (or if rejected), `SquashAndMergeAsync` invokes `RemoveWorktreeAsync`.
+   - Once all stages pass and the task is squashed and merged (or if rejected), `SquashAndMergeAsync` invokes `RemoveWorktreeAsync`.
    - Executes `git worktree remove "<worktreePath>" --force` and `git worktree prune`.
    - Disk space is reclaimed immediately.
 
@@ -898,25 +898,25 @@ sequenceDiagram
 
 Because NightCodeForge supports cross-environment execution (Windows host with WSL2 agent confinement, Linux bare-host, and container sandboxes), worktree paths are resolved systematically across boundaries:
 
-| Environment | Canonical Repository Path | Issue Worktree Path |
+| Environment | Canonical Repository Path | ForgeTask Worktree Path |
 | :--- | :--- | :--- |
-| **Linux / macOS Bare Host** | `~/.nightcodeforge/wks/{id}/clone/` | `~/.nightcodeforge/wks/{id}/issue-{issueId}/` |
-| **WSL2 Ext4 Mirror (Linux Path)** | `/home/{user}/.nightcodeforge/wks/{id}/clone/` | `/home/{user}/.nightcodeforge/wks/{id}/issue-{issueId}/` |
-| **Windows Host via Crucible UNC Bridge** | `\\wsl.localhost\{distro}\home\{user}\.nightcodeforge\wks\{id}\clone\` | `\\wsl.localhost\{distro}\home\{user}\.nightcodeforge\wks\{id}\issue-{issueId}\` |
-| **Local Bare Host (e.g. Unit Tests)** | `<workspaceRoot>/clone/` | `<workspaceRoot>/issue-{issueId}/` |
+| **Linux / macOS Bare Host** | `~/.nightcodeforge/wks/{id}/clone/` | `~/.nightcodeforge/wks/{id}/task-{taskId}/` |
+| **WSL2 Ext4 Mirror (Linux Path)** | `/home/{user}/.nightcodeforge/wks/{id}/clone/` | `/home/{user}/.nightcodeforge/wks/{id}/task-{taskId}/` |
+| **Windows Host via Crucible UNC Bridge** | `\\wsl.localhost\{distro}\home\{user}\.nightcodeforge\wks\{id}\clone\` | `\\wsl.localhost\{distro}\home\{user}\.nightcodeforge\wks\{id}\task-{taskId}\` |
+| **Local Bare Host (e.g. Unit Tests)** | `<workspaceRoot>/clone/` | `<workspaceRoot>/task-{taskId}/` |
 
-Agents inside containers or WSL access the worktree as their native root working directory (`/workspace/issue-{id}` or `~/.nightcodeforge/wks/{id}/issue-{id}`).
-Crucible running in-process on the Windows host seamlessly translates paths via `IWorkspacePathResolver.ResolveCruciblePath(workspaceId, relativeOrContainerPath, issueId)`, stripping container prefixes (`/workspace/`) and mounting to the high-speed WSL2 UNC network share.
+Agents inside containers or WSL access the worktree as their native root working directory (`/workspace/task-{id}` or `~/.nightcodeforge/wks/{id}/task-{id}`).
+Crucible running in-process on the Windows host seamlessly translates paths via `IWorkspacePathResolver.ResolveCruciblePath(workspaceId, relativeOrContainerPath, taskId)`, stripping container prefixes (`/workspace/`) and mounting to the high-speed WSL2 UNC network share.
 
-#### 4. Isolated Issue Worktree Mount (`/workspace`), Layered Clone Protection (`/clone:ro` & `/clone/.git:rw`) & LLM Cognitive Focus
+#### 4. Isolated ForgeTask Worktree Mount (`/workspace`), Layered Clone Protection (`/clone:ro` & `/clone/.git:rw`) & LLM Cognitive Focus
 
 To eliminate LLM confusion and safeguard the canonical repository while maintaining native Git worktree functionality:
 
-1. **Per-Issue Isolated Worktree Container Mount:**
-   Instead of mounting the parent workspace directory (which would expose sibling `issue-*` worktrees and the canonical `clone` directory inside `/workspace`), the sandbox container mounts **strictly the active issue's worktree** directly at `/workspace`:
+1. **Per-ForgeTask Isolated Worktree Container Mount:**
+   Instead of mounting the parent workspace directory (which would expose sibling `task-*` worktrees and the canonical `clone` directory inside `/workspace`), the sandbox container mounts **strictly the active task's worktree** directly at `/workspace`:
    ```bash
-   # 1. Active issue worktree mounted at /workspace (read-write)
-   -v ~/.nightcodeforge/wks/{workspaceId}/issue-{id}:/workspace
+   # 1. Active task worktree mounted at /workspace (read-write)
+   -v ~/.nightcodeforge/wks/{workspaceId}/task-{id}:/workspace
 
    # 2. Canonical clone repository (strictly read-only protection)
    -v ~/.nightcodeforge/wks/{workspaceId}/clone:/clone:ro
@@ -925,10 +925,10 @@ To eliminate LLM confusion and safeguard the canonical repository while maintain
    -v ~/.nightcodeforge/wks/{workspaceId}/clone/.git:/clone/.git
    ```
    *Cognitive & Security Benefits:*
-   - **Zero LLM Confusion:** Inside `/workspace`, the agent only sees the project files relevant to its assigned issue. No other issues (`issue-2`, `issue-3`) or the `clone` folder appear in directory listings, search tools, or file trees.
-   - **Cross-Environment Relative GitDir Resolution:** The worktree `.git` file contains `gitdir: ../clone/.git/worktrees/issue-{id}`. Inside the container, `/workspace/..` evaluates to `/`, so `../clone` cleanly resolves to `/clone/.git/worktrees/issue-{id}`. On the host/WSL filesystem, `../clone` is the sibling folder `~/.nightcodeforge/wks/{id}/clone`. Git operations (`git status`, `git add`, `git commit`) function flawlessly in both environments.
+   - **Zero LLM Confusion:** Inside `/workspace`, the agent only sees the project files relevant to its assigned task. No other tasks (`task-2`, `task-3`) or the `clone` folder appear in directory listings, search tools, or file trees.
+   - **Cross-Environment Relative GitDir Resolution:** The worktree `.git` file contains `gitdir: ../clone/.git/worktrees/task-{id}`. Inside the container, `/workspace/..` evaluates to `/`, so `../clone` cleanly resolves to `/clone/.git/worktrees/task-{id}`. On the host/WSL filesystem, `../clone` is the sibling folder `~/.nightcodeforge/wks/{id}/clone`. Git operations (`git status`, `git add`, `git commit`) function flawlessly in both environments.
    - **Canonical Working Tree Protection:** The canonical clone working tree at `/clone` is strictly read-only (`:ro`), preventing any container process from corrupting `main`. Worktree metadata and Git object writes to `/clone/.git` remain read-write (or read-only for untrusted triage).
-   - **Per-Issue Container Sandbox Naming:** Containers are named per issue (e.g. `ncf-sandbox-{workspaceId}-issue-{issueId}`), guaranteeing complete runtime isolation when multiple issues are worked in parallel.
+   - **Per-ForgeTask Container Sandbox Naming:** Containers are named per task (e.g. `ncf-sandbox-{workspaceId}-task-{taskId}`), guaranteeing complete runtime isolation when multiple tasks are worked in parallel.
 
 2. **Clean PWD & Environment Communication in Agent Prompts:**
    `PromptPrefixStabilizer` injects an explicit `<environment>` block into Layer 3 of the prompt prefix:
@@ -987,7 +987,7 @@ public interface IAgentHarness
 
 public record AgentSessionContext(
     int WorkspaceId,
-    int IssueId,
+    int TaskId,
     string StageId,
     AgentProfile Profile,
     string StageSystemPrompt,
@@ -1052,7 +1052,7 @@ flowchart LR
 * **Dedicated Specification:** For the complete, dedicated architectural specification, tool implementation details, resilient forgiving dispatcher, and token minimization engine, see **[CRUCIBLE.md](CRUCIBLE.md)**.
 * **Compatibility:** Plugs directly into OllamaRouter, vanilla Ollama, LM Studio, vLLM, or any OpenAI-compatible server.
 * **Profile Integration:** Adapts execution parameters based on the stage's `AgentProfile` (e.g. mapping `ThinkingEffort` to OpenAI `reasoning_effort` or DeepSeek/Ollama thinking budget tokens).
-* **Auto-Configuration:** Pre-configured out of the box with system prompts, canonical function tools (`read`, `edit`, `write`, `bash`, `web_search`, `ask`, `propose_issues`), and memory serialization.
+* **Auto-Configuration:** Pre-configured out of the box with system prompts, canonical function tools (`read`, `edit`, `write`, `bash`, `web_search`, `ask`, `propose_tasks`), and memory serialization.
 * **Interruption:** Tool `ask` catches the call, serializes the active `ChatHistory` to JSON, captures token counters from `AdditionalProperties["usage"]`, and flags `AgentRunStatus.WaitingForHuman`.
 
 #### Implementation B (First-Class Fallback): Pi via JSON-RPC
@@ -1075,7 +1075,7 @@ flowchart LR
 
 ### 9.4 Crucible Harness Specification & Token Minimization
 For the complete technical specification of the native Crucible harness—including:
-* **Canonical Tool Suite (Pi-Harmonized):** (`read`, `edit`, `write`, `bash`, `web_search`, `ask`, `propose_issues` - with `list_dir` / `grep_search` / `get_file_outline` mapped to `bash` / `read`)
+* **Canonical Tool Suite (Pi-Harmonized):** (`read`, `edit`, `write`, `bash`, `web_search`, `ask`, `propose_tasks` - with `list_dir` / `grep_search` / `get_file_outline` mapped to `bash` / `read`)
 * **The "Forgiving" Tool Dispatcher:** Tool name aliasing, parameter normalization, markdown code fence stripping, and indentation tolerance
 * **EditorConfig Enforcement for File Operations:** Automatic application of `.editorconfig` rules (`end_of_line` [LF/CRLF], `indent_style`, `indent_size`, `insert_final_newline`, `trim_trailing_whitespace`, `charset`) on `write` and `edit` to prevent cross-platform line ending churn and formatting diff noise
 * **Stage-Scoped Tool Visibility Matrix:** Gating tool schemas per stage to reduce static prompt overhead
@@ -1133,7 +1133,7 @@ flowchart LR
      }
    }
    ```
-2. **Dynamic Tool Discovery:** When an issue session begins, the MCP client manager connects to configured servers, queries `tools/list`, and dynamically exposes them as callable tools in the agent's reasoning loop.
+2. **Dynamic Tool Discovery:** When a task session begins, the MCP client manager connects to configured servers, queries `tools/list`, and dynamically exposes them as callable tools in the agent's reasoning loop.
 3. **ACP & MCP Synergy:** Because the **Agent Client Protocol (ACP)** specification natively re-uses MCP data types, NightCodeForge seamlessly forwards configured MCP server capabilities to both native Crucible (Microsoft Agent Framework) harnesses and external ACP agents.
 
 ### 10.2 Modular Skills System
@@ -1171,7 +1171,7 @@ triggers: ["*.cs", "DbContext", "Migration"]
 AI coding agents perform best when grounded in the conventions and rules of the repository they operate on. NightCodeForge natively supports **`AGENTS.md`** as a first-class project specification file.
 
 #### Discovery Hierarchy:
-When an issue session initializes, the harness inspects the target workspace directory using the following precedence:
+When a task session initializes, the harness inspects the target workspace directory using the following precedence:
 1. `<WorkspaceRoot>/AGENTS.md`
 2. `<WorkspaceRoot>/.agents/AGENTS.md` (or `.agents/rules/*.md`)
 3. Fallback to `<WorkspaceRoot>/CLAUDE.md` or `<WorkspaceRoot>/GEMINI.md`
@@ -1196,7 +1196,7 @@ flowchart TD
 * **Code Style & Formatting:** Naming conventions, nullability expectations, async best practices.
 * **Negative Constraints:** Prohibited patterns (e.g., "Never edit auto-generated migration files directly", "Do not introduce external heavy dependencies").
 
-By automatically loading `AGENTS.md`, NightCodeForge ensures that all 3 workflow stages—and all harness engines—adhere strictly to repository-specific rules without requiring developers to retype instructions for each issue.
+By automatically loading `AGENTS.md`, NightCodeForge ensures that all 3 workflow stages—and all harness engines—adhere strictly to repository-specific rules without requiring developers to retype instructions for each task.
 
 ---
 
@@ -1215,7 +1215,7 @@ flowchart TD
 
     subgraph TranscriptLayer ["Session Transcript Service"]
         Writer["SessionTranscriptService"]
-        MarkdownFile["docs/transcripts/\nYYYY-MM-DD-issue-123-stage-1.md"]
+        MarkdownFile["docs/transcripts/\nYYYY-MM-DD-task-123-stage-1.md"]
     end
 
     subgraph DiagnosticEngine ["Cloud Diagnostics"]
@@ -1231,11 +1231,11 @@ flowchart TD
 ```
 
 ### 11.1 Transcript Structure & Markdown Schema
-Whenever a stage completes, pauses for a question, or encounters an error, a transcript is saved to `<WorkspaceRoot>/docs/transcripts/YYYY-MM-DD-issue-{id}-{stage}-{status}.md`:
+Whenever a stage completes, pauses for a question, or encounters an error, a transcript is saved to `<WorkspaceRoot>/docs/transcripts/YYYY-MM-DD-task-{id}-{stage}-{status}.md`:
 
 ```markdown
 ---
-issue_id: 123
+task_id: 123
 stage_id: Implementation
 agent_profile: fast-coder
 model: qwen2.5-coder:32b
@@ -1260,11 +1260,11 @@ exit_reason: "Build failure not resolved after 3 attempts"
 created_at: 2026-10-12T22:25:00Z
 ---
 
-# Session Transcript: Issue #123 (Implementation)
+# Session Transcript: ForgeTask #123 (Implementation)
 
 ## 🎯 Task Prompt & Grounding Context
 - **Target Feature:** Implement OAuth2 Authorization Flow
-- **Approved Plan:** `docs/issues/2026-10-12-implement-oauth2-flow.md`
+- **Approved Plan:** `docs/tasks/2026-10-12-implement-oauth2-flow.md`
 - **Active Skills:** `csharp-clean-code`, `efcore-migrations`
 - **Loaded Guidelines:** `AGENTS.md` (Rules: nullability enabled, file-scoped namespaces)
 
@@ -1317,24 +1317,24 @@ Both modes execute a structured diagnostic evaluation prompt:
 * **Root Cause Analysis:** Pinpoint the exact breakdown (e.g., tool argument formatting error, loop detection, compilation trap, hallucination).
 * **Skill & Guideline Critique:** Identify missing, conflicting, or ambiguous instructions in `AGENTS.md` or active `.agents/skills/`.
 * **Harness & Tooling Critique:** Check if tool outputs or error messages were truncated, malformed, or unparseable.
-* **Actionable Remediation:** Provide concrete suggestions to fix the skill or unblock the issue, with one-click prompt/skill patching where applicable.
+* **Actionable Remediation:** Provide concrete suggestions to fix the skill or unblock the task, with one-click prompt/skill patching where applicable.
 
 ---
 
 ## 12. Data Storage & Schema Design
 
-NightCodeForge supports **multi-workspace management**, allowing developers to manage multiple local git repositories. While inference is queued globally to respect the single GPU constraint, each issue and Git context switch is isolated to its respective workspace.
+NightCodeForge supports **multi-workspace management**, allowing developers to manage multiple local git repositories. While inference is queued globally to respect the single GPU constraint, each task and Git context switch is isolated to its respective workspace.
 
 ```mermaid
 erDiagram
-    WORKSPACE ||--o{ ISSUE : "contains"
+    WORKSPACE ||--o{ TASK : "contains"
     WORKSPACE ||--o{ AGENT_PROFILE : "defines"
     AGENT_PROFILE ||--o{ STAGE_EXECUTION_RECORD : "executes"
-    ISSUE ||--o{ ISSUE_DEPENDENCY : "depends_on"
-    ISSUE ||--o{ QUESTION : "triggers"
-    ISSUE ||--o{ STAGE_CHECKPOINT : "records"
-    ISSUE ||--o{ STAGE_EXECUTION_RECORD : "measures"
-    ISSUE ||--o{ EXECUTION_LOG : "generates"
+    TASK ||--o{ TASK_DEPENDENCY : "depends_on"
+    TASK ||--o{ QUESTION : "triggers"
+    TASK ||--o{ STAGE_CHECKPOINT : "records"
+    TASK ||--o{ STAGE_EXECUTION_RECORD : "measures"
+    TASK ||--o{ EXECUTION_LOG : "generates"
     
     WORKSPACE {
         int Id PK
@@ -1360,7 +1360,7 @@ erDiagram
         string OptimizationFlagsJson
     }
 
-    ISSUE {
+    TASK {
         int Id PK
         int WorkspaceId FK
         string Title
@@ -1379,15 +1379,15 @@ erDiagram
         string PipelineDataJson
     }
 
-    ISSUE_DEPENDENCY {
+    TASK_DEPENDENCY {
         int Id PK
-        int IssueId FK
-        int DependsOnIssueId FK
+        int TaskId FK
+        int DependsOnTaskId FK
     }
 
     QUESTION {
         int Id PK
-        int IssueId FK
+        int TaskId FK
         string StageId
         string AgentProfileId
         string Prompt
@@ -1402,7 +1402,7 @@ erDiagram
 
     STAGE_CHECKPOINT {
         int Id PK
-        int IssueId FK
+        int TaskId FK
         string StageId
         string SerializedMemory
         string GitCommitHash
@@ -1411,7 +1411,7 @@ erDiagram
 
     STAGE_EXECUTION_RECORD {
         int Id PK
-        int IssueId FK
+        int TaskId FK
         string StageId
         string StageKind
         string AgentProfileId
@@ -1430,7 +1430,7 @@ erDiagram
 
     EXECUTION_LOG {
         int Id PK
-        int IssueId FK
+        int TaskId FK
         string StageId
         datetime Timestamp
         string LogLevel
@@ -1448,9 +1448,9 @@ erDiagram
 1. **Interactive Ideation & Codebase Discovery:**
    - Chat interface with the codebase exploration agent.
    - Natural language Q&A about architecture and requirements.
-   - Interactive issue proposal cards with one-click creation into backlog.
+   - Interactive task proposal cards with one-click creation into backlog.
 2. **Backlog & Dependency DAG:**
-   - Visual Kanban and dependency graph view showing issues and blocking links.
+   - Visual Kanban and dependency graph view showing tasks and blocking links.
    - Status indicators: `Waiting on Dependencies`, `Pending`, `Running [Stage]`, `Blocked`, `Review`, `Completed`.
    - Manual priority adjustment and dependency linking.
 3. **Monitoring & Terminal:**
@@ -1458,11 +1458,11 @@ erDiagram
    - Visual stage progression indicator (`Review ➔ Implement ➔ Fixes`).
    - Hardware routing badge (Local GPU vs Remote Server) and real-time token/timing metrics.
 4. **Inbox (Human-in-the-Loop):**
-   - Central view for all pending questions across blocked issues.
+   - Central view for all pending questions across blocked tasks.
    - Rich answer form supporting freeform text, code snippets, or multiple-choice options.
 5. **Review Room:**
    - Visual side-by-side / unified `git diff` against base branch.
-   - Action buttons: "Approve & Merge" (squashes WIP commits into base branch and triggers cascade unblocking) or "Request Changes" (opens revision notes input modal and routes issue back to Stage 2 `ImplementationStage` with highest priority via `llm-urgent`).
+   - Action buttons: "Approve & Merge" (squashes WIP commits into base branch and triggers cascade unblocking) or "Request Changes" (opens revision notes input modal and routes task back to Stage 2 `ImplementationStage` with highest priority via `llm-urgent`).
 6. **Workspace, Profiles & MCP Settings:**
    - Manage target repositories, configure MCP servers (`mcp_config.json`), and tune Agent Profiles per stage.
 7. **Session Transcripts & Cloud AI Diagnostics:**
@@ -1557,7 +1557,7 @@ public enum ExecutionMode
 | **Tooling & SDKs** | Uses host/WSL SDKs | Distro-installed SDKs | Bind-mounted host package caches |
 
 ### 14.3 Shared SDKs & Persistent Package Caches
-To prevent containers from downloading gigabytes of SDKs and package dependencies for every issue:
+To prevent containers from downloading gigabytes of SDKs and package dependencies for every task:
 
 1. **Persistent Package Caches (Read-Write Bind Mounts):**
    Package managers write to host-mounted shared cache directories:
@@ -1596,7 +1596,7 @@ flowchart LR
 ```
 
 #### Why In-Process Orchestration is Superior:
-1. **Network Simplicity for Inference:** The LLM client runs directly on the host, communicating with OllamaRouter on `localhost:11434` or cloud providers without Docker-to-Host bridge networking issues.
+1. **Network Simplicity for Inference:** The LLM client runs directly on the host, communicating with OllamaRouter on `localhost:11434` or cloud providers without Docker-to-Host bridge networking tasks.
 2. **Central Configuration for Pi & ACP:**
    - **Pi JSON-RPC:** NightCodeForge spawns and monitors the Pi agent runner on the host, passing tool implementations that forward `bash` into the container sandbox / WSL2.
    - **Agent Client Protocol (ACP):** NightCodeForge acts as the ACP client. When an ACP agent requests a terminal command execution, NightCodeForge routes the command into the container sandbox.
@@ -1614,7 +1614,7 @@ flowchart LR
 * **Sentinel REPL Process Protection:** If a command hangs or enters an infinite loop inside `docker exec` / WSL, the runner sends `\x03` (SIGINT) over stdin. If the sentinel is not emitted within a 2-second grace period, the container shell process is forcefully terminated and restarted to eliminate runaway background processes.
 
 #### 14.5.1 Restricted Read-Only Container Sandbox (Triage Tier)
-For untrusted external input (such as incoming GitHub issues processed by `TriageProfile` on the `main` or `master` branch), NightCodeForge enforces a hardened container profile:
+For untrusted external input (such as incoming GitHub tasks processed by `TriageProfile` on the `main` or `master` branch), NightCodeForge enforces a hardened container profile:
 * **Target Working Directory:** Mounted directly on the repository base branch (`main` or `master`) with strict read-only permissions (`-v /var/ncf/workspaces/{id}/repo:/workspace:ro`). No feature branch is checked out, guaranteeing the base branch cannot be modified.
 * **Air-Gapped Network Namespace (`--network none`):** The container is launched with zero network connectivity. Outbound TCP/UDP, DNS resolution, and access to host or internal subnets are completely disabled, neutralizing any data exfiltration or credential phone-home attempts.
 * **Read-Only Root Filesystem (`--read-only`):** The entire container filesystem (apart from a volatile 32MB in-memory `/tmp` tmpfs with `noexec,nosuid`) is immutable.
@@ -1627,8 +1627,8 @@ For untrusted external input (such as incoming GitHub issues processed by `Triag
 
 ### 14.6 Crash & Hang Protection
 * Every LLM step and Git command is bound to a strict timeout policy.
-* Hangfire automatic retry is disabled for LLM inference tasks (`[AutomaticRetry(Attempts = 0)]`) to prevent duplicate code edits on unexpected runtime exceptions; unhandled errors transition the issue cleanly to `Failed`.
-* **Clean Interruption Lifecycle:** Interruption via `ask` is intercepted internally: the checkpoint and question are persisted, `issue.IsWaitingForHuman = true` and `issue.InterruptedAgentProfileId` are set while preserving `issue.Status`, and the background job returns `StageExecutionResult.WaitingForHuman()`, completing in a clean `Succeeded` status in Hangfire rather than an artificial failure.
+* Hangfire automatic retry is disabled for LLM inference tasks (`[AutomaticRetry(Attempts = 0)]`) to prevent duplicate code edits on unexpected runtime exceptions; unhandled errors transition the task cleanly to `Failed`.
+* **Clean Interruption Lifecycle:** Interruption via `ask` is intercepted internally: the checkpoint and question are persisted, `task.IsWaitingForHuman = true` and `task.InterruptedAgentProfileId` are set while preserving `task.Status`, and the background job returns `StageExecutionResult.WaitingForHuman()`, completing in a clean `Succeeded` status in Hangfire rather than an artificial failure.
 
 ### 14.7 Graceful Restart & Crash Recovery System (`IStartupRecoveryService`)
 
@@ -1647,14 +1647,14 @@ flowchart TD
     end
 
     subgraph StateReconciliation ["2. State Machine Reconciliation"]
-        FindRunning["Query DB for Issues in 'Running' Status"]
+        FindRunning["Query DB for Tasks in 'Running' Status"]
         CheckStage{"Interrupted Stage Type?"}
         AgenticStage["Agentic Stage:\n- Restore last turn snapshot from STAGE_CHECKPOINT\n- Inject '[System Notice: Host restarted unexpectedly]'"]
         DeterministicStage["Deterministic Stage:\n- Reset stage execution metrics\n- Mark ready for fresh execution"]
     end
 
     subgraph Resumption ["3. Urgent Re-Enqueueing"]
-        EnqueueUrgent["Transition Issue to 'Pending'\nEnqueue to 'llm-urgent' queue"]
+        EnqueueUrgent["Transition ForgeTask to 'Pending'\nEnqueue to 'llm-urgent' queue"]
         AuditLog["Log Recovery in EXECUTION_LOG\nAppend entry to docs/transcripts/"]
         StartWorker["Start Hangfire Background Queue\n(Immediate pickup of recovered task)"]
     end
@@ -1675,6 +1675,6 @@ flowchart TD
 3. **Session Rehydration:**
    * For **Agentic Stages**, Crucible rehydrates the serialized conversation memory up to the last successful turn from `STAGE_CHECKPOINT.SerializedMemory`, appending a system notice informing the model that the environment was restarted and workspace files were restored.
    * For **Deterministic Stages** (e.g. interrupted midway through `dotnet test`), the stage is reset to run freshly from the beginning.
-4. **Immediate Priority Re-Enqueueing (`llm-urgent`):** The recovered issue is placed directly at the head of `llm-urgent`. When Hangfire initializes (`WorkerCount = 1`), the single GPU worker immediately resumes the interrupted overnight task before touching any other backlog items.
-5. **Auditing & Notification:** The recovery event is permanently recorded in `EXECUTION_LOG`, noted in the issue's session transcript under `docs/transcripts/`, and broadcasted via SignalR to the web UI.
+4. **Immediate Priority Re-Enqueueing (`llm-urgent`):** The recovered task is placed directly at the head of `llm-urgent`. When Hangfire initializes (`WorkerCount = 1`), the single GPU worker immediately resumes the interrupted overnight task before touching any other backlog items.
+5. **Auditing & Notification:** The recovery event is permanently recorded in `EXECUTION_LOG`, noted in the task's session transcript under `docs/transcripts/`, and broadcasted via SignalR to the web UI.
 

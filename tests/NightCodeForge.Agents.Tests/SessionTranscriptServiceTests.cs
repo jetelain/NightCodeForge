@@ -65,7 +65,7 @@ public class SessionTranscriptServiceTests
         {
             var service = new SessionTranscriptService();
             var metadata = new TranscriptMetadata(
-                IssueId: 42,
+                TaskId: 42,
                 StageId: "stage-2",
                 AgentProfile: "CoderPro",
                 ModelName: "qwen2.5-coder:7b",
@@ -95,7 +95,7 @@ public class SessionTranscriptServiceTests
 
             // Frontmatter checks
             Assert.Contains("---", content);
-            Assert.Contains("issue_id: 42", content);
+            Assert.Contains("task_id: 42", content);
             Assert.Contains("stage_id: stage-2", content);
             Assert.Contains("agent_profile: CoderPro", content);
             Assert.Contains("model: qwen2.5-coder:7b", content);
@@ -142,8 +142,8 @@ public class SessionTranscriptServiceTests
             var pathWaiting = await service.SaveTranscriptAsync(metaWaiting, Array.Empty<TranscriptEntry>(), tempDir);
             var pathFailed = await service.SaveTranscriptAsync(metaFailed, Array.Empty<TranscriptEntry>(), tempDir);
 
-            Assert.Contains("issue-101-stage-1-waitingforhuman.md", pathWaiting);
-            Assert.Contains("issue-102-stage-2-failed.md", pathFailed);
+            Assert.Contains("task-101-stage-1-waitingforhuman.md", pathWaiting);
+            Assert.Contains("task-102-stage-2-failed.md", pathFailed);
         }
         finally
         {

@@ -3,30 +3,30 @@ using NightCodeForge.Core.Domain;
 namespace NightCodeForge.Core.Repositories;
 
 /// <summary>
-/// Repository interface for issue persistence and dependency querying.
+/// Repository interface for task persistence and dependency querying.
 /// </summary>
-public interface IIssueRepository
+public interface ITaskRepository
 {
-    Task<Issue?> GetByIdAsync(int id, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<Issue>> GetByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default);
-    Task<Issue> CreateAsync(Issue issue, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default);
-    Task UpdateAsync(Issue issue, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<int>> GetDependenciesAsync(int issueId, CancellationToken cancellationToken = default);
+    Task<ForgeTask?> GetByIdAsync(int id, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ForgeTask>> GetByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default);
+    Task<ForgeTask> CreateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default);
+    Task UpdateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<int>> GetDependenciesAsync(int taskId, CancellationToken cancellationToken = default);
     Task DeleteAsync(int id, CancellationToken cancellationToken = default);
     Task<Question?> GetQuestionByIdAsync(int questionId, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<Issue>> GetByStatusAsync(IssueOverallStatus status, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ForgeTask>> GetByStatusAsync(TaskOverallStatus status, CancellationToken cancellationToken = default);
     Task AddExecutionRecordAsync(StageExecutionRecord record, CancellationToken cancellationToken = default);
     Task AddCheckpointAsync(StageCheckpoint checkpoint, CancellationToken cancellationToken = default);
     Task AddExecutionLogAsync(ExecutionLog log, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
-/// Thread-safe in-memory issue repository for unit testing and detached execution.
+/// Thread-safe in-memory task repository for unit testing and detached execution.
 /// </summary>
-public class InMemoryIssueRepository : IIssueRepository
+public class InMemoryTaskRepository : ITaskRepository
 {
     private readonly object _lock = new();
-    private readonly Dictionary<int, Issue> _issues = new();
+    private readonly Dictionary<int, ForgeTask> _tasks = new();
     private readonly Dictionary<int, List<int>> _dependencies = new();
     private readonly Dictionary<int, Question> _questions = new();
     private readonly List<StageExecutionRecord> _records = new();
@@ -38,64 +38,64 @@ public class InMemoryIssueRepository : IIssueRepository
     private int _nextRecordId = 1;
     private int _nextLogId = 1;
 
-    public Task<Issue?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
+    public Task<ForgeTask?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         lock (_lock)
         {
-            if (_issues.TryGetValue(id, out var issue))
+            if (_tasks.TryGetValue(id, out var task))
             {
-                return Task.FromResult<Issue?>(issue);
+                return Task.FromResult<ForgeTask?>(task);
             }
-            return Task.FromResult<Issue?>(null);
+            return Task.FromResult<ForgeTask?>(null);
         }
     }
 
-    public Task<IReadOnlyList<Issue>> GetByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<ForgeTask>> GetByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default)
     {
         lock (_lock)
         {
-            IReadOnlyList<Issue> list = _issues.Values.Where(i => i.WorkspaceId == workspaceId).ToList();
+            IReadOnlyList<ForgeTask> list = _tasks.Values.Where(i => i.WorkspaceId == workspaceId).ToList();
             return Task.FromResult(list);
         }
     }
 
-    public Task<Issue> CreateAsync(Issue issue, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
+    public Task<ForgeTask> CreateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
     {
         lock (_lock)
         {
-            if (issue.Id <= 0)
+            if (task.Id <= 0)
             {
-                issue.Id = _nextId++;
+                task.Id = _nextId++;
             }
-            else if (issue.Id >= _nextId)
+            else if (task.Id >= _nextId)
             {
-                _nextId = issue.Id + 1;
+                _nextId = task.Id + 1;
             }
 
-            _issues[issue.Id] = issue;
-            _dependencies[issue.Id] = dependsOn != null ? dependsOn.ToList() : new List<int>();
+            _tasks[task.Id] = task;
+            _dependencies[task.Id] = dependsOn != null ? dependsOn.ToList() : new List<int>();
 
-            foreach (var q in issue.Questions)
+            foreach (var q in task.Questions)
             {
                 if (q.Id <= 0) q.Id = _nextQuestionId++;
                 _questions[q.Id] = q;
             }
 
-            return Task.FromResult(issue);
+            return Task.FromResult(task);
         }
     }
 
-    public Task UpdateAsync(Issue issue, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
+    public Task UpdateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
     {
         lock (_lock)
         {
-            _issues[issue.Id] = issue;
+            _tasks[task.Id] = task;
             if (dependsOn != null)
             {
-                _dependencies[issue.Id] = dependsOn.ToList();
+                _dependencies[task.Id] = dependsOn.ToList();
             }
 
-            foreach (var q in issue.Questions)
+            foreach (var q in task.Questions)
             {
                 if (q.Id <= 0) q.Id = _nextQuestionId++;
                 _questions[q.Id] = q;
@@ -105,11 +105,11 @@ public class InMemoryIssueRepository : IIssueRepository
         }
     }
 
-    public Task<IReadOnlyList<int>> GetDependenciesAsync(int issueId, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<int>> GetDependenciesAsync(int taskId, CancellationToken cancellationToken = default)
     {
         lock (_lock)
         {
-            if (_dependencies.TryGetValue(issueId, out var deps))
+            if (_dependencies.TryGetValue(taskId, out var deps))
             {
                 return Task.FromResult<IReadOnlyList<int>>(deps.ToList());
             }
@@ -121,7 +121,7 @@ public class InMemoryIssueRepository : IIssueRepository
     {
         lock (_lock)
         {
-            _issues.Remove(id);
+            _tasks.Remove(id);
             _dependencies.Remove(id);
             return Task.CompletedTask;
         }
@@ -139,11 +139,11 @@ public class InMemoryIssueRepository : IIssueRepository
         }
     }
 
-    public Task<IReadOnlyList<Issue>> GetByStatusAsync(IssueOverallStatus status, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<ForgeTask>> GetByStatusAsync(TaskOverallStatus status, CancellationToken cancellationToken = default)
     {
         lock (_lock)
         {
-            IReadOnlyList<Issue> list = _issues.Values.Where(i => i.Status == status).ToList();
+            IReadOnlyList<ForgeTask> list = _tasks.Values.Where(i => i.Status == status).ToList();
             return Task.FromResult(list);
         }
     }
@@ -154,9 +154,9 @@ public class InMemoryIssueRepository : IIssueRepository
         {
             if (record.Id <= 0) record.Id = _nextRecordId++;
             _records.Add(record);
-            if (_issues.TryGetValue(record.IssueId, out var issue))
+            if (_tasks.TryGetValue(record.TaskId, out var task))
             {
-                issue.ExecutionRecords.Add(record);
+                task.ExecutionRecords.Add(record);
             }
             return Task.CompletedTask;
         }
@@ -168,9 +168,9 @@ public class InMemoryIssueRepository : IIssueRepository
         {
             if (checkpoint.Id <= 0) checkpoint.Id = _nextCheckpointId++;
             _checkpoints.Add(checkpoint);
-            if (_issues.TryGetValue(checkpoint.IssueId, out var issue))
+            if (_tasks.TryGetValue(checkpoint.TaskId, out var task))
             {
-                issue.Checkpoints.Add(checkpoint);
+                task.Checkpoints.Add(checkpoint);
             }
             return Task.CompletedTask;
         }
@@ -182,9 +182,9 @@ public class InMemoryIssueRepository : IIssueRepository
         {
             if (log.Id <= 0) log.Id = _nextLogId++;
             _logs.Add(log);
-            if (log.IssueId > 0 && _issues.TryGetValue(log.IssueId, out var issue))
+            if (log.TaskId > 0 && _tasks.TryGetValue(log.TaskId, out var task))
             {
-                issue.ExecutionLogs.Add(log);
+                task.ExecutionLogs.Add(log);
             }
             return Task.CompletedTask;
         }

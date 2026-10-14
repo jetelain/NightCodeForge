@@ -13,7 +13,7 @@ public record TriageReportRequest(
 /// </summary>
 public interface ITriageService
 {
-    Task<IReadOnlyList<Issue>> TriageExternalReportAsync(
+    Task<IReadOnlyList<ForgeTask>> TriageExternalReportAsync(
         Workspace workspace,
         TriageReportRequest request,
         CancellationToken cancellationToken = default);

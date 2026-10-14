@@ -46,7 +46,7 @@ public class ProcessStartSpec
     public string? Arguments { get; set; }
 
     /// <summary>
-    /// Command-line arguments list passed directly to ProcessStartInfo.ArgumentList, avoiding shell escaping issues.
+    /// Command-line arguments list passed directly to ProcessStartInfo.ArgumentList, avoiding shell escaping tasks.
     /// </summary>
     public IEnumerable<string>? ArgumentList { get; set; }
 

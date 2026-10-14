@@ -5,7 +5,7 @@ namespace NightCodeForge.Core.Workflow;
 
 /// <summary>
 /// Factory creating the standard full pipeline:
-/// Stage 1: IssueReviewStage
+/// Stage 1: TaskReviewStage
 /// -> Stage 2: DeterministicPreImplementationStage
 /// -> Stage 3: ImplementationStage
 /// -> Stage 4: DeterministicPostImplementationStage
@@ -16,7 +16,7 @@ namespace NightCodeForge.Core.Workflow;
 public static class Default3AgentPipeline
 {
     public static IWorkflowPipeline Create(
-        IssueReviewStage? reviewStage = null,
+        TaskReviewStage? reviewStage = null,
         DeterministicPreImplementationStage? preImplStage = null,
         ImplementationStage? implStage = null,
         DeterministicPostImplementationStage? postImplStage = null,
@@ -28,7 +28,7 @@ public static class Default3AgentPipeline
     {
         return new WorkflowPipeline(new IWorkflowStage[]
         {
-            reviewStage ?? new IssueReviewStage(),
+            reviewStage ?? new TaskReviewStage(),
             preImplStage ?? new DeterministicPreImplementationStage(
                 envProvider: envProvider,
                 executionEnv: executionEnv,

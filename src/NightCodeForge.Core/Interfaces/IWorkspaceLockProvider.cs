@@ -21,17 +21,17 @@ public interface IWorkspaceLockProvider
     Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireLockAsync(int workspaceId, TimeSpan timeout, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Asynchronously acquires an exclusive lock for a specific issue within a workspace, allowing concurrent execution of different issues.
+    /// Asynchronously acquires an exclusive lock for a specific task within a workspace, allowing concurrent execution of different tasks.
     /// </summary>
-    Task<IDisposable> AcquireIssueLockAsync(int workspaceId, int issueId, CancellationToken cancellationToken = default);
+    Task<IDisposable> AcquireTaskLockAsync(int workspaceId, int taskId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Synchronously attempts to acquire an exclusive lock for a specific issue within a workspace.
+    /// Synchronously attempts to acquire an exclusive lock for a specific task within a workspace.
     /// </summary>
-    bool TryAcquireIssueLock(int workspaceId, int issueId, out IDisposable? lockReleaser);
+    bool TryAcquireTaskLock(int workspaceId, int taskId, out IDisposable? lockReleaser);
 
     /// <summary>
-    /// Asynchronously attempts to acquire an exclusive lock for a specific issue within the specified timeout.
+    /// Asynchronously attempts to acquire an exclusive lock for a specific task within the specified timeout.
     /// </summary>
-    Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireIssueLockAsync(int workspaceId, int issueId, TimeSpan timeout, CancellationToken cancellationToken = default);
+    Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireTaskLockAsync(int workspaceId, int taskId, TimeSpan timeout, CancellationToken cancellationToken = default);
 }

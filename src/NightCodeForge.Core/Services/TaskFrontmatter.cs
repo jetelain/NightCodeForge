@@ -3,9 +3,9 @@ using YamlDotNet.Serialization;
 namespace NightCodeForge.Core.Services;
 
 /// <summary>
-/// YAML frontmatter representation for mirrored issue markdown files.
+/// YAML frontmatter representation for mirrored task markdown files.
 /// </summary>
-public class IssueFrontmatter
+public class TaskFrontmatter
 {
     public int? Id { get; set; }
     public string Title { get; set; } = string.Empty;

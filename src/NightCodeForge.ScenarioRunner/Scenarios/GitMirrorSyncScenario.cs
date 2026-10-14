@@ -68,8 +68,8 @@ public class GitMirrorSyncScenario : IScenario
         details.Add($"Mirror Initialized: {Path.GetFileName(mirrorRepo)}");
 
         // Step 2: Feature Branch & Commit on Mirror
-        const int issueId = 10;
-        var branchName = $"feature/issue-{issueId}";
+        const int taskId = 10;
+        var branchName = $"feature/task-{taskId}";
         ConsoleFormatting.PrintStep("10.2", $"Creating branch '{branchName}' in mirror and committing feature file...");
 
         await gitRunner.ExecuteAsync(mirrorRepo, ["checkout", "-b", branchName], cancellationToken: context.CancellationToken);
@@ -84,7 +84,7 @@ public class GitMirrorSyncScenario : IScenario
 
         // Step 3: Primary Clean Push to Host
         ConsoleFormatting.PrintStep("10.3", "Executing primary sync push to host-origin...");
-        var primaryPush = await syncService.PushToHostAsync(mirrorRepo, issueId, context.CancellationToken);
+        var primaryPush = await syncService.PushToHostAsync(mirrorRepo, taskId, context.CancellationToken);
 
         if (!primaryPush.Success || primaryPush.FallbackUsed || primaryPush.BranchPushed != branchName)
         {
@@ -115,7 +115,7 @@ public class GitMirrorSyncScenario : IScenario
         await gitRunner.ExecuteAsync(mirrorRepo, ["commit", "-m", "feat: agent secondary update"], cancellationToken: context.CancellationToken);
 
         // Attempt push while host worktree is dirty on the same checked-out branch
-        var dirtyPush = await syncService.PushToHostAsync(mirrorRepo, issueId, context.CancellationToken);
+        var dirtyPush = await syncService.PushToHostAsync(mirrorRepo, taskId, context.CancellationToken);
 
         if (!dirtyPush.Success)
         {
@@ -152,7 +152,7 @@ public class GitMirrorSyncScenario : IScenario
         // In mirror: checkout main and squash-merge feature branch
         await gitRunner.ExecuteAsync(mirrorRepo, ["checkout", "main"], cancellationToken: context.CancellationToken);
         await gitRunner.ExecuteAsync(mirrorRepo, ["merge", "--squash", branchName], cancellationToken: context.CancellationToken);
-        await gitRunner.ExecuteAsync(mirrorRepo, ["commit", "-m", "Squash: Issue #10 Feature Complete"], cancellationToken: context.CancellationToken);
+        await gitRunner.ExecuteAsync(mirrorRepo, ["commit", "-m", "Squash: ForgeTask #10 Feature Complete"], cancellationToken: context.CancellationToken);
 
         // Push base branch to host
         var basePush = await syncService.PushBaseBranchToHostAsync(mirrorRepo, "main", context.CancellationToken);
@@ -163,7 +163,7 @@ public class GitMirrorSyncScenario : IScenario
 
         // Inspect git log on host repository main branch
         var hostLog = await gitRunner.ExecuteAsync(hostRepo, ["log", "-1", "--pretty=%B"], cancellationToken: context.CancellationToken);
-        if (!hostLog.StandardOutput.Contains("Squash: Issue #10 Feature Complete"))
+        if (!hostLog.StandardOutput.Contains("Squash: ForgeTask #10 Feature Complete"))
         {
             return ScenarioResult.Fail(sw.Elapsed, $"Host repository 'main' branch did not receive the squash commit. Host log: {hostLog.StandardOutput}");
         }

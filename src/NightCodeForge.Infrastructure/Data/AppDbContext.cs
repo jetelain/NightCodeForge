@@ -13,8 +13,8 @@ public class AppDbContext : DbContext
 {
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<AgentProfile> AgentProfiles => Set<AgentProfile>();
-    public DbSet<Issue> Issues => Set<Issue>();
-    public DbSet<IssueDependency> IssueDependencies => Set<IssueDependency>();
+    public DbSet<ForgeTask> Tasks => Set<ForgeTask>();
+    public DbSet<TaskDependency> TaskDependencies => Set<TaskDependency>();
     public DbSet<Question> Questions => Set<Question>();
     public DbSet<StageCheckpoint> StageCheckpoints => Set<StageCheckpoint>();
     public DbSet<StageExecutionRecord> StageExecutionRecords => Set<StageExecutionRecord>();
@@ -44,7 +44,7 @@ public class AppDbContext : DbContext
             b.Property(w => w.BuildTimeoutSeconds);
             b.Property(w => w.TestTimeoutSeconds);
 
-            b.HasMany(w => w.Issues)
+            b.HasMany(w => w.Tasks)
                 .WithOne(i => i.Workspace)
                 .HasForeignKey(i => i.WorkspaceId)
                 .OnDelete(DeleteBehavior.Cascade);
@@ -107,8 +107,8 @@ public class AppDbContext : DbContext
                 .Metadata.SetValueComparer(stageDirectivesComparer);
         });
 
-        // 3. Issue
-        modelBuilder.Entity<Issue>(b =>
+        // 3. ForgeTask
+        modelBuilder.Entity<ForgeTask>(b =>
         {
             b.HasKey(i => i.Id);
             b.Property(i => i.Title).IsRequired().HasMaxLength(512);
@@ -123,41 +123,41 @@ public class AppDbContext : DbContext
             b.Property(i => i.LastHangfireJobId).HasMaxLength(128);
 
             b.HasMany(i => i.Dependencies)
-                .WithOne(d => d.Issue)
-                .HasForeignKey(d => d.IssueId)
+                .WithOne(d => d.ForgeTask)
+                .HasForeignKey(d => d.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            b.HasMany(i => i.DependentIssues)
-                .WithOne(d => d.DependsOnIssue)
-                .HasForeignKey(d => d.DependsOnIssueId)
+            b.HasMany(i => i.DependentTasks)
+                .WithOne(d => d.DependsOnTask)
+                .HasForeignKey(d => d.DependsOnTaskId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             b.HasMany(i => i.Questions)
-                .WithOne(q => q.Issue)
-                .HasForeignKey(q => q.IssueId)
+                .WithOne(q => q.ForgeTask)
+                .HasForeignKey(q => q.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
 
             b.HasMany(i => i.Checkpoints)
-                .WithOne(c => c.Issue)
-                .HasForeignKey(c => c.IssueId)
+                .WithOne(c => c.ForgeTask)
+                .HasForeignKey(c => c.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
 
             b.HasMany(i => i.ExecutionRecords)
-                .WithOne(r => r.Issue)
-                .HasForeignKey(r => r.IssueId)
+                .WithOne(r => r.ForgeTask)
+                .HasForeignKey(r => r.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
 
             b.HasMany(i => i.ExecutionLogs)
-                .WithOne(l => l.Issue)
-                .HasForeignKey(l => l.IssueId)
+                .WithOne(l => l.ForgeTask)
+                .HasForeignKey(l => l.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // 4. IssueDependency
-        modelBuilder.Entity<IssueDependency>(b =>
+        // 4. TaskDependency
+        modelBuilder.Entity<TaskDependency>(b =>
         {
             b.HasKey(d => d.Id);
-            b.HasIndex(d => new { d.IssueId, d.DependsOnIssueId }).IsUnique();
+            b.HasIndex(d => new { d.TaskId, d.DependsOnTaskId }).IsUnique();
         });
 
         // 5. Question
