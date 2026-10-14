@@ -60,22 +60,20 @@ public class TriageService : ITriageService
             request.Title, workspace.Id, baseBranch);
 
         // 1. Resolve triage agent profile with RestrictedReadOnly sandbox tier and ReadOnly agent mode
-        var profile = workspace.AgentProfiles?.FirstOrDefault(p =>
-            string.Equals(p.Id, TriageStage.DefaultStageId, StringComparison.OrdinalIgnoreCase) ||
-            p.Name.Contains("triage", StringComparison.OrdinalIgnoreCase));
+        var profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, TriageStage.DefaultStageId, cancellationToken);
 
         if (profile == null)
         {
             profile = new AgentProfile
             {
                 Id = TriageStage.DefaultStageId,
-                WorkspaceId = workspace.Id,
+                WorkspaceId = null,
                 Name = "Untrusted Intake Triage Agent",
                 HarnessId = "crucible",
                 ModelName = workspace.AgentProfiles?.FirstOrDefault()?.ModelName ?? "default",
                 Mode = AgentMode.ReadOnly,
                 SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
-                PermittedTools = new[] { "read", "bash", "web_search", "propose_tasks" }
+                PermittedTools = DefaultAgentTools.ReadOnly
             };
         }
 

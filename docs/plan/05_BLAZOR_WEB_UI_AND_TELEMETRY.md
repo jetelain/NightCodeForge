@@ -57,11 +57,12 @@ flowchart TD
 
 ## 2. Master Step Decomposition & Implementation Guides
 
-To ensure thorough, battle-tested execution without ambiguity, Phase 5 is decomposed into **12 self-contained, highly detailed technical specification documents**:
+To ensure thorough, battle-tested execution without ambiguity, Phase 5 is decomposed into **13 self-contained, highly detailed technical specification documents**:
 
 | Step | Dedicated Technical Specification | Focus Area & Deliverables |
 | :---: | :--- | :--- |
 | **5.1** | [🎨 Step 5.1: Design System & Blazor Layout](phase-5/STEP_5_1_DESIGN_SYSTEM_AND_LAYOUT.md) | Pure Vanilla CSS token architecture (`theme.css`), obsidian/indigo dark theme, Google Fonts (`Inter`, `JetBrains Mono`), glassmorphic `TopNavBar` with workspace switcher and pulsating GPU worker status badge, collapsible `NavMenu`, and `ToastService`. |
+| **5.1b** | [🧙 Step 5.1b: Workspace Provisioning & Creation Wizard](phase-5/STEP_5_1B_WORKSPACE_PROVISIONING_AND_CREATION_WIZARD.md) | Multi-step repository onboarding wizard, local git validation, auto-detected stack & base branch, WSL2 sandboxing check, automated Ext4 mirror clone (`~/.nightcodeforge/wks/{id}`), default agent profiles seeding, and first-run empty state hero. |
 | **5.2** | [⚡ Step 5.2: SignalR Telemetry Infrastructure](phase-5/STEP_5_2_SIGNALR_TELEMETRY_INFRASTRUCTURE.md) | Strongly typed `IOrchestratorHubClient`, `OrchestratorHub` (`/hubs/orchestrator`), `SignalRActivityBridgeService` channel listener, and client-side `OrchestratorHubClientConnection` with auto-reconnect and per-task group isolation. |
 | **5.3** | [💡 Step 5.3: Interactive Ideation & Discovery Chat](phase-5/STEP_5_3_IDEATION_AND_DISCOVERY_CHAT.md) | Conversational codebase exploration UI backed by `IIdeationService`, streaming model thoughts in collapsible `<think>` accordion, interactive `IdeationProposalCard` with in-place edits, and one-click ingestion to `Suggested` status and `docs/tasks/*.md`. |
 | **5.4** | [📋 Step 5.4: Backlog Management & Visual DAG](phase-5/STEP_5_4_BACKLOG_AND_VISUAL_DAG.md) | Kanban board & SVG interactive DAG graph, Maintainer Promotion modal (`Suggested` $\rightarrow$ `Open` with `Priority` 1..5 & `MergeMode` vs `Rejected`), prerequisite `Closed` gating rule, and real-time cycle prevention via `IDependencyResolutionEngine.HasCycle`. |
@@ -81,6 +82,7 @@ To ensure thorough, battle-tested execution without ambiguity, Phase 5 is decomp
 | Blazor Component / Page | Backend Service / Interface | Primary Method / Contract | Key Data Transferred |
 | :--- | :--- | :--- | :--- |
 | **`TopNavBar.razor`** | `WorkspaceStateService`<br>`WorkerStateService` | State properties & events | Active Workspace ID, GPU status, pending questions count. |
+| **`WorkspaceCreationWizardModal.razor`** | `IWorkspaceProvisioningService`<br>`IWorkspaceRepository`<br>`IGitMirrorSyncService` | `ProbeRepositoryAsync()`<br>`ProvisionWorkspaceAsync()` | Directory path, Git branch, stack detection, Ext4 clone mirror, agent profiles. |
 | **`Ideation.razor`** | `IIdeationService`<br>`ITaskRepository`<br>`ITaskMarkdownSyncService` | `ConverseStreamingAsync()`<br>`CreateAsync()`<br>`SyncTaskToMarkdownAsync()` | Chat history, streaming tokens, proposed tasks, disk sync. |
 | **`Backlog.razor`** | `ITaskRepository`<br>`ITaskOrchestrator`<br>`IDependencyResolutionEngine` | `GetByWorkspaceIdAsync()`<br>`PromoteSuggestedTaskAsync()`<br>`HasCycle()` | Backlog task list, DAG dependencies, cycle validation, promotion. |
 | **`Monitoring.razor`** | `OrchestratorHubClientConnection`<br>`ITaskRepository` | `OnTokenDeltaReceived`<br>`OnStageTransitionReceived`<br>`GetByIdAsync()` | Token stream, tool latency, active stage pulse, log lines. |
@@ -97,6 +99,7 @@ To ensure thorough, battle-tested execution without ambiguity, Phase 5 is decomp
 ## 4. Phase 5 Definition of Done (DoD) Checklist
 
 - [x] **Step 5.1:** Design system tokens in `theme.css`, `app.css`, `App.razor`, and responsive shell (`TopNavBar`, `NavMenu`, `MainLayout`, `ToastHost`).
+- [ ] **Step 5.1b:** `WorkspaceCreationWizardModal.razor` multi-step onboarding wizard, `IWorkspaceProvisioningService` (probe, git init, Ext4 clone, default profiles), TopNavBar `[+]` button, and first-run empty state hero.
 - [x] **Step 5.2:** `IOrchestratorHubClient`, `OrchestratorHub`, `SignalRActivityBridgeService`, and client-side `OrchestratorHubClientConnection` implemented and wired to DI.
 - [x] **Step 5.3:** `Ideation.razor` conversing with `IIdeationService` in real time, proposing tasks with editable fields, and saving to SQLite as `Suggested`.
 - [ ] **Step 5.4:** `Backlog.razor` rendering Kanban columns and SVG DAG graph, with Maintainer Promotion modal (`Suggested` $\rightarrow$ `Open`/`Rejected`) and cycle prevention.

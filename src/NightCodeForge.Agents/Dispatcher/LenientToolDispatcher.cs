@@ -391,7 +391,7 @@ public partial class LenientToolDispatcher
     private void RegisterCanonicalTools(CanonicalTools tools)
     {
         RegisterTool(new ToolDefinition(
-            "read",
+            CanonicalToolNames.Read,
             "Read file contents with line slicing (path, offset, limit)",
             async (args, ct) =>
             {
@@ -403,7 +403,7 @@ public partial class LenientToolDispatcher
             aliases: ["read_file", "readfile", "read_file_content", "cat", "view_file"]));
 
         RegisterTool(new ToolDefinition(
-            "edit",
+            CanonicalToolNames.Edit,
             "Make precise file edits with exact search-and-replace (path, edits: [{ oldText, newText }])",
             async (args, ct) =>
             {
@@ -414,7 +414,7 @@ public partial class LenientToolDispatcher
             aliases: ["replace_file_content", "replacefilecontent", "replace_content", "replacecontent", "edit_file", "str_replace", "patch_file", "editfile"]));
 
         RegisterTool(new ToolDefinition(
-            "write",
+            CanonicalToolNames.Write,
             "Create new files or completely rewrite files (path, content)",
             async (args, ct) =>
             {
@@ -425,7 +425,7 @@ public partial class LenientToolDispatcher
             aliases: ["write_file", "writefile", "create_file", "new_file"]));
 
         RegisterTool(new ToolDefinition(
-            "bash",
+            CanonicalToolNames.Bash,
             "Execute shell commands, builds, and file discovery (command, timeout, working_directory)",
             async (args, ct) =>
             {
@@ -437,7 +437,7 @@ public partial class LenientToolDispatcher
             aliases: ["run_command", "runcommand", "run_cmd", "exec", "execute", "cmd", "terminal", "powershell", "sh"]));
 
         RegisterTool(new ToolDefinition(
-            "ask",
+            CanonicalToolNames.Ask,
             "Ask clarifying questions to the user when blocked (prompt, rationale, options)",
             (args, _) =>
             {
@@ -449,7 +449,7 @@ public partial class LenientToolDispatcher
             aliases: ["ask_human_question", "ask_human", "ask_user", "askhumanquestion", "ask_question", "askhuman"]));
 
         RegisterTool(new ToolDefinition(
-            "web_search",
+            CanonicalToolNames.WebSearch,
             "Search technical web documentation for APIs, errors, or libraries (query, max_results)",
             async (args, ct) =>
             {
@@ -460,7 +460,7 @@ public partial class LenientToolDispatcher
             aliases: ["search_web", "google_search", "bing_search", "brave_search", "websearch", "internet_search", "search"]));
 
         RegisterTool(new ToolDefinition(
-            "propose_tasks",
+            CanonicalToolNames.ProposeTasks,
             "Propose structured backlog items (tasks: [{ title, description, type }])",
             (args, _) =>
             {
@@ -470,7 +470,7 @@ public partial class LenientToolDispatcher
             aliases: ["propose_task", "proposetasks"]));
 
         RegisterTool(new ToolDefinition(
-            "request_changes",
+            CanonicalToolNames.RequestChanges,
             "Reject implementation and send task back to the implementation agent for rework (feedback, reason)",
             (args, _) =>
             {
@@ -481,20 +481,20 @@ public partial class LenientToolDispatcher
             aliases: ["reject_implementation", "requestchanges", "rejectimplementation", "send_back", "sendback"]));
 
         // Register default translation rules for dropped legacy tools
-        RegisterTranslation(new ToolTranslationRule("list_dir", "bash", args =>
+        RegisterTranslation(new ToolTranslationRule("list_dir", CanonicalToolNames.Bash, args =>
         {
             var p = args.TryGetValue("path", out var val) ? val?.ToString() : ".";
             return new Dictionary<string, object?> { ["command"] = $"ls -la {p}" };
         }));
 
-        RegisterTranslation(new ToolTranslationRule("grep_search", "bash", args =>
+        RegisterTranslation(new ToolTranslationRule("grep_search", CanonicalToolNames.Bash, args =>
         {
             var q = args.TryGetValue("query", out var qVal) ? qVal?.ToString() : "";
             var p = args.TryGetValue("path", out var pVal) ? pVal?.ToString() : ".";
             return new Dictionary<string, object?> { ["command"] = $"rg -n \"{q}\" {p}" };
         }));
 
-        RegisterTranslation(new ToolTranslationRule("get_file_outline", "bash", args =>
+        RegisterTranslation(new ToolTranslationRule("get_file_outline", CanonicalToolNames.Bash, args =>
         {
             var p = args.TryGetValue("path", out var pVal) ? pVal?.ToString() : "";
             return new Dictionary<string, object?> { ["command"] = $"rg -n \"^(public|private|protected|internal|class|interface|record|def|function)\" {p}" };

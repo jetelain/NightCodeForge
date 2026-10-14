@@ -28,17 +28,84 @@ public class AgentProfile
     /// Default agent profile used for interactive ideation and codebase discovery.
     /// Not scheduled like other pipeline workloads.
     /// </summary>
-    public static AgentProfile CreateDefaultIdeationProfile(int? workspaceId = null) => new()
+    public static AgentProfile CreateDefaultIdeationProfile(int? workspaceId = null, string defaultModelName = "") => new()
     {
         Id = "ideation",
         WorkspaceId = workspaceId,
         Name = "Ideation & Codebase Discovery Agent",
         HarnessId = HarnessType.Crucible,
-        ModelName = "", // Defaults to LlmProviderOptions.ModelId from appsettings.json
+        ModelName = defaultModelName,
         Mode = AgentMode.ReadOnly,
-        PermittedTools = new[] { "read", "bash", "web_search", "propose_tasks" },
+        PermittedTools = DefaultAgentTools.ReadOnly,
+        OptimizationFlags = new LocalOptimizationFlags(),
         SystemPrompt = @"You are the NightCodeForge Ideation & Codebase Discovery Agent.
 Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.",
-        Temperature = 0.3
+        Temperature = 1,
+        ThinkingEffort = ThinkingEffort.Medium
+    };
+
+    /// <summary>
+    /// Creates the baseline set of 5 standard global agent profiles (WorkspaceId == null)
+    /// configured with the designated default model.
+    /// </summary>
+    public static IReadOnlyList<AgentProfile> CreateStandardGlobalProfiles(string defaultModelName) => new List<AgentProfile>
+    {
+        new()
+        {
+            Id = "triage",
+            WorkspaceId = null,
+            Name = "Stage 0 Untrusted Intake Triage Agent",
+            HarnessId = HarnessType.Crucible,
+            ModelName = defaultModelName,
+            Mode = AgentMode.ReadOnly,
+            SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
+            PermittedTools = DefaultAgentTools.ReadOnly,
+            OptimizationFlags = new LocalOptimizationFlags(),
+            Temperature = 1.0,
+            ThinkingEffort = ThinkingEffort.Medium
+        },
+        CreateDefaultIdeationProfile(null, defaultModelName),
+        new()
+        {
+            Id = "task-review",
+            WorkspaceId = null,
+            Name = "ForgeTask Review Agent",
+            HarnessId = HarnessType.Crucible,
+            ModelName = defaultModelName,
+            Mode = AgentMode.Full,
+            SecurityTier = SandboxSecurityTier.Standard,
+            PermittedTools = DefaultAgentTools.Full,
+            OptimizationFlags = new LocalOptimizationFlags(),
+            Temperature = 1.0,
+            ThinkingEffort = ThinkingEffort.High
+        },
+        new()
+        {
+            Id = "implementation",
+            WorkspaceId = null,
+            Name = "Implementation Agent",
+            HarnessId = HarnessType.Crucible,
+            ModelName = defaultModelName,
+            Mode = AgentMode.Full,
+            SecurityTier = SandboxSecurityTier.Standard,
+            PermittedTools = DefaultAgentTools.Full,
+            OptimizationFlags = new LocalOptimizationFlags(),
+            Temperature = 1.0,
+            ThinkingEffort = ThinkingEffort.Medium
+        },
+        new()
+        {
+            Id = "code-review-fix",
+            WorkspaceId = null,
+            Name = "Code Review & Targeted Fix Agent",
+            HarnessId = HarnessType.Crucible,
+            ModelName = defaultModelName,
+            Mode = AgentMode.Review,
+            SecurityTier = SandboxSecurityTier.Standard,
+            PermittedTools = DefaultAgentTools.Review,
+            OptimizationFlags = new LocalOptimizationFlags(),
+            Temperature = 1.0,
+            ThinkingEffort = ThinkingEffort.Medium
+        }
     };
 }

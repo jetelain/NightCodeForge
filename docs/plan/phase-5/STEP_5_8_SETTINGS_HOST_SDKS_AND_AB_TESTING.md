@@ -22,6 +22,7 @@ Provide an enterprise-grade administration and experimentation console for manag
      - Discovered tool command paths (`which dotnet`, `node`, `python3`, `cargo`).
      - One-click "Re-probe Host SDKs" cache busting action.
 3. **Agent Profile Editor & 7 Local LLM Optimization Toggles:**
+   - **Scope Switcher:** Toggle between editing **Global System Defaults** (`WorkspaceId == null`, inherited by all workspaces by default) and **Dedicated Workspace Overrides** (`WorkspaceId == ActiveWorkspace.Id`).
    - Configure Harness (`Crucible`, `PiRpc`, `Acp`), Model (dynamically autocompleted from `IOllamaModelCatalogService`), Thinking Effort (`None`, `Low`, `Medium`, `High`, `CustomBudget`), Token Budget, and Temperature.
    - Configure `SandboxSecurityTier`: `Standard` vs. `RestrictedReadOnly` (for Stage 0 untrusted intake triage).
    - Configure `PermittedTools` whitelist.

@@ -40,6 +40,9 @@ using (var scope = app.Services.CreateScope())
     var dbContext = scope.ServiceProvider.GetRequiredService<NightCodeForge.Infrastructure.Data.AppDbContext>();
     await dbContext.EnsureDatabaseCreatedAndWalAsync();
 
+    var defaultModel = builder.Configuration["LlmProvider:ModelId"] ?? "Qwen3.8-27B:latest";
+    await dbContext.EnsureDefaultGlobalAgentProfilesAsync(defaultModel);
+
     var recoveryService = scope.ServiceProvider.GetRequiredService<IStartupRecoveryService>();
     await recoveryService.ReconcileWorkspacesAsync();
 

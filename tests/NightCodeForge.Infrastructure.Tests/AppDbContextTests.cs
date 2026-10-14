@@ -166,4 +166,109 @@ public class AppDbContextTests : IDisposable
         Assert.Empty(await context.ExecutionLogs.Where(l => l.TaskId == task.Id).ToListAsync());
         Assert.Empty(await context.StageCheckpoints.Where(c => c.TaskId == task.Id).ToListAsync());
     }
+
+    [Fact]
+    public async Task EnsureDefaultGlobalAgentProfilesAsync_SeedsAll5StandardProfiles_WhenEmpty()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
+
+        var profiles = await context.AgentProfiles.Where(p => p.WorkspaceId == null).ToListAsync();
+        Assert.Equal(5, profiles.Count);
+
+        var ids = profiles.Select(p => p.Id).OrderBy(x => x).ToList();
+        Assert.Equal(new[] { "code-review-fix", "ideation", "implementation", "task-review", "triage" }, ids);
+
+        foreach (var p in profiles)
+        {
+            Assert.Null(p.WorkspaceId);
+            Assert.Equal("Qwen3.8-27B:latest", p.ModelName);
+        }
+
+        // Verify implementation has all 7 optimization flags
+        var impl = profiles.First(p => p.Id == "implementation");
+        Assert.NotNull(impl.OptimizationFlags);
+        Assert.True(impl.OptimizationFlags.ThinkingTraceCompaction);
+        Assert.True(impl.OptimizationFlags.LoopCircuitBreaker);
+        Assert.True(impl.OptimizationFlags.GuidedGrammarDecoding);
+        Assert.True(impl.OptimizationFlags.DeterministicSymbolMap);
+        Assert.True(impl.OptimizationFlags.StructuredDiagnosticExtraction);
+        Assert.True(impl.OptimizationFlags.PrefixStabilization);
+        Assert.True(impl.OptimizationFlags.JitModelPreload);
+
+        // Verify triage has restricted sandbox tier
+        var triage = profiles.First(p => p.Id == "triage");
+        Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, triage.SecurityTier);
+        Assert.Equal(AgentMode.ReadOnly, triage.Mode);
+    }
+
+    [Fact]
+    public async Task EnsureDefaultGlobalAgentProfilesAsync_IsIdempotent_AndPreservesCustomizations()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
+
+        // User customizes implementation temperature
+        var impl = await context.AgentProfiles.FirstAsync(p => p.Id == "implementation");
+        impl.Temperature = 0.77;
+        impl.ModelName = "custom-coder:32b";
+        await context.SaveChangesAsync();
+
+        // Run seeder again (e.g. app restart)
+        await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
+
+        var profiles = await context.AgentProfiles.Where(p => p.WorkspaceId == null).ToListAsync();
+        Assert.Equal(5, profiles.Count);
+
+        var updatedImpl = await context.AgentProfiles.FirstAsync(p => p.Id == "implementation");
+        Assert.Equal(0.77, updatedImpl.Temperature);
+        Assert.Equal("custom-coder:32b", updatedImpl.ModelName);
+    }
+
+    [Fact]
+    public async Task EfCoreWorkspaceRepository_GetEffectiveAgentProfileAsync_ResolvesDedicatedAndFallsBackToGlobal()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
+
+        var repo = new EfCoreWorkspaceRepository(context);
+        var ws = await repo.CreateAsync(new Workspace { Name = "RepoTest", RepositoryPath = "/repo", DefaultBaseBranch = "main" });
+
+        // 1. When no dedicated profile exists, falls back to global profile
+        var globalImpl = await repo.GetEffectiveAgentProfileAsync(ws.Id, "implementation");
+        Assert.NotNull(globalImpl);
+        Assert.Null(globalImpl.WorkspaceId);
+        Assert.Equal("Qwen3.8-27B:latest", globalImpl.ModelName);
+
+        // 2. Add dedicated workspace override for implementation
+        var dedicatedImpl = new AgentProfile
+        {
+            Id = $"ws-{ws.Id}:implementation",
+            WorkspaceId = ws.Id,
+            Name = "Dedicated Implementation Agent",
+            HarnessId = "crucible",
+            ModelName = "dedicated-model:70b",
+            StageDirectives = new Dictionary<string, string> { ["implementation"] = "Custom directive" }
+        };
+        context.AgentProfiles.Add(dedicatedImpl);
+        await context.SaveChangesAsync();
+
+        // 3. Now resolves the dedicated workspace profile
+        var resolved = await repo.GetEffectiveAgentProfileAsync(ws.Id, "implementation");
+        Assert.NotNull(resolved);
+        Assert.Equal(ws.Id, resolved.WorkspaceId);
+        Assert.Equal("dedicated-model:70b", resolved.ModelName);
+
+        // 4. Other stages still fall back to global
+        var triage = await repo.GetEffectiveAgentProfileAsync(ws.Id, "triage");
+        Assert.NotNull(triage);
+        Assert.Null(triage.WorkspaceId);
+        Assert.Equal("Qwen3.8-27B:latest", triage.ModelName);
+    }
 }

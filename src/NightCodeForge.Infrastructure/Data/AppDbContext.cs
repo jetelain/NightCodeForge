@@ -214,4 +214,27 @@ public class AppDbContext : DbContext
             await Database.ExecuteSqlRawAsync("PRAGMA synchronous = NORMAL;", cancellationToken);
         }
     }
+
+    /// <summary>
+    /// Seeds the standard global agent profiles (WorkspaceId == null) if not already present in the database.
+    /// Preserves existing profiles and user configurations without overwriting them.
+    /// </summary>
+    public async Task EnsureDefaultGlobalAgentProfilesAsync(string defaultModelName, CancellationToken cancellationToken = default)
+    {
+        var standardProfiles = AgentProfile.CreateStandardGlobalProfiles(defaultModelName);
+        var existingGlobalIds = await AgentProfiles
+            .Where(p => p.WorkspaceId == null)
+            .Select(p => p.Id)
+            .ToListAsync(cancellationToken);
+
+        var missingProfiles = standardProfiles
+            .Where(p => !existingGlobalIds.Contains(p.Id, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        if (missingProfiles.Count > 0)
+        {
+            AgentProfiles.AddRange(missingProfiles);
+            await SaveChangesAsync(cancellationToken);
+        }
+    }
 }

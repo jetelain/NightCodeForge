@@ -53,4 +53,41 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
             await _context.SaveChangesAsync(cancellationToken);
         }
     }
+
+    public async Task<AgentProfile?> GetEffectiveAgentProfileAsync(int? workspaceId, string stageId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stageId);
+
+        if (workspaceId.HasValue)
+        {
+            var dedicatedList = await _context.AgentProfiles
+                .Where(p => p.WorkspaceId == workspaceId.Value)
+                .ToListAsync(cancellationToken);
+
+            var dedicated = dedicatedList.FirstOrDefault(p =>
+                string.Equals(p.Id, stageId, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(p.Id, $"ws-{workspaceId.Value}:{stageId}", StringComparison.OrdinalIgnoreCase) ||
+                (p.StageDirectives != null && p.StageDirectives.ContainsKey(stageId)));
+
+            if (dedicated != null)
+            {
+                return dedicated;
+            }
+        }
+
+        var globalList = await _context.AgentProfiles
+            .Where(p => p.WorkspaceId == null)
+            .ToListAsync(cancellationToken);
+
+        return globalList.FirstOrDefault(p =>
+            string.Equals(p.Id, stageId, StringComparison.OrdinalIgnoreCase) ||
+            (p.StageDirectives != null && p.StageDirectives.ContainsKey(stageId)));
+    }
+
+    public async Task<IReadOnlyList<AgentProfile>> GetGlobalAgentProfilesAsync(CancellationToken cancellationToken = default)
+    {
+        return await _context.AgentProfiles
+            .Where(p => p.WorkspaceId == null)
+            .ToListAsync(cancellationToken);
+    }
 }

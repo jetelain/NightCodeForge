@@ -99,7 +99,7 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 | **Phase 3** | [docs/plan/03_QUEUE_AND_ORCHESTRATION_ENGINE.md](plan/03_QUEUE_AND_ORCHESTRATION_ENGINE.md) | Hangfire single-worker GPU queue (`WorkerCount = 1`, `llm-urgent` vs `llm-inference`), clean `WaitingForHuman` interruption lifecycle, cascade unblocking when dependencies are `Closed`, and startup crash recovery (`IStartupRecoveryService`). |
 | **Phase 4** | [docs/plan/04_HARNESSES_TOOLS_AND_LOCAL_OPTIMIZATIONS.md](plan/04_HARNESSES_TOOLS_AND_LOCAL_OPTIMIZATIONS.md) | Unified harness abstraction, OllamaRouter integration, canonical tools & `EditorConfigFileApplier`, container sandbox sentinel REPL, Crucible / Pi / ACP engines, modular skills & MCP, and the 7 local LLM optimizations (`LocalOptimizationFlags`). |
 | **Phase 4B** *(Intermediate)* | [docs/plan/04B_EXECUTION_ENVIRONMENT_AND_WORKFLOW_ALIGNMENT.md](plan/04B_EXECUTION_ENVIRONMENT_AND_WORKFLOW_ALIGNMENT.md) | **Cross-Platform & Lifecycle Realignment:** Unix-only agent enforcement, Windows WSL2 mandatory requirement, working clones at `~/.nightcodeforge/wks/{id}`, Windows Crucible UNC path access (`\\wsl.localhost\...`), bare mode bash in WSL2, container mode `/workspace` tool call remapping, on-the-fly slim container images, 3-channel task intake (`Suggested`), manual promotion (`Open` / `Rejected`) with `Priority` & `MergeMode`, and main workflow status progression (`Reviewed` $\rightarrow$ `Implemented` $\rightarrow$ `Ready` $\rightarrow$ `Closed`). |
-| **Phase 5** | [docs/plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md](plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | Blazor Interactive Server UI, obsidian/indigo dark theme, SignalR telemetry hub, ideation chat, visual DAG backlog with Suggested/Open promotion actions, question inbox, review room with diffs and manual merge triggers, and A/B testing comparator. |
+| **Phase 5** | [docs/plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md](plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | Blazor Interactive Server UI, obsidian/indigo dark theme, workspace provisioning & onboarding wizard, SignalR telemetry hub, ideation chat, visual DAG backlog with Suggested/Open promotion actions, question inbox, review room with diffs and manual merge triggers, and A/B testing comparator. |
 | **Phase 6** | [docs/plan/06_END_TO_END_TESTING_AND_HARDENING.md](plan/06_END_TO_END_TESTING_AND_HARDENING.md) | End-to-end workflow simulation, chaos & sudden reboot resilience, multi-workspace VRAM protection validation, and empirical A/B benchmark validation. |
 
 ---
@@ -345,34 +345,40 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 * **Objective:** Build a sleek, responsive, developer-grade dashboard for ideation chat, backlog & dependency management, live monitoring, question answering, transcript inspection, and diff review.
 * **Tasks:**
   1. Setup Blazor Interactive Server with modern dark-mode aesthetic (custom CSS tokens, obsidian/indigo palette, crisp typography).
-  2. Implement **SignalR Hub (`/hubs/orchestrator`)** streaming:
+  2. Implement **Workspace Provisioning & Creation Wizard:**
+     * Multi-step repository onboarding wizard, local path validation, and automatic Git detection (`git rev-parse`).
+     * Stack & toolchain auto-discovery (.NET, Node/TS, Python, Rust, Go) and default base branch resolution.
+     * Execution environment configuration with mandatory Windows WSL2 verification (`IWslMetadataService`) and sandbox container setup.
+     * Automated Ext4 mirror clone (`~/.nightcodeforge/wks/{workspaceId}`), directory scaffolding (`docs/tasks/`), markdown watcher registration, and default agent profile seeding.
+     * Empty-state hero banners on Home/Ideation and persistent TopNavBar `[+]` quick-action button.
+  3. Implement **SignalR Hub (`/hubs/orchestrator`)** streaming:
      * Live token output.
      * Agent tool executions (reading, writing, compiling).
      * Git CLI status updates.
      * Queue and worker status changes.
-  3. Implement **Interactive Ideation & Codebase Discovery Chat View:**
+  4. Implement **Interactive Ideation & Codebase Discovery Chat View:**
      * Developer chat interface to ask questions about the repository.
      * ForgeTask proposal cards with editable scope and one-click "Add to Backlog" with dependency wiring.
-  4. Implement **Backlog & Dependency DAG View:**
+  5. Implement **Backlog & Dependency DAG View:**
      * ForgeTask submission dialog (title, requirements, base branch, dependencies).
      * Dependency DAG graph / visual tree highlighting blocking relationships, lifecycle states (`Suggested`, `Open`, `Reviewed`, `Implemented`, `Ready`, `Closed`), and `WaitingForHuman` badges.
      * One-click maintainer promotion dialog: transition `Suggested` $\rightarrow$ `Open` with `Priority` (1..5) and `MergeMode` (`Automatic` vs. `ManualReviewRequired`), or `Rejected`.
-  5. Implement **Monitoring View:**
+  6. Implement **Monitoring View:**
      * Active worker dashboard: current task, active stage (`ForgeTask Review ➔ Deterministic Pre-Impl ➔ Implementation ➔ Deterministic Post-Impl ➔ Code Review ➔ Deterministic Post-Review`), elapsed time, GPU status.
      * Streaming terminal/log console with auto-scroll and log level filtering.
-  6. Implement **Inbox View:**
+  7. Implement **Inbox View:**
      * Grid of questions awaiting developer answers.
      * Rich answering card displaying prompt, rationale, file context, and response form.
-  7. Implement **Review Room:**
+  8. Implement **Review Room:**
      * Visual `git diff` viewer highlighting added/modified/deleted files.
      * Action buttons: for `ManualReviewRequired` tasks, "Approve & Merge" (squashes WIP commits into base branch $\rightarrow$ `Closed`, unblocking dependent tasks) or "Request Changes" (re-routes back to Stage 3 `ImplementationStage` with reviewer feedback). Auto-merge tasks report automatic merge completion.
-  8. Implement **Workspace, Agent Profile, Execution & MCP Settings:**
+  9. Implement **Workspace, Agent Profile, Execution & MCP Settings:**
      * Workspace creation/switching and target Git repository path configuration.
      * **Execution Sandbox Settings:** Selection between `BareHost`, `WslDirect`, and `ContainerSandbox` (Docker/Podman image selection, cache mount paths, read-only SDK mount paths).
      * Agent Profile editor: configure Harness, Model, Thinking Effort, Temperature, and custom JSON parameters, with stage-to-profile assignment.
-  9. Implement **Session Transcripts & AI Diagnostics Modal:**
-     * Markdown viewer for past and current execution transcripts with syntax highlighting.
-     * Choice between "Diagnose with Cloud AI" (fast, zero VRAM impact) and "Diagnose with Local AI" (100% private, sequential execution).
+  10. Implement **Session Transcripts & AI Diagnostics Modal:**
+      * Markdown viewer for past and current execution transcripts with syntax highlighting.
+      * Choice between "Diagnose with Cloud AI" (fast, zero VRAM impact) and "Diagnose with Local AI" (100% private, sequential execution).
 * **Deliverables:** Fully operational web interface with real-time reactive updates.
 
 ---

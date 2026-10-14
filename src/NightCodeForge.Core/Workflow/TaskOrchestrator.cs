@@ -209,20 +209,22 @@ public class TaskOrchestrator : ITaskOrchestrator
             return;
         }
 
-        // Resolve Agent Profile matching interrupted profile or current stage, or fallback to first
+        // Resolve Agent Profile matching interrupted profile or current stage, falling back to global system profile
         AgentProfile? profile = null;
         if (!string.IsNullOrWhiteSpace(task.InterruptedAgentProfileId))
         {
             profile = workspace.AgentProfiles?.FirstOrDefault(p =>
                 string.Equals(p.Id, task.InterruptedAgentProfileId, StringComparison.OrdinalIgnoreCase));
+            if (profile == null)
+            {
+                profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, task.InterruptedAgentProfileId, cancellationToken);
+            }
             task.InterruptedAgentProfileId = null;
         }
 
         if (profile == null)
         {
-            profile = workspace.AgentProfiles?.FirstOrDefault(p =>
-                string.Equals(p.Id, stage.StageId, StringComparison.OrdinalIgnoreCase) ||
-                (p.StageDirectives != null && p.StageDirectives.ContainsKey(stage.StageId)))
+            profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, stage.StageId, cancellationToken)
                 ?? workspace.AgentProfiles?.FirstOrDefault();
         }
 

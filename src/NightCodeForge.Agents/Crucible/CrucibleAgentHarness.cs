@@ -650,13 +650,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
 
         // 3. Modes: ReadOnly, Review, Full
-        var effectiveMode = profile.Mode == AgentMode.ReadOnly ? AgentMode.ReadOnly : requiredMode;
-        return effectiveMode switch
-        {
-            AgentMode.ReadOnly => new[] { "read", "propose_tasks", "web_search", "ask", "load_skill", "read_skill_resource" },
-            AgentMode.Review => new[] { "read", "edit", "write", "bash", "web_search", "ask", "propose_tasks", "request_changes", "load_skill", "read_skill_resource", "run_skill_script" },
-            _ => new[] { "read", "edit", "write", "bash", "web_search", "ask", "propose_tasks", "load_skill", "read_skill_resource", "run_skill_script" }
-        };
+        return DefaultAgentTools.GetTools(profile.Mode == AgentMode.ReadOnly ? AgentMode.ReadOnly : requiredMode);
     }
 
     private static string BuildDynamicToolsPrompt(

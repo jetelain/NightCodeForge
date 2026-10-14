@@ -197,9 +197,7 @@ When you recommend one or more implementation tasks, format them as a structured
 
         var permittedTools = profile.PermittedTools?.Count > 0
             ? profile.PermittedTools
-            : (profile.Mode == AgentMode.ReadOnly
-                ? new[] { "read", "propose_tasks", "web_search" }
-                : new[] { "read", "bash", "web_search", "propose_tasks" });
+            : DefaultAgentTools.GetTools(profile.Mode);
 
         var effectiveEnv = (workspace != null && _envProvider != null)
             ? _envProvider.GetEnvironment(workspace, profile.SecurityTier)

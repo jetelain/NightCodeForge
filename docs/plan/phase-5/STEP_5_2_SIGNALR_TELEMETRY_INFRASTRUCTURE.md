@@ -1,7 +1,7 @@
 # ⚡ Step 5.2: SignalR Real-Time Telemetry Hub & Streaming Infrastructure
 
 > **Phase 5 Implementation Step**  
-> *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.1: Design System & Layout](STEP_5_1_DESIGN_SYSTEM_AND_LAYOUT.md) | *Next Step:* [Step 5.3: Ideation & Discovery Chat](STEP_5_3_IDEATION_AND_DISCOVERY_CHAT.md)  
+> *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.1b: Workspace Provisioning & Creation Wizard](STEP_5_1B_WORKSPACE_PROVISIONING_AND_CREATION_WIZARD.md) | *Next Step:* [Step 5.3: Ideation & Discovery Chat](STEP_5_3_IDEATION_AND_DISCOVERY_CHAT.md)  
 > *Project Target:* `src/NightCodeForge.Infrastructure/Hubs` & `src/NightCodeForge.Web/Services` | *Status:* Completed
 
 ---

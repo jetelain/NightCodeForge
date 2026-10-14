@@ -236,4 +236,62 @@ public class DomainEntitiesTests
         Assert.Equal("{}", log.PayloadJson);
         Assert.Equal(task, log.ForgeTask);
     }
+
+    [Fact]
+    public void CanonicalToolNames_DefinesExpectedTools_AndAllContainsAllConstants()
+    {
+        Assert.Equal("read", CanonicalToolNames.Read);
+        Assert.Equal("edit", CanonicalToolNames.Edit);
+        Assert.Equal("write", CanonicalToolNames.Write);
+        Assert.Equal("bash", CanonicalToolNames.Bash);
+        Assert.Equal("ask", CanonicalToolNames.Ask);
+        Assert.Equal("web_search", CanonicalToolNames.WebSearch);
+        Assert.Equal("propose_tasks", CanonicalToolNames.ProposeTasks);
+        Assert.Equal("request_changes", CanonicalToolNames.RequestChanges);
+        Assert.Equal("load_skill", CanonicalToolNames.LoadSkill);
+        Assert.Equal("read_skill_resource", CanonicalToolNames.ReadSkillResource);
+        Assert.Equal("run_skill_script", CanonicalToolNames.RunSkillScript);
+
+        Assert.Equal(11, CanonicalToolNames.All.Count);
+        Assert.Contains(CanonicalToolNames.Read, CanonicalToolNames.All);
+        Assert.Contains(CanonicalToolNames.Edit, CanonicalToolNames.All);
+        Assert.Contains(CanonicalToolNames.Write, CanonicalToolNames.All);
+        Assert.Contains(CanonicalToolNames.Bash, CanonicalToolNames.All);
+        Assert.Contains(CanonicalToolNames.Ask, CanonicalToolNames.All);
+        Assert.Contains(CanonicalToolNames.WebSearch, CanonicalToolNames.All);
+        Assert.Contains(CanonicalToolNames.ProposeTasks, CanonicalToolNames.All);
+        Assert.Contains(CanonicalToolNames.RequestChanges, CanonicalToolNames.All);
+        Assert.Contains(CanonicalToolNames.LoadSkill, CanonicalToolNames.All);
+        Assert.Contains(CanonicalToolNames.ReadSkillResource, CanonicalToolNames.All);
+        Assert.Contains(CanonicalToolNames.RunSkillScript, CanonicalToolNames.All);
+    }
+
+    [Fact]
+    public void DefaultAgentTools_ProvidesAppropriateToolSetsPerMode()
+    {
+        // ReadOnly mode should not allow destructive edit/write/bash or request_changes
+        Assert.Contains(CanonicalToolNames.Read, DefaultAgentTools.ReadOnly);
+        Assert.Contains(CanonicalToolNames.ProposeTasks, DefaultAgentTools.ReadOnly);
+        Assert.DoesNotContain(CanonicalToolNames.Edit, DefaultAgentTools.ReadOnly);
+        Assert.DoesNotContain(CanonicalToolNames.Write, DefaultAgentTools.ReadOnly);
+        Assert.DoesNotContain(CanonicalToolNames.Bash, DefaultAgentTools.ReadOnly);
+        Assert.DoesNotContain(CanonicalToolNames.RequestChanges, DefaultAgentTools.ReadOnly);
+
+        // Full mode includes write, edit, bash
+        Assert.Contains(CanonicalToolNames.Write, DefaultAgentTools.Full);
+        Assert.Contains(CanonicalToolNames.Edit, DefaultAgentTools.Full);
+        Assert.Contains(CanonicalToolNames.Bash, DefaultAgentTools.Full);
+        Assert.DoesNotContain(CanonicalToolNames.RequestChanges, DefaultAgentTools.Full);
+
+        // Review mode includes request_changes
+        Assert.Contains(CanonicalToolNames.RequestChanges, DefaultAgentTools.Review);
+        Assert.Contains(CanonicalToolNames.Write, DefaultAgentTools.Review);
+        Assert.Contains(CanonicalToolNames.Edit, DefaultAgentTools.Review);
+
+        // Mode dispatch
+        Assert.Same(DefaultAgentTools.ReadOnly, DefaultAgentTools.GetTools(AgentMode.ReadOnly));
+        Assert.Same(DefaultAgentTools.Review, DefaultAgentTools.GetTools(AgentMode.Review));
+        Assert.Same(DefaultAgentTools.Full, DefaultAgentTools.GetTools(AgentMode.Full));
+    }
 }
+

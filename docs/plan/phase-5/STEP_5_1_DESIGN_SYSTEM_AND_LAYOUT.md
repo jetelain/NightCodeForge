@@ -1,7 +1,7 @@
 # 🎨 Step 5.1: Design System, CSS Architecture & Modern Obsidian/Indigo Layout
 
 > **Phase 5 Implementation Step**  
-> *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Next Step:* [Step 5.2: SignalR Telemetry Infrastructure](STEP_5_2_SIGNALR_TELEMETRY_INFRASTRUCTURE.md)  
+> *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Next Step:* [Step 5.1b: Workspace Provisioning & Creation Wizard](STEP_5_1B_WORKSPACE_PROVISIONING_AND_CREATION_WIZARD.md)  
 > *Project Target:* `src/NightCodeForge.Web` | *Status:* Completed
 
 ---
