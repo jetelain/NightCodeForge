@@ -64,13 +64,6 @@ public static class CanonicalAIFunctionFactory
                 "Executes a bash or shell command within the workspace sandbox."),
 
             AIFunctionFactory.Create(
-                ([Description("Search query string")] string query,
-                 [Description("Maximum results to return (1-10)")] int? max_results = null,
-                 CancellationToken ct = default) => tools.WebSearchAsync(query, max_results, ct),
-                "web_search",
-                "Searches technical web documentation for APIs, errors, or libraries."),
-
-            AIFunctionFactory.Create(
                 ([Description("Exact name of the skill to load from the <skills> catalog")] string skill_name,
                  CancellationToken ct = default) => tools.LoadSkillAsync(skill_name, ct),
                 "load_skill",
@@ -99,6 +92,16 @@ public static class CanonicalAIFunctionFactory
                 "request_changes",
                 "Rejects implementation and sends task back to the implementation agent for rework.")
         };
+
+        if (tools.IsWebSearchConfigured)
+        {
+            allTools.Add(AIFunctionFactory.Create(
+                ([Description("Search query string")] string query,
+                 [Description("Maximum results to return (1-10)")] int? max_results = null,
+                 CancellationToken ct = default) => tools.WebSearchAsync(query, max_results, ct),
+                "web_search",
+                "Searches technical web documentation for APIs, errors, or libraries."));
+        }
 
         if (permittedTools == null || permittedTools.Count == 0)
         {

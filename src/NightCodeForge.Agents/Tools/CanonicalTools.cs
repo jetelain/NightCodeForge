@@ -72,6 +72,9 @@ public partial class CanonicalTools
         _logger = logger;
     }
 
+    public IWebSearchService WebSearchService => _webSearchService;
+    public bool IsWebSearchConfigured => _webSearchService.IsConfigured;
+
     public string ResolveFullPath(string path)
     {
         if (_workspaceId.HasValue)
@@ -474,6 +477,11 @@ public partial class CanonicalTools
     /// </summary>
     public async Task<string> WebSearchAsync(string query, int? maxResults = null, CancellationToken cancellationToken = default)
     {
+        if (!_webSearchService.IsConfigured)
+        {
+            return "Web search is disabled because no API key is configured. Please solve the task using local repository inspection tools.";
+        }
+
         var response = await _webSearchService.SearchAsync(query, maxResults ?? 5, cancellationToken);
         if (response.Results.Count == 0)
         {

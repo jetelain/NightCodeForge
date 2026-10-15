@@ -26,6 +26,8 @@ public class SettingsComponentTests : BunitContext, IDisposable
     private readonly MockOllamaRouterGatewayService _gatewayService;
     private readonly MockWslMetadataService _wslService;
     private readonly MockGitMirrorSyncService _mirrorService;
+    private readonly MockWebSearchSettingsService _webSearchSettingsService;
+    private readonly NightCodeForge.Agents.Tools.MockWebSearchService _webSearchService;
 
     public SettingsComponentTests()
     {
@@ -51,12 +53,16 @@ public class SettingsComponentTests : BunitContext, IDisposable
         _gatewayService = new MockOllamaRouterGatewayService();
         _wslService = new MockWslMetadataService();
         _mirrorService = new MockGitMirrorSyncService();
+        _webSearchSettingsService = new MockWebSearchSettingsService();
+        _webSearchService = new NightCodeForge.Agents.Tools.MockWebSearchService();
 
         Services.AddDbContext<AppDbContext>(opts => opts.UseSqlite(_connection));
         Services.AddScoped<IWorkspaceRepository, EfCoreWorkspaceRepository>();
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton(_toastService);
         Services.AddSingleton<IGlobalOptimizationSettingsService>(_optService);
+        Services.AddSingleton<IWebSearchSettingsService>(_webSearchSettingsService);
+        Services.AddSingleton<NightCodeForge.Agents.Tools.IWebSearchService>(_webSearchService);
         Services.AddSingleton<IOllamaModelCatalogService>(_catalogService);
         Services.AddSingleton<IHostSdkDiscoveryService>(_sdkService);
         Services.AddSingleton<IOllamaRouterGatewayService>(_gatewayService);
@@ -325,6 +331,76 @@ public class SettingsComponentTests : BunitContext, IDisposable
         }
         public Task<GitSyncResult> PushToHostAsync(string mirrorRepoPath, int taskId, CancellationToken cancellationToken = default) => Task.FromResult(new GitSyncResult(true, false, "main", null));
         public Task<GitSyncResult> PushBaseBranchToHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default) => Task.FromResult(new GitSyncResult(true, false, "main", null));
+    }
+
+    private class MockWebSearchSettingsService : IWebSearchSettingsService
+    {
+        public WebSearchSettings CurrentSettings { get; set; } = new();
+        public event Action<WebSearchSettings>? OnSettingsChanged;
+
+        public WebSearchSettings GetSettings() => CurrentSettings.Clone();
+        public Task<WebSearchSettings> LoadSettingsAsync(CancellationToken cancellationToken = default) => Task.FromResult(GetSettings());
+        public Task UpdateSettingsAsync(WebSearchSettings settings, CancellationToken cancellationToken = default)
+        {
+            CurrentSettings = settings.Clone();
+            OnSettingsChanged?.Invoke(CurrentSettings);
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public void SettingsPage_NavigatesToWebSearchTab_AndRendersWebSearchCard()
+    {
+        var cut = Render<Settings>();
+
+        // Find web search tab button
+        var webSearchTab = cut.FindAll(".settings-tabs button")
+            .FirstOrDefault(b => b.TextContent.Contains("Web Search"));
+        Assert.NotNull(webSearchTab);
+
+        webSearchTab.Click();
+
+        Assert.Contains("Cloud &amp; Web Search Integration", cut.Markup);
+        Assert.Contains("Search Provider", cut.Markup);
+        Assert.Contains("Ollama API Key", cut.Markup);
+        Assert.Contains("Live Connectivity &amp; Search Tester", cut.Markup);
+    }
+
+    [Fact]
+    public void WebSearchSettingsTab_PastingApiKey_EnablesTestButtonAndAllowsSaving()
+    {
+        // Ensure no env key or settings key
+        Environment.SetEnvironmentVariable("OLLAMA_API_KEY", null);
+        _webSearchSettingsService.CurrentSettings = new WebSearchSettings { ApiKey = "" };
+
+        var cut = Render<NightCodeForge.Web.Components.Settings.WebSearchSettingsTab>();
+
+        // Find the API key input (password input)
+        var apiKeyInput = cut.Find("input[type='password']");
+        Assert.NotNull(apiKeyInput);
+
+        // Save button in header should be enabled (not disabled)
+        var saveBtn = cut.Find("button.forge-btn-primary");
+        Assert.False(saveBtn.HasAttribute("disabled"));
+
+        // Test button should initially be disabled because no API key is configured
+        var testBtn = cut.FindAll("button").FirstOrDefault(b => b.TextContent.Contains("Test Search Connection"));
+        Assert.NotNull(testBtn);
+        Assert.True(testBtn.HasAttribute("disabled"));
+
+        // Simulate pasting / typing an API key
+        apiKeyInput.Input("ollama_pasted_key_12345");
+
+        // Now the test button should be enabled!
+        testBtn = cut.FindAll("button").FirstOrDefault(b => b.TextContent.Contains("Test Search Connection"));
+        Assert.NotNull(testBtn);
+        Assert.False(testBtn.HasAttribute("disabled"));
+
+        // Click save button
+        saveBtn.Click();
+
+        // Verify settings were persisted
+        Assert.Equal("ollama_pasted_key_12345", _webSearchSettingsService.CurrentSettings.ApiKey);
     }
 
     #endregion

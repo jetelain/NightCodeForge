@@ -850,7 +850,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
         foreach (var tool in permittedTools)
         {
             // Only expose non-canonical tools that are actually registered (custom DB tools, MCP servers);
-            // names such as the legacy read_skill_resource/run_skill_script have no handler and are skipped.
+            // canonical tools are already handled by CanonicalAIFunctionFactory above.
+            if (CanonicalToolNames.All.Contains(tool, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             if (!knownNames.Contains(tool) && dispatcher.TryGetTool(tool, out _))
             {
                 var custom = customTools?.FirstOrDefault(c => string.Equals(c.Name, tool, StringComparison.OrdinalIgnoreCase));

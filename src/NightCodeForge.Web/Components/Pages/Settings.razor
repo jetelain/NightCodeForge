@@ -70,6 +70,12 @@
                 @onclick='() => _activeGlobalTab = "abtesting"'>
             📊 A/B Testing Comparator
         </button>
+        <button type="button" 
+                class="forge-btn @(_activeGlobalTab == "websearch" ? "forge-btn-primary" : "forge-btn-outline")" 
+                style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 500;"
+                @onclick='() => _activeGlobalTab = "websearch"'>
+            🌐 Cloud &amp; Web Search
+        </button>
     </div>
 
     <div class="settings-tab-content">
@@ -89,6 +95,9 @@
                 break;
             case "abtesting":
                 <ABTestingComparatorTab />
+                break;
+            case "websearch":
+                <WebSearchSettingsTab />
                 break;
         }
     </div>

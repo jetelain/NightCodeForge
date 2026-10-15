@@ -53,6 +53,9 @@ using (var scope = app.Services.CreateScope())
     var globalOptSettings = scope.ServiceProvider.GetRequiredService<NightCodeForge.Core.Interfaces.IGlobalOptimizationSettingsService>();
     await globalOptSettings.LoadFlagsAsync();
 
+    var webSearchSettings = scope.ServiceProvider.GetRequiredService<NightCodeForge.Core.Interfaces.IWebSearchSettingsService>();
+    await webSearchSettings.LoadSettingsAsync();
+
     var recoveryService = scope.ServiceProvider.GetRequiredService<IStartupRecoveryService>();
     await recoveryService.ReconcileWorkspacesAsync();
 

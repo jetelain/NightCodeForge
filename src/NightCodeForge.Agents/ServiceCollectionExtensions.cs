@@ -31,7 +31,8 @@ public static class ServiceCollectionExtensions
         // 2. Canonical Tools & Context Services
         services.TryAddSingleton<IEditorConfigService, EditorConfigService>();
         services.TryAddSingleton<IEditorConfigFileApplier, EditorConfigFileApplier>();
-        services.TryAddSingleton<IWebSearchService, MockWebSearchService>();
+        services.AddHttpClient<OllamaWebSearchService>();
+        services.TryAddScoped<IWebSearchService>(sp => sp.GetRequiredService<OllamaWebSearchService>());
         services.TryAddSingleton<IWorkspaceSymbolService, RoslynSymbolIndexProvider>();
         services.TryAddSingleton<SkillsService>();
         services.TryAddSingleton<AgentsMdService>();

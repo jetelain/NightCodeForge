@@ -7,18 +7,22 @@ public record WebSearchResponse(IReadOnlyList<WebSearchResultItem> Results);
 public interface IWebSearchService
 {
     string ProviderName { get; }
+    bool IsConfigured { get; }
     Task<WebSearchResponse> SearchAsync(string query, int maxResults = 5, CancellationToken cancellationToken = default);
 }
 
 public class MockWebSearchService : IWebSearchService
 {
     private readonly Func<string, int, Task<WebSearchResponse>>? _searchHandler;
+    private readonly bool _isConfigured;
 
     public string ProviderName => "Mock";
+    public bool IsConfigured => _isConfigured;
 
-    public MockWebSearchService(Func<string, int, Task<WebSearchResponse>>? searchHandler = null)
+    public MockWebSearchService(Func<string, int, Task<WebSearchResponse>>? searchHandler = null, bool isConfigured = true)
     {
         _searchHandler = searchHandler;
+        _isConfigured = isConfigured;
     }
 
     public async Task<WebSearchResponse> SearchAsync(string query, int maxResults = 5, CancellationToken cancellationToken = default)
