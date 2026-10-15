@@ -87,6 +87,48 @@ public class ResumptionTests
     }
 
     [Fact]
+    public async Task SubmitHumanAnswerAsync_PreservesImplementedStatusAndEnqueuesUrgent()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 105,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Implemented,
+            IsWaitingForHuman = true,
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 5,
+                    TaskId = 105,
+                    Prompt = "Should test assertions include mock verification?",
+                    Status = QuestionStatus.Pending
+                }
+            }
+        });
+        _depStore.AddTask(105, 1, TaskOverallStatus.Implemented);
+        _depStore.SetWaitingForHuman(105, true);
+
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
+            _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
+
+        await orchestrator.SubmitHumanAnswerAsync(5, "Yes, verify mock calls strictly.");
+
+        var question = await _taskRepo.GetQuestionByIdAsync(5);
+        Assert.NotNull(question);
+        Assert.Equal("Yes, verify mock calls strictly.", question.Answer);
+        Assert.Equal(QuestionStatus.Answered, question.Status);
+
+        var updatedTask = await _taskRepo.GetByIdAsync(105);
+        Assert.NotNull(updatedTask);
+        Assert.False(updatedTask.IsWaitingForHuman);
+        Assert.Equal(TaskOverallStatus.Implemented, updatedTask.Status); // Preserved!
+
+        Assert.Contains(105, _jobQueue.UrgentQueue);
+    }
+
+    [Fact]
     public async Task SubmitHumanAnswerAsync_ThenProcessTask_AllowsStageToConsumeAnswerAndSucceed()
     {
         var task = await _taskRepo.CreateAsync(new ForgeTask

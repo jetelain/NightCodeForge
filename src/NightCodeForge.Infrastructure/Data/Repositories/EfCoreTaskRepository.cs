@@ -113,6 +113,22 @@ public class EfCoreTaskRepository : ITaskRepository
             .FirstOrDefaultAsync(q => q.Id == questionId, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<Question>> GetQuestionsByStatusAsync(QuestionStatus status, int? workspaceId = null, CancellationToken cancellationToken = default)
+    {
+        var query = _context.Questions
+            .Include(q => q.ForgeTask)
+            .Where(q => q.Status == status);
+
+        if (workspaceId.HasValue)
+        {
+            query = query.Where(q => q.ForgeTask != null && q.ForgeTask.WorkspaceId == workspaceId.Value);
+        }
+
+        return await query
+            .OrderByDescending(q => q.AskedAt)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<ForgeTask>> GetByStatusAsync(TaskOverallStatus status, CancellationToken cancellationToken = default)
     {
         return await _context.Tasks

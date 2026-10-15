@@ -14,6 +14,7 @@ public interface ITaskRepository
     Task<IReadOnlyList<int>> GetDependenciesAsync(int taskId, CancellationToken cancellationToken = default);
     Task DeleteAsync(int id, CancellationToken cancellationToken = default);
     Task<Question?> GetQuestionByIdAsync(int questionId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<Question>> GetQuestionsByStatusAsync(QuestionStatus status, int? workspaceId = null, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ForgeTask>> GetByStatusAsync(TaskOverallStatus status, CancellationToken cancellationToken = default);
     Task AddExecutionRecordAsync(StageExecutionRecord record, CancellationToken cancellationToken = default);
     Task AddCheckpointAsync(StageCheckpoint checkpoint, CancellationToken cancellationToken = default);
@@ -144,9 +145,48 @@ public class InMemoryTaskRepository : ITaskRepository
         {
             if (_questions.TryGetValue(questionId, out var question))
             {
+                if (question.ForgeTask == null && _tasks.TryGetValue(question.TaskId, out var t))
+                {
+                    question.ForgeTask = t;
+                }
                 return Task.FromResult<Question?>(question);
             }
             return Task.FromResult<Question?>(null);
+        }
+    }
+
+    public Task<IReadOnlyList<Question>> GetQuestionsByStatusAsync(QuestionStatus status, int? workspaceId = null, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var list = _questions.Values
+                .Where(q => q.Status == status)
+                .Where(q => !workspaceId.HasValue || (q.ForgeTask != null && q.ForgeTask.WorkspaceId == workspaceId.Value) || (_tasks.TryGetValue(q.TaskId, out var t) && t.WorkspaceId == workspaceId.Value))
+                .OrderByDescending(q => q.AskedAt)
+                .ToList();
+
+            foreach (var q in list)
+            {
+                if (q.ForgeTask == null && _tasks.TryGetValue(q.TaskId, out var t))
+                {
+                    q.ForgeTask = t;
+                }
+            }
+
+            return Task.FromResult<IReadOnlyList<Question>>(list);
+        }
+    }
+
+    public void AddQuestion(Question question)
+    {
+        lock (_lock)
+        {
+            if (question.Id <= 0) question.Id = _nextQuestionId++;
+            if (question.ForgeTask != null && question.TaskId <= 0)
+            {
+                question.TaskId = question.ForgeTask.Id;
+            }
+            _questions[question.Id] = question;
         }
     }
 

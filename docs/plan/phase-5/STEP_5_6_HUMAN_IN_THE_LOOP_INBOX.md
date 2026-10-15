@@ -267,10 +267,10 @@ public class Question
 
 ## 6. Definition of Done (DoD) Checklist
 
-- [ ] `Pages/Inbox.razor` created with workspace filter toggle and empty state illustrations.
-- [ ] `QuestionCard.razor` component created with prompt, rationale, stage badges, and agent profile name.
-- [ ] Multiple-choice button selection and freeform markdown textarea support implemented.
-- [ ] Submitting answers invokes `ITaskOrchestrator.SubmitHumanAnswerAsync`.
-- [ ] Verification confirms `task.Status` is preserved exactly and task is enqueued to `llm-urgent`.
-- [ ] Reactive badge counters update in `TopNavBar` and `NavMenu`.
-- [ ] bUnit component tests verify submission and validation flows.
+- [x] `Pages/Inbox.razor` created with workspace filter toggle and empty state illustrations.
+- [x] `QuestionCard.razor` component created with prompt, rationale, stage badges, and agent profile name.
+- [x] Multiple-choice button selection and freeform markdown textarea support implemented.
+- [x] Submitting answers invokes `ITaskOrchestrator.SubmitHumanAnswerAsync`.
+- [x] Verification confirms `task.Status` is preserved exactly and task is enqueued to `llm-urgent`.
+- [x] Reactive badge counters update in `TopNavBar` and `NavMenu`.
+- [x] bUnit component tests verify submission and validation flows.

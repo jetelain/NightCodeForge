@@ -1,37 +1,111 @@
 @page "/inbox"
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Components.Inbox
+@inject ITaskRepository TaskRepository
+@inject WorkspaceStateService WorkspaceState
+@inject WorkerStateService WorkerState
+@inject ToastService ToastService
+@implements IDisposable
 
 <PageTitle>Question Inbox - NightCodeForge</PageTitle>
 
-<div class="page-header" style="margin-bottom: 1.5rem;">
-    <div style="display: flex; align-items: center; gap: 0.75rem;">
-        <span style="font-size: 1.75rem;">📬</span>
+<div class="inbox-container">
+    <div class="inbox-header mb-4">
         <div>
-            <h1>Human-in-the-Loop Question Inbox</h1>
-            <p>Direct interaction portal for agent clarification requests, scope approvals, and escalations.</p>
+            <h2>📬 Question Inbox</h2>
+            <p class="text-secondary">Questions requiring human clarification before autonomous execution can proceed.</p>
+        </div>
+        <div class="inbox-filter">
+            <label class="checkbox-inline font-sans">
+                <input type="checkbox" 
+                       id="filter-workspace-checkbox"
+                       @bind="_filterCurrentWorkspaceOnly" 
+                       @bind:after="LoadQuestionsAsync" />
+                <span>Filter to Active Workspace Only @(WorkspaceState.ActiveWorkspace != null ? $"({WorkspaceState.ActiveWorkspace.Name})" : "")</span>
+            </label>
         </div>
     </div>
-</div>
 
-<div class="forge-card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <div style="font-weight: 600; font-size: 1.1rem;">Pending Clarification Requests</div>
-        <span class="forge-badge badge-amber">@WorkerState.Current.PendingQuestionCount Pending</span>
-    </div>
-    @if (WorkerState.Current.PendingQuestionCount == 0)
+    @if (_isLoading)
     {
-        <p style="color: var(--text-muted); font-style: italic;">
-            All clear! No agents currently waiting for human guidance or clarification.
-        </p>
+        <div class="loading-spinner text-muted" id="inbox-loading">
+            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+            Loading questions...
+        </div>
+    }
+    else if (_pendingQuestions.Count == 0)
+    {
+        <div class="empty-inbox card-surface text-center p-5" id="inbox-empty-state">
+            <span class="empty-icon" style="font-size: 3rem; display: block; margin-bottom: 1rem;">🎉</span>
+            <h3>All clear! No questions pending.</h3>
+            <p class="text-muted">Agents are progressing autonomously without any human blockers.</p>
+        </div>
     }
     else
     {
-        <p style="color: var(--accent-amber); font-weight: 500;">
-            There are @WorkerState.Current.PendingQuestionCount questions requiring your decision or input.
-        </p>
+        <div class="question-grid" id="inbox-question-grid">
+            @foreach (var question in _pendingQuestions)
+            {
+                <QuestionCard @key="question.Id" Question="question" OnAnswerSubmitted="HandleAnswerSubmitted" />
+            }
+        </div>
     }
 </div>
 
 @code {
-    [Inject]
-    private WorkerStateService WorkerState { get; set; } = default!;
+    private List<Question> _pendingQuestions = new();
+    private bool _filterCurrentWorkspaceOnly;
+    private bool _isLoading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        await LoadQuestionsAsync();
+    }
+
+    private async void HandleWorkspaceChanged()
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadQuestionsAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task LoadQuestionsAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            int? workspaceFilter = _filterCurrentWorkspaceOnly ? WorkspaceState.ActiveWorkspaceId : null;
+            var list = await TaskRepository.GetQuestionsByStatusAsync(QuestionStatus.Pending, workspaceFilter);
+            _pendingQuestions = list.ToList();
+            
+            // Sync WorkerState pending count
+            WorkerState.UpdatePendingQuestions(_pendingQuestions.Count);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Error Loading Inbox", ex.Message, ToastLevel.Error);
+            _pendingQuestions = new List<Question>();
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task HandleAnswerSubmitted(int questionId)
+    {
+        _pendingQuestions.RemoveAll(q => q.Id == questionId);
+        WorkerState.UpdatePendingQuestions(_pendingQuestions.Count);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+    }
 }

@@ -104,7 +104,7 @@ To ensure thorough, battle-tested execution without ambiguity, Phase 5 is decomp
 - [x] **Step 5.3:** `Ideation.razor` conversing with `IIdeationService` in real time, proposing tasks with editable fields, and saving to SQLite as `Suggested`.
 - [x] **Step 5.4:** `Backlog.razor` rendering Kanban columns and SVG DAG graph, with Maintainer Promotion modal (`Suggested` $\rightarrow$ `Open`/`Rejected`) and cycle prevention.
 - [x] **Step 5.5:** `Monitoring.razor` displaying active worker state, 7-step pipeline (GPU vs CPU), and live terminal stream.
-- [ ] **Step 5.6:** `Inbox.razor` displaying pending questions, accepting answers, and resuming via `llm-urgent` without mutating task status.
+- [x] **Step 5.6:** `Inbox.razor` displaying pending questions, accepting answers, and resuming via `llm-urgent` without mutating task status.
 - [ ] **Step 5.7:** `Review.razor` rendering side-by-side diffs via `DiffPlex`, displaying quality gate cards, and executing auto-merge or approve/request-changes.
 - [x] **Step 5.8:** `Settings.razor` displaying workspace execution sandboxes, probed host SDK paths, agent profile optimization toggles, global LLM tuning flags, and A/B test metrics.
 - [ ] **Step 5.9:** `Transcripts.razor` rendering markdown transcripts and executing hybrid AI diagnostics (Cloud vs. Local).

@@ -130,18 +130,3 @@ public class MaintainerPromotionModalTests : BunitContext
     }
 }
 
-public class MockTaskOrchestrator : ITaskOrchestrator
-{
-    public (int TaskId, TaskOverallStatus TargetStatus, int Priority, MergeMode MergeMode)? LastPromotedCall { get; private set; }
-
-    public Task PromoteSuggestedTaskAsync(int taskId, TaskOverallStatus targetStatus, int priority, MergeMode mergeMode, CancellationToken cancellationToken = default)
-    {
-        LastPromotedCall = (taskId, targetStatus, priority, mergeMode);
-        return Task.CompletedTask;
-    }
-
-    public Task ProcessTaskAsync(int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-    public Task SubmitHumanAnswerAsync(int questionId, string answer, CancellationToken cancellationToken = default) => Task.CompletedTask;
-    public Task RequestChangesAsync(int taskId, string revisionNotes, CancellationToken cancellationToken = default) => Task.CompletedTask;
-    public Task CompleteTaskAndCascadeAsync(int taskId, string finalCommitMessage, CancellationToken cancellationToken = default) => Task.CompletedTask;
-}

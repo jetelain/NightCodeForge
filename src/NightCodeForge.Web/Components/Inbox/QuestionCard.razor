@@ -1,0 +1,161 @@
+@using System.Text.Json
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Workflow
+@inject ITaskOrchestrator TaskOrchestrator
+@inject ToastService ToastService
+@inject WorkerStateService WorkerState
+
+<div class="question-card card-surface mb-4" id="question-card-@Question.Id">
+    <div class="question-card-header">
+        <div class="header-left">
+            <span class="badge-stage" id="badge-stage-@Question.Id">@Question.StageId</span>
+            <span class="badge-profile" id="badge-profile-@Question.Id">🤖 @(Question.AgentProfileId ?? "Default Profile")</span>
+            <a href="/monitoring/@Question.TaskId" class="task-link" id="task-link-@Question.Id">
+                ForgeTask #@Question.TaskId: @(Question.ForgeTask?.Title ?? $"Task #{Question.TaskId}")
+            </a>
+            @if (!string.IsNullOrWhiteSpace(Question.ForgeTask?.Workspace?.Name))
+            {
+                <span class="badge-workspace font-mono">📁 @Question.ForgeTask.Workspace.Name</span>
+            }
+        </div>
+        <span class="timestamp font-mono">@Question.AskedAt.ToString("g")</span>
+    </div>
+
+    <div class="question-card-body">
+        <div class="prompt-box">
+            <h4 class="prompt-title">@Question.Prompt</h4>
+            @if (!string.IsNullOrWhiteSpace(Question.Rationale))
+            {
+                <div class="rationale-text text-secondary mt-2">
+                    <strong>Context / Rationale:</strong> @Question.Rationale
+                </div>
+            }
+        </div>
+
+        @if (Options.Any())
+        {
+            <div class="options-container mb-3">
+                <label class="form-label text-muted">Suggested Options:</label>
+                <div class="option-buttons">
+                    @foreach (var opt in Options)
+                    {
+                        <button type="button"
+                                class="btn btn-outline-indigo option-btn @(_selectedAnswer == opt ? "active" : "")"
+                                @onclick="() => SelectOption(opt)">
+                            @opt
+                        </button>
+                    }
+                </div>
+            </div>
+        }
+
+        <div class="form-group mb-3">
+            <div class="form-label-row">
+                <label class="form-label" for="clarification-input-@Question.Id">Your Response / Clarification:</label>
+                <button type="button" 
+                        class="btn btn-sm btn-subtle snippet-helper-btn"
+                        title="Insert code snippet block"
+                        @onclick="InsertCodeSnippet">
+                    💻 + Code Snippet
+                </button>
+            </div>
+            <textarea id="clarification-input-@Question.Id"
+                      class="form-control-dark font-sans question-textarea" 
+                      rows="3"
+                      placeholder="Type your answer, guidance, or decision here..."
+                      @bind="_answerText"
+                      @bind:event="oninput"></textarea>
+        </div>
+    </div>
+
+    <div class="question-card-footer">
+        <div class="text-muted small">
+            ⚡ Submitting will immediately enqueue to <code>llm-urgent</code> with the original agent profile.
+        </div>
+        <button class="btn btn-primary submit-answer-btn" 
+                id="submit-answer-btn-@Question.Id"
+                disabled="@(string.IsNullOrWhiteSpace(EffectiveAnswer) || _isSubmitting)"
+                @onclick="SubmitAnswerAsync">
+            @if (_isSubmitting)
+            {
+                <span>Submitting...</span>
+            }
+            else
+            {
+                <span>Submit &amp; Resume ForgeTask ➔</span>
+            }
+        </button>
+    </div>
+</div>
+
+@code {
+    [Parameter] public Question Question { get; set; } = null!;
+    [Parameter] public EventCallback<int> OnAnswerSubmitted { get; set; }
+
+    private string _answerText = string.Empty;
+    private string? _selectedAnswer;
+    private bool _isSubmitting;
+
+    private List<string> Options
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(Question.OptionsJson))
+                return new List<string>();
+
+            try
+            {
+                return JsonSerializer.Deserialize<List<string>>(Question.OptionsJson) ?? new List<string>();
+            }
+            catch
+            {
+                return new List<string>();
+            }
+        }
+    }
+
+    private string EffectiveAnswer => !string.IsNullOrWhiteSpace(_answerText)
+        ? _answerText
+        : _selectedAnswer ?? string.Empty;
+
+    private void SelectOption(string option)
+    {
+        _selectedAnswer = option;
+        _answerText = option;
+    }
+
+    private void InsertCodeSnippet()
+    {
+        var snippetTemplate = "\n```csharp\n// Insert code snippet or patch\n```\n";
+        if (string.IsNullOrWhiteSpace(_answerText))
+        {
+            _answerText = snippetTemplate.TrimStart();
+        }
+        else
+        {
+            _answerText += snippetTemplate;
+        }
+    }
+
+    private async Task SubmitAnswerAsync()
+    {
+        if (string.IsNullOrWhiteSpace(EffectiveAnswer)) return;
+
+        _isSubmitting = true;
+        try
+        {
+            await TaskOrchestrator.SubmitHumanAnswerAsync(Question.Id, EffectiveAnswer);
+            ToastService.Show("Clarification Submitted", $"ForgeTask #{Question.TaskId} resumed on llm-urgent queue.", ToastLevel.Success);
+            WorkerState.UpdatePendingQuestions(Math.Max(0, WorkerState.Current.PendingQuestionCount - 1));
+            await OnAnswerSubmitted.InvokeAsync(Question.Id);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Submission Failed", $"Error submitting answer: {ex.Message}", ToastLevel.Error);
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+}
