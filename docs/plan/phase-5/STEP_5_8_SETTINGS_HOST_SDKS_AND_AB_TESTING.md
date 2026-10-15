@@ -2,7 +2,7 @@
 
 > **Phase 5 Implementation Step**  
 > *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.7: Review Room & Merge Gates](STEP_5_7_REVIEW_ROOM_AND_MERGE_GATES.md) | *Next Step:* [Step 5.9: Transcripts & AI Diagnostics](STEP_5_9_TRANSCRIPTS_AND_AI_DIAGNOSTICS.md)  
-> *Project Target:* `src/NightCodeForge.Web/Components/Settings` & `Pages/Settings.razor` | *Status:* Ready for Implementation
+> *Project Target:* `src/NightCodeForge.Web/Components/Settings` & `Pages/Settings.razor` | *Status:* Implemented & Passing Tests
 
 ---
 
@@ -423,11 +423,12 @@ Compares Profile A vs Profile B from SQLite `StageExecutionRecords`:
 ---
 
 ## 6. Definition of Done (DoD) Checklist
-
-- [ ] `Pages/Settings.razor` created with 4 distinct tab views.
-- [ ] `WorkspaceSettingsTab.razor` allows editing workspace path, base branch, and execution mode.
-- [ ] WSL2 readiness card detects WSL2 availability and lists distros.
-- [ ] `HostSdkInspectorTab.razor` displays probed mounts, env vars, and binaries from `IHostSdkDiscoveryService`.
-- [ ] `AgentProfilesTab.razor` allows editing models, thinking budget, security tier, and all 7 `LocalOptimizationFlags`.
-- [ ] `ABTestingComparatorTab.razor` computes and displays side-by-side performance metrics.
-- [ ] Unit tests verify A/B metric aggregation logic.
+ 
+- [x] `Pages/Settings.razor` created with 5 distinct tab views (including Global Optimizations & Tuning).
+- [x] `GlobalOptimizationSettingsTab.razor` allows live viewing/updating of optimization flags via `IGlobalOptimizationSettingsService`.
+- [x] `WorkspaceSettingsTab.razor` allows editing workspace path, base branch, and execution mode.
+- [x] WSL2 readiness card detects WSL2 availability and lists distros.
+- [x] `HostSdkInspectorTab.razor` displays probed mounts, env vars, and binaries from `IHostSdkDiscoveryService`.
+- [x] `AgentProfilesTab.razor` allows editing models, thinking budget, security tier, and all 7 `LocalOptimizationFlags`.
+- [x] `ABTestingComparatorTab.razor` computes and displays side-by-side performance metrics.
+- [x] Unit tests verify settings services, tab components, and metric calculations (`GlobalOptimizationSettingsServiceTests`).

@@ -12,12 +12,12 @@ Provide an in-depth audit trail browser that parses, renders, and analyzes histo
 
 ### Core Capabilities:
 1. **Markdown Session Transcript Browser:**
-   - Discovers and lists turn-by-turn markdown transcript logs under `docs/transcripts/` per task and stage.
+   - Discovers and lists turn-by-turn markdown transcript logs under `<ActiveWorkspace.RepositoryPath>/docs/transcripts/` per task and stage.
    - Extracts and renders YAML frontmatter metadata into an executive summary card (Tokens consumed, Model, Harness, Stage, Duration, Final Status).
-2. **Interactive Conversation Viewer:**
+2. **Interactive Conversation Viewer & Model Call Snapshots:**
    - Turn-by-turn dialogue rendering with syntax highlighting for code blocks and bash outputs.
-   - Expandable/collapsible `<think>` reasoning traces.
-   - Tool execution callout cards displaying tool name, arguments, duration, and status.
+   - Expandable/collapsible `<think>` reasoning traces extracted via `ThinkingAndActivityTracingChatClient`.
+   - Tool execution callout cards displaying tool name, arguments, duration, and status aligned with `ModelCallSnapshot` and `AgentActivityRecord`.
 3. **Hybrid "Diagnose with AI" Modal:**
    - Action dialog offering developer choice between:
      - **Option A: Cloud Diagnostics:** Fast, zero local VRAM consumption via OllamaRouter cloud overflow or direct API.

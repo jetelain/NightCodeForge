@@ -23,6 +23,7 @@ Provide a consolidated developer inbox for reviewing and answering human clarifi
    - Submitting an answer invokes `ITaskOrchestrator.SubmitHumanAnswerAsync(questionId, answer)`.
    - Backend persists the answer, marks `Question.Status = Answered`, and clears `task.IsWaitingForHuman = false` **without mutating `task.Status`** (preserving the exact milestone `Open`, `Reviewed`, or `Implemented`).
    - Immediately enqueues the task to the **`llm-urgent`** queue (`WorkerCount = 1`), taking priority over general backlog inference tasks, resuming with the exact original `InterruptedAgentProfileId`.
+   - Dispatches `WorkerStateService.UpdatePendingQuestions` to decrement the top-bar notification badge immediately.
 
 ---
 

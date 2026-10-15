@@ -106,7 +106,7 @@ To ensure thorough, battle-tested execution without ambiguity, Phase 5 is decomp
 - [ ] **Step 5.5:** `Monitoring.razor` displaying active worker state, 7-step pipeline (GPU vs CPU), and live terminal stream.
 - [ ] **Step 5.6:** `Inbox.razor` displaying pending questions, accepting answers, and resuming via `llm-urgent` without mutating task status.
 - [ ] **Step 5.7:** `Review.razor` rendering side-by-side diffs via `DiffPlex`, displaying quality gate cards, and executing auto-merge or approve/request-changes.
-- [ ] **Step 5.8:** `Settings.razor` displaying workspace execution sandboxes, probed host SDK paths, agent profile optimization toggles, and A/B test metrics.
+- [x] **Step 5.8:** `Settings.razor` displaying workspace execution sandboxes, probed host SDK paths, agent profile optimization toggles, global LLM tuning flags, and A/B test metrics.
 - [ ] **Step 5.9:** `Transcripts.razor` rendering markdown transcripts and executing hybrid AI diagnostics (Cloud vs. Local).
 - [ ] **Step 5.10:** `Triage.razor` portal executing Stage 0 intake triage in a `RestrictedReadOnly` sandbox (`:ro` mount, `--network none`) on `main`/`master`.
 - [ ] **Step 5.11:** `GitSync.razor` managing Ext4 mirror status, reacting to `ReceiveHostDirtyAlert`, and guiding resolution for `-ncf` rescue branches.

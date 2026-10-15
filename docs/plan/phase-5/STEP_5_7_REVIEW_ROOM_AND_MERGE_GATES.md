@@ -49,9 +49,10 @@ flowchart TD
     end
 ```
 
----
-
 ## 3. Data Contracts & Models
+
+> [!NOTE]
+> Ensure `DiffPlex` (e.g. `DiffPlex` NuGet package) is referenced in `src/NightCodeForge.Web/NightCodeForge.Web.csproj`. Working tree diffs are resolved against the Ext4 mirror or UNC path via `IWorkspacePathResolver`.
 
 ### 3.1 Inline Diff Comment Models (`Services/ReviewCommentModels.cs`)
 

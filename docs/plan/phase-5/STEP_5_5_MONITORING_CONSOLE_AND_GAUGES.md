@@ -34,7 +34,10 @@ Provide a high-frequency, low-latency live observability dashboard that monitors
 4. **Live Tool Call Activity Strip:**
    - Visual badges for active tool invocations (`read`, `write`, `edit`, `bash`, `ask`, `web_search`) with real-time latency stopwatches.
 5. **Live Reasoning Accordion (`<think>`):**
-   - Expandable stream showing agent deliberation tokens before tool calls occur.
+   - Direct streaming of reasoning thoughts via `ReceiveTokenDelta(int taskId, string token, bool isThinking)` where `isThinking == true`, natively aligned with `ThinkingAndActivityTracingChatClient`.
+6. **Workspace Context & Global Worker Awareness:**
+   - Displays current running task's workspace alongside the global GPU worker status.
+   - Allows developer to filter live terminal stream to the currently selected active workspace or view all logs across workspaces.
 
 ---
 

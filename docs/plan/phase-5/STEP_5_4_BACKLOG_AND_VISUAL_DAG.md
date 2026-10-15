@@ -27,6 +27,12 @@ Provide a responsive, visual project management center that visualizes the compl
 4. **Interactive Dependency Linking & Instant Cycle Prevention:**
    - Dependency editor modal allows wiring prerequisites.
    - Validates candidate graphs through `IDependencyResolutionEngine.HasCycle`, blocking circular dependencies (`A -> B -> A`) before saving to SQLite.
+5. **Workspace Multi-Tenancy & Reactive Reloading (Step 5.1b Alignment):**
+   - Scoped strictly to `WorkspaceStateService.ActiveWorkspace`.
+   - When no workspace is selected, renders a clean empty state with a call-to-action launching `WorkspaceCreationWizardModal`.
+   - Subscribes to `WorkspaceState.OnWorkspaceChanged` to cleanly reload workspace tasks via `ITaskRepository.GetByWorkspaceIdAsync(active.Id)`.
+6. **Host Markdown Task Synchronization:**
+   - All maintainer status transitions (`Suggested` $\rightarrow$ `Open` or `Rejected`) and dependency mutations synchronize to `docs/tasks/*.md` via `ITaskMarkdownSyncService.SyncTaskToDiskAsync`, keeping Git and SQLite in continuous lockstep.
 
 ---
 
@@ -269,10 +275,12 @@ Renders nodes and arrows using pure SVG:
 
 ## 6. Definition of Done (DoD) Checklist
 
-- [ ] `Pages/Backlog.razor` created with view toggle (Kanban vs. DAG Graph).
+- [ ] `Pages/Backlog.razor` created with view toggle (Kanban vs. DAG Graph) and reactive workspace context (`WorkspaceStateService.OnWorkspaceChanged`).
+- [ ] Empty state banner displayed when no workspace is active with modal creation wizard trigger.
 - [ ] `KanbanBoard.razor` renders all lifecycle columns with proper count badges.
 - [ ] `KanbanCard.razor` displays status badges, priority indicator, and `Waiting for Human` pill.
 - [ ] `MaintainerPromotionModal.razor` allows setting `Priority`, `MergeMode`, and promoting/rejecting `Suggested` tasks.
+- [ ] `ITaskMarkdownSyncService.SyncTaskToDiskAsync` syncs task file to `docs/tasks/*.md` on maintainer promotion and dependency updates.
 - [ ] `DagVisualizer.razor` renders SVG dependency edges and nodes with topological ordering.
 - [ ] Prerequisite `Closed` gating rule visually indicated with lock icon and blocked tooltip.
 - [ ] `DependencyLinkingModal.razor` validates cycle freedom via `IDependencyResolutionEngine.HasCycle`.
