@@ -84,4 +84,56 @@ public class EditorConfigFileApplierTests
         var detectedLf = EditorConfigFileApplier.ResolveTargetEol(null, lfSample);
         Assert.Equal("\n", detectedLf);
     }
+
+    [Fact]
+    public void ResolveTargetEol_WslUncPath_ForcesLf_EvenIfContentIsCrlf()
+    {
+        var crlfSample = "line1\r\nline2\r\nline3\r\n";
+        var wslUncPath = @"\\wsl.localhost\Ubuntu\home\user\.nightcodeforge\wks\1\clone\file.cs";
+        var eol = EditorConfigFileApplier.ResolveTargetEol(EndOfLine.CrLf, crlfSample, wslUncPath);
+
+        Assert.Equal("\n", eol);
+    }
+
+    [Fact]
+    public void ResolveTargetEol_WslDollarUncPath_ForcesLf()
+    {
+        var crlfSample = "line1\r\nline2\r\nline3\r\n";
+        var wslDollarPath = @"\\wsl$\Ubuntu\home\user\repo\file.cs";
+        var eol = EditorConfigFileApplier.ResolveTargetEol(null, crlfSample, wslDollarPath);
+
+        Assert.Equal("\n", eol);
+    }
+
+    [Fact]
+    public void ResolveTargetEol_PosixWslPath_ForcesLf()
+    {
+        var crlfSample = "line1\r\nline2\r\nline3\r\n";
+        var posixPath = "/home/user/.nightcodeforge/wks/42/task-1/app.cs";
+        var eol = EditorConfigFileApplier.ResolveTargetEol(null, crlfSample, posixPath);
+
+        Assert.Equal("\n", eol);
+    }
+
+    [Fact]
+    public void ResolveTargetEol_WindowsWorkspaceMirror_DefaultsToLf_WhenUnconfigured()
+    {
+        var crlfSample = "line1\r\nline2\r\nline3\r\n";
+        var mirrorPath = @"C:\Users\User\.nightcodeforge\wks\1\task-2\app.cs";
+        var eol = EditorConfigFileApplier.ResolveTargetEol(null, crlfSample, mirrorPath);
+
+        Assert.Equal("\n", eol);
+    }
+
+    [Fact]
+    public void ApplyFormatting_WithWslTargetPath_EnforcesLfFormatting()
+    {
+        var crlfContent = "class Foo\r\n{\r\n    void Bar() {}\r\n}";
+        var wslPath = @"\\wsl.localhost\Ubuntu\home\user\project\Foo.cs";
+        var settings = new EditorConfigSettings(); // Unset EOL
+        var formatted = _applier.ApplyFormatting(crlfContent, settings, existingContent: crlfContent, targetPath: wslPath);
+
+        Assert.DoesNotContain("\r\n", formatted);
+        Assert.Contains("\n", formatted);
+    }
 }

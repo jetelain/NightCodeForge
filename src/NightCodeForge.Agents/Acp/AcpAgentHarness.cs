@@ -672,7 +672,7 @@ public class AcpAgentHarness : IAgentHarness
 
         var editorConfig = await _editorConfigService.GetSettingsForPathAsync(resolvedPath, ct);
         string? existing = File.Exists(resolvedPath) ? await File.ReadAllTextAsync(resolvedPath, ct) : null;
-        var bytes = _editorConfigFileApplier.ApplyFormattingAndEncode(content, editorConfig, existing);
+        var bytes = _editorConfigFileApplier.ApplyFormattingAndEncode(content, editorConfig, existing, resolvedPath);
         await File.WriteAllBytesAsync(resolvedPath, bytes, ct);
     }
 

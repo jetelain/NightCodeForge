@@ -21,6 +21,6 @@ public interface IEditorConfigService
 
 public interface IEditorConfigFileApplier
 {
-    string ApplyFormatting(string content, EditorConfigSettings settings, string? existingContent = null);
-    byte[] ApplyFormattingAndEncode(string content, EditorConfigSettings settings, string? existingContent = null);
+    string ApplyFormatting(string content, EditorConfigSettings settings, string? existingContent = null, string? targetPath = null);
+    byte[] ApplyFormattingAndEncode(string content, EditorConfigSettings settings, string? existingContent = null, string? targetPath = null);
 }

@@ -891,13 +891,28 @@ To ensure zero data loss during context switches:
   - Pushes from the working clone (`git push host-origin feature/task-{id}`) update the developer's checked-out branch without conflict.
   - **Dirty Host Tree Fallback:** If the developer has uncommitted changes to tracked files in their host IDE, `GitMirrorSyncService` catches the rejection, pushes to `refs/heads/feature/task-{id}-ncf`, and sends a SignalR alert to the UI with reconciliation guidance.
 
-#### 4. Crucible Windows UNC Bridge
+#### 4. Crucible Windows UNC Bridge & Cross-Platform Line-Ending Hygiene
 Because Crucible runs in-process within the Windows Forge process:
 * Crucible file tools (`read`, `write`, `edit`) access the WSL2 working tree via the high-speed Windows UNC share:
   ```text
   \\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{workspaceId}\
   ```
 * This ensures instant, direct file manipulation with full EditorConfig normalization without spawning intermediate shell processes.
+
+#### 5. Tri-Part Cross-Platform Line-Ending Hygiene
+Cross-platform development between Windows NTFS host repositories and isolated Linux/WSL2 ext4 mirrors introduces CRLF vs LF friction. If files on the host are converted to CRLF while the Linux Git index uses LF, Git perceives the working tree as modified with unstaged changes, aborting `receive.denyCurrentBranch updateInstead` pushes and diverting work to `-ncf` rescue branches.
+
+NightCodeForge implements a tri-part defense:
+1. **Repository-Level Line Ending Normalization (`.gitattributes` & `.editorconfig`):**
+   - Host repositories are automatically scaffolded with `.gitattributes` (`* text=auto eol=lf`) and `.editorconfig` (`end_of_line = lf`).
+   - Ensures consistent line breaks across Windows IDEs (Visual Studio, VS Code) and Linux agents.
+2. **Local Git Configuration (`core.autocrlf false`):**
+   - The host repository's local Git configuration explicitly sets `core.autocrlf false`, preventing Git on Windows from converting checked-out files from LF to CRLF.
+3. **Agent Tool & Internal Service LF Enforcement:**
+   - `EditorConfigFileApplier` detects WSL UNC paths (`\\wsl.localhost\...` or POSIX paths) and unconditionally enforces `\n` (LF), overriding sample-based CRLF detection.
+   - On Windows targeting workspace mirrors (`wks`, `task-*`), line endings default to `\n` (LF) when unconfigured.
+   - Internal writers (`TaskMarkdownSyncService`, `SessionTranscriptService`, `GitWorkspaceManager`, `GitMirrorSyncService`) strictly write pure `\n` line endings.
+   - The UI Provisioning Wizard detects `.gitattributes`, `.editorconfig`, and `core.autocrlf` during repository probing, presenting diagnostic badges and auto-configuration toggles. The Reconcile Drawer provides guidance and `git add --renormalize .` suggestions if ghost CRLF/LF diffs occur.
 
 ### 8.4 Git Worktree Architecture & Ephemeral Working Trees
 

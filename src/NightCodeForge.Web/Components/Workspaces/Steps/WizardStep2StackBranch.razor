@@ -65,7 +65,7 @@
     </div>
 
     <!-- Agent Guidelines Status Card -->
-    <div class="guidelines-card @(ProbeResult?.HasAgentsMarkdown == true ? "guidelines-present" : "guidelines-none")">
+    <div class="guidelines-card @(ProbeResult?.HasAgentsMarkdown == true ? "guidelines-present" : "guidelines-none") mb-4">
         <div class="guidelines-header">
             <span class="guidelines-icon">@(ProbeResult?.HasAgentsMarkdown == true ? "📄" : "ℹ️")</span>
             <div>
@@ -81,6 +81,42 @@
                 </p>
             </div>
         </div>
+    </div>
+
+    <!-- Cross-Platform & Line-Ending Hygiene Card -->
+    <div class="hygiene-card card-surface p-3 mb-4" id="cross-platform-hygiene-card">
+        <div class="d-flex justify-content-between align-items-start mb-2">
+            <div class="d-flex align-items-center gap-2">
+                <span class="fs-5">🛡️</span>
+                <div>
+                    <h5 class="mb-0 text-primary">Cross-Platform &amp; Line-Ending Hygiene</h5>
+                    <p class="text-secondary small mb-0">Enforces LF line endings and Git attributes to prevent Windows vs WSL2 / Linux push conflicts.</p>
+                </div>
+            </div>
+            <div class="form-check form-switch m-0">
+                <input class="form-check-input" type="checkbox" id="configure-hygiene-checkbox" @bind="Model.ConfigureCrossPlatformHygiene" />
+                <label class="form-check-label small" for="configure-hygiene-checkbox">Auto-Configure</label>
+            </div>
+        </div>
+
+        <div class="d-flex flex-wrap gap-2 mt-3" id="hygiene-status-badges">
+            <span class="badge @(ProbeResult?.HasLfGitAttributes == true ? "bg-success" : (ProbeResult?.HasGitAttributes == true ? "bg-warning text-dark" : "bg-secondary"))" id="badge-gitattributes">
+                .gitattributes: @(ProbeResult?.HasLfGitAttributes == true ? "✓ eol=lf" : (ProbeResult?.HasGitAttributes == true ? "⚠ Missing eol=lf" : "Missing"))
+            </span>
+            <span class="badge @(ProbeResult?.HasLfEditorConfig == true ? "bg-success" : (ProbeResult?.HasEditorConfig == true ? "bg-warning text-dark" : "bg-secondary"))" id="badge-editorconfig">
+                .editorconfig: @(ProbeResult?.HasLfEditorConfig == true ? "✓ end_of_line=lf" : (ProbeResult?.HasEditorConfig == true ? "⚠ Missing eol=lf" : "Missing"))
+            </span>
+            <span class="badge @(string.Equals(ProbeResult?.CoreAutoCrlf, "false", StringComparison.OrdinalIgnoreCase) ? "bg-success" : "bg-secondary")" id="badge-core-autocrlf">
+                core.autocrlf: @(string.IsNullOrWhiteSpace(ProbeResult?.CoreAutoCrlf) ? "Not set" : ProbeResult.CoreAutoCrlf)
+            </span>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(ProbeResult?.LineEndingRecommendation))
+        {
+            <div class="alert alert-info py-2 px-3 mt-3 mb-0 small" id="hygiene-recommendation-alert">
+                💡 <strong>Recommendation:</strong> @ProbeResult.LineEndingRecommendation
+            </div>
+        }
     </div>
 </div>
 

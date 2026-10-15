@@ -163,6 +163,77 @@ public class WorkspaceProvisioningServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ProbeRepositoryAsync_DetectsGitAttributes_EditorConfig_AndCoreAutoCrlf()
+    {
+        var repoDir = Path.Combine(_tempDir, "hygiene-app");
+        Directory.CreateDirectory(repoDir);
+        Directory.CreateDirectory(Path.Combine(repoDir, ".git"));
+        await File.WriteAllTextAsync(Path.Combine(repoDir, ".gitattributes"), "* text=auto eol=lf\n");
+        await File.WriteAllTextAsync(Path.Combine(repoDir, ".editorconfig"), "root = true\n[*]\nend_of_line = lf\n");
+
+        _gitCliRunner.ExecuteHandler = (dir, args) =>
+        {
+            if (args.Contains("core.autocrlf"))
+            {
+                return new GitCommandResult(0, "false", "", TimeSpan.Zero);
+            }
+            if (args.Contains("branch"))
+            {
+                return new GitCommandResult(0, "* main\n", "", TimeSpan.Zero);
+            }
+            return new GitCommandResult(0, "", "", TimeSpan.Zero);
+        };
+
+        var result = await _service.ProbeRepositoryAsync(repoDir);
+
+        Assert.True(result.Exists);
+        Assert.True(result.IsGitRepository);
+        Assert.True(result.HasGitAttributes);
+        Assert.True(result.HasLfGitAttributes);
+        Assert.True(result.HasEditorConfig);
+        Assert.True(result.HasLfEditorConfig);
+        Assert.Equal("false", result.CoreAutoCrlf);
+        Assert.Null(result.LineEndingRecommendation);
+    }
+
+    [Fact]
+    public async Task ProbeRepositoryAsync_FlagsMissingLfRules_OnWindows()
+    {
+        var repoDir = Path.Combine(_tempDir, "missing-hygiene-app");
+        Directory.CreateDirectory(repoDir);
+        Directory.CreateDirectory(Path.Combine(repoDir, ".git"));
+
+        _gitCliRunner.ExecuteHandler = (dir, args) =>
+        {
+            if (args.Contains("core.autocrlf"))
+            {
+                return new GitCommandResult(0, "true", "", TimeSpan.Zero);
+            }
+            if (args.Contains("branch"))
+            {
+                return new GitCommandResult(0, "* main\n", "", TimeSpan.Zero);
+            }
+            return new GitCommandResult(0, "", "", TimeSpan.Zero);
+        };
+
+        var result = await _service.ProbeRepositoryAsync(repoDir);
+
+        Assert.False(result.HasGitAttributes);
+        Assert.False(result.HasLfGitAttributes);
+        Assert.False(result.HasEditorConfig);
+        Assert.False(result.HasLfEditorConfig);
+        Assert.Equal("true", result.CoreAutoCrlf);
+
+        if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+        {
+            Assert.NotNull(result.LineEndingRecommendation);
+            Assert.Contains(".gitattributes", result.LineEndingRecommendation);
+            Assert.Contains(".editorconfig", result.LineEndingRecommendation);
+            Assert.Contains("core.autocrlf false", result.LineEndingRecommendation);
+        }
+    }
+
+    [Fact]
     public async Task InitializeGitRepositoryAsync_RunsGitInitSuccessfully()
     {
         var targetDir = Path.Combine(_tempDir, "init-target");

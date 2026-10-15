@@ -89,6 +89,17 @@ public static partial class WslPathConverter
     }
 
     /// <summary>
+    /// Checks if the path represents a WSL or POSIX path (POSIX path starting with / or ~, or Windows UNC path to a WSL distribution).
+    /// </summary>
+    public static bool IsWslPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        var trimmed = path.Trim();
+        if (trimmed.StartsWith('/') || trimmed.StartsWith('~')) return true;
+        return IsWslUncPath(trimmed);
+    }
+
+    /// <summary>
     /// Extracts the WSL distribution name and the inner Linux path from a WSL UNC path.
     /// </summary>
     public static bool TryExtractWslUnc(string path, out string distro, out string linuxPath)

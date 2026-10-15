@@ -98,32 +98,32 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             UpdatedAt = task.UpdatedAt
         };
 
-        var yaml = _yamlSerializer.Serialize(frontmatter);
+        var yaml = _yamlSerializer.Serialize(frontmatter).Replace("\r\n", "\n");
         var sb = new StringBuilder();
-        sb.AppendLine("---");
+        sb.Append("---\n");
         sb.Append(yaml);
-        sb.AppendLine("---");
-        sb.AppendLine();
-        sb.AppendLine($"# {task.Title}");
-        sb.AppendLine();
-        sb.AppendLine("## 📋 Requirements & Description");
-        sb.AppendLine(task.Description);
+        if (!yaml.EndsWith('\n'))
+        {
+            sb.Append('\n');
+        }
+        sb.Append("---\n\n");
+        sb.Append($"# {task.Title}\n\n");
+        sb.Append("## 📋 Requirements & Description\n");
+        sb.Append(task.Description).Append('\n');
 
         if (task.Questions != null && task.Questions.Count > 0)
         {
-            sb.AppendLine();
-            sb.AppendLine("## ❓ Human Clarifications (Q&A)");
+            sb.Append("\n## ❓ Human Clarifications (Q&A)\n");
             int qIndex = 1;
             foreach (var q in task.Questions)
             {
-                sb.AppendLine($"### Question {qIndex++} (Asked during Stage: {q.StageId} on {q.AskedAt:yyyy-MM-dd HH:mm:ss})");
-                sb.AppendLine($"**Prompt:** {q.Prompt}");
-                sb.AppendLine($"**Answer:** {q.Answer ?? "_Awaiting response_"}");
-                sb.AppendLine();
+                sb.Append($"### Question {qIndex++} (Asked during Stage: {q.StageId} on {q.AskedAt:yyyy-MM-dd HH:mm:ss})\n");
+                sb.Append($"**Prompt:** {q.Prompt}\n");
+                sb.Append($"**Answer:** {q.Answer ?? "_Awaiting response_"}\n\n");
             }
         }
 
-        return sb.ToString();
+        return sb.ToString().Replace("\r\n", "\n");
     }
 
     public (TaskFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent)
@@ -213,7 +213,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         var hash = ComputeContentHash(markdown);
         _suppressedHashes[hash] = 1;
 
-        await File.WriteAllTextAsync(targetFile, markdown, Encoding.UTF8, cancellationToken);
+        await File.WriteAllTextAsync(targetFile, markdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
         return targetFile;
     }
 
@@ -339,7 +339,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         _suppressedHashes[newHash] = 1;
                         if (File.Exists(filePath))
                         {
-                            await File.WriteAllTextAsync(filePath, rewritten, Encoding.UTF8, cancellationToken);
+                            await File.WriteAllTextAsync(filePath, rewritten.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
                         }
                     }
 
@@ -383,7 +383,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
             if (File.Exists(filePath))
             {
-                await File.WriteAllTextAsync(filePath, inPlaceMarkdown, Encoding.UTF8, cancellationToken);
+                await File.WriteAllTextAsync(filePath, inPlaceMarkdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
             }
         }
         finally

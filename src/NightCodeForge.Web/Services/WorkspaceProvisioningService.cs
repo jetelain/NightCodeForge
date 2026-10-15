@@ -128,6 +128,59 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         var branches = await ProbeBranchesAsync(trimmedPath, cancellationToken);
         var detectedBaseBranch = ResolveDefaultBaseBranch(branches);
 
+        // Probe cross-platform line-ending hygiene (.gitattributes, .editorconfig, core.autocrlf)
+        var gitattributesPath = Path.Combine(trimmedPath, ".gitattributes");
+        bool hasGitAttributes = File.Exists(gitattributesPath);
+        bool hasLfGitAttributes = false;
+        if (hasGitAttributes)
+        {
+            try
+            {
+                var content = await File.ReadAllTextAsync(gitattributesPath, cancellationToken);
+                hasLfGitAttributes = content.Contains("eol=lf", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { }
+        }
+
+        var editorConfigPath = Path.Combine(trimmedPath, ".editorconfig");
+        bool hasEditorConfig = File.Exists(editorConfigPath);
+        bool hasLfEditorConfig = false;
+        if (hasEditorConfig)
+        {
+            try
+            {
+                var content = await File.ReadAllTextAsync(editorConfigPath, cancellationToken);
+                hasLfEditorConfig = content.Contains("end_of_line = lf", StringComparison.OrdinalIgnoreCase) ||
+                                    content.Contains("end_of_line=lf", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { }
+        }
+
+        string? coreAutoCrlf = null;
+        try
+        {
+            var configResult = await _gitCliRunner.ExecuteAsync(trimmedPath, ["config", "--get", "core.autocrlf"], cancellationToken: cancellationToken);
+            if (configResult.ExitCode == 0)
+            {
+                coreAutoCrlf = configResult.StandardOutput.Trim();
+            }
+        }
+        catch { }
+
+        string? lineEndingRecommendation = null;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            var missingItems = new List<string>();
+            if (!hasLfGitAttributes) missingItems.Add(".gitattributes (* text=auto eol=lf)");
+            if (!hasLfEditorConfig) missingItems.Add(".editorconfig (end_of_line = lf)");
+            if (!string.Equals(coreAutoCrlf, "false", StringComparison.OrdinalIgnoreCase)) missingItems.Add("git config core.autocrlf false");
+
+            if (missingItems.Count > 0)
+            {
+                lineEndingRecommendation = $"Cross-platform hygiene recommended: configure {string.Join(", ", missingItems)} to avoid CRLF/LF push conflicts between Windows and WSL2.";
+            }
+        }
+
         return new RepositoryProbeResult(
             Exists: true,
             IsGitRepository: true,
@@ -136,7 +189,13 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
             DetectedBaseBranch: detectedBaseBranch,
             DetectedTechStack: techStack,
             HasAgentsMarkdown: hasGuidelines,
-            WarningMessage: null);
+            WarningMessage: null,
+            HasGitAttributes: hasGitAttributes,
+            HasLfGitAttributes: hasLfGitAttributes,
+            HasEditorConfig: hasEditorConfig,
+            HasLfEditorConfig: hasLfEditorConfig,
+            CoreAutoCrlf: coreAutoCrlf,
+            LineEndingRecommendation: lineEndingRecommendation);
     }
 
     /// <inheritdoc />

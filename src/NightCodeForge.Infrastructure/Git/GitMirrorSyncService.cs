@@ -50,8 +50,134 @@ public class GitMirrorSyncService : IGitMirrorSyncService
             ["config", "receive.denyCurrentBranch", "updateInstead"],
             cancellationToken: cancellationToken);
 
+        // Local Git Config: set core.autocrlf false to prevent CRLF conversions on host
+        try
+        {
+            await _gitCliRunner.ExecuteAsync(
+                hostRepoPath,
+                ["config", "--local", "core.autocrlf", "false"],
+                cancellationToken: cancellationToken);
+            _logger.LogInformation("Configured git config --local core.autocrlf false on '{HostRepoPath}'", hostRepoPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to configure core.autocrlf false in '{HostRepoPath}'", hostRepoPath);
+        }
+
         // Ensure task deliverables and transcripts are ignored by Git
         await EnsureGitIgnoreEntriesAsync(hostRepoPath, cancellationToken);
+
+        // Ensure .gitattributes line-ending normalization (* text=auto eol=lf)
+        await EnsureGitAttributesAsync(hostRepoPath, cancellationToken);
+
+        // Ensure .editorconfig cross-platform LF line endings
+        await EnsureEditorConfigAsync(hostRepoPath, cancellationToken);
+    }
+
+    private async Task EnsureGitAttributesAsync(string repoPath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var gitattributesPath = Path.Combine(repoPath, ".gitattributes");
+            if (File.Exists(gitattributesPath))
+            {
+                var content = await File.ReadAllTextAsync(gitattributesPath, cancellationToken);
+                if (!content.Contains("eol=lf", StringComparison.OrdinalIgnoreCase))
+                {
+                    var textToAppend = "\n# NightCodeForge line ending normalization for cross-platform Windows / WSL2 compatibility\n* text=auto eol=lf\n";
+                    await File.AppendAllTextAsync(gitattributesPath, textToAppend, cancellationToken);
+                    _logger.LogInformation("Appended LF normalization entries to '{GitAttributesPath}'", gitattributesPath);
+                    try
+                    {
+                        await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".gitattributes"], cancellationToken: cancellationToken);
+                        await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: configure .gitattributes for NightCodeForge"], cancellationToken: cancellationToken);
+                    }
+                    catch (Exception commitEx)
+                    {
+                        _logger.LogDebug(commitEx, "Could not commit .gitattributes updates to '{RepoPath}'", repoPath);
+                    }
+                }
+            }
+            else
+            {
+                var initialContent = "# NightCodeForge line ending normalization for cross-platform Windows / WSL2 compatibility\n* text=auto eol=lf\n";
+                await File.WriteAllTextAsync(gitattributesPath, initialContent, cancellationToken);
+                _logger.LogInformation("Created '{GitAttributesPath}' with LF normalization", gitattributesPath);
+                try
+                {
+                    await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".gitattributes"], cancellationToken: cancellationToken);
+                    await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: configure .gitattributes for NightCodeForge"], cancellationToken: cancellationToken);
+                }
+                catch (Exception commitEx)
+                {
+                    _logger.LogDebug(commitEx, "Could not commit .gitattributes creation to '{RepoPath}'", repoPath);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to ensure .gitattributes entries in '{RepoPath}'", repoPath);
+        }
+    }
+
+    private async Task EnsureEditorConfigAsync(string repoPath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var editorConfigPath = Path.Combine(repoPath, ".editorconfig");
+            if (File.Exists(editorConfigPath))
+            {
+                var content = await File.ReadAllTextAsync(editorConfigPath, cancellationToken);
+                if (!content.Contains("end_of_line = lf", StringComparison.OrdinalIgnoreCase) &&
+                    !content.Contains("end_of_line=lf", StringComparison.OrdinalIgnoreCase))
+                {
+                    var textToAppend = "\n[*]\nend_of_line = lf\n";
+                    await File.AppendAllTextAsync(editorConfigPath, textToAppend, cancellationToken);
+                    _logger.LogInformation("Appended end_of_line = lf block to '{EditorConfigPath}'", editorConfigPath);
+                    try
+                    {
+                        await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".editorconfig"], cancellationToken: cancellationToken);
+                        await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: configure .editorconfig for NightCodeForge"], cancellationToken: cancellationToken);
+                    }
+                    catch (Exception commitEx)
+                    {
+                        _logger.LogDebug(commitEx, "Could not commit .editorconfig updates to '{RepoPath}'", repoPath);
+                    }
+                }
+            }
+            else
+            {
+                var initialContent =
+                    "# EditorConfig for cross-platform consistency\n" +
+                    "root = true\n\n" +
+                    "[*]\n" +
+                    "indent_style = space\n" +
+                    "indent_size = 4\n" +
+                    "end_of_line = lf\n" +
+                    "charset = utf-8\n" +
+                    "trim_trailing_whitespace = true\n" +
+                    "insert_final_newline = true\n\n" +
+                    "[*.{json,yml,yaml,md}]\n" +
+                    "indent_size = 2\n\n" +
+                    "[*.{bat,cmd}]\n" +
+                    "end_of_line = crlf\n";
+                await File.WriteAllTextAsync(editorConfigPath, initialContent, cancellationToken);
+                _logger.LogInformation("Created '{EditorConfigPath}' with cross-platform configuration", editorConfigPath);
+                try
+                {
+                    await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".editorconfig"], cancellationToken: cancellationToken);
+                    await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: configure .editorconfig for NightCodeForge"], cancellationToken: cancellationToken);
+                }
+                catch (Exception commitEx)
+                {
+                    _logger.LogDebug(commitEx, "Could not commit .editorconfig creation to '{RepoPath}'", repoPath);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to ensure .editorconfig entries in '{RepoPath}'", repoPath);
+        }
     }
 
     private async Task EnsureGitIgnoreEntriesAsync(string repoPath, CancellationToken cancellationToken)

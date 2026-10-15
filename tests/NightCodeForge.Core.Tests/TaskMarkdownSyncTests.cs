@@ -333,4 +333,48 @@ Enriched description formulated by review agent directly on disk.
         var allTasks = await repo.GetByWorkspaceIdAsync(1);
         Assert.Single(allTasks);
     }
+
+    [Fact]
+    public void GenerateMarkdown_StrictlyEmitsLfLineEndings()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = new TaskMarkdownSyncService(repo);
+
+        var task = new ForgeTask
+        {
+            Id = 55,
+            Title = "Cross-Platform Hygiene Task",
+            Description = "Ensure pure LF line endings across Windows and Linux environments.",
+            Status = TaskOverallStatus.Open
+        };
+
+        var markdown = sync.GenerateMarkdown(task);
+
+        Assert.DoesNotContain("\r\n", markdown);
+        Assert.Contains("\n", markdown);
+    }
+
+    [Fact]
+    public async Task SyncTaskToDiskAsync_WritesPureLfContent_ToDisk()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = new TaskMarkdownSyncService(repo);
+
+        var task = new ForgeTask
+        {
+            Id = 56,
+            Title = "Disk LF Task",
+            Description = "Writing to disk must preserve strict LF endings.\r\nEven if input has CRLF.",
+            Status = TaskOverallStatus.Open
+        };
+
+        var path = await sync.SyncTaskToDiskAsync(task, _tempWorkspaceDir);
+
+        Assert.True(File.Exists(path));
+        var rawBytes = await File.ReadAllBytesAsync(path);
+        var rawText = System.Text.Encoding.UTF8.GetString(rawBytes);
+
+        Assert.DoesNotContain("\r\n", rawText);
+        Assert.Contains("\n", rawText);
+    }
 }

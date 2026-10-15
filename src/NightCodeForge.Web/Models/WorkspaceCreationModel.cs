@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Runtime.InteropServices;
 using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Web.Models;
@@ -37,4 +38,10 @@ public class WorkspaceCreationModel
     /// Custom model name override if UseDedicatedAgentProfiles is true.
     /// </summary>
     public string? DedicatedModelName { get; set; }
+
+    /// <summary>
+    /// When true, configures .editorconfig, .gitattributes (* text=auto eol=lf), and local core.autocrlf false.
+    /// Defaults to true on Windows.
+    /// </summary>
+    public bool ConfigureCrossPlatformHygiene { get; set; } = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 }

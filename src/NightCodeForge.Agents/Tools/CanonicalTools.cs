@@ -150,7 +150,7 @@ public partial class CanonicalTools
 
         var editorConfig = await _editorConfigService.GetSettingsForPathAsync(fullPath, cancellationToken);
         string? existing = File.Exists(fullPath) ? await File.ReadAllTextAsync(fullPath, cancellationToken) : null;
-        var bytes = _editorConfigFileApplier.ApplyFormattingAndEncode(content, editorConfig, existing);
+        var bytes = _editorConfigFileApplier.ApplyFormattingAndEncode(content, editorConfig, existing, fullPath);
 
         await File.WriteAllBytesAsync(fullPath, bytes, cancellationToken);
         return $"Successfully wrote {bytes.Length} bytes to '{path}'.";
@@ -191,7 +191,7 @@ public partial class CanonicalTools
 
         // Apply EditorConfig compliance
         var editorConfig = await _editorConfigService.GetSettingsForPathAsync(fullPath, cancellationToken);
-        var formattedBytes = _editorConfigFileApplier.ApplyFormattingAndEncode(currentContent, editorConfig, originalContent);
+        var formattedBytes = _editorConfigFileApplier.ApplyFormattingAndEncode(currentContent, editorConfig, originalContent, fullPath);
 
         await File.WriteAllBytesAsync(fullPath, formattedBytes, cancellationToken);
         return $"Successfully applied {edits.Count} edit(s) to '{path}'.";

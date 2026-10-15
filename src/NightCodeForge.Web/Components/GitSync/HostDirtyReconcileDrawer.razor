@@ -20,10 +20,13 @@
             <!-- Root Cause Alert -->
             <div class="alert alert-warning mb-4" id="dirty-drawer-explanation">
                 <strong>Why did this happen?</strong>
-                <p class="mb-0 mt-1">
+                <p class="mb-1 mt-1">
                     Your local working tree on the host IDE has uncommitted edits to tracked files.
                     Git rejected the push update to <code>@Alert.BranchName</code> via
                     <code>receive.denyCurrentBranch updateInstead</code> to prevent overwriting your host work.
+                </p>
+                <p class="mb-0 small text-secondary">
+                    <em>Cross-Platform Note:</em> In Windows/WSL2 environments, line-ending mismatches (CRLF vs LF) can cause Git to perceive files as modified even without code changes. Check that your repository has <code>.gitattributes</code> (<code>* text=auto eol=lf</code>) and <code>.editorconfig</code> (<code>end_of_line = lf</code>). If line endings caused ghost diffs, run <code class="text-light">git add --renormalize .</code> in your host terminal to re-index them cleanly.
                 </p>
             </div>
 

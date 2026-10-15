@@ -1,5 +1,7 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using NightCodeForge.Infrastructure.Git;
 
 namespace NightCodeForge.Agents.Tools.EditorConfig;
 
@@ -11,7 +13,7 @@ public partial class EditorConfigFileApplier : IEditorConfigFileApplier
     [GeneratedRegex(@"\r\n|\r|\n")]
     private static partial Regex NewlineRegex();
 
-    public string ApplyFormatting(string content, EditorConfigSettings settings, string? existingContent = null)
+    public string ApplyFormatting(string content, EditorConfigSettings settings, string? existingContent = null, string? targetPath = null)
     {
         if (content == null)
         {
@@ -19,7 +21,7 @@ public partial class EditorConfigFileApplier : IEditorConfigFileApplier
         }
 
         // 1. Determine target line ending
-        string targetEol = ResolveTargetEol(settings.EndOfLine, existingContent ?? content);
+        string targetEol = ResolveTargetEol(settings.EndOfLine, existingContent ?? content, targetPath);
 
         // 2. Split content into lines preserving empty lines
         var rawLines = NewlineRegex().Split(content);
@@ -81,15 +83,41 @@ public partial class EditorConfigFileApplier : IEditorConfigFileApplier
         return result;
     }
 
-    public byte[] ApplyFormattingAndEncode(string content, EditorConfigSettings settings, string? existingContent = null)
+    public byte[] ApplyFormattingAndEncode(string content, EditorConfigSettings settings, string? existingContent = null, string? targetPath = null)
     {
-        var formatted = ApplyFormatting(content, settings, existingContent);
+        var formatted = ApplyFormatting(content, settings, existingContent, targetPath);
         var encoding = settings.Charset ?? new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         return encoding.GetBytes(formatted);
     }
 
-    public static string ResolveTargetEol(EndOfLine? setting, string sample)
+    public static string ResolveTargetEol(EndOfLine? setting, string sample, string? targetPath = null)
     {
+        if (!string.IsNullOrWhiteSpace(targetPath))
+        {
+            var trimmedPath = targetPath.Trim();
+            // If targetPath is a WSL path (POSIX path starting with / or ~, or Windows UNC path matching WslPathConverter.IsWslUncPath),
+            // unconditionally force \n (LF), overriding any CRLF auto-detection from existing content.
+            if (trimmedPath.StartsWith('/') || trimmedPath.StartsWith('~') || WslPathConverter.IsWslUncPath(trimmedPath))
+            {
+                return "\n";
+            }
+
+            // If setting is not specified by .editorconfig and the environment is on Windows targeting a workspace mirror,
+            // default to \n rather than auto-detecting CRLF.
+            if (!setting.HasValue && RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                var norm = trimmedPath.Replace('/', '\\');
+                if (norm.Contains(@"\.nightcodeforge\", StringComparison.OrdinalIgnoreCase) ||
+                    norm.Contains(@"\wks\", StringComparison.OrdinalIgnoreCase) ||
+                    norm.Contains(@"\wt\", StringComparison.OrdinalIgnoreCase) ||
+                    norm.Contains(@"\clone\", StringComparison.OrdinalIgnoreCase) ||
+                    norm.Contains("task-", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "\n";
+                }
+            }
+        }
+
         if (setting.HasValue)
         {
             return setting.Value switch

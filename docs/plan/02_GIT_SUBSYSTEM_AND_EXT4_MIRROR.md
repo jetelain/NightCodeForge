@@ -111,6 +111,13 @@ flowchart TD
   7. **Synchronization Lifecycle:**
      - **Stage Inception:** `git fetch host-origin <baseBranch>` ensures the agent works on the latest base commit.
      - **Stage Checkpoint / Completion:** `git push host-origin feature/task-{id}` keeps the host repository in sync.
+  8. **Cross-Platform Git & File Hygiene (Windows Host, WSL2 Ext4 Mirrors & Agent Tools):**
+     - **`.gitattributes` Scaffolding:** `EnsureGitAttributesAsync` configures `* text=auto eol=lf` in host repositories.
+     - **`.editorconfig` Scaffolding:** `EnsureEditorConfigAsync` ensures `end_of_line = lf` across repository files.
+     - **Local Git Config:** `git config --local core.autocrlf false` prevents Windows host Git from altering LF line endings to CRLF on checkout.
+     - **Agent Tool LF Enforcement:** `EditorConfigFileApplier` detects WSL UNC paths (`\\wsl.localhost\...` or POSIX paths) and unconditionally enforces `\n` (LF), overriding CRLF auto-detection.
+     - **Internal Service Normalization:** `TaskMarkdownSyncService`, `SessionTranscriptService`, `GitWorkspaceManager`, and `GitMirrorSyncService` strictly write pure `\n` line endings.
+     - **Wizard & Reconcile Guidance:** The UI displays `.gitattributes`, `.editorconfig`, and `core.autocrlf` status badges and provides `git add --renormalize .` troubleshooting in `HostDirtyReconcileDrawer`.
 
 ---
 

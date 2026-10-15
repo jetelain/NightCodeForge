@@ -204,7 +204,7 @@ public class SessionTranscriptService
             AppendModelCalls(sb, metadata.ModelCalls, origin);
         }
 
-        await File.WriteAllTextAsync(filePath, sb.ToString(), cancellationToken);
+        await File.WriteAllTextAsync(filePath, sb.ToString().Replace("\r\n", "\n"), cancellationToken);
         return filePath;
     }
 

@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NightCodeForge.Core\NightCodeForge.Core.csproj" />
+    <ProjectReference Include="..\NightCodeForge.Infrastructure\NightCodeForge.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>

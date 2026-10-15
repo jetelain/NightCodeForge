@@ -8,4 +8,10 @@ public record RepositoryProbeResult(
     string DetectedBaseBranch,
     string DetectedTechStack,
     bool HasAgentsMarkdown,
-    string? WarningMessage);
+    string? WarningMessage,
+    bool HasGitAttributes = false,
+    bool HasLfGitAttributes = false,
+    bool HasEditorConfig = false,
+    bool HasLfEditorConfig = false,
+    string? CoreAutoCrlf = null,
+    string? LineEndingRecommendation = null);

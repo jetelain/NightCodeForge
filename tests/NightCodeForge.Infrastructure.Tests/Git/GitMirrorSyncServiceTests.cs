@@ -45,6 +45,52 @@ public class GitMirrorSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ConfigureHostRepositoryAsync_ScaffoldsEditorConfig_GitAttributes_AndSetsCoreAutoCrlfFalse()
+    {
+        // Act
+        await _syncService.ConfigureHostRepositoryAsync(_hostRepo.RepositoryPath);
+
+        // Assert: core.autocrlf is false
+        var autoCrlf = await _runner.ExecuteAsync(_hostRepo.RepositoryPath, ["config", "--local", "core.autocrlf"]);
+        Assert.Equal("false", autoCrlf.StandardOutput.Trim());
+
+        // Assert: .gitattributes was created with eol=lf
+        var gitattributesPath = Path.Combine(_hostRepo.RepositoryPath, ".gitattributes");
+        Assert.True(File.Exists(gitattributesPath));
+        var gitattrContent = await File.ReadAllTextAsync(gitattributesPath);
+        Assert.Contains("* text=auto eol=lf", gitattrContent);
+
+        // Assert: .editorconfig was created with end_of_line = lf
+        var editorconfigPath = Path.Combine(_hostRepo.RepositoryPath, ".editorconfig");
+        Assert.True(File.Exists(editorconfigPath));
+        var editorConfigContent = await File.ReadAllTextAsync(editorconfigPath);
+        Assert.Contains("end_of_line = lf", editorConfigContent);
+    }
+
+    [Fact]
+    public async Task ConfigureHostRepositoryAsync_AppendsMissingRules_WhenFilesExistWithoutLf()
+    {
+        // Arrange: preexisting files without LF rules
+        var gitattributesPath = Path.Combine(_hostRepo.RepositoryPath, ".gitattributes");
+        await File.WriteAllTextAsync(gitattributesPath, "*.txt text\n");
+
+        var editorconfigPath = Path.Combine(_hostRepo.RepositoryPath, ".editorconfig");
+        await File.WriteAllTextAsync(editorconfigPath, "[*]\nindent_size = 4\n");
+
+        // Act
+        await _syncService.ConfigureHostRepositoryAsync(_hostRepo.RepositoryPath);
+
+        // Assert: appended rules
+        var gitattrContent = await File.ReadAllTextAsync(gitattributesPath);
+        Assert.Contains("*.txt text", gitattrContent);
+        Assert.Contains("* text=auto eol=lf", gitattrContent);
+
+        var editorConfigContent = await File.ReadAllTextAsync(editorconfigPath);
+        Assert.Contains("indent_size = 4", editorConfigContent);
+        Assert.Contains("end_of_line = lf", editorConfigContent);
+    }
+
+    [Fact]
     public async Task InitializeMirrorAsync_ClonesRepo_AndConfiguresHostOriginRemote()
     {
         // Act
