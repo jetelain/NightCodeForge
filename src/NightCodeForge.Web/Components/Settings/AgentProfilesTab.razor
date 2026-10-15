@@ -146,11 +146,14 @@
                         <div>
                             <label class="forge-field-label">OllamaRouter Target</label>
                             <select class="forge-input" style="width: 100%;" @bind="profile.RoutingTarget">
-                                <option value="@OllamaRoutingTarget.Auto">Auto (Dynamic VRAM/Context Routing)</option>
-                                <option value="@OllamaRoutingTarget.Local">Local GPU Only (Pin to Local Hardware)</option>
-                                <option value="@OllamaRoutingTarget.Remote">Remote Server (High-VRAM Host)</option>
-                                <option value="@OllamaRoutingTarget.Cloud">Cloud Overflow (Zero-VRAM Cloud LLM)</option>
+                                <option value="@OllamaRoutingTarget.Auto">Auto (Dynamic VRAM &amp; Context Routing)</option>
+                                <option value="@OllamaRoutingTarget.Local">Host GPU (Local Workstation - On-Premise)</option>
+                                <option value="@OllamaRoutingTarget.Remote">LAN GPU Server (Remote - Dedicated High-VRAM, ~95% Workloads)</option>
+                                <option value="@OllamaRoutingTarget.Cloud">Cloud Overflow (Optional External / Zero Local VRAM)</option>
                             </select>
+                            <span class="field-hint" style="display: block; font-size: 0.78rem; color: var(--text-muted); margin-top: 0.35rem;">
+                                Host GPU and LAN Server are both 100% private local workloads.
+                            </span>
                         </div>
 
                         <!-- 3. Thinking Effort -->

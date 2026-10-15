@@ -116,8 +116,8 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains("qwen2.5-coder:32b", cut.Markup);
 
         // Verify OllamaRouter target options
-        Assert.Contains("Local GPU Only", cut.Markup);
-        Assert.Contains("Remote Server", cut.Markup);
+        Assert.Contains("Host GPU (Local Workstation", cut.Markup);
+        Assert.Contains("LAN GPU Server (Remote", cut.Markup);
         Assert.Contains("Cloud Overflow", cut.Markup);
     }
 
@@ -203,6 +203,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains("OllamaRouter Gateway &amp; VRAM Inspector", cut.Markup);
         Assert.Contains("🟢 Gateway Connected", cut.Markup);
         Assert.Contains("OllamaRouter Active", cut.Markup);
+        Assert.Contains("Dual-Compute Architecture", cut.Markup);
         Assert.Contains("Local GPU Target", cut.Markup);
         Assert.Contains("Remote Server Target", cut.Markup);
         Assert.Contains("Cloud Overflow Target", cut.Markup);

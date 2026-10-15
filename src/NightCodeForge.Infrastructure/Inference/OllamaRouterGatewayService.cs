@@ -46,9 +46,9 @@ public class OllamaRouterGatewayService : IOllamaRouterGatewayService
 
             var targets = new List<TargetBackendStatus>
             {
-                new("Local GPU Target", isConnected ? TargetBackendState.Active : TargetBackendState.Offline, "Fast local GPU execution (nvidia-smi monitored). Pinned for Stage 0 Triage."),
-                new("Remote Server Target", isConnected ? TargetBackendState.Available : TargetBackendState.Offline, "Networked high-VRAM instance for extended reasoning."),
-                new("Cloud Overflow Target", isConnected ? TargetBackendState.Active : TargetBackendState.Offline, "ollama.com overflow for Zero-VRAM AI diagnostics.")
+                new("Local GPU Target", isConnected ? TargetBackendState.Active : TargetBackendState.Offline, "Host GPU (Developer Workstation). Fast on-premise execution when model/context fits host VRAM, or for concurrent interactive ideation."),
+                new("Remote Server Target", isConnected ? TargetBackendState.Available : TargetBackendState.Offline, "Dedicated LAN GPU Server (Local Area Network). High-VRAM on-premise node powering ~95% of background dev-queue tasks."),
+                new("Cloud Overflow Target", isConnected ? TargetBackendState.Active : TargetBackendState.Offline, "Cloud Overflow. Optional external endpoint for complex ideation or instant zero-VRAM diagnostics without waiting.")
             };
 
             return new OllamaRouterStatus(isConnected, isRouter, _baseUrl, targets);
@@ -58,9 +58,9 @@ public class OllamaRouterGatewayService : IOllamaRouterGatewayService
             _logger.LogDebug(ex, "OllamaRouter gateway unreachable at {BaseAddress}", _httpClient.BaseAddress);
             var targets = new List<TargetBackendStatus>
             {
-                new("Local GPU Target", TargetBackendState.Offline, "Fast local GPU execution (nvidia-smi monitored). Pinned for Stage 0 Triage."),
-                new("Remote Server Target", TargetBackendState.Offline, "Networked high-VRAM instance for extended reasoning."),
-                new("Cloud Overflow Target", TargetBackendState.Offline, "ollama.com overflow for Zero-VRAM AI diagnostics.")
+                new("Local GPU Target", TargetBackendState.Offline, "Host GPU (Developer Workstation). Fast on-premise execution when model/context fits host VRAM, or for concurrent interactive ideation."),
+                new("Remote Server Target", TargetBackendState.Offline, "Dedicated LAN GPU Server (Local Area Network). High-VRAM on-premise node powering ~95% of background dev-queue tasks."),
+                new("Cloud Overflow Target", TargetBackendState.Offline, "Cloud Overflow. Optional external endpoint for complex ideation or instant zero-VRAM diagnostics without waiting.")
             };
             return new OllamaRouterStatus(false, false, _baseUrl, targets);
         }

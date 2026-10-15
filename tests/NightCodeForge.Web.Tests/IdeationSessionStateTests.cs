@@ -208,5 +208,24 @@ public class IdeationSessionStateTests
         Assert.Contains("[Result: Exit Code: 0", historyContent);
         Assert.Contains("I located OllamaRouter.sln.", historyContent);
     }
+
+    [Fact]
+    public void SelectedRoutingTarget_DefaultsToAuto_AndCanBeConfiguredAndReset()
+    {
+        var session = new IdeationSessionState();
+        Assert.Equal(OllamaRoutingTarget.Auto, session.SelectedRoutingTarget);
+        Assert.Null(session.SelectedModelOverride);
+
+        session.SelectedRoutingTarget = OllamaRoutingTarget.Local;
+        session.SelectedModelOverride = "qwen2.5-coder:7b";
+
+        Assert.Equal(OllamaRoutingTarget.Local, session.SelectedRoutingTarget);
+        Assert.Equal("qwen2.5-coder:7b", session.SelectedModelOverride);
+
+        session.Reset();
+
+        Assert.Equal(OllamaRoutingTarget.Auto, session.SelectedRoutingTarget);
+        Assert.Null(session.SelectedModelOverride);
+    }
 }
 

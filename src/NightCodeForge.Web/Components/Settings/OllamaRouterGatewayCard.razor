@@ -43,6 +43,14 @@
         </div>
     </div>
 
+    <!-- Dual-Compute Topology Callout -->
+    <div style="padding: 1.25rem 1.5rem; border-radius: var(--radius-lg); background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 2rem;">
+        <span style="font-size: 1.5rem; line-height: 1;">💡</span>
+        <div style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.6;">
+            <strong style="color: var(--text-primary);">Dual-Compute Architecture:</strong> Both <strong>Host GPU</strong> (Local) and the <strong>Dedicated LAN Server</strong> (Remote) are 100% on-premise private resources. OllamaRouter dispatches ~95% of heavy dev-queue tasks to the high-VRAM LAN server, leaving your Host GPU free to power interactive <strong>Ideation Chat</strong> simultaneously without queue latency. <strong>Cloud Overflow</strong> remains available on-demand for zero-local-VRAM operations.
+        </div>
+    </div>
+
     <!-- Target Backends Status -->
     <div style="margin-bottom: 2rem;">
         <label style="display: block; font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.85rem;">

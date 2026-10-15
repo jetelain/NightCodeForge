@@ -291,6 +291,37 @@ public class IdeationPageTests : BunitContext
         Assert.Contains("🧠 Reasoning Trace", cut.Markup);
         Assert.Contains("Deep chain-of-thought analysis in progress...", cut.Markup);
     }
+
+    [Fact]
+    public async Task IdeationPage_RendersRoutingTargetBadge_AndUpdatesTargetInConfig()
+    {
+        var ws = new Workspace { Id = 1, Name = "TestRepo" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 1;
+
+        var cut = Render<Ideation>();
+
+        // Default badge shows Auto Target
+        Assert.Contains("🔀 Auto Target", cut.Markup);
+
+        // Open config accordion
+        var configBtn = cut.Find("button.prompt-config-toggle-btn");
+        await cut.InvokeAsync(() => configBtn.Click());
+
+        // Verify OllamaRouter target selector is rendered
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("OllamaRouter Target Backend", cut.Markup);
+            Assert.Contains("Host GPU", cut.Markup);
+        });
+
+        // Change target to Local (Host GPU)
+        var select = cut.Find("select.forge-input");
+        select.Change(OllamaRoutingTarget.Local.ToString());
+
+        Assert.Equal(OllamaRoutingTarget.Local, _sessionState.SelectedRoutingTarget);
+        cut.WaitForAssertion(() => Assert.Contains("🖥️ Host GPU", cut.Markup));
+    }
 }
 
 public class MockIdeationService : IIdeationService

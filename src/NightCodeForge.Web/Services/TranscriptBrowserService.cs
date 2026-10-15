@@ -132,7 +132,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             {
                 var target = string.Equals(mode, "Cloud", StringComparison.OrdinalIgnoreCase)
                     ? OllamaRoutingTarget.Cloud
-                    : OllamaRoutingTarget.Local;
+                    : OllamaRoutingTarget.Auto; // Dynamic routing across on-premise targets (Host GPU or LAN Server)
 
                 var client = OllamaChatClientFactory.CreateOllama(
                     _providerOptions.Value,

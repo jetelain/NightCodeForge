@@ -181,6 +181,20 @@ public class IdeationSessionState
     public string? LatestFullTranscriptMarkdown { get; set; }
     public IdeationQuestion? PendingQuestion { get; set; }
 
+    /// <summary>
+    /// Active target policy for ideation inference dispatch via OllamaRouter.
+    /// Auto = Dynamic routing across Host GPU and LAN Server.
+    /// Local = Host GPU (powers ideation concurrently while background dev-queue uses LAN server).
+    /// Remote = Dedicated LAN GPU Server.
+    /// Cloud = Cloud Overflow (instant complex chats without waiting for LAN GPU).
+    /// </summary>
+    public OllamaRoutingTarget SelectedRoutingTarget { get; set; } = OllamaRoutingTarget.Auto;
+
+    /// <summary>
+    /// Optional model override for ideation (e.g. lightweight model for Host GPU, or large model for Cloud Overflow).
+    /// </summary>
+    public string? SelectedModelOverride { get; set; }
+
     public event Action? OnChange;
 
     public void NotifyStateChanged() => OnChange?.Invoke();
@@ -215,6 +229,8 @@ public class IdeationSessionState
         CurrentMessageBuffer = string.Empty;
         LatestTranscriptPath = null;
         LatestFullTranscriptMarkdown = null;
+        SelectedRoutingTarget = OllamaRoutingTarget.Auto;
+        SelectedModelOverride = null;
         IsGenerating = false;
         NotifyStateChanged();
     }

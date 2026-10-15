@@ -25,6 +25,24 @@
                 <span class="status-dot @(Session.IsGenerating ? "running" : "idle")"></span>
                 @(Session.IsGenerating ? "Architect Deliberating..." : "Architect Agent Ready")
             </span>
+            <span class="forge-badge @(Session.SelectedRoutingTarget == OllamaRoutingTarget.Local ? "badge-teal" : (Session.SelectedRoutingTarget == OllamaRoutingTarget.Remote ? "badge-indigo" : (Session.SelectedRoutingTarget == OllamaRoutingTarget.Cloud ? "badge-amber" : "badge-gray")))" 
+                  title="OllamaRouter Target Backend (Click ⚙️ Config to change)">
+                @switch (Session.SelectedRoutingTarget)
+                {
+                    case OllamaRoutingTarget.Local:
+                        <text>🖥️ Host GPU</text>
+                        break;
+                    case OllamaRoutingTarget.Remote:
+                        <text>🌐 LAN Server</text>
+                        break;
+                    case OllamaRoutingTarget.Cloud:
+                        <text>☁️ Cloud Overflow</text>
+                        break;
+                    default:
+                        <text>🔀 Auto Target</text>
+                        break;
+                }
+            </span>
             <button type="button" 
                     class="forge-btn forge-btn-secondary transcript-btn" 
                     @onclick="OpenTranscriptModal"
@@ -34,7 +52,7 @@
             <button type="button" 
                     class="forge-btn forge-btn-secondary prompt-config-toggle-btn" 
                     @onclick="() => _showCustomPromptConfig = !_showCustomPromptConfig"
-                    title="Customize System Prompt">
+                    title="Customize System Prompt &amp; Inference Target">
                 ⚙️ Config
             </button>
         </div>
@@ -80,7 +98,7 @@
         </div>
     }
 
-    <!-- Optional Custom System Prompt Config Accordion -->
+    <!-- Optional Custom System Prompt & OllamaRouter Target Config Accordion -->
     @if (_showCustomPromptConfig)
     {
         <div class="system-prompt-card">
@@ -92,6 +110,24 @@
                       rows="2" 
                       @bind="Session.CustomSystemPrompt" 
                       placeholder="e.g. Focus exclusively on performance optimizations in src/NightCodeForge.Core..."></textarea>
+            
+            <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                <div style="flex: 1; min-width: 260px;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                        <span style="font-size: 1.1rem;">🔀</span>
+                        <strong style="font-size: 0.92rem; color: var(--text-primary);">OllamaRouter Target Backend</strong>
+                    </div>
+                    <p style="margin: 0; font-size: 0.82rem; color: var(--text-secondary); line-height: 1.4;">
+                        Select <strong>Host GPU</strong> to chat concurrently without waiting if a background task is occupying the LAN server. Select <strong>Cloud Overflow</strong> for complex chats with zero local VRAM.
+                    </p>
+                </div>
+                <select class="forge-input font-mono" style="width: auto; min-width: 280px; padding: 0.45rem 0.75rem; font-size: 0.88rem;" @bind="Session.SelectedRoutingTarget">
+                    <option value="@OllamaRoutingTarget.Auto">🔀 Auto (Dynamic Routing)</option>
+                    <option value="@OllamaRoutingTarget.Local">🖥️ Host GPU (Concurrent Workstation Execution)</option>
+                    <option value="@OllamaRoutingTarget.Remote">🌐 LAN GPU Server (Dedicated High-VRAM)</option>
+                    <option value="@OllamaRoutingTarget.Cloud">☁️ Cloud Overflow (Zero Local VRAM / No Waiting)</option>
+                </select>
+            </div>
         </div>
     }
 
@@ -774,10 +810,39 @@
 
         try
         {
+            var ws = WorkspaceState.ActiveWorkspace;
+            var baseProfile = ws?.AgentProfiles?.FirstOrDefault(p =>
+                string.Equals(p.Id, "ideation", StringComparison.OrdinalIgnoreCase) ||
+                p.Name.Contains("ideation", StringComparison.OrdinalIgnoreCase))
+                ?? AgentProfile.CreateDefaultIdeationProfile(ws?.Id);
+            AgentProfile? effectiveProfile = null;
+            if (Session.SelectedRoutingTarget != OllamaRoutingTarget.Auto || !string.IsNullOrEmpty(Session.SelectedModelOverride))
+            {
+                effectiveProfile = new AgentProfile
+                {
+                    Id = baseProfile.Id,
+                    Name = baseProfile.Name,
+                    WorkspaceId = baseProfile.WorkspaceId,
+                    HarnessId = baseProfile.HarnessId,
+                    ModelName = !string.IsNullOrEmpty(Session.SelectedModelOverride) ? Session.SelectedModelOverride : baseProfile.ModelName,
+                    Mode = baseProfile.Mode,
+                    SecurityTier = baseProfile.SecurityTier,
+                    PermittedTools = baseProfile.PermittedTools,
+                    OptimizationFlags = baseProfile.OptimizationFlags,
+                    Temperature = baseProfile.Temperature,
+                    ThinkingEffort = baseProfile.ThinkingEffort,
+                    ThinkingTokenBudget = baseProfile.ThinkingTokenBudget,
+                    MaxTurns = baseProfile.MaxTurns,
+                    SystemPrompt = baseProfile.SystemPrompt,
+                    RoutingTarget = Session.SelectedRoutingTarget
+                };
+            }
+
             await foreach (var update in IdeationService.ConverseStreamingAsync(
                 WorkspaceState.ActiveWorkspace,
                 prompt,
                 history,
+                agentProfile: effectiveProfile,
                 customSystemPrompt: Session.CustomSystemPrompt,
                 cancellationToken: _cts.Token))
             {

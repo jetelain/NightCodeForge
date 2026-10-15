@@ -65,7 +65,8 @@ NightCodeForge eliminates idle GPU time through **automatic Git checkpointing an
 * 💡 **Interactive Ideation & Codebase Discovery Chat:** Ask questions about your repository in real time. The read-only discovery agent analyzes the code and proposes structured tasks with dependency links directly into the backlog.
 * 🔀 **First-Class [OllamaRouter](https://github.com/jetelain/OllamaRouter) Integration:**
   - Works with native Ollama (`/api/chat`) and OpenAI-compatible (`/v1/chat/completions`) endpoints.
-  - Automatically routes tasks to the best GPU: **Fast Local GPU** (when context fits VRAM), **Remote Server** (for large contexts or heavy models), or **Cloud Overflow**.
+  - **Dual-Compute Topology (100% On-Premise):** Both **Host GPU (`Local`)** and **Dedicated LAN Server (`Remote`)** are private local workloads. ~95% of heavy dev-queue tasks route to the high-VRAM LAN server, leaving the Host GPU free to power real-time **Ideation Chat** concurrently without waiting!
+  - **Optional Cloud Overflow:** Seamlessly overflow complex ideation chats or zero-VRAM AI diagnostics without queue waiting.
   - Dynamic model catalog discovery via `/api/tags`.
 * 📬 **Human-in-the-Loop Inbox & Review Room:**
   - **Inbox:** Clean, consolidated dashboard of all blocked questions with quick text or multiple-choice answering.
@@ -93,10 +94,11 @@ flowchart TD
         HangfireStandard["llm-inference Queue (Priority 2)"]
     end
 
-    subgraph Router ["Inference Gateway"]
+    subgraph Router ["Inference Gateway (OllamaRouter)"]
         OllamaRouter["OllamaRouter (:11434)"]
-        LocalGPU["Fast Local GPU"]
-        RemoteServer["Remote Server (High VRAM)"]
+        LocalGPU["Host GPU (Local Target)\n(Developer Workstation / Concurrent Ideation)"]
+        RemoteServer["Dedicated LAN GPU Server (Remote Target)\n(High VRAM - ~95% Dev-Queue)"]
+        CloudOverflow["Cloud Overflow (Optional External)"]
     end
 
     subgraph Workspace ["Target Codebase"]
@@ -104,12 +106,14 @@ flowchart TD
     end
 
     UI --> Core
+    Ideation -.->|Concurrent Interactive Inference| OllamaRouter
     Core --> HangfireUrgent
     Core --> HangfireStandard
     HangfireUrgent -->|WorkerCount = 1| OllamaRouter
     HangfireStandard -->|WorkerCount = 1| OllamaRouter
     OllamaRouter --> LocalGPU
     OllamaRouter --> RemoteServer
+    OllamaRouter -.-> CloudOverflow
     Core --> GitCli
 ```
 

@@ -2,13 +2,26 @@ namespace NightCodeForge.Core.Domain;
 
 /// <summary>
 /// Target pinning policy for OllamaRouter reverse proxy dispatch backends.
-/// Propagated as X-OllamaRouter-Target HTTP request header.
+/// Propagated as the X-OllamaRouter-Target HTTP request header.
+/// 
+/// ARCHITECTURAL NOTE: Both 'Local' (Host GPU) and 'Remote' (LAN Server) are 100% on-premise,
+/// private workloads. 'Remote' refers to a Local Network Area server dedicated to GPU workloads
+/// with high VRAM (powering ~95% of background dev-queue tasks). 'Local' refers to the developer's
+/// host machine GPU (ideal for fast tasks and concurrent Ideation Chat).
+/// 'Cloud' represents external cloud overflow (e.g., ollama.com or commercial APIs).
 /// </summary>
 public enum OllamaRoutingTarget
 {
+    /// <summary>Dynamic VRAM and context-aware routing across Host GPU and LAN Server.</summary>
     Auto = 0,
+
+    /// <summary>Host GPU (Developer Workstation) - Fast, on-premise local hardware.</summary>
     Local = 1,
+
+    /// <summary>Dedicated LAN GPU Server - High-VRAM local network server (~95% of dev tasks).</summary>
     Remote = 2,
+
+    /// <summary>Cloud Overflow - External zero-local-VRAM endpoint for instant complex chats.</summary>
     Cloud = 3
 }
 
@@ -85,7 +98,7 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
             ModelName = defaultModelName,
             Mode = AgentMode.ReadOnly,
             SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
-            RoutingTarget = OllamaRoutingTarget.Local, // Pinned strictly to local GPU to prevent data leaks
+            RoutingTarget = OllamaRoutingTarget.Local, // Pinned to Host GPU for immediate on-premise execution
             PermittedTools = DefaultAgentTools.ReadOnly,
             OptimizationFlags = null,
             Temperature = 1.0,

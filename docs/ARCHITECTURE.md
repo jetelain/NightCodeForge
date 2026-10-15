@@ -5,8 +5,8 @@
 ### 1.1 Context & Objectives
 **NightCodeForge** is an Asynchronous AI Orchestrator ("Dev-Queue") designed specifically for software engineering workflows backed by **local Large Language Models (LLMs)**.
 
-In local AI-assisted development (e.g., using Ollama, vLLM, llama-server, or local agent runtimes like Pi and OpenCode), the physical environment is bound by a strict hardware limitation: **a single dedicated GPU**.
-Unlike elastic cloud APIs, local inference throughput cannot run multiple concurrent reasoning/coding tasks without severe VRAM thrashing, context truncation, or out-of-memory (OOM) crashes. Therefore, **LLM execution must strictly run sequentially (Concurrency = 1)**.
+In local AI-assisted development (e.g., using OllamaRouter, Ollama, vLLM, llama-server, or local agent runtimes like Pi and OpenCode), the physical environment is bound by a strict hardware reality: **a single primary GPU bottleneck for heavy reasoning**.
+As described in Section 2.1, NightCodeForge operates on a **dual-compute topology**: a local **Host GPU** (developer workstation) and a dedicated **Remote LAN GPU Server** (high-VRAM machine on the local network). Because ~95% of automated software engineering tasks require high VRAM (32B+ models and 32k/64k context windows) and are routed to the dedicated Remote LAN server, that server constitutes a shared single-worker bottleneck. Unlike elastic cloud APIs, running multiple concurrent background reasoning/coding tasks against that GPU causes severe VRAM thrashing, context truncation, or out-of-memory (OOM) crashes. Therefore, **background dev-queue execution must strictly run sequentially (Concurrency = 1)**.
 
 ### 1.2 The Core Problem: Interactive Blocking vs. GPU Utilization
 Standard autonomous coding agents operate in interactive synchronous loops:
@@ -55,6 +55,13 @@ flowchart TB
         PiRpc["Pi Agent via JSON-RPC\n(External Process Fallback)"]
     end
 
+    subgraph Gateway ["Inference Gateway Layer (OllamaRouter)"]
+        Router["OllamaRouter (:11434)\n(Dynamic VRAM & Context Dispatch)"]
+        HostGPU["Host GPU (Local Target)\n(Developer Workstation - Fast, Low Latency)"]
+        LanGPU["Dedicated LAN GPU Server (Remote Target)\n(Local Area Network - High VRAM, ~95% Dev-Queue)"]
+        CloudOverflow["Cloud Overflow (Optional External Target)\n(Zero Local VRAM / Instant Complex Chat)"]
+    end
+
     subgraph Workspaces ["Workspace & Storage Layer"]
         GitCli["Git CLI Engine (CliWrap)\n- Worktrees: task-{id}\n- WIP Commits & Diff -U2"]
         EFCore["Entity Framework Core (SQLite/PostgreSQL)"]
@@ -65,6 +72,7 @@ flowchart TB
     UI --> SignalR
     SignalR --> Core
     Ideation -.->|Spawns Tasks with Dependencies| DepEngine
+    Ideation -.->|Concurrent Interactive Inference| Router
     DepEngine --> PipelineEngine
     PipelineEngine --> HangfireEngine
     HangfireEngine --> QueueUrgent
@@ -78,12 +86,101 @@ flowchart TB
     IHarness -.->|Primary Target| Crucible
     IHarness -.->|Fallback Engine| PiRpc
 
+    Crucible --> Router
+    Router --> HostGPU
+    Router --> LanGPU
+    Router -.-> CloudOverflow
+
     IHarness --> PipelineEngine
     IHarness --> GitCli
     GitCli --> CanonicalClone
     GitCli --> Worktrees
     PipelineEngine --> EFCore
 ```
+
+---
+
+## 2.1 Inference Topology & Dual-Compute Hardware Model ([OllamaRouter](https://github.com/jetelain/OllamaRouter))
+
+### 2.1.1 Target Classification: "Local" and "Remote" are Both Local/On-Premise Workloads
+NightCodeForge integrates with [OllamaRouter](https://github.com/jetelain/OllamaRouter) as its unified reverse-proxy inference gateway. In this architecture, it is essential to understand the physical and operational semantics of the routing targets:
+
+1. **Local Target (`Local`): Host GPU (Developer Workstation)**
+   * **Physical Location:** The developer's primary machine running the NightCodeForge host process (e.g., an NVIDIA RTX 4070/4080/4090 laptop or desktop).
+   * **Role:** Used whenever possible for fast, zero-latency inference when the model and context fit comfortably within host VRAM (typically 8–16 GB). Ideal for Stage 0 Untrusted Intake Triage, quick diff evaluations, or local interactive Ideation Chat.
+2. **Remote Target (`Remote`): Dedicated Local Network Area (LAN) Server**
+   * **Physical Location:** A dedicated compute node residing strictly on the **Local Area Network (LAN)** (e.g., a headless Linux workstation equipped with dual RTX 3090/4090s, RTX 6000 Ada, or 80GB VRAM).
+   * **Role:** The primary inference workhorse for **~95% of automated software engineering workloads**. Provides the expansive VRAM necessary to load 32B/70B parameter models (e.g., `qwen2.5-coder:32b`, `deepseek-r1:32b`) and sustain 32k/64k token context windows without quantization degradation or out-of-memory (OOM) crashes.
+3. **Strict Data-Privacy Invariant: Both Targets are On-Premise Workloads**
+   * In traditional cloud vernacular, "remote" often connotes third-party public cloud services (AWS, Azure, GCP).
+   * **In NightCodeForge & OllamaRouter, "Remote" explicitly means a Local Network Area server.**
+   * Both `Local` and `Remote` targets reside behind the developer's physical/local network firewall. Zero tokens, source code fragments, or git diffs ever egress to the public internet when executing on either target. Both represent 100% private, sovereign, and air-gapped-capable infrastructure.
+4. **Cloud Target (`Cloud` / Cloud Overflow): Optional External Fallback**
+   * Only the `Cloud` target (e.g., `ollama.com` cloud models or external cloud API endpoints) communicates outside the local network perimeter.
+   * This target is strictly opt-in and serves as an **overflow mechanism** for zero-local-VRAM operations (such as one-click AI transcript diagnostics) or when a developer wishes to run complex exploratory chats without waiting for local hardware.
+
+---
+
+### 2.1.2 The Single-GPU Dev-Queue Bottleneck Hypothesis
+A foundational operational premise of NightCodeForge is that background dev-queue tasks in Hangfire (`llm-urgent` and `llm-inference`) run with `WorkerCount = 1`.
+
+Why this single-GPU hypothesis remains correct and necessary:
+* **The 95% Routing Reality:** Modern software engineering tasks (analyzing entire project ASTs, multi-turn tool loops, generating complex unit tests, and comprehensive code reviews) require high parameter density and large context windows. Consequently, **OllamaRouter routes approximately 95% of background dev-queue workloads to the dedicated Remote LAN GPU server**.
+* **Contention & Thrashing Prevention:** Because the Remote LAN server is effectively a single shared high-capacity GPU resource, running concurrent background jobs would force GPU memory contention, interleaved prompt cache evictions, or out-of-memory crashes.
+* **Conclusion:** Modeling the background dev-queue as a single sequential worker (`WorkerCount = 1`) accurately matches the physical reality of the primary LAN GPU bottleneck, ensuring 100% deterministic job completion without race conditions or thrashing.
+
+---
+
+### 2.1.3 Interactive Ideation Concurrency & Dual-Compute Flexibility
+While automated background tasks must execute sequentially through the single Hangfire worker, **Interactive Ideation & Codebase Discovery Chat (`IIdeationService`) runs on-demand within the Blazor UI session**.
+
+This introduces a powerful **Dual-Compute Concurrency** capability:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Dev as Developer (Blazor UI)
+    participant Ideation as Ideation Chat (IIdeationService)
+    participant DevQueue as Hangfire Dev-Queue (WorkerCount = 1)
+    participant Router as OllamaRouter Gateway
+    participant HostGPU as Host GPU (Local Target - Workstation)
+    participant LanGPU as LAN GPU Server (Remote Target - High VRAM)
+    participant Cloud as Cloud Overflow (Optional External)
+
+    Note over DevQueue,LanGPU: Background Task #42 active on LAN Server (~95% dev-queue workload)
+    DevQueue->>Router: Execute Task #42 (X-OllamaRouter-Target: Auto -> Remote)
+    Router->>LanGPU: Run qwen2.5-coder:32b (Occupies LAN VRAM)
+
+    Note over Dev,HostGPU: Developer wants to brainstorm new features concurrently!
+    alt Scenario A: Concurrent Ideation on Host GPU (Zero Wait, 100% Private)
+        Dev->>Ideation: Send discovery prompt (Target: Local / Host GPU)
+        Ideation->>Router: X-OllamaRouter-Target: Local
+        Router->>HostGPU: Run qwen2.5-coder:7b / 14b on Host GPU
+        HostGPU-->>Ideation: Stream tokens (sub-100ms latency)
+        Ideation-->>Dev: Live response (Runs in parallel with Task #42 on LAN GPU!)
+    else Scenario B: Complex Ideation via Cloud Overflow (No waiting for LAN GPU)
+        Dev->>Ideation: Send complex architectural query (Target: Cloud Overflow)
+        Ideation->>Router: X-OllamaRouter-Target: Cloud
+        Router->>Cloud: Stream completion from Cloud LLM (0 local VRAM)
+        Cloud-->>Ideation: Instant high-capacity response
+        Ideation-->>Dev: Live response without waiting for Task #42 to finish
+    else Scenario C: Queued on LAN GPU (Target: Auto / Remote)
+        Dev->>Ideation: Send query to Remote LAN GPU
+        Ideation->>Router: X-OllamaRouter-Target: Remote
+        Note over Router: Waits for LAN GPU time-slice or interleaves with Task #42
+    end
+```
+
+#### Key Operating Modes for Ideation:
+1. **Host GPU Concurrency (Default Local Coexistence):**
+   * The host workstation GPU is free while the background worker is executing on the LAN server.
+   * Ideation can be pinned to `Local` (Host GPU) using a 7B or 14B model (e.g., `qwen2.5-coder:7b` or `deepseek-r1:14b`).
+   * The developer enjoys instantaneous interactive discovery with zero queue delays and zero impact on the running dev-queue job.
+2. **Optional Cloud Overflow for Complex Chats:**
+   * If an ideation session demands a massive reasoning model (e.g., 70B+ or frontier thinking models) that exceeds Host GPU VRAM, and the Remote LAN GPU is currently occupied with a long-running dev-queue task, the developer can switch the Ideation routing target to **Cloud Overflow**.
+   * This prevents the developer from being blocked, providing instant frontier intelligence without disturbing local VRAM or waiting for background tasks to finish.
+3. **Auto / Sequential Queueing:**
+   * If both tasks target the Remote LAN server, requests interleave or queue according to OllamaRouter's priority policies.
 
 ---
 
