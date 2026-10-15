@@ -372,13 +372,22 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
   8. Implement **Review Room:**
      * Visual `git diff` viewer highlighting added/modified/deleted files.
      * Action buttons: for `ManualReviewRequired` tasks, "Approve & Merge" (squashes WIP commits into base branch $\rightarrow$ `Closed`, unblocking dependent tasks) or "Request Changes" (re-routes back to Stage 3 `ImplementationStage` with reviewer feedback). Auto-merge tasks report automatic merge completion.
-  9. Implement **Workspace, Agent Profile, Execution & MCP Settings:**
-     * Workspace creation/switching and target Git repository path configuration.
-     * **Execution Sandbox Settings:** Selection between `BareHost`, `WslDirect`, and `ContainerSandbox` (Docker/Podman image selection, cache mount paths, read-only SDK mount paths).
-     * Agent Profile editor: configure Harness, Model, Thinking Effort, Temperature, and custom JSON parameters, with stage-to-profile assignment.
-  10. Implement **Session Transcripts & AI Diagnostics Modal:**
-      * Markdown viewer for past and current execution transcripts with syntax highlighting.
+  9. Implement **Two-Tier Settings, Host SDKs, OllamaRouter Gateway, A/B Testing & Cloud/Web Search:**
+     * Two-tier configuration hierarchy (Global System Settings vs Workspace Scoped Settings).
+     * Agent Profile editor: configure Harness, Model, Thinking Effort, Temperature, generous autonomous turn budgets (500 turns), and 12-parameter optimization matrix.
+     * Host SDK Inspector: probe and bind read-only toolchains and package cache mounts.
+     * Deep OllamaRouter gateway integration: dynamic `/api/tags` catalog, `/api/ps` resident VRAM monitoring, target pinning (`X-OllamaRouter-Target`), and non-destructive memory reclaim.
+     * Pluggable Cloud & Web Search settings (`WebSearchSettingsTab.razor`) supporting Ollama, SearXNG, and DuckDuckGo.
+     * Empirical A/B testing comparator.
+  10. Implement **Session Transcripts & AI Diagnostics:**
+      * Markdown viewer for past and current execution transcripts with syntax highlighting and YAML frontmatter metadata.
       * Choice between "Diagnose with Cloud AI" (fast, zero VRAM impact) and "Diagnose with Local AI" (100% private, sequential execution).
+  11. Implement **Untrusted Intake & Sandboxed Triage (Stage 0):**
+      * Triage portal executing bug reproduction and backlog proposal generation inside a hardened `RestrictedReadOnly` sandbox (`--network none`, `:ro` workspace mount, `--read-only`, `--cap-drop=ALL`, `--user 1000:1000`).
+  12. Implement **Ext4 Git Mirror & Host Sync:**
+      * Working clone / Ext4 mirror inspector (`~/.nightcodeforge/wks/{id}`), active worktrees monitor, SignalR dirty host tree alert drawer, and guided `-ncf` rescue reconciliation.
+  13. Implement **Dev-Queue & Concurrency Lock Inspector:**
+      * Real-time Hangfire queue monitor (`llm-urgent` vs `llm-inference`), keyed `IWorkspaceLockProvider` concurrency lock inspection, emergency lock release, and mounted Hangfire dashboard.
 * **Deliverables:** Fully operational web interface with real-time reactive updates.
 
 ---

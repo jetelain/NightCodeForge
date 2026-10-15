@@ -344,12 +344,12 @@ flowchart TD
 
 ## 6. Definition of Done (DoD)
 
-- [ ] `TaskOverallStatus` and `MergeMode` enums defined and persisted in `AppDbContext`.
-- [ ] `IWorkspacePathResolver` implemented with complete Windows WSL2, UNC share, and `/workspace` container remapping support.
-- [ ] Bare mode bash runs in WSL2 on Windows and host bash on Unix.
-- [ ] All working clones consistently target `~/.nightcodeforge/wks/{id}`.
-- [ ] All three task creation sources create tasks in `Suggested` status.
-- [ ] Manual promotion action changes status to `Open` or `Rejected`, setting `Priority` and `MergeMode`.
-- [ ] Main workflow advances through `Reviewed` $\rightarrow$ `Implemented` $\rightarrow$ `Ready` $\rightarrow$ `Closed`.
-- [ ] `ask` pauses workflow with `IsWaitingForHuman = true` and records `InterruptedAgentProfileId` without modifying `task.Status`, freeing the GPU; answer enqueues to `llm-urgent` and resumes with the exact agent profile.
-- [ ] All unit and integration tests compile and pass 100%.
+- [x] `TaskOverallStatus` and `MergeMode` enums defined and persisted in `AppDbContext`.
+- [x] `IWorkspacePathResolver` implemented with complete Windows WSL2, UNC share, and `/workspace` container remapping support.
+- [x] Bare mode bash runs in WSL2 on Windows and host bash on Unix.
+- [x] All working clones consistently target `~/.nightcodeforge/wks/{id}`.
+- [x] All three task creation sources create tasks in `Suggested` status.
+- [x] Manual promotion action changes status to `Open` or `Rejected`, setting `Priority` and `MergeMode`.
+- [x] Main workflow advances through `Reviewed` $\rightarrow$ `Implemented` $\rightarrow$ `Ready` $\rightarrow$ `Closed`.
+- [x] `ask` pauses workflow with `IsWaitingForHuman = true` and records `InterruptedAgentProfileId` without modifying `task.Status`, freeing the GPU; answer enqueues to `llm-urgent` and resumes with the exact agent profile.
+- [x] All unit and integration tests compile and pass 100%.

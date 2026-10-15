@@ -1172,6 +1172,11 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
         if (options.IsRestrictedReadOnly)
         {
+            args.AddRange(["--network", "none"]);
+            args.AddRange(["--read-only"]);
+            args.AddRange(["--tmpfs", "/tmp:rw,noexec,nosuid,size=32m"]);
+            args.AddRange(["--cap-drop=ALL"]);
+            args.AddRange(["--security-opt", "no-new-privileges:true"]);
             args.AddRange(["--user", "1000:1000"]);
         }
 

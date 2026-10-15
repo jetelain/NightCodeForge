@@ -21,7 +21,8 @@ To prevent confusion between global system defaults and project-specific executi
  │    ├── 🤖 Global Agent Profiles (Baseline stage profiles: Triage, Ideation, Task Review, Implementation, Code Review)
  │    ├── 🔍 Host SDK & Toolchain Inspector (Probed container mounts, binaries, environment variables, re-probe)
  │    ├── 🦙 OllamaRouter Gateway & Inference (Target health: Local/Remote/Cloud, resident VRAM /api/ps, non-destructive reclaim)
- │    └── 📊 A/B Testing Comparator (Cross-profile empirical benchmark analysis)
+ │    ├── 📊 A/B Testing Comparator (Cross-profile empirical benchmark analysis)
+ │    └── 🌐 Cloud & Web Search Settings (Ollama Web Search, SearXNG, DuckDuckGo providers, result limits, timeouts)
  │
  └── 🏢 Workspace Settings (Scoped to ActiveWorkspace)
       ├── 📁 General & Execution Confinement (Host path, base branch, BareHost vs WSL2 vs Container Sandbox, timeouts)
@@ -63,6 +64,24 @@ NightCodeForge relies on **OllamaRouter** (`jetelain/OllamaRouter`, documented i
    - Propagated over the wire via the `X-OllamaRouter-Target` HTTP request header in `OllamaChatClient`.
 5. **Wire-Level Auto-Healing Status:**
    - Visual indicator confirming that OllamaRouter's `ToolCallHealingTransform` is active, stripping markdown code fences (` ```json `), repairing malformed arguments, and promoting `<tool_call>` pseudo-tags into valid schemas.
+
+---
+
+### 1.2b Cloud & Web Search Configuration (`WebSearchSettingsTab.razor`)
+
+To support live documentation lookups, dependency changelog queries, and troubleshooting during autonomous coding and ideation turns without compromising local data privacy:
+
+1. **Pluggable Search Providers:**
+   - **Ollama Web Search (`ollama`):** Native web search integration via Ollama / OllamaRouter `/api/web_search` or OpenAI-compatible endpoints.
+   - **SearXNG (`searxng`):** Self-hosted, private metasearch engine endpoint with configurable base URL (default: `http://localhost:8080`).
+   - **DuckDuckGo (`duckduckgo`):** Zero-configuration privacy-respecting public search provider.
+2. **Runtime Governance & Safety Controls:**
+   - **Global Enable/Disable Toggle:** Master kill-switch to enforce 100% offline air-gapped operation.
+   - **Max Results & Snippet Length:** Bounds token ingestion per tool turn (default: 5 results, 500 characters/snippet).
+   - **Query Timeout Policy:** Governed by strict cancellation timeouts (default: 15 seconds) to prevent hanging agent loops.
+3. **Reactive Settings Persistence:**
+   - Managed via `IWebSearchSettingsService` / `WebSearchSettingsService` persisting configuration to `SystemSettings` table in `AppDbContext`.
+   - Wired dynamically to `CanonicalTools.web_search` through `IWebSearchService` / `OllamaWebSearchService`.
 
 ---
 

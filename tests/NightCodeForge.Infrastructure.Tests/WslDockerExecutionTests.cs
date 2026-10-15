@@ -404,6 +404,35 @@ public class WslDockerExecutionTests
     }
 
     [Fact]
+    public void BuildDockerRunArgs_RestrictedReadOnly_IncludesAirGapAndSecurityHardeningFlags()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "ncf-triage-sandbox",
+            IsRestrictedReadOnly = true
+        };
+
+        var args = NightCodeForgeContainerExecutor.BuildDockerRunArgs(options);
+
+        Assert.Contains("--network", args);
+        var netIdx = args.IndexOf("--network");
+        Assert.Equal("none", args[netIdx + 1]);
+
+        Assert.Contains("--read-only", args);
+        Assert.Contains("--tmpfs", args);
+        Assert.Contains("/tmp:rw,noexec,nosuid,size=32m", args);
+        Assert.Contains("--cap-drop=ALL", args);
+
+        Assert.Contains("--security-opt", args);
+        var secOptIdx = args.IndexOf("--security-opt");
+        Assert.Equal("no-new-privileges:true", args[secOptIdx + 1]);
+
+        Assert.Contains("--user", args);
+        var userIdx = args.IndexOf("--user");
+        Assert.Equal("1000:1000", args[userIdx + 1]);
+    }
+
+    [Fact]
     public void BuildDockerRunProcessSpec_WslEnabled_WrapsWithWslAndDistro()
     {
         var options = new ContainerExecutorOptions

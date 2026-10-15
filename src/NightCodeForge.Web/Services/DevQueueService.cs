@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.BackgroundJobs;
 
@@ -166,6 +167,18 @@ public class DevQueueService : IDevQueueService
                     task.Status = TaskOverallStatus.Cancelled;
                     await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);
                     _logger.LogInformation("Marked Task #{TaskId} status as Cancelled after job cancellation", taskId.Value);
+
+                    var workspaceRepo = scope.ServiceProvider.GetService<IWorkspaceRepository>();
+                    var markdownSync = scope.ServiceProvider.GetService<ITaskMarkdownSyncService>();
+                    if (workspaceRepo != null && markdownSync != null)
+                    {
+                        var workspace = await workspaceRepo.GetByIdAsync(task.WorkspaceId, cancellationToken);
+                        if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+                        {
+                            await markdownSync.ArchiveOrCleanupTaskFileAsync(task, workspace.RepositoryPath, archive: true, cancellationToken);
+                            _logger.LogInformation("Archived task file for cancelled Task #{TaskId}", taskId.Value);
+                        }
+                    }
                 }
             }
 

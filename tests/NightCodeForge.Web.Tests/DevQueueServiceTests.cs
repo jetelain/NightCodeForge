@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.BackgroundJobs;
 using NightCodeForge.Web.Services;
@@ -19,6 +20,7 @@ public class DevQueueServiceTests : IDisposable
     private readonly MockTaskJobQueue _jobQueue;
     private readonly InMemoryTaskRepository _taskRepo;
     private readonly InMemoryWorkspaceRepository _workspaceRepo;
+    private readonly TestDevQueueMarkdownSyncService _markdownSync;
     private readonly ServiceProvider _serviceProvider;
     private readonly string _tempDir;
 
@@ -29,10 +31,12 @@ public class DevQueueServiceTests : IDisposable
         _jobQueue = new MockTaskJobQueue();
         _taskRepo = new InMemoryTaskRepository();
         _workspaceRepo = new InMemoryWorkspaceRepository();
+        _markdownSync = new TestDevQueueMarkdownSyncService();
 
         var services = new ServiceCollection();
         services.AddSingleton<ITaskRepository>(_taskRepo);
         services.AddSingleton<IWorkspaceRepository>(_workspaceRepo);
+        services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
         _serviceProvider = services.BuildServiceProvider();
 
         _tempDir = Path.Combine(Path.GetTempPath(), "ncf-test-" + Guid.NewGuid().ToString("N"));
@@ -126,6 +130,42 @@ public class DevQueueServiceTests : IDisposable
         var updated = await _taskRepo.GetByIdAsync(55);
         Assert.NotNull(updated);
         Assert.Equal(TaskOverallStatus.Cancelled, updated.Status);
+    }
+
+    [Fact]
+    public async Task CancelJobAsync_WhenTaskCancelled_ArchivesMarkdownTaskFile()
+    {
+        var ws = new Workspace
+        {
+            Id = 1,
+            Name = "Test Workspace",
+            RepositoryPath = _tempDir
+        };
+        await _workspaceRepo.CreateAsync(ws);
+
+        var task = new ForgeTask
+        {
+            Id = 88,
+            WorkspaceId = 1,
+            Title = "Task to Cancel and Archive",
+            Status = TaskOverallStatus.Open
+        };
+        await _taskRepo.CreateAsync(task);
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            jobStorage: null);
+
+        var result = await service.CancelJobAsync("job-88", 88);
+
+        Assert.True(result);
+        Assert.Single(_markdownSync.ArchivedCalls);
+        Assert.Equal(88, _markdownSync.ArchivedCalls[0].Task.Id);
+        Assert.Equal(_tempDir, _markdownSync.ArchivedCalls[0].WorkspacePath);
+        Assert.True(_markdownSync.ArchivedCalls[0].Archive);
     }
 
     [Fact]
@@ -272,6 +312,28 @@ public class DevQueueServiceTests : IDisposable
             LastEnqueuedInferenceTaskId = taskId;
             return "inference-job-id";
         }
+    }
+
+    private class TestDevQueueMarkdownSyncService : ITaskMarkdownSyncService
+    {
+        public List<(ForgeTask Task, string WorkspacePath, bool Archive)> ArchivedCalls { get; } = new();
+
+        public Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive = true, CancellationToken cancellationToken = default)
+        {
+            ArchivedCalls.Add((task, workspacePath, archive));
+            return Task.CompletedTask;
+        }
+
+        public Task<string> SyncTaskToDiskAsync(ForgeTask task, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default) => Task.FromResult(string.Empty);
+        public string GenerateMarkdown(ForgeTask task, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null) => string.Empty;
+        public (TaskFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent) => (new TaskFrontmatter(), string.Empty);
+        public string ComputeContentHash(string content) => string.Empty;
+        public void SuppressContentHash(string content) { }
+        public Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ProcessFileChangedAsync(string filePath, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public void StartWatching(int workspaceId, string workspacePath) { }
+        public void StopWatching(int workspaceId) { }
+        public void Dispose() { }
     }
 
     #endregion
