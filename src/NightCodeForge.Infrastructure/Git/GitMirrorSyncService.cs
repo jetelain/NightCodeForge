@@ -72,6 +72,15 @@ public class GitMirrorSyncService : IGitMirrorSyncService
                     var textToAppend = "\n# NightCodeForge task artifacts and transcripts\n" + string.Join("\n", missing) + "\n";
                     await File.AppendAllTextAsync(gitignorePath, textToAppend, cancellationToken);
                     _logger.LogInformation("Appended {Count} NightCodeForge entries to '{GitIgnorePath}'", missing.Count, gitignorePath);
+                    try
+                    {
+                        await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".gitignore"], cancellationToken: cancellationToken);
+                        await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: configure .gitignore for NightCodeForge"], cancellationToken: cancellationToken);
+                    }
+                    catch (Exception commitEx)
+                    {
+                        _logger.LogDebug(commitEx, "Could not commit .gitignore updates to '{RepoPath}'", repoPath);
+                    }
                 }
             }
             else
@@ -79,6 +88,15 @@ public class GitMirrorSyncService : IGitMirrorSyncService
                 var initialContent = "# NightCodeForge task artifacts and transcripts\ndocs/tasks/\ndocs/transcripts/\n";
                 await File.WriteAllTextAsync(gitignorePath, initialContent, cancellationToken);
                 _logger.LogInformation("Created '{GitIgnorePath}' with NightCodeForge entries", gitignorePath);
+                try
+                {
+                    await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".gitignore"], cancellationToken: cancellationToken);
+                    await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: create .gitignore for NightCodeForge"], cancellationToken: cancellationToken);
+                }
+                catch (Exception commitEx)
+                {
+                    _logger.LogDebug(commitEx, "Could not commit .gitignore creation to '{RepoPath}'", repoPath);
+                }
             }
         }
         catch (Exception ex)

@@ -374,7 +374,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         // 3. Commit squashed changeset
         await _gitCliRunner.ExecuteAsync(
             canonicalPath,
-            ["commit", "-m", safeMessage],
+            ["commit", "-m", safeMessage, "--no-verify"],
             cancellationToken: cancellationToken);
 
         _logger.LogInformation("Squash merge completed for ForgeTask #{TaskId} on '{BaseBranch}'", taskId, baseBranch);

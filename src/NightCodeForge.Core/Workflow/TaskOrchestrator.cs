@@ -28,6 +28,7 @@ public class TaskOrchestrator : ITaskOrchestrator
     private readonly IGitMirrorSyncService? _gitMirrorSyncService;
     private readonly Services.ITaskMarkdownSyncService? _markdownSyncService;
     private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly Streaming.IAgentActivityStreamer? _streamer;
     private readonly ILogger<TaskOrchestrator> _logger;
 
     public TaskOrchestrator(
@@ -43,6 +44,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         IGitMirrorSyncService? gitMirrorSyncService = null,
         Services.ITaskMarkdownSyncService? markdownSyncService = null,
         IWorkspacePathResolver? pathResolver = null,
+        Streaming.IAgentActivityStreamer? streamer = null,
         ILogger<TaskOrchestrator>? logger = null)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -57,6 +59,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         _gitMirrorSyncService = gitMirrorSyncService;
         _markdownSyncService = markdownSyncService;
         _pathResolver = pathResolver;
+        _streamer = streamer;
         _logger = logger ?? NullLogger<TaskOrchestrator>.Instance;
     }
 
@@ -220,6 +223,11 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         if (profile == null)
         {
+            profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, stage.StageId, cancellationToken);
+        }
+
+        if (profile == null)
+        {
             profile = workspace.AgentProfiles?.FirstOrDefault(p =>
                 string.Equals(p.Id, stage.StageId, StringComparison.OrdinalIgnoreCase) ||
                 (p.StageDirectives != null && p.StageDirectives.ContainsKey(stage.StageId)))
@@ -310,7 +318,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                         {
                             ForgeTask = task,
                             Workspace = workspace,
-                            Profile = profile ?? new AgentProfile { Id = "default", HarnessId = harnessId, ModelName = "default" },
+                            Profile = profile ?? new AgentProfile { Id = "default", HarnessId = harnessId, ModelName = string.Empty },
                             StageId = stage.StageId,
                             StageDirective = stageDirective,
                             RequiredMode = stage.RequiredMode,
@@ -840,6 +848,25 @@ public class TaskOrchestrator : ITaskOrchestrator
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Closed, cancellationToken);
         }
 
+        if (_streamer != null)
+        {
+            try
+            {
+                await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                    Guid.NewGuid().ToString("N"),
+                    task.Id,
+                    "merge",
+                    Streaming.AgentActivityKind.StageCompleted,
+                    $"ForgeTask #{task.Id} completed and squash-merged.",
+                    DateTime.UtcNow,
+                    new Dictionary<string, object?> { ["StageKind"] = "Deterministic" }), cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to publish merge completion event for task #{TaskId}", task.Id);
+            }
+        }
+
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
         {
             TaskId = task.Id,
@@ -1050,12 +1077,36 @@ public class TaskOrchestrator : ITaskOrchestrator
             // Sync modified file from disk into repository and database
             await _markdownSyncService.ProcessFileChangedAsync(targetFile, workspace.Id, expectedTaskId: task.Id, cancellationToken: cancellationToken);
 
+            // Directly read and apply disk description and title to ensure in-memory task reflects agent edits
+            if (File.Exists(targetFile))
+            {
+                try
+                {
+                    var fileContent = await File.ReadAllTextAsync(targetFile, cancellationToken);
+                    var (fm, body) = _markdownSyncService.ParseMarkdown(fileContent);
+                    var diskDesc = Services.TaskMarkdownSyncService.ExtractDescriptionFromBody(body);
+                    if (!string.IsNullOrWhiteSpace(diskDesc))
+                    {
+                        task.Description = diskDesc;
+                    }
+                    if (!string.IsNullOrWhiteSpace(fm.Title) &&
+                        !string.Equals(fm.Title.Trim(), "Task", StringComparison.OrdinalIgnoreCase))
+                    {
+                        task.Title = fm.Title.Trim();
+                    }
+                }
+                catch (Exception pex)
+                {
+                    _logger.LogDebug(pex, "Failed direct parse of task markdown file {Path}", targetFile);
+                }
+            }
+
             // Refresh task from repository to capture agent's updated description, title, and dependencies
             var refreshedTask = await _taskRepository.GetByIdAsync(task.Id, cancellationToken);
             if (refreshedTask != null)
             {
-                task.Title = refreshedTask.Title;
-                task.Description = refreshedTask.Description;
+                if (!string.IsNullOrWhiteSpace(refreshedTask.Title) && !string.Equals(refreshedTask.Title.Trim(), "Task", StringComparison.OrdinalIgnoreCase)) task.Title = refreshedTask.Title;
+                if (!string.IsNullOrWhiteSpace(refreshedTask.Description)) task.Description = refreshedTask.Description;
                 task.Priority = refreshedTask.Priority;
                 task.BaseBranch = refreshedTask.BaseBranch;
                 task.FeatureBranch = refreshedTask.FeatureBranch;

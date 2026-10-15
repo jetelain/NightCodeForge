@@ -31,6 +31,7 @@ public class EfCoreTaskRepository : ITaskRepository
     public async Task<IReadOnlyList<ForgeTask>> GetByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default)
     {
         return await _context.Tasks
+            .AsNoTracking()
             .Include(i => i.Dependencies)
             .Include(i => i.DependentTasks)
             .Include(i => i.Questions)
@@ -65,7 +66,18 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task UpdateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
     {
-        _context.Tasks.Update(task);
+        var local = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == task.Id);
+        if (local != null)
+        {
+            if (!ReferenceEquals(local, task))
+            {
+                _context.Entry(local).CurrentValues.SetValues(task);
+            }
+        }
+        else
+        {
+            _context.Tasks.Update(task);
+        }
 
         if (dependsOn != null)
         {
@@ -132,6 +144,7 @@ public class EfCoreTaskRepository : ITaskRepository
     public async Task<IReadOnlyList<ForgeTask>> GetByStatusAsync(TaskOverallStatus status, CancellationToken cancellationToken = default)
     {
         return await _context.Tasks
+            .AsNoTracking()
             .Include(i => i.Workspace)
             .Include(i => i.Checkpoints)
             .Include(i => i.ExecutionRecords)

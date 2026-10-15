@@ -436,13 +436,14 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        _logger.LogError(ex, "Error during Crucible streaming LLM invocation");
+                        var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
+                        _logger.LogError(ex, "Error during Crucible streaming LLM invocation: {ErrorMessage}", errorMsg);
                         stopwatch.Stop();
-                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, errorMsg, cancellationToken);
                         await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken, tracingClient, harnessOptions, activeSkills);
 
                         return AgentRunResult.Failed(
-                            ex.Message,
+                            errorMsg,
                             new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
                             latestSerializedState);
                     }

@@ -525,7 +525,10 @@ public partial class CanonicalTools
 
         if (!string.IsNullOrWhiteSpace(title) || !string.IsNullOrWhiteSpace(description))
         {
-            discovered.Add(new TaskProposal(title ?? "Task", description ?? string.Empty, priority ?? 1));
+            var effectiveTitle = !string.IsNullOrWhiteSpace(title) && !string.Equals(title.Trim(), "Task", StringComparison.OrdinalIgnoreCase)
+                ? title.Trim()
+                : DeriveTitleFromDescription(description);
+            discovered.Add(new TaskProposal(effectiveTitle, description ?? string.Empty, priority ?? 1));
         }
 
         if (tasks != null)
@@ -645,6 +648,11 @@ public partial class CanonicalTools
 
         if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(desc)) return null;
 
+        if (string.IsNullOrWhiteSpace(title) || string.Equals(title.Trim(), "Task", StringComparison.OrdinalIgnoreCase))
+        {
+            title = DeriveTitleFromDescription(desc);
+        }
+
         int priority = 1;
         if (item.TryGetProperty("priority", out var p) && p.TryGetInt32(out var pVal))
         {
@@ -669,6 +677,21 @@ public partial class CanonicalTools
         }
 
         return new TaskProposal(title, desc, type, null, null, priority, deps);
+    }
+
+    private static string DeriveTitleFromDescription(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description)) return "Task";
+        var firstLine = description.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? "Task";
+        firstLine = firstLine.TrimStart('#', ' ', '-', '*', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', ':');
+        if (firstLine.Length > 80)
+        {
+            var truncated = firstLine[..80];
+            var lastSpace = truncated.LastIndexOf(' ');
+            if (lastSpace > 30) truncated = truncated[..lastSpace];
+            return truncated;
+        }
+        return string.IsNullOrWhiteSpace(firstLine) ? "Task" : firstLine;
     }
 
     /// <summary>

@@ -64,7 +64,8 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IOllamaRouterGatewayService, Inference.OllamaRouterGatewayService>();
 
         // 8. Markdown ForgeTask Mirroring
-        services.TryAddScoped<ITaskMarkdownSyncService, TaskMarkdownSyncService>();
+        services.TryAddSingleton<ITaskMarkdownSyncService>(sp =>
+            new TaskMarkdownSyncService(sp.GetRequiredService<IServiceScopeFactory>()));
 
         // 9. Deterministic Quality Gate Stages
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicBuildStage>();

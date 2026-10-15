@@ -1,7 +1,7 @@
 @namespace NightCodeForge.Web.Components.Backlog
 @using NightCodeForge.Core.Domain
 
-<div class="kanban-card card-glass @(Task.IsWaitingForHuman ? "card-waiting-human" : "")"
+<div class="kanban-card task-card card-glass @(Task.IsWaitingForHuman ? "card-waiting-human" : "")"
      @onclick="HandleClick"
      role="button"
      tabindex="0"
@@ -90,7 +90,7 @@
         @if (Task.Status == TaskOverallStatus.Suggested)
         {
             <button type="button"
-                    class="forge-btn forge-btn-primary btn-xs"
+                    class="forge-btn forge-btn-primary btn-xs promote-btn"
                     @onclick="HandlePromote"
                     @onclick:stopPropagation="true">
                 🚀 Triage

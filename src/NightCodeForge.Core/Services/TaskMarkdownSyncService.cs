@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
@@ -18,8 +19,9 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     [GeneratedRegex(@"[^a-z0-9]+")]
     private static partial Regex NonAlphaNumericRegex();
 
-    private readonly ITaskRepository _taskRepository;
-    private readonly IDependencyResolutionEngine? _dependencyEngine;
+    private readonly ITaskRepository? _fallbackTaskRepository;
+    private readonly IDependencyResolutionEngine? _fallbackDependencyEngine;
+    private readonly IServiceScopeFactory? _scopeFactory;
     private readonly IDeserializer _yamlDeserializer;
     private readonly ISerializer _yamlSerializer;
     private readonly ConcurrentDictionary<string, byte> _suppressedHashes = new();
@@ -27,10 +29,30 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     private readonly ConcurrentDictionary<int, FileSystemWatcher> _watchers = new();
     private readonly TimeSpan _debounceWindow = TimeSpan.FromMilliseconds(300);
 
-    public TaskMarkdownSyncService(ITaskRepository taskRepository, IDependencyResolutionEngine? dependencyEngine = null)
+    [ActivatorUtilitiesConstructor]
+    public TaskMarkdownSyncService(IServiceScopeFactory scopeFactory)
+        : this(null, null, scopeFactory)
     {
-        _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
-        _dependencyEngine = dependencyEngine;
+    }
+
+    public TaskMarkdownSyncService(ITaskRepository taskRepository, IDependencyResolutionEngine? dependencyEngine = null)
+        : this(taskRepository, dependencyEngine, null)
+    {
+    }
+
+    public TaskMarkdownSyncService(
+        ITaskRepository? taskRepository,
+        IDependencyResolutionEngine? dependencyEngine,
+        IServiceScopeFactory? scopeFactory)
+    {
+        _fallbackTaskRepository = taskRepository;
+        _fallbackDependencyEngine = dependencyEngine;
+        _scopeFactory = scopeFactory;
+
+        if (_fallbackTaskRepository == null && _scopeFactory == null)
+        {
+            throw new ArgumentException("Either taskRepository or scopeFactory must be provided.");
+        }
 
         _yamlDeserializer = new DeserializerBuilder()
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
@@ -41,6 +63,19 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
             .Build();
+    }
+
+    private (ITaskRepository TaskRepo, IDependencyResolutionEngine? DepEngine, IDisposable? Scope) ResolveDependencies()
+    {
+        if (_scopeFactory != null)
+        {
+            var scope = _scopeFactory.CreateScope();
+            var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+            var depEngine = scope.ServiceProvider.GetService<IDependencyResolutionEngine>();
+            return (taskRepo, depEngine, scope);
+        }
+
+        return (_fallbackTaskRepository!, _fallbackDependencyEngine, null);
     }
 
     public string GenerateMarkdown(ForgeTask task, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null)
@@ -229,123 +264,131 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             ? frontmatter.Id.Value
             : (expectedTaskId.HasValue && expectedTaskId.Value > 0 ? expectedTaskId.Value : (int?)null);
 
-        if (targetTaskId.HasValue)
+        var (taskRepo, depEngine, scope) = ResolveDependencies();
+        try
         {
-            var task = await _taskRepository.GetByIdAsync(targetTaskId.Value, cancellationToken);
-            if (task != null)
+            if (targetTaskId.HasValue)
             {
-                bool restoreProtected = false;
+                var task = await taskRepo.GetByIdAsync(targetTaskId.Value, cancellationToken);
+                if (task != null)
+                {
+                    bool restoreProtected = false;
 
-                // Validate system-managed fields
-                if (!string.Equals(frontmatter.Status, task.Status.ToString(), StringComparison.OrdinalIgnoreCase))
-                {
-                    restoreProtected = true;
-                    frontmatter.Status = task.Status.ToString();
-                }
-
-                if (!string.Equals(frontmatter.CurrentStage, task.CurrentStageId, StringComparison.OrdinalIgnoreCase))
-                {
-                    restoreProtected = true;
-                    frontmatter.CurrentStage = task.CurrentStageId;
-                }
-
-                if (frontmatter.WaitingForHuman != task.IsWaitingForHuman)
-                {
-                    restoreProtected = true;
-                    frontmatter.WaitingForHuman = task.IsWaitingForHuman;
-                }
-
-                // Update editable fields
-                if (!string.IsNullOrWhiteSpace(frontmatter.Title))
-                {
-                    task.Title = frontmatter.Title;
-                }
-                if (!string.IsNullOrWhiteSpace(description))
-                {
-                    task.Description = description;
-                }
-                task.Priority = frontmatter.Priority;
-                task.BaseBranch = frontmatter.BaseBranch;
-                if (!string.IsNullOrWhiteSpace(frontmatter.FeatureBranch))
-                {
-                    task.FeatureBranch = frontmatter.FeatureBranch;
-                }
-                task.UpdatedAt = DateTime.UtcNow;
-
-                // Validate DAG cycles on dependency changes if engine is provided
-                if (_dependencyEngine != null && frontmatter.DependsOn != null)
-                {
-                    var testDependencies = frontmatter.DependsOn.Select(d => (task.Id, d));
-                    if (_dependencyEngine.HasCycle(workspaceId, testDependencies))
+                    // Validate system-managed fields
+                    if (!string.Equals(frontmatter.Status, task.Status.ToString(), StringComparison.OrdinalIgnoreCase))
                     {
-                        // Cycle detected, revert dependencies in frontmatter
                         restoreProtected = true;
-                        var existingDeps = await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken);
-                        frontmatter.DependsOn = existingDeps.ToList();
+                        frontmatter.Status = task.Status.ToString();
+                    }
+
+                    if (!string.Equals(frontmatter.CurrentStage, task.CurrentStageId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        restoreProtected = true;
+                        frontmatter.CurrentStage = task.CurrentStageId;
+                    }
+
+                    if (frontmatter.WaitingForHuman != task.IsWaitingForHuman)
+                    {
+                        restoreProtected = true;
+                        frontmatter.WaitingForHuman = task.IsWaitingForHuman;
+                    }
+
+                    // Update editable fields
+                    if (!string.IsNullOrWhiteSpace(frontmatter.Title))
+                    {
+                        task.Title = frontmatter.Title;
+                    }
+                    if (!string.IsNullOrWhiteSpace(description))
+                    {
+                        task.Description = description;
+                    }
+                    task.Priority = frontmatter.Priority;
+                    task.BaseBranch = frontmatter.BaseBranch;
+                    if (!string.IsNullOrWhiteSpace(frontmatter.FeatureBranch))
+                    {
+                        task.FeatureBranch = frontmatter.FeatureBranch;
+                    }
+                    task.UpdatedAt = DateTime.UtcNow;
+
+                    // Validate DAG cycles on dependency changes if engine is provided
+                    if (depEngine != null && frontmatter.DependsOn != null)
+                    {
+                        var testDependencies = frontmatter.DependsOn.Select(d => (task.Id, d));
+                        if (depEngine.HasCycle(workspaceId, testDependencies))
+                        {
+                            // Cycle detected, revert dependencies in frontmatter
+                            restoreProtected = true;
+                            var existingDeps = await taskRepo.GetDependenciesAsync(task.Id, cancellationToken);
+                            frontmatter.DependsOn = existingDeps.ToList();
+                        }
+                        else
+                        {
+                            await taskRepo.UpdateAsync(task, frontmatter.DependsOn, cancellationToken);
+                        }
                     }
                     else
                     {
-                        await _taskRepository.UpdateAsync(task, frontmatter.DependsOn, cancellationToken);
+                        await taskRepo.UpdateAsync(task, frontmatter.DependsOn, cancellationToken);
                     }
-                }
-                else
-                {
-                    await _taskRepository.UpdateAsync(task, frontmatter.DependsOn, cancellationToken);
-                }
 
-                if (restoreProtected)
-                {
-                    // Rewrite back authoritative state
-                    var rewritten = GenerateMarkdown(task, frontmatter.DependsOn, frontmatter.AgentProfile);
-                    var newHash = ComputeContentHash(rewritten);
-                    _suppressedHashes[newHash] = 1;
-                    if (File.Exists(filePath))
+                    if (restoreProtected)
                     {
-                        await File.WriteAllTextAsync(filePath, rewritten, Encoding.UTF8, cancellationToken);
+                        // Rewrite back authoritative state
+                        var rewritten = GenerateMarkdown(task, frontmatter.DependsOn, frontmatter.AgentProfile);
+                        var newHash = ComputeContentHash(rewritten);
+                        _suppressedHashes[newHash] = 1;
+                        if (File.Exists(filePath))
+                        {
+                            await File.WriteAllTextAsync(filePath, rewritten, Encoding.UTF8, cancellationToken);
+                        }
                     }
-                }
 
-                return;
+                    return;
+                }
+            }
+
+            // New task dropped in without an ID
+            var mergeMode = string.Equals(frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
+                ? Domain.MergeMode.Automatic
+                : Domain.MergeMode.ManualReviewRequired;
+
+            var newTask = new ForgeTask
+            {
+                WorkspaceId = workspaceId,
+                Title = string.IsNullOrWhiteSpace(frontmatter.Title) ? Path.GetFileNameWithoutExtension(filePath) : frontmatter.Title,
+                Description = string.IsNullOrWhiteSpace(description) ? body : description,
+                Priority = frontmatter.Priority,
+                MergeMode = mergeMode,
+                IsWaitingForHuman = frontmatter.WaitingForHuman,
+                BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? "main" : frontmatter.BaseBranch,
+                Status = TaskOverallStatus.Suggested,
+                CurrentStageId = "task-review",
+                CreatedAt = frontmatter.CreatedAt ?? DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            var created = await taskRepo.CreateAsync(newTask, frontmatter.DependsOn, cancellationToken);
+
+            // Update frontmatter in-place with allocated ID and creation timestamp
+            frontmatter.Id = created.Id;
+            frontmatter.CreatedAt = created.CreatedAt;
+            frontmatter.Status = created.Status.ToString();
+            frontmatter.MergeMode = created.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required";
+            frontmatter.WaitingForHuman = created.IsWaitingForHuman;
+            frontmatter.CurrentStage = created.CurrentStageId;
+
+            var inPlaceMarkdown = GenerateMarkdown(created, frontmatter.DependsOn, frontmatter.AgentProfile);
+            var inPlaceHash = ComputeContentHash(inPlaceMarkdown);
+            _suppressedHashes[inPlaceHash] = 1;
+
+            if (File.Exists(filePath))
+            {
+                await File.WriteAllTextAsync(filePath, inPlaceMarkdown, Encoding.UTF8, cancellationToken);
             }
         }
-
-        // New task dropped in without an ID
-        var mergeMode = string.Equals(frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
-            ? Domain.MergeMode.Automatic
-            : Domain.MergeMode.ManualReviewRequired;
-
-        var newTask = new ForgeTask
+        finally
         {
-            WorkspaceId = workspaceId,
-            Title = string.IsNullOrWhiteSpace(frontmatter.Title) ? Path.GetFileNameWithoutExtension(filePath) : frontmatter.Title,
-            Description = string.IsNullOrWhiteSpace(description) ? body : description,
-            Priority = frontmatter.Priority,
-            MergeMode = mergeMode,
-            IsWaitingForHuman = frontmatter.WaitingForHuman,
-            BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? "main" : frontmatter.BaseBranch,
-            Status = TaskOverallStatus.Suggested,
-            CurrentStageId = "task-review",
-            CreatedAt = frontmatter.CreatedAt ?? DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
-
-        var created = await _taskRepository.CreateAsync(newTask, frontmatter.DependsOn, cancellationToken);
-
-        // Update frontmatter in-place with allocated ID and creation timestamp
-        frontmatter.Id = created.Id;
-        frontmatter.CreatedAt = created.CreatedAt;
-        frontmatter.Status = created.Status.ToString();
-        frontmatter.MergeMode = created.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required";
-        frontmatter.WaitingForHuman = created.IsWaitingForHuman;
-        frontmatter.CurrentStage = created.CurrentStageId;
-
-        var inPlaceMarkdown = GenerateMarkdown(created, frontmatter.DependsOn, frontmatter.AgentProfile);
-        var inPlaceHash = ComputeContentHash(inPlaceMarkdown);
-        _suppressedHashes[inPlaceHash] = 1;
-
-        if (File.Exists(filePath))
-        {
-            await File.WriteAllTextAsync(filePath, inPlaceMarkdown, Encoding.UTF8, cancellationToken);
+            scope?.Dispose();
         }
     }
 
@@ -440,7 +483,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         }, TaskScheduler.Default);
     }
 
-    private static string ExtractDescriptionFromBody(string body)
+    public static string ExtractDescriptionFromBody(string body)
     {
         if (string.IsNullOrWhiteSpace(body)) return string.Empty;
 
