@@ -20,6 +20,7 @@ builder.Services.AddScoped<IWorkspaceProvisioningService, WorkspaceProvisioningS
 builder.Services.AddScoped<ReviewCommentStateService>();
 builder.Services.AddScoped<ITaskReviewService, TaskReviewService>();
 builder.Services.AddScoped<ITranscriptBrowserService, TranscriptBrowserService>();
+builder.Services.AddScoped<IGitSyncService, GitSyncService>();
 
 // Register NightCodeForge domain and infrastructure services
 var dbConnection = builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=nightcodeforge.db;";

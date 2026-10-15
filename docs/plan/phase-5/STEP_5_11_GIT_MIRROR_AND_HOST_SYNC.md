@@ -383,9 +383,9 @@ public record WorktreeSnapshot(
 
 ## 6. Definition of Done (DoD) Checklist
 
-- [ ] `Pages/GitSync.razor` created with Ext4 mirror details card and worktree list.
-- [ ] Reactive subscription to SignalR `ReceiveHostDirtyAlert` alert stream.
-- [ ] `HostDirtyReconcileDrawer.razor` component created with guided resolution strategies.
-- [ ] Fallback branch (`-ncf`) visualization and copyable terminal merge command.
-- [ ] "Fetch from Host" action integrated with `IGitMirrorSyncService.FetchFromHostAsync`.
-- [ ] Component unit tests verify alert dispatch and reconciliation actions.
+- [x] `Pages/GitSync.razor` created with Ext4 mirror details card and worktree list.
+- [x] Reactive subscription to SignalR `ReceiveHostDirtyAlert` alert stream.
+- [x] `HostDirtyReconcileDrawer.razor` component created with guided resolution strategies.
+- [x] Fallback branch (`-ncf`) visualization and copyable terminal merge command.
+- [x] "Fetch from Host" action integrated with `IGitMirrorSyncService.FetchFromHostAsync`.
+- [x] Component unit tests verify alert dispatch and reconciliation actions.

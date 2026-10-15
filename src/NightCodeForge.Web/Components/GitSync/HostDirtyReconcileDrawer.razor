@@ -1,0 +1,166 @@
+@namespace NightCodeForge.Web.Components.GitSync
+@using Microsoft.JSInterop
+@using NightCodeForge.Web.Services
+@inject ToastService ToastService
+@inject IGitSyncService GitSyncService
+@inject WorkspaceStateService WorkspaceState
+@inject IJSRuntime JSRuntime
+
+<div class="forge-modal-backdrop" id="host-dirty-modal-backdrop" @onclick="HandleBackdropClick">
+    <div class="forge-modal card-glass modal-lg" id="host-dirty-reconcile-drawer" @onclick:stopPropagation="true">
+        <div class="modal-header d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-2">
+                <span class="fs-4">🛠️</span>
+                <h3 class="mb-0">Reconcile Dirty Host Working Tree</h3>
+            </div>
+            <button class="btn-icon" id="close-dirty-drawer-btn" @onclick="Close" title="Close Drawer">✕</button>
+        </div>
+
+        <div class="modal-body">
+            <!-- Root Cause Alert -->
+            <div class="alert alert-warning mb-4" id="dirty-drawer-explanation">
+                <strong>Why did this happen?</strong>
+                <p class="mb-0 mt-1">
+                    Your local working tree on the host IDE has uncommitted edits to tracked files.
+                    Git rejected the push update to <code>@Alert.BranchName</code> via
+                    <code>receive.denyCurrentBranch updateInstead</code> to prevent overwriting your host work.
+                </p>
+            </div>
+
+            <!-- Fallback Rescue Branch Securing -->
+            <div class="rescue-branch-card card-surface p-3 mb-4" id="rescue-branch-box">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="text-secondary small font-semibold">FALLBACK RESCUE BRANCH SECURED:</div>
+                        <code class="font-mono text-indigo fs-5 mt-1 d-inline-block" id="rescue-branch-name">@Alert.BranchName-ncf</code>
+                    </div>
+                    <span class="badge-tag priority-badge">Auto-Diverted</span>
+                </div>
+                <p class="text-muted small mt-2 mb-0">
+                    Your Forge changes are 100% safe, verified, and preserved on this branch on host-origin.
+                </p>
+            </div>
+
+            <!-- Choose Strategy Header -->
+            <h4 class="mb-3">Choose Resolution Strategy:</h4>
+            <div class="strategies-grid d-flex flex-column gap-3">
+                <!-- Strategy 1: Stash & Fast-Forward -->
+                <div class="strategy-card card-surface p-3" id="strategy-stash-card">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <strong class="text-primary">1. Fast-Forward Host (Recommended)</strong>
+                            <p class="text-secondary small mb-2 mt-1">
+                                Runs <code>git stash</code> on host, checks out <code>@Alert.BranchName</code>, and fast-forwards/merges the <code>-ncf</code> rescue branch.
+                            </p>
+                        </div>
+                        <span class="badge-tag">Automated</span>
+                    </div>
+                    <button type="button" class="forge-btn forge-btn-primary forge-btn-sm btn btn-sm btn-primary mt-2" id="strategy-stash-and-merge-btn"
+                            @onclick="ExecuteStashAndMergeAsync" disabled="@_isExecuting">
+                        @(_isExecuting ? "Executing Reconcile..." : "Stash Host Edits & Fast-Forward ➔")
+                    </button>
+                </div>
+
+                <!-- Strategy 2: Manual Terminal Merge -->
+                <div class="strategy-card card-surface p-3" id="strategy-manual-card">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <strong class="text-primary">2. Manual Merge in Terminal / VS Code</strong>
+                            <p class="text-secondary small mb-2 mt-1">
+                                Run this command in your host terminal to review and merge at your own pace:
+                            </p>
+                        </div>
+                        <span class="badge-tag">Manual</span>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 mt-2">
+                        <code class="p-2 font-mono flex-grow-1 bg-dark text-info rounded border border-subtle" id="manual-merge-command">git merge @Alert.BranchName-ncf</code>
+                        <button type="button" class="forge-btn forge-btn-secondary forge-btn-sm btn btn-sm btn-secondary" id="copy-merge-command-btn" @onclick="CopyCommandToClipboard">
+                            📋 Copy
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Strategy 3: Dismiss Alert -->
+                <div class="strategy-card card-surface p-3" id="strategy-dismiss-card">
+                    <strong class="text-primary">3. Keep Separate &amp; Dismiss Alert</strong>
+                    <p class="text-secondary small mb-2 mt-1">
+                        Acknowledge the alert. The rescue branch will remain available on host-origin for manual branch switching later.
+                    </p>
+                    <button type="button" class="forge-btn forge-btn-secondary forge-btn-sm btn btn-sm btn-secondary mt-2" id="strategy-dismiss-btn"
+                            @onclick="DismissAlert" disabled="@_isExecuting">
+                        Acknowledge &amp; Dismiss Alert
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal-footer d-flex justify-content-end gap-2 mt-3">
+            <button type="button" class="forge-btn forge-btn-secondary btn btn-secondary" id="cancel-dirty-drawer-btn" @onclick="Close">Close</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public HostDirtyAlertEvent Alert { get; set; } = null!;
+    [Parameter] public EventCallback OnResolved { get; set; }
+    [Parameter] public EventCallback OnClosed { get; set; }
+
+    private bool _isExecuting;
+
+    private async Task ExecuteStashAndMergeAsync()
+    {
+        _isExecuting = true;
+        try
+        {
+            var ws = WorkspaceState.ActiveWorkspace;
+            if (ws != null)
+            {
+                var result = await GitSyncService.ReconcileHostBranchAsync(ws, Alert.TaskId, Alert.BranchName, "stash-and-merge");
+                if (result.Success)
+                {
+                    ToastService.Show("Reconciliation Succeeded", $"Branch {Alert.BranchName} synchronized with rescue changes.", ToastLevel.Success);
+                }
+                else
+                {
+                    ToastService.Show("Reconciliation Warning", result.WarningMessage ?? "Could not fast-forward branch.", ToastLevel.Warning);
+                }
+            }
+            await OnResolved.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Reconciliation Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isExecuting = false;
+        }
+    }
+
+    private async Task CopyCommandToClipboard()
+    {
+        var cmd = $"git merge {Alert.BranchName}-ncf";
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", cmd);
+        }
+        catch { }
+
+        ToastService.Show("Copied to Clipboard", $"Command copied: {cmd}", ToastLevel.Info);
+    }
+
+    private async Task DismissAlert()
+    {
+        await OnResolved.InvokeAsync();
+    }
+
+    private async Task Close()
+    {
+        await OnClosed.InvokeAsync();
+    }
+
+    private async Task HandleBackdropClick()
+    {
+        await Close();
+    }
+}

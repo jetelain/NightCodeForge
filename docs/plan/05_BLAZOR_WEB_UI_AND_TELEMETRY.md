@@ -105,9 +105,9 @@ To ensure thorough, battle-tested execution without ambiguity, Phase 5 is decomp
 - [x] **Step 5.4:** `Backlog.razor` rendering Kanban columns and SVG DAG graph, with Maintainer Promotion modal (`Suggested` $\rightarrow$ `Open`/`Rejected`) and cycle prevention.
 - [x] **Step 5.5:** `Monitoring.razor` displaying active worker state, 7-step pipeline (GPU vs CPU), and live terminal stream.
 - [x] **Step 5.6:** `Inbox.razor` displaying pending questions, accepting answers, and resuming via `llm-urgent` without mutating task status.
-- [ ] **Step 5.7:** `Review.razor` rendering side-by-side diffs via `DiffPlex`, displaying quality gate cards, and executing auto-merge or approve/request-changes.
-- [ ] **Step 5.8:** `Settings.razor` two-tier configuration console (Global System vs. Workspace Scoped), dual-scope agent reasoning profile editor with dynamic inheritance fallback, generous autonomous turn budgets (500 turns), `MaxTurns` precedence fix, complete 12-parameter optimization matrix, deep OllamaRouter gateway integration (`/api/tags`, `/api/ps` VRAM inspection, target pinning `X-OllamaRouter-Target`, non-destructive memory reclaim), probed host SDK paths, and A/B test metrics.
-- [ ] **Step 5.9:** `Transcripts.razor` rendering markdown transcripts and executing hybrid AI diagnostics (Cloud vs. Local).
-- [ ] **Step 5.10:** `Triage.razor` portal executing Stage 0 intake triage in a `RestrictedReadOnly` sandbox (`:ro` mount, `--network none`) on `main`/`master`.
-- [ ] **Step 5.11:** `GitSync.razor` managing Ext4 mirror status, reacting to `ReceiveHostDirtyAlert`, and guiding resolution for `-ncf` rescue branches.
+- [x] **Step 5.7:** `Review.razor` rendering side-by-side diffs via `DiffPlex`, displaying quality gate cards, and executing auto-merge or approve/request-changes.
+- [x] **Step 5.8:** `Settings.razor` two-tier configuration console (Global System vs. Workspace Scoped), dual-scope agent reasoning profile editor with dynamic inheritance fallback, generous autonomous turn budgets (500 turns), `MaxTurns` precedence fix, complete 12-parameter optimization matrix, deep OllamaRouter gateway integration (`/api/tags`, `/api/ps` VRAM inspection, target pinning `X-OllamaRouter-Target`, non-destructive memory reclaim), probed host SDK paths, and A/B test metrics.
+- [x] **Step 5.9:** `Transcripts.razor` rendering markdown transcripts and executing hybrid AI diagnostics (Cloud vs. Local).
+- [x] **Step 5.10:** `Triage.razor` portal executing Stage 0 intake triage in a `RestrictedReadOnly` sandbox (`:ro` mount, `--network none`) on `main`/`master`.
+- [x] **Step 5.11:** `GitSync.razor` managing Ext4 mirror status, reacting to `ReceiveHostDirtyAlert`, and guiding resolution for `-ncf` rescue branches.
 - [ ] **Step 5.12:** `DevQueue.razor` monitoring Hangfire queue priorities (`llm-urgent` vs. `llm-inference`), inspecting `IWorkspaceLockProvider` locks, and mounting Hangfire dashboard.

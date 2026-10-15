@@ -1,0 +1,302 @@
+@page "/git-sync"
+@namespace NightCodeForge.Web.Components.Pages
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Web.Components.Common
+@using NightCodeForge.Web.Components.GitSync
+@using NightCodeForge.Web.Components.Workspaces
+@using NightCodeForge.Web.Services
+@inject IGitMirrorSyncService MirrorSyncService
+@inject IGitSyncService GitSyncService
+@inject OrchestratorHubClientConnection HubConnection
+@inject WorkspaceStateService WorkspaceState
+@inject ToastService ToastService
+@implements IDisposable
+
+<PageTitle>Git Mirror &amp; Host Sync - NightCodeForge</PageTitle>
+
+<div class="gitsync-container" id="gitsync-container">
+    @if (WorkspaceState.ActiveWorkspace == null)
+    {
+        <WorkspaceEmptyStateHero />
+    }
+    else
+    {
+        <!-- Page Header -->
+        <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-3" id="gitsync-header">
+            <div>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="fs-2">🌿</span>
+                    <h2 class="mb-0">Git Mirror, Worktrees &amp; Host Sync</h2>
+                </div>
+                <p class="text-secondary mb-0 mt-1">
+                    Inspect isolated Ext4 Git mirrors, monitor host-origin synchronization, and reconcile dirty tree alerts.
+                </p>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <button type="button" class="forge-btn forge-btn-secondary btn btn-secondary" id="btn-refresh-status" @onclick="RefreshDataAsync" disabled="@_isFetching">
+                    🔄 Refresh
+                </button>
+                <button type="button" class="forge-btn forge-btn-primary btn btn-primary" id="btn-fetch-host" @onclick="FetchLatestFromHostAsync" disabled="@_isFetching">
+                    @(_isFetching ? "Fetching from Host..." : "📥 Fetch from Host")
+                </button>
+            </div>
+        </div>
+
+        <!-- Reactive Dirty Tree Warning Banner (Shows when alert is active) -->
+        @if (_activeDirtyAlert != null)
+        {
+            <div class="dirty-alert-banner card-surface p-4 mb-4 border-warning" id="dirty-alert-banner">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+                    <div class="d-flex align-items-center gap-3">
+                        <span class="fs-1 text-warning">⚠️</span>
+                        <div>
+                            <h4 class="text-warning mb-1" id="dirty-banner-title">Developer Host Working Tree is Dirty!</h4>
+                            <p class="mb-0 text-secondary" id="dirty-banner-desc">
+                                Forge could not push directly to <code class="text-warning font-mono">@_activeDirtyAlert.BranchName</code> because uncommitted edits were detected on your host machine.
+                                Changes have been safely secured on fallback rescue branch: <strong><code class="text-indigo font-mono">@(_activeDirtyAlert.BranchName)-ncf</code></strong>.
+                            </p>
+                        </div>
+                    </div>
+                    <button type="button" class="forge-btn forge-btn-warning btn btn-warning" id="btn-open-reconcile-drawer" @onclick="OpenReconcileDrawer">
+                        🛠️ Resolve &amp; Reconcile ➔
+                    </button>
+                </div>
+            </div>
+        }
+
+        <div class="gitsync-grid">
+            <!-- 1. Ext4 Mirror Details Card -->
+            <div class="forge-card card-surface p-4 h-100" id="mirror-status-card">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="fs-4">🪞</span>
+                        <h4 class="mb-0">Ext4 Mirror Repository</h4>
+                    </div>
+                    <span class="badge-tag">Zero 9p Latency</span>
+                </div>
+
+                <div class="mirror-meta font-mono mt-3 d-flex flex-column gap-3">
+                    <div class="meta-row">
+                        <span class="meta-label">Mirror Path:</span>
+                        <code class="meta-val" id="mirror-path">@(!string.IsNullOrWhiteSpace(_status?.MirrorPath) ? _status.MirrorPath : "Not configured")</code>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Host Dev Workspace:</span>
+                        <code class="meta-val" id="host-repo-path">@(!string.IsNullOrWhiteSpace(_status?.HostRepoPath) ? _status.HostRepoPath : (WorkspaceState.ActiveWorkspace?.RepositoryPath ?? "Not configured"))</code>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Mirror Remote (host-origin):</span>
+                        <code class="meta-val" id="host-origin-path">@(!string.IsNullOrWhiteSpace(_status?.HostOriginPath) ? _status.HostOriginPath : "Not detected")</code>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Base Branch:</span>
+                        <code class="meta-val" id="base-branch">@(!string.IsNullOrWhiteSpace(_status?.BaseBranch) ? _status.BaseBranch : "main")</code>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Mirror Divergence:</span>
+                        <div class="d-flex gap-2">
+                            <span class="badge-tag" id="divergence-ahead" title="Commits in mirror ahead of host repository">Ahead: @(_status?.CommitsAhead ?? 0)</span>
+                            <span class="badge-tag" id="divergence-behind" title="Commits in host repository waiting to be fetched">Behind: @(_status?.CommitsBehind ?? 0)</span>
+                        </div>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Host Working Tree:</span>
+                        <span class="badge-status @(_status?.IsHostDirty == true ? "dirty" : "clean")" id="host-tree-status">
+                            @(_status?.IsHostDirty == true ? "DIRTY (Uncommitted Edits)" : "CLEAN")
+                        </span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Last Host Fetch:</span>
+                        <span class="text-secondary small font-sans" id="last-fetched-at">
+                            @(_status?.LastFetchedAt.HasValue == true ? _status.LastFetchedAt.Value.ToLocalTime().ToString("g") : "Never")
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. Active ForgeTask Worktrees Card -->
+            <div class="forge-card card-surface p-4 h-100" id="worktrees-card">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="fs-4">🌳</span>
+                        <h4 class="mb-0">Active Agent Worktrees (@_worktrees.Count)</h4>
+                    </div>
+                    <button type="button" class="forge-btn forge-btn-secondary forge-btn-sm btn btn-sm btn-secondary" id="btn-prune-worktrees"
+                            @onclick="PruneStaleWorktreesAsync" disabled="@_isPruning">
+                        @(_isPruning ? "Pruning..." : "🧹 Prune Stale")
+                    </button>
+                </div>
+
+                    <div class="worktree-list mt-3">
+                        @if (_worktrees.Count == 0)
+                        {
+                            <div class="p-4 text-center text-secondary card-glass rounded" id="no-worktrees-msg">
+                                <span>No active agent worktrees found. Worktrees are spawned dynamically during task execution.</span>
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var wt in _worktrees)
+                            {
+                                <div class="worktree-item p-3 mb-2 card-glass d-flex justify-content-between align-items-center rounded" id="worktree-item-@wt.TaskId">
+                                    <div>
+                                        <div class="d-flex align-items-center gap-2 mb-1">
+                                            <span class="badge-tag" id="badge-task-id">ForgeTask #@wt.TaskId</span>
+                                            <code class="font-mono text-indigo">@wt.BranchName</code>
+                                        </div>
+                                        <div class="text-muted small font-mono text-truncate" style="max-width: 320px;" title="@wt.Path">
+                                            @wt.Path
+                                        </div>
+                                    </div>
+                                    <span class="badge-status @(wt.IsActive ? "running" : "idle")">
+                                        @(wt.IsActive ? "ACTIVE" : "IDLE")
+                                    </span>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+    }
+</div>
+
+<!-- Reconcile Drawer Modal -->
+@if (_showReconcileDrawer && _activeDirtyAlert != null)
+{
+    <HostDirtyReconcileDrawer
+        Alert="_activeDirtyAlert"
+        OnResolved="HandleDirtyAlertResolved"
+        OnClosed="CloseDrawer" />
+}
+
+@code {
+    private MirrorStatusSnapshot? _status;
+    private List<WorktreeSnapshot> _worktrees = new();
+    private HostDirtyAlertEvent? _activeDirtyAlert;
+    private bool _showReconcileDrawer;
+    private bool _isFetching;
+    private bool _isPruning;
+
+    protected override async Task OnInitializedAsync()
+    {
+        HubConnection.OnHostDirtyAlertReceived += HandleHostDirtyAlert;
+        HubConnection.OnGitProgressReceived += HandleGitProgress;
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+
+        await RefreshDataAsync();
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await RefreshDataAsync();
+            StateHasChanged();
+        });
+    }
+
+    private void HandleHostDirtyAlert(int taskId, string branchName)
+    {
+        _activeDirtyAlert = new HostDirtyAlertEvent(taskId, branchName, DateTime.UtcNow);
+        ToastService.Show("Host Dirty Alert", $"Push diverted to {branchName}-ncf due to uncommitted host edits.", ToastLevel.Warning);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleGitProgress(int taskId, string operation, string message)
+    {
+        if (operation.Contains("fetch", StringComparison.OrdinalIgnoreCase) ||
+            operation.Contains("push", StringComparison.OrdinalIgnoreCase))
+        {
+            _ = InvokeAsync(RefreshDataAsync);
+        }
+    }
+
+    private async Task RefreshDataAsync()
+    {
+        var ws = WorkspaceState.ActiveWorkspace;
+        if (ws == null)
+        {
+            _status = null;
+            _worktrees.Clear();
+            return;
+        }
+
+        try
+        {
+            _status = await GitSyncService.GetMirrorStatusAsync(ws);
+            _worktrees = await GitSyncService.GetWorktreesAsync(ws);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Git Sync Refresh Error", ex.Message, ToastLevel.Warning);
+        }
+    }
+
+    private async Task FetchLatestFromHostAsync()
+    {
+        var ws = WorkspaceState.ActiveWorkspace;
+        if (ws == null) return;
+
+        _isFetching = true;
+        try
+        {
+            var mirrorPath = ws.Ext4MirrorPath ?? string.Empty;
+            var baseBranch = ws.DefaultBaseBranch ?? "main";
+
+            await MirrorSyncService.FetchFromHostAsync(mirrorPath, baseBranch);
+            GitSyncService.RecordFetch(ws.Id);
+            await RefreshDataAsync();
+            ToastService.Show("Fetch Complete", "Ext4 Mirror updated with latest host commits.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Fetch Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isFetching = false;
+        }
+    }
+
+    private void OpenReconcileDrawer() => _showReconcileDrawer = true;
+
+    private void CloseDrawer() => _showReconcileDrawer = false;
+
+    private async Task HandleDirtyAlertResolved()
+    {
+        _activeDirtyAlert = null;
+        _showReconcileDrawer = false;
+        await RefreshDataAsync();
+        ToastService.Show("Reconciliation Complete", "Host working tree synchronized.", ToastLevel.Success);
+    }
+
+    private async Task PruneStaleWorktreesAsync()
+    {
+        var ws = WorkspaceState.ActiveWorkspace;
+        if (ws == null) return;
+
+        _isPruning = true;
+        try
+        {
+            await GitSyncService.PruneWorktreesAsync(ws);
+            await RefreshDataAsync();
+            ToastService.Show("Prune Complete", "Stale and closed worktrees cleaned.", ToastLevel.Info);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Prune Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isPruning = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        HubConnection.OnHostDirtyAlertReceived -= HandleHostDirtyAlert;
+        HubConnection.OnGitProgressReceived -= HandleGitProgress;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+    }
+}
