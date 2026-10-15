@@ -1,0 +1,175 @@
+@namespace NightCodeForge.Web.Components.Settings
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Web.Services
+@inject IOllamaRouterGatewayService GatewayService
+@inject ToastService ToastService
+
+<div class="forge-card mt-3">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <div>
+            <div class="d-flex align-items-center gap-2">
+                <span style="font-size: 1.35rem;">🦙</span>
+                <h3 style="font-weight: 600; margin: 0;">OllamaRouter Gateway &amp; VRAM Inspector</h3>
+                @if (_status != null)
+                {
+                    <span class="forge-badge @(_status.IsConnected ? "badge-teal" : "badge-gray")">
+                        @(_status.IsConnected ? "🟢 Gateway Connected" : "🔴 Gateway Offline")
+                    </span>
+                    @if (_status.IsRouterProxy)
+                    {
+                        <span class="forge-badge badge-indigo">OllamaRouter Active</span>
+                    }
+                }
+            </div>
+            <p class="text-secondary mb-0" style="font-size: 0.85rem;">
+                Reverse proxy gateway status, target backends, resident GPU models, and non-destructive memory release.
+            </p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="http://localhost:11434/monitor" target="_blank" class="forge-btn forge-btn-outline" style="font-size: 0.85rem;">
+                ↗ Open Router Monitor
+            </a>
+            <button type="button" class="forge-btn forge-btn-outline" style="font-size: 0.85rem;" @onclick="RefreshAsync" disabled="_isLoading">
+                @(_isLoading ? "Refreshing..." : "🔄 Refresh")
+            </button>
+            <button type="button" class="forge-btn forge-btn-primary" style="font-size: 0.85rem;" @onclick="ReclaimVramAsync" disabled="_isReclaiming">
+                @(_isReclaiming ? "Reclaiming VRAM..." : "🧹 Reclaim GPU VRAM")
+            </button>
+        </div>
+    </div>
+
+    <!-- Target Backends Status -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem;" class="mb-4">
+        @if (_status?.Targets != null)
+        {
+            @foreach (var target in _status.Targets)
+            {
+                <div class="p-3 rounded" style="background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle);">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <strong>@target.TargetName</strong>
+                        <span class="forge-badge @(target.State == TargetBackendState.Active ? "badge-teal" : (target.State == TargetBackendState.Available ? "badge-indigo" : "badge-gray"))">
+                            @target.State
+                        </span>
+                    </div>
+                    <p class="text-secondary mb-0" style="font-size: 0.8rem;">@target.Description</p>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="p-3 rounded text-center text-muted" style="background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); grid-column: 1 / -1;">
+                Querying gateway targets...
+            </div>
+        }
+    </div>
+
+    <!-- Wire-Level Healing Strip -->
+    <div class="mb-4 p-2 rounded d-flex align-items-center justify-content-between" style="background: var(--bg-input); border: 1px solid var(--border-subtle); font-size: 0.8rem;">
+        <div class="d-flex align-items-center gap-2">
+            <span>🛡️</span>
+            <span><strong>Wire-Level Auto-Healing:</strong> OllamaRouter strips markdown code fences (<code>```json</code>), repairs malformed tool arguments, and auto-promotes <code>&lt;tool_call&gt;</code> pseudo-tags.</span>
+        </div>
+        <span class="forge-badge badge-teal">Active</span>
+    </div>
+
+    <!-- Resident VRAM Models Table (/api/ps) -->
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h4 style="font-size: 1rem; font-weight: 600; margin: 0;">Resident Models in GPU Memory (/api/ps)</h4>
+        <span class="text-secondary" style="font-size: 0.8rem;">
+            @(_residentModels.Count == 1 ? "1 model resident in VRAM" : $"{_residentModels.Count} models resident in VRAM")
+        </span>
+    </div>
+
+    <div class="table-responsive rounded border" style="border-color: var(--border-subtle);">
+        <table class="table-dark font-mono" style="width: 100%; font-size: 0.85rem; margin-bottom: 0;">
+            <thead>
+                <tr style="border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface-elevated);">
+                    <th class="p-2">Model</th>
+                    <th class="p-2">VRAM Footprint</th>
+                    <th class="p-2">Total Size</th>
+                    <th class="p-2">Expires At</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_residentModels.Count == 0)
+                {
+                    <tr>
+                        <td colspan="4" class="p-3 text-center text-muted">
+                            @(_status?.IsConnected == true ? "No models currently resident in GPU VRAM." : "Gateway unreachable at " + (_status?.BaseUrl ?? "http://localhost:11434"))
+                        </td>
+                    </tr>
+                }
+                else
+                {
+                    @foreach (var rm in _residentModels)
+                    {
+                        <tr style="border-bottom: 1px solid var(--border-subtle);">
+                            <td class="p-2"><strong>@rm.Name</strong></td>
+                            <td class="p-2 text-teal" style="color: var(--accent-teal, #10b981); font-weight: 600;">@rm.SizeVramFormatted</td>
+                            <td class="p-2">@rm.SizeTotalFormatted</td>
+                            <td class="p-2 text-muted">@rm.ExpiresAtFormatted</td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    private OllamaRouterStatus? _status;
+    private List<ResidentModelInfo> _residentModels = new();
+    private bool _isLoading;
+    private bool _isReclaiming;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            _status = await GatewayService.GetGatewayStatusAsync();
+            var models = await GatewayService.GetResidentModelsAsync();
+            _residentModels = models.ToList();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("OllamaRouter Query Error", ex.Message, ToastLevel.Warning);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task ReclaimVramAsync()
+    {
+        _isReclaiming = true;
+        try
+        {
+            var success = await GatewayService.ReclaimVramAsync();
+            if (success)
+            {
+                ToastService.Show("VRAM Reclaim Triggered", "Sent non-destructive memory reclaim command to OllamaRouter.", ToastLevel.Success);
+            }
+            else
+            {
+                ToastService.Show("VRAM Reclaim Notice", "Reclaim request completed (no active resident models to free or endpoint not reachable).", ToastLevel.Info);
+            }
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("VRAM Reclaim Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isReclaiming = false;
+        }
+    }
+}

@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Agents.Inference;
 
@@ -23,16 +24,19 @@ public class OllamaChatClient : IChatClient
     private readonly ILogger<OllamaChatClient> _logger;
 
     public ChatClientMetadata Metadata { get; }
+    public OllamaRoutingTarget RoutingTarget { get; set; } = OllamaRoutingTarget.Auto;
 
     public OllamaChatClient(
         HttpClient httpClient,
         string defaultModel = "qwen2.5-coder:7b",
         string? baseUrl = null,
-        ILogger<OllamaChatClient>? logger = null)
+        ILogger<OllamaChatClient>? logger = null,
+        OllamaRoutingTarget routingTarget = OllamaRoutingTarget.Auto)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _defaultModel = defaultModel;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<OllamaChatClient>.Instance;
+        RoutingTarget = routingTarget;
 
         var host = baseUrl ?? "http://localhost:11434";
         if (_httpClient.BaseAddress == null)
@@ -63,7 +67,28 @@ public class OllamaChatClient : IChatClient
             Options = options?.Temperature.HasValue == true ? new Dictionary<string, object> { ["temperature"] = options.Temperature.Value } : null
         };
 
-        var response = await _httpClient.PostAsJsonAsync("api/chat", payload, cancellationToken);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "api/chat")
+        {
+            Content = JsonContent.Create(payload)
+        };
+
+        var effectiveTarget = ResolveRoutingTarget(options);
+        if (effectiveTarget != OllamaRoutingTarget.Auto)
+        {
+            var targetStr = effectiveTarget switch
+            {
+                OllamaRoutingTarget.Local => "Local",
+                OllamaRoutingTarget.Remote => "Remote",
+                OllamaRoutingTarget.Cloud => "Cloud",
+                _ => null
+            };
+            if (targetStr != null)
+            {
+                request.Headers.Add("X-OllamaRouter-Target", targetStr);
+            }
+        }
+
+        var response = await _httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         string? targetRouting = null;
@@ -123,6 +148,22 @@ public class OllamaChatClient : IChatClient
         {
             Content = JsonContent.Create(payload)
         };
+
+        var effectiveTarget = ResolveRoutingTarget(options);
+        if (effectiveTarget != OllamaRoutingTarget.Auto)
+        {
+            var targetStr = effectiveTarget switch
+            {
+                OllamaRoutingTarget.Local => "Local",
+                OllamaRoutingTarget.Remote => "Remote",
+                OllamaRoutingTarget.Cloud => "Cloud",
+                _ => null
+            };
+            if (targetStr != null)
+            {
+                request.Headers.Add("X-OllamaRouter-Target", targetStr);
+            }
+        }
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -186,6 +227,23 @@ public class OllamaChatClient : IChatClient
     public object? GetService(Type serviceType, object? serviceKey = null)
     {
         return serviceType == typeof(HttpClient) ? _httpClient : null;
+    }
+
+    private OllamaRoutingTarget ResolveRoutingTarget(ChatOptions? options)
+    {
+        if (options?.AdditionalProperties != null)
+        {
+            if (options.AdditionalProperties.TryGetValue("X-OllamaRouter-Target", out var headerVal) && headerVal is string hStr && Enum.TryParse<OllamaRoutingTarget>(hStr, true, out var parsedH))
+            {
+                return parsedH;
+            }
+            if (options.AdditionalProperties.TryGetValue("routing_target", out var targetVal))
+            {
+                if (targetVal is OllamaRoutingTarget ort) return ort;
+                if (targetVal is string tStr && Enum.TryParse<OllamaRoutingTarget>(tStr, true, out var parsedT)) return parsedT;
+            }
+        }
+        return RoutingTarget;
     }
 
     public void Dispose()

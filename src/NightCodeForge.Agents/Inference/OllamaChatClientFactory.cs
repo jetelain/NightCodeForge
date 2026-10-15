@@ -12,7 +12,7 @@ namespace NightCodeForge.Agents.Inference;
 /// </summary>
 public static class OllamaChatClientFactory
 {
-    public static IChatClient CreateOllama(LlmProviderOptions options, string? modelId = null, ILogger? logger = null)
+    public static IChatClient CreateOllama(LlmProviderOptions options, string? modelId = null, ILogger? logger = null, OllamaRoutingTarget routingTarget = OllamaRoutingTarget.Auto)
     {
         var endpoint = string.IsNullOrWhiteSpace(options.Endpoint) ? "http://localhost:11434" : options.Endpoint;
         var timeoutMinutes = Math.Max(1, options.RequestTimeoutMinutes);
@@ -24,13 +24,29 @@ public static class OllamaChatClientFactory
             Timeout = TimeSpan.FromMinutes(timeoutMinutes)
         };
 
+        if (routingTarget != OllamaRoutingTarget.Auto)
+        {
+            var targetStr = routingTarget switch
+            {
+                OllamaRoutingTarget.Local => "Local",
+                OllamaRoutingTarget.Remote => "Remote",
+                OllamaRoutingTarget.Cloud => "Cloud",
+                _ => null
+            };
+            if (targetStr != null)
+            {
+                httpClient.DefaultRequestHeaders.Add("X-OllamaRouter-Target", targetStr);
+            }
+        }
+
         return new OllamaApiClient(httpClient, effectiveModel, null);
     }
 
     public static IChatClient CreateOllama(LlmProviderOptions options, AgentProfile? profile, ILogger? logger = null)
     {
         var model = !string.IsNullOrWhiteSpace(profile?.ModelName) ? profile.ModelName : options.ModelId;
-        return CreateOllama(options, model, logger);
+        var routingTarget = profile?.RoutingTarget ?? OllamaRoutingTarget.Auto;
+        return CreateOllama(options, model, logger, routingTarget);
     }
 
     public static ChatOptions CreateDefaultChatOptions(
@@ -81,14 +97,20 @@ public class DefaultOllamaChatClientFactory : IOllamaChatClientFactory
     {
         var defaultOpts = _options.Value;
         var effectiveModel = !string.IsNullOrWhiteSpace(modelId) ? modelId : defaultOpts.ModelId;
+        var cacheKey = $"{effectiveModel}:{OllamaRoutingTarget.Auto}";
 
-        return _clientCache.GetOrAdd(effectiveModel, model =>
-            OllamaChatClientFactory.CreateOllama(defaultOpts, model, _loggerFactory?.CreateLogger("OllamaApiClient")));
+        return _clientCache.GetOrAdd(cacheKey, _ =>
+            OllamaChatClientFactory.CreateOllama(defaultOpts, effectiveModel, _loggerFactory?.CreateLogger("OllamaApiClient"), OllamaRoutingTarget.Auto));
     }
 
     public IChatClient CreateClient(AgentProfile? profile)
     {
-        var model = !string.IsNullOrWhiteSpace(profile?.ModelName) ? profile.ModelName : null;
-        return CreateClient(model);
+        var defaultOpts = _options.Value;
+        var effectiveModel = !string.IsNullOrWhiteSpace(profile?.ModelName) ? profile.ModelName : defaultOpts.ModelId;
+        var routingTarget = profile?.RoutingTarget ?? OllamaRoutingTarget.Auto;
+        var cacheKey = $"{effectiveModel}:{routingTarget}";
+
+        return _clientCache.GetOrAdd(cacheKey, _ =>
+            OllamaChatClientFactory.CreateOllama(defaultOpts, effectiveModel, _loggerFactory?.CreateLogger("OllamaApiClient"), routingTarget));
     }
 }

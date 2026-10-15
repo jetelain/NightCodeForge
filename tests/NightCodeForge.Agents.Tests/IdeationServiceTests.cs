@@ -615,12 +615,12 @@ Let me know what you think!";
     [Fact]
     public void IdeationService_ExposesExplicitMaxTurnsConstants()
     {
-        Assert.Equal(100, IdeationService.DefaultMaxTurns);
-        Assert.Equal(100, AgentProfile.DefaultMaxTurns);
+        Assert.Equal(500, IdeationService.DefaultMaxTurns);
+        Assert.Equal(500, AgentProfile.DefaultMaxTurns);
         Assert.Equal(500, Crucible.CrucibleHarnessConfig.DefaultMaxTurns);
 
         var profile = AgentProfile.CreateDefaultIdeationProfile();
-        Assert.Equal(100, profile.MaxTurns);
+        Assert.Equal(300, profile.MaxTurns);
     }
 
     [Fact]

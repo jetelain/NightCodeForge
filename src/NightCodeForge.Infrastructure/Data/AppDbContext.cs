@@ -94,6 +94,7 @@ public class AppDbContext : DbContext
             b.Property(p => p.ThinkingEffort).HasConversion<int>();
             b.Property(p => p.Mode).HasConversion<int>();
             b.Property(p => p.SecurityTier).HasConversion<int>();
+            b.Property(p => p.RoutingTarget).HasConversion<int>().HasDefaultValue(OllamaRoutingTarget.Auto);
 
             b.Property(p => p.OptimizationFlags)
                 .HasConversion(optFlagsConverter)
@@ -227,6 +228,15 @@ public class AppDbContext : DbContext
                 ""Value"" TEXT NOT NULL,
                 ""UpdatedAt"" TEXT NOT NULL
             );", cancellationToken);
+
+            try
+            {
+                await Database.ExecuteSqlRawAsync(@"ALTER TABLE ""AgentProfiles"" ADD COLUMN ""RoutingTarget"" INTEGER NOT NULL DEFAULT 0;", cancellationToken);
+            }
+            catch
+            {
+                // Column already exists or table was just created
+            }
         }
     }
 

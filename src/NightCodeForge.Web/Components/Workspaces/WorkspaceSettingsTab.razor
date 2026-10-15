@@ -1,49 +1,143 @@
 @namespace NightCodeForge.Web.Components.Workspaces
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Core.Repositories
 @using NightCodeForge.Web.Services
 @inject WorkspaceStateService WorkspaceState
+@inject IWorkspaceRepository WorkspaceRepo
+@inject IWslMetadataService WslService
+@inject IGitMirrorSyncService MirrorSyncService
+@inject ToastService ToastService
 
-<div class="forge-card mt-4">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+<div class="forge-card mt-3">
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
         <div>
-            <h3 style="font-weight: 600; font-size: 1.1rem; margin: 0 0 0.25rem 0;">Workspace Onboarding &amp; Repositories</h3>
-            <p style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">Manage local repositories, branch targets, and execution confinement.</p>
+            <div class="d-flex align-items-center gap-2">
+                <span style="font-size: 1.25rem;">🏢</span>
+                <h3 style="font-weight: 600; margin: 0;">Repository &amp; Execution Confinement</h3>
+                <span class="forge-badge badge-indigo">Workspace Scoped</span>
+            </div>
+            <p class="text-secondary mb-0" style="font-size: 0.85rem;">
+                Configure repository paths, base branches, container execution confinement, timeouts, and Git Ext4 mirror synchronization.
+            </p>
         </div>
-        <button type="button" class="forge-btn forge-btn-primary" @onclick="LaunchWizard">
-            🧙 Launch Workspace Creation Wizard
-        </button>
+        <div class="d-flex gap-2">
+            <button type="button" class="forge-btn forge-btn-outline" @onclick="LaunchWizard">
+                🧙 Creation Wizard
+            </button>
+            <button type="button" class="forge-btn forge-btn-primary" @onclick="SaveWorkspaceAsync" disabled="_isSaving || WorkspaceState.ActiveWorkspace == null">
+                @(_isSaving ? "Saving..." : "💾 Save Workspace Settings")
+            </button>
+        </div>
     </div>
 
     @if (WorkspaceState.ActiveWorkspace != null)
     {
-        <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; margin-top: 1rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-                <strong style="font-size: 1rem; color: var(--text-primary);">@WorkspaceState.ActiveWorkspace.Name</strong>
-                <span class="forge-badge badge-teal">Active</span>
+        var ws = WorkspaceState.ActiveWorkspace;
+
+        <!-- Core Repository & Confinement Configuration -->
+        <div class="p-3 rounded mb-4" style="background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle);">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <strong style="font-size: 1.05rem;">@ws.Name</strong>
+                <span class="forge-badge badge-teal">ID: @ws.Id</span>
             </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; font-size: 0.85rem;">
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; font-size: 0.85rem;">
+                <!-- Host Repository Path (Read-Only) -->
                 <div>
-                    <span style="color: var(--text-muted); display: block;">Host Path</span>
-                    <span class="font-mono" style="color: var(--text-secondary); word-break: break-all;">@WorkspaceState.ActiveWorkspace.RepositoryPath</span>
+                    <label class="form-label text-secondary mb-1">Host Repository Path</label>
+                    <input type="text" class="forge-input font-mono" style="width: 100%;" value="@ws.RepositoryPath" readonly disabled />
+                </div>
+
+                <!-- Base Branch Target -->
+                <div>
+                    <label class="form-label text-secondary mb-1">Default Base Branch</label>
+                    <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="ws.DefaultBaseBranch" placeholder="e.g. main or master" />
+                </div>
+
+                <!-- Execution Mode -->
+                <div>
+                    <label class="form-label text-secondary mb-1">Execution Mode</label>
+                    <select class="forge-input" style="width: 100%;" @bind="ws.ExecutionMode">
+                        <option value="@ExecutionMode.BareHost">BareHost (Unrestricted Local Execution)</option>
+                        <option value="@ExecutionMode.WslDirect">WslDirect (Native Linux inside WSL2)</option>
+                        <option value="@ExecutionMode.ContainerSandbox">ContainerSandbox (Rootless Docker/Podman)</option>
+                    </select>
+                </div>
+
+                <!-- Container Image (Visible when ContainerSandbox) -->
+                <div>
+                    <label class="form-label text-secondary mb-1">Container Image</label>
+                    <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="ws.ContainerImage" placeholder="mcr.microsoft.com/dotnet/sdk:8.0" />
+                </div>
+
+                <!-- Build Timeout -->
+                <div>
+                    <label class="form-label text-secondary mb-1">Build Timeout (Seconds)</label>
+                    <input type="number" min="10" max="1800" step="15" class="forge-input font-mono" style="width: 100%;" @bind="ws.BuildTimeoutSeconds" />
+                </div>
+
+                <!-- Test Timeout -->
+                <div>
+                    <label class="form-label text-secondary mb-1">Test Timeout (Seconds)</label>
+                    <input type="number" min="10" max="3600" step="30" class="forge-input font-mono" style="width: 100%;" @bind="ws.TestTimeoutSeconds" />
+                </div>
+            </div>
+        </div>
+
+        <!-- WSL2 & Container Environment Status -->
+        <div class="p-3 rounded mb-4" style="background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle);">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <div class="d-flex align-items-center gap-2">
+                    <span>🐧</span>
+                    <strong>WSL2 Native Environment &amp; Toolchain</strong>
+                </div>
+                <button type="button" class="forge-btn forge-btn-ghost py-0 px-2" style="font-size: 0.75rem;" @onclick="ProbeWslAsync">
+                    🔄 Re-probe WSL2
+                </button>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; font-size: 0.85rem;" class="mt-2">
+                <div>
+                    <span class="text-secondary d-block">Default Distribution</span>
+                    <strong class="font-mono text-teal">@(_wslDistro ?? "Probing...")</strong>
                 </div>
                 <div>
-                    <span style="color: var(--text-muted); display: block;">Base Branch</span>
-                    <span class="font-mono" style="color: var(--text-secondary);">@WorkspaceState.ActiveWorkspace.DefaultBaseBranch</span>
+                    <span class="text-secondary d-block">Linux User</span>
+                    <strong class="font-mono">@(_wslUser ?? "Probing...")</strong>
                 </div>
                 <div>
-                    <span style="color: var(--text-muted); display: block;">Execution Mode</span>
-                    <span style="color: var(--text-secondary);">@WorkspaceState.ActiveWorkspace.ExecutionMode</span>
+                    <span class="text-secondary d-block">WSL Container Runtime</span>
+                    <label class="d-flex align-items-center gap-2 mt-1 cursor-pointer">
+                        <input type="checkbox" @bind="ws.UseWslForContainers" /> Use WSL2 For Containers
+                    </label>
                 </div>
-                <div>
-                    <span style="color: var(--text-muted); display: block;">Ext4 Mirror Path</span>
-                    <span class="font-mono" style="color: var(--text-secondary); word-break: break-all;">@(WorkspaceState.ActiveWorkspace.Ext4MirrorPath ?? "Default Ext4 Mirror")</span>
+            </div>
+        </div>
+
+        <!-- Git Ext4 Mirror Status & Sync -->
+        <div class="p-3 rounded" style="background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle);">
+            <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                <div class="d-flex align-items-center gap-2">
+                    <span>🪞</span>
+                    <strong>Git Ext4 Mirror Synchronization</strong>
+                    <span class="forge-badge badge-teal">updateInstead Active</span>
                 </div>
+                <button type="button" class="forge-btn forge-btn-primary py-1 px-3" style="font-size: 0.8rem;" @onclick="SyncMirrorAsync" disabled="_isSyncing">
+                    @(_isSyncing ? "Syncing Mirror..." : "🔄 Sync Ext4 Mirror Now")
+                </button>
+            </div>
+            <p class="text-secondary mb-2" style="font-size: 0.85rem;">
+                Isolated Linux Ext4 filesystem mirror preventing Windows NTFS lock contention and enabling lightning-fast container I/O.
+            </p>
+            <div class="font-mono p-2 rounded" style="background: var(--bg-input); font-size: 0.8rem; border: 1px solid var(--border-subtle); word-break: break-all;">
+                @(ws.Ext4MirrorPath ?? "Standard Ext4 Clone Mirror (auto-provisioned)")
             </div>
         </div>
     }
     else
     {
-        <div style="padding: 1.5rem; text-align: center; border: 1px dashed var(--border-subtle); border-radius: var(--radius-md); margin-top: 1rem;">
-            <p style="color: var(--text-secondary); margin-bottom: 1rem;">No active workspace selected.</p>
+        <div class="p-4 text-center border-dashed rounded" style="border: 1px dashed var(--border-subtle);">
+            <p class="text-secondary mb-2">No active workspace selected.</p>
             <button type="button" class="forge-btn forge-btn-outline" @onclick="LaunchWizard">
                 ➕ Onboard New Repository
             </button>
@@ -52,6 +146,92 @@
 </div>
 
 @code {
+    private bool _isSaving;
+    private bool _isSyncing;
+    private string? _wslDistro;
+    private string? _wslUser;
+
+    protected override void OnInitialized()
+    {
+        ProbeWsl();
+    }
+
+    private void ProbeWsl()
+    {
+        try
+        {
+            _wslDistro = WslService.GetDefaultDistributionName();
+            _wslUser = WslService.GetDefaultUserName();
+        }
+        catch (Exception)
+        {
+            _wslDistro = "Not Available";
+            _wslUser = "N/A";
+        }
+    }
+
+    private void ProbeWslAsync()
+    {
+        try
+        {
+            WslService.ClearCache();
+            ProbeWsl();
+            ToastService.Show("WSL2 Probed", $"Active distribution: {_wslDistro}", ToastLevel.Info);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("WSL2 Probe Error", ex.Message, ToastLevel.Warning);
+        }
+    }
+
+    private async Task SaveWorkspaceAsync()
+    {
+        if (WorkspaceState.ActiveWorkspace == null || _isSaving) return;
+        _isSaving = true;
+
+        try
+        {
+            await WorkspaceRepo.UpdateAsync(WorkspaceState.ActiveWorkspace);
+            ToastService.Show("Workspace Settings Saved", "Repository execution confinement parameters updated.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Error Saving Settings", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task SyncMirrorAsync()
+    {
+        if (WorkspaceState.ActiveWorkspace == null || _isSyncing) return;
+        _isSyncing = true;
+
+        try
+        {
+            var ws = WorkspaceState.ActiveWorkspace;
+            if (!string.IsNullOrWhiteSpace(ws.Ext4MirrorPath))
+            {
+                await MirrorSyncService.FetchFromHostAsync(ws.Ext4MirrorPath, ws.DefaultBaseBranch);
+                ToastService.Show("Git Mirror Synced", "Ext4 mirror successfully updated from host repository.", ToastLevel.Success);
+            }
+            else
+            {
+                ToastService.Show("No Mirror Path", "This workspace does not have an isolated Ext4 mirror path configured.", ToastLevel.Info);
+            }
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Mirror Sync Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSyncing = false;
+        }
+    }
+
     private void LaunchWizard()
     {
         WorkspaceState.RequestOpenWizard();

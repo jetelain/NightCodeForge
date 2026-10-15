@@ -2,7 +2,7 @@
 
 > **Phase 5 Implementation Step**  
 > *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.7: Review Room & Merge Gates](STEP_5_7_REVIEW_ROOM_AND_MERGE_GATES.md) | *Next Step:* [Step 5.9: Transcripts & AI Diagnostics](STEP_5_9_TRANSCRIPTS_AND_AI_DIAGNOSTICS.md)  
-> *Project Target:* `src/NightCodeForge.Web/Components/Settings`, `Components/Workspaces/WorkspaceSettingsTab.razor` & `Pages/Settings.razor` | *Status:* Redesign Specified (Pending Implementation)
+> *Project Target:* `src/NightCodeForge.Web/Components/Settings`, `Components/Workspaces/WorkspaceSettingsTab.razor` & `Pages/Settings.razor` | *Status:* Completed & Fully Tested
 
 ---
 
@@ -986,15 +986,15 @@ Upgraded from a static status card into an **interactive repository & execution 
 - [x] Unit tests for global optimization settings persistence (`GlobalOptimizationSettingsServiceTests`).
 
 ### 6.2 Redesign & Refinement (Pending Implementation)
-- [ ] Top-level Scope Switcher in `Pages/Settings.razor` establishing a clear visual and architectural boundary between **Global System Settings** and **Workspace Settings**.
-- [ ] Dual-scope Agent Profile Editor (`AgentProfilesTab.razor`) supporting configuration at both **Global Scope** (`WorkspaceId == null`) and **Workspace Scope** (`WorkspaceId == ActiveWorkspace.Id`).
-- [ ] Workspace Profile dynamic inheritance fallback and one-click detachment ("Create Dedicated Profiles") / revert ("Revert to Global Profiles").
-- [ ] Deep **OllamaRouter gateway awareness** in Settings: target availability cards (Local/Remote/Cloud), resident VRAM inspector (`/api/ps`), non-destructive memory reclaim, and `/monitor` launcher.
-- [ ] Per-profile **OllamaRouter Target Pinning** (`X-OllamaRouter-Target: Auto/Local/Remote/Cloud`), strictly pinning Stage 0 Untrusted Triage to `Local`.
-- [ ] Very generous default turn budgets (**500 turns**) ensuring full agent autonomy without premature stalls.
-- [ ] Fix `CrucibleAgentHarness.MaxTurns` precedence bug so `profile.MaxTurns` takes absolute precedence over default harness limits.
-- [ ] Complete 12-parameter optimization override matrix at profile level (8 boolean flags + 4 sliding-window numeric controls).
-- [ ] Native Ollama model dropdown selector populated dynamically via `IOllamaModelCatalogService.GetAvailableModelsAsync()` (`/api/tags`) with model size, connection indicator, and live refresh.
-- [ ] Full parameter configurability for profiles: `ThinkingTokenBudget`, `SecurityTier`, `Mode`, and `SystemPrompt`.
-- [ ] Upgraded interactive `WorkspaceSettingsTab.razor` allowing live edits to ExecutionMode, ContainerImage, BaseBranch, Timeouts, and Ext4 mirror sync.
-- [ ] Unit and component tests in `tests/NightCodeForge.Web.Tests` verifying scope switching, inheritance, OllamaRouter integration, and `MaxTurns` resolution.
+- [x] Top-level Scope Switcher in `Pages/Settings.razor` establishing a clear visual and architectural boundary between **Global System Settings** and **Workspace Settings**.
+- [x] Dual-scope Agent Profile Editor (`AgentProfilesTab.razor`) supporting configuration at both **Global Scope** (`WorkspaceId == null`) and **Workspace Scope** (`WorkspaceId == ActiveWorkspace.Id`).
+- [x] Workspace Profile dynamic inheritance fallback and one-click detachment ("Create Dedicated Profiles") / revert ("Revert to Global Profiles").
+- [x] Deep **OllamaRouter gateway awareness** in Settings: target availability cards (Local/Remote/Cloud), resident VRAM inspector (`/api/ps`), non-destructive memory reclaim, and `/monitor` launcher.
+- [x] Per-profile **OllamaRouter Target Pinning** (`X-OllamaRouter-Target: Auto/Local/Remote/Cloud`), strictly pinning Stage 0 Untrusted Triage to `Local`.
+- [x] Very generous default turn budgets (**500 turns**) ensuring full agent autonomy without premature stalls.
+- [x] Fix `CrucibleAgentHarness.MaxTurns` precedence bug so `profile.MaxTurns` takes absolute precedence over default harness limits.
+- [x] Complete 12-parameter optimization override matrix at profile level (8 boolean flags + 4 sliding-window numeric controls).
+- [x] Native Ollama model dropdown selector populated dynamically via `IOllamaModelCatalogService.GetAvailableModelsAsync()` (`/api/tags`) with model size, connection indicator, and live refresh.
+- [x] Full parameter configurability for profiles: `ThinkingTokenBudget`, `SecurityTier`, `Mode`, and `SystemPrompt`.
+- [x] Upgraded interactive `WorkspaceSettingsTab.razor` allowing live edits to ExecutionMode, ContainerImage, BaseBranch, Timeouts, and Ext4 mirror sync.
+- [x] Unit and component tests in `tests/NightCodeForge.Web.Tests` verifying scope switching, inheritance, OllamaRouter integration, and `MaxTurns` resolution.

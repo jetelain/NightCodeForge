@@ -1,14 +1,26 @@
 namespace NightCodeForge.Core.Domain;
 
 /// <summary>
+/// Target pinning policy for OllamaRouter reverse proxy dispatch backends.
+/// Propagated as X-OllamaRouter-Target HTTP request header.
+/// </summary>
+public enum OllamaRoutingTarget
+{
+    Auto = 0,
+    Local = 1,
+    Remote = 2,
+    Cloud = 3
+}
+
+/// <summary>
 /// Configuration profile specifying model, reasoning parameters, harness, and permissions for an agent.
 /// </summary>
 public class AgentProfile
 {    
     /// <summary>
-    /// Default maximum turn budget for autonomous agent deliberation and tool invocation.
+    /// Generous default turn budget ensuring full agent autonomy without premature stalls.
     /// </summary>
-    public const int DefaultMaxTurns = 100;
+    public const int DefaultMaxTurns = 500;
 
     public string Id { get; set; } = string.Empty;
     public int? WorkspaceId { get; set; }
@@ -25,7 +37,12 @@ public class AgentProfile
     public AgentMode Mode { get; set; } = AgentMode.Full;
     public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard;
     public string? SystemPrompt { get; set; }
-    public int? MaxTurns { get; set; }
+    public int? MaxTurns { get; set; } = DefaultMaxTurns;
+
+    /// <summary>
+    /// OllamaRouter target pinning policy (propagated as X-OllamaRouter-Target header).
+    /// </summary>
+    public OllamaRoutingTarget RoutingTarget { get; set; } = OllamaRoutingTarget.Auto;
 
     public Workspace? Workspace { get; set; }
 
@@ -43,13 +60,14 @@ public class AgentProfile
         Mode = AgentMode.ReadOnly,
         PermittedTools = DefaultAgentTools.ReadOnly,
         OptimizationFlags = null,
+        RoutingTarget = OllamaRoutingTarget.Auto,
         SystemPrompt = @"You are the NightCodeForge Ideation & Codebase Discovery Agent.
 Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.
 Each proposed task represents a full Pull Request / Merge Request unit of work with autonomous build, test, and code review gates.
 Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with sub-tasks and open questions to be answered in the task review process.",
         Temperature = 1,
         ThinkingEffort = ThinkingEffort.Medium,
-        MaxTurns = DefaultMaxTurns
+        MaxTurns = 300
     };
 
     /// <summary>
@@ -67,10 +85,12 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
             ModelName = defaultModelName,
             Mode = AgentMode.ReadOnly,
             SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
+            RoutingTarget = OllamaRoutingTarget.Local, // Pinned strictly to local GPU to prevent data leaks
             PermittedTools = DefaultAgentTools.ReadOnly,
             OptimizationFlags = null,
             Temperature = 1.0,
-            ThinkingEffort = ThinkingEffort.Medium
+            ThinkingEffort = ThinkingEffort.Medium,
+            MaxTurns = 250
         },
         CreateDefaultIdeationProfile(null, defaultModelName),
         new()
@@ -82,10 +102,12 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
             ModelName = defaultModelName,
             Mode = AgentMode.Full,
             SecurityTier = SandboxSecurityTier.Standard,
+            RoutingTarget = OllamaRoutingTarget.Auto,
             PermittedTools = DefaultAgentTools.Full,
             OptimizationFlags = null,
             Temperature = 1.0,
-            ThinkingEffort = ThinkingEffort.High
+            ThinkingEffort = ThinkingEffort.High,
+            MaxTurns = 500
         },
         new()
         {
@@ -96,10 +118,12 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
             ModelName = defaultModelName,
             Mode = AgentMode.Full,
             SecurityTier = SandboxSecurityTier.Standard,
+            RoutingTarget = OllamaRoutingTarget.Auto,
             PermittedTools = DefaultAgentTools.Full,
             OptimizationFlags = null,
             Temperature = 1.0,
-            ThinkingEffort = ThinkingEffort.Medium
+            ThinkingEffort = ThinkingEffort.Medium,
+            MaxTurns = 500
         },
         new()
         {
@@ -110,10 +134,12 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
             ModelName = defaultModelName,
             Mode = AgentMode.Review,
             SecurityTier = SandboxSecurityTier.Standard,
+            RoutingTarget = OllamaRoutingTarget.Auto,
             PermittedTools = DefaultAgentTools.Review,
             OptimizationFlags = null,
             Temperature = 1.0,
-            ThinkingEffort = ThinkingEffort.Medium
+            ThinkingEffort = ThinkingEffort.Medium,
+            MaxTurns = 300
         }
     };
 }

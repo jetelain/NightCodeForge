@@ -60,6 +60,7 @@ public static class ServiceCollectionExtensions
         // 7. OllamaRouter Services
         services.AddHttpClient<IOllamaModelCatalogService, Inference.OllamaModelCatalogService>();
         services.AddHttpClient<IOllamaModelPreloadService, Inference.OllamaModelPreloadService>();
+        services.AddHttpClient<IOllamaRouterGatewayService, Inference.OllamaRouterGatewayService>();
 
         // 8. Markdown ForgeTask Mirroring
         services.TryAddScoped<ITaskMarkdownSyncService, TaskMarkdownSyncService>();

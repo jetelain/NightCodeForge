@@ -298,11 +298,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var activeClient = new LenientToolCallChatClient(compactedClient);
 
         // 10. Main Agentic Reasoning Loop with HarnessAgent & Real-Time Streaming
-        int maxTurns = harnessConfig.MaxTurns > 0
-            ? harnessConfig.MaxTurns
-            : (context.Profile.MaxTurns.HasValue && context.Profile.MaxTurns.Value > 0
-                ? context.Profile.MaxTurns.Value
-                : CrucibleHarnessConfig.DefaultMaxTurns);
+        int maxTurns = ResolveMaxTurns(harnessConfig, context.Profile);
 
         var aiTools = BuildAIFunctionList(canonicalTools, permittedTools, dispatcher, harnessConfig.CustomTools, harnessConfig.ToolDirectives);
 
@@ -951,6 +947,20 @@ public partial class CrucibleAgentHarness : IAgentHarness
     public static void CompactOlderToolResults(IList<ChatMessage> messages, int? keepVerbatimCount = null, LocalOptimizationFlags? flags = null)
     {
         ToolResultCompactor.Compact(messages, flags, keepVerbatimCount);
+    }
+
+    /// <summary>
+    /// Resolves the maximum iterations per request, giving absolute precedence to profile.MaxTurns
+    /// over harnessConfig.MaxTurns to avoid premature agent stalls.
+    /// </summary>
+    public static int ResolveMaxTurns(CrucibleHarnessConfig harnessConfig, AgentProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(harnessConfig);
+        ArgumentNullException.ThrowIfNull(profile);
+
+        return (profile.MaxTurns.HasValue && profile.MaxTurns.Value > 0)
+            ? profile.MaxTurns.Value
+            : (harnessConfig.MaxTurns > 0 ? harnessConfig.MaxTurns : CrucibleHarnessConfig.DefaultMaxTurns);
     }
 
     private record SerializedMessageItem(
