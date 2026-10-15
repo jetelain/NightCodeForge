@@ -1,0 +1,216 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@implements IDisposable
+@inject WorkerStateService WorkerState
+@inject WorkspaceStateService WorkspaceState
+
+<div class="worker-card card-surface" id="worker-telemetry-card">
+    <div class="worker-card-header">
+        <div class="worker-card-title-group">
+            <span style="font-size: 1.5rem;">⚡</span>
+            <div>
+                <div class="worker-card-title">Engine Worker &amp; Hardware Telemetry</div>
+                <div style="font-size: 0.78rem; color: var(--text-secondary);">
+                    Workspace: <strong style="color: var(--text-primary);">@(WorkspaceState.ActiveWorkspace?.Name ?? "Global / All Workspaces")</strong>
+                </div>
+            </div>
+        </div>
+        <div class="worker-status-pill @GetStatusClass()">
+            @switch (CurrentSnapshot.Status)
+            {
+                case WorkerExecutionStatus.Running:
+                    <span class="spinner-pulse" style="width: 10px; height: 10px; border-width: 1.5px; border-top-color: #34d399;"></span>
+                    <span>RUNNING</span>
+                    break;
+                case WorkerExecutionStatus.WaitingForHuman:
+                    <span>✋ WAITING FOR HUMAN</span>
+                    break;
+                case WorkerExecutionStatus.Blocked:
+                    <span>⛔ BLOCKED</span>
+                    break;
+                default:
+                    <span>● IDLE</span>
+                    break;
+            }
+        </div>
+    </div>
+
+    @if (CurrentSnapshot.PendingQuestionCount > 0)
+    {
+        <div style="background: rgba(245, 158, 11, 0.15); border: 1px solid var(--accent-amber); border-radius: var(--radius-md); padding: 0.65rem 1rem; margin-bottom: 1.25rem; display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 0.6rem; color: #fde68a; font-size: 0.85rem; font-weight: 500;">
+                <span>✋</span>
+                <span>Worker paused: @CurrentSnapshot.PendingQuestionCount pending question@(CurrentSnapshot.PendingQuestionCount > 1 ? "s" : "") awaiting developer input.</span>
+            </div>
+            <a href="/inbox" class="forge-btn forge-btn-secondary" style="padding: 0.3rem 0.75rem; font-size: 0.78rem; border-color: var(--accent-amber); color: #fde68a;">
+                Open Inbox →
+            </a>
+        </div>
+    }
+
+    <div class="worker-grid">
+        <!-- Active Task & Branch -->
+        <div class="worker-metric-group">
+            <div class="worker-metric-label">Active Task &amp; Scope</div>
+            <div class="worker-metric-value">
+                @if (CurrentSnapshot.ActiveTaskId.HasValue)
+                {
+                    <span class="card-id font-mono" style="color: var(--accent-indigo);">#@CurrentSnapshot.ActiveTaskId.Value</span>
+                    <span style="font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        @(CurrentSnapshot.ActiveTaskTitle ?? "In progress")
+                    </span>
+                }
+                else
+                {
+                    <span style="color: var(--text-muted); font-size: 0.88rem;">No active task running</span>
+                }
+            </div>
+            @if (!string.IsNullOrEmpty(CurrentSnapshot.BranchName))
+            {
+                <div style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono); display: flex; align-items: center; gap: 0.35rem;">
+                    <span>🌿</span>
+                    <span>@CurrentSnapshot.BranchName</span>
+                </div>
+            }
+        </div>
+
+        <!-- Execution Stopwatch -->
+        <div class="worker-metric-group">
+            <div class="worker-metric-label">Elapsed Execution</div>
+            <div class="worker-stopwatch" id="worker-stopwatch-display">
+                @GetElapsedDisplay()
+            </div>
+            <div style="font-size: 0.74rem; color: var(--text-muted);">
+                Stage: <strong style="color: var(--text-secondary);">@(CurrentSnapshot.StageId ?? "Standby")</strong>
+            </div>
+        </div>
+
+        <!-- Hardware & Routing Target -->
+        <div class="worker-metric-group">
+            <div class="worker-metric-label">Hardware Target &amp; Gauge</div>
+            <div class="worker-metric-value" style="font-size: 0.88rem;">
+                <span style="color: var(--accent-teal);">🖥️ @CurrentSnapshot.HardwareTarget</span>
+            </div>
+            <div class="hardware-gauge-meter">
+                <div class="hardware-gauge-fill @GetGaugeFillClass()" style="width: @GetGaugePercentage()%;"></div>
+            </div>
+            <div style="font-size: 0.72rem; color: var(--text-muted); display: flex; justify-content: space-between; margin-top: 0.15rem;">
+                <span>@(IsGpuActive() ? "GPU Inference Active" : (IsDeterministicActive() ? "Deterministic CPU (0 GPU)" : "Engine Standby"))</span>
+                <span class="font-mono">@GetGaugePercentage()%</span>
+            </div>
+        </div>
+
+        <!-- Harness & LLM Model -->
+        <div class="worker-metric-group">
+            <div class="worker-metric-label">Harness &amp; Model</div>
+            <div class="worker-metric-value" style="font-size: 0.88rem; flex-wrap: wrap;">
+                <span class="step-badge badge-gpu" style="font-size: 0.72rem;">@CurrentSnapshot.Harness</span>
+                <span class="font-mono" style="font-size: 0.8rem; color: #a5b4fc;">@CurrentSnapshot.Model</span>
+            </div>
+            <div style="font-size: 0.72rem; color: var(--text-muted);">
+                Context: Local Ollama / Crucible VFS
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public WorkerStatusSnapshot? SnapshotOverride { get; set; }
+
+    private WorkerStatusSnapshot CurrentSnapshot => SnapshotOverride ?? WorkerState.Current;
+    private System.Threading.Timer? _stopwatchTimer;
+
+    protected override void OnInitialized()
+    {
+        WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceStateChanged;
+        StartStopwatchTimer();
+    }
+
+    private void HandleWorkerStateChanged()
+    {
+        InvokeAsync(() =>
+        {
+            StartStopwatchTimer();
+            StateHasChanged();
+        });
+    }
+
+    private void HandleWorkspaceStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void StartStopwatchTimer()
+    {
+        if (CurrentSnapshot.Status == WorkerExecutionStatus.Running && _stopwatchTimer == null)
+        {
+            _stopwatchTimer = new System.Threading.Timer(_ =>
+            {
+                InvokeAsync(StateHasChanged);
+            }, null, 1000, 1000);
+        }
+        else if (CurrentSnapshot.Status != WorkerExecutionStatus.Running && _stopwatchTimer != null)
+        {
+            _stopwatchTimer.Dispose();
+            _stopwatchTimer = null;
+        }
+    }
+
+    private string GetStatusClass() => CurrentSnapshot.Status switch
+    {
+        WorkerExecutionStatus.Running => "status-running",
+        WorkerExecutionStatus.WaitingForHuman => "status-waiting",
+        WorkerExecutionStatus.Blocked => "status-blocked",
+        _ => "status-idle"
+    };
+
+    private string GetElapsedDisplay()
+    {
+        if (CurrentSnapshot.Status != WorkerExecutionStatus.Running || !CurrentSnapshot.StartedAt.HasValue)
+        {
+            return "00:00:00";
+        }
+        var elapsed = DateTime.UtcNow - CurrentSnapshot.StartedAt.Value;
+        if (elapsed < TimeSpan.Zero) elapsed = TimeSpan.Zero;
+        return elapsed.ToString(@"hh\:mm\:ss");
+    }
+
+    private bool IsGpuActive()
+    {
+        if (CurrentSnapshot.Status != WorkerExecutionStatus.Running) return false;
+        var kind = CurrentSnapshot.StageKind?.ToLowerInvariant() ?? "";
+        if (kind.Contains("deterministic")) return false;
+        if (kind.Contains("agentic")) return true;
+
+        var stageId = CurrentSnapshot.StageId?.ToLowerInvariant() ?? "";
+        if (stageId.Contains("preimpl") || stageId.Contains("postimpl") || stageId.Contains("postreview") || stageId.Contains("gate")) return false;
+        return stageId.Contains("taskreview") || stageId.Contains("implement") || stageId.Contains("codereview");
+    }
+
+    private bool IsDeterministicActive()
+    {
+        if (CurrentSnapshot.Status != WorkerExecutionStatus.Running) return false;
+        return !IsGpuActive();
+    }
+
+    private string GetGaugeFillClass()
+    {
+        if (IsGpuActive()) return "gpu";
+        if (IsDeterministicActive()) return "cpu";
+        return "idle";
+    }
+
+    private int GetGaugePercentage()
+    {
+        if (CurrentSnapshot.Status != WorkerExecutionStatus.Running) return 0;
+        return IsGpuActive() ? 85 : 45;
+    }
+
+    public void Dispose()
+    {
+        WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceStateChanged;
+        _stopwatchTimer?.Dispose();
+        _stopwatchTimer = null;
+    }
+}

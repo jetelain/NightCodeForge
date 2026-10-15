@@ -1,0 +1,118 @@
+using Bunit;
+using Microsoft.Extensions.DependencyInjection;
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Repositories;
+using NightCodeForge.Web.Components.Pages;
+using NightCodeForge.Web.Services;
+using Xunit;
+
+namespace NightCodeForge.Web.Tests;
+
+public class MonitoringPageTests : BunitContext
+{
+    private readonly WorkerStateService _workerState;
+    private readonly WorkspaceStateService _workspaceState;
+    private readonly InMemoryTaskRepository _taskRepository;
+    private readonly OrchestratorHubClientConnection _hubConnection;
+
+    public MonitoringPageTests()
+    {
+        JSInterop.Mode = JSRuntimeMode.Loose;
+
+        _workerState = new WorkerStateService();
+        _workspaceState = new WorkspaceStateService();
+        _taskRepository = new InMemoryTaskRepository();
+        _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+
+        Services.AddSingleton(_workerState);
+        Services.AddSingleton(_workspaceState);
+        Services.AddSingleton<ITaskRepository>(_taskRepository);
+        Services.AddSingleton(_hubConnection);
+    }
+
+    [Fact]
+    public void MonitoringPage_RendersHeaderAndAllTelemetryComponents()
+    {
+        var cut = Render<Monitoring>();
+
+        // Header and title
+        Assert.Contains("Live Telemetry & Monitoring Console", cut.Find("h1").TextContent);
+        Assert.NotNull(cut.Find("#signalr-connection-badge"));
+
+        // All 5 core components
+        Assert.NotNull(cut.Find("#worker-telemetry-card"));
+        Assert.NotNull(cut.Find(".pipeline-stepper-container"));
+        Assert.NotNull(cut.Find("#tool-activity-strip"));
+        Assert.NotNull(cut.Find("#thinking-accordion"));
+        Assert.NotNull(cut.Find("#terminal-console-container"));
+    }
+
+    [Fact]
+    public void MonitoringPage_WhenSignalRStageTransitionTriggered_UpdatesStepperAndLogs()
+    {
+        var cut = Render<Monitoring>();
+
+        // Simulate SignalR event
+        _hubConnection.TriggerStageTransition(15, "ImplementationStage", "Agentic", "Running");
+
+        // Stepper reflects running stage 3
+        var stage3 = cut.Find("#stage-step-3");
+        Assert.Contains("step-active", stage3.ClassName);
+
+        // Terminal console has log
+        var terminalLogs = cut.FindAll(".log-line");
+        Assert.Contains(terminalLogs, l => l.TextContent.Contains("Stage transition: ImplementationStage"));
+    }
+
+    [Fact]
+    public void MonitoringPage_WhenSignalRDeterministicGateResultTriggered_UpdatesStepperWithMetrics()
+    {
+        var cut = Render<Monitoring>();
+
+        _hubConnection.TriggerDeterministicGateResult(15, "CoverageGate", true, "+1.4% Coverage");
+
+        var stage4 = cut.Find("#stage-step-4");
+        Assert.Contains("step-completed", stage4.ClassName);
+        Assert.Contains("+1.4% Coverage", stage4.TextContent);
+    }
+
+    [Fact]
+    public void MonitoringPage_WhenSignalRToolExecutionTriggered_UpdatesToolActivityStripAndTerminal()
+    {
+        var cut = Render<Monitoring>();
+
+        _hubConnection.TriggerToolExecution(15, "bash", "dotnet build", "Running", null);
+
+        var toolPills = cut.FindAll(".tool-call-pill");
+        Assert.Single(toolPills);
+        Assert.Contains("bash", toolPills[0].TextContent);
+
+        _hubConnection.TriggerToolExecution(15, "bash", "dotnet build", "Completed", 1200);
+
+        toolPills = cut.FindAll(".tool-call-pill");
+        Assert.Contains("1.20s", toolPills[0].TextContent);
+    }
+
+    [Fact]
+    public void MonitoringPage_WhenSignalRThinkingDeltaTriggered_StreamsReasoningTokens()
+    {
+        var cut = Render<Monitoring>();
+
+        _hubConnection.TriggerTokenDelta(15, "Formulating ", true);
+        _hubConnection.TriggerTokenDelta(15, "hypothesis...", true);
+
+        var thinkContent = cut.Find("#think-accordion-content-body");
+        Assert.Contains("Formulating hypothesis...", thinkContent.TextContent);
+    }
+
+    [Fact]
+    public void MonitoringPage_WhenSignalRExecutionLogTriggered_AppendsLogToTerminal()
+    {
+        var cut = Render<Monitoring>();
+
+        _hubConnection.TriggerExecutionLog(15, "Implementation", "Warning", "High memory usage detected", DateTime.UtcNow);
+
+        var terminalLogs = cut.FindAll(".log-line");
+        Assert.Contains(terminalLogs, l => l.TextContent.Contains("High memory usage detected"));
+    }
+}

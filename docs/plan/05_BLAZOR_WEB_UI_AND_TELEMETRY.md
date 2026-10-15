@@ -102,8 +102,8 @@ To ensure thorough, battle-tested execution without ambiguity, Phase 5 is decomp
 - [x] **Step 5.1b:** `WorkspaceCreationWizardModal.razor` multi-step onboarding wizard, `IWorkspaceProvisioningService` (probe, git init, Ext4 clone, default profiles), TopNavBar `[+]` button, and first-run empty state hero.
 - [x] **Step 5.2:** `IOrchestratorHubClient`, `OrchestratorHub`, `SignalRActivityBridgeService`, and client-side `OrchestratorHubClientConnection` implemented and wired to DI.
 - [x] **Step 5.3:** `Ideation.razor` conversing with `IIdeationService` in real time, proposing tasks with editable fields, and saving to SQLite as `Suggested`.
-- [ ] **Step 5.4:** `Backlog.razor` rendering Kanban columns and SVG DAG graph, with Maintainer Promotion modal (`Suggested` $\rightarrow$ `Open`/`Rejected`) and cycle prevention.
-- [ ] **Step 5.5:** `Monitoring.razor` displaying active worker state, 7-step pipeline (GPU vs CPU), and live terminal stream.
+- [x] **Step 5.4:** `Backlog.razor` rendering Kanban columns and SVG DAG graph, with Maintainer Promotion modal (`Suggested` $\rightarrow$ `Open`/`Rejected`) and cycle prevention.
+- [x] **Step 5.5:** `Monitoring.razor` displaying active worker state, 7-step pipeline (GPU vs CPU), and live terminal stream.
 - [ ] **Step 5.6:** `Inbox.razor` displaying pending questions, accepting answers, and resuming via `llm-urgent` without mutating task status.
 - [ ] **Step 5.7:** `Review.razor` rendering side-by-side diffs via `DiffPlex`, displaying quality gate cards, and executing auto-merge or approve/request-changes.
 - [x] **Step 5.8:** `Settings.razor` displaying workspace execution sandboxes, probed host SDK paths, agent profile optimization toggles, global LLM tuning flags, and A/B test metrics.

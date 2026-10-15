@@ -1,0 +1,173 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+
+<div class="pipeline-stepper-container card-surface">
+    <div class="pipeline-stepper">
+        @foreach (var stage in Stages)
+        {
+            <div class="step-item @GetStepClass(stage)" id="stage-step-@stage.Order">
+                <div class="step-header">
+                    <span class="step-badge @(stage.IsAgentic ? "badge-gpu" : (stage.Order == 7 ? "badge-gate" : "badge-cpu"))">
+                        @(stage.IsAgentic ? "⚡ GPU" : (stage.Order == 7 ? "🔀 Gate" : "⚙️ CPU"))
+                    </span>
+                    <span class="step-index">#@stage.Order</span>
+                </div>
+                <div class="step-icon-circle">
+                    @if (stage.Status == "Running")
+                    {
+                        <div class="spinner-pulse"></div>
+                    }
+                    else if (stage.Status == "Completed" || stage.Status == "Passed")
+                    {
+                        <span>✓</span>
+                    }
+                    else if (stage.Status == "Failed")
+                    {
+                        <span>✕</span>
+                    }
+                    else if (stage.Status == "WaitingForHuman")
+                    {
+                        <span>✋</span>
+                    }
+                    else
+                    {
+                        <span>@stage.Order</span>
+                    }
+                </div>
+                <div class="step-title">@stage.Name</div>
+                <div class="step-status">@stage.StatusText</div>
+                @if (!string.IsNullOrEmpty(stage.MetricsSummary))
+                {
+                    <div class="step-metrics-badge">@stage.MetricsSummary</div>
+                }
+            </div>
+            @if (stage.Order < 7)
+            {
+                <div class="step-connector @(IsConnectorActive(stage) ? "connector-completed" : "")"></div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public int? TaskId { get; set; }
+    [Parameter] public string? CurrentStageId { get; set; }
+    [Parameter] public string? CurrentStageStatus { get; set; }
+
+    public class StageDefinition
+    {
+        public int Order { get; set; }
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public bool IsAgentic { get; set; }
+        public string Status { get; set; } = "Pending";
+        public string StatusText { get; set; } = "Pending";
+        public string? MetricsSummary { get; set; }
+    }
+
+    public List<StageDefinition> Stages { get; set; } = CreateDefaultStages();
+
+    private static List<StageDefinition> CreateDefaultStages() => new()
+    {
+        new StageDefinition { Order = 1, Id = "TaskReview", Name = "ForgeTask Review", IsAgentic = true, Status = "Pending", StatusText = "Awaiting review" },
+        new StageDefinition { Order = 2, Id = "PreImplementation", Name = "Pre-Impl Baseline", IsAgentic = false, Status = "Pending", StatusText = "Baseline build & tests" },
+        new StageDefinition { Order = 3, Id = "Implementation", Name = "Implementation", IsAgentic = true, Status = "Pending", StatusText = "Code modification" },
+        new StageDefinition { Order = 4, Id = "PostImplementation", Name = "Post-Impl Gates", IsAgentic = false, Status = "Pending", StatusText = "Ratchets & coverage" },
+        new StageDefinition { Order = 5, Id = "CodeReview", Name = "Code Review", IsAgentic = true, Status = "Pending", StatusText = "Gap analysis & fixes" },
+        new StageDefinition { Order = 6, Id = "PostReview", Name = "Post-Review Verification", IsAgentic = false, Status = "Pending", StatusText = "Deterministic validation" },
+        new StageDefinition { Order = 7, Id = "MergeGate", Name = "Merge Resolution", IsAgentic = false, Status = "Pending", StatusText = "Squash & merge gate" }
+    };
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(CurrentStageId))
+        {
+            ApplyStageTransition(CurrentStageId, CurrentStageStatus ?? "Running");
+        }
+    }
+
+    public void ApplyStageTransition(string stageId, string status)
+    {
+        var order = ResolveStageOrder(stageId);
+        if (order == 0) return;
+
+        for (int i = 0; i < Stages.Count; i++)
+        {
+            var st = Stages[i];
+            if (st.Order < order)
+            {
+                if (st.Status != "Failed")
+                {
+                    st.Status = "Completed";
+                    st.StatusText = "Completed";
+                }
+            }
+            else if (st.Order == order)
+            {
+                st.Status = status;
+                st.StatusText = status == "Running" ? "In Progress" : status;
+            }
+            else
+            {
+                if (st.Status != "Completed")
+                {
+                    st.Status = "Pending";
+                    st.StatusText = "Pending";
+                }
+            }
+        }
+        StateHasChanged();
+    }
+
+    public void ApplyGateResult(string gateName, bool passed, string metricsSummary)
+    {
+        var order = gateName.Contains("Pre", StringComparison.OrdinalIgnoreCase) || gateName.Contains("Baseline", StringComparison.OrdinalIgnoreCase) ? 2 : 4;
+        if (gateName.Contains("Review", StringComparison.OrdinalIgnoreCase)) order = 6;
+        if (gateName.Contains("Merge", StringComparison.OrdinalIgnoreCase)) order = 7;
+
+        var stage = Stages.FirstOrDefault(s => s.Order == order);
+        if (stage != null)
+        {
+            stage.Status = passed ? "Completed" : "Failed";
+            stage.StatusText = passed ? "Passed" : "Failed";
+            stage.MetricsSummary = metricsSummary;
+        }
+        StateHasChanged();
+    }
+
+    public void Reset()
+    {
+        Stages = CreateDefaultStages();
+        StateHasChanged();
+    }
+
+    private int ResolveStageOrder(string? stageId)
+    {
+        if (string.IsNullOrWhiteSpace(stageId)) return 0;
+        var s = stageId.Trim().ToLowerInvariant();
+        if (s.Contains("merge") || s == "7") return 7;
+        if (s.Contains("taskreview") || s.Contains("review_task") || s == "1") return 1;
+        if (s.Contains("preimpl") || s.Contains("baseline") || s == "2") return 2;
+        if (s.Contains("postreview") || s.Contains("post_review") || s == "6") return 6;
+        if (s.Contains("codereview") || s.Contains("code_review") || s == "5") return 5;
+        if (s.Contains("postimpl") || s.Contains("ratchet") || s.Contains("coverage") || s == "4") return 4;
+        if (s.Contains("implementationstage") || s.Contains("implementation") || s.Contains("implement") || s == "3") return 3;
+
+        var match = Stages.FirstOrDefault(st => st.Id.Equals(stageId, StringComparison.OrdinalIgnoreCase) || st.Name.Equals(stageId, StringComparison.OrdinalIgnoreCase));
+        return match?.Order ?? 0;
+    }
+
+    private string GetStepClass(StageDefinition stage)
+    {
+        if (stage.Status == "Running") return "step-active";
+        if (stage.Status == "Completed" || stage.Status == "Passed") return "step-completed";
+        if (stage.Status == "Failed") return "step-failed";
+        if (stage.Status == "WaitingForHuman") return "step-waiting";
+        return "step-pending";
+    }
+
+    private bool IsConnectorActive(StageDefinition stage)
+    {
+        var next = Stages.FirstOrDefault(s => s.Order == stage.Order + 1);
+        return stage.Status == "Completed" || stage.Status == "Passed" || (next != null && next.Status == "Running");
+    }
+}

@@ -1,0 +1,109 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@inject IJSRuntime JSRuntime
+
+<div class="think-accordion-container card-surface" id="thinking-accordion">
+    <div class="think-accordion-summary" @onclick="ToggleOpen">
+        <div class="think-summary-title">
+            <span>🧠</span>
+            <span>Agent Reasoning Trace (&lt;think&gt;)</span>
+            @if (_isStreaming)
+            {
+                <span class="step-badge badge-gpu" style="font-size: 0.68rem; margin-left: 0.5rem;">
+                    STREAMING REASONING
+                    <span class="cursor-blink">▊</span>
+                </span>
+            }
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span class="think-token-pill">@_tokenCount tokens</span>
+            <button class="forge-btn forge-btn-secondary"
+                    style="padding: 0.15rem 0.5rem; font-size: 0.72rem;"
+                    @onclick:stopPropagation="true"
+                    @onclick="Clear">
+                Clear
+            </button>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">
+                @(_isOpen ? "▲" : "▼")
+            </span>
+        </div>
+    </div>
+
+    @if (_isOpen)
+    {
+        <div class="think-accordion-content font-mono" id="think-accordion-content-body">
+            @if (string.IsNullOrEmpty(_content))
+            {
+                <div style="color: var(--text-muted); font-style: italic;">
+                    No reasoning thoughts captured yet. Awaiting agent token generation...
+                </div>
+            }
+            else
+            {
+                <span>@_content</span>
+                @if (_isStreaming)
+                {
+                    <span class="cursor-blink">▊</span>
+                }
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public int? TaskId { get; set; }
+    [Parameter] public string? InitialContent { get; set; }
+
+    private string _content = "";
+    private int _tokenCount = 0;
+    private bool _isStreaming = false;
+    private bool _isOpen = true;
+
+    protected override void OnInitialized()
+    {
+        if (!string.IsNullOrEmpty(InitialContent))
+        {
+            _content = InitialContent;
+            _tokenCount = _content.Split(new[] { ' ', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries).Length;
+        }
+    }
+
+    public void AppendToken(int taskId, string token, bool isThinking)
+    {
+        if (TaskId.HasValue && TaskId.Value != taskId) return;
+
+        if (isThinking)
+        {
+            _isStreaming = true;
+            _content += token;
+            _tokenCount++;
+            StateHasChanged();
+        }
+        else
+        {
+            if (_isStreaming)
+            {
+                _isStreaming = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    public void MarkFinished()
+    {
+        _isStreaming = false;
+        StateHasChanged();
+    }
+
+    public void ToggleOpen()
+    {
+        _isOpen = !_isOpen;
+    }
+
+    public void Clear()
+    {
+        _content = "";
+        _tokenCount = 0;
+        _isStreaming = false;
+        StateHasChanged();
+    }
+}

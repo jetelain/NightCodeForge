@@ -1,0 +1,185 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@inject IJSRuntime JSRuntime
+
+<div class="terminal-container card-surface" id="terminal-console-container">
+    <div class="terminal-toolbar">
+        <div class="terminal-title">
+            <span class="terminal-dot red"></span>
+            <span class="terminal-dot yellow"></span>
+            <span class="terminal-dot green"></span>
+            <span class="terminal-heading">Terminal Console &amp; Execution Stream</span>
+            <span class="step-badge badge-gpu" style="font-size: 0.68rem; margin-left: 0.5rem;">@_logs.Count logs</span>
+        </div>
+        <div class="terminal-actions">
+            <!-- Search Filter -->
+            <input type="text"
+                   class="form-control-dark"
+                   placeholder="Search logs..."
+                   style="width: 160px; font-size: 0.78rem; padding: 0.25rem 0.5rem;"
+                   @bind="_searchFilter"
+                   @bind:event="oninput" />
+
+            <!-- Log Level Filter -->
+            <select class="form-control-dark"
+                    style="width: 120px; font-size: 0.78rem; padding: 0.25rem 0.5rem;"
+                    @bind="_selectedLevel">
+                <option value="All">All Levels</option>
+                <option value="Information">Info</option>
+                <option value="Warning">Warning</option>
+                <option value="Error">Error</option>
+                <option value="Debug">Debug</option>
+            </select>
+
+            <!-- Auto-Scroll Toggle -->
+            <button class="forge-btn forge-btn-secondary"
+                    style="padding: 0.25rem 0.65rem; font-size: 0.78rem;"
+                    @onclick="ToggleAutoScroll"
+                    title="Toggle auto-scrolling to bottom on new log lines">
+                @(_autoScroll ? "🔒 Auto-Scroll ON" : "🔓 Auto-Scroll OFF")
+            </button>
+
+            <!-- Clear -->
+            <button class="forge-btn forge-btn-secondary"
+                    style="padding: 0.25rem 0.65rem; font-size: 0.78rem;"
+                    @onclick="ClearLogs"
+                    title="Clear current log buffer">
+                Clear
+            </button>
+
+            <!-- Export -->
+            <button class="forge-btn forge-btn-secondary"
+                    style="padding: 0.25rem 0.65rem; font-size: 0.78rem;"
+                    @onclick="ExportLogsAsync"
+                    title="Export logs as .txt file">
+                Export
+            </button>
+        </div>
+    </div>
+
+    <div class="terminal-body font-mono" id="terminal-console-body">
+        @{
+            var logsToDisplay = FilteredLogs.ToList();
+        }
+        @if (!logsToDisplay.Any())
+        {
+            <div class="terminal-empty">
+                <span>No logs recorded yet. Waiting for orchestrator stream...</span>
+            </div>
+        }
+        else
+        {
+            @foreach (var log in logsToDisplay)
+            {
+                <div class="log-line log-@log.Level.ToLowerInvariant()">
+                    <span class="log-ts">[@log.Timestamp.ToString("HH:mm:ss.fff")]</span>
+                    <span class="log-stage">[@log.StageId]</span>
+                    <span class="log-level">[@log.Level]</span>
+                    <span class="log-message">@log.Message</span>
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public int? FilterTaskId { get; set; }
+    [Parameter] public List<TerminalLog>? InitialLogs { get; set; }
+
+    public record TerminalLog(int TaskId, string StageId, string Level, string Message, DateTime Timestamp);
+
+    private readonly List<TerminalLog> _logs = new();
+    private string _selectedLevel = "All";
+    private string _searchFilter = "";
+    private bool _autoScroll = true;
+    private const int MaxLogCapacity = 2000;
+
+    protected override void OnInitialized()
+    {
+        if (InitialLogs != null && InitialLogs.Any())
+        {
+            _logs.AddRange(InitialLogs);
+        }
+    }
+
+    public IEnumerable<TerminalLog> FilteredLogs
+    {
+        get
+        {
+            var result = _logs.AsEnumerable();
+            if (FilterTaskId.HasValue && FilterTaskId.Value > 0)
+            {
+                result = result.Where(l => l.TaskId == FilterTaskId.Value);
+            }
+            if (!string.Equals(_selectedLevel, "All", StringComparison.OrdinalIgnoreCase))
+            {
+                result = result.Where(l => l.Level.Equals(_selectedLevel, StringComparison.OrdinalIgnoreCase) ||
+                                          (_selectedLevel == "Information" && l.Level.Equals("Info", StringComparison.OrdinalIgnoreCase)));
+            }
+            if (!string.IsNullOrWhiteSpace(_searchFilter))
+            {
+                result = result.Where(l => l.Message.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase) ||
+                                          l.StageId.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase));
+            }
+            return result;
+        }
+    }
+
+    public void AddLog(int taskId, string stageId, string level, string message, DateTime timestamp)
+    {
+        _logs.Add(new TerminalLog(taskId, stageId, level, message, timestamp));
+        if (_logs.Count > MaxLogCapacity)
+        {
+            _logs.RemoveRange(0, _logs.Count - MaxLogCapacity);
+        }
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_autoScroll)
+        {
+            try
+            {
+                await JSRuntime.InvokeVoidAsync("NightCodeForge.scrollToBottom", "terminal-console-body", false);
+            }
+            catch
+            {
+                // Silently ignore JSInterop issues in unit test environments without JS runtime
+            }
+        }
+    }
+
+    public void ToggleAutoScroll()
+    {
+        _autoScroll = !_autoScroll;
+        if (_autoScroll)
+        {
+            _ = JSRuntime.InvokeVoidAsync("NightCodeForge.scrollToBottom", "terminal-console-body", true);
+        }
+    }
+
+    public void ClearLogs()
+    {
+        _logs.Clear();
+        StateHasChanged();
+    }
+
+    public async Task ExportLogsAsync()
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var log in FilteredLogs)
+        {
+            sb.AppendLine($"[{log.Timestamp:yyyy-MM-dd HH:mm:ss.fff}] [Task #{log.TaskId}] [{log.StageId}] [{log.Level}] {log.Message}");
+        }
+
+        var filename = $"nightcodeforge-logs-{DateTime.UtcNow:yyyyMMdd-HHmmss}.txt";
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("NightCodeForge.downloadTextFile", filename, sb.ToString());
+        }
+        catch
+        {
+            // Ignore if JS not available in mock test
+        }
+    }
+}

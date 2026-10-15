@@ -1,0 +1,200 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@implements IDisposable
+
+<div class="tool-strip-container card-surface" id="tool-activity-strip">
+    <div class="tool-strip-header">
+        <div class="tool-strip-title">
+            <span>🛠️ Live Tool Activity &amp; Latency</span>
+            @if (_runningTools.Any())
+            {
+                <span class="step-badge badge-gpu" style="font-size: 0.68rem; margin-left: 0.5rem;">
+                    @(_runningTools.Count()) Active Invocations
+                </span>
+            }
+        </div>
+        <div style="font-size: 0.74rem; color: var(--text-muted); font-family: var(--font-mono);">
+            Crucible &amp; PiRpc Tool Invocation Telemetry
+        </div>
+    </div>
+
+    @if (!_toolCalls.Any())
+    {
+        <div style="font-size: 0.8rem; color: var(--text-muted); font-style: italic; padding: 0.25rem 0;">
+            No active tool invocations. Engine standby.
+        </div>
+    }
+    else
+    {
+        <div class="tool-pills-list">
+            @foreach (var call in _toolCalls)
+            {
+                <div class="tool-call-pill @GetPillClass(call)" title="@GetTooltip(call)">
+                    <span style="font-size: 0.95rem;">@GetToolIcon(call.ToolName)</span>
+                    <span style="font-weight: 600;">@call.ToolName</span>
+
+                    @if (call.Status == "Running")
+                    {
+                        <span class="spinner-pulse" style="width: 10px; height: 10px; border-width: 1.5px; border-top-color: #a5b4fc;"></span>
+                        <span class="tool-pill-duration font-mono" style="color: #c7d2fe;">@GetRunningDuration(call)</span>
+                    }
+                    else
+                    {
+                        @if (call.Status == "Completed")
+                        {
+                            <span style="color: #34d399; font-weight: 700;">✓</span>
+                        }
+                        else
+                        {
+                            <span style="color: #f87171; font-weight: 700;">✕</span>
+                        }
+                        <span class="tool-pill-duration font-mono">@FormatDuration(call.DurationMs)</span>
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    public class ToolActivityItem
+    {
+        public int TaskId { get; set; }
+        public string ToolName { get; set; } = "";
+        public string Arguments { get; set; } = "";
+        public string Status { get; set; } = "Running";
+        public int? DurationMs { get; set; }
+        public DateTime StartedAt { get; set; } = DateTime.UtcNow;
+    }
+
+    private readonly List<ToolActivityItem> _toolCalls = new();
+    private IEnumerable<ToolActivityItem> _runningTools => _toolCalls.Where(t => t.Status == "Running");
+    private System.Threading.Timer? _stopwatchTimer;
+
+    public void HandleToolExecution(int taskId, string toolName, string arguments, string status, int? durationMs)
+    {
+        if (status.Equals("Running", StringComparison.OrdinalIgnoreCase))
+        {
+            var newItem = new ToolActivityItem
+            {
+                TaskId = taskId,
+                ToolName = toolName,
+                Arguments = arguments,
+                Status = "Running",
+                DurationMs = null,
+                StartedAt = DateTime.UtcNow
+            };
+            _toolCalls.Insert(0, newItem);
+            StartStopwatchTimer();
+        }
+        else
+        {
+            var existing = _toolCalls.FirstOrDefault(t => t.TaskId == taskId && t.ToolName.Equals(toolName, StringComparison.OrdinalIgnoreCase) && t.Status == "Running");
+            if (existing != null)
+            {
+                existing.Status = status;
+                existing.DurationMs = durationMs ?? (int)Math.Max(1, (DateTime.UtcNow - existing.StartedAt).TotalMilliseconds);
+                if (!string.IsNullOrEmpty(arguments))
+                {
+                    existing.Arguments = arguments;
+                }
+            }
+            else
+            {
+                _toolCalls.Insert(0, new ToolActivityItem
+                {
+                    TaskId = taskId,
+                    ToolName = toolName,
+                    Arguments = arguments,
+                    Status = status,
+                    DurationMs = durationMs ?? 100,
+                    StartedAt = DateTime.UtcNow
+                });
+            }
+
+            if (!_runningTools.Any())
+            {
+                StopStopwatchTimer();
+            }
+        }
+
+        if (_toolCalls.Count > 20)
+        {
+            _toolCalls.RemoveRange(20, _toolCalls.Count - 20);
+        }
+
+        StateHasChanged();
+    }
+
+    private void StartStopwatchTimer()
+    {
+        if (_stopwatchTimer == null)
+        {
+            _stopwatchTimer = new System.Threading.Timer(_ =>
+            {
+                InvokeAsync(StateHasChanged);
+            }, null, 150, 150);
+        }
+    }
+
+    private void StopStopwatchTimer()
+    {
+        _stopwatchTimer?.Dispose();
+        _stopwatchTimer = null;
+    }
+
+    private string GetPillClass(ToolActivityItem call) => call.Status.ToLowerInvariant() switch
+    {
+        "running" => "running",
+        "completed" => "completed",
+        "failed" => "failed",
+        _ => ""
+    };
+
+    private string GetRunningDuration(ToolActivityItem call)
+    {
+        var elapsed = (DateTime.UtcNow - call.StartedAt).TotalSeconds;
+        return $"{elapsed.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}s...";
+    }
+
+    private string FormatDuration(int? durationMs)
+    {
+        if (!durationMs.HasValue) return "0ms";
+        if (durationMs.Value >= 1000)
+        {
+            return $"{(durationMs.Value / 1000.0).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}s";
+        }
+        return $"{durationMs.Value}ms";
+    }
+
+    private string GetToolIcon(string toolName)
+    {
+        var t = toolName.ToLowerInvariant();
+        if (t.Contains("bash") || t.Contains("cmd") || t.Contains("terminal")) return "⚡";
+        if (t.Contains("read") || t.Contains("view")) return "📖";
+        if (t.Contains("write")) return "📝";
+        if (t.Contains("edit") || t.Contains("replace")) return "✏️";
+        if (t.Contains("ask")) return "❓";
+        if (t.Contains("search")) return "🌐";
+        if (t.Contains("git")) return "🌿";
+        return "🔧";
+    }
+
+    private string GetTooltip(ToolActivityItem call)
+    {
+        var preview = call.Arguments;
+        if (preview.Length > 80) preview = preview.Substring(0, 80) + "...";
+        return $"{call.ToolName} (Task #{call.TaskId}): {preview}";
+    }
+
+    public void Clear()
+    {
+        _toolCalls.Clear();
+        StopStopwatchTimer();
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        StopStopwatchTimer();
+    }
+}

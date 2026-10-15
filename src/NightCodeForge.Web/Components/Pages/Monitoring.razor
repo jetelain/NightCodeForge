@@ -1,31 +1,273 @@
 @page "/monitoring"
+@implements IAsyncDisposable
+@inject OrchestratorHubClientConnection HubClient
+@inject WorkerStateService WorkerState
+@inject WorkspaceStateService WorkspaceState
+@inject ITaskRepository TaskRepository
+@inject NavigationManager Navigation
 
 <PageTitle>Live Telemetry - NightCodeForge</PageTitle>
 
-<div class="page-header" style="margin-bottom: 1.5rem;">
+<div class="page-header" style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
     <div style="display: flex; align-items: center; gap: 0.75rem;">
         <span style="font-size: 1.75rem;">⚡</span>
         <div>
-            <h1>Live Telemetry &amp; Monitoring Console</h1>
-            <p>Real-time execution telemetry, agent thought logs, GPU gauges, and execution traces.</p>
+            <h1 style="margin: 0; font-size: 1.5rem;">Live Telemetry &amp; Monitoring Console</h1>
+            <p style="margin: 0.25rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;">
+                Real-time 7-stage workflow pipeline, GPU vs deterministic CPU gauges, and live execution streams.
+            </p>
         </div>
+    </div>
+
+    <!-- Connection State & Controls -->
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <!-- SignalR Connection Status Pill -->
+        <div class="forge-badge @GetConnectionBadgeClass()" id="signalr-connection-badge">
+            <span>@GetConnectionDot()</span>
+            <span>@GetConnectionText()</span>
+        </div>
+
+        @if (HubClient.State == Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Disconnected)
+        {
+            <button class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem;" @onclick="ReconnectAsync">
+                Reconnect
+            </button>
+        }
+
+        <!-- Workspace Indicator -->
+        <span class="forge-badge badge-indigo" style="font-size: 0.78rem;">
+            📁 @(WorkspaceState.ActiveWorkspace?.Name ?? "All Workspaces")
+        </span>
     </div>
 </div>
 
-<div class="forge-card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <div style="font-weight: 600; font-size: 1.1rem;">Hardware &amp; Execution Stream</div>
-        <span class="forge-badge badge-indigo">SignalR Live Telemetry</span>
+<!-- 1. Active Worker Telemetry Card -->
+<WorkerStatusCard />
+
+<!-- 2. 7-Step Visual Pipeline Stepper -->
+<PipelineStepper @ref="_stepperRef"
+                 TaskId="WorkerState.Current.ActiveTaskId"
+                 CurrentStageId="WorkerState.Current.StageId" />
+
+<!-- 3. Live Tool Call Activity Strip -->
+<ToolActivityStrip @ref="_toolStripRef" />
+
+<!-- 4. Split Grid: Thinking Trace & Live Terminal Stream -->
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1.25rem; align-items: start;">
+    <!-- Model Reasoning Accordion (<think>) -->
+    <div>
+        <ThinkingAccordion @ref="_thinkingRef" TaskId="WorkerState.Current.ActiveTaskId" />
     </div>
-    <p style="margin-bottom: 1.25rem;">
-        Streaming logs, token velocity gauges, and tool invocation visualizer powered by SignalR hub.
-    </p>
-    <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-secondary);">
-        Worker Target: <span style="color: var(--accent-teal);">@WorkerState.Current.HardwareTarget</span> | Status: <span style="color: var(--accent-indigo);">@WorkerState.Current.Status</span>
+
+    <!-- Live Streaming Terminal Console -->
+    <div>
+        <TerminalConsole @ref="_terminalRef" FilterTaskId="_selectedTaskId" />
     </div>
 </div>
 
 @code {
-    [Inject]
-    private WorkerStateService WorkerState { get; set; } = default!;
+    private PipelineStepper? _stepperRef;
+    private ToolActivityStrip? _toolStripRef;
+    private ThinkingAccordion? _thinkingRef;
+    private TerminalConsole? _terminalRef;
+
+    private int? _selectedTaskId;
+    private int? _joinedTaskId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+
+        HubClient.OnTokenDeltaReceived += HandleTokenDelta;
+        HubClient.OnToolExecutionReceived += HandleToolExecution;
+        HubClient.OnGitProgressReceived += HandleGitProgress;
+        HubClient.OnWorkerStatusReceived += HandleWorkerStatus;
+        HubClient.OnStageTransitionReceived += HandleStageTransition;
+        HubClient.OnDeterministicGateResultReceived += HandleDeterministicGateResult;
+        HubClient.OnHostDirtyAlertReceived += HandleHostDirtyAlert;
+        HubClient.OnExecutionLogReceived += HandleExecutionLog;
+        HubClient.OnConnectionStateChanged += HandleConnectionStateChanged;
+
+        try
+        {
+            await HubClient.StartAsync();
+        }
+        catch
+        {
+            // Silently handle initial start failure; auto-reconnect or manual reconnect available
+        }
+
+        if (WorkerState.Current.ActiveTaskId.HasValue)
+        {
+            await JoinTaskGroupAsync(WorkerState.Current.ActiveTaskId.Value);
+        }
+    }
+
+    private void HandleWorkerStateChanged()
+    {
+        InvokeAsync(async () =>
+        {
+            var activeTaskId = WorkerState.Current.ActiveTaskId;
+            if (activeTaskId.HasValue && activeTaskId != _joinedTaskId)
+            {
+                await JoinTaskGroupAsync(activeTaskId.Value);
+            }
+            StateHasChanged();
+        });
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleConnectionStateChanged(Microsoft.AspNetCore.SignalR.Client.HubConnectionState state)
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleTokenDelta(int taskId, string token, bool isThinking)
+    {
+        InvokeAsync(() =>
+        {
+            _thinkingRef?.AppendToken(taskId, token, isThinking);
+        });
+    }
+
+    private void HandleToolExecution(int taskId, string toolName, string arguments, string status, int? durationMs)
+    {
+        InvokeAsync(() =>
+        {
+            _toolStripRef?.HandleToolExecution(taskId, toolName, arguments, status, durationMs);
+            _terminalRef?.AddLog(taskId, "Tool", status.Equals("Running", StringComparison.OrdinalIgnoreCase) ? "Info" : "Debug",
+                $"[{toolName}] {status} {(durationMs.HasValue ? $"({durationMs}ms)" : "")}: {arguments}", DateTime.UtcNow);
+        });
+    }
+
+    private void HandleGitProgress(int taskId, string operation, string message)
+    {
+        InvokeAsync(() =>
+        {
+            _terminalRef?.AddLog(taskId, "Git", "Info", $"[{operation}] {message}", DateTime.UtcNow);
+        });
+    }
+
+    private void HandleWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget)
+    {
+        InvokeAsync(() =>
+        {
+            WorkerState.HandleWorkerStatus(status, activeTaskId, stageId, hardwareTarget);
+            StateHasChanged();
+        });
+    }
+
+    private void HandleStageTransition(int taskId, string stageId, string stageKind, string status)
+    {
+        InvokeAsync(() =>
+        {
+            _stepperRef?.ApplyStageTransition(stageId, status);
+            _terminalRef?.AddLog(taskId, stageId, "Info", $"Stage transition: {stageId} [{stageKind}] -> {status}", DateTime.UtcNow);
+        });
+    }
+
+    private void HandleDeterministicGateResult(int taskId, string gateName, bool passed, string metricsSummary)
+    {
+        InvokeAsync(() =>
+        {
+            _stepperRef?.ApplyGateResult(gateName, passed, metricsSummary);
+            _terminalRef?.AddLog(taskId, gateName, passed ? "Info" : "Warning",
+                $"Deterministic Gate [{gateName}]: Passed={passed}. Metrics: {metricsSummary}", DateTime.UtcNow);
+        });
+    }
+
+    private void HandleHostDirtyAlert(int taskId, string branchName)
+    {
+        InvokeAsync(() =>
+        {
+            _terminalRef?.AddLog(taskId, "HostAlert", "Warning",
+                $"Host working tree dirty alert on branch {branchName}", DateTime.UtcNow);
+        });
+    }
+
+    private void HandleExecutionLog(int taskId, string stageId, string level, string message, DateTime timestamp)
+    {
+        InvokeAsync(() =>
+        {
+            _terminalRef?.AddLog(taskId, stageId, level, message, timestamp);
+        });
+    }
+
+    private async Task JoinTaskGroupAsync(int taskId)
+    {
+        if (_joinedTaskId.HasValue && _joinedTaskId.Value != taskId)
+        {
+            await HubClient.LeaveTaskGroupAsync(_joinedTaskId.Value);
+        }
+        _joinedTaskId = taskId;
+        _selectedTaskId = taskId;
+        await HubClient.JoinTaskGroupAsync(taskId);
+    }
+
+    private async Task ReconnectAsync()
+    {
+        try
+        {
+            await HubClient.StartAsync();
+            if (_joinedTaskId.HasValue)
+            {
+                await HubClient.JoinTaskGroupAsync(_joinedTaskId.Value);
+            }
+        }
+        catch
+        {
+            // Handled
+        }
+        StateHasChanged();
+    }
+
+    private string GetConnectionBadgeClass() => HubClient.State switch
+    {
+        Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected => "badge-teal",
+        Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connecting or
+        Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Reconnecting => "badge-amber",
+        _ => "badge-crimson"
+    };
+
+    private string GetConnectionDot() => HubClient.State switch
+    {
+        Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected => "●",
+        Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connecting or
+        Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Reconnecting => "◐",
+        _ => "○"
+    };
+
+    private string GetConnectionText() => HubClient.State switch
+    {
+        Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connected => "SignalR Live",
+        Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Connecting => "Connecting...",
+        Microsoft.AspNetCore.SignalR.Client.HubConnectionState.Reconnecting => "Reconnecting...",
+        _ => "SignalR Offline"
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+
+        HubClient.OnTokenDeltaReceived -= HandleTokenDelta;
+        HubClient.OnToolExecutionReceived -= HandleToolExecution;
+        HubClient.OnGitProgressReceived -= HandleGitProgress;
+        HubClient.OnWorkerStatusReceived -= HandleWorkerStatus;
+        HubClient.OnStageTransitionReceived -= HandleStageTransition;
+        HubClient.OnDeterministicGateResultReceived -= HandleDeterministicGateResult;
+        HubClient.OnHostDirtyAlertReceived -= HandleHostDirtyAlert;
+        HubClient.OnExecutionLogReceived -= HandleExecutionLog;
+        HubClient.OnConnectionStateChanged -= HandleConnectionStateChanged;
+
+        if (_joinedTaskId.HasValue)
+        {
+            await HubClient.LeaveTaskGroupAsync(_joinedTaskId.Value);
+        }
+    }
 }

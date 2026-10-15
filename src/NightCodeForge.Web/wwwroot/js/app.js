@@ -167,4 +167,22 @@ window.NightCodeForge = window.NightCodeForge || {};
 
         activeScrollStates.delete(elementId);
     };
+
+    /**
+     * Downloads plain text content as a file in the browser.
+     * @param {string} filename
+     * @param {string} content
+     */
+    window.NightCodeForge.downloadTextFile = function (filename, content) {
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
 })();
+

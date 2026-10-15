@@ -2,7 +2,7 @@
 
 > **Phase 5 Implementation Step**  
 > *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.4: Backlog & Visual DAG](STEP_5_4_BACKLOG_AND_VISUAL_DAG.md) | *Next Step:* [Step 5.6: Human-in-the-Loop Question Inbox](STEP_5_6_HUMAN_IN_THE_LOOP_INBOX.md)  
-> *Project Target:* `src/NightCodeForge.Web/Components/Monitoring` & `Pages/Monitoring.razor` | *Status:* Ready for Implementation
+> *Project Target:* `src/NightCodeForge.Web/Components/Monitoring` & `Pages/Monitoring.razor` | *Status:* Completed
 
 ---
 
@@ -240,10 +240,10 @@ The stepper visualizes the 7 distinct stages defined across Phase 1, Phase 3, an
 
 ## 6. Definition of Done (DoD) Checklist
 
-- [ ] `Pages/Monitoring.razor` created with real-time task listener.
-- [ ] `WorkerStatusCard.razor` displays active worker state, elapsed stopwatch, and hardware routing gauge.
-- [ ] `PipelineStepper.razor` renders all 7 pipeline stages with distinct GPU/CPU badges and status icons.
-- [ ] `TerminalConsole.razor` renders high-frequency log streams with level filtering, auto-scroll toggle, and clear/export actions.
-- [ ] `ToolActivityStrip.razor` renders real-time tool invocation pills and duration timers.
-- [ ] `ThinkingAccordion.razor` separates and streams reasoning tokens (`<think>`).
-- [ ] Components cleanly wire to `OrchestratorHubClientConnection` events.
+- [x] `Pages/Monitoring.razor` created with real-time task listener.
+- [x] `WorkerStatusCard.razor` displays active worker state, elapsed stopwatch, and hardware routing gauge.
+- [x] `PipelineStepper.razor` renders all 7 pipeline stages with distinct GPU/CPU badges and status icons.
+- [x] `TerminalConsole.razor` renders high-frequency log streams with level filtering, auto-scroll toggle, and clear/export actions.
+- [x] `ToolActivityStrip.razor` renders real-time tool invocation pills and duration timers.
+- [x] `ThinkingAccordion.razor` separates and streams reasoning tokens (`<think>`).
+- [x] Components cleanly wire to `OrchestratorHubClientConnection` events.
