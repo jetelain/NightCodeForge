@@ -100,4 +100,18 @@ public class PipelineStepperTests : BunitContext
         Assert.Contains("step-waiting", stage7.ClassName);
         Assert.Contains("✋", stage7.TextContent);
     }
+
+    [Fact]
+    public void PipelineStepper_WhenHyphenatedStageIdRunning_CorrectlyActivatesStep()
+    {
+        var cut = Render<PipelineStepper>(p => p
+            .Add(c => c.CurrentStageId, "task-review")
+            .Add(c => c.CurrentStageStatus, "Running"));
+
+        var steps = cut.FindAll(".step-item");
+        var stage1 = steps[0];
+
+        Assert.Contains("step-active", stage1.ClassName);
+        Assert.NotEmpty(stage1.QuerySelectorAll(".spinner-pulse"));
+    }
 }

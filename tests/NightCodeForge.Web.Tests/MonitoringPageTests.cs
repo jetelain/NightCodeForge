@@ -115,4 +115,28 @@ public class MonitoringPageTests : BunitContext
         var terminalLogs = cut.FindAll(".log-line");
         Assert.Contains(terminalLogs, l => l.TextContent.Contains("High memory usage detected"));
     }
+
+    [Fact]
+    public async Task MonitoringPage_WhenInFlightTaskExistsOnInitialize_AutoDiscoversTaskAndUpdatesWorkerState()
+    {
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 42,
+            WorkspaceId = 1,
+            Title = "Active Migration Task",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "task-review"
+        });
+
+        var cut = Render<Monitoring>();
+
+        cut.WaitForState(() => _workerState.Current.ActiveTaskId == 42);
+
+        Assert.Equal(42, _workerState.Current.ActiveTaskId);
+        Assert.Equal(WorkerExecutionStatus.Running, _workerState.Current.Status);
+        Assert.Equal("task-review", _workerState.Current.StageId);
+
+        Assert.Contains("RUNNING", cut.Find("#worker-telemetry-card").TextContent);
+        Assert.Contains("#42", cut.Find("#worker-telemetry-card").TextContent);
+    }
 }

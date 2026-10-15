@@ -127,10 +127,11 @@
                     @foreach (var node in graphLayout.Nodes)
                     {
                         var task = node.Task;
-                        var isBlocked = task.Status == TaskOverallStatus.Open && node.IsBlocked;
-                        var isReadyToExecute = task.Status == TaskOverallStatus.Open && !node.IsBlocked;
+                        var isInFlight = IsInFlight(task);
+                        var isBlocked = task.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(task.CurrentStageId) && node.IsBlocked;
+                        var isReadyToExecute = task.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(task.CurrentStageId) && !node.IsBlocked;
 
-                        <g class="dag-node-group status-@task.Status.ToString().ToLowerInvariant() @(isBlocked ? "node-blocked" : "") @(isReadyToExecute ? "node-ready" : "")"
+                        <g class="dag-node-group status-@task.Status.ToString().ToLowerInvariant() @(isBlocked ? "node-blocked" : "") @(isReadyToExecute ? "node-ready" : "") @(isInFlight ? "node-inflight" : "")"
                            transform="translate(@node.X, @node.Y)"
                            @onclick="() => HandleNodeClick(task)"
                            style="cursor: pointer;">
@@ -140,9 +141,9 @@
                                   height="76"
                                   rx="8"
                                   ry="8"
-                                  fill="@GetNodeFillUrl(task.Status, isBlocked)"
-                                  stroke="@GetNodeStrokeColor(task.Status, isBlocked)"
-                                  stroke-width="@(isReadyToExecute || task.IsWaitingForHuman ? "2" : "1.2")"
+                                  fill="@GetNodeFillUrl(task, isBlocked)"
+                                  stroke="@GetNodeStrokeColor(task, isBlocked)"
+                                  stroke-width="@(isReadyToExecute || task.IsWaitingForHuman || isInFlight ? "2" : "1.2")"
                                   class="dag-node-box" />
 
                             <!-- Top Bar: Task ID, Priority, Mode -->
@@ -176,7 +177,7 @@
                             }
                             else
                             {
-                                @RenderSvgText(10, 64, GetStatusLabel(task), fill: GetStatusTextColor(task.Status), fontSize: 10)
+                                @RenderSvgText(10, 64, GetStatusLabel(task), fill: GetStatusTextColor(task), fontSize: 10)
                             }
                         </g>
                     }
@@ -379,28 +380,33 @@
         return layout;
     }
 
-    private static string GetNodeFillUrl(TaskOverallStatus status, bool isBlocked)
+    private static bool IsInFlight(ForgeTask task) =>
+        task.Status == TaskOverallStatus.Reviewed ||
+        task.Status == TaskOverallStatus.Implemented ||
+        (task.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(task.CurrentStageId));
+
+    private static string GetNodeFillUrl(ForgeTask task, bool isBlocked)
     {
         if (isBlocked) return "url(#grad-open-blocked)";
-        return status switch
+        if (IsInFlight(task)) return "url(#grad-inflight)";
+        return task.Status switch
         {
             TaskOverallStatus.Suggested => "url(#grad-suggested)",
             TaskOverallStatus.Open => "url(#grad-open-ready)",
-            TaskOverallStatus.Reviewed or TaskOverallStatus.Implemented => "url(#grad-inflight)",
             TaskOverallStatus.Ready => "url(#grad-ready)",
             TaskOverallStatus.Closed => "url(#grad-closed)",
             _ => "#181b24"
         };
     }
 
-    private static string GetNodeStrokeColor(TaskOverallStatus status, bool isBlocked)
+    private static string GetNodeStrokeColor(ForgeTask task, bool isBlocked)
     {
         if (isBlocked) return "#f59e0b";
-        return status switch
+        if (IsInFlight(task)) return "#a855f7";
+        return task.Status switch
         {
             TaskOverallStatus.Suggested => "#eab308",
             TaskOverallStatus.Open => "#6366f1",
-            TaskOverallStatus.Reviewed or TaskOverallStatus.Implemented => "#a855f7",
             TaskOverallStatus.Ready => "#14b8a6",
             TaskOverallStatus.Closed => "#10b981",
             TaskOverallStatus.Rejected or TaskOverallStatus.Failed => "#ef4444",
@@ -408,28 +414,38 @@
         };
     }
 
-    private static string GetStatusTextColor(TaskOverallStatus status) => status switch
+    private static string GetStatusTextColor(ForgeTask task)
     {
-        TaskOverallStatus.Suggested => "#fde047",
-        TaskOverallStatus.Open => "#a5b4fc",
-        TaskOverallStatus.Reviewed or TaskOverallStatus.Implemented => "#d8b4fe",
-        TaskOverallStatus.Ready => "#5eead4",
-        TaskOverallStatus.Closed => "#6ee7b7",
-        TaskOverallStatus.Rejected or TaskOverallStatus.Failed => "#fca5a5",
-        _ => "#94a3b8"
-    };
+        if (IsInFlight(task)) return "#d8b4fe";
+        return task.Status switch
+        {
+            TaskOverallStatus.Suggested => "#fde047",
+            TaskOverallStatus.Open => "#a5b4fc",
+            TaskOverallStatus.Ready => "#5eead4",
+            TaskOverallStatus.Closed => "#6ee7b7",
+            TaskOverallStatus.Rejected or TaskOverallStatus.Failed => "#fca5a5",
+            _ => "#94a3b8"
+        };
+    }
 
-    private static string GetStatusLabel(ForgeTask task) => task.Status switch
+    private static string GetStatusLabel(ForgeTask task)
     {
-        TaskOverallStatus.Suggested => "💡 Suggested",
-        TaskOverallStatus.Reviewed => "Stage 1: Reviewed",
-        TaskOverallStatus.Implemented => "Stage 3: Implemented",
-        TaskOverallStatus.Ready => "🔍 Ready for Review",
-        TaskOverallStatus.Closed => "✅ Closed",
-        TaskOverallStatus.Rejected => "Archived",
-        TaskOverallStatus.Failed => "Failed",
-        _ => task.Status.ToString()
-    };
+        if (task.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(task.CurrentStageId))
+        {
+            return $"In-Flight: {task.CurrentStageId}";
+        }
+        return task.Status switch
+        {
+            TaskOverallStatus.Suggested => "💡 Suggested",
+            TaskOverallStatus.Reviewed => "Stage 1: Reviewed",
+            TaskOverallStatus.Implemented => "Stage 3: Implemented",
+            TaskOverallStatus.Ready => "🔍 Ready for Review",
+            TaskOverallStatus.Closed => "✅ Closed",
+            TaskOverallStatus.Rejected => "Archived",
+            TaskOverallStatus.Failed => "Failed",
+            _ => task.Status.ToString()
+        };
+    }
 
     private static string GetPriorityBg(int priority) => priority switch
     {

@@ -68,13 +68,13 @@
 
     private static List<StageDefinition> CreateDefaultStages() => new()
     {
-        new StageDefinition { Order = 1, Id = "TaskReview", Name = "ForgeTask Review", IsAgentic = true, Status = "Pending", StatusText = "Awaiting review" },
-        new StageDefinition { Order = 2, Id = "PreImplementation", Name = "Pre-Impl Baseline", IsAgentic = false, Status = "Pending", StatusText = "Baseline build & tests" },
-        new StageDefinition { Order = 3, Id = "Implementation", Name = "Implementation", IsAgentic = true, Status = "Pending", StatusText = "Code modification" },
-        new StageDefinition { Order = 4, Id = "PostImplementation", Name = "Post-Impl Gates", IsAgentic = false, Status = "Pending", StatusText = "Ratchets & coverage" },
-        new StageDefinition { Order = 5, Id = "CodeReview", Name = "Code Review", IsAgentic = true, Status = "Pending", StatusText = "Gap analysis & fixes" },
-        new StageDefinition { Order = 6, Id = "PostReview", Name = "Post-Review Verification", IsAgentic = false, Status = "Pending", StatusText = "Deterministic validation" },
-        new StageDefinition { Order = 7, Id = "MergeGate", Name = "Merge Resolution", IsAgentic = false, Status = "Pending", StatusText = "Squash & merge gate" }
+        new StageDefinition { Order = 1, Id = "task-review", Name = "ForgeTask Review", IsAgentic = true, Status = "Pending", StatusText = "Awaiting review" },
+        new StageDefinition { Order = 2, Id = "deterministic-pre-impl", Name = "Pre-Impl Baseline", IsAgentic = false, Status = "Pending", StatusText = "Baseline build & tests" },
+        new StageDefinition { Order = 3, Id = "implementation", Name = "Implementation", IsAgentic = true, Status = "Pending", StatusText = "Code modification" },
+        new StageDefinition { Order = 4, Id = "deterministic-post-impl", Name = "Post-Impl Gates", IsAgentic = false, Status = "Pending", StatusText = "Ratchets & coverage" },
+        new StageDefinition { Order = 5, Id = "code-review-fix", Name = "Code Review", IsAgentic = true, Status = "Pending", StatusText = "Gap analysis & fixes" },
+        new StageDefinition { Order = 6, Id = "deterministic-post-review", Name = "Post-Review Verification", IsAgentic = false, Status = "Pending", StatusText = "Deterministic validation" },
+        new StageDefinition { Order = 7, Id = "merge", Name = "Merge Resolution", IsAgentic = false, Status = "Pending", StatusText = "Squash & merge gate" }
     };
 
     protected override void OnParametersSet()
@@ -143,14 +143,14 @@
     private int ResolveStageOrder(string? stageId)
     {
         if (string.IsNullOrWhiteSpace(stageId)) return 0;
-        var s = stageId.Trim().ToLowerInvariant();
+        var s = stageId.Trim().ToLowerInvariant().Replace("-", "").Replace("_", "");
         if (s.Contains("merge") || s == "7") return 7;
-        if (s.Contains("taskreview") || s.Contains("review_task") || s == "1") return 1;
+        if (s.Contains("taskreview") || s.Contains("reviewtask") || s == "1") return 1;
         if (s.Contains("preimpl") || s.Contains("baseline") || s == "2") return 2;
-        if (s.Contains("postreview") || s.Contains("post_review") || s == "6") return 6;
-        if (s.Contains("codereview") || s.Contains("code_review") || s == "5") return 5;
+        if (s.Contains("postreview") || s == "6") return 6;
+        if (s.Contains("codereview") || s == "5") return 5;
         if (s.Contains("postimpl") || s.Contains("ratchet") || s.Contains("coverage") || s == "4") return 4;
-        if (s.Contains("implementationstage") || s.Contains("implementation") || s.Contains("implement") || s == "3") return 3;
+        if (s.Contains("implementation") || s.Contains("implement") || s == "3") return 3;
 
         var match = Stages.FirstOrDefault(st => st.Id.Equals(stageId, StringComparison.OrdinalIgnoreCase) || st.Name.Equals(stageId, StringComparison.OrdinalIgnoreCase));
         return match?.Order ?? 0;

@@ -128,4 +128,42 @@ public class KanbanBoardAndCardTests : BunitContext
         Assert.Equal("1", columns[3].QuerySelector(".column-count-badge")?.TextContent);
         Assert.Equal("1", columns[4].QuerySelector(".column-count-badge")?.TextContent);
     }
+
+    [Fact]
+    public void KanbanCard_WhenOpenAndActiveStageExecuting_RendersCurrentStageBadge()
+    {
+        var task = new ForgeTask
+        {
+            Id = 9,
+            Title = "Task In Stage 1",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "task-review"
+        };
+
+        var cut = Render<KanbanCard>(p => p
+            .Add(c => c.Task, task));
+
+        var stageBadge = cut.Find(".badge-purple");
+        Assert.Contains("task-review", stageBadge.TextContent);
+        Assert.Empty(cut.FindAll(".badge-ready"));
+    }
+
+    [Fact]
+    public void KanbanBoard_WhenOpenWithActiveStage_PlacesInInFlightColumn()
+    {
+        var tasks = new List<ForgeTask>
+        {
+            new ForgeTask { Id = 1, Title = "Waiting Item", Status = TaskOverallStatus.Open, CurrentStageId = "" },
+            new ForgeTask { Id = 2, Title = "Executing Item", Status = TaskOverallStatus.Open, CurrentStageId = "task-review" }
+        };
+
+        var cut = Render<KanbanBoard>(p => p
+            .Add(b => b.Tasks, tasks));
+
+        var columns = cut.FindAll(".kanban-column");
+        // Open column has 1 task (Waiting Item)
+        Assert.Equal("1", columns[1].QuerySelector(".column-count-badge")?.TextContent);
+        // In-Flight column has 1 task (Executing Item)
+        Assert.Equal("1", columns[2].QuerySelector(".column-count-badge")?.TextContent);
+    }
 }

@@ -145,9 +145,11 @@ public class SignalRActivityBridgeServiceTests
         Assert.Equal("Deterministic", allClient.StageTransitions[0].StageKind);
         Assert.Equal("Running", allClient.StageTransitions[0].Status);
 
-        Assert.Single(allClient.WorkerStatuses);
-        Assert.Equal("WaitingForHuman", allClient.WorkerStatuses[0].Status);
+        Assert.Equal(2, allClient.WorkerStatuses.Count);
+        Assert.Equal("Running", allClient.WorkerStatuses[0].Status);
         Assert.Equal(7, allClient.WorkerStatuses[0].ActiveTaskId);
+        Assert.Equal("WaitingForHuman", allClient.WorkerStatuses[1].Status);
+        Assert.Equal(7, allClient.WorkerStatuses[1].ActiveTaskId);
     }
 
     [Fact]

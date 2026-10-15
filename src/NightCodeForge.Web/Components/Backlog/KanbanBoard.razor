@@ -38,7 +38,7 @@
 
         <!-- Column 2: Open / Backlog -->
         @{
-            var openTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Open).ToList();
+            var openTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(t.CurrentStageId)).ToList();
         }
         <div class="kanban-column column-open">
             <div class="column-header">
@@ -71,7 +71,7 @@
 
         <!-- Column 3: In-Flight -->
         @{
-            var inFlightTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented).ToList();
+            var inFlightTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented || (t.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(t.CurrentStageId))).ToList();
         }
         <div class="kanban-column column-inflight">
             <div class="column-header">

@@ -460,7 +460,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                             {
                                 var canonicalName = dispatcher.ResolveToolName(fc.Name);
                                 var argsJson = fc.Arguments != null ? JsonSerializer.Serialize(fc.Arguments) : "{}";
-                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken);
+                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken, new Dictionary<string, object?> { ["ToolName"] = canonicalName });
                             }
                             else if (content is FunctionResultContent frc)
                             {
@@ -529,7 +529,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                             {
                                 var canonicalName = dispatcher.ResolveToolName(fc.Name);
                                 var argsJson = fc.Arguments != null ? JsonSerializer.Serialize(fc.Arguments) : "{}";
-                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken);
+                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken, new Dictionary<string, object?> { ["ToolName"] = canonicalName });
                             }
                             else if (content is FunctionResultContent frc)
                             {
@@ -651,11 +651,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
             targetRouting: targetRouting);
     }
 
-    private async Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken ct)
+    private async Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken ct, Dictionary<string, object?>? metadata = null)
     {
         if (_activityStreamer != null)
         {
-            var evt = new AgentActivityEvent(sessionId, taskId, stageId, kind, content, DateTime.UtcNow);
+            var evt = new AgentActivityEvent(sessionId, taskId, stageId, kind, content, DateTime.UtcNow, metadata);
             await _activityStreamer.BroadcastAsync(evt, ct);
         }
     }

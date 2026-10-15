@@ -212,6 +212,28 @@ public class TaskOrchestrator : ITaskOrchestrator
             return;
         }
 
+        // Persist current stage immediately so UI / Kanban / DAG shows task is actively executing
+        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+
+        if (_streamer != null)
+        {
+            try
+            {
+                await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                    Guid.NewGuid().ToString("N"),
+                    task.Id,
+                    stage.StageId,
+                    Streaming.AgentActivityKind.StageStarted,
+                    $"Starting stage '{stage.StageId}'",
+                    DateTime.UtcNow,
+                    new Dictionary<string, object?> { ["StageKind"] = stage.Kind.ToString() }), cancellationToken);
+            }
+            catch (Exception sex)
+            {
+                _logger.LogDebug(sex, "Failed broadcasting stage started event for task #{TaskId}", task.Id);
+            }
+        }
+
         // Resolve Agent Profile matching interrupted profile or current stage, or fallback to first
         AgentProfile? profile = null;
         if (!string.IsNullOrWhiteSpace(task.InterruptedAgentProfileId))
@@ -842,6 +864,7 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         // 2. Mark task as completed (Closed)
         task.Status = TaskOverallStatus.Closed;
+        task.CurrentStageId = string.Empty;
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
         if (_dependencyStore != null)
         {

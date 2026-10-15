@@ -76,11 +76,11 @@
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Open ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Open)">
                 <span class="stat-chip-label">📂 Open</span>
-                <span class="stat-chip-val text-indigo">@_allTasks.Count(t => t.Status == TaskOverallStatus.Open)</span>
+                <span class="stat-chip-val text-indigo">@_allTasks.Count(t => t.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(t.CurrentStageId))</span>
             </div>
             <div class="stat-chip" @onclick="() => FilterByStatus(TaskOverallStatus.Reviewed)">
                 <span class="stat-chip-label">⚡ In-Flight</span>
-                <span class="stat-chip-val text-purple">@_allTasks.Count(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented)</span>
+                <span class="stat-chip-val text-purple">@_allTasks.Count(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented || (t.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(t.CurrentStageId)))</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Ready ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Ready)">
                 <span class="stat-chip-label">🔍 Ready</span>
@@ -343,7 +343,11 @@
             if (_statusFilter == TaskOverallStatus.Reviewed)
             {
                 // Group In-Flight stages
-                query = query.Where(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented);
+                query = query.Where(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented || (t.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(t.CurrentStageId)));
+            }
+            else if (_statusFilter == TaskOverallStatus.Open)
+            {
+                query = query.Where(t => t.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(t.CurrentStageId));
             }
             else
             {

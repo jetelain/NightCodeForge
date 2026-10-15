@@ -182,8 +182,8 @@
         if (kind.Contains("deterministic")) return false;
         if (kind.Contains("agentic")) return true;
 
-        var stageId = CurrentSnapshot.StageId?.ToLowerInvariant() ?? "";
-        if (stageId.Contains("preimpl") || stageId.Contains("postimpl") || stageId.Contains("postreview") || stageId.Contains("gate")) return false;
+        var stageId = (CurrentSnapshot.StageId ?? "").ToLowerInvariant().Replace("-", "").Replace("_", "");
+        if (stageId.Contains("preimpl") || stageId.Contains("postimpl") || stageId.Contains("postreview") || stageId.Contains("gate") || stageId.Contains("merge")) return false;
         return stageId.Contains("taskreview") || stageId.Contains("implement") || stageId.Contains("codereview");
     }
 

@@ -36,35 +36,6 @@
                 <span>Waiting for Human</span>
             </span>
         }
-        else if (Task.Status == TaskOverallStatus.Open)
-        {
-            var blockers = GetBlockers();
-            if (blockers.Count > 0)
-            {
-                var blockerText = string.Join(", ", blockers.Select(b => $"#{b.Id} {b.Title}"));
-                <span class="badge-blocked" title="Blocked by: @blockerText">
-                    🔒 Blocked (@blockers.Count)
-                </span>
-            }
-            else
-            {
-                <span class="badge-ready" title="All dependencies closed; ready for inference execution">
-                    🟢 Ready for Inference
-                </span>
-            }
-        }
-        else if (Task.Status == TaskOverallStatus.Reviewed || Task.Status == TaskOverallStatus.Implemented)
-        {
-            <span class="forge-badge badge-purple" style="font-size: 0.75rem;">
-                @(string.IsNullOrWhiteSpace(Task.CurrentStageId) ? Task.Status.ToString() : Task.CurrentStageId)
-            </span>
-        }
-        else if (Task.Status == TaskOverallStatus.Ready)
-        {
-            <span class="forge-badge badge-teal" style="font-size: 0.75rem;">
-                Ready for Review
-            </span>
-        }
         else if (Task.Status == TaskOverallStatus.Closed)
         {
             <span class="forge-badge badge-emerald" style="font-size: 0.75rem;">
@@ -82,6 +53,35 @@
             <span class="forge-badge badge-crimson" style="font-size: 0.75rem;">
                 Failed
             </span>
+        }
+        else if (Task.Status == TaskOverallStatus.Ready)
+        {
+            <span class="forge-badge badge-teal" style="font-size: 0.75rem;">
+                Ready for Review
+            </span>
+        }
+        else if (!string.IsNullOrWhiteSpace(Task.CurrentStageId) || Task.Status == TaskOverallStatus.Reviewed || Task.Status == TaskOverallStatus.Implemented)
+        {
+            <span class="forge-badge badge-purple" style="font-size: 0.75rem;">
+                @(string.IsNullOrWhiteSpace(Task.CurrentStageId) ? Task.Status.ToString() : Task.CurrentStageId)
+            </span>
+        }
+        else if (Task.Status == TaskOverallStatus.Open)
+        {
+            var blockers = GetBlockers();
+            if (blockers.Count > 0)
+            {
+                var blockerText = string.Join(", ", blockers.Select(b => $"#{b.Id} {b.Title}"));
+                <span class="badge-blocked" title="Blocked by: @blockerText">
+                    🔒 Blocked (@blockers.Count)
+                </span>
+            }
+            else
+            {
+                <span class="badge-ready" title="All dependencies closed; ready for inference execution">
+                    🟢 Ready for Inference
+                </span>
+            }
         }
     </div>
 

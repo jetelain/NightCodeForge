@@ -82,7 +82,7 @@ public class SignalRActivityBridgeService : BackgroundService
             case AgentActivityKind.ToolStarted:
                 var toolName = evt.Metadata?.TryGetValue("ToolName", out var tn) == true && tn != null
                     ? tn.ToString()!
-                    : "tool";
+                    : (evt.Content.Contains(':') ? evt.Content.Split(':')[0].Trim() : "tool");
                 await _hubContext.Clients.Group(groupName)
                     .ReceiveToolExecution(evt.TaskId, toolName, evt.Content, "Running", null);
                 break;
@@ -90,7 +90,7 @@ public class SignalRActivityBridgeService : BackgroundService
             case AgentActivityKind.ToolCompleted:
                 var completedTool = evt.Metadata?.TryGetValue("ToolName", out var ctn) == true && ctn != null
                     ? ctn.ToString()!
-                    : "tool";
+                    : (evt.Content.Contains(':') ? evt.Content.Split(':')[0].Trim() : "tool");
                 int? durationMs = null;
                 if (evt.Metadata?.TryGetValue("DurationMs", out var dur) == true && dur != null)
                 {
@@ -115,6 +115,17 @@ public class SignalRActivityBridgeService : BackgroundService
                     : "Agentic";
                 await _hubContext.Clients.All
                     .ReceiveStageTransition(evt.TaskId, evt.StageId, kind, status);
+                if (evt.Kind == AgentActivityKind.StageStarted)
+                {
+                    await _hubContext.Clients.All
+                        .ReceiveWorkerStatus("Running", evt.TaskId, evt.StageId, kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU");
+                }
+                else if (string.Equals(evt.StageId, "merge", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(evt.StageId, "deterministic-post-review", StringComparison.OrdinalIgnoreCase))
+                {
+                    await _hubContext.Clients.All
+                        .ReceiveWorkerStatus("Idle", null, null, "Local GPU");
+                }
                 break;
 
             case AgentActivityKind.Interrupted:

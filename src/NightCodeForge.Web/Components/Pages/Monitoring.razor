@@ -98,9 +98,76 @@
             // Silently handle initial start failure; auto-reconnect or manual reconnect available
         }
 
+        // Auto-discover in-flight active task from repository if worker state has not received status event yet
+        if (!WorkerState.Current.ActiveTaskId.HasValue)
+        {
+            try
+            {
+                var wsId = WorkspaceState.ActiveWorkspace?.Id;
+                IEnumerable<ForgeTask> allTasks;
+                if (wsId.HasValue)
+                {
+                    allTasks = await TaskRepository.GetByWorkspaceIdAsync(wsId.Value);
+                }
+                else
+                {
+                    var open = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Open);
+                    var reviewed = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Reviewed);
+                    var implemented = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Implemented);
+                    allTasks = open.Concat(reviewed).Concat(implemented);
+                }
+
+                var active = allTasks.FirstOrDefault(t =>
+                    t.Status == TaskOverallStatus.Reviewed ||
+                    t.Status == TaskOverallStatus.Implemented ||
+                    (t.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(t.CurrentStageId)));
+
+                if (active != null)
+                {
+                    WorkerState.HandleWorkerStatus("Running", active.Id, active.CurrentStageId ?? "task-review", "Local GPU", active.Title, active.FeatureBranch);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error resolving active in-flight task for monitoring: {ex.Message}");
+            }
+        }
+
         if (WorkerState.Current.ActiveTaskId.HasValue)
         {
-            await JoinTaskGroupAsync(WorkerState.Current.ActiveTaskId.Value);
+            var activeId = WorkerState.Current.ActiveTaskId.Value;
+            await JoinTaskGroupAsync(activeId);
+        }
+
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && WorkerState.Current.ActiveTaskId.HasValue)
+        {
+            var activeId = WorkerState.Current.ActiveTaskId.Value;
+            if (!string.IsNullOrEmpty(WorkerState.Current.StageId))
+            {
+                _stepperRef?.ApplyStageTransition(WorkerState.Current.StageId, "Running");
+            }
+
+            try
+            {
+                var fullTask = await TaskRepository.GetByIdAsync(activeId);
+                var logs = fullTask?.ExecutionLogs;
+                if (logs != null && logs.Any() && _terminalRef != null)
+                {
+                    foreach (var log in logs)
+                    {
+                        _terminalRef.AddLog(log.TaskId, "Orchestrator", log.Level.ToString(), log.Message, log.Timestamp);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error hydrating logs in OnAfterRender for task #{activeId}: {ex.Message}");
+            }
         }
     }
 
@@ -155,19 +222,32 @@
 
     private void HandleWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget)
     {
-        InvokeAsync(() =>
+        InvokeAsync(async () =>
         {
             WorkerState.HandleWorkerStatus(status, activeTaskId, stageId, hardwareTarget);
+            if (activeTaskId.HasValue && activeTaskId.Value != _joinedTaskId)
+            {
+                await JoinTaskGroupAsync(activeTaskId.Value);
+            }
             StateHasChanged();
         });
     }
 
     private void HandleStageTransition(int taskId, string stageId, string stageKind, string status)
     {
-        InvokeAsync(() =>
+        InvokeAsync(async () =>
         {
             _stepperRef?.ApplyStageTransition(stageId, status);
             _terminalRef?.AddLog(taskId, stageId, "Info", $"Stage transition: {stageId} [{stageKind}] -> {status}", DateTime.UtcNow);
+            if (status.Equals("Running", StringComparison.OrdinalIgnoreCase))
+            {
+                WorkerState.HandleWorkerStatus("Running", taskId, stageId, stageKind.Contains("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU");
+                if (taskId != _joinedTaskId)
+                {
+                    await JoinTaskGroupAsync(taskId);
+                }
+            }
+            StateHasChanged();
         });
     }
 
