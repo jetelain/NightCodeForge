@@ -12,6 +12,19 @@ namespace NightCodeForge.Infrastructure.Migrations
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.CreateTable(
+                name: "SystemSettings",
+                columns: table => new
+                {
+                    Key = table.Column<string>(type: "TEXT", maxLength: 128, nullable: false),
+                    Value = table.Column<string>(type: "TEXT", nullable: false),
+                    UpdatedAt = table.Column<DateTimeOffset>(type: "TEXT", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_SystemSettings", x => x.Key);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "Workspaces",
                 columns: table => new
                 {
@@ -54,7 +67,8 @@ namespace NightCodeForge.Infrastructure.Migrations
                     Mode = table.Column<int>(type: "INTEGER", nullable: false),
                     SecurityTier = table.Column<int>(type: "INTEGER", nullable: false),
                     SystemPrompt = table.Column<string>(type: "TEXT", nullable: true),
-                    MaxTurns = table.Column<int>(type: "INTEGER", nullable: true)
+                    MaxTurns = table.Column<int>(type: "INTEGER", nullable: true),
+                    RoutingTarget = table.Column<int>(type: "INTEGER", nullable: false, defaultValue: 0)
                 },
                 constraints: table =>
                 {
@@ -296,6 +310,9 @@ namespace NightCodeForge.Infrastructure.Migrations
 
             migrationBuilder.DropTable(
                 name: "StageExecutionRecords");
+
+            migrationBuilder.DropTable(
+                name: "SystemSettings");
 
             migrationBuilder.DropTable(
                 name: "TaskDependencies");

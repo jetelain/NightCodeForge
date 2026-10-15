@@ -53,6 +53,11 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<string>("PermittedTools")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("RoutingTarget")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(0);
+
                     b.Property<int>("SecurityTier")
                         .HasColumnType("INTEGER");
 
@@ -344,6 +349,24 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.HasIndex("TaskId");
 
                     b.ToTable("StageExecutionRecords");
+                });
+
+            modelBuilder.Entity("NightCodeForge.Core.Domain.SystemSetting", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("SystemSettings");
                 });
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.TaskDependency", b =>
