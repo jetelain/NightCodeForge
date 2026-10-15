@@ -130,11 +130,26 @@ public static partial class WslPathConverter
 
     /// <summary>
     /// Converts a WSL Linux path (/home/user/...) to a Windows UNC path (\\wsl.localhost\Ubuntu\home\user\...).
+    /// Both distro and userName are required.
     /// </summary>
-    public static string ToWslUncPath(string linuxPath, string distro = "Ubuntu")
+    public static string ToWslUncPath(string linuxPath, string distro, string userName)
     {
         if (string.IsNullOrWhiteSpace(linuxPath)) return linuxPath;
-        var trimmed = linuxPath.TrimStart('/', '\\');
+        if (IsWslUncPath(linuxPath)) return linuxPath;
+        ArgumentException.ThrowIfNullOrWhiteSpace(distro);
+        ArgumentException.ThrowIfNullOrWhiteSpace(userName);
+
+        var trimmed = linuxPath.Trim();
+        if (trimmed == "~" || trimmed.StartsWith("~/") || trimmed.StartsWith("~\\"))
+        {
+            var rel = trimmed.Length > 1 ? trimmed[1..].TrimStart('/', '\\') : string.Empty;
+            trimmed = string.IsNullOrEmpty(rel) ? $"home/{userName}" : $"home/{userName}/{rel}";
+        }
+        else
+        {
+            trimmed = trimmed.TrimStart('/', '\\');
+        }
         return $@"\\wsl.localhost\{distro}\{trimmed.Replace('/', '\\')}";
     }
 }
+

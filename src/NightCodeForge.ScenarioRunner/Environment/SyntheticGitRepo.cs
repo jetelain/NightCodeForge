@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Text;
 
+using NightCodeForge.Core.Interfaces;
+
 namespace NightCodeForge.ScenarioRunner.Environment;
 
 /// <summary>
@@ -10,10 +12,12 @@ namespace NightCodeForge.ScenarioRunner.Environment;
 public sealed class SyntheticGitRepo
 {
     public string RepositoryPath { get; }
+    public IWslMetadataService WslMetadataService { get; set; }
 
-    public SyntheticGitRepo(string repositoryPath)
+    public SyntheticGitRepo(string repositoryPath, IWslMetadataService? wslMetadataService = null)
     {
         RepositoryPath = repositoryPath ?? throw new ArgumentNullException(nameof(repositoryPath));
+        WslMetadataService = wslMetadataService ?? new NightCodeForge.Infrastructure.Execution.WslMetadataService(new NightCodeForge.Infrastructure.Execution.SystemProcessRunner());
     }
 
     /// <summary>
@@ -48,6 +52,8 @@ public sealed class SyntheticGitRepo
 obj/
 *.user
 .vs/
+docs/tasks/
+docs/transcripts/
 ");
 
         // 2. Calculator.cs
@@ -147,7 +153,9 @@ Contains Calculator arithmetic service and project configuration.
         if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) &&
             (basePath.StartsWith('/') || basePath.StartsWith('~')))
         {
-            basePath = NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(basePath, "Ubuntu");
+            var distro = WslMetadataService.GetDefaultDistributionName();
+            var user = WslMetadataService.GetDefaultUserName();
+            basePath = NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(basePath, distro, user);
         }
         var targetFile = Path.Combine(basePath, "Calculator.cs");
         var sourceFile = File.Exists(targetFile) ? targetFile : Path.Combine(RepositoryPath, "Calculator.cs");
@@ -199,7 +207,9 @@ public class Calculator
             if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) &&
                 (mirrorPath.StartsWith('/') || mirrorPath.StartsWith('~')))
             {
-                target = NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(mirrorPath, "Ubuntu");
+                var distro = WslMetadataService.GetDefaultDistributionName();
+                var user = WslMetadataService.GetDefaultUserName();
+                target = NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(mirrorPath, distro, user);
             }
             try
             {
@@ -220,11 +230,54 @@ public class Calculator
     }
 
     /// <summary>
-    /// Injects a dangling .git/index.lock file simulating an aborted git crash.
+    /// Injects a dangling index.lock file into the repository or specified worktree.
+    /// Resolves .git pointer files in worktrees to locate the real gitdir.
     /// </summary>
-    public string InjectDanglingLock()
+    public string InjectDanglingLock(string? targetPath = null)
     {
-        var lockPath = Path.Combine(RepositoryPath, ".git", "index.lock");
+        var rawPath = !string.IsNullOrWhiteSpace(targetPath) ? targetPath : RepositoryPath;
+        var isWindows = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
+        var isWsl = isWindows && (rawPath.StartsWith('/') || rawPath.StartsWith('~'));
+        var distro = WslMetadataService.GetDefaultDistributionName();
+        var user = WslMetadataService.GetDefaultUserName();
+        var basePath = isWsl
+            ? NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(rawPath, distro, user)
+            : rawPath;
+
+        var gitDir = Path.Combine(basePath, ".git");
+
+        if (File.Exists(gitDir))
+        {
+            try
+            {
+                var lines = File.ReadAllLines(gitDir);
+                var gitDirLine = lines.FirstOrDefault(l => l.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase));
+                if (gitDirLine != null)
+                {
+                    var targetGitDir = gitDirLine[7..].Trim();
+                    if (!Path.IsPathRooted(targetGitDir) && !targetGitDir.StartsWith('/'))
+                    {
+                        targetGitDir = Path.GetFullPath(Path.Combine(basePath, targetGitDir));
+                    }
+                    else if (isWsl && (targetGitDir.StartsWith('/') || targetGitDir.StartsWith('~')))
+                    {
+                        targetGitDir = NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(targetGitDir, distro, user);
+                    }
+                    if (Directory.Exists(targetGitDir))
+                    {
+                        gitDir = targetGitDir;
+                    }
+                }
+            }
+            catch { }
+        }
+
+        var lockPath = Path.Combine(gitDir, "index.lock");
+        var lockDir = Path.GetDirectoryName(lockPath);
+        if (!string.IsNullOrEmpty(lockDir) && !Directory.Exists(lockDir))
+        {
+            Directory.CreateDirectory(lockDir);
+        }
         File.WriteAllText(lockPath, "dangling lock file");
         return lockPath;
     }
@@ -232,43 +285,84 @@ public class Calculator
     /// <summary>
     /// Injects uncommitted modifications to working tree files simulating uncommitted edits before crash.
     /// </summary>
-    public void InjectDirtyChange()
+    public void InjectDirtyChange(string? targetPath = null)
     {
-        var path = Path.Combine(RepositoryPath, "Calculator.cs");
+        var rawPath = !string.IsNullOrWhiteSpace(targetPath) ? targetPath : RepositoryPath;
+        var isWindows = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
+        var distro = WslMetadataService.GetDefaultDistributionName();
+        var user = WslMetadataService.GetDefaultUserName();
+        var basePath = (isWindows && (rawPath.StartsWith('/') || rawPath.StartsWith('~')))
+            ? NightCodeForge.Infrastructure.Git.WslPathConverter.ToWslUncPath(rawPath, distro, user)
+            : rawPath;
+
+        var path = Path.Combine(basePath, "Calculator.cs");
         File.AppendAllText(path, "\n// Uncommitted working tree edit before crash\n");
     }
 
-    public async Task<string> GetStatusAsync(CancellationToken cancellationToken = default)
+    public Task<string> GetStatusAsync(CancellationToken cancellationToken = default)
+        => GetStatusAsync(null, cancellationToken);
+
+    public async Task<string> GetStatusAsync(string? targetPath, CancellationToken cancellationToken = default)
     {
-        return await RunGitAsync("status --short", cancellationToken);
+        return await RunGitAsync("status --short", targetPath, cancellationToken);
     }
 
-    public async Task<string> GetCommitLogAsync(int count = 5, CancellationToken cancellationToken = default)
+    public Task<string> GetCommitLogAsync(int count = 5, CancellationToken cancellationToken = default)
+        => GetCommitLogAsync(count, null, cancellationToken);
+
+    public async Task<string> GetCommitLogAsync(int count, string? targetPath, CancellationToken cancellationToken = default)
     {
-        return await RunGitAsync($"log -n {count} --oneline", cancellationToken);
+        return await RunGitAsync($"log -n {count} --oneline", targetPath, cancellationToken);
     }
 
-    public async Task<string> GetDiffAsync(string baseBranch = "main", CancellationToken cancellationToken = default)
+    public Task<string> GetDiffAsync(string baseBranch = "main", CancellationToken cancellationToken = default)
+        => GetDiffAsync(baseBranch, null, cancellationToken);
+
+    public async Task<string> GetDiffAsync(string baseBranch, string? targetPath, CancellationToken cancellationToken = default)
     {
-        return await RunGitAsync($"diff {baseBranch}", cancellationToken);
+        return await RunGitAsync($"diff {baseBranch}", targetPath, cancellationToken);
     }
 
-    public async Task<string> GetCurrentBranchAsync(CancellationToken cancellationToken = default)
+    public Task<string> GetCurrentBranchAsync(CancellationToken cancellationToken = default)
+        => GetCurrentBranchAsync(null, cancellationToken);
+
+    public async Task<string> GetCurrentBranchAsync(string? targetPath, CancellationToken cancellationToken = default)
     {
-        var result = await RunGitAsync("branch --show-current", cancellationToken);
+        var result = await RunGitAsync("branch --show-current", targetPath, cancellationToken);
         return result.Trim();
     }
 
-    public async Task<string> RunGitAsync(string arguments, CancellationToken cancellationToken = default)
+    public Task<string> RunGitAsync(string arguments, CancellationToken cancellationToken = default)
+        => RunGitAsync(arguments, null, cancellationToken);
+
+    public async Task<string> RunGitAsync(string arguments, string? workingDirectory, CancellationToken cancellationToken = default)
     {
-        var psi = new ProcessStartInfo("git", arguments)
+        var workDir = !string.IsNullOrWhiteSpace(workingDirectory) ? workingDirectory : RepositoryPath;
+        var isWindows = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
+        var isWsl = isWindows && (workDir.StartsWith('/') || workDir.StartsWith('~'));
+
+        ProcessStartInfo psi;
+        if (isWsl)
         {
-            WorkingDirectory = RepositoryPath,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
+            psi = new ProcessStartInfo("wsl.exe", $"-d Ubuntu -- git -C \"{workDir}\" {arguments}")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+        }
+        else
+        {
+            psi = new ProcessStartInfo("git", arguments)
+            {
+                WorkingDirectory = workDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+        }
 
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to launch git CLI.");
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -281,7 +375,7 @@ public class Calculator
 
         if (process.ExitCode != 0)
         {
-            throw new InvalidOperationException($"Git command 'git {arguments}' failed with exit code {process.ExitCode}: {stderr}");
+            throw new InvalidOperationException($"Git command 'git {arguments}' in '{workDir}' failed with exit code {process.ExitCode}: {stderr}");
         }
 
         return stdout;

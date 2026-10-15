@@ -13,15 +13,18 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 {
     private readonly IGitCliRunner _gitCliRunner;
     private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IWslMetadataService _wslMetadataService;
     private readonly ILogger<GitWorkspaceManager> _logger;
 
     public GitWorkspaceManager(
         IGitCliRunner gitCliRunner,
         IWorkspacePathResolver? pathResolver = null,
+        IWslMetadataService? wslMetadataService = null,
         ILogger<GitWorkspaceManager>? logger = null)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _pathResolver = pathResolver;
+        _wslMetadataService = wslMetadataService ?? new Execution.WslMetadataService(new Execution.SystemProcessRunner());
         _logger = logger ?? NullLogger<GitWorkspaceManager>.Instance;
     }
 
@@ -87,7 +90,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         }
 
         // If directory exists on disk but is not registered in git, clean it up before worktree add
-        if (Directory.Exists(worktreePath))
+        if (WorktreeDirectoryExists(worktreePath))
         {
             _logger.LogWarning("Worktree directory '{WorktreePath}' exists on disk but is not registered in git; cleaning up", worktreePath);
             DeleteDirectorySafe(worktreePath);
@@ -190,7 +193,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         try
         {
-            if (Directory.Exists(worktreePath))
+            if (WorktreeDirectoryExists(worktreePath))
             {
                 DeleteDirectorySafe(worktreePath);
             }
@@ -430,8 +433,9 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                 }
                 else
                 {
-                    var distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
-                    checkPath = WslPathConverter.ToWslUncPath(workspace.Ext4MirrorPath, distro);
+                    var distro = _wslMetadataService.GetDefaultDistributionName();
+                    var user = _wslMetadataService.GetDefaultUserName();
+                    checkPath = WslPathConverter.ToWslUncPath(workspace.Ext4MirrorPath, distro, user);
                 }
 
                 if (Directory.Exists(checkPath))
@@ -472,10 +476,9 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             string targetCanonical = canonicalPath;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (canonicalPath.StartsWith('/') || canonicalPath.StartsWith('~')))
             {
-                var distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
-                var user = _pathResolver?.GetWslUserName() ?? Environment.UserName.ToLowerInvariant();
-                var expanded = canonicalPath.StartsWith('~') ? $"/home/{user}/{canonicalPath.TrimStart('~', '/')}" : canonicalPath;
-                targetCanonical = WslPathConverter.ToWslUncPath(expanded, distro);
+                var distro = _wslMetadataService.GetDefaultDistributionName();
+                var user = _wslMetadataService.GetDefaultUserName();
+                targetCanonical = WslPathConverter.ToWslUncPath(canonicalPath, distro, user);
             }
 
             var result = await _gitCliRunner.ExecuteAsync(canonicalPath, ["rev-parse", "--git-path", "info/exclude"], cancellationToken: cancellationToken);
@@ -514,23 +517,64 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         }
     }
 
-    private static void DeleteDirectorySafe(string path)
+    private string ResolveHostAccessiblePath(string path)
     {
-        if (!Directory.Exists(path)) return;
-
-        try
+        if (string.IsNullOrWhiteSpace(path)) return path;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (path.StartsWith('/') || path.StartsWith('~')))
         {
-            foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-            {
-                try
-                {
-                    File.SetAttributes(file, FileAttributes.Normal);
-                }
-                catch { }
-            }
-
-            Directory.Delete(path, true);
+            var distro = _wslMetadataService.GetDefaultDistributionName();
+            var user = _wslMetadataService.GetDefaultUserName();
+            return WslPathConverter.ToWslUncPath(path, distro, user);
         }
-        catch { }
+        return path;
+    }
+
+    private bool WorktreeDirectoryExists(string worktreePath)
+    {
+        if (Directory.Exists(worktreePath)) return true;
+        var hostPath = ResolveHostAccessiblePath(worktreePath);
+        return !string.Equals(hostPath, worktreePath, StringComparison.OrdinalIgnoreCase) && Directory.Exists(hostPath);
+    }
+
+    private void DeleteDirectorySafe(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        var hostPath = ResolveHostAccessiblePath(path);
+        if (Directory.Exists(hostPath))
+        {
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(hostPath, "*", SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        File.SetAttributes(file, FileAttributes.Normal);
+                    }
+                    catch { }
+                }
+
+                Directory.Delete(hostPath, true);
+            }
+            catch { }
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (path.StartsWith('/') || path.StartsWith('~')))
+        {
+            try
+            {
+                var distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
+                var cleanPath = path.Replace("\"", "\\\"");
+                using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "wsl.exe",
+                    Arguments = $"-d {distro} -u root -- rm -rf \"{cleanPath}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+                p?.WaitForExit(3000);
+            }
+            catch { }
+        }
     }
 }

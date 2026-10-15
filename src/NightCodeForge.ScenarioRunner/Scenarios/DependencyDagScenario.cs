@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Data;
@@ -126,15 +127,29 @@ public class DependencyDagScenario : IScenario
         }
 
         // Step 4: Advance and Complete ForgeTask A with Squash-Merge
-        ConsoleFormatting.PrintStep("4.4", "Completing ForgeTask A and triggering cascade unblocking...");
-        // Add a commit on ForgeTask A's feature branch
-        await context.Environment.GitRepo.CheckoutBranchAsync(taskA.FeatureBranch, create: true, context.CancellationToken);
-        context.Environment.GitRepo.CreateFile("MathService.cs", "// MathService core implementation\npublic class MathService {}");
-        await context.Environment.GitRepo.CommitAllAsync("Implement MathService", context.CancellationToken);
-        await context.Environment.GitRepo.CheckoutBranchAsync("main", create: false, context.CancellationToken);
-
+        ConsoleFormatting.PrintStep("4.4", "Completing ForgeTask A via dedicated worktree and triggering cascade unblocking...");
         using (var scope = context.Environment.Services.CreateScope())
         {
+            var gitManager = scope.ServiceProvider.GetRequiredService<IGitWorkspaceManager>();
+            var gitRunner = scope.ServiceProvider.GetRequiredService<IGitCliRunner>();
+
+            var taskAWorktree = await gitManager.EnsureWorktreeAsync(
+                context.Environment.Workspace,
+                taskA.Id,
+                taskA.BaseBranch,
+                context.CancellationToken);
+
+            var wslMetadata = scope.ServiceProvider.GetRequiredService<IWslMetadataService>();
+            var hostTaskAWorktree = (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) &&
+                                     (taskAWorktree.StartsWith('/') || taskAWorktree.StartsWith('~')))
+                ? Infrastructure.Git.WslPathConverter.ToWslUncPath(taskAWorktree, wslMetadata.GetDefaultDistributionName(), wslMetadata.GetDefaultUserName())
+                : taskAWorktree;
+            var mathServiceFile = Path.Combine(hostTaskAWorktree, "MathService.cs");
+            await File.WriteAllTextAsync(mathServiceFile, "// MathService core implementation\npublic class MathService {}\n", context.CancellationToken);
+
+            await gitRunner.ExecuteAsync(taskAWorktree, ["add", "MathService.cs"], cancellationToken: context.CancellationToken);
+            await gitRunner.ExecuteAsync(taskAWorktree, ["commit", "-m", "Implement MathService"], cancellationToken: context.CancellationToken);
+
             var orchestrator = scope.ServiceProvider.GetRequiredService<ITaskOrchestrator>();
             await orchestrator.CompleteTaskAndCascadeAsync(taskA.Id, "Squash: Complete MathService", context.CancellationToken);
         }

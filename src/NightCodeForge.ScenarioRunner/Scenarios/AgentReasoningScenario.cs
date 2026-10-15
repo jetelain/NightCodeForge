@@ -47,10 +47,18 @@ public class AgentReasoningScenario : IScenario
             ConsoleFormatting.PrintSuccess($"Created ForgeTask #{task.Id}: '{task.Title}'");
         }
 
-        ConsoleFormatting.PrintStep("2.2", $"Preparing CrucibleAgentHarness with model '{context.Options.ModelId}'...");
+        ConsoleFormatting.PrintStep("2.2", $"Preparing CrucibleAgentHarness with model '{context.Options.ModelId}' and dedicated worktree...");
         using var runScope = context.Environment.Services.CreateScope();
         var harness = runScope.ServiceProvider.GetRequiredService<CrucibleAgentHarness>();
         var streamer = runScope.ServiceProvider.GetRequiredService<IAgentActivityStreamer>();
+        var gitManager = runScope.ServiceProvider.GetRequiredService<IGitWorkspaceManager>();
+
+        var worktreePath = await gitManager.EnsureWorktreeAsync(
+            context.Environment.Workspace,
+            task.Id,
+            task.BaseBranch,
+            context.CancellationToken);
+        ConsoleFormatting.PrintInfo($"Worktree provisioned at '{worktreePath}'");
 
         var profile = context.Environment.Workspace.AgentProfiles?.FirstOrDefault(p => p.Id == "task-review")
             ?? new AgentProfile
@@ -70,7 +78,7 @@ public class AgentReasoningScenario : IScenario
             StageId = "task-review",
             StageDirective = "Inspect Calculator.cs and README.md in the repository. Answer what methods are present and recommend 2 additional arithmetic operations.",
             RequiredMode = AgentMode.Full,
-            WorkspacePath = context.Environment.RepositoryPath,
+            WorkspacePath = worktreePath,
             BootstrapPrompt = "Please inspect Calculator.cs and provide an overview and enhancement recommendations.",
             OptimizationFlags = new LocalOptimizationFlags()
         };
@@ -118,32 +126,43 @@ public class AgentReasoningScenario : IScenario
             }
         }, streamCts.Token);
 
-        ConsoleFormatting.PrintStep("2.3", "Executing CrucibleAgentHarness reasoning turn...");
-        var runResult = await harness.RunStageAsync(sessionContext, context.CancellationToken);
-
-        // Cancel streaming watcher and wait for it
-        streamCts.Cancel();
-        try { await streamTask; } catch { }
-
-        sw.Stop();
-
-        if (runResult.Status == AgentRunStatus.Failed)
+        try
         {
-            return ScenarioResult.Fail(sw.Elapsed, $"Agent execution failed: {runResult.Error}");
+            ConsoleFormatting.PrintStep("2.3", "Executing CrucibleAgentHarness reasoning turn...");
+            var runResult = await harness.RunStageAsync(sessionContext, context.CancellationToken);
+
+            // Cancel streaming watcher and wait for it
+            streamCts.Cancel();
+            try { await streamTask; } catch { }
+
+            sw.Stop();
+
+            if (runResult.Status == AgentRunStatus.Failed)
+            {
+                return ScenarioResult.Fail(sw.Elapsed, $"Agent execution failed: {runResult.Error}");
+            }
+
+            ConsoleFormatting.PrintSuccess($"Agent execution completed in {sw.ElapsedMilliseconds}ms!");
+            ConsoleFormatting.PrintInfo($"Duration: {runResult.Metrics.DurationMs}ms, Prompt Tokens: {runResult.Metrics.PromptTokens}, Completion Tokens: {runResult.Metrics.CompletionTokens}, Total Tokens: {runResult.Metrics.TotalTokens}");
+
+            if (!string.IsNullOrEmpty(runResult.UpdatedState))
+            {
+                ConsoleFormatting.PrintSuccess($"Serialized memory captured ({runResult.UpdatedState.Length} bytes)");
+            }
+
+            details.Add($"Model: {context.Options.ModelId}");
+            details.Add($"Tokens: {runResult.Metrics.TotalTokens} (Prompt: {runResult.Metrics.PromptTokens}, Comp: {runResult.Metrics.CompletionTokens})");
+            details.Add($"Duration: {runResult.Metrics.DurationMs}ms");
+
+            return ScenarioResult.Pass(sw.Elapsed, "Crucible agent reasoning, streaming, and tool execution verified.", details.ToArray());
         }
-
-        ConsoleFormatting.PrintSuccess($"Agent execution completed in {sw.ElapsedMilliseconds}ms!");
-        ConsoleFormatting.PrintInfo($"Duration: {runResult.Metrics.DurationMs}ms, Prompt Tokens: {runResult.Metrics.PromptTokens}, Completion Tokens: {runResult.Metrics.CompletionTokens}, Total Tokens: {runResult.Metrics.TotalTokens}");
-
-        if (!string.IsNullOrEmpty(runResult.UpdatedState))
+        finally
         {
-            ConsoleFormatting.PrintSuccess($"Serialized memory captured ({runResult.UpdatedState.Length} bytes)");
+            try
+            {
+                await gitManager.RemoveWorktreeAsync(context.Environment.Workspace, task.Id, context.CancellationToken);
+            }
+            catch { }
         }
-
-        details.Add($"Model: {context.Options.ModelId}");
-        details.Add($"Tokens: {runResult.Metrics.TotalTokens} (Prompt: {runResult.Metrics.PromptTokens}, Comp: {runResult.Metrics.CompletionTokens})");
-        details.Add($"Duration: {runResult.Metrics.DurationMs}ms");
-
-        return ScenarioResult.Pass(sw.Elapsed, "Crucible agent reasoning, streaming, and tool execution verified.", details.ToArray());
     }
 }

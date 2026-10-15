@@ -21,6 +21,7 @@ public class GitSyncService : IGitSyncService
     private readonly IGitMirrorSyncService _mirrorSyncService;
     private readonly ITaskRepository? _taskRepository;
     private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IWslMetadataService _wslMetadataService;
     private readonly ILogger<GitSyncService> _logger;
 
     private static readonly ConcurrentDictionary<int, DateTime> LastFetchedTimes = new();
@@ -32,6 +33,7 @@ public class GitSyncService : IGitSyncService
         IGitMirrorSyncService mirrorSyncService,
         ITaskRepository? taskRepository = null,
         IWorkspacePathResolver? pathResolver = null,
+        IWslMetadataService? wslMetadataService = null,
         ILogger<GitSyncService>? logger = null)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
@@ -39,6 +41,7 @@ public class GitSyncService : IGitSyncService
         _mirrorSyncService = mirrorSyncService ?? throw new ArgumentNullException(nameof(mirrorSyncService));
         _taskRepository = taskRepository;
         _pathResolver = pathResolver;
+        _wslMetadataService = wslMetadataService ?? new Infrastructure.Execution.WslMetadataService(new Infrastructure.Execution.SystemProcessRunner());
         _logger = logger ?? NullLogger<GitSyncService>.Instance;
     }
 
@@ -57,8 +60,9 @@ public class GitSyncService : IGitSyncService
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
             (path.StartsWith('/') || path.StartsWith('~') || WslPathConverter.IsWslUncPath(path)))
         {
-            var distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
-            var uncPath = WslPathConverter.ToWslUncPath(path, distro);
+            var distro = _wslMetadataService.GetDefaultDistributionName();
+            var user = _wslMetadataService.GetDefaultUserName();
+            var uncPath = WslPathConverter.ToWslUncPath(path, distro, user);
             return Directory.Exists(uncPath);
         }
 

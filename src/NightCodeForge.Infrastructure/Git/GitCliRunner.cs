@@ -17,23 +17,27 @@ public class GitCliRunner : IGitCliRunner
 {
     private readonly IProcessRunner _processRunner;
     private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IWslMetadataService _wslMetadataService;
     private readonly ILogger<GitCliRunner> _logger;
 
     [ActivatorUtilitiesConstructor]
     public GitCliRunner(
         IProcessRunner processRunner,
         IWorkspacePathResolver? pathResolver = null,
+        IWslMetadataService? wslMetadataService = null,
         ILogger<GitCliRunner>? logger = null)
     {
         _processRunner = processRunner ?? new SystemProcessRunner();
         _pathResolver = pathResolver;
+        _wslMetadataService = wslMetadataService ?? new Execution.WslMetadataService(_processRunner);
         _logger = logger ?? NullLogger<GitCliRunner>.Instance;
     }
 
     public GitCliRunner(
         IWorkspacePathResolver? pathResolver = null,
+        IWslMetadataService? wslMetadataService = null,
         ILogger<GitCliRunner>? logger = null)
-        : this(new SystemProcessRunner(), pathResolver, logger)
+        : this(new SystemProcessRunner(), pathResolver, wslMetadataService, logger)
     {
     }
 
@@ -146,7 +150,7 @@ public class GitCliRunner : IGitCliRunner
 
     private bool TryResolveWslTarget(string workingDirectory, out string distro, out string linuxDir)
     {
-        distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
+        distro = _wslMetadataService.GetDefaultDistributionName();
         linuxDir = workingDirectory;
 
         if (string.IsNullOrWhiteSpace(workingDirectory))
@@ -186,17 +190,9 @@ public class GitCliRunner : IGitCliRunner
             return;
         }
 
-        string checkPath;
-        if (linuxDir.StartsWith('~'))
-        {
-            var user = _pathResolver?.GetWslUserName() ?? Environment.UserName.ToLowerInvariant();
-            var expanded = $"/home/{user}/{linuxDir.TrimStart('~', '/')}";
-            checkPath = WslPathConverter.ToWslUncPath(expanded, distro);
-        }
-        else
-        {
-            checkPath = WslPathConverter.ToWslUncPath(linuxDir, distro);
-        }
+        var effectiveDistro = !string.IsNullOrWhiteSpace(distro) ? distro : _wslMetadataService.GetDefaultDistributionName();
+        var user = _wslMetadataService.GetDefaultUserName();
+        var checkPath = WslPathConverter.ToWslUncPath(linuxDir, effectiveDistro, user);
 
         if (!Directory.Exists(checkPath))
         {

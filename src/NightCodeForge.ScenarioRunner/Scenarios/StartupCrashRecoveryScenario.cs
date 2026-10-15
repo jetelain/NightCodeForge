@@ -26,27 +26,8 @@ public class StartupCrashRecoveryScenario : IScenario
         var sw = Stopwatch.StartNew();
         var details = new List<string>();
 
-        // Step 1: Simulate Crash Conditions
-        ConsoleFormatting.PrintStep("7.1", "Injecting crash artifacts: dangling index.lock, dirty tree edits, and orphaned Running task...");
-
-        // 1. Dangling lock
-        var lockPath = context.Environment.GitRepo.InjectDanglingLock();
-        if (!File.Exists(lockPath))
-        {
-            return ScenarioResult.Fail(sw.Elapsed, "Failed to create dangling index.lock.");
-        }
-        ConsoleFormatting.PrintInfo($"Injected dangling lock: {lockPath}");
-
-        // 2. Dirty uncommitted file edit
-        context.Environment.GitRepo.InjectDirtyChange();
-        var status = await context.Environment.GitRepo.GetStatusAsync(context.CancellationToken);
-        if (string.IsNullOrWhiteSpace(status))
-        {
-            return ScenarioResult.Fail(sw.Elapsed, "Failed to inject dirty working tree change.");
-        }
-        ConsoleFormatting.PrintInfo($"Working tree is dirty:\n{status.Trim()}");
-
-        // 3. Orphaned task left in Running state
+        // Step 1: Create in-flight task and dedicated active worktree
+        ConsoleFormatting.PrintStep("7.1", "Seeding in-flight task and provisioning active worktree...");
         ForgeTask crashedTask;
         using (var scope = context.Environment.Services.CreateScope())
         {
@@ -68,58 +49,92 @@ public class StartupCrashRecoveryScenario : IScenario
             ConsoleFormatting.PrintInfo($"Seeded orphaned task #{crashedTask.Id} with Status=Implemented.");
         }
 
-        // Step 2: Execute Startup Recovery Reconciliation
-        ConsoleFormatting.PrintStep("7.2", "Executing IStartupRecoveryService.ReconcileWorkspacesAsync()...");
-        using (var scope = context.Environment.Services.CreateScope())
-        {
-            var recoveryService = scope.ServiceProvider.GetRequiredService<IStartupRecoveryService>();
-            await recoveryService.ReconcileWorkspacesAsync(context.CancellationToken);
-            ConsoleFormatting.PrintSuccess("Startup recovery service executed successfully.");
-        }
+        using var workScope = context.Environment.Services.CreateScope();
+        var gitManager = workScope.ServiceProvider.GetRequiredService<Core.Interfaces.IGitWorkspaceManager>();
+        var worktreePath = await gitManager.EnsureWorktreeAsync(
+            context.Environment.Workspace,
+            crashedTask.Id,
+            crashedTask.BaseBranch,
+            context.CancellationToken);
+        ConsoleFormatting.PrintInfo($"Active worktree created at: {worktreePath}");
 
-        // Step 3: Verify Stale Lock Purged
-        ConsoleFormatting.PrintStep("7.3", "Verifying dangling .git/index.lock was purged...");
-        if (File.Exists(lockPath))
+        try
         {
-            return ScenarioResult.Fail(sw.Elapsed, "Violation: .git/index.lock was NOT purged by recovery service.");
-        }
-        ConsoleFormatting.PrintSuccess(".git/index.lock safely detected and removed.");
-        details.Add("Stale Lock: Purged successfully");
+            // 1. Inject dangling locks (both base repo and active worktree)
+            var baseLockPath = context.Environment.GitRepo.InjectDanglingLock();
+            var worktreeLockPath = context.Environment.GitRepo.InjectDanglingLock(worktreePath);
+            ConsoleFormatting.PrintInfo($"Injected dangling locks: {baseLockPath} and {worktreeLockPath}");
 
-        // Step 4: Verify Rescue Commit Created for Dirty Tree
-        ConsoleFormatting.PrintStep("7.4", "Verifying rescue commit was created for uncommitted edits...");
-        var log = await context.Environment.GitRepo.GetCommitLogAsync(2, context.CancellationToken);
-        if (!log.Contains("WIP-RECOVERY"))
-        {
-            return ScenarioResult.Fail(sw.Elapsed, "Violation: No WIP-RECOVERY rescue commit found in git log.");
-        }
-        ConsoleFormatting.PrintSuccess($"Rescue commit verified in Git log:\n{log.Trim()}");
-        details.Add("Rescue Commit: Created WIP-RECOVERY commit");
-
-        // Step 5: Verify Orphaned ForgeTask Reset & Re-Enqueued to Priority Queue
-        ConsoleFormatting.PrintStep("7.5", "Verifying orphaned task reconciled and enqueued to llm-urgent...");
-        using (var scope = context.Environment.Services.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var reloaded = await db.Tasks.FindAsync([crashedTask.Id], context.CancellationToken);
-
-            if (reloaded == null)
+            // 2. Inject uncommitted working tree edits into active task worktree
+            context.Environment.GitRepo.InjectDirtyChange(worktreePath);
+            var status = await context.Environment.GitRepo.GetStatusAsync(worktreePath, context.CancellationToken);
+            if (string.IsNullOrWhiteSpace(status))
             {
-                return ScenarioResult.Fail(sw.Elapsed, "Orphaned task was lost from database.");
+                return ScenarioResult.Fail(sw.Elapsed, "Failed to inject dirty worktree change.");
+            }
+            ConsoleFormatting.PrintInfo($"Worktree is dirty:\n{status.Trim()}");
+
+            // Step 2: Execute Startup Recovery Reconciliation
+            ConsoleFormatting.PrintStep("7.2", "Executing IStartupRecoveryService.ReconcileWorkspacesAsync()...");
+            using (var scope = context.Environment.Services.CreateScope())
+            {
+                var recoveryService = scope.ServiceProvider.GetRequiredService<IStartupRecoveryService>();
+                await recoveryService.ReconcileWorkspacesAsync(context.CancellationToken);
+                ConsoleFormatting.PrintSuccess("Startup recovery service executed successfully.");
             }
 
-            ConsoleFormatting.PrintSuccess($"Orphaned task reconciled (Status={reloaded.Status}).");
-
-            var urgentJob = context.Environment.JobQueue.AllJobs
-                .FirstOrDefault(j => j.TaskId == crashedTask.Id && j.QueueName == "llm-urgent");
-
-            if (urgentJob == null)
+            // Step 3: Verify Stale Locks Purged
+            ConsoleFormatting.PrintStep("7.3", "Verifying dangling locks were purged...");
+            if (File.Exists(baseLockPath) || File.Exists(worktreeLockPath))
             {
-                return ScenarioResult.Fail(sw.Elapsed, "Orphaned task was not re-enqueued to priority queue 'llm-urgent'.");
+                return ScenarioResult.Fail(sw.Elapsed, "Violation: .git/index.lock was NOT purged by recovery service.");
             }
+            ConsoleFormatting.PrintSuccess("Dangling git lockfiles safely detected and removed.");
+            details.Add("Stale Locks: Purged successfully");
 
-            ConsoleFormatting.PrintSuccess($"Orphaned task re-enqueued to head of queue '{urgentJob.QueueName}'.");
-            details.Add($"Task Re-Enqueued: {urgentJob.JobId} -> {urgentJob.QueueName}");
+            // Step 4: Verify Rescue Commit Created for Dirty Tree
+            ConsoleFormatting.PrintStep("7.4", "Verifying rescue commit was created for uncommitted edits in worktree...");
+            var log = await context.Environment.GitRepo.GetCommitLogAsync(2, worktreePath, context.CancellationToken);
+            if (!log.Contains("WIP-RECOVERY"))
+            {
+                return ScenarioResult.Fail(sw.Elapsed, "Violation: No WIP-RECOVERY rescue commit found in worktree git log.");
+            }
+            ConsoleFormatting.PrintSuccess($"Rescue commit verified in worktree Git log:\n{log.Trim()}");
+            details.Add("Rescue Commit: Created WIP-RECOVERY commit in task worktree");
+
+            // Step 5: Verify Orphaned ForgeTask Reset & Re-Enqueued to Priority Queue
+            ConsoleFormatting.PrintStep("7.5", "Verifying orphaned task reconciled and enqueued to llm-urgent...");
+            using (var scope = context.Environment.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var reloaded = await db.Tasks.FindAsync([crashedTask.Id], context.CancellationToken);
+
+                if (reloaded == null)
+                {
+                    return ScenarioResult.Fail(sw.Elapsed, "Orphaned task was lost from database.");
+                }
+
+                ConsoleFormatting.PrintSuccess($"Orphaned task reconciled (Status={reloaded.Status}).");
+
+                var urgentJob = context.Environment.JobQueue.AllJobs
+                    .FirstOrDefault(j => j.TaskId == crashedTask.Id && j.QueueName == "llm-urgent");
+
+                if (urgentJob == null)
+                {
+                    return ScenarioResult.Fail(sw.Elapsed, "Orphaned task was not re-enqueued to priority queue 'llm-urgent'.");
+                }
+
+                ConsoleFormatting.PrintSuccess($"Orphaned task re-enqueued to head of queue '{urgentJob.QueueName}'.");
+                details.Add($"Task Re-Enqueued: {urgentJob.JobId} -> {urgentJob.QueueName}");
+            }
+        }
+        finally
+        {
+            try
+            {
+                await gitManager.RemoveWorktreeAsync(context.Environment.Workspace, crashedTask.Id, context.CancellationToken);
+            }
+            catch { }
         }
 
         sw.Stop();

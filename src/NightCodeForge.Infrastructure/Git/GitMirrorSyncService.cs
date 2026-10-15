@@ -15,17 +15,20 @@ public class GitMirrorSyncService : IGitMirrorSyncService
     private readonly IGitCliRunner _gitCliRunner;
     private readonly IGitAlertNotifier? _alertNotifier;
     private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IWslMetadataService _wslMetadataService;
     private readonly ILogger<GitMirrorSyncService> _logger;
 
     public GitMirrorSyncService(
         IGitCliRunner gitCliRunner,
         IGitAlertNotifier? alertNotifier = null,
         IWorkspacePathResolver? pathResolver = null,
+        IWslMetadataService? wslMetadataService = null,
         ILogger<GitMirrorSyncService>? logger = null)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _alertNotifier = alertNotifier;
         _pathResolver = pathResolver;
+        _wslMetadataService = wslMetadataService ?? new Execution.WslMetadataService(new Execution.SystemProcessRunner());
         _logger = logger ?? NullLogger<GitMirrorSyncService>.Instance;
     }
 
@@ -118,8 +121,9 @@ public class GitMirrorSyncService : IGitMirrorSyncService
         var checkPath = targetMirrorDir;
         if (isTargetWsl)
         {
-            var distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
-            checkPath = WslPathConverter.ToWslUncPath(targetMirrorDir, distro);
+            var distro = _wslMetadataService.GetDefaultDistributionName();
+            var user = _wslMetadataService.GetDefaultUserName();
+            checkPath = WslPathConverter.ToWslUncPath(targetMirrorDir, distro, user);
         }
 
         if (Directory.Exists(checkPath))
@@ -160,8 +164,9 @@ public class GitMirrorSyncService : IGitMirrorSyncService
 
             if (isWindows && (targetMirrorDir.StartsWith('/') || targetMirrorDir.StartsWith('~')))
             {
-                var distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
-                var uncMirror = WslPathConverter.ToWslUncPath(targetMirrorDir, distro);
+                var distro = _wslMetadataService.GetDefaultDistributionName();
+                var user = _wslMetadataService.GetDefaultUserName();
+                var uncMirror = WslPathConverter.ToWslUncPath(targetMirrorDir, distro, user);
                 var parentUnc = Path.GetDirectoryName(uncMirror);
                 if (!string.IsNullOrEmpty(parentUnc) && !Directory.Exists(parentUnc))
                 {

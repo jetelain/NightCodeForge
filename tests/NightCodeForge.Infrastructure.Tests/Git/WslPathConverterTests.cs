@@ -43,8 +43,25 @@ public class WslPathConverterTests
     public void ToWslUncPath_FormatsProperUncString()
     {
         const string linuxPath = "/home/julien/.nightcodeforge/wks/42";
-        var unc = WslPathConverter.ToWslUncPath(linuxPath, "Ubuntu");
+        var unc = WslPathConverter.ToWslUncPath(linuxPath, "Ubuntu", "julien");
 
         Assert.Equal(@"\\wsl.localhost\Ubuntu\home\julien\.nightcodeforge\wks\42", unc);
     }
+
+    [Fact]
+    public void ToWslUncPath_WithTilde_ExpandsToHomeUserName()
+    {
+        const string linuxPath = "~/.nightcodeforge/wks/42";
+        var unc = WslPathConverter.ToWslUncPath(linuxPath, "Ubuntu", "julien");
+
+        Assert.Equal(@"\\wsl.localhost\Ubuntu\home\julien\.nightcodeforge\wks\42", unc);
+    }
+
+    [Fact]
+    public void ToWslUncPath_ThrowsOnNullOrEmptyDistroOrUserName()
+    {
+        Assert.Throws<ArgumentException>(() => WslPathConverter.ToWslUncPath("/foo", "", "julien"));
+        Assert.Throws<ArgumentException>(() => WslPathConverter.ToWslUncPath("/foo", "Ubuntu", ""));
+    }
 }
+

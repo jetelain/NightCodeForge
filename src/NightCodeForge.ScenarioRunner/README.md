@@ -4,6 +4,11 @@ A specialized console application designed to test, validate, and demonstrate au
 
 All environments are **synthetic and ephemeral** by default (clean teardown on completion), with a `--keep` / `-k` flag to retain SQLite databases and Git repositories for inspection.
 
+> [!NOTE]
+> **Workspace Isolation & Worktree Architecture:**
+> All synthetic workspaces are assigned IDs strictly **larger than 1,000,000** (e.g. `1000001`, `1000002`) to prevent any path collisions with real NightCodeForge instances and WSL ext4 environments (`~/.nightcodeforge/wks/{workspaceId}`).
+> All tasks run in dedicated native Git worktrees (`task-{taskId}`) enabling intra-workspace task parallelism and worktree-level crash recovery.
+
 ---
 
 ## Quick Start
@@ -73,8 +78,8 @@ dotnet run --project src/NightCodeForge.ScenarioRunner -- -s 1 --mock-llm -c --i
 | **4** | **Dependency DAG Engine** | Parent/child prerequisite blocking and cascade unblocking | Blocks premature execution, squash-merges, unblocks child |
 | **5** | **Deterministic Quality Gates** | Zero-token CPU build verification & regression interception | Intercepts syntax errors, routes backward loopback without GPU |
 | **6** | **End-to-End Workflow** | Full 6-stage autonomous lifecycle with auto-squash-merge | Review -> Pre-impl -> Impl -> Post-impl -> Code Review -> Verify |
-| **7** | **Crash Resilience & Recovery** | Startup recovery for dirty workspaces and crashed jobs | Purges `.git/index.lock`, creates `WIP-RECOVERY` commits |
-| **8** | **Workspace Concurrency** | Per-workspace mutual exclusion & non-blocking multi-workspace | Workspace lock serialization, cross-workspace parallel locks |
+| **7** | **Crash Resilience & Recovery** | Startup recovery for active worktrees and crashed tasks | Purges stale locks across base repos and worktree gitdir, creates `WIP-RECOVERY` commits in task worktrees, re-enqueues orphaned tasks |
+| **8** | **Workspace Concurrency & Lock Isolation** | Intra-workspace task concurrency & cross-workspace isolation | Per-task worktree locks (`AcquireTaskLockAsync`), non-blocking parallel tasks in same workspace, cross-workspace isolation, emergency release |
 | **9** | **Untrusted Triage Execution** | Sandboxed evaluation of untrusted incoming tasks and code | Restricted execution tier, secret scrubbing, network policy |
 | **10** | **Git Mirror Sync & Merge** | Git mirror push/pull and automatic squash-merge lifecycle | Isolated working clones (`~/.nightcodeforge/wks/{id}`), mirror sync |
 

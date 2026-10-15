@@ -132,7 +132,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             buildTimeoutSeconds: buildTimeout,
             testTimeoutSeconds: testTimeout,
             workspaceId: context.Workspace?.Id,
-            taskId: context.ForgeTask.Id,
+            taskId: context.ForgeTask.Id > 0 ? context.ForgeTask.Id : (int?)null,
             isReadOnly: context.Profile.Mode == AgentMode.ReadOnly || context.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly);
 
         var dispatcher = new LenientToolDispatcher(canonicalTools);

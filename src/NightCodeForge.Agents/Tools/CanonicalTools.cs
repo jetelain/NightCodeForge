@@ -58,7 +58,9 @@ public partial class CanonicalTools
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentNullException.ThrowIfNull(pathResolver);
 
-        _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _workspaceRoot = (workspaceRoot.StartsWith('/') || workspaceRoot.StartsWith('~') || workspaceRoot.StartsWith(@"\\") || workspaceRoot.StartsWith("//"))
+            ? workspaceRoot
+            : Path.GetFullPath(workspaceRoot);
         _pathResolver = pathResolver;
         _executionEnv = executionEnv;
         _editorConfigService = editorConfigService ?? new EditorConfigService();
@@ -67,7 +69,7 @@ public partial class CanonicalTools
         _buildTimeoutSeconds = buildTimeoutSeconds;
         _testTimeoutSeconds = testTimeoutSeconds;
         _workspaceId = workspaceId;
-        _taskId = taskId;
+        _taskId = (taskId.HasValue && taskId.Value > 0) ? taskId.Value : null;
         _isReadOnly = isReadOnly;
         _logger = logger;
     }
@@ -104,7 +106,7 @@ public partial class CanonicalTools
         if (!File.Exists(fullPath))
         {
             _logger?.LogWarning("CanonicalTools.read: File not found '{Path}' (resolved: '{FullPath}')", path, fullPath);
-            throw new FileNotFoundException($"File not found: '{path}' (resolved: '{fullPath}')");
+            return $"Error: File not found: '{path}'";
         }
 
         var lines = await File.ReadAllLinesAsync(fullPath, cancellationToken);
@@ -166,13 +168,14 @@ public partial class CanonicalTools
 
         if (edits == null || edits.Count == 0)
         {
-            throw new ArgumentException("At least one edit chunk must be provided.");
+            return "Error: At least one edit chunk must be provided.";
         }
 
         var fullPath = ResolveFullPath(path);
         if (!File.Exists(fullPath))
         {
-            throw new FileNotFoundException($"File not found for edit: '{path}'");
+            _logger?.LogWarning("CanonicalTools.edit: File not found '{Path}' (resolved: '{FullPath}')", path, fullPath);
+            return $"Error: File not found for edit: '{path}'";
         }
 
         var originalContent = await File.ReadAllTextAsync(fullPath, cancellationToken);

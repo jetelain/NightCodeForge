@@ -152,6 +152,28 @@ public class StartupRecoveryService : IStartupRecoveryService
             }
 
             var gitDir = Path.Combine(effectivePath, ".git");
+            if (File.Exists(gitDir))
+            {
+                try
+                {
+                    var lines = File.ReadAllLines(gitDir);
+                    var gitDirLine = lines.FirstOrDefault(l => l.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase));
+                    if (gitDirLine != null)
+                    {
+                        var targetGitDir = gitDirLine[7..].Trim();
+                        if (!Path.IsPathRooted(targetGitDir))
+                        {
+                            targetGitDir = Path.GetFullPath(Path.Combine(effectivePath, targetGitDir));
+                        }
+                        if (Directory.Exists(targetGitDir))
+                        {
+                            gitDir = targetGitDir;
+                        }
+                    }
+                }
+                catch { }
+            }
+
             if (!Directory.Exists(gitDir))
             {
                 return;
@@ -224,8 +246,8 @@ public class StartupRecoveryService : IStartupRecoveryService
             }
         }
 
-        // 2. Also check any active task worktrees via path resolver
-        if (_pathResolver != null && workspace.Id > 0)
+        // 2. Also check any active task worktrees via path resolver if Ext4 mirror is active
+        if (_pathResolver != null && workspace.Id > 0 && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
             try
             {

@@ -142,7 +142,7 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             return raw.Replace('/', '\\');
         }
 
-        int? effectiveTaskId = taskId;
+        int? effectiveTaskId = (taskId.HasValue && taskId.Value > 0) ? taskId.Value : null;
         var agentWorkingPrefix = $".nightcodeforge/wks/{workspaceId}/";
         int wksIdx = normalized.IndexOf(agentWorkingPrefix, StringComparison.OrdinalIgnoreCase);
         if (wksIdx >= 0)
@@ -172,8 +172,21 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
+        if (IsWindows && (workspaceRoot.StartsWith('/') || workspaceRoot.StartsWith('~')))
+        {
+            var distro = GetWslDistributionName();
+            var user = GetWslUserName();
+            workspaceRoot = WslPathConverter.ToWslUncPath(workspaceRoot, distro, user);
+        }
+
         var raw = (relativeOrContainerPath ?? string.Empty).Trim();
         var normalized = raw.Replace('\\', '/');
+
+        if (normalized.StartsWith("./") || normalized.StartsWith(".\\"))
+        {
+            raw = raw[2..].TrimStart('/', '\\');
+            normalized = raw.Replace('\\', '/');
+        }
 
         if (normalized.StartsWith("//wsl.localhost/", StringComparison.OrdinalIgnoreCase) ||
             normalized.StartsWith("\\\\wsl.localhost\\", StringComparison.OrdinalIgnoreCase))

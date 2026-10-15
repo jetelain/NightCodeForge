@@ -501,7 +501,8 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to ensure container {Container} is running; attempting to proceed with exec session", _options.ContainerNameOrId);
+            _logger.LogError(ex, "Failed to ensure container {Container} is running.", _options.ContainerNameOrId);
+            throw;
         }
     }
 

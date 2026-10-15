@@ -110,6 +110,7 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
         serviceCollection.AddNightCodeForgeAgents();
 
         Services = serviceCollection.BuildServiceProvider();
+        GitRepo.WslMetadataService = Services.GetRequiredService<IWslMetadataService>();
 
         // 3. Ensure Database Created with WAL Mode
         using (var scope = Services.CreateScope())
@@ -117,7 +118,13 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await db.EnsureDatabaseCreatedAndWalAsync(cancellationToken);
 
-            // 4. Seed Workspace
+            // 4. Seed sqlite_sequence so generated Workspace IDs start at 1,000,000
+            // This prevents ID and path collisions with real NightCodeForge workspaces (~/.nightcodeforge/wks/{id})
+            const int baseWorkspaceId = 1_000_000;
+            await db.Database.ExecuteSqlRawAsync(
+                $"INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES ('Workspaces', {baseWorkspaceId});",
+                cancellationToken);
+
             Workspace = new Workspace
             {
                 Name = "Synthetic Workspace",
@@ -128,6 +135,42 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
             };
             db.Workspaces.Add(Workspace);
             await db.SaveChangesAsync(cancellationToken);
+
+            if (Workspace.Id <= baseWorkspaceId)
+            {
+                throw new InvalidOperationException($"Expected generated workspace ID to be > {baseWorkspaceId}, but got {Workspace.Id}.");
+            }
+
+            // In container mode, initialize the ext4 mirror immediately at bootstrap so all worktrees are provisioned in ext4
+            if (Options.UseContainerMode)
+            {
+                var pathResolver = scope.ServiceProvider.GetRequiredService<IWorkspacePathResolver>();
+                var mirrorSync = scope.ServiceProvider.GetRequiredService<IGitMirrorSyncService>();
+                var distro = pathResolver.GetWslDistributionName();
+                var user = pathResolver.GetWslUserName();
+
+                // Clean up any stale mirror from previous scenario runs
+                try
+                {
+                    using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "wsl.exe",
+                        Arguments = $"-d {distro} -- rm -rf /home/{user}/.nightcodeforge/wks/{Workspace.Id}",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    });
+                    p?.WaitForExit(5000);
+                }
+                catch { }
+
+                var defaultMirrorDir = pathResolver.GetAgentWorkingClonePath(Workspace.Id);
+                var initialized = await mirrorSync.InitializeMirrorAsync(Workspace, defaultMirrorDir, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(initialized))
+                {
+                    Workspace.Ext4MirrorPath = initialized;
+                    await db.SaveChangesAsync(cancellationToken);
+                }
+            }
 
             // 5. Seed Agent Profiles
             var defaultProfiles = new List<AgentProfile>
@@ -197,15 +240,30 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
         else
         {
             DeleteDirectorySafe(RootDirectory);
+
+            if (Options.UseContainerMode && Workspace != null)
+            {
+                try
+                {
+                    using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "wsl.exe",
+                        Arguments = $"-- rm -rf ~/.nightcodeforge/wks/{Workspace.Id}",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    });
+                    p?.WaitForExit(5000);
+                }
+                catch { }
+            }
         }
 
         if (Options.UseContainerMode && Workspace != null)
         {
             try
             {
-                var containerName = $"ncf-sandbox-{Workspace.Id}";
                 var (rmExe, rmArgs) = Infrastructure.Execution.NightCodeForgeContainerExecutor.BuildDockerCommand(
-                    $"rm -f {containerName}",
+                    $"rm -f ncf-sandbox-{Workspace.Id} $(docker ps -aq --filter name=ncf-sandbox-{Workspace.Id})",
                     useWsl: true,
                     wslDistribution: null,
                     shellExecutable: "docker",

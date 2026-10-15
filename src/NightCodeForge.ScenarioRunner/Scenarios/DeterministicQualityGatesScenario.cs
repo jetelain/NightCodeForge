@@ -48,9 +48,6 @@ public class DeterministicQualityGatesScenario : IScenario
             };
             db.Tasks.Add(task);
             await db.SaveChangesAsync(context.CancellationToken);
-
-            await context.Environment.GitRepo.CheckoutBranchAsync(task.FeatureBranch, create: true, context.CancellationToken);
-            ConsoleFormatting.PrintSuccess($"Branch '{task.FeatureBranch}' created and checked out.");
         }
 
         using var testScope = context.Environment.Services.CreateScope();
@@ -58,7 +55,9 @@ public class DeterministicQualityGatesScenario : IScenario
         var buildStage = testScope.ServiceProvider.GetRequiredService<DeterministicBuildStage>();
         var gitManager = testScope.ServiceProvider.GetRequiredService<IGitWorkspaceManager>();
 
-        var worktreePath = await gitManager.EnsureWorktreeAsync(context.Environment.Workspace, task.Id, task.FeatureBranch, cancellationToken: context.CancellationToken);
+        var worktreePath = await gitManager.EnsureWorktreeAsync(context.Environment.Workspace, task.Id, task.BaseBranch, cancellationToken: context.CancellationToken);
+        ConsoleFormatting.PrintSuccess($"Provisioned dedicated worktree for task #{task.Id} at '{worktreePath}'.");
+
         var pipelineContext = new PipelineContext(task, context.Environment.Workspace)
         {
             WorkingDirectory = worktreePath
@@ -105,9 +104,8 @@ public class DeterministicQualityGatesScenario : IScenario
         ConsoleFormatting.PrintSuccess("DeterministicBuildStage succeeded cleanly with 0 compiler errors!");
         details.Add("Compilation Gate: Passed cleanly on valid code");
 
-        // Teardown worktree and checkout back to main
+        // Teardown worktree
         await gitManager.RemoveWorktreeAsync(context.Environment.Workspace, task.Id, context.CancellationToken);
-        await context.Environment.GitRepo.CheckoutBranchAsync("main", create: false, context.CancellationToken);
 
         sw.Stop();
         return ScenarioResult.Pass(sw.Elapsed, "Deterministic quality gate compiler regression interception and loopback routing verified.", details.ToArray());
