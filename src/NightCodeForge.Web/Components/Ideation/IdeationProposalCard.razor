@@ -17,11 +17,11 @@
                     @bind="Proposal.Priority" 
                     disabled="@Proposal.IsAdded"
                     aria-label="Task Priority">
-                <option value="1">1 - Low</option>
-                <option value="2">2 - Normal</option>
+                <option value="1">1 - Critical</option>
+                <option value="2">2 - High</option>
                 <option value="3">3 - Medium</option>
-                <option value="4">4 - High</option>
-                <option value="5">5 - Critical</option>
+                <option value="4">4 - Normal</option>
+                <option value="5">5 - Low</option>
             </select>
         </div>
     </div>
@@ -39,21 +39,31 @@
     <div class="proposal-desc-container">
         <div class="proposal-tab-bar">
             <button type="button" 
-                    class="proposal-tab-btn @(!_isPreviewDescription ? "active" : "")" 
-                    @onclick="() => _isPreviewDescription = false">
-                ✏️ Edit Scope
-            </button>
-            <button type="button" 
                     class="proposal-tab-btn @(_isPreviewDescription ? "active" : "")" 
                     @onclick="() => _isPreviewDescription = true">
                 👁️ Preview
             </button>
+            <button type="button" 
+                    class="proposal-tab-btn @(!_isPreviewDescription ? "active" : "")" 
+                    @onclick="() => _isPreviewDescription = false">
+                ✏️ Edit Scope
+            </button>
+            <div class="proposal-tab-spacer"></div>
+            @if (!string.IsNullOrWhiteSpace(Proposal.Description))
+            {
+                <button type="button" 
+                        class="proposal-tab-btn proposal-expand-toggle-btn" 
+                        @onclick="() => _isExpanded = !_isExpanded"
+                        title="@(_isExpanded ? "Collapse height" : "Expand to view full content")">
+                    @(_isExpanded ? "⤡ Collapse" : "⤢ Expand")
+                </button>
+            }
         </div>
 
         @if (!_isPreviewDescription)
         {
-            <textarea class="form-control-dark proposal-desc-textarea" 
-                      rows="4" 
+            <textarea class="form-control-dark proposal-desc-textarea @(_isExpanded ? "expanded" : "")" 
+                      rows="14" 
                       @bind="Proposal.Description" 
                       placeholder="Technical scope, implementation details, and acceptance criteria..." 
                       disabled="@Proposal.IsAdded"
@@ -61,10 +71,10 @@
         }
         else
         {
-            <div class="proposal-desc-preview">
+            <div class="proposal-desc-preview @(_isExpanded ? "expanded" : "")">
                 @if (string.IsNullOrWhiteSpace(Proposal.Description))
                 {
-                    <em class="text-muted" style="font-size: 0.82rem;">No description provided.</em>
+                    <em class="text-muted" style="font-size: 0.85rem;">No description provided.</em>
                 }
                 else
                 {
@@ -169,7 +179,8 @@
     public EventCallback<IdeationProposalViewModel> OnDismiss { get; set; }
 
     private bool _showDependencies;
-    private bool _isPreviewDescription;
+    private bool _isPreviewDescription = true;
+    private bool _isExpanded;
 
     private void OnDependencyToggled(int taskId, object? isChecked)
     {

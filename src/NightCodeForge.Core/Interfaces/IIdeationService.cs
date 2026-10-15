@@ -30,7 +30,35 @@ public enum IdeationStreamUpdateKind
     ProposalDiscovered,
     ToolCallStarted,
     ToolCallCompleted,
-    Completed
+    Completed,
+    QuestionAsked
+}
+
+/// <summary>
+/// A question raised by the agent's ask tool during a live ideation turn. The agent turn stays
+/// suspended until the user calls Submit (or the turn is cancelled).
+/// </summary>
+public sealed class IdeationQuestion
+{
+    private readonly TaskCompletionSource<string> _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public IdeationQuestion(string prompt, string? rationale, IReadOnlyList<string>? options)
+    {
+        Prompt = prompt;
+        Rationale = rationale;
+        Options = options ?? Array.Empty<string>();
+    }
+
+    public Guid Id { get; } = Guid.NewGuid();
+    public string Prompt { get; }
+    public string? Rationale { get; }
+    public IReadOnlyList<string> Options { get; }
+    public bool IsAnswered => _answer.Task.IsCompleted;
+    public Task<string> AnswerTask => _answer.Task;
+
+    public bool Submit(string answer) => _answer.TrySetResult(answer);
+
+    public bool Cancel() => _answer.TrySetCanceled();
 }
 
 public record IdeationStreamUpdate(
@@ -38,7 +66,8 @@ public record IdeationStreamUpdate(
     string? TextDelta = null,
     IdeationProposal? Proposal = null,
     IdeationToolCallInfo? ToolCall = null,
-    IdeationResult? FinalResult = null);
+    IdeationResult? FinalResult = null,
+    IdeationQuestion? Question = null);
 
 /// <summary>
 /// Service contract for interactive discovery chat and autonomous backlog task formulation.

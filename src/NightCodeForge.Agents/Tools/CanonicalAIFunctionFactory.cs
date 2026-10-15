@@ -79,18 +79,19 @@ public static class CanonicalAIFunctionFactory
             AIFunctionFactory.Create(
                 ([Description("Question or clarification prompt to ask the user")] string prompt,
                  [Description("Reason or context for asking")] string? rationale = null,
-                 [Description("Optional choice options for the user")] IReadOnlyList<string>? options = null) => tools.Ask(prompt, rationale, options),
+                 [Description("Optional choice options for the user")] IReadOnlyList<string>? options = null,
+                 CancellationToken ct = default) => tools.AskAsync(prompt, rationale, options, ct),
                 "ask",
                 "Asks clarifying questions to the user when blocked."),
 
             AIFunctionFactory.Create(
                 ([Description("List of structured backlog task proposals")] object? tasks = null,
                  [Description("Task title if single proposal")] string? title = null,
-                 [Description("Task description if single proposal")] string? description = null,
-                 [Description("Task priority (1-5) if single proposal")] int? priority = null) =>
+                 [Description("Task description with sub-tasks, testing plan, and open questions if single proposal")] string? description = null,
+                 [Description("Task priority (1 Highest - 5 Lowest) if single proposal")] int? priority = null) =>
                 tools.ProposeTasks(tasks, title, description, priority),
                 "propose_tasks",
-                "Proposes structured backlog items for triage and discovery."),
+                "Proposes structured backlog items for triage and discovery. Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Include sub-tasks and open questions in the description."),
 
             AIFunctionFactory.Create(
                 ([Description("Detailed critique and rework feedback for the implementation agent")] string feedback,

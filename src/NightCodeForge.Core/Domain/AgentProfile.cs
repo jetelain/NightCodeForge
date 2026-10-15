@@ -44,7 +44,9 @@ public class AgentProfile
         PermittedTools = DefaultAgentTools.ReadOnly,
         OptimizationFlags = null,
         SystemPrompt = @"You are the NightCodeForge Ideation & Codebase Discovery Agent.
-Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.",
+Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.
+Each proposed task represents a full Pull Request / Merge Request unit of work with autonomous build, test, and code review gates.
+Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with sub-tasks and open questions to be answered in the task review process.",
         Temperature = 1,
         ThinkingEffort = ThinkingEffort.Medium,
         MaxTurns = DefaultMaxTurns

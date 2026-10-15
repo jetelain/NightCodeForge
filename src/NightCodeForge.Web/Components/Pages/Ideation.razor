@@ -124,7 +124,8 @@
             </div>
 
             <!-- Scrollable Message Transcript -->
-            <div id="chatMessagesContainer" class="chat-messages-container">
+            <div class="chat-messages-wrapper">
+                <div id="chatMessagesContainer" class="chat-messages-container">
                 @if (Session.Messages.Count == 0 && !Session.IsGenerating)
                 {
                     <div class="chat-empty-state">
@@ -210,6 +211,48 @@
                                                 }
                                             </div>
                                         </details>
+                                    }
+                                    else if (part is QuestionContentPart qp)
+                                    {
+                                        <div class="agent-question-card @(qp.IsAnswered ? "answered" : "pending")">
+                                            <div class="agent-question-header">
+                                                <span class="agent-question-title">
+                                                    @(qp.IsAnswered ? "✓ Agent Clarification" : "❓ Agent Question")
+                                                </span>
+                                                @if (qp.IsAnswered)
+                                                {
+                                                    <span class="forge-badge badge-success tool-trace-badge">Answered</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="forge-badge badge-indigo tool-trace-badge">Pending</span>
+                                                }
+                                            </div>
+                                            <div class="agent-question-prompt">@qp.Prompt</div>
+                                            @if (!string.IsNullOrWhiteSpace(qp.Rationale))
+                                            {
+                                                <div class="agent-question-rationale text-muted">@qp.Rationale</div>
+                                            }
+                                            @if (qp.Options != null && qp.Options.Count > 0)
+                                            {
+                                                <div class="agent-question-options">
+                                                    @foreach (var option in qp.Options)
+                                                    {
+                                                        var isSelected = qp.IsAnswered && string.Equals(qp.Answer, option, StringComparison.OrdinalIgnoreCase);
+                                                        <span class="agent-choice-pill @(isSelected ? "selected" : "muted")">
+                                                            @(isSelected ? "✓ " : "")@option
+                                                        </span>
+                                                    }
+                                                </div>
+                                            }
+                                            @if (qp.IsAnswered)
+                                            {
+                                                <div class="agent-answer-summary">
+                                                    <span class="agent-answer-label">Your Answer:</span>
+                                                    <span class="agent-answer-value font-mono">@qp.Answer</span>
+                                                </div>
+                                            }
+                                        </div>
                                     }
                                     else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
                                     {
@@ -359,6 +402,68 @@
                                             </div>
                                         </details>
                                     }
+                                    else if (part is QuestionContentPart qp)
+                                    {
+                                        <div class="agent-question-card @(qp.IsAnswered ? "answered" : "pending")">
+                                            <div class="agent-question-header">
+                                                <span class="agent-question-title">
+                                                    @(qp.IsAnswered ? "✓ Agent Clarification" : "❓ The Agent Needs Your Input")
+                                                </span>
+                                                @if (qp.IsAnswered)
+                                                {
+                                                    <span class="forge-badge badge-success tool-trace-badge">Answered</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="forge-badge badge-indigo tool-trace-badge">Waiting for Answer</span>
+                                                }
+                                            </div>
+                                            <div class="agent-question-prompt">@qp.Prompt</div>
+                                            @if (!string.IsNullOrWhiteSpace(qp.Rationale))
+                                            {
+                                                <div class="agent-question-rationale text-muted">@qp.Rationale</div>
+                                            }
+                                            @if (qp.Options != null && qp.Options.Count > 0)
+                                            {
+                                                <div class="agent-question-options">
+                                                    @foreach (var option in qp.Options)
+                                                    {
+                                                        var captured = option;
+                                                        var isSelected = qp.IsAnswered && string.Equals(qp.Answer, option, StringComparison.OrdinalIgnoreCase);
+                                                        if (qp.IsAnswered)
+                                                        {
+                                                            <span class="agent-choice-pill @(isSelected ? "selected" : "muted")">
+                                                                @(isSelected ? "✓ " : "")@captured
+                                                            </span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <button type="button" class="forge-btn forge-btn-secondary" @onclick="() => SubmitQuestionAnswer(captured)">@captured</button>
+                                                        }
+                                                    }
+                                                </div>
+                                            }
+                                            @if (qp.IsAnswered)
+                                            {
+                                                <div class="agent-answer-summary">
+                                                    <span class="agent-answer-label">Your Answer:</span>
+                                                    <span class="agent-answer-value font-mono">@qp.Answer</span>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <div class="agent-question-freetext">
+                                                    <input type="text" class="form-control-dark" placeholder="Type your answer..."
+                                                           @bind="_questionAnswer" @bind:event="oninput"
+                                                           @onkeydown="HandleQuestionKeyDownAsync"
+                                                           aria-label="Answer to agent question" />
+                                                    <button type="button" class="forge-btn forge-btn-primary"
+                                                            disabled="@string.IsNullOrWhiteSpace(_questionAnswer)"
+                                                            @onclick="() => SubmitQuestionAnswer(_questionAnswer)">Answer</button>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
                                     else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
                                     {
                                         <div class="chat-content-wrap">
@@ -382,6 +487,16 @@
                     </div>
                 }
             </div>
+
+            <!-- Scroll to bottom floating button -->
+            <button id="chatScrollToBottomBtn" 
+                    type="button" 
+                    class="chat-scroll-bottom-btn" 
+                    title="Scroll to latest messages" 
+                    aria-label="Scroll to latest messages">
+                <span>↓</span>
+            </button>
+        </div>
 
             <!-- Chat Input Area -->
             <div class="chat-input-area">
@@ -498,6 +613,21 @@
         await ReloadWorkspaceContextAsync();
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("NightCodeForge.initAutoScroll", "chatMessagesContainer", "chatScrollToBottomBtn");
+            }
+            catch
+            {
+                // In non-interactive or test rendering
+            }
+        }
+    }
+
     private async Task ReloadWorkspaceContextAsync()
     {
         var active = WorkspaceState.ActiveWorkspace;
@@ -555,6 +685,42 @@
                 await SendMessageAsync();
             }
         }
+    }
+
+    private string _questionAnswer = string.Empty;
+
+    private void SubmitQuestionAnswer(string? answer)
+    {
+        if (string.IsNullOrWhiteSpace(answer))
+            return;
+
+        var cleanAnswer = answer.Trim();
+
+        var qPart = Session.CurrentParts.OfType<QuestionContentPart>()
+            .LastOrDefault(q => !q.IsAnswered);
+        if (qPart != null)
+        {
+            qPart.Answer = cleanAnswer;
+        }
+
+        if (Session.PendingQuestion != null)
+        {
+            Session.PendingQuestion.Submit(cleanAnswer);
+            Session.PendingQuestion = null;
+        }
+
+        _questionAnswer = string.Empty;
+        StateHasChanged();
+        _ = ScrollChatToBottomAsync(true);
+    }
+
+    private Task HandleQuestionKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            SubmitQuestionAnswer(_questionAnswer);
+        }
+        return Task.CompletedTask;
     }
 
     private bool _showTranscriptModal;
@@ -664,7 +830,10 @@
                                 IsCompleted = false
                             };
                             Session.CurrentToolCalls.Add(vm);
-                            Session.CurrentParts.Add(new ToolCallContentPart(vm));
+                            if (!string.Equals(call.ToolName, "ask", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Session.CurrentParts.Add(new ToolCallContentPart(vm));
+                            }
                         }
                         StateHasChanged();
                         break;
@@ -687,7 +856,38 @@
                             partMatch.ToolCall.IsError = comp.IsError;
                             partMatch.ToolCall.DurationMs = comp.DurationMs;
                         }
+
+                        if (string.Equals(comp.ToolName, "ask", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(comp.Result))
+                        {
+                            var qPart = Session.CurrentParts.OfType<QuestionContentPart>().LastOrDefault(q => !q.IsAnswered);
+                            if (qPart != null)
+                            {
+                                var res = comp.Result;
+                                if (res.StartsWith("User answered: ", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    res = res.Substring("User answered: ".Length).Trim();
+                                }
+                                qPart.Answer = res;
+                            }
+                        }
                         StateHasChanged();
+                        break;
+
+                    case IdeationStreamUpdateKind.QuestionAsked when update.Question != null:
+                        Session.PendingQuestion = update.Question;
+                        _questionAnswer = string.Empty;
+                        if (!Session.CurrentParts.OfType<QuestionContentPart>().Any(q => q.QuestionId == update.Question.Id))
+                        {
+                            Session.CurrentParts.Add(new QuestionContentPart
+                            {
+                                QuestionId = update.Question.Id,
+                                Prompt = update.Question.Prompt,
+                                Rationale = update.Question.Rationale,
+                                Options = update.Question.Options ?? Array.Empty<string>()
+                            });
+                        }
+                        StateHasChanged();
+                        await ScrollChatToBottomAsync();
                         break;
 
                     case IdeationStreamUpdateKind.ProposalDiscovered when update.Proposal != null:
@@ -731,11 +931,16 @@
                 }).ToList()
                 : null;
 
+            foreach (var qp in Session.CurrentParts.OfType<QuestionContentPart>().Where(q => !q.IsAnswered))
+            {
+                qp.Answer = "(No answer provided)";
+            }
+
             var partsForMessage = Session.CurrentParts.Count > 0
                 ? Session.CurrentParts.ToList()
                 : null;
 
-            if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer) || !string.IsNullOrEmpty(Session.CurrentThinkingBuffer) || (toolsForMessage != null && toolsForMessage.Count > 0))
+            if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer) || !string.IsNullOrEmpty(Session.CurrentThinkingBuffer) || (toolsForMessage != null && toolsForMessage.Count > 0) || (partsForMessage != null && partsForMessage.Count > 0))
             {
                 Session.Messages.Add(new ChatMessage(
                     "assistant",
@@ -749,6 +954,11 @@
         catch (OperationCanceledException)
         {
             ToastService.Show("Generation Cancelled", "Exploration agent stopped.", ToastLevel.Warning);
+            foreach (var qp in Session.CurrentParts.OfType<QuestionContentPart>().Where(q => !q.IsAnswered))
+            {
+                qp.Answer = "(Cancelled)";
+            }
+
             var toolsForMessage = Session.CurrentToolCalls.Count > 0
                 ? Session.CurrentToolCalls.Select(t => new IdeationToolCallViewModel
                 {
@@ -783,6 +993,8 @@
         }
         finally
         {
+            Session.PendingQuestion?.Cancel();
+            Session.PendingQuestion = null;
             Session.IsGenerating = false;
             Session.CurrentThinkingBuffer = string.Empty;
             Session.CurrentMessageBuffer = string.Empty;
@@ -811,6 +1023,7 @@
         _cts?.Cancel();
         Session.Reset();
         _userInput = string.Empty;
+        _ = ScrollChatToBottomAsync(true);
     }
 
     private async Task AddProposalToBacklogAsync(IdeationProposalViewModel proposal)
@@ -894,11 +1107,11 @@
         ToastService.Show("Proposal Dismissed", $"Proposal '{proposal.Title}' removed.", ToastLevel.Info);
     }
 
-    private async Task ScrollChatToBottomAsync()
+    private async Task ScrollChatToBottomAsync(bool force = true)
     {
         try
         {
-            await JS.InvokeVoidAsync("NightCodeForge.scrollToBottom", "chatMessagesContainer");
+            await JS.InvokeVoidAsync("NightCodeForge.scrollToBottom", "chatMessagesContainer", force);
         }
         catch
         {
@@ -950,5 +1163,13 @@
         _cts?.Dispose();
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
         Session.OnChange -= HandleSessionChanged;
+        try
+        {
+            _ = JS.InvokeVoidAsync("NightCodeForge.disposeAutoScroll", "chatMessagesContainer");
+        }
+        catch
+        {
+            // Circuit may already be disconnected
+        }
     }
 }

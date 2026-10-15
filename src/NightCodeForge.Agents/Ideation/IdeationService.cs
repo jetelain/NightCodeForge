@@ -17,6 +17,7 @@ using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Agents.Ideation;
 
@@ -252,13 +253,40 @@ public partial class IdeationService : IIdeationService
             ? customSystemPrompt
             : (!string.IsNullOrWhiteSpace(profile.SystemPrompt)
                 ? profile.SystemPrompt
-                : "You are the NightCodeForge Ideation & Codebase Discovery Agent.\nYour objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.");
+                : @"You are the NightCodeForge Ideation & Codebase Discovery Agent.
+Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.
+Each proposed task represents a full Pull Request / Merge Request unit of work with autonomous build, test, and code review gates.
+Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with sub-tasks and open questions to be answered in the task review process.");
 
         var permittedTools = profile.PermittedTools?.Count > 0
             ? profile.PermittedTools
             : DefaultAgentTools.GetTools(profile.Mode);
 
-        var taskGuidance = @"When you recommend one or more implementation tasks, do NOT output markdown JSON codeblocks in your response. Instead, invoke the 'propose_tasks' tool with your proposed tasks (each having title, description, and optional priority). If multiple tasks are proposed, they will be scheduled sequentially with dependencies established automatically. After proposing tasks, explain your proposal and architectural rationale clearly to the developer.";
+        var taskGuidance = @"<task_planning_guidelines>
+When proposing implementation tasks to the developer, adhere to the following rules:
+1. PULL-REQUEST / MERGE-REQUEST SIZING:
+   - Each task in NightCodeForge represents a full, independent 'pull-request' / 'merge-request' (PR/MR).
+   - Each task automatically passes through rigorous pipeline gates: Stage 1 (ForgeTask Review & ambiguity clarification), Pre-Implementation Baseline build & test gates, Stage 2 (Implementation), Post-Implementation Ratchet build & test gates, Stage 3 (Code Review & automated fix gate), and a Merge Gate.
+   - Each task will have its own tests (unit, integration, or functional tests) verifying the implementation.
+   - DO NOT over-decompose into excessively small or trivial micro-tasks (e.g., do NOT create separate tasks for creating a single file, adding a single method, updating a configuration line, or adding a single dependency). Over-decomposition creates unnecessary pipeline, build, and review overhead.
+
+2. SUB-TASKS WITHIN A TASK:
+   - A task may have sub-tasks! When a feature, refactoring, or fix consists of multiple logical steps or components (e.g., database schema changes, backend service implementation, API endpoints, UI updates), group them together into a single cohesive task.
+   - Detail these sub-tasks as an implementation checklist or breakdown inside the task's 'description'.
+   - The downstream Implementation Agent will execute all sub-tasks together within the single PR/task lifecycle.
+
+3. OPEN QUESTIONS RESOLVED IN TASK REVIEW:
+   - A task may have open questions! You do not need every minor detail, design alternative, or edge case 100% resolved during ideation.
+   - If there are unresolved architectural questions, alternative approaches, or decisions that require deeper inspection or user input, list them explicitly under an 'Open Questions' section in the task's 'description'.
+   - These open questions will be answered in the task review process (Stage 1: ForgeTask Review), where the review agent inspects the code and can proactively prompt the developer ('ask') before coding begins.
+
+4. TASK PROPOSAL INVOCATION:
+   - When you recommend one or more implementation tasks, do NOT output markdown JSON codeblocks in your response.
+   - Instead, invoke the 'propose_tasks' tool with your proposed tasks (each having title, description, and optional priority).
+   - Structure each task's description with clear Markdown sections (## Summary, ## Sub-tasks / Scope, ## Testing Plan, ## Open Questions if applicable).
+   - If multiple tasks are proposed, they will be scheduled sequentially with dependencies established automatically (or via dependsOnTitles).
+   - After proposing tasks, explain your proposal and architectural rationale clearly to the developer.
+</task_planning_guidelines>";
 
         // Skills catalog (lean ~25 tokens/skill) is only injected when the agent can call load_skill.
         IReadOnlyList<SkillDescriptor> discoveredSkills = Array.Empty<SkillDescriptor>();
@@ -316,6 +344,17 @@ public partial class IdeationService : IIdeationService
             workspaceId: workspace?.Id);
 
         var sessionProposals = new List<IdeationProposal>();
+
+        // In-turn ask: the tool awaits the user's answer while the stream surfaces the question to the UI.
+        var questionChannel = System.Threading.Channels.Channel.CreateUnbounded<IdeationQuestion>();
+        canonicalTools.AskHandler = async (prompt, rationale, options, ct) =>
+        {
+            var question = new IdeationQuestion(prompt, rationale, options);
+            questionChannel.Writer.TryWrite(question);
+            using var registration = ct.Register(() => question.Cancel());
+            return await question.AnswerTask.ConfigureAwait(false);
+        };
+        HumanInterruptionException? interruption = null;
 
         var aiTools = BuildAIFunctionList(canonicalTools, permittedTools);
 
@@ -378,13 +417,32 @@ public partial class IdeationService : IIdeationService
                 while (true)
                 {
                     bool hasMore;
+                    var moveTask = enumerator.MoveNextAsync().AsTask();
+                    while (!moveTask.IsCompleted)
+                    {
+                        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        var waitQuestion = questionChannel.Reader.WaitToReadAsync(waitCts.Token).AsTask();
+                        await Task.WhenAny(moveTask, waitQuestion).ConfigureAwait(false);
+                        waitCts.Cancel();
+                        while (questionChannel.Reader.TryRead(out var pendingQuestion))
+                        {
+                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolStarted, $"ask: {pendingQuestion.Prompt}", cancellationToken, metadata);
+                            yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.QuestionAsked, Question: pendingQuestion);
+                        }
+                    }
+
                     try
                     {
-                        hasMore = await enumerator.MoveNextAsync();
+                        hasMore = await moveTask;
                     }
                     catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
                     {
                         streamingFailed = true;
+                        break;
+                    }
+                    catch (Exception ex) when (FindInterruption(ex) != null)
+                    {
+                        interruption = FindInterruption(ex);
                         break;
                     }
                     catch (Exception ex)
@@ -454,10 +512,16 @@ public partial class IdeationService : IIdeationService
 
         if (streamingFailed)
         {
-            AgentResponse response;
+            // No live pump in the non-streaming fallback: an interactive ask would deadlock.
+            canonicalTools.AskHandler = null;
+            AgentResponse? response = null;
             try
             {
                 response = await agent.RunAsync(messages, session, cancellationToken: cancellationToken);
+            }
+            catch (Exception ex) when (FindInterruption(ex) != null)
+            {
+                interruption = FindInterruption(ex);
             }
             catch (Exception ex)
             {
@@ -465,7 +529,7 @@ public partial class IdeationService : IIdeationService
                 throw;
             }
 
-            foreach (var update in response.ToAgentResponseUpdates())
+            foreach (var update in response?.ToAgentResponseUpdates() ?? Enumerable.Empty<AgentResponseUpdate>())
             {
                 foreach (var domainEvt in projector.ProjectUpdate(update))
                 {
@@ -534,6 +598,16 @@ public partial class IdeationService : IIdeationService
             }
 
             yield return domainEvt;
+        }
+
+        // Safety net: an ask that escaped as an exception becomes visible chat text instead of a crash.
+        if (interruption != null)
+        {
+            var interruptionText = $"\n\n**I need your input before continuing:** {interruption.Question.Prompt}\n";
+            fullTextBuilder.Append(interruptionText);
+            transcriptBuffer.Append("ASSISTANT", interruptionText);
+            _logger.LogWarning("Ideation ask escaped the live handler; surfaced as chat text: {Prompt}", interruption.Question.Prompt);
+            yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.MessageDelta, TextDelta: interruptionText);
         }
 
         // Final sync of any pending proposals from canonicalTools
@@ -677,6 +751,15 @@ public partial class IdeationService : IIdeationService
             var evt = new AgentActivityEvent(sessionId, taskId, stageId, kind, content, DateTime.UtcNow, metadata);
             await _activityStreamer.BroadcastAsync(evt, ct);
         }
+    }
+
+    private static HumanInterruptionException? FindInterruption(Exception? ex)
+    {
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            if (current is HumanInterruptionException hie) return hie;
+        }
+        return null;
     }
 
     private static IList<AITool> BuildAIFunctionList(CanonicalTools canonicalTools, IReadOnlyList<string> permittedTools)

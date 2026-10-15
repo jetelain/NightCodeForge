@@ -28,6 +28,16 @@ public record ThinkingContentPart(string Thinking) : ChatContentPart;
 
 public record ToolCallContentPart(IdeationToolCallViewModel ToolCall) : ChatContentPart;
 
+public record QuestionContentPart : ChatContentPart
+{
+    public Guid QuestionId { get; init; } = Guid.NewGuid();
+    public string Prompt { get; set; } = string.Empty;
+    public string? Rationale { get; set; }
+    public IReadOnlyList<string> Options { get; set; } = Array.Empty<string>();
+    public string? Answer { get; set; }
+    public bool IsAnswered => !string.IsNullOrWhiteSpace(Answer);
+}
+
 /// <summary>
 /// Immutable chat turn record within an ideation conversational session.
 /// </summary>
@@ -50,14 +60,36 @@ public record ChatMessage(
                 {
                     sb.AppendLine(tp.Text);
                 }
+                else if (part is QuestionContentPart qp)
+                {
+                    sb.AppendLine($"[Agent Question: {qp.Prompt}]");
+                    if (!string.IsNullOrWhiteSpace(qp.Answer))
+                    {
+                        sb.AppendLine($"[User Answer: {qp.Answer}]");
+                    }
+                }
                 else if (part is ToolCallContentPart tcp)
                 {
                     var tc = tcp.ToolCall;
-                    sb.AppendLine($"[Tool: {tc.ToolName}({tc.Arguments})]");
-                    if (!string.IsNullOrWhiteSpace(tc.Result))
+                    if (string.Equals(tc.ToolName, "ask", StringComparison.OrdinalIgnoreCase))
                     {
-                        var resSummary = tc.Result.Length > 400 ? tc.Result[..400] + "... [truncated]" : tc.Result;
-                        sb.AppendLine($"[Result: {resSummary}]");
+                        if (!Parts.OfType<QuestionContentPart>().Any())
+                        {
+                            sb.AppendLine($"[Tool: {tc.ToolName}({tc.Arguments})]");
+                            if (!string.IsNullOrWhiteSpace(tc.Result))
+                            {
+                                sb.AppendLine($"[{tc.Result}]");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        sb.AppendLine($"[Tool: {tc.ToolName}({tc.Arguments})]");
+                        if (!string.IsNullOrWhiteSpace(tc.Result))
+                        {
+                            var resSummary = tc.Result.Length > 400 ? tc.Result[..400] + "... [truncated]" : tc.Result;
+                            sb.AppendLine($"[Result: {resSummary}]");
+                        }
                     }
                 }
             }
@@ -147,6 +179,7 @@ public class IdeationSessionState
     public int? BoundWorkspaceId { get; set; }
     public string? LatestTranscriptPath { get; set; }
     public string? LatestFullTranscriptMarkdown { get; set; }
+    public IdeationQuestion? PendingQuestion { get; set; }
 
     public event Action? OnChange;
 
@@ -175,6 +208,8 @@ public class IdeationSessionState
         Messages.Clear();
         Proposals.Clear();
         CurrentToolCalls.Clear();
+        PendingQuestion?.Cancel();
+        PendingQuestion = null;
         CurrentParts.Clear();
         CurrentThinkingBuffer = string.Empty;
         CurrentMessageBuffer = string.Empty;

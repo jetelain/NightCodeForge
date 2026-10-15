@@ -27,12 +27,20 @@ public class IdeationProposalCardTests : BunitContext
         var prioritySelect = cut.Find("select.proposal-priority-select");
         Assert.Equal("3", prioritySelect.GetAttribute("value"));
 
+        // Defaults to preview mode
+        var previewContainer = cut.Find(".proposal-desc-preview");
+        Assert.Contains("Improve SignalR broadcast throughput", previewContainer.InnerHtml);
+
+        // Click Edit Scope tab to view textarea
+        var editBtn = cut.FindAll("button.proposal-tab-btn").First(b => b.TextContent.Contains("Edit Scope"));
+        editBtn.Click();
+
         var descTextarea = cut.Find("textarea.proposal-desc-textarea");
         Assert.Equal("Improve SignalR broadcast throughput", descTextarea.GetAttribute("value"));
     }
 
     [Fact]
-    public void ToggleDescriptionPreview_DisplaysMarkdownRenderer()
+    public void DefaultPreviewMode_DisplaysMarkdownRenderer_AndCanToggleToEdit()
     {
         var proposal = new IdeationProposalViewModel
         {
@@ -43,12 +51,22 @@ public class IdeationProposalCardTests : BunitContext
         var cut = Render<IdeationProposalCard>(parameters => parameters
             .Add(p => p.Proposal, proposal));
 
-        // Click Preview Tab
-        var previewBtn = cut.FindAll("button.proposal-tab-btn")[1];
-        previewBtn.Click();
-
+        // In preview mode by default
         var previewContainer = cut.Find(".proposal-desc-preview");
         Assert.Contains("Acceptance Criteria", previewContainer.InnerHtml);
+
+        // Switch to Edit Scope
+        var editBtn = cut.FindAll("button.proposal-tab-btn").First(b => b.TextContent.Contains("Edit Scope"));
+        editBtn.Click();
+
+        var descTextarea = cut.Find("textarea.proposal-desc-textarea");
+        Assert.Contains("Acceptance Criteria", descTextarea.GetAttribute("value"));
+
+        // Switch back to Preview
+        var previewBtn = cut.FindAll("button.proposal-tab-btn").First(b => b.TextContent.Contains("Preview"));
+        previewBtn.Click();
+
+        Assert.NotNull(cut.Find(".proposal-desc-preview"));
     }
 
     [Fact]

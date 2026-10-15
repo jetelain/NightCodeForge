@@ -793,6 +793,50 @@ Let me know what you think!";
         // Must NOT ask the model for markdown JSON codeblocks
         Assert.DoesNotContain("```json", systemMsg.Text);
     }
+
+    [Fact]
+    public async Task ConverseStreamingAsync_SystemPrompt_InstructsPullRequestSizingSubTasksAndOpenQuestions()
+    {
+        List<ChatMessage>? capturedMessages = null;
+        var fakeClient = new MessageCapturingChatClient(msgs => capturedMessages = msgs.ToList())
+        {
+            ResponseToReturn = "Ready."
+        };
+
+        var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var workspace = new Workspace { Id = 14, RepositoryPath = Directory.GetCurrentDirectory() };
+
+        await service.ConverseAsync(workspace, "Plan new features");
+
+        Assert.NotNull(capturedMessages);
+        var systemMsg = capturedMessages.FirstOrDefault(m => m.Role == ChatRole.System);
+        Assert.NotNull(systemMsg);
+
+        // PR / Merge Request sizing with build & code review gates, and own tests
+        Assert.Contains("pull-request", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("merge-request", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("gates", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("tests", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
+
+        // Sub-tasks within a task
+        Assert.Contains("sub-tasks", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
+
+        // Open questions answered in task review
+        Assert.Contains("open questions", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("task review", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CreateDefaultIdeationProfile_DirectsOnPullRequestSizingAndTaskReview()
+    {
+        var profile = AgentProfile.CreateDefaultIdeationProfile();
+
+        Assert.NotNull(profile.SystemPrompt);
+        Assert.Contains("Pull Request / Merge Request", profile.SystemPrompt);
+        Assert.Contains("sub-tasks", profile.SystemPrompt);
+        Assert.Contains("open questions", profile.SystemPrompt);
+        Assert.Contains("task review", profile.SystemPrompt);
+    }
 }
 
 
