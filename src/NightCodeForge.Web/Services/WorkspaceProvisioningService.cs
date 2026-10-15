@@ -216,8 +216,8 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
             _logger.LogWarning(ex, "Ext4 mirror setup encountered an issue for workspace {WorkspaceId}. Continuing provisioning.", workspace.Id);
         }
 
-        // 3. Directory Scaffolding
-        progress?.Report("Scaffolding docs/tasks/ directory...");
+        // 3. Directory Scaffolding & GitIgnore
+        progress?.Report("Scaffolding docs/tasks/ and ensuring .gitignore entries...");
         try
         {
             var docsTasksPath = Path.Combine(workspace.RepositoryPath, "docs", "tasks");
@@ -225,10 +225,18 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
             {
                 Directory.CreateDirectory(docsTasksPath);
             }
+
+            var docsTranscriptsPath = Path.Combine(workspace.RepositoryPath, "docs", "transcripts");
+            if (!Directory.Exists(docsTranscriptsPath))
+            {
+                Directory.CreateDirectory(docsTranscriptsPath);
+            }
+
+            await EnsureGitIgnoreEntriesAsync(workspace.RepositoryPath, cancellationToken);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to create docs/tasks directory in {RepositoryPath}", workspace.RepositoryPath);
+            _logger.LogWarning(ex, "Failed to create docs/tasks directory or update .gitignore in {RepositoryPath}", workspace.RepositoryPath);
         }
 
         // 4. Markdown Sync Watcher Registration
@@ -420,6 +428,39 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         catch
         {
             return false;
+        }
+    }
+
+    private async Task EnsureGitIgnoreEntriesAsync(string repoPath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var gitignorePath = Path.Combine(repoPath, ".gitignore");
+            var requiredEntries = new[] { "docs/tasks/", "docs/transcripts/" };
+
+            if (File.Exists(gitignorePath))
+            {
+                var content = await File.ReadAllTextAsync(gitignorePath, cancellationToken);
+                var lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var missing = requiredEntries.Where(e => !lines.Contains(e) && !lines.Contains(e.TrimEnd('/'))).ToList();
+
+                if (missing.Count > 0)
+                {
+                    var textToAppend = "\n# NightCodeForge task artifacts and transcripts\n" + string.Join("\n", missing) + "\n";
+                    await File.AppendAllTextAsync(gitignorePath, textToAppend, cancellationToken);
+                    _logger.LogInformation("Appended {Count} NightCodeForge entries to '{GitIgnorePath}'", missing.Count, gitignorePath);
+                }
+            }
+            else
+            {
+                var initialContent = "# NightCodeForge task artifacts and transcripts\ndocs/tasks/\ndocs/transcripts/\n";
+                await File.WriteAllTextAsync(gitignorePath, initialContent, cancellationToken);
+                _logger.LogInformation("Created '{GitIgnorePath}' with NightCodeForge entries", gitignorePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to ensure .gitignore entries in '{RepoPath}'", repoPath);
         }
     }
 }

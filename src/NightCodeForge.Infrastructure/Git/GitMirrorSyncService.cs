@@ -46,6 +46,42 @@ public class GitMirrorSyncService : IGitMirrorSyncService
             hostRepoPath,
             ["config", "receive.denyCurrentBranch", "updateInstead"],
             cancellationToken: cancellationToken);
+
+        // Ensure task deliverables and transcripts are ignored by Git
+        await EnsureGitIgnoreEntriesAsync(hostRepoPath, cancellationToken);
+    }
+
+    private async Task EnsureGitIgnoreEntriesAsync(string repoPath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var gitignorePath = Path.Combine(repoPath, ".gitignore");
+            var requiredEntries = new[] { "docs/tasks/", "docs/transcripts/" };
+
+            if (File.Exists(gitignorePath))
+            {
+                var content = await File.ReadAllTextAsync(gitignorePath, cancellationToken);
+                var lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var missing = requiredEntries.Where(e => !lines.Contains(e) && !lines.Contains(e.TrimEnd('/'))).ToList();
+
+                if (missing.Count > 0)
+                {
+                    var textToAppend = "\n# NightCodeForge task artifacts and transcripts\n" + string.Join("\n", missing) + "\n";
+                    await File.AppendAllTextAsync(gitignorePath, textToAppend, cancellationToken);
+                    _logger.LogInformation("Appended {Count} NightCodeForge entries to '{GitIgnorePath}'", missing.Count, gitignorePath);
+                }
+            }
+            else
+            {
+                var initialContent = "# NightCodeForge task artifacts and transcripts\ndocs/tasks/\ndocs/transcripts/\n";
+                await File.WriteAllTextAsync(gitignorePath, initialContent, cancellationToken);
+                _logger.LogInformation("Created '{GitIgnorePath}' with NightCodeForge entries", gitignorePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to ensure .gitignore entries in '{RepoPath}'", repoPath);
+        }
     }
 
     /// <inheritdoc />
