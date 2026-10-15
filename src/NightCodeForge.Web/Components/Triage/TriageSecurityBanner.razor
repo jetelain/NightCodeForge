@@ -1,16 +1,16 @@
 @namespace NightCodeForge.Web.Components.Triage
 
-<div class="security-banner card-surface p-3 mb-4 d-flex justify-content-between align-items-center" id="triage-security-banner">
-    <div class="d-flex align-items-center gap-3">
+<div class="security-banner" id="triage-security-banner">
+    <div class="security-banner-content">
         <div class="security-shield-icon">
             <span class="security-shield">🔒</span>
         </div>
-        <div>
-            <div class="d-flex align-items-center gap-2">
+        <div class="security-banner-info">
+            <div class="security-banner-heading">
                 <strong class="security-tier-title">Sandbox Security Tier: RestrictedReadOnly</strong>
                 <span class="badge-branch-tag font-mono">Branch: @(string.IsNullOrWhiteSpace(BaseBranch) ? "main" : BaseBranch)</span>
             </div>
-            <div class="security-isolation-badges d-flex align-items-center flex-wrap gap-2 mt-1">
+            <div class="security-isolation-badges">
                 <span class="badge-isolation">
                     <span class="isolation-dot"></span>
                     <span>Filesystem: Read-Only (<code>:ro</code>)</span>

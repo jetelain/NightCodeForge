@@ -23,23 +23,24 @@
     else
     {
         <!-- Page Header -->
-        <div class="triage-header mb-4">
-            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <div class="triage-header" id="triage-header">
+            <div class="triage-header-left">
+                <span class="triage-header-icon">🛡️</span>
                 <div>
-                    <h2>🛡️ Untrusted Intake &amp; Sandboxed Triage Portal</h2>
-                    <p class="text-secondary mb-0">
-                        Safely ingest and analyze untrusted external bug reports on <code>@(string.IsNullOrWhiteSpace(_model.BaseBranch) ? "main" : _model.BaseBranch)</code>.
+                    <h1 class="triage-header-title">Untrusted Intake &amp; Sandboxed Triage Portal</h1>
+                    <p class="triage-header-desc">
+                        Safely ingest and analyze untrusted external bug reports on <code class="font-mono">@(string.IsNullOrWhiteSpace(_model.BaseBranch) ? "main" : _model.BaseBranch)</code>.
                         Execution is strictly isolated within a <strong>RestrictedReadOnly sandbox</strong> to defend against prompt injection.
                     </p>
                 </div>
-                <div class="header-actions d-flex align-items-center gap-2">
-                    <button class="btn btn-sm btn-outline-indigo" @onclick="LoadSampleBugReport" disabled="@_isTriaging" title="Load sample crash report">
-                        📝 Load Sample Bug
-                    </button>
-                    <button class="btn btn-sm btn-secondary" @onclick="ResetForm" disabled="@_isTriaging" title="Clear form inputs">
-                        🔄 Reset Form
-                    </button>
-                </div>
+            </div>
+            <div class="triage-header-actions">
+                <button type="button" class="forge-btn forge-btn-secondary" @onclick="LoadSampleBugReport" disabled="@_isTriaging" title="Load sample crash report">
+                    📝 Load Sample Bug
+                </button>
+                <button type="button" class="forge-btn forge-btn-outline" @onclick="ResetForm" disabled="@_isTriaging" title="Clear form inputs">
+                    🔄 Reset Form
+                </button>
             </div>
         </div>
 
@@ -48,24 +49,27 @@
 
         @if (!string.IsNullOrWhiteSpace(_errorMessage))
         {
-            <div class="alert alert-danger mb-4 d-flex justify-content-between align-items-center" id="triage-error-alert">
+            <div class="triage-error-banner" id="triage-error-alert">
                 <div class="d-flex align-items-center gap-2">
                     <span>⚠️</span>
                     <span>@_errorMessage</span>
                 </div>
-                <button class="btn btn-sm btn-outline-danger" @onclick="() => _errorMessage = null">Dismiss</button>
+                <button type="button" class="forge-btn forge-btn-outline btn-xs" @onclick="() => _errorMessage = null">Dismiss</button>
             </div>
         }
 
         <div class="triage-grid">
             <!-- 1. Submission Form (Left 45%) -->
-            <div class="triage-form-card card-surface p-4" id="triage-form-card">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <h3 class="mb-0">Submit External Report</h3>
+            <div class="triage-form-card" id="triage-form-card">
+                <div class="triage-card-header">
+                    <div>
+                        <h3 class="triage-card-title">Submit External Report</h3>
+                        <p class="triage-card-subtitle">Provide report details to initiate sandboxed reproduction.</p>
+                    </div>
                     <span class="badge-stage-pill font-mono">Stage 0 Intake</span>
                 </div>
 
-                <div class="form-group mb-3">
+                <div class="form-group">
                     <label class="form-label" for="triage-report-title">
                         <span>Report Title</span>
                         <span class="text-crimson">*</span>
@@ -78,7 +82,7 @@
                            disabled="@_isTriaging" />
                 </div>
 
-                <div class="form-group mb-3">
+                <div class="form-group">
                     <label class="form-label" for="triage-base-branch">
                         <span>Target Base Branch</span>
                         <span class="text-crimson">*</span>
@@ -91,8 +95,11 @@
                            disabled="@_isTriaging" />
                 </div>
 
-                <div class="form-group mb-3">
-                    <label class="form-label" for="triage-external-url">External URL / ForgeTask Tracker (Optional)</label>
+                <div class="form-group">
+                    <label class="form-label" for="triage-external-url">
+                        <span>External URL / ForgeTask Tracker</span>
+                        <span class="form-hint text-muted">(Optional)</span>
+                    </label>
                     <input id="triage-external-url"
                            class="form-control-dark font-mono"
                            placeholder="https://github.com/org/repo/issues/123"
@@ -100,7 +107,7 @@
                            disabled="@_isTriaging" />
                 </div>
 
-                <div class="form-group mb-3">
+                <div class="form-group">
                     <label class="form-label" for="triage-description">
                         <span>Detailed Description &amp; Reproduction Steps</span>
                         <span class="text-crimson">*</span>
@@ -114,8 +121,11 @@
                               disabled="@_isTriaging"></textarea>
                 </div>
 
-                <div class="form-group mb-4">
-                    <label class="form-label" for="triage-stack-trace">Stack Trace or Error Output (Optional)</label>
+                <div class="form-group">
+                    <label class="form-label" for="triage-stack-trace">
+                        <span>Stack Trace or Error Output</span>
+                        <span class="form-hint text-muted">(Optional)</span>
+                    </label>
                     <textarea id="triage-stack-trace"
                               class="form-control-dark font-mono text-sm"
                               rows="4"
@@ -125,7 +135,7 @@
                 </div>
 
                 <button id="triage-submit-btn"
-                        class="btn btn-primary w-100 btn-triage-launch"
+                        class="forge-btn forge-btn-primary btn-triage-launch"
                         @onclick="StartTriageAsync"
                         disabled="@(string.IsNullOrWhiteSpace(_model.Title) || string.IsNullOrWhiteSpace(_model.Description) || _isTriaging)">
                     @if (_isTriaging)
@@ -146,10 +156,10 @@
             <div class="triage-results-pane" id="triage-results-pane">
                 @if (_isTriaging)
                 {
-                    <div class="card-surface p-5 text-center triage-running-card" id="triage-running-card">
+                    <div class="triage-running-card" id="triage-running-card">
                         <div class="spinner-pulse mb-3"></div>
-                        <h4>Triage Agent Inspecting Base Branch...</h4>
-                        <p class="text-secondary mb-3">
+                        <h4 class="mt-2 mb-2">Triage Agent Inspecting Base Branch...</h4>
+                        <p class="text-secondary max-w-md mx-auto mb-4">
                             Validating reproducibility, scanning repository symbol index, and formulating task specifications.
                         </p>
                         <div class="triage-running-badges d-flex justify-content-center flex-wrap gap-2">
@@ -170,15 +180,15 @@
                 }
                 else if (_triagedTasks.Count > 0)
                 {
-                    <div class="card-surface p-4 triage-results-card" id="triage-results-card">
-                        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                    <div class="triage-results-card" id="triage-results-card">
+                        <div class="triage-results-header">
                             <div>
-                                <h3 class="mb-1">Proposed Backlog Tasks (@_triagedTasks.Count)</h3>
-                                <p class="text-secondary small mb-0">
-                                    The triage agent verified the report and formulated structured backlog items in status <code>Suggested</code>.
+                                <h3 class="triage-card-title">Proposed Backlog Tasks (@_triagedTasks.Count)</h3>
+                                <p class="triage-card-subtitle">
+                                    The triage agent verified the report and formulated structured backlog items in status <code class="font-mono">Suggested</code>:
                                 </p>
                             </div>
-                            <a href="/backlog" class="btn btn-sm btn-outline-indigo" id="go-to-backlog-link">
+                            <a href="/backlog" class="forge-btn forge-btn-secondary btn-sm" id="go-to-backlog-link">
                                 Go to Backlog ➔
                             </a>
                         </div>
@@ -193,10 +203,10 @@
                 }
                 else
                 {
-                    <div class="card-surface p-5 text-center text-muted triage-awaiting-card" id="triage-awaiting-card">
-                        <span class="awaiting-icon" style="font-size: 3rem; display: block; margin-bottom: 1rem;">📋</span>
-                        <h4>Awaiting Intake Submission</h4>
-                        <p class="text-secondary max-w-md mx-auto">
+                    <div class="triage-awaiting-card" id="triage-awaiting-card">
+                        <span class="awaiting-icon">📋</span>
+                        <h4 class="mt-2 mb-2">Awaiting Intake Submission</h4>
+                        <p class="text-secondary max-w-md mx-auto mb-0">
                             Submit an external bug report, stack trace, or task description to start automated, sandboxed triage on the base branch.
                         </p>
                     </div>

@@ -4808,47 +4808,136 @@ code, kbd, samp, pre {
 }
 
 /* ==========================================================================
+   Common Utility Classes
+   ========================================================================== */
+.card-surface {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+}
+
+.d-flex { display: flex; }
+.flex-column { flex-direction: column; }
+.flex-wrap { flex-wrap: wrap; }
+.justify-content-between { justify-content: space-between; }
+.justify-content-center { justify-content: center; }
+.align-items-center { align-items: center; }
+.align-items-start { align-items: flex-start; }
+.gap-1 { gap: 0.25rem; }
+.gap-2 { gap: 0.5rem; }
+.gap-3 { gap: 0.75rem; }
+.gap-4 { gap: 1rem; }
+.p-2 { padding: 0.5rem; }
+.p-3 { padding: 1rem; }
+.p-4 { padding: 1.5rem; }
+.p-5 { padding: 2.25rem; }
+.mb-1 { margin-bottom: 0.25rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-3 { margin-bottom: 1rem; }
+.mb-4 { margin-bottom: 1.5rem; }
+.mt-1 { margin-top: 0.25rem; }
+.mt-2 { margin-top: 0.5rem; }
+.mt-3 { margin-top: 1rem; }
+.w-100 { width: 100%; }
+.max-w-md { max-width: 28rem; }
+.mx-auto { margin-left: auto; margin-right: auto; }
+
+/* ==========================================================================
    Untrusted Intake & Sandboxed Triage Portal (Step 5.10)
    ========================================================================== */
 
 .triage-container {
-    padding: 1.5rem 2rem 3rem 2rem;
-    max-width: 1600px;
-    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
     width: 100%;
-    height: 100%;
-    overflow-y: auto;
+    padding-bottom: 2rem;
 }
 
-.triage-header h2 {
+.triage-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 1.25rem;
+}
+
+.triage-header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+}
+
+.triage-header-icon {
+    font-size: 2rem;
+    line-height: 1;
+}
+
+.triage-header-title {
+    margin: 0;
     font-size: 1.5rem;
     font-weight: 700;
     color: var(--text-primary);
-    margin-bottom: 0.25rem;
 }
 
-.triage-header p {
+.triage-header-desc {
+    margin: 0.35rem 0 0 0;
     font-size: 0.875rem;
     color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.triage-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
 }
 
 /* Security Banner */
 .security-banner {
-    background: linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(24, 27, 36, 0.85) 100%);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1.25rem;
+    padding: 1.25rem 1.5rem;
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.06) 0%, rgba(24, 27, 36, 0.9) 100%);
     border: 1px solid rgba(16, 185, 129, 0.25);
     border-radius: var(--radius-lg);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    box-shadow: var(--shadow-sm);
+}
+
+.security-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    flex-wrap: wrap;
 }
 
 .security-shield-icon {
-    font-size: 1.75rem;
+    font-size: 2rem;
     line-height: 1;
-    filter: drop-shadow(0 0 8px rgba(16, 185, 129, 0.4));
+    filter: drop-shadow(0 0 10px rgba(16, 185, 129, 0.45));
+}
+
+.security-banner-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.security-banner-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
 }
 
 .security-tier-title {
     color: var(--text-primary);
-    font-size: 0.95rem;
+    font-size: 0.98rem;
     font-weight: 600;
 }
 
@@ -4857,7 +4946,7 @@ code, kbd, samp, pre {
     background: rgba(99, 102, 241, 0.15);
     border: 1px solid rgba(99, 102, 241, 0.35);
     color: #a5b4fc;
-    padding: 0.15rem 0.5rem;
+    padding: 0.2rem 0.6rem;
     border-radius: var(--radius-sm);
 }
 
@@ -4870,12 +4959,12 @@ code, kbd, samp, pre {
 .badge-isolation {
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
+    gap: 0.4rem;
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid var(--border-subtle);
     color: var(--text-secondary);
     border-radius: var(--radius-sm);
-    padding: 0.15rem 0.5rem;
+    padding: 0.2rem 0.55rem;
     font-size: 0.75rem;
 }
 
@@ -4902,15 +4991,27 @@ code, kbd, samp, pre {
     font-weight: 700;
     font-size: 0.75rem;
     letter-spacing: 0.05em;
-    padding: 0.35rem 0.75rem;
+    padding: 0.4rem 0.85rem;
     border-radius: var(--radius-full);
     box-shadow: 0 0 12px rgba(16, 185, 129, 0.15);
+}
+
+.triage-error-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1.25rem;
+    color: #fca5a5;
+    font-size: 0.88rem;
 }
 
 /* Triage Main Grid */
 .triage-grid {
     display: grid;
-    grid-template-columns: minmax(360px, 45%) minmax(400px, 55%);
+    grid-template-columns: minmax(380px, 45%) minmax(420px, 55%);
     gap: 1.5rem;
     align-items: start;
 }
@@ -4925,7 +5026,52 @@ code, kbd, samp, pre {
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-md);
+    padding: 1.75rem;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.triage-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.triage-card-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.triage-card-subtitle {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    margin: 0.25rem 0 0 0;
+}
+
+.triage-form-card .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.triage-form-card .form-label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.text-crimson {
+    color: var(--accent-crimson);
 }
 
 .badge-stage-pill {
@@ -4933,7 +5079,7 @@ code, kbd, samp, pre {
     border: 1px solid rgba(99, 102, 241, 0.3);
     color: #a5b4fc;
     font-size: 0.75rem;
-    padding: 0.2rem 0.6rem;
+    padding: 0.2rem 0.65rem;
     border-radius: var(--radius-full);
 }
 
@@ -4941,12 +5087,7 @@ code, kbd, samp, pre {
     padding: 0.75rem 1rem;
     font-weight: 600;
     font-size: 0.95rem;
-    transition: all var(--transition-normal);
-}
-
-.btn-triage-launch:hover:not(:disabled) {
-    box-shadow: 0 0 16px rgba(99, 102, 241, 0.4);
-    transform: translateY(-1px);
+    width: 100%;
 }
 
 /* Triage Results Pane */
@@ -4956,13 +5097,46 @@ code, kbd, samp, pre {
     gap: 1rem;
 }
 
-.triage-running-card,
-.triage-awaiting-card,
 .triage-results-card {
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-md);
+    padding: 1.75rem;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.triage-results-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    flex-wrap: wrap;
+}
+
+.triage-running-card,
+.triage-awaiting-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 4rem 2rem;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+.awaiting-icon {
+    font-size: 3rem;
+    line-height: 1;
+    margin-bottom: 0.75rem;
+    display: inline-block;
 }
 
 .spinner-pulse {
@@ -4986,29 +5160,78 @@ code, kbd, samp, pre {
 
 /* Task Proposal Card */
 .task-card-preview {
-    background: rgba(24, 27, 36, 0.7);
+    background: rgba(24, 27, 36, 0.75);
     backdrop-filter: blur(8px);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
+    padding: 1.25rem;
     transition: all var(--transition-fast);
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
 }
 
 .task-card-preview:hover {
     border-color: rgba(99, 102, 241, 0.5);
     background: rgba(32, 36, 51, 0.85);
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.task-proposal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.task-proposal-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.task-proposal-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .task-proposal-title {
-    font-size: 1rem;
+    font-size: 1.05rem;
     font-weight: 600;
     color: var(--text-primary);
+    margin: 0;
 }
 
 .task-proposal-desc {
-    line-height: 1.5;
+    line-height: 1.55;
+    font-size: 0.875rem;
     color: var(--text-secondary);
+    margin: 0;
+}
+
+.task-proposal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.task-proposal-tags {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.task-created-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
 }
 
 .badge-suggested {
@@ -5031,12 +5254,12 @@ code, kbd, samp, pre {
 .badge-tag {
     display: inline-flex;
     align-items: center;
-    gap: 0.3rem;
+    gap: 0.35rem;
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid var(--border-subtle);
     color: var(--text-secondary);
     border-radius: var(--radius-sm);
-    padding: 0.15rem 0.5rem;
+    padding: 0.18rem 0.55rem;
     font-size: 0.75rem;
 }
 
@@ -5052,8 +5275,14 @@ code, kbd, samp, pre {
 }
 
 .btn-xs {
-    padding: 0.2rem 0.5rem;
+    padding: 0.25rem 0.6rem;
     font-size: 0.75rem;
+    border-radius: var(--radius-sm);
+}
+
+.btn-sm {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.82rem;
     border-radius: var(--radius-sm);
 }
 

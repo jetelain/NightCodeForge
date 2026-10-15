@@ -1,28 +1,28 @@
 @namespace NightCodeForge.Web.Components.Triage
 @using NightCodeForge.Core.Domain
 
-<div class="task-card-preview card-glass p-3 mb-3" id="triage-task-proposal-@Task.Id">
-    <div class="d-flex justify-content-between align-items-center mb-2">
-        <div class="d-flex align-items-center gap-2">
+<div class="task-card-preview" id="triage-task-proposal-@Task.Id">
+    <div class="task-proposal-header">
+        <div class="task-proposal-meta">
             <span class="badge-suggested">Suggested</span>
             <span class="task-id-badge font-mono">#@Task.Id</span>
         </div>
-        <div class="d-flex align-items-center gap-2">
+        <div class="task-proposal-actions">
             <span class="badge-tag priority-badge">P@(Task.Priority)</span>
-            <a href="/backlog" class="btn btn-xs btn-outline-indigo" title="Open Backlog Kanban">
+            <a href="/backlog" class="forge-btn forge-btn-outline btn-xs" title="Open Backlog Kanban">
                 Open in Backlog ➔
             </a>
         </div>
     </div>
 
-    <h4 class="task-proposal-title mt-1 mb-2">@Task.Title</h4>
+    <h4 class="task-proposal-title">@Task.Title</h4>
 
-    <p class="task-proposal-desc text-secondary small mb-3">
+    <p class="task-proposal-desc">
         @GetDisplayDescription()
     </p>
 
-    <div class="task-proposal-footer d-flex align-items-center justify-content-between flex-wrap gap-2 pt-2">
-        <div class="d-flex align-items-center gap-2 flex-wrap">
+    <div class="task-proposal-footer">
+        <div class="task-proposal-tags">
             <span class="badge-tag branch-tag">
                 <span>Branch:</span>
                 <code class="font-mono">@(string.IsNullOrWhiteSpace(Task.FeatureBranch) ? Task.BaseBranch : Task.FeatureBranch)</code>
@@ -36,7 +36,7 @@
                 <span>@Task.MergeMode</span>
             </span>
         </div>
-        <span class="task-created-time font-mono text-muted small">
+        <span class="task-created-time font-mono">
             @Task.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
         </span>
     </div>
