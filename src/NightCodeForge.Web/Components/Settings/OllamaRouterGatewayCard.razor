@@ -4,98 +4,109 @@
 @inject IOllamaRouterGatewayService GatewayService
 @inject ToastService ToastService
 
-<div class="forge-card mt-3">
+<div class="forge-card mt-3" style="padding: 2rem;">
     <!-- Header -->
-    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem; flex-wrap: wrap; gap: 1.5rem;">
         <div>
-            <div class="d-flex align-items-center gap-2">
-                <span style="font-size: 1.35rem;">🦙</span>
-                <h3 style="font-weight: 600; margin: 0;">OllamaRouter Gateway &amp; VRAM Inspector</h3>
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                <span style="font-size: 1.75rem;">🦙</span>
+                <h3 style="font-weight: 700; font-size: 1.35rem; margin: 0; color: var(--text-primary);">
+                    OllamaRouter Gateway &amp; VRAM Inspector
+                </h3>
                 @if (_status != null)
                 {
-                    <span class="forge-badge @(_status.IsConnected ? "badge-teal" : "badge-gray")">
+                    <span class="forge-badge @(_status.IsConnected ? "badge-teal" : "badge-gray")" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;">
                         @(_status.IsConnected ? "🟢 Gateway Connected" : "🔴 Gateway Offline")
                     </span>
                     @if (_status.IsRouterProxy)
                     {
-                        <span class="forge-badge badge-indigo">OllamaRouter Active</span>
+                        <span class="forge-badge badge-indigo" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;">
+                            OllamaRouter Active
+                        </span>
                     }
                 }
             </div>
-            <p class="text-secondary mb-0" style="font-size: 0.85rem;">
+            <p style="margin: 0; font-size: 0.92rem; color: var(--text-secondary); line-height: 1.6; max-width: 820px;">
                 Reverse proxy gateway status, target backends, resident GPU models, and non-destructive memory release.
             </p>
         </div>
-        <div class="d-flex gap-2">
-            <a href="http://localhost:11434/monitor" target="_blank" class="forge-btn forge-btn-outline" style="font-size: 0.85rem;">
+        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <a href="http://localhost:11434/monitor" target="_blank" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem;">
                 ↗ Open Router Monitor
             </a>
-            <button type="button" class="forge-btn forge-btn-outline" style="font-size: 0.85rem;" @onclick="RefreshAsync" disabled="_isLoading">
+            <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem;" @onclick="RefreshAsync" disabled="_isLoading">
                 @(_isLoading ? "Refreshing..." : "🔄 Refresh")
             </button>
-            <button type="button" class="forge-btn forge-btn-primary" style="font-size: 0.85rem;" @onclick="ReclaimVramAsync" disabled="_isReclaiming">
+            <button type="button" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;" @onclick="ReclaimVramAsync" disabled="_isReclaiming">
                 @(_isReclaiming ? "Reclaiming VRAM..." : "🧹 Reclaim GPU VRAM")
             </button>
         </div>
     </div>
 
     <!-- Target Backends Status -->
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem;" class="mb-4">
-        @if (_status?.Targets != null)
-        {
-            @foreach (var target in _status.Targets)
+    <div style="margin-bottom: 2rem;">
+        <label style="display: block; font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.85rem;">
+            Target Routing Endpoints &amp; Cluster Health
+        </label>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.25rem;">
+            @if (_status?.Targets != null)
             {
-                <div class="p-3 rounded" style="background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle);">
-                    <div class="d-flex justify-content-between align-items-center mb-1">
-                        <strong>@target.TargetName</strong>
-                        <span class="forge-badge @(target.State == TargetBackendState.Active ? "badge-teal" : (target.State == TargetBackendState.Available ? "badge-indigo" : "badge-gray"))">
-                            @target.State
-                        </span>
+                @foreach (var target in _status.Targets)
+                {
+                    <div class="forge-subcard" style="padding: 1.5rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); box-shadow: var(--shadow-sm);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <strong style="font-size: 1.05rem; color: var(--text-primary); font-weight: 700;">@target.TargetName</strong>
+                            <span class="forge-badge @(target.State == TargetBackendState.Active ? "badge-teal" : (target.State == TargetBackendState.Available ? "badge-indigo" : "badge-gray"))" style="padding: 0.25rem 0.65rem; font-size: 0.8rem;">
+                                @target.State
+                            </span>
+                        </div>
+                        <p style="margin: 0; font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">@target.Description</p>
                     </div>
-                    <p class="text-secondary mb-0" style="font-size: 0.8rem;">@target.Description</p>
+                }
+            }
+            else
+            {
+                <div style="padding: 2.5rem; text-align: center; color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); grid-column: 1 / -1; font-size: 0.95rem;">
+                    Querying gateway targets...
                 </div>
             }
-        }
-        else
-        {
-            <div class="p-3 rounded text-center text-muted" style="background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); grid-column: 1 / -1;">
-                Querying gateway targets...
-            </div>
-        }
+        </div>
     </div>
 
     <!-- Wire-Level Healing Strip -->
-    <div class="mb-4 p-2 rounded d-flex align-items-center justify-content-between" style="background: var(--bg-input); border: 1px solid var(--border-subtle); font-size: 0.8rem;">
-        <div class="d-flex align-items-center gap-2">
-            <span>🛡️</span>
-            <span><strong>Wire-Level Auto-Healing:</strong> OllamaRouter strips markdown code fences (<code>```json</code>), repairs malformed tool arguments, and auto-promotes <code>&lt;tool_call&gt;</code> pseudo-tags.</span>
+    <div style="padding: 1.25rem 1.5rem; border-radius: var(--radius-lg); background: var(--bg-surface); border: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; gap: 1.25rem; margin-bottom: 2.5rem; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 1rem; flex: 1; min-width: 280px;">
+            <span style="font-size: 1.75rem;">🛡️</span>
+            <span style="font-size: 0.92rem; color: var(--text-secondary); line-height: 1.6;">
+                <strong>Wire-Level Auto-Healing:</strong> OllamaRouter strips markdown code fences (<code>```json</code>), repairs malformed tool arguments, and auto-promotes <code>&lt;tool_call&gt;</code> pseudo-tags.
+            </span>
         </div>
-        <span class="forge-badge badge-teal">Active</span>
+        <span class="forge-badge badge-teal" style="padding: 0.35rem 0.85rem; font-size: 0.85rem; font-weight: 600;">Active</span>
     </div>
 
     <!-- Resident VRAM Models Table (/api/ps) -->
-    <div class="d-flex justify-content-between align-items-center mb-2">
-        <h4 style="font-size: 1rem; font-weight: 600; margin: 0;">Resident Models in GPU Memory (/api/ps)</h4>
-        <span class="text-secondary" style="font-size: 0.8rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+        <h4 style="font-size: 1.15rem; font-weight: 700; margin: 0; color: var(--text-primary);">Resident Models in GPU Memory (/api/ps)</h4>
+        <span class="forge-badge badge-indigo" style="font-size: 0.85rem; padding: 0.3rem 0.75rem;">
             @(_residentModels.Count == 1 ? "1 model resident in VRAM" : $"{_residentModels.Count} models resident in VRAM")
         </span>
     </div>
 
-    <div class="table-responsive rounded border" style="border-color: var(--border-subtle);">
-        <table class="table-dark font-mono" style="width: 100%; font-size: 0.85rem; margin-bottom: 0;">
+    <div style="border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); overflow: hidden; background: var(--bg-surface);">
+        <table class="font-mono" style="width: 100%; border-collapse: collapse; font-size: 0.92rem;">
             <thead>
-                <tr style="border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface-elevated);">
-                    <th class="p-2">Model</th>
-                    <th class="p-2">VRAM Footprint</th>
-                    <th class="p-2">Total Size</th>
-                    <th class="p-2">Expires At</th>
+                <tr style="border-bottom: 1px solid var(--border-subtle); background: var(--bg-input);">
+                    <th style="padding: 1rem 1.25rem; text-align: left; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Model</th>
+                    <th style="padding: 1rem 1.25rem; text-align: left; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">VRAM Footprint</th>
+                    <th style="padding: 1rem 1.25rem; text-align: left; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Total Size</th>
+                    <th style="padding: 1rem 1.25rem; text-align: left; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Expires At</th>
                 </tr>
             </thead>
             <tbody>
                 @if (_residentModels.Count == 0)
                 {
                     <tr>
-                        <td colspan="4" class="p-3 text-center text-muted">
+                        <td colspan="4" style="padding: 3rem 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.95rem;">
                             @(_status?.IsConnected == true ? "No models currently resident in GPU VRAM." : "Gateway unreachable at " + (_status?.BaseUrl ?? "http://localhost:11434"))
                         </td>
                     </tr>
@@ -105,10 +116,10 @@
                     @foreach (var rm in _residentModels)
                     {
                         <tr style="border-bottom: 1px solid var(--border-subtle);">
-                            <td class="p-2"><strong>@rm.Name</strong></td>
-                            <td class="p-2 text-teal" style="color: var(--accent-teal, #10b981); font-weight: 600;">@rm.SizeVramFormatted</td>
-                            <td class="p-2">@rm.SizeTotalFormatted</td>
-                            <td class="p-2 text-muted">@rm.ExpiresAtFormatted</td>
+                            <td style="padding: 1.15rem 1.25rem; color: var(--text-primary); font-weight: 600;">@rm.Name</td>
+                            <td style="padding: 1.15rem 1.25rem; color: var(--accent-teal); font-weight: 700;">@rm.SizeVramFormatted</td>
+                            <td style="padding: 1.15rem 1.25rem; color: var(--text-secondary);">@rm.SizeTotalFormatted</td>
+                            <td style="padding: 1.15rem 1.25rem; color: var(--text-muted);">@rm.ExpiresAtFormatted</td>
                         </tr>
                     }
                 }

@@ -6,27 +6,29 @@
 
 <PageTitle>Settings &amp; Optimizations - NightCodeForge</PageTitle>
 
-<div class="page-header mb-4">
-    <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
-        <div class="d-flex align-items-center gap-2">
-            <span style="font-size: 1.75rem;">⚙️</span>
+<div class="page-header" style="margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1.5rem;">
+        <div style="display: flex; align-items: center; gap: 1rem;">
+            <span style="font-size: 2.25rem;">⚙️</span>
             <div>
-                <h1 style="margin: 0; font-size: 1.5rem; font-weight: 700;">Settings &amp; Optimizations</h1>
-                <p class="text-secondary mb-0">System defaults, workspace sandboxes, agent reasoning profiles, and model experimentation.</p>
+                <h1 style="margin: 0; font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em;">Settings &amp; Optimizations</h1>
+                <p style="margin: 0.35rem 0 0 0; font-size: 0.95rem; color: var(--text-secondary); line-height: 1.5;">
+                    System defaults, workspace sandboxes, agent reasoning profiles, and model experimentation.
+                </p>
             </div>
         </div>
 
-        <!-- Scope Switcher Pill Bar -->
-        <div class="scope-switcher" style="display: flex; background: var(--bg-surface-elevated); padding: 0.25rem; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); gap: 0.25rem;">
+        <!-- Scope Switcher Pill Bar (Spacious Segmented Control) -->
+        <div class="scope-switcher" style="display: inline-flex; background: var(--bg-surface); padding: 0.4rem; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); gap: 0.5rem; box-shadow: var(--shadow-sm);">
             <button type="button" 
                     class="forge-btn @(_activeScope == SettingsScope.Global ? "forge-btn-primary" : "forge-btn-ghost")" 
-                    style="font-size: 0.85rem; padding: 0.35rem 0.85rem;"
+                    style="font-size: 0.92rem; font-weight: 600; padding: 0.65rem 1.4rem; border-radius: var(--radius-md);"
                     @onclick="() => SetScope(SettingsScope.Global)">
                 🌐 Global System Settings
             </button>
             <button type="button" 
                     class="forge-btn @(_activeScope == SettingsScope.Workspace ? "forge-btn-primary" : "forge-btn-ghost")" 
-                    style="font-size: 0.85rem; padding: 0.35rem 0.85rem;"
+                    style="font-size: 0.92rem; font-weight: 600; padding: 0.65rem 1.4rem; border-radius: var(--radius-md);"
                     @onclick="() => SetScope(SettingsScope.Workspace)">
                 🏢 Workspace Settings @(WorkspaceState.ActiveWorkspace != null ? $"({WorkspaceState.ActiveWorkspace.Name})" : "(None)")
             </button>
@@ -36,21 +38,36 @@
 
 @if (_activeScope == SettingsScope.Global)
 {
-    <!-- Global Tabs -->
-    <div class="settings-tabs mb-4" style="display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem; overflow-x: auto;">
-        <button type="button" class="forge-btn @(_activeGlobalTab == "optimizations" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeGlobalTab = "optimizations"'>
+    <!-- Global Navigation Tabs Bar -->
+    <div class="settings-tabs" style="display: flex; gap: 0.75rem; margin-bottom: 2rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 1rem; overflow-x: auto; flex-wrap: wrap;">
+        <button type="button" 
+                class="forge-btn @(_activeGlobalTab == "optimizations" ? "forge-btn-primary" : "forge-btn-outline")" 
+                style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 500;"
+                @onclick='() => _activeGlobalTab = "optimizations"'>
             ⚡ Local LLM Optimizations
         </button>
-        <button type="button" class="forge-btn @(_activeGlobalTab == "profiles" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeGlobalTab = "profiles"'>
+        <button type="button" 
+                class="forge-btn @(_activeGlobalTab == "profiles" ? "forge-btn-primary" : "forge-btn-outline")" 
+                style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 500;"
+                @onclick='() => _activeGlobalTab = "profiles"'>
             🤖 Global Agent Profiles
         </button>
-        <button type="button" class="forge-btn @(_activeGlobalTab == "sdks" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeGlobalTab = "sdks"'>
+        <button type="button" 
+                class="forge-btn @(_activeGlobalTab == "sdks" ? "forge-btn-primary" : "forge-btn-outline")" 
+                style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 500;"
+                @onclick='() => _activeGlobalTab = "sdks"'>
             🔍 Host SDK Inspector
         </button>
-        <button type="button" class="forge-btn @(_activeGlobalTab == "ollamarouter" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeGlobalTab = "ollamarouter"'>
+        <button type="button" 
+                class="forge-btn @(_activeGlobalTab == "ollamarouter" ? "forge-btn-primary" : "forge-btn-outline")" 
+                style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 500;"
+                @onclick='() => _activeGlobalTab = "ollamarouter"'>
             🦙 OllamaRouter Gateway &amp; VRAM
         </button>
-        <button type="button" class="forge-btn @(_activeGlobalTab == "abtesting" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeGlobalTab = "abtesting"'>
+        <button type="button" 
+                class="forge-btn @(_activeGlobalTab == "abtesting" ? "forge-btn-primary" : "forge-btn-outline")" 
+                style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 500;"
+                @onclick='() => _activeGlobalTab = "abtesting"'>
             📊 A/B Testing Comparator
         </button>
     </div>
@@ -81,11 +98,17 @@ else
     <!-- Workspace Scope -->
     @if (WorkspaceState.ActiveWorkspace != null)
     {
-        <div class="settings-tabs mb-4" style="display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem; overflow-x: auto;">
-            <button type="button" class="forge-btn @(_activeWorkspaceTab == "confinement" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeWorkspaceTab = "confinement"'>
+        <div class="settings-tabs" style="display: flex; gap: 0.75rem; margin-bottom: 2rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 1rem; overflow-x: auto; flex-wrap: wrap;">
+            <button type="button" 
+                    class="forge-btn @(_activeWorkspaceTab == "confinement" ? "forge-btn-primary" : "forge-btn-outline")" 
+                    style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 500;"
+                    @onclick='() => _activeWorkspaceTab = "confinement"'>
                 🏢 Confinement &amp; Sandboxing
             </button>
-            <button type="button" class="forge-btn @(_activeWorkspaceTab == "profiles" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeWorkspaceTab = "profiles"'>
+            <button type="button" 
+                    class="forge-btn @(_activeWorkspaceTab == "profiles" ? "forge-btn-primary" : "forge-btn-outline")" 
+                    style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 500;"
+                    @onclick='() => _activeWorkspaceTab = "profiles"'>
                 🤖 Workspace Agent Profiles
             </button>
         </div>
@@ -106,10 +129,13 @@ else
     }
     else
     {
-        <div class="forge-card p-5 text-center mt-3">
-            <h3>No Active Workspace Selected</h3>
-            <p class="text-secondary mb-3">Please select or onboard a repository to configure workspace execution environments and dedicated agent profiles.</p>
-            <button type="button" class="forge-btn forge-btn-primary" @onclick="() => WorkspaceState.RequestOpenWizard()">
+        <div class="forge-card" style="padding: 4rem 2rem; text-align: center; border-radius: var(--radius-xl); margin-top: 1rem;">
+            <span style="font-size: 3rem; display: block; margin-bottom: 1rem;">📁</span>
+            <h2 style="font-size: 1.5rem; font-weight: 700; margin-bottom: 0.75rem; color: var(--text-primary);">No Active Workspace Selected</h2>
+            <p style="font-size: 0.95rem; color: var(--text-secondary); max-width: 640px; margin: 0 auto 2rem auto; line-height: 1.6;">
+                Please select or onboard a repository to configure workspace execution environments, container toolchains, and dedicated agent reasoning profiles.
+            </p>
+            <button type="button" class="forge-btn forge-btn-primary" style="padding: 0.75rem 1.75rem; font-size: 1rem; font-weight: 600;" @onclick="() => WorkspaceState.RequestOpenWizard()">
                 🧙 Launch Workspace Creation Wizard
             </button>
         </div>
