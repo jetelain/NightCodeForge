@@ -2,7 +2,7 @@
 
 > **Phase 5 Implementation Step**  
 > *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.6: Human-in-the-Loop Inbox](STEP_5_6_HUMAN_IN_THE_LOOP_INBOX.md) | *Next Step:* [Step 5.8: Settings, Host SDKs & A/B Testing](STEP_5_8_SETTINGS_HOST_SDKS_AND_AB_TESTING.md)  
-> *Project Target:* `src/NightCodeForge.Web/Components/Review` & `Pages/Review.razor` | *Status:* Ready for Implementation
+> *Project Target:* `src/NightCodeForge.Web/Components/Review` & `Pages/Review.razor` | *Status:* Completed (All 640 Tests Passing)
 
 ---
 
@@ -568,12 +568,12 @@ Aggregates all inline comments and overall notes into the `ReviewerFeedback` pay
 ---
 
 ## 6. Definition of Done (DoD) Checklist
-
-- [ ] `ReviewCommentStateService` implemented to manage drafted inline line comments.
-- [ ] `DiffViewer.razor` includes hover `[+]` button to open inline comment thread on any diff line.
-- [ ] Review header displays dynamic comment counter badge.
-- [ ] `ChangeRequestModal.razor` aggregates inline comments + general notes into formatted Markdown.
-- [ ] Dispatches to `ITaskOrchestrator.RequestChangesAsync` and routes to `ImplementationStage` on `llm-urgent`.
-- [ ] Implementation agent receives the structured line-by-line feedback in its bootstrap prompt context.
-- [ ] Approve & Merge modal completes task, squashes commits, and cascades DAG unblocking.
-- [ ] Component unit tests verify inline comment persistence and feedback compilation.
+ 
+- [x] `ReviewCommentStateService` implemented to manage drafted inline line comments.
+- [x] `DiffViewer.razor` includes hover `[+]` button to open inline comment thread on any diff line.
+- [x] Review header displays dynamic comment counter badge.
+- [x] `ChangeRequestModal.razor` aggregates inline comments + general notes into formatted Markdown.
+- [x] Dispatches to `ITaskOrchestrator.RequestChangesAsync` and routes to `ImplementationStage` on `llm-urgent`.
+- [x] Implementation agent receives the structured line-by-line feedback in its bootstrap prompt context.
+- [x] Approve & Merge modal completes task, squashes commits, and cascades DAG unblocking.
+- [x] Component unit tests verify inline comment persistence and feedback compilation.

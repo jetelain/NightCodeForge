@@ -1,0 +1,94 @@
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Services
+@inject ITaskOrchestrator TaskOrchestrator
+@inject ToastService ToastService
+
+<div class="forge-modal-backdrop" id="approve-merge-modal">
+    <div class="forge-modal card-glass modal-md">
+        <div class="modal-header">
+            <h3>🚀 Approve &amp; Merge ForgeTask #@TaskId</h3>
+            <button class="btn-icon" @onclick="Close" id="btn-approve-close" title="Close">✕</button>
+        </div>
+
+        <div class="modal-body font-sans">
+            <p class="text-secondary mb-3">
+                This will perform a deterministic squash-merge of <code>feature/task-@TaskId</code> into
+                <strong><code>@BaseBranch</code></strong>, transition the task to <strong>Closed</strong>,
+                and unblock downstream DAG dependencies.
+            </p>
+
+            <div class="form-group mb-3">
+                <label class="form-label mb-1">Squash Commit Message</label>
+                <input type="text" class="form-control-dark font-sans"
+                       id="merge-commit-message"
+                       placeholder="Squash commit message..."
+                       @bind="_commitMessage" />
+            </div>
+        </div>
+
+        <div class="modal-footer d-flex justify-content-end gap-2 mt-3">
+            <button class="btn btn-secondary" @onclick="Close" id="btn-cancel-approve">Cancel</button>
+            <button class="btn btn-success" id="btn-confirm-approve-merge" disabled="@_isSubmitting" @onclick="HandleApproveAsync">
+                @if (_isSubmitting)
+                {
+                    <span>Squashing &amp; Merging...</span>
+                }
+                else
+                {
+                    <span>🚀 Confirm Squash &amp; Merge</span>
+                }
+            </button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int TaskId { get; set; }
+    [Parameter] public string BaseBranch { get; set; } = "main";
+    [Parameter] public string TaskTitle { get; set; } = string.Empty;
+    [Parameter] public EventCallback OnApproved { get; set; }
+    [Parameter] public EventCallback OnClosed { get; set; }
+
+    private string _commitMessage = string.Empty;
+    private bool _isSubmitting;
+
+    protected override void OnParametersSet()
+    {
+        if (string.IsNullOrWhiteSpace(_commitMessage))
+        {
+            _commitMessage = string.IsNullOrWhiteSpace(TaskTitle)
+                ? $"Merge task #{TaskId} into {BaseBranch}"
+                : $"Merge task #{TaskId}: {TaskTitle}";
+        }
+    }
+
+    private async Task HandleApproveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_commitMessage))
+        {
+            ToastService.Show("Validation Error", "Please provide a squash commit message.", ToastLevel.Warning);
+            return;
+        }
+
+        _isSubmitting = true;
+        try
+        {
+            await TaskOrchestrator.CompleteTaskAndCascadeAsync(TaskId, _commitMessage);
+            ToastService.Show("Task Merged", $"ForgeTask #{TaskId} approved and merged to {BaseBranch}.", ToastLevel.Success);
+            await OnApproved.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Merge Error", $"Failed to complete merge: {ex.Message}", ToastLevel.Error);
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private async Task Close()
+    {
+        await OnClosed.InvokeAsync();
+    }
+}

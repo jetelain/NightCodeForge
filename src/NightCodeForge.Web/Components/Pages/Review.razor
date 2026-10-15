@@ -1,31 +1,284 @@
 @page "/review"
+@page "/review/{TaskId:int}"
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Components.Review
+@using NightCodeForge.Web.Services
+@inject ITaskOrchestrator TaskOrchestrator
+@inject ITaskRepository TaskRepository
+@inject ITaskReviewService TaskReviewService
+@inject ReviewCommentStateService CommentState
+@inject ToastService ToastService
+@inject NavigationManager NavigationManager
+@inject WorkspaceStateService WorkspaceState
+@implements IDisposable
 
 <PageTitle>Review Room - NightCodeForge</PageTitle>
 
-<div class="page-header" style="margin-bottom: 1.5rem;">
-    <div style="display: flex; align-items: center; gap: 0.75rem;">
-        <span style="font-size: 1.75rem;">🔍</span>
-        <div>
-            <h1>Review Room &amp; Merge Gates</h1>
-            <p>Syntax-highlighted diff inspection, test result verification, and interactive merge decision controls.</p>
+<div class="review-room-container">
+    @if (_isLoading)
+    {
+        <div class="card-surface p-5 text-center" id="review-loading-state">
+            <span class="text-secondary">Loading review snapshot...</span>
         </div>
-    </div>
+    }
+    else if (_snapshot == null)
+    {
+        <div class="card-surface p-5 text-center" id="review-empty-state">
+            <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">🔍</div>
+            <h3>No Tasks Awaiting Review</h3>
+            <p class="text-secondary mb-3">Tasks in <code>Ready</code> or <code>Implemented</code> status will appear here for maintainer code review and merge gate resolution.</p>
+            <a href="/backlog" class="btn btn-secondary">Go to Backlog</a>
+        </div>
+    }
+    else
+    {
+        <!-- Task Switcher (if multiple pending reviews exist) -->
+        @if (_pendingReviews.Count > 1)
+        {
+            <div class="d-flex align-items-center justify-content-between mb-2 p-2 card-surface" style="font-size: 0.85rem;" id="task-switcher-bar">
+                <span class="text-secondary">Pending Reviews (@_pendingReviews.Count):</span>
+                <div class="d-flex gap-2">
+                    @foreach (var review in _pendingReviews)
+                    {
+                        <button class="btn btn-sm @(review.TaskId == _snapshot.TaskId ? "btn-primary" : "btn-secondary")"
+                                @onclick="() => SwitchTask(review.TaskId)">
+                            #@review.TaskId: @Truncate(review.Title, 25)
+                        </button>
+                    }
+                </div>
+            </div>
+        }
+
+        <!-- 1. Header & Quality Gate Summary Strip -->
+        <div class="review-header card-surface mb-3" id="review-header-section">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                    <h2>Review: ForgeTask #@_snapshot.TaskId - @_snapshot.Title</h2>
+                    <div class="mt-2 d-flex align-items-center flex-wrap gap-1">
+                        <span class="badge-branch"><code>@_snapshot.FeatureBranch</code> ➔ <code>@_snapshot.BaseBranch</code></span>
+                        <span class="badge-mode">Mode: @_snapshot.MergeMode</span>
+                        <span class="badge-status @GetStatusBadgeClass(_snapshot.Status)">Status: @_snapshot.Status</span>
+                        @if (CommentState.CommentCount > 0)
+                        {
+                            <span class="badge-amber" id="header-comment-badge" style="padding: 0.25rem 0.6rem; border-radius: var(--radius-sm); font-size: 0.8rem;">
+                                💬 @CommentState.CommentCount comments drafted
+                            </span>
+                        }
+                    </div>
+                </div>
+                <div class="review-actions d-flex align-items-center gap-2">
+                    @if (_snapshot.MergeMode == MergeMode.Automatic && _snapshot.Status == TaskOverallStatus.Closed)
+                    {
+                        <span class="badge-success-large" id="badge-auto-merged">✅ Auto-Merged to @_snapshot.BaseBranch</span>
+                    }
+                    else if (_snapshot.Status == TaskOverallStatus.Closed)
+                    {
+                        <span class="badge-success-large" id="badge-merged">✅ Merged to @_snapshot.BaseBranch</span>
+                    }
+                    else if (_snapshot.Status == TaskOverallStatus.Ready || _snapshot.Status == TaskOverallStatus.Implemented)
+                    {
+                        <button class="btn btn-warning-outline" id="btn-request-changes" @onclick="OpenChangeRequestModal">
+                            📝 Request Changes @(CommentState.CommentCount > 0 ? $"({CommentState.CommentCount})" : "")
+                        </button>
+                        <button class="btn btn-success" id="btn-approve-merge" @onclick="OpenApproveModal">
+                            🚀 Approve &amp; Merge
+                        </button>
+                    }
+                </div>
+            </div>
+
+            <!-- Deterministic Quality Gate Metrics Cards -->
+            <div class="gate-metrics-grid mt-3" id="gate-metrics-grid">
+                <div class="gate-card @(_snapshot.GateMetrics.CoverageDelta >= 0 ? "gate-pass" : "gate-fail")" id="card-metric-coverage">
+                    <span class="gate-title">Code Coverage</span>
+                    <span class="gate-value">@_snapshot.GateMetrics.CurrentCoverage.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)%</span>
+                    <span class="gate-delta @(_snapshot.GateMetrics.CoverageDelta >= 0 ? "delta-positive" : "delta-negative")">
+                        @(_snapshot.GateMetrics.CoverageDelta >= 0 ? "+" : "")@_snapshot.GateMetrics.CoverageDelta.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)%
+                    </span>
+                </div>
+
+                <div class="gate-card @(_snapshot.GateMetrics.WarningDelta <= 0 ? "gate-pass" : "gate-fail")" id="card-metric-warnings">
+                    <span class="gate-title">Compiler Warnings</span>
+                    <span class="gate-value">@_snapshot.GateMetrics.CurrentWarnings</span>
+                    <span class="gate-delta @(_snapshot.GateMetrics.WarningDelta <= 0 ? "delta-positive" : "delta-negative")">
+                        @(_snapshot.GateMetrics.WarningDelta > 0 ? "+" : "")@_snapshot.GateMetrics.WarningDelta
+                    </span>
+                </div>
+
+                <div class="gate-card @(_snapshot.GateMetrics.FailedTests == 0 ? "gate-pass" : "gate-fail")" id="card-metric-tests">
+                    <span class="gate-title">Test Suite</span>
+                    <span class="gate-value">@_snapshot.GateMetrics.PassedTests / @_snapshot.GateMetrics.TotalTests</span>
+                    <span class="gate-delta text-muted">@(_snapshot.GateMetrics.DurationMs)ms</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. Diff Navigation & DiffPlex Canvas -->
+        <div class="diff-workspace-grid" id="diff-workspace-grid">
+            <div class="file-tree card-surface">
+                <h4>Changed Files (@_snapshot.Files.Count)</h4>
+                @if (_snapshot.Files.Count == 0)
+                {
+                    <p class="text-muted small">No file modifications recorded in diff.</p>
+                }
+                else
+                {
+                    <ul class="file-list" id="file-list">
+                        @foreach (var file in _snapshot.Files)
+                        {
+                            <li class="file-item @(_selectedFile?.Path == file.Path ? "active" : "")"
+                                @onclick="() => SelectFile(file)">
+                                <span class="file-type badge-@file.ChangeType.ToString().ToLower()">
+                                    @file.ChangeType.ToString()[0]
+                                </span>
+                                <span class="file-path" title="@file.Path">@file.Path</span>
+                                <span class="file-counts">+@file.Additions -@file.Deletions</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+
+            <div class="diff-viewer-panel card-surface" id="diff-viewer-panel">
+                @if (_selectedFile != null)
+                {
+                    <DiffViewer File="_selectedFile" />
+                }
+                else
+                {
+                    <div class="p-4 text-center text-muted">
+                        Select a file on the left to inspect diff and add inline comments.
+                    </div>
+                }
+            </div>
+        </div>
+    }
 </div>
 
-<div class="forge-card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <div style="font-weight: 600; font-size: 1.1rem;">Pending Pull Decisions</div>
-        <span class="forge-badge badge-teal">Gatekeeper Active</span>
-    </div>
-    <p style="margin-bottom: 1.25rem;">
-        Review agent patch proposals with full deterministic test summaries, security checks, and one-click squash merges.
-    </p>
-    <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-secondary);">
-        Active Workspace: <span style="color: var(--accent-indigo);">@(WorkspaceState.ActiveWorkspace?.Name ?? "None selected")</span>
-    </div>
-</div>
+@if (_showChangeRequestModal && _snapshot != null)
+{
+    <ChangeRequestModal
+        TaskId="_snapshot.TaskId"
+        OnSubmitted="HandleChangesRequestedAsync"
+        OnClosed="() => _showChangeRequestModal = false" />
+}
+
+@if (_showApproveModal && _snapshot != null)
+{
+    <ApproveMergeModal
+        TaskId="_snapshot.TaskId"
+        BaseBranch="_snapshot.BaseBranch"
+        TaskTitle="_snapshot.Title"
+        OnApproved="HandleApprovedAsync"
+        OnClosed="() => _showApproveModal = false" />
+}
 
 @code {
-    [Inject]
-    private WorkspaceStateService WorkspaceState { get; set; } = default!;
+    [Parameter] public int? TaskId { get; set; }
+
+    private TaskReviewSnapshot? _snapshot;
+    private IReadOnlyList<TaskReviewSnapshot> _pendingReviews = Array.Empty<TaskReviewSnapshot>();
+    private FileDiffSummary? _selectedFile;
+    private bool _showChangeRequestModal;
+    private bool _showApproveModal;
+    private bool _isLoading = true;
+
+    protected override void OnInitialized()
+    {
+        CommentState.OnCommentsChanged += StateHasChanged;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadReviewDataAsync();
+    }
+
+    private async Task LoadReviewDataAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            var workspaceId = WorkspaceState.ActiveWorkspaceId;
+            _pendingReviews = await TaskReviewService.GetPendingReviewsAsync(workspaceId);
+
+            if (TaskId.HasValue)
+            {
+                _snapshot = await TaskReviewService.GetSnapshotAsync(TaskId.Value);
+            }
+            else if (_pendingReviews.Count > 0)
+            {
+                _snapshot = _pendingReviews[0];
+            }
+            else
+            {
+                _snapshot = null;
+            }
+
+            if (_snapshot != null && _snapshot.Files.Count > 0)
+            {
+                if (_selectedFile == null || !_snapshot.Files.Any(f => f.Path == _selectedFile.Path))
+                {
+                    _selectedFile = _snapshot.Files[0];
+                }
+            }
+            else
+            {
+                _selectedFile = null;
+            }
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void SelectFile(FileDiffSummary file)
+    {
+        _selectedFile = file;
+    }
+
+    private void SwitchTask(int taskId)
+    {
+        NavigationManager.NavigateTo($"/review/{taskId}");
+    }
+
+    private void OpenChangeRequestModal()
+    {
+        _showChangeRequestModal = true;
+    }
+
+    private void OpenApproveModal()
+    {
+        _showApproveModal = true;
+    }
+
+    private async Task HandleChangesRequestedAsync()
+    {
+        _showChangeRequestModal = false;
+        await LoadReviewDataAsync();
+    }
+
+    private async Task HandleApprovedAsync()
+    {
+        _showApproveModal = false;
+        await LoadReviewDataAsync();
+    }
+
+    private string GetStatusBadgeClass(TaskOverallStatus status) => status switch
+    {
+        TaskOverallStatus.Ready => "badge-status-ready",
+        TaskOverallStatus.Closed => "badge-status-closed",
+        TaskOverallStatus.Implemented => "badge-status-implemented",
+        TaskOverallStatus.Reviewed => "badge-status-reviewed",
+        _ => "badge-indigo"
+    };
+
+    private static string Truncate(string value, int maxLen) =>
+        value.Length <= maxLen ? value : value[..maxLen] + "…";
+
+    public void Dispose()
+    {
+        CommentState.OnCommentsChanged -= StateHasChanged;
+    }
 }

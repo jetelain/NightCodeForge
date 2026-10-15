@@ -4407,6 +4407,406 @@ code, kbd, samp, pre {
     box-shadow: none;
 }
 
+/* ==========================================================================
+   Review Room & Merge Gates Styles (Step 5.7)
+   ========================================================================== */
+.review-room-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    gap: 1rem;
+    overflow-y: auto;
+    padding-bottom: 2rem;
+}
+
+.review-header {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 1.25rem 1.5rem;
+}
+
+.badge-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: var(--radius-sm);
+    background: rgba(99, 102, 241, 0.12);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    color: #c7d2fe;
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    margin-right: 0.5rem;
+}
+
+.badge-mode {
+    display: inline-flex;
+    padding: 0.25rem 0.6rem;
+    border-radius: var(--radius-sm);
+    background: rgba(20, 184, 166, 0.12);
+    border: 1px solid rgba(20, 184, 166, 0.3);
+    color: #5eead4;
+    font-size: 0.8rem;
+    margin-right: 0.5rem;
+}
+
+.badge-status {
+    display: inline-flex;
+    padding: 0.25rem 0.6rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.badge-status-ready {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    color: #fbbf24;
+}
+
+.badge-status-closed {
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    color: #34d399;
+}
+
+.badge-status-implemented {
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    color: #60a5fa;
+}
+
+.badge-status-reviewed {
+    background: rgba(168, 85, 247, 0.15);
+    border: 1px solid rgba(168, 85, 247, 0.4);
+    color: #c084fc;
+}
+
+.badge-success-large {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 1rem;
+    border-radius: var(--radius-md);
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid var(--accent-emerald);
+    color: #34d399;
+    font-weight: 600;
+}
+
+.btn-warning-outline {
+    background: transparent;
+    border: 1px solid var(--accent-amber);
+    color: #fbbf24;
+    padding: 0.45rem 1rem;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.btn-warning-outline:hover {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fef3c7;
+}
+
+/* Gate Metrics Strip */
+.gate-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.gate-card {
+    background: var(--bg-canvas);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 0.75rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    transition: border-color 0.2s;
+}
+
+.gate-card.gate-pass {
+    border-left: 4px solid var(--accent-emerald);
+}
+
+.gate-card.gate-fail {
+    border-left: 4px solid var(--accent-crimson);
+}
+
+.gate-title {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.05em;
+}
+
+.gate-value {
+    font-size: 1.35rem;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+}
+
+.gate-delta {
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+}
+
+.delta-positive {
+    color: var(--accent-emerald);
+}
+
+.delta-negative {
+    color: var(--accent-crimson);
+}
+
+/* Diff Workspace Grid */
+.diff-workspace-grid {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 1rem;
+    align-items: start;
+    min-height: 500px;
+}
+
+.file-tree {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+}
+
+.file-tree h4 {
+    font-size: 0.9rem;
+    margin-bottom: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.file-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.file-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.6rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    background: transparent;
+    border: 1px solid transparent;
+    transition: background 0.15s, border-color 0.15s;
+    font-size: 0.82rem;
+}
+
+.file-item:hover {
+    background: var(--bg-card-hover);
+}
+
+.file-item.active {
+    background: rgba(99, 102, 241, 0.12);
+    border-color: rgba(99, 102, 241, 0.35);
+}
+
+.file-type {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    line-height: 18px;
+    text-align: center;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    font-family: var(--font-mono);
+}
+
+.badge-modified {
+    background: rgba(245, 158, 11, 0.2);
+    color: #fbbf24;
+}
+
+.badge-added {
+    background: rgba(16, 185, 129, 0.2);
+    color: #34d399;
+}
+
+.badge-deleted {
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+}
+
+.badge-renamed {
+    background: rgba(99, 102, 241, 0.2);
+    color: #a5b4fc;
+}
+
+.file-path {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+}
+
+.file-counts {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+.diff-viewer-panel {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    overflow-x: auto;
+}
+
+/* Diff Tables */
+.diff-pane {
+    width: 100%;
+}
+
+.diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+
+.diff-header-col {
+    padding: 0.4rem 0.75rem;
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    text-align: left;
+    font-size: 0.75rem;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.diff-row {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.diff-row:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.diff-action-cell {
+    width: 28px;
+    text-align: center;
+    padding: 2px 4px;
+    vertical-align: top;
+}
+
+.btn-add-comment {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    opacity: 0.25;
+    font-size: 0.75rem;
+    padding: 2px;
+    border-radius: 3px;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+.diff-row:hover .btn-add-comment {
+    opacity: 0.85;
+}
+
+.btn-add-comment:hover {
+    opacity: 1 !important;
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.diff-num {
+    width: 44px;
+    text-align: right;
+    padding: 2px 8px;
+    color: var(--text-muted);
+    user-select: none;
+    font-size: 0.75rem;
+    vertical-align: top;
+}
+
+.diff-prefix {
+    width: 16px;
+    text-align: center;
+    padding: 2px 4px;
+    user-select: none;
+    font-weight: 700;
+}
+
+.diff-text {
+    padding: 2px 8px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    vertical-align: top;
+}
+
+.line-inserted {
+    background: rgba(16, 185, 129, 0.15) !important;
+    color: #a7f3d0;
+}
+
+.line-deleted {
+    background: rgba(239, 68, 68, 0.15) !important;
+    color: #fca5a5;
+}
+
+.line-modified {
+    background: rgba(245, 158, 11, 0.12) !important;
+    color: #fde68a;
+}
+
+.line-unchanged {
+    background: transparent;
+}
+
+/* Inline Comments Thread */
+.diff-comment-row td {
+    padding: 0;
+}
+
+.inline-comment-thread {
+    background: rgba(15, 23, 42, 0.95);
+    border-left: 3px solid var(--accent-amber);
+    margin: 0.35rem 0.5rem;
+    border-radius: var(--radius-sm);
+}
+
+.comment-bubble {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.75rem;
+}
+
+.comment-meta {
+    font-size: 0.75rem;
+    color: var(--accent-amber);
+    margin-bottom: 0.25rem;
+}
+
+.comment-text {
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+}
+
+.comment-input-box textarea {
+    width: 100%;
+    resize: vertical;
+}
+
 
 
 

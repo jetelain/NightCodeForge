@@ -17,6 +17,8 @@ builder.Services.AddSingleton<WorkerStateService>();
 builder.Services.AddScoped<ToastService>();
 builder.Services.AddScoped<IdeationSessionState>();
 builder.Services.AddScoped<IWorkspaceProvisioningService, WorkspaceProvisioningService>();
+builder.Services.AddScoped<ReviewCommentStateService>();
+builder.Services.AddScoped<ITaskReviewService, TaskReviewService>();
 
 // Register NightCodeForge domain and infrastructure services
 var dbConnection = builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=nightcodeforge.db;";

@@ -1,0 +1,260 @@
+@using DiffPlex
+@using DiffPlex.DiffBuilder
+@using DiffPlex.DiffBuilder.Model
+@using NightCodeForge.Web.Services
+@inject ReviewCommentStateService CommentState
+@implements IDisposable
+
+<div class="diff-pane font-mono">
+    <div class="diff-controls mb-2 d-flex justify-content-between align-items-center">
+        <span class="text-secondary"><code>@File.Path</code></span>
+        <div class="btn-group">
+            <button class="btn btn-sm @(_isSideBySide ? "btn-primary" : "btn-secondary")" @onclick="() => _isSideBySide = true" id="btn-diff-side-by-side">
+                Side-by-Side
+            </button>
+            <button class="btn btn-sm @(!_isSideBySide ? "btn-primary" : "btn-secondary")" @onclick="() => _isSideBySide = false" id="btn-diff-unified">
+                Unified
+            </button>
+        </div>
+    </div>
+
+    @if (_isSideBySide)
+    {
+        <!-- Side-by-Side Diff Table -->
+        <table class="diff-table diff-table-sbs">
+            <thead>
+                <tr>
+                    <th colspan="2" class="diff-header-col">Base Branch (Original)</th>
+                    <th colspan="3" class="diff-header-col">Feature Branch (Proposed)</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_sbsModel != null)
+                {
+                    var maxLines = Math.Max(_sbsModel.OldText.Lines.Count, _sbsModel.NewText.Lines.Count);
+                    for (int i = 0; i < maxLines; i++)
+                    {
+                        var oldLine = i < _sbsModel.OldText.Lines.Count ? _sbsModel.OldText.Lines[i] : null;
+                        var newLine = i < _sbsModel.NewText.Lines.Count ? _sbsModel.NewText.Lines[i] : null;
+
+                        var lineNum = newLine?.Position ?? oldLine?.Position ?? (i + 1);
+                        var lineText = newLine?.Text ?? oldLine?.Text ?? string.Empty;
+                        var commentsOnLine = CommentState.Comments
+                            .Where(c => c.FilePath == File.Path && c.LineNumber == lineNum)
+                            .ToList();
+
+                        <tr class="diff-row">
+                            <!-- Left: Old Side -->
+                            <td class="diff-num old-num @GetLineTypeClass(oldLine?.Type)">@(oldLine?.Position?.ToString() ?? "")</td>
+                            <td class="diff-text old-text @GetLineTypeClass(oldLine?.Type)">@(oldLine?.Text ?? "")</td>
+
+                            <!-- Right: New Side with comment action -->
+                            <td class="diff-action-cell">
+                                <button class="btn-add-comment" title="Add review comment on line @lineNum"
+                                        @onclick="() => ToggleCommentBox(lineNum, lineText)">
+                                    ➕
+                                </button>
+                            </td>
+                            <td class="diff-num new-num @GetLineTypeClass(newLine?.Type)">@(newLine?.Position?.ToString() ?? "")</td>
+                            <td class="diff-text new-text @GetLineTypeClass(newLine?.Type)">@(newLine?.Text ?? "")</td>
+                        </tr>
+
+                        @if (commentsOnLine.Any() || _activeInputLine == lineNum)
+                        {
+                            <tr class="diff-comment-row">
+                                <td colspan="5">
+                                    <div class="inline-comment-thread p-3 card-glass font-sans">
+                                        @foreach (var comment in commentsOnLine)
+                                        {
+                                            <div class="comment-bubble mb-2">
+                                                <div class="comment-meta d-flex justify-content-between align-items-center">
+                                                    <strong>Reviewer Note</strong>
+                                                    <button class="btn-icon text-muted" title="Delete comment" @onclick="() => CommentState.RemoveComment(comment.Id)">✕</button>
+                                                </div>
+                                                <div class="comment-text">@comment.CommentText</div>
+                                            </div>
+                                        }
+
+                                        @if (_activeInputLine == lineNum)
+                                        {
+                                            <div class="comment-input-box mt-2">
+                                                <textarea class="form-control-dark font-sans" rows="2"
+                                                          placeholder="Type your review comment or instruction for the implementation agent..."
+                                                          @bind="_newCommentText"></textarea>
+                                                <div class="d-flex justify-content-end gap-2 mt-2">
+                                                    <button class="btn btn-sm btn-secondary" @onclick="() => _activeInputLine = null">Cancel</button>
+                                                    <button class="btn btn-sm btn-primary" @onclick="() => SaveComment(lineNum, lineText)">
+                                                        Save Comment
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    }
+                }
+            </tbody>
+        </table>
+    }
+    else
+    {
+        <!-- Unified Diff Table -->
+        <table class="diff-table diff-table-unified">
+            <tbody>
+                @if (_unifiedLines != null)
+                {
+                    @foreach (var line in _unifiedLines)
+                    {
+                        var lineNum = line.NewLineNumber ?? line.OldLineNumber ?? 0;
+                        var commentsOnLine = CommentState.Comments
+                            .Where(c => c.FilePath == File.Path && c.LineNumber == lineNum)
+                            .ToList();
+
+                        <tr class="diff-row @GetLineTypeClass(line.Type)">
+                            <!-- Add Comment Action -->
+                            <td class="diff-action-cell">
+                                <button class="btn-add-comment" title="Add review comment on line @lineNum"
+                                        @onclick="() => ToggleCommentBox(lineNum, line.Text)">
+                                    ➕
+                                </button>
+                            </td>
+                            <td class="diff-num old-num">@(line.OldLineNumber?.ToString() ?? "")</td>
+                            <td class="diff-num new-num">@(line.NewLineNumber?.ToString() ?? "")</td>
+                            <td class="diff-prefix">@GetDiffPrefix(line.Type)</td>
+                            <td class="diff-text">@line.Text</td>
+                        </tr>
+
+                        @if (commentsOnLine.Any() || _activeInputLine == lineNum)
+                        {
+                            <tr class="diff-comment-row">
+                                <td colspan="5">
+                                    <div class="inline-comment-thread p-3 card-glass font-sans">
+                                        @foreach (var comment in commentsOnLine)
+                                        {
+                                            <div class="comment-bubble mb-2">
+                                                <div class="comment-meta d-flex justify-content-between align-items-center">
+                                                    <strong>Reviewer Note</strong>
+                                                    <button class="btn-icon text-muted" title="Delete comment" @onclick="() => CommentState.RemoveComment(comment.Id)">✕</button>
+                                                </div>
+                                                <div class="comment-text">@comment.CommentText</div>
+                                            </div>
+                                        }
+
+                                        @if (_activeInputLine == lineNum)
+                                        {
+                                            <div class="comment-input-box mt-2">
+                                                <textarea class="form-control-dark font-sans" rows="2"
+                                                          placeholder="Type your review comment or instruction for the implementation agent..."
+                                                          @bind="_newCommentText"></textarea>
+                                                <div class="d-flex justify-content-end gap-2 mt-2">
+                                                    <button class="btn btn-sm btn-secondary" @onclick="() => _activeInputLine = null">Cancel</button>
+                                                    <button class="btn btn-sm btn-primary" @onclick="() => SaveComment(lineNum, line.Text)">
+                                                        Save Comment
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    }
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    [Parameter] public FileDiffSummary File { get; set; } = null!;
+
+    private bool _isSideBySide = true;
+    private SideBySideDiffModel? _sbsModel;
+    private List<UnifiedLine>? _unifiedLines;
+    private int? _activeInputLine;
+    private string _newCommentText = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        CommentState.OnCommentsChanged += StateHasChanged;
+    }
+
+    protected override void OnParametersSet()
+    {
+        var differ = new Differ();
+        var sbsBuilder = new SideBySideDiffBuilder(differ);
+        _sbsModel = sbsBuilder.BuildDiffModel(File.OldContent ?? string.Empty, File.NewContent ?? string.Empty);
+
+        var inlineBuilder = new InlineDiffBuilder(differ);
+        var inlineModel = inlineBuilder.BuildDiffModel(File.OldContent ?? string.Empty, File.NewContent ?? string.Empty);
+
+        int oldCounter = 1;
+        int newCounter = 1;
+        _unifiedLines = new List<UnifiedLine>();
+
+        foreach (var piece in inlineModel.Lines)
+        {
+            int? oldNum = null;
+            int? newNum = null;
+
+            switch (piece.Type)
+            {
+                case ChangeType.Unchanged:
+                    oldNum = oldCounter++;
+                    newNum = newCounter++;
+                    break;
+                case ChangeType.Deleted:
+                    oldNum = oldCounter++;
+                    break;
+                case ChangeType.Inserted:
+                    newNum = newCounter++;
+                    break;
+                case ChangeType.Modified:
+                    oldNum = oldCounter++;
+                    newNum = newCounter++;
+                    break;
+            }
+
+            _unifiedLines.Add(new UnifiedLine(oldNum, newNum, piece.Type, piece.Text ?? string.Empty));
+        }
+    }
+
+    private void ToggleCommentBox(int lineNum, string lineText)
+    {
+        _activeInputLine = lineNum;
+        _newCommentText = string.Empty;
+    }
+
+    private void SaveComment(int lineNum, string lineText)
+    {
+        if (string.IsNullOrWhiteSpace(_newCommentText)) return;
+
+        CommentState.AddComment(File.Path, lineNum, lineText, _newCommentText);
+        _activeInputLine = null;
+        _newCommentText = string.Empty;
+    }
+
+    private string GetLineTypeClass(ChangeType? type) => type switch
+    {
+        ChangeType.Inserted => "line-inserted",
+        ChangeType.Deleted => "line-deleted",
+        ChangeType.Modified => "line-modified",
+        _ => "line-unchanged"
+    };
+
+    private string GetDiffPrefix(ChangeType type) => type switch
+    {
+        ChangeType.Inserted => "+",
+        ChangeType.Deleted => "-",
+        _ => " "
+    };
+
+    public void Dispose()
+    {
+        CommentState.OnCommentsChanged -= StateHasChanged;
+    }
+
+    private record UnifiedLine(int? OldLineNumber, int? NewLineNumber, ChangeType Type, string Text);
+}

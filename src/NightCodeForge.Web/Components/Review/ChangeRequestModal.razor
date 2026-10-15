@@ -1,0 +1,114 @@
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Services
+@inject ITaskOrchestrator TaskOrchestrator
+@inject ReviewCommentStateService CommentState
+@inject ToastService ToastService
+
+<div class="forge-modal-backdrop" id="change-request-modal">
+    <div class="forge-modal card-glass modal-lg">
+        <div class="modal-header">
+            <h3>📝 Request Changes for ForgeTask #@TaskId</h3>
+            <button class="btn-icon" @onclick="Close" id="btn-modal-close" title="Close">✕</button>
+        </div>
+
+        <div class="modal-body font-sans">
+            <p class="text-secondary mb-3">
+                Submitting this review will route ForgeTask #@TaskId back to <strong>Stage 3 (ImplementationStage)</strong>
+                and enqueue it to <strong><code>llm-urgent</code></strong> with top priority.
+            </p>
+
+            <div class="form-group mb-3">
+                <label class="form-label mb-1">Overall Review Notes / Instructions</label>
+                <textarea class="form-control-dark font-sans" rows="3"
+                          id="review-general-notes"
+                          placeholder="Summarize the core requirements or missing aspects..."
+                          @bind="_generalNotes"></textarea>
+            </div>
+
+            <!-- Inline Comments Summary -->
+            <div class="inline-comments-summary card-surface p-3 mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5>Inline Code Comments (@CommentState.CommentCount)</h5>
+                    @if (CommentState.CommentCount > 0)
+                    {
+                        <button class="btn btn-sm btn-secondary" id="btn-clear-comments" @onclick="CommentState.Clear">Clear All</button>
+                    }
+                </div>
+
+                @if (CommentState.CommentCount == 0)
+                {
+                    <p class="text-muted small mb-0" id="no-inline-comments-msg">No inline comments added. You can add comments by clicking [+] on any diff line.</p>
+                }
+                else
+                {
+                    <ul class="comments-preview-list" id="inline-comments-list" style="list-style: none; padding-left: 0;">
+                        @foreach (var c in CommentState.Comments)
+                        {
+                            <li class="mb-2 p-2" style="background: rgba(255, 255, 255, 0.03); border-radius: 4px;">
+                                <code>@c.FilePath:@c.LineNumber</code>
+                                <span class="text-secondary ms-2">@c.CommentText</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+
+            <!-- Formatted Markdown Preview Dispatched to Agent -->
+            <div class="payload-preview card-surface p-3">
+                <label class="text-muted small mb-1 d-block">Agent Feedback Payload Preview:</label>
+                <pre class="font-mono text-sm mb-0 p-2" id="payload-preview-box" style="background: rgba(0, 0, 0, 0.3); border-radius: 4px; white-space: pre-wrap; max-height: 160px; overflow-y: auto;">@CommentState.FormatAggregatedFeedback(_generalNotes)</pre>
+            </div>
+        </div>
+
+        <div class="modal-footer d-flex justify-content-end gap-2 mt-3">
+            <button class="btn btn-secondary" @onclick="Close" id="btn-cancel-change-request">Cancel</button>
+            <button class="btn btn-warning" id="btn-submit-change-request" disabled="@_isSubmitting" @onclick="SubmitChangeRequestAsync">
+                @if (_isSubmitting)
+                {
+                    <span>Dispatching to llm-urgent...</span>
+                }
+                else
+                {
+                    <span>🚀 Submit Review &amp; Dispatch to Agent</span>
+                }
+            </button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int TaskId { get; set; }
+    [Parameter] public EventCallback OnSubmitted { get; set; }
+    [Parameter] public EventCallback OnClosed { get; set; }
+
+    private string _generalNotes = string.Empty;
+    private bool _isSubmitting;
+
+    private async Task SubmitChangeRequestAsync()
+    {
+        var feedback = CommentState.FormatAggregatedFeedback(_generalNotes);
+        if (string.IsNullOrWhiteSpace(feedback))
+        {
+            ToastService.Show("Validation Error", "Please provide general notes or at least one inline comment.", ToastLevel.Warning);
+            return;
+        }
+
+        _isSubmitting = true;
+        try
+        {
+            await TaskOrchestrator.RequestChangesAsync(TaskId, feedback);
+            CommentState.Clear();
+            ToastService.Show("Changes Requested", $"ForgeTask #{TaskId} routed to ImplementationStage on llm-urgent.", ToastLevel.Success);
+            await OnSubmitted.InvokeAsync();
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private async Task Close()
+    {
+        await OnClosed.InvokeAsync();
+    }
+}
