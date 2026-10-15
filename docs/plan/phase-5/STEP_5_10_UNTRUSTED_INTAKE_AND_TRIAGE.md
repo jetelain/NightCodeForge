@@ -2,7 +2,7 @@
 
 > **Phase 5 Implementation Step**  
 > *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.9: Transcripts & AI Diagnostics](STEP_5_9_TRANSCRIPTS_AND_AI_DIAGNOSTICS.md) | *Next Step:* [Step 5.11: Git Mirror & Host Sync](STEP_5_11_GIT_MIRROR_AND_HOST_SYNC.md)  
-> *Project Target:* `src/NightCodeForge.Web/Components/Triage` & `Pages/Triage.razor` | *Status:* Ready for Implementation
+> *Project Target:* `src/NightCodeForge.Web/Components/Triage` & `Pages/Triage.razor` | *Status:* Completed
 
 ---
 
@@ -324,9 +324,9 @@ public record TriageExecutionState(
 
 ## 6. Definition of Done (DoD) Checklist
 
-- [ ] `Pages/Triage.razor` created with report submission form and results pane.
-- [ ] Security badge banner visualizes `RestrictedReadOnly` sandbox isolation (`:ro`, `--network none`).
-- [ ] Integration with `ITriageService.TriageExternalReportAsync` functional with error handling.
-- [ ] Formulated tasks render as interactive cards with status `Suggested`.
-- [ ] Ingested tasks sync to `docs/tasks/*.md` on the developer repository.
-- [ ] Component unit tests verify submission and security validation.
+- [x] `Pages/Triage.razor` created with report submission form and results pane.
+- [x] Security badge banner visualizes `RestrictedReadOnly` sandbox isolation (`:ro`, `--network none`).
+- [x] Integration with `ITriageService.TriageExternalReportAsync` functional with error handling.
+- [x] Formulated tasks render as interactive cards with status `Suggested`.
+- [x] Ingested tasks sync to `docs/tasks/*.md` on the developer repository.
+- [x] Component unit tests verify submission and security validation.

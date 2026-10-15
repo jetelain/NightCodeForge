@@ -1,0 +1,338 @@
+@page "/triage"
+@namespace NightCodeForge.Web.Components.Pages
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Components.Common
+@using NightCodeForge.Web.Components.Triage
+@using NightCodeForge.Web.Components.Workspaces
+@using NightCodeForge.Web.Services
+@inject ITriageService TriageService
+@inject ITaskRepository TaskRepository
+@inject WorkspaceStateService WorkspaceState
+@inject ToastService ToastService
+@implements IDisposable
+
+<PageTitle>Untrusted Intake &amp; Triage - NightCodeForge</PageTitle>
+
+<div class="triage-container" id="triage-portal-container">
+    @if (WorkspaceState.ActiveWorkspace == null)
+    {
+        <WorkspaceEmptyStateHero />
+    }
+    else
+    {
+        <!-- Page Header -->
+        <div class="triage-header mb-4">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div>
+                    <h2>🛡️ Untrusted Intake &amp; Sandboxed Triage Portal</h2>
+                    <p class="text-secondary mb-0">
+                        Safely ingest and analyze untrusted external bug reports on <code>@(string.IsNullOrWhiteSpace(_model.BaseBranch) ? "main" : _model.BaseBranch)</code>.
+                        Execution is strictly isolated within a <strong>RestrictedReadOnly sandbox</strong> to defend against prompt injection.
+                    </p>
+                </div>
+                <div class="header-actions d-flex align-items-center gap-2">
+                    <button class="btn btn-sm btn-outline-indigo" @onclick="LoadSampleBugReport" disabled="@_isTriaging" title="Load sample crash report">
+                        📝 Load Sample Bug
+                    </button>
+                    <button class="btn btn-sm btn-secondary" @onclick="ResetForm" disabled="@_isTriaging" title="Clear form inputs">
+                        🔄 Reset Form
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Security Tier Badge Banner -->
+        <TriageSecurityBanner BaseBranch="@_model.BaseBranch" />
+
+        @if (!string.IsNullOrWhiteSpace(_errorMessage))
+        {
+            <div class="alert alert-danger mb-4 d-flex justify-content-between align-items-center" id="triage-error-alert">
+                <div class="d-flex align-items-center gap-2">
+                    <span>⚠️</span>
+                    <span>@_errorMessage</span>
+                </div>
+                <button class="btn btn-sm btn-outline-danger" @onclick="() => _errorMessage = null">Dismiss</button>
+            </div>
+        }
+
+        <div class="triage-grid">
+            <!-- 1. Submission Form (Left 45%) -->
+            <div class="triage-form-card card-surface p-4" id="triage-form-card">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h3 class="mb-0">Submit External Report</h3>
+                    <span class="badge-stage-pill font-mono">Stage 0 Intake</span>
+                </div>
+
+                <div class="form-group mb-3">
+                    <label class="form-label" for="triage-report-title">
+                        <span>Report Title</span>
+                        <span class="text-crimson">*</span>
+                    </label>
+                    <input id="triage-report-title"
+                           class="form-control-dark"
+                           placeholder="e.g. NullReferenceException when parsing empty JSON payload"
+                           @bind="_model.Title"
+                           @bind:event="oninput"
+                           disabled="@_isTriaging" />
+                </div>
+
+                <div class="form-group mb-3">
+                    <label class="form-label" for="triage-base-branch">
+                        <span>Target Base Branch</span>
+                        <span class="text-crimson">*</span>
+                    </label>
+                    <input id="triage-base-branch"
+                           class="form-control-dark font-mono"
+                           placeholder="main"
+                           @bind="_model.BaseBranch"
+                           @bind:event="oninput"
+                           disabled="@_isTriaging" />
+                </div>
+
+                <div class="form-group mb-3">
+                    <label class="form-label" for="triage-external-url">External URL / ForgeTask Tracker (Optional)</label>
+                    <input id="triage-external-url"
+                           class="form-control-dark font-mono"
+                           placeholder="https://github.com/org/repo/issues/123"
+                           @bind="_model.ExternalUrl"
+                           disabled="@_isTriaging" />
+                </div>
+
+                <div class="form-group mb-3">
+                    <label class="form-label" for="triage-description">
+                        <span>Detailed Description &amp; Reproduction Steps</span>
+                        <span class="text-crimson">*</span>
+                    </label>
+                    <textarea id="triage-description"
+                              class="form-control-dark font-sans"
+                              rows="6"
+                              placeholder="Describe the bug, user actions, and observed behavior..."
+                              @bind="_model.Description"
+                              @bind:event="oninput"
+                              disabled="@_isTriaging"></textarea>
+                </div>
+
+                <div class="form-group mb-4">
+                    <label class="form-label" for="triage-stack-trace">Stack Trace or Error Output (Optional)</label>
+                    <textarea id="triage-stack-trace"
+                              class="form-control-dark font-mono text-sm"
+                              rows="4"
+                              placeholder="Paste logs, stack traces, or compiler errors..."
+                              @bind="_model.StackTrace"
+                              disabled="@_isTriaging"></textarea>
+                </div>
+
+                <button id="triage-submit-btn"
+                        class="btn btn-primary w-100 btn-triage-launch"
+                        @onclick="StartTriageAsync"
+                        disabled="@(string.IsNullOrWhiteSpace(_model.Title) || string.IsNullOrWhiteSpace(_model.Description) || _isTriaging)">
+                    @if (_isTriaging)
+                    {
+                        <span class="d-flex align-items-center justify-content-center gap-2">
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                            <span>Running Sandboxed Triage...</span>
+                        </span>
+                    }
+                    else
+                    {
+                        <span>🛡️ Launch Sandboxed Triage ➔</span>
+                    }
+                </button>
+            </div>
+
+            <!-- 2. Live Triage Results & Generated Backlog (Right 55%) -->
+            <div class="triage-results-pane" id="triage-results-pane">
+                @if (_isTriaging)
+                {
+                    <div class="card-surface p-5 text-center triage-running-card" id="triage-running-card">
+                        <div class="spinner-pulse mb-3"></div>
+                        <h4>Triage Agent Inspecting Base Branch...</h4>
+                        <p class="text-secondary mb-3">
+                            Validating reproducibility, scanning repository symbol index, and formulating task specifications.
+                        </p>
+                        <div class="triage-running-badges d-flex justify-content-center flex-wrap gap-2">
+                            <span class="badge-isolation">
+                                <span class="isolation-dot"></span>
+                                <span>Network: Isolated</span>
+                            </span>
+                            <span class="badge-isolation">
+                                <span class="isolation-dot"></span>
+                                <span>Mount: Read-Only</span>
+                            </span>
+                            <span class="badge-isolation">
+                                <span class="isolation-dot"></span>
+                                <span>Base: @(_model.BaseBranch)</span>
+                            </span>
+                        </div>
+                    </div>
+                }
+                else if (_triagedTasks.Count > 0)
+                {
+                    <div class="card-surface p-4 triage-results-card" id="triage-results-card">
+                        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                            <div>
+                                <h3 class="mb-1">Proposed Backlog Tasks (@_triagedTasks.Count)</h3>
+                                <p class="text-secondary small mb-0">
+                                    The triage agent verified the report and formulated structured backlog items in status <code>Suggested</code>.
+                                </p>
+                            </div>
+                            <a href="/backlog" class="btn btn-sm btn-outline-indigo" id="go-to-backlog-link">
+                                Go to Backlog ➔
+                            </a>
+                        </div>
+
+                        <div class="triaged-tasks-list" id="triaged-tasks-list">
+                            @foreach (var task in _triagedTasks)
+                            {
+                                <TriageTaskProposalCard @key="task.Id" Task="task" />
+                            }
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="card-surface p-5 text-center text-muted triage-awaiting-card" id="triage-awaiting-card">
+                        <span class="awaiting-icon" style="font-size: 3rem; display: block; margin-bottom: 1rem;">📋</span>
+                        <h4>Awaiting Intake Submission</h4>
+                        <p class="text-secondary max-w-md mx-auto">
+                            Submit an external bug report, stack trace, or task description to start automated, sandboxed triage on the base branch.
+                        </p>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private TriageSubmissionModel _model = new();
+    private bool _isTriaging;
+    private List<ForgeTask> _triagedTasks = new();
+    private string? _errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        SyncBaseBranchFromActiveWorkspace();
+        await LoadExistingSuggestedTasksAsync();
+    }
+
+    private void SyncBaseBranchFromActiveWorkspace()
+    {
+        if (WorkspaceState.ActiveWorkspace != null && string.IsNullOrWhiteSpace(_model.BaseBranch))
+        {
+            _model.BaseBranch = !string.IsNullOrWhiteSpace(WorkspaceState.ActiveWorkspace.DefaultBaseBranch)
+                ? WorkspaceState.ActiveWorkspace.DefaultBaseBranch
+                : "main";
+        }
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        SyncBaseBranchFromActiveWorkspace();
+        _ = InvokeAsync(async () =>
+        {
+            _triagedTasks.Clear();
+            await LoadExistingSuggestedTasksAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task LoadExistingSuggestedTasksAsync()
+    {
+        var workspace = WorkspaceState.ActiveWorkspace;
+        if (workspace == null) return;
+
+        try
+        {
+            var tasks = await TaskRepository.GetByWorkspaceIdAsync(workspace.Id);
+            var suggested = tasks
+                .Where(t => t.Status == TaskOverallStatus.Suggested)
+                .OrderByDescending(t => t.CreatedAt)
+                .Take(10)
+                .ToList();
+
+            if (_triagedTasks.Count == 0 && suggested.Count > 0)
+            {
+                _triagedTasks = suggested;
+            }
+        }
+        catch (Exception)
+        {
+            // Non-critical, initial load fallback
+        }
+    }
+
+    private async Task StartTriageAsync()
+    {
+        var workspace = WorkspaceState.ActiveWorkspace;
+        if (workspace == null)
+        {
+            ToastService.Show("No Active Workspace", "Please select or create an active workspace first.", ToastLevel.Warning);
+            return;
+        }
+
+        if (!_model.IsValid)
+        {
+            ToastService.Show("Validation Error", "Title and Description are required.", ToastLevel.Warning);
+            return;
+        }
+
+        _isTriaging = true;
+        _errorMessage = null;
+        _triagedTasks.Clear();
+
+        try
+        {
+            var fullDescription = _model.BuildFullDescription();
+            var targetBranch = !string.IsNullOrWhiteSpace(_model.BaseBranch)
+                ? _model.BaseBranch.Trim()
+                : (workspace.DefaultBaseBranch ?? "main");
+
+            var request = new TriageReportRequest(
+                Title: _model.Title.Trim(),
+                Description: fullDescription,
+                BaseBranch: targetBranch);
+
+            var tasks = await TriageService.TriageExternalReportAsync(workspace, request);
+            _triagedTasks = tasks.ToList();
+
+            ToastService.Show("Triage Complete", $"Triage agent formulated {_triagedTasks.Count} suggested task(s).", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Triage failed: {ex.Message}";
+            ToastService.Show("Triage Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isTriaging = false;
+        }
+    }
+
+    private void LoadSampleBugReport()
+    {
+        _model.Title = "NullReferenceException when parsing empty JSON payload in MessageParser";
+        _model.BaseBranch = WorkspaceState.ActiveWorkspace?.DefaultBaseBranch ?? "main";
+        _model.ExternalUrl = "https://github.com/example/issue-tracker/issues/402";
+        _model.Description = "When an incoming webhook delivers an empty HTTP body with Content-Type: application/json, the MessageParser fails to validate payload presence and throws an unhandled NullReferenceException.\n\nSteps to reproduce:\n1. POST /api/webhooks/intake with empty payload.\n2. Observe 500 Internal Server Error.";
+        _model.StackTrace = "System.NullReferenceException: Object reference not set to an instance of an object.\n   at NightCodeForge.Agents.MessageParser.ParsePayload(String json) in MessageParser.cs:line 42\n   at NightCodeForge.Web.Controllers.WebhookController.IntakeAsync() in WebhookController.cs:line 88";
+        _errorMessage = null;
+    }
+
+    private void ResetForm()
+    {
+        _model = new TriageSubmissionModel
+        {
+            BaseBranch = WorkspaceState.ActiveWorkspace?.DefaultBaseBranch ?? "main"
+        };
+        _errorMessage = null;
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+    }
+}
