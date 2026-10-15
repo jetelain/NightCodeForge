@@ -1,3 +1,4 @@
+using Hangfire;
 using NightCodeForge.Agents;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Infrastructure;
@@ -21,6 +22,7 @@ builder.Services.AddScoped<ReviewCommentStateService>();
 builder.Services.AddScoped<ITaskReviewService, TaskReviewService>();
 builder.Services.AddScoped<ITranscriptBrowserService, TranscriptBrowserService>();
 builder.Services.AddScoped<IGitSyncService, GitSyncService>();
+builder.Services.AddScoped<IDevQueueService, DevQueueService>();
 
 // Register NightCodeForge domain and infrastructure services
 var dbConnection = builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=nightcodeforge.db;";
@@ -80,6 +82,15 @@ app.UseAntiforgery();
 
 app.MapStaticAssets();
 app.MapHub<NightCodeForge.Infrastructure.Hubs.OrchestratorHub>("/hubs/orchestrator");
+
+// Configure Hangfire Dashboard with local requests allowed
+app.UseHangfireDashboard("/hangfire", new DashboardOptions
+{
+    DashboardTitle = "NightCodeForge Dev-Queue Monitor",
+    DarkModeEnabled = true,
+    Authorization = new[] { new HangfireLocalRequestsOnlyAuthorizationFilter() }
+});
+
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 

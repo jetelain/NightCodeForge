@@ -1,0 +1,279 @@
+using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
+using Microsoft.Extensions.DependencyInjection;
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Workflow;
+using NightCodeForge.Infrastructure.BackgroundJobs;
+using NightCodeForge.Web.Services;
+using Xunit;
+
+namespace NightCodeForge.Web.Tests;
+
+public class DevQueueServiceTests : IDisposable
+{
+    private readonly MockLockProvider _lockProvider;
+    private readonly MockBackgroundJobClient _jobClient;
+    private readonly MockTaskJobQueue _jobQueue;
+    private readonly InMemoryTaskRepository _taskRepo;
+    private readonly InMemoryWorkspaceRepository _workspaceRepo;
+    private readonly ServiceProvider _serviceProvider;
+    private readonly string _tempDir;
+
+    public DevQueueServiceTests()
+    {
+        _lockProvider = new MockLockProvider();
+        _jobClient = new MockBackgroundJobClient();
+        _jobQueue = new MockTaskJobQueue();
+        _taskRepo = new InMemoryTaskRepository();
+        _workspaceRepo = new InMemoryWorkspaceRepository();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<ITaskRepository>(_taskRepo);
+        services.AddSingleton<IWorkspaceRepository>(_workspaceRepo);
+        _serviceProvider = services.BuildServiceProvider();
+
+        _tempDir = Path.Combine(Path.GetTempPath(), "ncf-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tempDir);
+    }
+
+    [Fact]
+    public async Task GetSnapshotAsync_ReturnsActiveLocks_WhenNoJobStorage()
+    {
+        _lockProvider.ActiveLocks.Add(new ActiveLockSnapshot(
+            WorkspaceId: 1,
+            TaskId: null,
+            LockType: "WorkspaceExclusive",
+            AcquiredAt: DateTime.UtcNow.AddMinutes(-5),
+            DurationHeld: TimeSpan.FromMinutes(5)));
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            jobStorage: null);
+
+        var snapshot = await service.GetSnapshotAsync();
+
+        Assert.NotNull(snapshot);
+        Assert.Single(snapshot.ActiveLocks);
+        Assert.Equal(1, snapshot.ActiveLocks[0].WorkspaceId);
+        Assert.Equal("WorkspaceExclusive", snapshot.ActiveLocks[0].LockType);
+        Assert.Empty(snapshot.UrgentJobs);
+        Assert.Empty(snapshot.InferenceJobs);
+    }
+
+    [Fact]
+    public async Task PromoteToUrgentAsync_WithJobId_ChangesJobState()
+    {
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            jobStorage: null);
+
+        var result = await service.PromoteToUrgentAsync("job-123", 42);
+
+        Assert.True(result);
+        Assert.Equal("job-123", _jobClient.LastChangedJobId);
+        Assert.Equal(HangfireQueues.LlmUrgent, _jobClient.LastChangedStateName);
+    }
+
+    [Fact]
+    public async Task PromoteToUrgentAsync_WithoutJobId_EnqueuesToUrgentQueue()
+    {
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            jobStorage: null);
+
+        var result = await service.PromoteToUrgentAsync("", 99);
+
+        Assert.True(result);
+        Assert.Equal(99, _jobQueue.LastEnqueuedUrgentTaskId);
+    }
+
+    [Fact]
+    public async Task CancelJobAsync_DeletesJobAndUpdatesTaskStatus()
+    {
+        var task = new ForgeTask
+        {
+            Id = 55,
+            WorkspaceId = 1,
+            Title = "Task to Cancel",
+            Status = TaskOverallStatus.Open
+        };
+        await _taskRepo.CreateAsync(task);
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            jobStorage: null);
+
+        var result = await service.CancelJobAsync("job-55", 55);
+
+        Assert.True(result);
+        Assert.Equal("job-55", _jobClient.LastDeletedJobId);
+
+        var updated = await _taskRepo.GetByIdAsync(55);
+        Assert.NotNull(updated);
+        Assert.Equal(TaskOverallStatus.Cancelled, updated.Status);
+    }
+
+    [Fact]
+    public async Task RequeueJobAsync_RequeuesJob()
+    {
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            jobStorage: null);
+
+        var result = await service.RequeueJobAsync("job-fail-1", 77);
+
+        Assert.True(result);
+        Assert.Equal("job-fail-1", _jobClient.LastRequeuedJobId);
+    }
+
+    [Fact]
+    public async Task EmergencyReleaseLockAsync_ReleasesLockAndDeletesIndexLock()
+    {
+        var gitDir = Path.Combine(_tempDir, ".git");
+        Directory.CreateDirectory(gitDir);
+        var indexLock = Path.Combine(gitDir, "index.lock");
+        await File.WriteAllTextAsync(indexLock, "lock");
+
+        var workspace = new Workspace
+        {
+            Id = 10,
+            Name = "Crash Repo",
+            RepositoryPath = _tempDir
+        };
+        await _workspaceRepo.CreateAsync(workspace);
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            jobStorage: null);
+
+        var result = await service.EmergencyReleaseLockAsync(10);
+
+        Assert.True(result);
+        Assert.Equal(10, _lockProvider.LastEmergencyWorkspaceId);
+        Assert.False(File.Exists(indexLock), ".git/index.lock should have been purged");
+    }
+
+    public void Dispose()
+    {
+        _serviceProvider.Dispose();
+        if (Directory.Exists(_tempDir))
+        {
+            try { Directory.Delete(_tempDir, true); } catch { }
+        }
+    }
+
+    #region Mock Implementations
+
+    private class MockLockProvider : IWorkspaceLockProvider
+    {
+        public List<ActiveLockSnapshot> ActiveLocks { get; } = new();
+        public int? LastEmergencyWorkspaceId { get; private set; }
+        public int? LastEmergencyTaskId { get; private set; }
+
+        public IReadOnlyList<ActiveLockSnapshot> GetActiveLocks() => ActiveLocks.ToList();
+
+        public bool EmergencyRelease(int workspaceId, int? taskId = null)
+        {
+            LastEmergencyWorkspaceId = workspaceId;
+            LastEmergencyTaskId = taskId;
+            ActiveLocks.RemoveAll(l => l.WorkspaceId == workspaceId && l.TaskId == taskId);
+            return true;
+        }
+
+        public void EmergencyReleaseAll() => ActiveLocks.Clear();
+
+        public Task<IDisposable> AcquireLockAsync(int workspaceId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IDisposable>(new DummyReleaser());
+
+        public bool TryAcquireLock(int workspaceId, out IDisposable? lockReleaser)
+        {
+            lockReleaser = new DummyReleaser();
+            return true;
+        }
+
+        public Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireLockAsync(int workspaceId, TimeSpan timeout, CancellationToken cancellationToken = default)
+            => Task.FromResult<(bool, IDisposable?)>((true, new DummyReleaser()));
+
+        public Task<IDisposable> AcquireTaskLockAsync(int workspaceId, int taskId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IDisposable>(new DummyReleaser());
+
+        public bool TryAcquireTaskLock(int workspaceId, int taskId, out IDisposable? lockReleaser)
+        {
+            lockReleaser = new DummyReleaser();
+            return true;
+        }
+
+        public Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireTaskLockAsync(int workspaceId, int taskId, TimeSpan timeout, CancellationToken cancellationToken = default)
+            => Task.FromResult<(bool, IDisposable?)>((true, new DummyReleaser()));
+
+        private class DummyReleaser : IDisposable { public void Dispose() { } }
+    }
+
+    private class MockBackgroundJobClient : IBackgroundJobClient
+    {
+        public string? LastChangedJobId { get; private set; }
+        public string? LastChangedStateName { get; private set; }
+        public string? LastDeletedJobId { get; private set; }
+        public string? LastRequeuedJobId { get; private set; }
+
+        public bool ChangeState(string jobId, IState state, string? expectedState = null)
+        {
+            LastChangedJobId = jobId;
+            LastChangedStateName = state.Name;
+            if (state is EnqueuedState enqueued)
+            {
+                LastChangedStateName = enqueued.Queue;
+                LastRequeuedJobId = jobId;
+            }
+            if (state is DeletedState)
+            {
+                LastDeletedJobId = jobId;
+            }
+            return true;
+        }
+
+        public string Create(Job job, IState state) => "mock-job-id";
+    }
+
+    private class MockTaskJobQueue : ITaskJobQueue
+    {
+        public int? LastEnqueuedUrgentTaskId { get; private set; }
+        public int? LastEnqueuedInferenceTaskId { get; private set; }
+
+        public string EnqueueUrgent(int taskId)
+        {
+            LastEnqueuedUrgentTaskId = taskId;
+            return "urgent-job-id";
+        }
+
+        public string EnqueueInference(int taskId)
+        {
+            LastEnqueuedInferenceTaskId = taskId;
+            return "inference-job-id";
+        }
+    }
+
+    #endregion
+}
+

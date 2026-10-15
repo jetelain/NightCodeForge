@@ -5547,6 +5547,36 @@ code, kbd, samp, pre {
 .border-warning { border: 1px solid rgba(245, 158, 11, 0.45) !important; }
 .text-warning { color: #f59e0b !important; }
 .text-indigo { color: #a5b4fc !important; }
+.text-teal { color: #2dd4bf !important; }
+.border-indigo { border-color: rgba(99, 102, 241, 0.5) !important; }
+
+/* Dev-Queue Operations Console */
+.devqueue-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    align-items: stretch;
+}
+
+@media (max-width: 1024px) {
+    .devqueue-metrics-grid {
+        grid-template-columns: 1fr;
+        gap: 1.25rem;
+    }
+}
+
+.badge-gpu {
+    background: rgba(99, 102, 241, 0.18);
+    border: 1px solid rgba(99, 102, 241, 0.4);
+    color: #a5b4fc;
+}
+
+.badge-cpu {
+    background: rgba(20, 184, 166, 0.18);
+    border: 1px solid rgba(20, 184, 166, 0.4);
+    color: #5eead4;
+}
 
 
 

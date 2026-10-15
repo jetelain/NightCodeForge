@@ -1,0 +1,27 @@
+@namespace NightCodeForge.Web.Components.DevQueue
+
+<div class="card-surface p-4 @CardClass d-flex flex-column justify-content-between h-100" style="border-radius: var(--radius-lg); background: var(--bg-surface); border: 1px solid @BorderColor; box-shadow: var(--shadow-sm); min-height: 180px;">
+    <div>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h5 class="m-0" style="font-weight: 700; color: var(--text-primary); font-size: 1.05rem;">@Title</h5>
+            <span class="@BadgeClass" style="padding: 0.25rem 0.65rem; border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 600; font-family: var(--font-mono);">@WorkerBadge</span>
+        </div>
+        <div class="queue-metric mt-3 d-flex align-items-baseline">
+            <span class="fs-1 font-mono @MetricColor" style="font-weight: 800; line-height: 1;">@Count</span>
+            <span class="text-muted ms-2" style="font-size: 0.9rem;">@CountLabel</span>
+        </div>
+    </div>
+    <small class="text-secondary d-block mt-3" style="font-size: 0.82rem; line-height: 1.4;">@Description</small>
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = string.Empty;
+    [Parameter] public string WorkerBadge { get; set; } = "Worker: 1";
+    [Parameter] public string BadgeClass { get; set; } = "badge-gpu";
+    [Parameter] public int Count { get; set; }
+    [Parameter] public string CountLabel { get; set; } = "tasks waiting";
+    [Parameter] public string Description { get; set; } = string.Empty;
+    [Parameter] public string CardClass { get; set; } = string.Empty;
+    [Parameter] public string BorderColor { get; set; } = "var(--border-subtle)";
+    [Parameter] public string MetricColor { get; set; } = "text-indigo";
+}

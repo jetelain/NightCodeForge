@@ -344,9 +344,10 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
 
 ## 7. Definition of Done (DoD) Checklist
 
-- [ ] `Pages/DevQueue.razor` created with queue metric cards and active task tables.
-- [ ] Active locks grid visualizes locks from `IWorkspaceLockProvider`.
-- [ ] Emergency lock release mechanism implemented.
-- [ ] Task prioritization (move to `llm-urgent`) and cancellation buttons implemented.
-- [ ] Hangfire dashboard mounted at `/hangfire` in `Program.cs`.
-- [ ] Component unit tests verify queue filtering and lock display.
+- [x] `Pages/DevQueue.razor` created with queue metric cards and active task tables.
+- [x] Active locks grid visualizes locks from `IWorkspaceLockProvider`.
+- [x] Emergency lock release mechanism implemented.
+- [x] Task prioritization (move to `llm-urgent`) and cancellation buttons implemented.
+- [x] Hangfire dashboard mounted at `/hangfire` in `Program.cs`.
+- [x] Component unit tests verify queue filtering and lock display.
+

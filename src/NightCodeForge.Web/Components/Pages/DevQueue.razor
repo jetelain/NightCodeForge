@@ -1,0 +1,204 @@
+@page "/dev-queue"
+@namespace NightCodeForge.Web.Components.Pages
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Web.Components.DevQueue
+@using NightCodeForge.Web.Services
+@inject IDevQueueService DevQueueService
+@inject ToastService ToastService
+@implements IDisposable
+
+<div class="devqueue-container p-4" style="max-width: 1400px; margin: 0 auto;">
+    <!-- Top Action Bar -->
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-3">
+        <div>
+            <h2 class="m-0" style="font-weight: 800; font-size: 1.75rem; color: var(--text-primary);">
+                ⏱️ Dev-Queue &amp; Concurrency Operations
+            </h2>
+            <p class="text-secondary mt-1 mb-0" style="font-size: 0.95rem;">
+                Monitor the sequential GPU inference queue (<code>WorkerCount = 1</code>), manage task priority, and inspect active workspace locks.
+            </p>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <a href="/hangfire" target="_blank" class="btn btn-secondary" style="border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-primary); font-size: 0.9rem; padding: 0.5rem 1rem;" id="open-hangfire-link">
+                📊 Open Hangfire Dashboard ↗
+            </a>
+            <button class="btn btn-primary" style="background: var(--accent-indigo); border: none; font-size: 0.9rem; padding: 0.5rem 1.25rem; font-weight: 600;" @onclick="RefreshQueueStateAsync" disabled="_isRefreshing" id="refresh-devqueue-btn">
+                @(_isRefreshing ? "🔄 Refreshing..." : "🔄 Refresh")
+            </button>
+        </div>
+    </div>
+
+    <!-- Queue Status Summary Cards -->
+    <div class="devqueue-metrics-grid">
+        <QueueMetricCard
+            Title="🚨 llm-urgent (Priority 1)"
+            WorkerBadge="Worker: 1"
+            BadgeClass="badge-gpu"
+            Count="_urgentJobs.Count"
+            CountLabel="tasks waiting"
+            Description="Resumed human clarifications & reviewer revision requests awaiting immediate GPU reasoning."
+            CardClass="border-indigo"
+            BorderColor="var(--accent-indigo)"
+            MetricColor="text-indigo" />
+
+        <QueueMetricCard
+            Title="📋 llm-inference (Priority 2)"
+            WorkerBadge="Worker: 1"
+            BadgeClass="badge-gpu"
+            Count="_inferenceJobs.Count"
+            CountLabel="tasks waiting"
+            Description="Ready backlog tasks with all prerequisite DAG dependencies fully closed."
+            BorderColor="var(--border-subtle)"
+            MetricColor="text-primary" />
+
+        <QueueMetricCard
+            Title="⚙️ default (Utility)"
+            WorkerBadge="Workers: 4"
+            BadgeClass="badge-cpu"
+            Count="_utilityJobs.Count"
+            CountLabel="jobs"
+            Description="Git mirror synchronization, markdown file indexing, and maintenance."
+            BorderColor="var(--border-subtle)"
+            MetricColor="text-teal" />
+    </div>
+
+    <!-- Active Concurrency Locks Grid -->
+    <ActiveLocksGrid Locks="_activeLocks" OnEmergencyRelease="EmergencyReleaseLock" />
+
+    <!-- Active Inference Queue Table -->
+    <DevQueueTable Jobs="AllQueuedJobs" OnPrioritize="PromoteToUrgent" OnCancel="CancelJob" />
+
+    <!-- Failed Jobs Table -->
+    <FailedJobsTable FailedJobs="_failedJobs" OnRequeue="RequeueJob" OnCancel="CancelJob" />
+</div>
+
+@code {
+    private List<QueuedJobItem> _urgentJobs = new();
+    private List<QueuedJobItem> _inferenceJobs = new();
+    private List<QueuedJobItem> _utilityJobs = new();
+    private List<QueuedJobItem> _processingJobs = new();
+    private List<QueuedJobItem> _failedJobs = new();
+    private List<ActiveLockSnapshot> _activeLocks = new();
+    private bool _isRefreshing;
+    private PeriodicTimer? _refreshTimer;
+    private CancellationTokenSource _cts = new();
+
+    public IReadOnlyList<QueuedJobItem> AllQueuedJobs => _urgentJobs.Concat(_inferenceJobs).Concat(_processingJobs).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshQueueStateAsync();
+        StartAutoRefresh();
+    }
+
+    private void StartAutoRefresh()
+    {
+        _refreshTimer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (await _refreshTimer.WaitForNextTickAsync(_cts.Token))
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        await RefreshQueueStateAsync();
+                        StateHasChanged();
+                    });
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected on dispose
+            }
+        });
+    }
+
+    public async Task RefreshQueueStateAsync()
+    {
+        if (_isRefreshing) return;
+        _isRefreshing = true;
+
+        try
+        {
+            var snapshot = await DevQueueService.GetSnapshotAsync(_cts.Token);
+            _urgentJobs = snapshot.UrgentJobs.ToList();
+            _inferenceJobs = snapshot.InferenceJobs.ToList();
+            _utilityJobs = snapshot.UtilityJobs.ToList();
+            _processingJobs = snapshot.ProcessingJobs.ToList();
+            _failedJobs = snapshot.FailedJobs.ToList();
+            _activeLocks = snapshot.ActiveLocks.ToList();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Refresh Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isRefreshing = false;
+        }
+    }
+
+    private async Task PromoteToUrgent(QueuedJobItem job)
+    {
+        var success = await DevQueueService.PromoteToUrgentAsync(job.JobId, job.TaskId, _cts.Token);
+        if (success)
+        {
+            ToastService.Show("Prioritized", $"ForgeTask #{job.TaskId} moved to head of llm-urgent.", ToastLevel.Success);
+            await RefreshQueueStateAsync();
+        }
+        else
+        {
+            ToastService.Show("Prioritization Failed", $"Could not promote task #{job.TaskId}.", ToastLevel.Error);
+        }
+    }
+
+    private async Task CancelJob(QueuedJobItem job)
+    {
+        var success = await DevQueueService.CancelJobAsync(job.JobId, job.TaskId, _cts.Token);
+        if (success)
+        {
+            ToastService.Show("Job Cancelled", $"Execution cancelled for ForgeTask #{job.TaskId}.", ToastLevel.Warning);
+            await RefreshQueueStateAsync();
+        }
+        else
+        {
+            ToastService.Show("Cancel Failed", $"Could not cancel job {job.JobId}.", ToastLevel.Error);
+        }
+    }
+
+    private async Task RequeueJob(QueuedJobItem job)
+    {
+        var success = await DevQueueService.RequeueJobAsync(job.JobId, job.TaskId, _cts.Token);
+        if (success)
+        {
+            ToastService.Show("Job Requeued", $"ForgeTask #{job.TaskId} requeued for execution.", ToastLevel.Success);
+            await RefreshQueueStateAsync();
+        }
+        else
+        {
+            ToastService.Show("Requeue Failed", $"Could not requeue job {job.JobId}.", ToastLevel.Error);
+        }
+    }
+
+    private async Task EmergencyReleaseLock(ActiveLockSnapshot lockItem)
+    {
+        var success = await DevQueueService.EmergencyReleaseLockAsync(lockItem.WorkspaceId, lockItem.TaskId, _cts.Token);
+        if (success)
+        {
+            ToastService.Show("Lock Released", $"Emergency unlock executed for Workspace #{lockItem.WorkspaceId}.", ToastLevel.Warning);
+            await RefreshQueueStateAsync();
+        }
+        else
+        {
+            ToastService.Show("Unlock Failed", $"Failed to release lock for Workspace #{lockItem.WorkspaceId}.", ToastLevel.Error);
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _refreshTimer?.Dispose();
+        _cts.Dispose();
+    }
+}

@@ -1,0 +1,73 @@
+@namespace NightCodeForge.Web.Components.DevQueue
+@using NightCodeForge.Core.Interfaces
+
+<div class="card-surface p-4 mb-4" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);" id="active-locks-container">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="m-0" style="font-weight: 700; color: var(--text-primary); font-size: 1.15rem;">🔒 Active Workspace Locks (IWorkspaceLockProvider)</h4>
+        <span class="text-muted small">Protects against <code>.git/index.lock</code> race conditions</span>
+    </div>
+
+    @if (Locks == null || Locks.Count == 0)
+    {
+        <div class="p-4 text-center text-muted" style="background: var(--bg-card); border-radius: var(--radius-md);" id="no-active-locks-msg">
+            No active locks held. All workspaces are free for operations.
+        </div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-dark table-hover font-mono m-0" style="background: transparent;" id="active-locks-table">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 0.85rem;">
+                        <th>Workspace</th>
+                        <th>Target ForgeTask</th>
+                        <th>Lock Type</th>
+                        <th>Duration Held</th>
+                        <th class="text-end">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var lockItem in Locks)
+                    {
+                        <tr style="vertical-align: middle; border-bottom: 1px solid rgba(255,255,255,0.05);" id="lock-row-@lockItem.WorkspaceId-@(lockItem.TaskId ?? 0)">
+                            <td>
+                                <span class="badge" style="background: var(--bg-card); color: var(--accent-indigo); font-weight: 600;">
+                                    Workspace #@lockItem.WorkspaceId
+                                </span>
+                            </td>
+                            <td>
+                                @(lockItem.TaskId.HasValue ? $"ForgeTask #{lockItem.TaskId}" : "All Workspace Tasks")
+                            </td>
+                            <td>
+                                <span class="badge-tag" style="background: rgba(99, 102, 241, 0.15); color: var(--accent-indigo); padding: 0.25rem 0.6rem; border-radius: var(--radius-sm); font-size: 0.8rem;">
+                                    @lockItem.LockType
+                                </span>
+                            </td>
+                            <td class="text-secondary">
+                                @FormatDuration(lockItem.DurationHeld)
+                            </td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-danger-outline"
+                                        style="border: 1px solid var(--accent-crimson); color: var(--accent-crimson); background: transparent; font-size: 0.8rem; padding: 0.3rem 0.75rem; border-radius: var(--radius-sm);"
+                                        @onclick="() => OnEmergencyRelease.InvokeAsync(lockItem)"
+                                        id="emergency-release-btn-@lockItem.WorkspaceId">
+                                    ⚡ Emergency Release
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<ActiveLockSnapshot> Locks { get; set; } = Array.Empty<ActiveLockSnapshot>();
+    [Parameter] public EventCallback<ActiveLockSnapshot> OnEmergencyRelease { get; set; }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        return $"{(int)duration.TotalMinutes:D2}:{duration.Seconds:D2}";
+    }
+}

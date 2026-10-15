@@ -1,0 +1,68 @@
+@namespace NightCodeForge.Web.Components.DevQueue
+@using NightCodeForge.Web.Services
+
+@if (FailedJobs != null && FailedJobs.Count > 0)
+{
+    <div class="card-surface p-4 mt-4" style="background: var(--bg-surface); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);" id="failed-jobs-card">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h4 class="m-0" style="font-weight: 700; color: #f87171; font-size: 1.15rem;">⚠️ Failed Background Jobs</h4>
+            <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; font-family: var(--font-mono); font-size: 0.85rem;">
+                @FailedJobs.Count Failed
+            </span>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-dark table-hover font-mono m-0" style="background: transparent;" id="failed-jobs-table">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 0.85rem;">
+                        <th>Job ID</th>
+                        <th>ForgeTask</th>
+                        <th>Failed At</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var job in FailedJobs)
+                    {
+                        <tr style="vertical-align: middle; border-bottom: 1px solid rgba(255,255,255,0.05);" id="failed-row-@job.JobId">
+                            <td><code>@job.JobId</code></td>
+                            <td>
+                                @if (job.TaskId > 0)
+                                {
+                                    <a href="/monitoring/@job.TaskId" style="color: #f87171; text-decoration: none; font-weight: 600;">
+                                        #@job.TaskId: @job.TaskTitle
+                                    </a>
+                                }
+                                else
+                                {
+                                    <span class="text-secondary">@job.TaskTitle</span>
+                                }
+                            </td>
+                            <td class="text-secondary">@job.EnqueuedAt.ToString("HH:mm:ss")</td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-outline-warning me-2"
+                                        style="font-size: 0.8rem; padding: 0.25rem 0.65rem;"
+                                        @onclick="() => OnRequeue.InvokeAsync(job)"
+                                        id="requeue-btn-@job.JobId">
+                                    🔄 Requeue
+                                </button>
+                                <button class="btn btn-sm btn-secondary"
+                                        style="font-size: 0.8rem; padding: 0.25rem 0.65rem;"
+                                        @onclick="() => OnCancel.InvokeAsync(job)"
+                                        id="delete-failed-btn-@job.JobId">
+                                    ✕ Dismiss
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<QueuedJobItem> FailedJobs { get; set; } = Array.Empty<QueuedJobItem>();
+    [Parameter] public EventCallback<QueuedJobItem> OnRequeue { get; set; }
+    [Parameter] public EventCallback<QueuedJobItem> OnCancel { get; set; }
+}

@@ -185,4 +185,107 @@ public class WorkspaceLockTests
         Assert.NotNull(secondReleaser);
         secondReleaser?.Dispose();
     }
+
+    [Fact]
+    public async Task GetActiveLocks_ReflectsCurrentlyHeldLocks_AndClearsOnDispose()
+    {
+        var provider = new WorkspaceLockProvider();
+        Assert.Empty(provider.GetActiveLocks());
+
+        var lock1 = await provider.AcquireLockAsync(1);
+        var lock2 = await provider.AcquireTaskLockAsync(2, 42);
+
+        var active = provider.GetActiveLocks();
+        Assert.Equal(2, active.Count);
+
+        var wsLock = Assert.Single(active, l => l.WorkspaceId == 1);
+        Assert.Null(wsLock.TaskId);
+        Assert.Equal("WorkspaceExclusive", wsLock.LockType);
+        Assert.True(wsLock.DurationHeld >= TimeSpan.Zero);
+
+        var taskLock = Assert.Single(active, l => l.WorkspaceId == 2);
+        Assert.Equal(42, taskLock.TaskId);
+        Assert.Equal("TaskExclusive", taskLock.LockType);
+        Assert.True(taskLock.DurationHeld >= TimeSpan.Zero);
+
+        lock1.Dispose();
+        active = provider.GetActiveLocks();
+        Assert.Single(active);
+        Assert.Equal(2, active[0].WorkspaceId);
+
+        lock2.Dispose();
+        Assert.Empty(provider.GetActiveLocks());
+    }
+
+    [Fact]
+    public async Task EmergencyRelease_WorkspaceLock_ReleasesLockAndAllowsNewAcquisition()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 10;
+
+        var originalReleaser = await provider.AcquireLockAsync(workspaceId);
+        Assert.Single(provider.GetActiveLocks());
+
+        // Attempting to acquire should fail
+        Assert.False(provider.TryAcquireLock(workspaceId, out var blockedReleaser));
+        Assert.Null(blockedReleaser);
+
+        // Emergency release
+        var released = provider.EmergencyRelease(workspaceId);
+        Assert.True(released);
+        Assert.Empty(provider.GetActiveLocks());
+
+        // Now acquire should succeed immediately
+        var acquired = provider.TryAcquireLock(workspaceId, out var newReleaser);
+        Assert.True(acquired);
+        Assert.NotNull(newReleaser);
+
+        // Disposing original releaser after emergency release should not throw
+        var exception = Record.Exception(() => originalReleaser.Dispose());
+        Assert.Null(exception);
+
+        newReleaser?.Dispose();
+        Assert.Empty(provider.GetActiveLocks());
+    }
+
+    [Fact]
+    public async Task EmergencyRelease_TaskLock_ReleasesLockAndAllowsNewAcquisition()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 15;
+        const int taskId = 99;
+
+        var originalReleaser = await provider.AcquireTaskLockAsync(workspaceId, taskId);
+        Assert.Single(provider.GetActiveLocks());
+
+        var released = provider.EmergencyRelease(workspaceId, taskId);
+        Assert.True(released);
+        Assert.Empty(provider.GetActiveLocks());
+
+        var acquired = provider.TryAcquireTaskLock(workspaceId, taskId, out var newReleaser);
+        Assert.True(acquired);
+        Assert.NotNull(newReleaser);
+
+        originalReleaser.Dispose();
+        newReleaser?.Dispose();
+    }
+
+    [Fact]
+    public async Task EmergencyReleaseAll_ClearsAllActiveLocks()
+    {
+        var provider = new WorkspaceLockProvider();
+        var l1 = await provider.AcquireLockAsync(1);
+        var l2 = await provider.AcquireLockAsync(2);
+        var l3 = await provider.AcquireTaskLockAsync(3, 100);
+
+        Assert.Equal(3, provider.GetActiveLocks().Count);
+
+        provider.EmergencyReleaseAll();
+        Assert.Empty(provider.GetActiveLocks());
+
+        // Disposing original releasers does not throw
+        l1.Dispose();
+        l2.Dispose();
+        l3.Dispose();
+    }
 }

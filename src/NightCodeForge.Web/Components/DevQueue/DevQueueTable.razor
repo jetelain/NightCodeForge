@@ -1,0 +1,102 @@
+@namespace NightCodeForge.Web.Components.DevQueue
+@using NightCodeForge.Web.Services
+
+<div class="card-surface p-4" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);" id="dev-queue-table-card">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="m-0" style="font-weight: 700; color: var(--text-primary); font-size: 1.15rem;">Sequential GPU Queue Schedule</h4>
+        <span class="badge" style="background: var(--bg-card); color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.85rem;">
+            @(Jobs?.Count ?? 0) Total Scheduled
+        </span>
+    </div>
+
+    @if (Jobs == null || Jobs.Count == 0)
+    {
+        <div class="p-4 text-center text-muted" style="background: var(--bg-card); border-radius: var(--radius-md);" id="no-queued-jobs-msg">
+            No pending tasks in GPU queue. The sequential worker is idle.
+        </div>
+    }
+    else
+    {
+        <div class="queue-table-container font-mono">
+            <div class="table-responsive">
+                <table class="table table-dark table-hover m-0" style="background: transparent;" id="sequential-queue-table">
+                    <thead>
+                        <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 0.85rem;">
+                            <th>Priority</th>
+                            <th>Queue</th>
+                            <th>ForgeTask</th>
+                            <th>Stage</th>
+                            <th>Enqueued</th>
+                            <th class="text-end">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var job in Jobs)
+                        {
+                            <tr style="vertical-align: middle; border-bottom: 1px solid rgba(255,255,255,0.05);" id="job-row-@job.JobId">
+                                <td>
+                                    @if (job.QueueName == "llm-urgent")
+                                    {
+                                        <span class="badge-status running" style="background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); padding: 0.25rem 0.6rem; border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: 700;">
+                                            🚨 URGENT
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge-tag" style="background: rgba(99, 102, 241, 0.15); color: #a5b4fc; padding: 0.25rem 0.6rem; border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: 600;">
+                                            NORMAL
+                                        </span>
+                                    }
+                                </td>
+                                <td>
+                                    <code style="color: var(--accent-indigo);">@job.QueueName</code>
+                                </td>
+                                <td>
+                                    @if (job.TaskId > 0)
+                                    {
+                                        <a href="/monitoring/@job.TaskId" style="color: var(--text-primary); text-decoration: none; font-weight: 600;">
+                                            #@job.TaskId: @job.TaskTitle
+                                        </a>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-secondary">@job.TaskTitle</span>
+                                    }
+                                </td>
+                                <td>
+                                    <span class="text-muted">@job.StageId</span>
+                                </td>
+                                <td class="text-secondary">
+                                    @job.EnqueuedAt.ToString("HH:mm:ss")
+                                </td>
+                                <td class="text-end">
+                                    @if (job.QueueName != "llm-urgent")
+                                    {
+                                        <button class="btn btn-sm btn-outline-indigo me-2"
+                                                style="border: 1px solid var(--accent-indigo); color: var(--accent-indigo); background: transparent; font-size: 0.8rem; padding: 0.25rem 0.65rem; border-radius: var(--radius-sm);"
+                                                @onclick="() => OnPrioritize.InvokeAsync(job)"
+                                                id="prioritize-btn-@job.JobId">
+                                            ⬆️ Prioritize
+                                        </button>
+                                    }
+                                    <button class="btn btn-sm btn-secondary"
+                                            style="border: 1px solid var(--border-subtle); color: var(--text-secondary); background: var(--bg-card); font-size: 0.8rem; padding: 0.25rem 0.65rem; border-radius: var(--radius-sm);"
+                                            @onclick="() => OnCancel.InvokeAsync(job)"
+                                            id="cancel-btn-@job.JobId">
+                                        ✕ Cancel
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<QueuedJobItem> Jobs { get; set; } = Array.Empty<QueuedJobItem>();
+    [Parameter] public EventCallback<QueuedJobItem> OnPrioritize { get; set; }
+    [Parameter] public EventCallback<QueuedJobItem> OnCancel { get; set; }
+}

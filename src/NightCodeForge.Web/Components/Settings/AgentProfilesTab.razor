@@ -339,16 +339,18 @@
     private bool _isLoading = true;
     private bool _isLoadingModels;
     private bool _isSaving;
-
-    protected override async Task OnInitializedAsync()
-    {
-        await RefreshOllamaModelsAsync();
-        await LoadProfilesAsync();
-    }
+    private int? _lastLoadedWorkspaceId;
+    private ProfileScope? _lastLoadedScope;
 
     protected override async Task OnParametersSetAsync()
     {
-        await LoadProfilesAsync();
+        if (_lastLoadedScope != Scope || _lastLoadedWorkspaceId != WorkspaceId)
+        {
+            _lastLoadedScope = Scope;
+            _lastLoadedWorkspaceId = WorkspaceId;
+            await RefreshOllamaModelsAsync();
+            await LoadProfilesAsync();
+        }
     }
 
     private async Task RefreshOllamaModelsAsync()
