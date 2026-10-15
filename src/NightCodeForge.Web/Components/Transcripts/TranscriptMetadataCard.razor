@@ -1,0 +1,86 @@
+@namespace NightCodeForge.Web.Components.Transcripts
+@using NightCodeForge.Web.Services
+
+<div class="metadata-card mb-3">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; flex-wrap: wrap;">
+                <span class="badge-status @Summary.Status.ToLowerInvariant()">@Summary.Status</span>
+                <h3 style="margin: 0; font-size: 1.3rem; font-weight: 700; color: var(--text-primary);">
+                    @Summary.FileName
+                </h3>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.5rem;">
+                <span class="badge-tag">
+                    <strong>Task:</strong> #@Summary.TaskId
+                </span>
+                <span class="badge-tag">
+                    <strong>Stage:</strong> @Summary.StageId
+                </span>
+                <span class="badge-tag">
+                    <strong>Model:</strong> @Summary.ModelName
+                </span>
+                @if (!string.IsNullOrWhiteSpace(Summary.AgentProfile))
+                {
+                    <span class="badge-tag">
+                        <strong>Profile:</strong> @Summary.AgentProfile
+                    </span>
+                }
+                <span class="badge-tag">
+                    <strong>Tokens:</strong> @Summary.TotalTokens.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) 
+                    <small class="text-muted" style="margin-left: 0.25rem;">(In: @Summary.PromptTokens.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) | Out: @Summary.CompletionTokens.ToString("N0", System.Globalization.CultureInfo.InvariantCulture))</small>
+                </span>
+                <span class="badge-tag">
+                    <strong>Duration:</strong> @((Summary.DurationMs / 1000.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture))s
+                </span>
+                @if (Summary.KvCacheHitRate.HasValue)
+                {
+                    <span class="badge-tag" style="border-color: var(--accent-teal); color: #5eead4;">
+                        <strong>KV Cache:</strong> @((Summary.KvCacheHitRate.Value * 100).ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%
+                    </span>
+                }
+            </div>
+
+            @if (Summary.Optimizations != null)
+            {
+                <div style="display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.75rem; align-items: center;">
+                    <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.25rem; font-weight: 600;">Optimizations:</span>
+                    @if (Summary.Optimizations.LoopCircuitBreaker)
+                    {
+                        <span class="forge-badge badge-teal" style="font-size: 0.7rem;">LoopBreaker</span>
+                    }
+                    @if (Summary.Optimizations.ThinkingTraceCompaction)
+                    {
+                        <span class="forge-badge badge-indigo" style="font-size: 0.7rem;">ThinkCompaction</span>
+                    }
+                    @if (Summary.Optimizations.GuidedGrammarDecoding)
+                    {
+                        <span class="forge-badge badge-indigo" style="font-size: 0.7rem;">Grammar</span>
+                    }
+                    @if (Summary.Optimizations.DeterministicSymbolMap)
+                    {
+                        <span class="forge-badge badge-teal" style="font-size: 0.7rem;">SymbolMap</span>
+                    }
+                    @if (Summary.Optimizations.PrefixStabilization)
+                    {
+                        <span class="forge-badge badge-indigo" style="font-size: 0.7rem;">PrefixStable</span>
+                    }
+                    @if (Summary.Optimizations.CompactOlderToolResults)
+                    {
+                        <span class="forge-badge badge-teal" style="font-size: 0.7rem;">ToolCompaction</span>
+                    }
+                </div>
+            }
+        </div>
+
+        <button type="button" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.35rem; font-size: 0.95rem; font-weight: 600; box-shadow: 0 0 15px rgba(99, 102, 241, 0.4);" @onclick="OnDiagnoseRequested">
+            <span>🧠</span>
+            <span>Diagnose with AI</span>
+        </button>
+    </div>
+</div>
+
+@code {
+    [Parameter] public TranscriptSummary Summary { get; set; } = null!;
+    [Parameter] public EventCallback OnDiagnoseRequested { get; set; }
+}

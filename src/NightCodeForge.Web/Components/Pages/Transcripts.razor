@@ -1,31 +1,569 @@
 @page "/transcripts"
+@page "/transcripts/{FileName}"
+@using NightCodeForge.Web.Components.Transcripts
+@using NightCodeForge.Web.Services
+@inject ITranscriptBrowserService BrowserService
+@inject WorkspaceStateService WorkspaceState
+@inject ToastService ToastService
+@inject NavigationManager NavigationManager
+@implements IDisposable
 
 <PageTitle>Transcripts &amp; AI - NightCodeForge</PageTitle>
 
-<div class="page-header" style="margin-bottom: 1.5rem;">
-    <div style="display: flex; align-items: center; gap: 0.75rem;">
-        <span style="font-size: 1.75rem;">📜</span>
-        <div>
-            <h1>Transcripts &amp; AI Diagnostics</h1>
-            <p>Full-fidelity LLM conversational logs, tool execution history, token efficiency analysis, and replays.</p>
+<div class="transcripts-container">
+    <div class="transcripts-grid">
+        <!-- 1. Left Sidebar: Transcript Navigator -->
+        <div class="transcript-sidebar">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="font-size: 1.25rem;">📜</span>
+                    <h4 style="margin: 0; font-weight: 700; font-size: 1.1rem; color: var(--text-primary);">
+                        Session Transcripts
+                    </h4>
+                </div>
+                <span class="forge-badge badge-indigo">@_filteredTranscripts.Count</span>
+            </div>
+
+            <!-- Search Filter -->
+            <div style="margin-bottom: 0.75rem;">
+                <input type="text"
+                       class="forge-input"
+                       style="padding: 0.45rem 0.75rem; font-size: 0.85rem; min-height: 36px;"
+                       placeholder="Filter task, stage, model..."
+                       @bind="_searchTerm"
+                       @bind:event="oninput" />
+            </div>
+
+            <!-- Status Filter Chips -->
+            <div style="display: flex; gap: 0.35rem; margin-bottom: 1rem; overflow-x: auto; padding-bottom: 0.25rem;">
+                <button type="button" class="forge-btn-ghost @(_selectedFilter == "All" ? "active-filter" : "")" style="padding: 0.2rem 0.55rem; font-size: 0.75rem; border-radius: var(--radius-sm);" @onclick='() => SetFilter("All")'>
+                    All
+                </button>
+                <button type="button" class="forge-btn-ghost @(_selectedFilter == "Failed" ? "active-filter" : "")" style="padding: 0.2rem 0.55rem; font-size: 0.75rem; border-radius: var(--radius-sm); color: #f87171;" @onclick='() => SetFilter("Failed")'>
+                    Failed
+                </button>
+                <button type="button" class="forge-btn-ghost @(_selectedFilter == "Completed" ? "active-filter" : "")" style="padding: 0.2rem 0.55rem; font-size: 0.75rem; border-radius: var(--radius-sm); color: #34d399;" @onclick='() => SetFilter("Completed")'>
+                    Completed
+                </button>
+                <button type="button" class="forge-btn-ghost @(_selectedFilter == "Waiting" ? "active-filter" : "")" style="padding: 0.2rem 0.55rem; font-size: 0.75rem; border-radius: var(--radius-sm); color: #fbbf24;" @onclick='() => SetFilter("Waiting")'>
+                    Waiting
+                </button>
+            </div>
+
+            <!-- File List -->
+            @if (_isLoading)
+            {
+                <div style="padding: 2rem; text-align: center; color: var(--text-muted);">
+                    <div class="spinner-border spinner-border-sm mb-2" role="status"></div>
+                    <p style="font-size: 0.85rem; margin: 0;">Scanning transcripts...</p>
+                </div>
+            }
+            else if (_filteredTranscripts.Count == 0)
+            {
+                <div style="padding: 2rem 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+                    <p style="margin-bottom: 0.75rem;">No session transcripts found.</p>
+                    <button type="button" class="forge-btn forge-btn-outline" style="font-size: 0.8rem; padding: 0.4rem 0.8rem;" @onclick="CreateSampleTranscriptAsync">
+                        ⚡ Generate Sample
+                    </button>
+                </div>
+            }
+            else
+            {
+                <ul class="transcript-file-list">
+                    @foreach (var item in _filteredTranscripts)
+                    {
+                        var isSelected = _selectedTranscriptSummary?.FileName == item.FileName;
+                        <li class="file-item @(isSelected ? "active" : "")"
+                            @onclick="() => SelectTranscript(item)">
+                            <span class="badge-status @item.Status.ToLowerInvariant()">@item.Status</span>
+                            <div class="file-info" style="flex: 1; min-width: 0;">
+                                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                                    <strong style="font-size: 0.88rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;">
+                                        Task #@item.TaskId: @item.StageId
+                                    </strong>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.2rem;">
+                                    <small class="text-muted font-mono" style="font-size: 0.75rem;">@item.ModelName</small>
+                                    <small class="text-muted font-mono" style="font-size: 0.75rem;">@((item.DurationMs / 1000.0).ToString("F0"))s</small>
+                                </div>
+                            </div>
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
+
+        <!-- 2. Main Canvas: Transcript Viewer -->
+        <div class="transcript-main">
+            @if (_selectedTranscriptDetail != null)
+            {
+                <!-- Executive Metadata Card -->
+                <TranscriptMetadataCard Summary="_selectedTranscriptDetail.Metadata"
+                                        OnDiagnoseRequested="OpenDiagnosticsModal" />
+
+                <!-- Canvas Navigation Tabs -->
+                <div style="display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border-subtle); margin-bottom: 1.25rem; padding-bottom: 0.5rem;">
+                    <button type="button" 
+                            class="forge-btn @(_activeTab == "dialogue" ? "forge-btn-primary" : "forge-btn-ghost")" 
+                            style="padding: 0.4rem 0.95rem; font-size: 0.85rem;"
+                            @onclick='() => _activeTab = "dialogue"'>
+                        💬 Turn-by-Turn Dialogue (@_selectedTranscriptDetail.Turns.Count)
+                    </button>
+
+                    @if (!string.IsNullOrWhiteSpace(_selectedTranscriptDetail.SystemPrompt) || _selectedTranscriptDetail.AvailableTools.Count > 0)
+                    {
+                        <button type="button" 
+                                class="forge-btn @(_activeTab == "environment" ? "forge-btn-primary" : "forge-btn-ghost")" 
+                                style="padding: 0.4rem 0.95rem; font-size: 0.85rem;"
+                                @onclick='() => _activeTab = "environment"'>
+                            ⚙️ Environment &amp; Tools (@_selectedTranscriptDetail.AvailableTools.Count)
+                        </button>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(_selectedTranscriptDetail.ModelCallsMarkdown))
+                    {
+                        <button type="button" 
+                                class="forge-btn @(_activeTab == "model_calls" ? "forge-btn-primary" : "forge-btn-ghost")" 
+                                style="padding: 0.4rem 0.95rem; font-size: 0.85rem;"
+                                @onclick='() => _activeTab = "model_calls"'>
+                            📡 Model Call Snapshots
+                        </button>
+                    }
+
+                    <button type="button" 
+                            class="forge-btn @(_activeTab == "raw" ? "forge-btn-primary" : "forge-btn-ghost")" 
+                            style="padding: 0.4rem 0.95rem; font-size: 0.85rem;"
+                            @onclick='() => _activeTab = "raw"'>
+                        📄 Raw Markdown
+                    </button>
+                </div>
+
+                <!-- Tab 1: Dialogue -->
+                @if (_activeTab == "dialogue")
+                {
+                    <div class="transcript-dialogue">
+                        @if (_selectedTranscriptDetail.Turns.Count == 0)
+                        {
+                            <!-- Fallback to rendered HTML from raw markdown if turn markers weren't present -->
+                            <div class="card-surface p-4 font-sans" style="line-height: 1.7; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.5rem;">
+                                @MarkdownHelper.ToMarkupString(_selectedTranscriptDetail.RawMarkdown)
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var turn in _selectedTranscriptDetail.Turns)
+                            {
+                                var roleUpper = turn.Role.ToUpperInvariant();
+                                var bubbleClass = roleUpper switch
+                                {
+                                    "USER" => "user-turn",
+                                    "ASSISTANT" => "assistant-turn",
+                                    "TOOL_ERROR" => "tool-error-turn",
+                                    "TOOL" or "TOOL_RESULT" => "tool-turn",
+                                    _ => ""
+                                };
+
+                                var roleIcon = roleUpper switch
+                                {
+                                    "USER" => "🧑 USER",
+                                    "ASSISTANT" => "🤖 ASSISTANT",
+                                    "THINKING" => "💭 COGNITIVE DELIBERATION",
+                                    "TOOL" => "🔧 TOOL INVOCATION",
+                                    "TOOL_RESULT" => "↳ TOOL RESULT",
+                                    "TOOL_ERROR" => "❌ TOOL ERROR",
+                                    "COMPACTION" => "✂️ CONTEXT COMPACTION",
+                                    _ => roleUpper
+                                };
+
+                                <div class="turn-bubble @bubbleClass">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                            <strong style="font-size: 0.9rem; color: var(--text-primary);">@roleIcon</strong>
+                                        </div>
+                                        <span class="badge-tag" style="margin: 0; font-size: 0.72rem;">@turn.Offset</span>
+                                    </div>
+
+                                    @if (!string.IsNullOrWhiteSpace(turn.ThinkingTrace))
+                                    {
+                                        <ThinkingTraceViewer Trace="@turn.ThinkingTrace" />
+                                    }
+
+                                    @if (turn.IsTool || !string.IsNullOrWhiteSpace(turn.ToolName))
+                                    {
+                                        <ToolCallCard ToolName="@turn.ToolName"
+                                                      Arguments="@turn.ToolArguments"
+                                                      Result="@(turn.ToolResult ?? turn.Content)"
+                                                      IsError="@turn.IsError"
+                                                      Offset="@turn.Offset" />
+                                    }
+                                    else if (!string.IsNullOrWhiteSpace(turn.Content))
+                                    {
+                                        <div class="turn-markdown" style="font-size: 0.92rem; line-height: 1.6; color: var(--text-primary);">
+                                            @MarkdownHelper.ToMarkupString(turn.Content)
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+                    </div>
+                }
+                <!-- Tab 2: Environment -->
+                else if (_activeTab == "environment")
+                {
+                    <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.5rem;">
+                        <h4 style="font-weight: 700; margin-bottom: 1rem; color: var(--text-primary);">Available Tools Catalog</h4>
+                        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem;">
+                            @foreach (var tool in _selectedTranscriptDetail.AvailableTools)
+                            {
+                                <span class="forge-badge badge-teal" style="font-size: 0.85rem; padding: 0.35rem 0.75rem;">🔧 @tool</span>
+                            }
+                        </div>
+
+                        @if (_selectedTranscriptDetail.ActiveSkills.Count > 0)
+                        {
+                            <h4 style="font-weight: 700; margin-bottom: 1rem; color: var(--text-primary);">Active Skills</h4>
+                            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem;">
+                                @foreach (var skill in _selectedTranscriptDetail.ActiveSkills)
+                                {
+                                    <span class="forge-badge badge-indigo" style="font-size: 0.85rem; padding: 0.35rem 0.75rem;">📚 @skill</span>
+                                }
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(_selectedTranscriptDetail.SystemPrompt))
+                        {
+                            <h4 style="font-weight: 700; margin-bottom: 0.75rem; color: var(--text-primary);">Full Fidelity System Prompt</h4>
+                            <pre style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; font-size: 0.85rem; white-space: pre-wrap; color: var(--text-secondary); max-height: 450px; overflow-y: auto;"><code>@_selectedTranscriptDetail.SystemPrompt</code></pre>
+                        }
+                    </div>
+                }
+                <!-- Tab 3: Model Calls -->
+                else if (_activeTab == "model_calls")
+                {
+                    <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.5rem;">
+                        <h4 style="font-weight: 700; margin-bottom: 0.5rem; color: var(--text-primary);">Model Calls (Requests As Sent To The LLM)</h4>
+                        <p class="text-muted" style="font-size: 0.85rem; margin-bottom: 1.25rem;">
+                            Inspects delta changes across successive requests, rewritten history, and tool declarations.
+                        </p>
+                        <div class="model-calls-content">
+                            @MarkdownHelper.ToMarkupString(_selectedTranscriptDetail.ModelCallsMarkdown)
+                        </div>
+                    </div>
+                }
+                <!-- Tab 4: Raw Markdown -->
+                else if (_activeTab == "raw")
+                {
+                    <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.5rem;">
+                        <pre style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; font-size: 0.82rem; white-space: pre-wrap; color: var(--text-secondary); max-height: 600px; overflow-y: auto;"><code>@_selectedTranscriptDetail.RawMarkdown</code></pre>
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="card-surface p-5 text-center text-muted" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 4rem 2rem; margin: auto 0;">
+                    <span style="font-size: 3rem; display: block; margin-bottom: 1rem;">📜</span>
+                    <h3 style="color: var(--text-primary); font-weight: 600; margin-bottom: 0.5rem;">No Transcript Selected</h3>
+                    <p style="max-width: 450px; margin: 0 auto 1.5rem auto; font-size: 0.92rem;">
+                        Select a session transcript from the sidebar to review the turn-by-turn conversation trace, tool execution parameters, and model call snapshots.
+                    </p>
+                    @if (_transcripts.Count == 0)
+                    {
+                        <button type="button" class="forge-btn forge-btn-primary" @onclick="CreateSampleTranscriptAsync">
+                            ⚡ Generate Demo Session Transcript
+                        </button>
+                    }
+                </div>
+            }
         </div>
     </div>
 </div>
 
-<div class="forge-card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <div style="font-weight: 600; font-size: 1.1rem;">Transcript Search &amp; Inspector</div>
-        <span class="forge-badge badge-deterministic">Audit Trail</span>
-    </div>
-    <p style="margin-bottom: 1.25rem;">
-        Inspect raw agent thoughts, tool dispatch parameters, stderr streams, and token consumption breakdowns.
-    </p>
-    <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-secondary);">
-        Active Workspace: <span style="color: var(--accent-indigo);">@(WorkspaceState.ActiveWorkspace?.Name ?? "None selected")</span>
-    </div>
-</div>
+@if (_showDiagnosticsModal && _selectedTranscriptDetail != null)
+{
+    <DiagnosticsModal Transcript="_selectedTranscriptDetail"
+                      WorkspaceId="WorkspaceState.ActiveWorkspaceId"
+                      OnClosed="() => _showDiagnosticsModal = false"
+                      OnRemediationApplied="HandleRemediationApplied" />
+}
+
+<style>
+    .active-filter {
+        background: rgba(99, 102, 241, 0.2) !important;
+        color: #ffffff !important;
+        border-color: var(--accent-indigo) !important;
+    }
+</style>
 
 @code {
-    [Inject]
-    private WorkspaceStateService WorkspaceState { get; set; } = default!;
+    [Parameter] public string? FileName { get; set; }
+
+    private bool _isLoading = true;
+    private bool _showDiagnosticsModal;
+    private string _activeTab = "dialogue";
+    private string _searchTerm = string.Empty;
+    private string _selectedFilter = "All";
+
+    private IReadOnlyList<TranscriptSummary> _transcripts = Array.Empty<TranscriptSummary>();
+    private TranscriptSummary? _selectedTranscriptSummary;
+    private ParsedTranscriptDetail? _selectedTranscriptDetail;
+
+    protected override async Task OnInitializedAsync()
+    {
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        await LoadTranscriptsAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(FileName) && (_selectedTranscriptSummary == null || _selectedTranscriptSummary.FileName != FileName))
+        {
+            var match = _transcripts.FirstOrDefault(t => t.FileName.Equals(FileName, StringComparison.OrdinalIgnoreCase));
+            if (match != null)
+            {
+                await SelectTranscript(match);
+            }
+            else
+            {
+                var detail = await BrowserService.GetTranscriptDetailByNameAsync(FileName, WorkspaceState.ActiveWorkspace?.RepositoryPath);
+                if (detail != null)
+                {
+                    _selectedTranscriptSummary = detail.Metadata;
+                    _selectedTranscriptDetail = detail;
+                }
+            }
+        }
+    }
+
+    private async void HandleWorkspaceChanged()
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadTranscriptsAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task LoadTranscriptsAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            var repoPath = WorkspaceState.ActiveWorkspace?.RepositoryPath;
+            _transcripts = await BrowserService.GetTranscriptsAsync(repoPath);
+
+            if (!string.IsNullOrWhiteSpace(FileName))
+            {
+                var match = _transcripts.FirstOrDefault(t => t.FileName.Equals(FileName, StringComparison.OrdinalIgnoreCase));
+                if (match != null)
+                {
+                    await SelectTranscript(match);
+                    return;
+                }
+            }
+
+            if (_transcripts.Count > 0 && _selectedTranscriptSummary == null)
+            {
+                await SelectTranscript(_transcripts[0]);
+            }
+            else if (_transcripts.Count == 0)
+            {
+                _selectedTranscriptSummary = null;
+                _selectedTranscriptDetail = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Failed to Load Transcripts", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task SelectTranscript(TranscriptSummary summary)
+    {
+        _selectedTranscriptSummary = summary;
+        _selectedTranscriptDetail = await BrowserService.GetTranscriptDetailAsync(summary.FilePath);
+    }
+
+    private void SetFilter(string filter)
+    {
+        _selectedFilter = filter;
+    }
+
+    private IReadOnlyList<TranscriptSummary> _filteredTranscripts
+    {
+        get
+        {
+            var list = _transcripts.AsEnumerable();
+
+            if (!string.IsNullOrWhiteSpace(_searchTerm))
+            {
+                var term = _searchTerm.Trim();
+                list = list.Where(t => 
+                    t.FileName.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    t.StageId.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    t.ModelName.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    t.TaskId.ToString().Contains(term));
+            }
+
+            if (_selectedFilter != "All")
+            {
+                list = list.Where(t => t.Status.Contains(_selectedFilter, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return list.ToList();
+        }
+    }
+
+    private void OpenDiagnosticsModal()
+    {
+        _showDiagnosticsModal = true;
+    }
+
+    private async Task HandleRemediationApplied(RemediationSuggestion suggestion)
+    {
+        // Refresh detail if needed
+        if (_selectedTranscriptSummary != null)
+        {
+            _selectedTranscriptDetail = await BrowserService.GetTranscriptDetailAsync(_selectedTranscriptSummary.FilePath);
+        }
+    }
+
+    private async Task CreateSampleTranscriptAsync()
+    {
+        try
+        {
+            var targetDir = Path.Combine(
+                WorkspaceState.ActiveWorkspace?.RepositoryPath ?? Directory.GetCurrentDirectory(),
+                "docs",
+                "transcripts");
+
+            if (!Directory.Exists(targetDir))
+            {
+                Directory.CreateDirectory(targetDir);
+            }
+
+            var sampleFile = Path.Combine(targetDir, $"{DateTime.UtcNow:yyyy-MM-dd}-task-101-stage-compile-failed.md");
+            var sampleContent = @"---
+task_id: 101
+stage_id: stage-compile
+agent_profile: RefactorEngineer
+model: qwen2.5-coder:32b
+duration_ms: 4500
+tokens:
+  prompt: 3200
+  completion: 840
+  total: 4040
+optimizations:
+  thinking_trace_compaction: false
+  loop_circuit_breaker: false
+  guided_grammar_decoding: true
+  deterministic_symbol_map: false
+  structured_diagnostic_extraction: false
+  prefix_stabilization: true
+  jit_model_preload: true
+  compact_older_tool_results: false
+kv_cache_hit_rate: 0.88
+status: Failed
+---
+
+# Execution Transcript: ForgeTask #101 (stage-compile)
+
+### Environment
+
+**Available tools**
+- ReadFile
+- EditFile
+- RoslynSymbolQuery
+- ExecuteDotNetBuild
+
+**Active skills**
+- csharp-refactoring
+- clean-architecture
+
+**System prompt**
+````
+You are an expert autonomous software engineer working within NightCodeForge.
+Your task is to refactor legacy models to C# 13 and .NET 10.
+Ensure strict type checking and zero compiler warnings.
+````
+
+### [ 00:00 ] 🧑 USER
+Refactor `UserProfile.cs` to record type and update all call sites.
+
+### [ 00:02 ] 💭 THINKING
+Analyzing UserProfile.cs syntax.
+The current class has mutable properties with private setters.
+Converting to positional record type with primary constructor.
+Checking dependent references across domain project.
+
+### [ 00:05 ] 🔧 TOOL
+**Tool Invocation:** `ReadFile`
+````json
+{
+  ""path"": ""src/Core/UserProfile.cs""
+}
+````
+**Tool Output:**
+````
+public class UserProfile {
+    public string Id { get; set; }
+    public string Name { get; set; }
+}
+````
+
+### [ 00:08 ] 🤖 ASSISTANT
+<think>
+Now converting to positional record: `public record UserProfile(string Id, string Name);`
+I will apply this change using EditFile.
+</think>
+I am modifying `src/Core/UserProfile.cs` to use record syntax.
+
+### [ 00:10 ] 🔧 TOOL
+**Tool Invocation:** `EditFile`
+````json
+{
+  ""path"": ""src/Core/UserProfile.cs"",
+  ""content"": ""public record UserProfile(string Id, string Name);""
+}
+````
+**Tool Output:**
+````
+File edited successfully.
+````
+
+### [ 00:13 ] ❌ TOOL_ERROR
+**Tool:** `ExecuteDotNetBuild`
+````
+error CS0117: 'UserProfile' does not contain a definition for 'Id' setter.
+error CS1061: 'UserProfile' does not contain a parameterless constructor.
+Build failed with 2 errors.
+````
+
+### [ 00:16 ] 🤖 ASSISTANT
+The build encountered compiler error CS0117. I will attempt to edit the file again without checking dependent constructor references.
+
+### Model calls (requests as sent to the model)
+#### [ 00:01 ] Call 1
+**Messages:** 2 total, 0 unchanged, 2 new
+**Instructions:** unchanged
+**Tools (4):** ReadFile, EditFile, RoslynSymbolQuery, ExecuteDotNetBuild
+";
+
+            await File.WriteAllTextAsync(sampleFile, sampleContent);
+            ToastService.Show("Sample Generated", "Generated demo session transcript in docs/transcripts/", ToastLevel.Success);
+            await LoadTranscriptsAsync();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Failed to Generate Sample", ex.Message, ToastLevel.Error);
+        }
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+    }
 }

@@ -1,0 +1,258 @@
+@namespace NightCodeForge.Web.Components.Transcripts
+@using NightCodeForge.Web.Services
+@inject ITranscriptBrowserService BrowserService
+@inject ToastService ToastService
+
+<div class="forge-modal-backdrop" @onclick="HandleBackdropClick">
+    <div class="forge-modal card-glass modal-lg" @onclick:stopPropagation="true">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 0.65rem;">
+                <span style="font-size: 1.5rem;">🧠</span>
+                <div>
+                    <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--text-primary);">
+                        AI Diagnostics: @Transcript.Metadata.FileName
+                    </h3>
+                    <small class="text-muted">Task #@Transcript.Metadata.TaskId — Stage: @Transcript.Metadata.StageId</small>
+                </div>
+            </div>
+            <button type="button" class="btn-icon" style="background: transparent; border: none; font-size: 1.25rem; color: var(--text-secondary); cursor: pointer;" @onclick="Close">
+                ✕
+            </button>
+        </div>
+
+        <div class="modal-body">
+            @if (_report == null && !_isDiagnosing)
+            {
+                <div class="diagnostics-choice p-4 text-center">
+                    <h4 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--text-primary);">
+                        Select Diagnostic Execution Engine
+                    </h4>
+                    <p class="text-secondary mb-4" style="font-size: 0.92rem; max-width: 520px; margin: 0 auto 1.75rem auto;">
+                        Choose how the session transcript evaluation should be routed and analyzed.
+                    </p>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; text-align: left;">
+                        <!-- Option A: Cloud Diagnostics -->
+                        <div class="diagnostic-option-card card-surface p-4" @onclick='() => RunDiagnosticsAsync("Cloud")'>
+                            <span style="font-size: 2.25rem; margin-bottom: 0.75rem; display: block;">☁️</span>
+                            <h4 style="font-weight: 700; font-size: 1.1rem; color: var(--text-primary); margin-bottom: 0.35rem;">
+                                Cloud Diagnostics
+                            </h4>
+                            <p class="text-muted" style="font-size: 0.85rem; line-height: 1.5; flex: 1;">
+                                Fast, zero local VRAM consumption via OllamaRouter cloud overflow or direct API.
+                            </p>
+                            <button type="button" class="forge-btn forge-btn-primary" style="margin-top: 1rem; width: 100%;">
+                                Run via Cloud ➔
+                            </button>
+                        </div>
+
+                        <!-- Option B: Local Diagnostics -->
+                        <div class="diagnostic-option-card card-surface p-4" @onclick='() => RunDiagnosticsAsync("Local")'>
+                            <span style="font-size: 2.25rem; margin-bottom: 0.75rem; display: block;">🔒</span>
+                            <h4 style="font-weight: 700; font-size: 1.1rem; color: var(--text-primary); margin-bottom: 0.35rem;">
+                                Local Diagnostics
+                            </h4>
+                            <p class="text-muted" style="font-size: 0.85rem; line-height: 1.5; flex: 1;">
+                                100% offline and private. Enqueued sequentially on local GPU to avoid VRAM collision.
+                            </p>
+                            <button type="button" class="forge-btn forge-btn-outline" style="margin-top: 1rem; width: 100%; border-color: var(--accent-teal); color: #5eead4;">
+                                Run Locally ➔
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+            else if (_isDiagnosing)
+            {
+                <div class="p-5 text-center" style="padding: 3.5rem 1rem;">
+                    <div class="spinner-pulse mb-3"></div>
+                    <h4 style="font-size: 1.2rem; font-weight: 700; margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--text-primary);">
+                        Analyzing Agent Transcript &amp; Cognitive Deliberation...
+                    </h4>
+                    <p class="text-muted" style="font-size: 0.88rem; max-width: 480px; margin: 0 auto;">
+                        Evaluating tool call patterns, prompt instructions, and compiler feedback using @(_selectedMode ?? "AI") diagnostics engine.
+                    </p>
+                </div>
+            }
+            else if (_report != null)
+            {
+                <div class="diagnostic-report">
+                    <!-- Root Cause Box -->
+                    <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 1.5rem;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.65rem; flex-wrap: wrap; gap: 0.5rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <span style="font-size: 1.25rem;">⚠️</span>
+                                <strong style="color: #fde68a; font-size: 1rem;">Root Cause Identified:</strong>
+                            </div>
+                            <span class="forge-badge badge-amber">@_report.FailureCategory</span>
+                        </div>
+                        <div class="diagnostic-markdown" style="margin: 0; color: var(--text-primary); font-size: 0.95rem; line-height: 1.6;">
+                            @MarkdownHelper.ToMarkupString(_report.RootCause)
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_report.FullMarkdownReport) && _report.FullMarkdownReport != _report.RootCause)
+                    {
+                        <!-- Detailed LLM Analysis Section -->
+                        <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 1.5rem;">
+                            <h4 style="font-size: 1rem; font-weight: 700; color: var(--text-primary); margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+                                <span>📋</span>
+                                <span>Detailed AI Diagnostic Analysis:</span>
+                            </h4>
+                            <div class="diagnostic-markdown" style="color: var(--text-primary); font-size: 0.92rem; line-height: 1.6;">
+                                @MarkdownHelper.ToMarkupString(_report.FullMarkdownReport)
+                            </div>
+                        </div>
+                    }
+
+                    <!-- Prompt & Skill Critique -->
+                    @if (_report.CritiquePoints.Count > 0)
+                    {
+                        <div style="margin-bottom: 1.5rem;">
+                            <h4 style="font-size: 1rem; font-weight: 700; color: var(--text-primary); margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+                                <span>🔍</span>
+                                <span>Prompt &amp; Skill Critique:</span>
+                            </h4>
+                            <ul style="padding-left: 1.25rem; margin: 0; color: var(--text-secondary); font-size: 0.9rem; line-height: 1.6;">
+                                @foreach (var point in _report.CritiquePoints)
+                                {
+                                    <li style="margin-bottom: 0.45rem;">
+                                        <div class="diagnostic-markdown-inline">
+                                            @MarkdownHelper.ToMarkupString(point)
+                                        </div>
+                                    </li>
+                                }
+                            </ul>
+                        </div>
+                    }
+
+                    <!-- Recommended Actions -->
+                    <div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                            <h4 style="font-size: 1rem; font-weight: 700; color: var(--text-primary); margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+                                <span>⚡</span>
+                                <span>One-Click Remediation Actions:</span>
+                            </h4>
+                            <span class="forge-badge badge-teal">@_report.SuggestedActions.Count Actions Available</span>
+                        </div>
+
+                        <div class="remediation-list" style="display: flex; flex-direction: column; gap: 0.75rem;">
+                            @foreach (var action in _report.SuggestedActions)
+                            {
+                                var isApplied = _appliedActions.Contains(action.Title);
+                                <div class="remediation-card d-flex justify-content-between align-items-center" style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+                                    <div>
+                                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                                            <strong style="color: var(--text-primary); font-size: 0.95rem;">@action.Title</strong>
+                                            @if (!string.IsNullOrWhiteSpace(action.TargetKey))
+                                            {
+                                                <span class="forge-badge badge-indigo" style="font-size: 0.7rem;">@action.TargetKey</span>
+                                            }
+                                        </div>
+                                        <div class="diagnostic-markdown-inline text-muted mb-0" style="font-size: 0.85rem; margin: 0;">
+                                            @MarkdownHelper.ToMarkupString(action.Description)
+                                        </div>
+                                    </div>
+                                    <button type="button" 
+                                            class="forge-btn @(isApplied ? "forge-btn-secondary" : "forge-btn-primary")" 
+                                            style="padding: 0.45rem 1rem; font-size: 0.85rem; white-space: nowrap;"
+                                            disabled="isApplied || _isApplying"
+                                            @onclick="() => ApplyActionAsync(action)">
+                                        @(isApplied ? "✓ Applied" : "Apply Action")
+                                    </button>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <div class="modal-footer">
+            @if (_report != null)
+            {
+                <button type="button" class="forge-btn forge-btn-outline" @onclick="ResetDiagnostics">
+                    ↺ Run Again
+                </button>
+            }
+            <button type="button" class="forge-btn forge-btn-secondary" @onclick="Close">
+                Close
+            </button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public ParsedTranscriptDetail Transcript { get; set; } = null!;
+    [Parameter] public EventCallback OnClosed { get; set; }
+    [Parameter] public EventCallback<RemediationSuggestion> OnRemediationApplied { get; set; }
+    [Parameter] public int? WorkspaceId { get; set; }
+
+    private bool _isDiagnosing;
+    private bool _isApplying;
+    private string? _selectedMode;
+    private DiagnosticReport? _report;
+    private readonly HashSet<string> _appliedActions = new(StringComparer.OrdinalIgnoreCase);
+
+    private async Task RunDiagnosticsAsync(string mode)
+    {
+        _selectedMode = mode;
+        _isDiagnosing = true;
+        _report = null;
+
+        try
+        {
+            _report = await BrowserService.RunDiagnosticsAsync(Transcript, mode);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Diagnostics Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isDiagnosing = false;
+        }
+    }
+
+    private async Task ApplyActionAsync(RemediationSuggestion action)
+    {
+        if (_isApplying) return;
+        _isApplying = true;
+
+        try
+        {
+            await BrowserService.ApplyRemediationAsync(
+                action, 
+                workspaceId: WorkspaceId, 
+                profileName: Transcript.Metadata.AgentProfile);
+
+            _appliedActions.Add(action.Title);
+            ToastService.Show("Remediation Applied", $"Successfully applied: '{action.Title}' to agent configuration.", ToastLevel.Success);
+            await OnRemediationApplied.InvokeAsync(action);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Failed to Apply Remediation", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isApplying = false;
+        }
+    }
+
+    private void ResetDiagnostics()
+    {
+        _report = null;
+        _selectedMode = null;
+    }
+
+    private async Task HandleBackdropClick()
+    {
+        await Close();
+    }
+
+    private async Task Close()
+    {
+        await OnClosed.InvokeAsync();
+    }
+}

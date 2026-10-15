@@ -2,7 +2,7 @@
 
 > **Phase 5 Implementation Step**  
 > *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.8: Settings & A/B Testing](STEP_5_8_SETTINGS_HOST_SDKS_AND_AB_TESTING.md) | *Next Phase:* [Phase 6: End-to-End Hardening](../06_END_TO_END_TESTING_AND_HARDENING.md)  
-> *Project Target:* `src/NightCodeForge.Web/Components/Transcripts` & `Pages/Transcripts.razor` | *Status:* Ready for Implementation
+> *Project Target:* `src/NightCodeForge.Web/Components/Transcripts` & `Pages/Transcripts.razor` | *Status:* Completed
 
 ---
 
@@ -322,10 +322,10 @@ public record RemediationSuggestion(
 
 ## 6. Definition of Done (DoD) Checklist
 
-- [ ] `Pages/Transcripts.razor` created with transcript sidebar and main viewer canvas.
-- [ ] Frontmatter metadata parser extracts tokens, latency, status, and model name.
-- [ ] Turn-by-turn markdown viewer renders thinking traces and tool calls.
-- [ ] `DiagnosticsModal.razor` created with Option A (Cloud) vs Option B (Local) execution choice.
-- [ ] Diagnostic report renders Root Cause, Prompt Critique, and Remediation Suggestions.
-- [ ] One-click remediation actions dispatch to agent profile settings.
-- [ ] Component unit tests verify frontmatter parsing and diagnostic flows.
+- [x] `Pages/Transcripts.razor` created with transcript sidebar and main viewer canvas.
+- [x] Frontmatter metadata parser extracts tokens, latency, status, and model name.
+- [x] Turn-by-turn markdown viewer renders thinking traces and tool calls.
+- [x] `DiagnosticsModal.razor` created with Option A (Cloud) vs Option B (Local) execution choice.
+- [x] Diagnostic report renders Root Cause, Prompt Critique, and Remediation Suggestions.
+- [x] One-click remediation actions dispatch to agent profile settings.
+- [x] Component unit tests verify frontmatter parsing and diagnostic flows.

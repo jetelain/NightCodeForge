@@ -1,0 +1,66 @@
+@namespace NightCodeForge.Web.Components.Transcripts
+@using Microsoft.JSInterop
+@inject IJSRuntime JSRuntime
+
+<div class="think-accordion">
+    <div class="think-header" @onclick="Toggle">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span>💭</span>
+            <span>Agent Cognitive Reasoning Trace</span>
+            <span class="forge-badge" style="background: rgba(168, 85, 247, 0.2); border: 1px solid rgba(168, 85, 247, 0.4); color: #d8b4fe; font-size: 0.72rem;">
+                ~@EstimatedTokens tokens
+            </span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <button type="button" class="forge-btn-ghost" style="padding: 0.2rem 0.5rem; font-size: 0.75rem; color: #d8b4fe;" @onclick:stopPropagation="true" @onclick="CopyTrace">
+                @(_copied ? "✓ Copied" : "📋 Copy")
+            </button>
+            <span style="font-size: 0.8rem; transform: rotate(@(_isExpanded ? "90deg" : "0deg")); transition: transform 0.2s ease;">
+                ▶
+            </span>
+        </div>
+    </div>
+
+    @if (_isExpanded)
+    {
+        <div class="think-content">
+            @Trace
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Trace { get; set; } = string.Empty;
+    [Parameter] public bool InitiallyExpanded { get; set; }
+
+    private bool _isExpanded;
+    private bool _copied;
+
+    protected override void OnInitialized()
+    {
+        _isExpanded = InitiallyExpanded;
+    }
+
+    private void Toggle()
+    {
+        _isExpanded = !_isExpanded;
+    }
+
+    private int EstimatedTokens => Math.Max(1, Trace.Length / 4);
+
+    private async Task CopyTrace()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", Trace);
+            _copied = true;
+            StateHasChanged();
+            await Task.Delay(2000);
+            _copied = false;
+        }
+        catch
+        {
+            // Clipboard access might be restricted in some headless test runners
+        }
+    }
+}
