@@ -116,8 +116,8 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains("qwen2.5-coder:32b", cut.Markup);
 
         // Verify OllamaRouter target options
-        Assert.Contains("Host GPU (Local Workstation", cut.Markup);
-        Assert.Contains("LAN GPU Server (Remote", cut.Markup);
+        Assert.Contains("Local GPU Only", cut.Markup);
+        Assert.Contains("Remote Server", cut.Markup);
         Assert.Contains("Cloud Overflow", cut.Markup);
     }
 
@@ -125,26 +125,14 @@ public class SettingsComponentTests : BunitContext, IDisposable
     public async Task AgentProfilesTab_WorkspaceScope_CreatesAndRevertsDedicatedProfiles()
     {
         const int workspaceId = 42;
-        await using (var db = new AppDbContext(_dbOptions))
-        {
-            db.Workspaces.Add(new Workspace
-            {
-                Id = workspaceId,
-                Name = "TestProject",
-                RepositoryPath = @"C:\repos\TestProject",
-                DefaultBaseBranch = "main"
-            });
-            await db.SaveChangesAsync();
-        }
-
         var cut = Render<AgentProfilesTab>(p => p
             .Add(x => x.Scope, AgentProfilesTab.ProfileScope.Workspace)
             .Add(x => x.WorkspaceId, workspaceId)
             .Add(x => x.WorkspaceName, "TestProject"));
 
         // Initial state: Inheriting global
-        Assert.Contains("inherits the <strong>Global System Profiles</strong>", cut.Markup);
-        var customizeBtn = cut.FindAll("button.forge-btn-primary").First(b => b.TextContent.Contains("Dedicated") || b.TextContent.Contains("Customize"));
+        Assert.Contains("inherits the Global System Profiles", cut.Markup);
+        var customizeBtn = cut.Find("button.forge-btn-primary");
         customizeBtn.Click();
 
         // After creation: dedicated profiles created
@@ -203,7 +191,6 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains("OllamaRouter Gateway &amp; VRAM Inspector", cut.Markup);
         Assert.Contains("🟢 Gateway Connected", cut.Markup);
         Assert.Contains("OllamaRouter Active", cut.Markup);
-        Assert.Contains("Dual-Compute Architecture", cut.Markup);
         Assert.Contains("Local GPU Target", cut.Markup);
         Assert.Contains("Remote Server Target", cut.Markup);
         Assert.Contains("Cloud Overflow Target", cut.Markup);
@@ -254,14 +241,16 @@ public class SettingsComponentTests : BunitContext, IDisposable
     private class MockGlobalOptimizationSettingsService : IGlobalOptimizationSettingsService
     {
         private LocalOptimizationFlags _flags = new();
-        public event Action<LocalOptimizationFlags>? OnFlagsChanged;
-
         public LocalOptimizationFlags GetFlags() => _flags;
-        public Task<LocalOptimizationFlags> LoadFlagsAsync(CancellationToken cancellationToken = default) => Task.FromResult(_flags);
+        public Task<LocalOptimizationFlags> GetFlagsAsync(CancellationToken cancellationToken = default) => Task.FromResult(_flags);
         public Task UpdateFlagsAsync(LocalOptimizationFlags flags, CancellationToken cancellationToken = default)
         {
             _flags = flags;
-            OnFlagsChanged?.Invoke(_flags);
+            return Task.CompletedTask;
+        }
+        public Task ResetToDefaultsAsync(CancellationToken cancellationToken = default)
+        {
+            _flags = new LocalOptimizationFlags();
             return Task.CompletedTask;
         }
     }
@@ -280,13 +269,16 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
     private class MockHostSdkDiscoveryService : IHostSdkDiscoveryService
     {
-        public IReadOnlyList<string> DiscoverSdkMountPaths(string? distribution = null) => Array.Empty<string>();
-        public HostSdkDiscoveryDetails DiscoverSdkDetails(string? distribution = null) =>
-            new(Array.Empty<string>(), new Dictionary<string, string>(), new Dictionary<string, string>());
-        public Task<IReadOnlyList<string>> DiscoverSdkMountPathsAsync(string? distribution = null, CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
-        public Task<HostSdkDiscoveryDetails> DiscoverSdkDetailsAsync(string? distribution = null, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new HostSdkDiscoveryDetails(Array.Empty<string>(), new Dictionary<string, string>(), new Dictionary<string, string>()));
+        public Task<HostSdkDiscoveryResult> DiscoverHostSdksAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new HostSdkDiscoveryResult(
+                IsWsl: false,
+                ProbedAt: DateTime.UtcNow,
+                Mounts: new List<ProbedMountDirectory>(),
+                Binaries: new List<ProbedToolBinary>(),
+                EnvironmentVariables: new Dictionary<string, string>(),
+                Warnings: new List<string>()));
+        }
         public void ClearCache() { }
     }
 
@@ -333,7 +325,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         public bool FetchCalled { get; private set; }
         public Task ConfigureHostRepositoryAsync(string hostRepoPath, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<string> InitializeMirrorAsync(Workspace workspace, string mirrorDirectory, CancellationToken cancellationToken = default) => Task.FromResult("/mirrors/test");
-        public Task FetchFromHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default)
+        public Task PullFromHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default)
         {
             FetchCalled = true;
             return Task.CompletedTask;

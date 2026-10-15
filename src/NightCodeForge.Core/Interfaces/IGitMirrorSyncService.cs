@@ -40,9 +40,9 @@ public interface IGitMirrorSyncService
     Task<string> InitializeMirrorAsync(Workspace workspace, string mirrorDirectory, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Fetches the latest base branch commits from host-origin.
+    /// Fetches and pull the latest base branch commits from host-origin.
     /// </summary>
-    Task FetchFromHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default);
+    Task PullFromHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Pushes the task branch to host-origin. If the host working tree has uncommitted edits to tracked files,

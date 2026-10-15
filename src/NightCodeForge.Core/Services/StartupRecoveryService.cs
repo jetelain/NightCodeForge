@@ -70,7 +70,13 @@ public class StartupRecoveryService : IStartupRecoveryService
                 PurgeStaleGitLocks(path, workspace.Id);
             }
 
-            // 2. Discover and rescue active agent worktrees ONLY (clone and host repo are strictly untouched)
+            // 2. Align Ext4 mirror with host-origin base branch so Ideation and Triage work on up-to-date code
+            if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+            {
+                await AlignMirrorWithHostOriginAsync(workspace, cancellationToken);
+            }
+
+            // 3. Discover and rescue active agent worktrees ONLY (clone and host repo are strictly untouched)
             var worktreesToRescue = await GetWorktreesToRescueAsync(workspace, cancellationToken);
             foreach (var worktreePath in worktreesToRescue)
             {
@@ -249,6 +255,53 @@ public class StartupRecoveryService : IStartupRecoveryService
         }
 
         return worktrees;
+    }
+
+    private async Task AlignMirrorWithHostOriginAsync(Workspace workspace, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            return;
+        }
+
+        var baseBranch = string.IsNullOrWhiteSpace(workspace.DefaultBaseBranch) ? "main" : workspace.DefaultBaseBranch;
+        var mirrorPath = workspace.Ext4MirrorPath;
+
+        try
+        {
+            _logger.LogInformation("Aligning mirror '{MirrorPath}' with host-origin base branch '{BaseBranch}'", mirrorPath, baseBranch);
+
+            // Fetch latest commits from host-origin
+            await _gitCliRunner.ExecuteAsync(
+                mirrorPath,
+                ["fetch", "host-origin", baseBranch],
+                timeoutSeconds: 120,
+                cancellationToken: cancellationToken);
+
+            // Checkout base branch
+            await _gitCliRunner.ExecuteAsync(
+                mirrorPath,
+                ["checkout", baseBranch],
+                cancellationToken: cancellationToken);
+
+            // Fast-forward merge or reset hard
+            var mergeResult = await _gitCliRunner.ExecuteAsync(
+                mirrorPath,
+                ["merge", "--ff-only", $"host-origin/{baseBranch}"],
+                cancellationToken: cancellationToken);
+
+            if (mergeResult.ExitCode != 0)
+            {
+                await _gitCliRunner.ExecuteAsync(
+                    mirrorPath,
+                    ["reset", "--hard", $"host-origin/{baseBranch}"],
+                    cancellationToken: cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to align mirror '{MirrorPath}' with host-origin on startup", mirrorPath);
+        }
     }
 
     private async Task RescueUncommittedChangesAsync(string repoPath, CancellationToken cancellationToken)

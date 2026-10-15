@@ -224,7 +224,7 @@ public class GitMirrorSyncService : IGitMirrorSyncService
     }
 
     /// <inheritdoc />
-    public async Task FetchFromHostAsync(
+    public async Task PullFromHostAsync(
         string mirrorRepoPath,
         string baseBranch,
         CancellationToken cancellationToken = default)
@@ -232,14 +232,55 @@ public class GitMirrorSyncService : IGitMirrorSyncService
         ArgumentException.ThrowIfNullOrWhiteSpace(mirrorRepoPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(baseBranch);
 
-        _logger.LogInformation("Fetching base branch '{BaseBranch}' from host-origin in '{MirrorRepoPath}'",
+        _logger.LogInformation("Pulling latest base branch '{BaseBranch}' from host-origin into mirror '{MirrorRepoPath}'",
             baseBranch, mirrorRepoPath);
 
+        // 1. Fetch latest commits from host-origin
         await _gitCliRunner.ExecuteAsync(
             mirrorRepoPath,
             ["fetch", "host-origin", baseBranch],
             timeoutSeconds: 120,
             cancellationToken: cancellationToken);
+
+        // 2. Fast-forward local base branch to host-origin so working tree stays 100% current for ideation and triage
+        try
+        {
+            await _gitCliRunner.ExecuteAsync(
+                mirrorRepoPath,
+                ["checkout", baseBranch],
+                cancellationToken: cancellationToken);
+
+            var mergeResult = await _gitCliRunner.ExecuteAsync(
+                mirrorRepoPath,
+                ["merge", "--ff-only", $"host-origin/{baseBranch}"],
+                cancellationToken: cancellationToken);
+
+            if (mergeResult.ExitCode != 0)
+            {
+                await _gitCliRunner.ExecuteAsync(
+                    mirrorRepoPath,
+                    ["reset", "--hard", $"host-origin/{baseBranch}"],
+                    cancellationToken: cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Fast-forward merge failed in mirror '{MirrorRepoPath}'. Attempting hard reset to host-origin/{BaseBranch}",
+                mirrorRepoPath, baseBranch);
+
+            try
+            {
+                await _gitCliRunner.ExecuteAsync(
+                    mirrorRepoPath,
+                    ["reset", "--hard", $"host-origin/{baseBranch}"],
+                    cancellationToken: cancellationToken);
+            }
+            catch (Exception rex)
+            {
+                _logger.LogWarning(rex, "Failed to hard-reset mirror '{MirrorRepoPath}' to host-origin/{BaseBranch}",
+                    mirrorRepoPath, baseBranch);
+            }
+        }
     }
 
     /// <inheritdoc />

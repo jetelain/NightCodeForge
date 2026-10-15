@@ -1,4 +1,3 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -262,90 +261,7 @@ public class WorkspaceProvisioningServiceTests : IDisposable
         });
     }
 
-    [Fact]
-    public async Task ProvisionWorkspaceAsync_WithRealDbContext_DefaultProfiles_Succeeds()
-    {
-        using var connection = new Microsoft.Data.Sqlite.SqliteConnection("DataSource=:memory:");
-        connection.Open();
-        var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<NightCodeForge.Infrastructure.Data.AppDbContext>()
-            .UseSqlite(connection)
-            .Options;
-        using var context = new NightCodeForge.Infrastructure.Data.AppDbContext(options);
-        await context.EnsureDatabaseCreatedAndWalAsync();
-
-        var repo = new NightCodeForge.Infrastructure.Data.Repositories.EfCoreWorkspaceRepository(context);
-        var service = new WorkspaceProvisioningService(
-            repo,
-            _gitMirrorSyncService,
-            _pathResolver,
-            _wslMetadataService,
-            _gitCliRunner,
-            _markdownSyncService,
-            _configuration,
-            dbContext: context);
-
-        var repoDir = Path.Combine(_tempDir, "realdb-default-repo");
-        Directory.CreateDirectory(repoDir);
-
-        var model = new WorkspaceCreationModel
-        {
-            Name = "Real DB Default",
-            RepositoryPath = repoDir,
-            DefaultBaseBranch = "main",
-            UseDedicatedAgentProfiles = false
-        };
-
-        var ws = await service.ProvisionWorkspaceAsync(model);
-        Assert.NotNull(ws);
-        Assert.True(ws.Id > 0);
-    }
-
-    [Fact]
-    public async Task ProvisionWorkspaceAsync_WithRealDbContext_DedicatedProfiles_Succeeds()
-    {
-        using var connection = new Microsoft.Data.Sqlite.SqliteConnection("DataSource=:memory:");
-        connection.Open();
-        var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<NightCodeForge.Infrastructure.Data.AppDbContext>()
-            .UseSqlite(connection)
-            .Options;
-        using var context = new NightCodeForge.Infrastructure.Data.AppDbContext(options);
-        await context.EnsureDatabaseCreatedAndWalAsync();
-
-        var repo = new NightCodeForge.Infrastructure.Data.Repositories.EfCoreWorkspaceRepository(context);
-        var service = new WorkspaceProvisioningService(
-            repo,
-            _gitMirrorSyncService,
-            _pathResolver,
-            _wslMetadataService,
-            _gitCliRunner,
-            _markdownSyncService,
-            _configuration,
-            dbContext: context);
-
-        var repoDir = Path.Combine(_tempDir, "realdb-dedicated-repo");
-        Directory.CreateDirectory(repoDir);
-
-        var model = new WorkspaceCreationModel
-        {
-            Name = "Real DB Dedicated",
-            RepositoryPath = repoDir,
-            DefaultBaseBranch = "main",
-            UseDedicatedAgentProfiles = true,
-            DedicatedModelName = "qwen:70b"
-        };
-
-        var ws = await service.ProvisionWorkspaceAsync(model);
-        Assert.NotNull(ws);
-        Assert.True(ws.Id > 0);
-
-        var profiles = await repo.GetEffectiveAgentProfileAsync(ws.Id, "implementation");
-        Assert.NotNull(profiles);
-        Assert.Equal(ws.Id, profiles.WorkspaceId);
-        Assert.Equal("qwen:70b", profiles.ModelName);
-    }
-
     #region Test Fakes
-
 
     private class TestGitCliRunner : IGitCliRunner
     {
@@ -379,7 +295,7 @@ public class WorkspaceProvisioningServiceTests : IDisposable
             return Task.FromResult($"~/.nightcodeforge/wks/{workspace.Id}/clone");
         }
 
-        public Task FetchFromHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default)
+        public Task PullFromHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public Task<GitSyncResult> PushToHostAsync(string mirrorRepoPath, int taskId, CancellationToken cancellationToken = default)

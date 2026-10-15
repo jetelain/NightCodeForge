@@ -75,7 +75,7 @@ public class GitMirrorSyncServiceTests : IDisposable
         _hostRepo.CommitAll("Host update commit");
 
         // Act: Fetch from host
-        await _syncService.FetchFromHostAsync(_mirrorDir, "main");
+        await _syncService.PullFromHostAsync(_mirrorDir, "main");
 
         // Assert: host-origin/main on mirror contains the new commit
         var logResult = await _runner.ExecuteAsync(_mirrorDir, ["log", "host-origin/main", "-1", "--pretty=%B"]);

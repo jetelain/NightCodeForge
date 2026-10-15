@@ -34,11 +34,11 @@
                 </p>
             </div>
             <div class="d-flex align-items-center gap-2">
-                <button type="button" class="forge-btn forge-btn-secondary btn btn-secondary" id="btn-refresh-status" @onclick="RefreshDataAsync" disabled="@_isFetching">
+                <button type="button" class="forge-btn forge-btn-secondary btn btn-secondary" id="btn-refresh-status" @onclick="RefreshDataAsync" disabled="@_isPulling">
                     🔄 Refresh
                 </button>
-                <button type="button" class="forge-btn forge-btn-primary btn btn-primary" id="btn-fetch-host" @onclick="FetchLatestFromHostAsync" disabled="@_isFetching">
-                    @(_isFetching ? "Fetching from Host..." : "📥 Fetch from Host")
+                <button type="button" class="forge-btn forge-btn-primary btn btn-primary" id="btn-pull-host" @onclick="PullFromHostAsync" disabled="@_isPulling">
+                    @(_isPulling ? "Pulling from Host..." : "📥 Pull from Host")
                 </button>
             </div>
         </div>
@@ -175,7 +175,7 @@
     private List<WorktreeSnapshot> _worktrees = new();
     private HostDirtyAlertEvent? _activeDirtyAlert;
     private bool _showReconcileDrawer;
-    private bool _isFetching;
+    private bool _isPulling;
     private bool _isPruning;
 
     protected override async Task OnInitializedAsync()
@@ -233,29 +233,29 @@
         }
     }
 
-    private async Task FetchLatestFromHostAsync()
+    private async Task PullFromHostAsync()
     {
         var ws = WorkspaceState.ActiveWorkspace;
         if (ws == null) return;
 
-        _isFetching = true;
+        _isPulling = true;
         try
         {
             var mirrorPath = ws.Ext4MirrorPath ?? string.Empty;
             var baseBranch = ws.DefaultBaseBranch ?? "main";
 
-            await MirrorSyncService.FetchFromHostAsync(mirrorPath, baseBranch);
+            await MirrorSyncService.PullFromHostAsync(mirrorPath, baseBranch);
             GitSyncService.RecordFetch(ws.Id);
             await RefreshDataAsync();
-            ToastService.Show("Fetch Complete", "Ext4 Mirror updated with latest host commits.", ToastLevel.Success);
+            ToastService.Show("Pull Complete", "Ext4 Mirror updated with latest host commits.", ToastLevel.Success);
         }
         catch (Exception ex)
         {
-            ToastService.Show("Fetch Failed", ex.Message, ToastLevel.Error);
+            ToastService.Show("Pull Failed", ex.Message, ToastLevel.Error);
         }
         finally
         {
-            _isFetching = false;
+            _isPulling = false;
         }
     }
 

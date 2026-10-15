@@ -28,7 +28,6 @@ public class TaskOrchestrator : ITaskOrchestrator
     private readonly IGitMirrorSyncService? _gitMirrorSyncService;
     private readonly Services.ITaskMarkdownSyncService? _markdownSyncService;
     private readonly IWorkspacePathResolver? _pathResolver;
-    private readonly IGlobalOptimizationSettingsService? _globalOptimizationSettings;
     private readonly ILogger<TaskOrchestrator> _logger;
 
     public TaskOrchestrator(
@@ -44,7 +43,6 @@ public class TaskOrchestrator : ITaskOrchestrator
         IGitMirrorSyncService? gitMirrorSyncService = null,
         Services.ITaskMarkdownSyncService? markdownSyncService = null,
         IWorkspacePathResolver? pathResolver = null,
-        IGlobalOptimizationSettingsService? globalOptimizationSettings = null,
         ILogger<TaskOrchestrator>? logger = null)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -59,7 +57,6 @@ public class TaskOrchestrator : ITaskOrchestrator
         _gitMirrorSyncService = gitMirrorSyncService;
         _markdownSyncService = markdownSyncService;
         _pathResolver = pathResolver;
-        _globalOptimizationSettings = globalOptimizationSettings;
         _logger = logger ?? NullLogger<TaskOrchestrator>.Instance;
     }
 
@@ -145,7 +142,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     try
                     {
                         await _gitMirrorSyncService.ConfigureHostRepositoryAsync(workspace.RepositoryPath, cancellationToken);
-                        await _gitMirrorSyncService.FetchFromHostAsync(workspace.Ext4MirrorPath, task.BaseBranch, cancellationToken);
+                        await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, task.BaseBranch, cancellationToken);
                     }
                     catch (Exception mex)
                     {
@@ -212,22 +209,20 @@ public class TaskOrchestrator : ITaskOrchestrator
             return;
         }
 
-        // Resolve Agent Profile matching interrupted profile or current stage, falling back to global system profile
+        // Resolve Agent Profile matching interrupted profile or current stage, or fallback to first
         AgentProfile? profile = null;
         if (!string.IsNullOrWhiteSpace(task.InterruptedAgentProfileId))
         {
             profile = workspace.AgentProfiles?.FirstOrDefault(p =>
                 string.Equals(p.Id, task.InterruptedAgentProfileId, StringComparison.OrdinalIgnoreCase));
-            if (profile == null)
-            {
-                profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, task.InterruptedAgentProfileId, cancellationToken);
-            }
             task.InterruptedAgentProfileId = null;
         }
 
         if (profile == null)
         {
-            profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, stage.StageId, cancellationToken)
+            profile = workspace.AgentProfiles?.FirstOrDefault(p =>
+                string.Equals(p.Id, stage.StageId, StringComparison.OrdinalIgnoreCase) ||
+                (p.StageDirectives != null && p.StageDirectives.ContainsKey(stage.StageId)))
                 ?? workspace.AgentProfiles?.FirstOrDefault();
         }
 
@@ -323,7 +318,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             SerializedStateJson = resumeMemory,
                             PendingHumanAnswer = lastHumanAnswer,
                             BootstrapPrompt = BuildBootstrapPrompt(stage.StageId, task, pipelineContext, stageDirective),
-                            OptimizationFlags = profile?.OptimizationFlags ?? _globalOptimizationSettings?.GetFlags() ?? new LocalOptimizationFlags(),
+                            OptimizationFlags = profile?.OptimizationFlags ?? new LocalOptimizationFlags(),
                             PipelineContext = pipelineContext
                         };
 

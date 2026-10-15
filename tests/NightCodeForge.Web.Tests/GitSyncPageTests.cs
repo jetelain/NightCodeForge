@@ -151,7 +151,7 @@ public class GitSyncPageTests : BunitContext
 
         var cut = Render<GitSync>();
 
-        var fetchBtn = cut.Find("#btn-fetch-host");
+        var fetchBtn = cut.Find("#btn-pull-host");
         await fetchBtn.ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
 
         Assert.Equal("/mirror/4", _mirrorSyncService.LastFetchedMirrorRepoPath);
@@ -180,7 +180,7 @@ public class GitSyncPageTests : BunitContext
 
         public Task ConfigureHostRepositoryAsync(string hostRepoPath, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<string> InitializeMirrorAsync(Workspace workspace, string mirrorDirectory, CancellationToken cancellationToken = default) => Task.FromResult(mirrorDirectory);
-        public Task FetchFromHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default)
+        public Task PullFromHostAsync(string mirrorRepoPath, string baseBranch, CancellationToken cancellationToken = default)
         {
             LastFetchedMirrorRepoPath = mirrorRepoPath;
             LastFetchedBaseBranch = baseBranch;

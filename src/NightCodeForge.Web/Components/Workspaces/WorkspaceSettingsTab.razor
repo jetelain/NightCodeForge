@@ -231,7 +231,7 @@
             var ws = WorkspaceState.ActiveWorkspace;
             if (!string.IsNullOrWhiteSpace(ws.Ext4MirrorPath))
             {
-                await MirrorSyncService.FetchFromHostAsync(ws.Ext4MirrorPath, ws.DefaultBaseBranch);
+                await MirrorSyncService.PullFromHostAsync(ws.Ext4MirrorPath, ws.DefaultBaseBranch);
                 ToastService.Show("Git Mirror Synced", "Ext4 mirror successfully updated from host repository.", ToastLevel.Success);
             }
             else
