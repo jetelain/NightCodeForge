@@ -1,0 +1,179 @@
+@namespace NightCodeForge.Web.Components.Backlog
+@using NightCodeForge.Core.Domain
+
+<div class="kanban-board-container">
+    <div class="kanban-columns-grid">
+        <!-- Column 1: Suggested / Triage -->
+        @{
+            var suggestedTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Suggested).ToList();
+        }
+        <div class="kanban-column column-suggested">
+            <div class="column-header">
+                <div class="column-title-group">
+                    <span class="column-icon">💡</span>
+                    <span class="column-title">Suggested (Triage)</span>
+                </div>
+                <span class="column-count-badge">@suggestedTasks.Count</span>
+            </div>
+            <div class="column-cards-container">
+                @if (suggestedTasks.Count == 0)
+                {
+                    <div class="column-empty-state">No suggested tasks awaiting triage</div>
+                }
+                else
+                {
+                    @foreach (var task in suggestedTasks)
+                    {
+                        var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
+                        <KanbanCard Task="task"
+                                    AllTasks="Tasks"
+                                    PrerequisiteIds="prereqs"
+                                    OnClick="OnTaskSelected"
+                                    OnPromote="OnPromoteTask"
+                                    OnLinkDependencies="OnLinkDependencies" />
+                    }
+                }
+            </div>
+        </div>
+
+        <!-- Column 2: Open / Backlog -->
+        @{
+            var openTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Open).ToList();
+        }
+        <div class="kanban-column column-open">
+            <div class="column-header">
+                <div class="column-title-group">
+                    <span class="column-icon">📂</span>
+                    <span class="column-title">Open (Backlog)</span>
+                </div>
+                <span class="column-count-badge">@openTasks.Count</span>
+            </div>
+            <div class="column-cards-container">
+                @if (openTasks.Count == 0)
+                {
+                    <div class="column-empty-state">No open tasks in backlog</div>
+                }
+                else
+                {
+                    @foreach (var task in openTasks)
+                    {
+                        var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
+                        <KanbanCard Task="task"
+                                    AllTasks="Tasks"
+                                    PrerequisiteIds="prereqs"
+                                    OnClick="OnTaskSelected"
+                                    OnPromote="OnPromoteTask"
+                                    OnLinkDependencies="OnLinkDependencies" />
+                    }
+                }
+            </div>
+        </div>
+
+        <!-- Column 3: In-Flight -->
+        @{
+            var inFlightTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented).ToList();
+        }
+        <div class="kanban-column column-inflight">
+            <div class="column-header">
+                <div class="column-title-group">
+                    <span class="column-icon">⚡</span>
+                    <span class="column-title">In-Flight</span>
+                </div>
+                <span class="column-count-badge">@inFlightTasks.Count</span>
+            </div>
+            <div class="column-cards-container">
+                @if (inFlightTasks.Count == 0)
+                {
+                    <div class="column-empty-state">No tasks currently executing</div>
+                }
+                else
+                {
+                    @foreach (var task in inFlightTasks)
+                    {
+                        var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
+                        <KanbanCard Task="task"
+                                    AllTasks="Tasks"
+                                    PrerequisiteIds="prereqs"
+                                    OnClick="OnTaskSelected"
+                                    OnPromote="OnPromoteTask"
+                                    OnLinkDependencies="OnLinkDependencies" />
+                    }
+                }
+            </div>
+        </div>
+
+        <!-- Column 4: Ready for Review -->
+        @{
+            var readyTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Ready).ToList();
+        }
+        <div class="kanban-column column-ready">
+            <div class="column-header">
+                <div class="column-title-group">
+                    <span class="column-icon">🔍</span>
+                    <span class="column-title">Ready for Review</span>
+                </div>
+                <span class="column-count-badge">@readyTasks.Count</span>
+            </div>
+            <div class="column-cards-container">
+                @if (readyTasks.Count == 0)
+                {
+                    <div class="column-empty-state">No tasks awaiting review</div>
+                }
+                else
+                {
+                    @foreach (var task in readyTasks)
+                    {
+                        var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
+                        <KanbanCard Task="task"
+                                    AllTasks="Tasks"
+                                    PrerequisiteIds="prereqs"
+                                    OnClick="OnTaskSelected"
+                                    OnPromote="OnPromoteTask"
+                                    OnLinkDependencies="OnLinkDependencies" />
+                    }
+                }
+            </div>
+        </div>
+
+        <!-- Column 5: Closed & Terminal -->
+        @{
+            var closedTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Closed || t.Status == TaskOverallStatus.Rejected || t.Status == TaskOverallStatus.Failed).ToList();
+        }
+        <div class="kanban-column column-closed">
+            <div class="column-header">
+                <div class="column-title-group">
+                    <span class="column-icon">🏁</span>
+                    <span class="column-title">Closed &amp; Archived</span>
+                </div>
+                <span class="column-count-badge">@closedTasks.Count</span>
+            </div>
+            <div class="column-cards-container">
+                @if (closedTasks.Count == 0)
+                {
+                    <div class="column-empty-state">No closed or archived tasks</div>
+                }
+                else
+                {
+                    @foreach (var task in closedTasks)
+                    {
+                        var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
+                        <KanbanCard Task="task"
+                                    AllTasks="Tasks"
+                                    PrerequisiteIds="prereqs"
+                                    OnClick="OnTaskSelected"
+                                    OnPromote="OnPromoteTask"
+                                    OnLinkDependencies="OnLinkDependencies" />
+                    }
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<ForgeTask> Tasks { get; set; } = Array.Empty<ForgeTask>();
+    [Parameter] public IReadOnlyDictionary<int, IReadOnlyList<int>> TaskDependencies { get; set; } = new Dictionary<int, IReadOnlyList<int>>();
+    [Parameter] public EventCallback<ForgeTask> OnTaskSelected { get; set; }
+    [Parameter] public EventCallback<ForgeTask> OnPromoteTask { get; set; }
+    [Parameter] public EventCallback<ForgeTask> OnLinkDependencies { get; set; }
+}

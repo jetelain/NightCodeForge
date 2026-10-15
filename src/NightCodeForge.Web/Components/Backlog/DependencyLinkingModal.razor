@@ -1,0 +1,244 @@
+@namespace NightCodeForge.Web.Components.Backlog
+@using NightCodeForge.Core.Dependencies
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Services
+@using NightCodeForge.Web.Services
+@inject IDependencyResolutionEngine DependencyEngine
+@inject ITaskRepository TaskRepository
+@inject ITaskMarkdownSyncService MarkdownSyncService
+@inject WorkspaceStateService WorkspaceState
+@inject ToastService ToastService
+
+@if (IsOpen && TargetTask != null)
+{
+    <div class="forge-modal-backdrop" @onclick="Close">
+        <div class="forge-modal card-glass dependency-linking-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="dep-modal-title">
+            <div class="modal-header">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="font-size: 1.25rem;">🔗</span>
+                    <h3 id="dep-modal-title" style="margin: 0; font-size: 1.15rem; font-weight: 600;">
+                        Manage Dependencies for ForgeTask #@TargetTask.Id
+                    </h3>
+                </div>
+                <button type="button" class="btn-icon" @onclick="Close" aria-label="Close dialog">✕</button>
+            </div>
+
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 1rem;">
+                <p style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">
+                    Select the prerequisite tasks that must reach <span class="forge-badge badge-teal" style="font-size: 0.75rem; padding: 2px 6px;">Closed</span> before <strong>ForgeTask #@TargetTask.Id: @TargetTask.Title</strong> can begin execution.
+                </p>
+
+                @if (!string.IsNullOrEmpty(_errorMessage))
+                {
+                    <div class="alert-box alert-error" style="background: rgba(239, 68, 68, 0.15); border: 1px solid var(--accent-crimson); border-radius: var(--radius-md); padding: 0.75rem; color: #fca5a5; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem;">
+                        <span>⚠️</span>
+                        <span>@_errorMessage</span>
+                    </div>
+                }
+
+                <div class="search-filter-box">
+                    <input type="text"
+                           class="form-control-dark"
+                           placeholder="Filter tasks by title or ID..."
+                           @bind="_searchFilter"
+                           @bind:event="oninput"
+                           style="width: 100%; font-size: 0.85rem;" />
+                </div>
+
+                <div class="candidate-tasks-container" style="max-height: 280px; overflow-y: auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-input); padding: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem;">
+                    @{
+                        var candidateTasks = AllTasks
+                            .Where(t => t.Id != TargetTask.Id)
+                            .Where(t => string.IsNullOrWhiteSpace(_searchFilter) ||
+                                        t.Title.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase) ||
+                                        t.Id.ToString().Contains(_searchFilter))
+                            .ToList();
+                    }
+
+                    @if (candidateTasks.Count == 0)
+                    {
+                        <div style="padding: 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+                            No other candidate tasks available in this workspace.
+                        </div>
+                    }
+                    else
+                    {
+                        @foreach (var task in candidateTasks)
+                        {
+                            var isChecked = _selectedPrereqIds.Contains(task.Id);
+                            <label class="candidate-task-row @(isChecked ? "selected" : "")"
+                                   style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); border: 1px solid @(isChecked ? "var(--border-accent)" : "transparent"); background: @(isChecked ? "rgba(99, 102, 241, 0.1)" : "transparent"); cursor: pointer; transition: background var(--transition-fast);">
+                                <div style="display: flex; align-items: center; gap: 0.6rem; min-width: 0;">
+                                    <input type="checkbox"
+                                           checked="@isChecked"
+                                           @onchange="e => TogglePrerequisite(task.Id, e)"
+                                           style="accent-color: var(--accent-indigo); cursor: pointer;" />
+                                    <span class="font-mono text-secondary" style="font-size: 0.85rem; flex-shrink: 0;">#@task.Id</span>
+                                    <span style="font-size: 0.875rem; font-weight: 500; color: var(--text-primary); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+                                        @task.Title
+                                    </span>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
+                                    <span class="forge-badge @GetStatusBadgeClass(task.Status)" style="font-size: 0.75rem;">
+                                        @task.Status
+                                    </span>
+                                    <span class="forge-badge badge-priority-@task.Priority" style="font-size: 0.75rem;">
+                                        P@(task.Priority)
+                                    </span>
+                                </div>
+                            </label>
+                        }
+                    }
+                </div>
+
+                <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+                    <span>Selected Prerequisites: <strong>@_selectedPrereqIds.Count</strong></span>
+                    <span>Graph Validation: <strong>Cycle-Protected</strong></span>
+                </div>
+            </div>
+
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem;">
+                <button type="button" class="forge-btn forge-btn-secondary" @onclick="Close" disabled="@_isSaving">
+                    Cancel
+                </button>
+                <button type="button" class="forge-btn forge-btn-primary" @onclick="SaveDependenciesAsync" disabled="@_isSaving">
+                    @(_isSaving ? "Validating & Saving..." : "Save Dependencies")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public ForgeTask? TargetTask { get; set; }
+    [Parameter] public IReadOnlyList<ForgeTask> AllTasks { get; set; } = Array.Empty<ForgeTask>();
+    [Parameter] public IReadOnlyList<(int TaskId, int DependsOnTaskId)> AllDependencies { get; set; } = Array.Empty<(int, int)>();
+    [Parameter] public EventCallback OnClosed { get; set; }
+    [Parameter] public EventCallback OnSaved { get; set; }
+
+    private readonly HashSet<int> _selectedPrereqIds = new();
+    private string? _errorMessage;
+    private string _searchFilter = string.Empty;
+    private bool _isSaving;
+    private int _lastTaskId;
+
+    protected override void OnParametersSet()
+    {
+        if (TargetTask != null && TargetTask.Id != _lastTaskId)
+        {
+            _lastTaskId = TargetTask.Id;
+            _errorMessage = null;
+            _searchFilter = string.Empty;
+            _selectedPrereqIds.Clear();
+
+            // Populate selected prerequisites from AllDependencies or TargetTask.Dependencies
+            var existing = AllDependencies
+                .Where(d => d.TaskId == TargetTask.Id)
+                .Select(d => d.DependsOnTaskId);
+
+            foreach (var depId in existing)
+            {
+                _selectedPrereqIds.Add(depId);
+            }
+
+            if (_selectedPrereqIds.Count == 0 && TargetTask.Dependencies != null)
+            {
+                foreach (var dep in TargetTask.Dependencies)
+                {
+                    _selectedPrereqIds.Add(dep.DependsOnTaskId);
+                }
+            }
+        }
+    }
+
+    private void TogglePrerequisite(int taskId, ChangeEventArgs e)
+    {
+        _errorMessage = null;
+        var isChecked = e.Value is bool b && b;
+        if (isChecked)
+        {
+            _selectedPrereqIds.Add(taskId);
+        }
+        else
+        {
+            _selectedPrereqIds.Remove(taskId);
+        }
+    }
+
+    private async Task SaveDependenciesAsync()
+    {
+        if (TargetTask == null || _isSaving) return;
+
+        // Build candidate dependency list
+        var candidatePairs = AllDependencies
+            .Where(d => d.TaskId != TargetTask.Id)
+            .Select(d => (d.TaskId, d.DependsOnTaskId))
+            .ToList();
+
+        foreach (var depId in _selectedPrereqIds)
+        {
+            candidatePairs.Add((TargetTask.Id, depId));
+        }
+
+        // Validate cycle
+        if (DependencyEngine.HasCycle(TargetTask.WorkspaceId, candidatePairs))
+        {
+            _errorMessage = "Circular dependency detected! This configuration would create a deadlock.";
+            return;
+        }
+
+        _isSaving = true;
+        try
+        {
+            await TaskRepository.UpdateAsync(TargetTask, _selectedPrereqIds);
+
+            var workspace = WorkspaceState.ActiveWorkspace;
+            if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+            {
+                try
+                {
+                    await MarkdownSyncService.SyncTaskToDiskAsync(TargetTask, workspace.RepositoryPath, _selectedPrereqIds.ToList());
+                }
+                catch (Exception ex)
+                {
+                    // Non-fatal disk sync error
+                    Console.WriteLine($"Markdown sync warning: {ex.Message}");
+                }
+            }
+
+            ToastService.Show("Dependencies Updated", $"Dependencies updated for ForgeTask #{TargetTask.Id}.", ToastLevel.Success);
+            await OnSaved.InvokeAsync();
+            await Close();
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Failed to save dependencies: {ex.Message}";
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task Close()
+    {
+        IsOpen = false;
+        _errorMessage = null;
+        await OnClosed.InvokeAsync();
+    }
+
+    private static string GetStatusBadgeClass(TaskOverallStatus status) => status switch
+    {
+        TaskOverallStatus.Suggested => "badge-amber",
+        TaskOverallStatus.Open => "badge-indigo",
+        TaskOverallStatus.Reviewed => "badge-purple",
+        TaskOverallStatus.Implemented => "badge-purple",
+        TaskOverallStatus.Ready => "badge-teal",
+        TaskOverallStatus.Closed => "badge-emerald",
+        TaskOverallStatus.Rejected => "badge-crimson",
+        TaskOverallStatus.Failed => "badge-crimson",
+        _ => "badge-secondary"
+    };
+}

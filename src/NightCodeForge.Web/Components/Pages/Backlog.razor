@@ -1,31 +1,428 @@
 @page "/backlog"
+@namespace NightCodeForge.Web.Components.Pages
+@using NightCodeForge.Core.Dependencies
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Components.Backlog
+@using NightCodeForge.Web.Components.Workspaces
+@using NightCodeForge.Web.Services
+@inject WorkspaceStateService WorkspaceState
+@inject ITaskRepository TaskRepository
+@inject ITaskDependencyStore DependencyStore
+@inject OrchestratorHubClientConnection HubConnection
+@inject ToastService ToastService
+@implements IDisposable
 
 <PageTitle>Backlog &amp; DAG - NightCodeForge</PageTitle>
 
-<div class="page-header" style="margin-bottom: 1.5rem;">
-    <div style="display: flex; align-items: center; gap: 0.75rem;">
-        <span style="font-size: 1.75rem;">📋</span>
-        <div>
-            <h1>Backlog &amp; Visual DAG</h1>
-            <p>Task dependency graphs, priority queues, and deterministic execution pipelines.</p>
-        </div>
-    </div>
-</div>
+<div class="backlog-page-container">
+    @if (WorkspaceState.ActiveWorkspace == null)
+    {
+        <WorkspaceEmptyStateHero />
+    }
+    else
+    {
+        <!-- Page Header & Action Controls -->
+        <div class="backlog-header">
+            <div class="backlog-header-left">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <span style="font-size: 1.85rem;">📋</span>
+                    <div>
+                        <h1 style="margin: 0; font-size: 1.5rem; font-weight: 700; color: var(--text-primary);">Backlog &amp; Visual DAG</h1>
+                        <p style="margin: 0.2rem 0 0 0; font-size: 0.875rem; color: var(--text-secondary);">
+                            Interactive dependency graphs, priority queues, and deterministic execution pipelines for
+                            <strong style="color: var(--accent-indigo);">@WorkspaceState.ActiveWorkspace.Name</strong>
+                        </p>
+                    </div>
+                </div>
+            </div>
 
-<div class="forge-card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <div style="font-weight: 600; font-size: 1.1rem;">Pipeline Topology</div>
-        <span class="forge-badge badge-deterministic">DAG Orchestrator</span>
-    </div>
-    <p style="margin-bottom: 1.25rem;">
-        Visual representation of tasks, stage gates, validation tests, and sequential dependencies.
-    </p>
-    <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-secondary);">
-        Active Workspace: <span style="color: var(--accent-indigo);">@(WorkspaceState.ActiveWorkspace?.Name ?? "None selected")</span>
-    </div>
+            <!-- Header Right Controls -->
+            <div class="backlog-header-right">
+                <!-- View Mode Switcher -->
+                <div class="view-mode-toggle card-glass">
+                    <button type="button"
+                            class="view-toggle-btn @(_currentView == BacklogViewMode.Kanban ? "active" : "")"
+                            @onclick="() => SetView(BacklogViewMode.Kanban)">
+                        📊 Kanban Board
+                    </button>
+                    <button type="button"
+                            class="view-toggle-btn @(_currentView == BacklogViewMode.Dag ? "active" : "")"
+                            @onclick="() => SetView(BacklogViewMode.Dag)">
+                        🕸️ Visual DAG
+                    </button>
+                </div>
+
+                <a href="/ideation" class="forge-btn forge-btn-primary">
+                    💡 Ideate / Propose Tasks
+                </a>
+
+                <button type="button" class="forge-btn forge-btn-secondary" @onclick="ReloadTasksAsync" title="Refresh Backlog">
+                    🔄 Refresh
+                </button>
+            </div>
+        </div>
+
+        <!-- Metrics & Quick Stats Bar -->
+        <div class="backlog-stats-bar">
+            <div class="stat-chip @(_statusFilter == null ? "active" : "")" @onclick="() => FilterByStatus(null)">
+                <span class="stat-chip-label">Total</span>
+                <span class="stat-chip-val">@_allTasks.Count</span>
+            </div>
+            <div class="stat-chip @(_statusFilter == TaskOverallStatus.Suggested ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Suggested)">
+                <span class="stat-chip-label">💡 Suggested</span>
+                <span class="stat-chip-val text-amber">@_allTasks.Count(t => t.Status == TaskOverallStatus.Suggested)</span>
+            </div>
+            <div class="stat-chip @(_statusFilter == TaskOverallStatus.Open ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Open)">
+                <span class="stat-chip-label">📂 Open</span>
+                <span class="stat-chip-val text-indigo">@_allTasks.Count(t => t.Status == TaskOverallStatus.Open)</span>
+            </div>
+            <div class="stat-chip" @onclick="() => FilterByStatus(TaskOverallStatus.Reviewed)">
+                <span class="stat-chip-label">⚡ In-Flight</span>
+                <span class="stat-chip-val text-purple">@_allTasks.Count(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented)</span>
+            </div>
+            <div class="stat-chip @(_statusFilter == TaskOverallStatus.Ready ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Ready)">
+                <span class="stat-chip-label">🔍 Ready</span>
+                <span class="stat-chip-val text-teal">@_allTasks.Count(t => t.Status == TaskOverallStatus.Ready)</span>
+            </div>
+            <div class="stat-chip @(_statusFilter == TaskOverallStatus.Closed ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Closed)">
+                <span class="stat-chip-label">✅ Closed</span>
+                <span class="stat-chip-val text-emerald">@_allTasks.Count(t => t.Status == TaskOverallStatus.Closed)</span>
+            </div>
+        </div>
+
+        <!-- Filter & Search Toolbar -->
+        <div class="backlog-toolbar">
+            <div class="search-input-wrap">
+                <span class="search-icon">🔍</span>
+                <input type="text"
+                       class="form-control-dark backlog-search-input"
+                       placeholder="Filter tasks by title, description, or #ID..."
+                       @bind="_searchQuery"
+                       @bind:event="oninput" />
+                @if (!string.IsNullOrWhiteSpace(_searchQuery))
+                {
+                    <button type="button" class="search-clear-btn" @onclick="() => _searchQuery = string.Empty">✕</button>
+                }
+            </div>
+
+            <div class="toolbar-right-filters">
+                <select class="form-control-dark toolbar-filter-select"
+                        value="@(_statusFilter?.ToString() ?? "ALL")"
+                        @onchange="OnStatusFilterSelectChanged">
+                    <option value="ALL">All Statuses</option>
+                    <option value="@TaskOverallStatus.Suggested">Suggested (Triage)</option>
+                    <option value="@TaskOverallStatus.Open">Open (Backlog)</option>
+                    <option value="@TaskOverallStatus.Reviewed">Reviewed</option>
+                    <option value="@TaskOverallStatus.Implemented">Implemented</option>
+                    <option value="@TaskOverallStatus.Ready">Ready for Review</option>
+                    <option value="@TaskOverallStatus.Closed">Closed &amp; Merged</option>
+                    <option value="@TaskOverallStatus.Rejected">Rejected / Archived</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Main View Area -->
+        <div class="backlog-main-surface">
+            @{
+                var filtered = GetFilteredTasks();
+            }
+
+            @if (_isLoading)
+            {
+                <div class="backlog-loading-state card-glass">
+                    <span class="status-dot running"></span>
+                    <span>Synchronizing workspace backlog and DAG topology...</span>
+                </div>
+            }
+            else if (_currentView == BacklogViewMode.Kanban)
+            {
+                <KanbanBoard Tasks="filtered"
+                             TaskDependencies="_dependenciesMap"
+                             OnTaskSelected="OpenTaskDrawer"
+                             OnPromoteTask="OpenPromoteModal"
+                             OnLinkDependencies="OpenDependencyModal" />
+            }
+            else
+            {
+                <DagVisualizer Tasks="filtered"
+                               Dependencies="_allDependencies"
+                               OnTaskSelected="OpenTaskDrawer"
+                               OnLinkDependencies="OpenDependencyModal" />
+            }
+        </div>
+
+        <!-- Modals & Drawers -->
+        <MaintainerPromotionModal IsOpen="_showPromoteModal"
+                                  TargetTask="_selectedTask"
+                                  OnClosed="ClosePromoteModal"
+                                  OnPromoted="ReloadTasksAsync" />
+
+        <DependencyLinkingModal IsOpen="_showDepModal"
+                                TargetTask="_selectedTask"
+                                AllTasks="_allTasks"
+                                AllDependencies="_allDependencies"
+                                OnClosed="CloseDepModal"
+                                OnSaved="ReloadTasksAsync" />
+
+        <TaskDetailDrawer IsOpen="_showDrawer"
+                          Task="_selectedTask"
+                          AllTasks="_allTasks"
+                          PrerequisiteIds="GetPrerequisitesForSelected()"
+                          DependentIds="GetDependentsForSelected()"
+                          OnClose="CloseDrawer"
+                          OnPromoteClicked="OpenPromoteModal"
+                          OnLinkDependenciesClicked="OpenDependencyModal" />
+    }
 </div>
 
 @code {
-    [Inject]
-    private WorkspaceStateService WorkspaceState { get; set; } = default!;
+    private enum BacklogViewMode { Kanban, Dag }
+
+    private BacklogViewMode _currentView = BacklogViewMode.Kanban;
+    private List<ForgeTask> _allTasks = new();
+    private List<(int TaskId, int DependsOnTaskId)> _allDependencies = new();
+    private Dictionary<int, IReadOnlyList<int>> _dependenciesMap = new();
+
+    private string _searchQuery = string.Empty;
+    private TaskOverallStatus? _statusFilter;
+    private bool _isLoading = false;
+
+    // Modals state
+    private ForgeTask? _selectedTask;
+    private bool _showPromoteModal;
+    private bool _showDepModal;
+    private bool _showDrawer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+
+        HubConnection.OnStageTransitionReceived += HandleStageTransition;
+        HubConnection.OnDeterministicGateResultReceived += HandleGateResult;
+        HubConnection.OnWorkerStatusReceived += HandleWorkerStatus;
+
+        try
+        {
+            await HubConnection.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Hub connection notice: {ex.Message}");
+        }
+
+        await LoadDataAsync();
+    }
+
+    private async void HandleWorkspaceChanged()
+    {
+        await InvokeAsync(async () =>
+        {
+            _selectedTask = null;
+            _showPromoteModal = false;
+            _showDepModal = false;
+            _showDrawer = false;
+            await LoadDataAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async void HandleStageTransition(int taskId, string stageId, string stageKind, string status)
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadDataAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async void HandleGateResult(int taskId, string gateName, bool passed, string metricsSummary)
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadDataAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async void HandleWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget)
+    {
+        if (activeTaskId.HasValue)
+        {
+            await InvokeAsync(async () =>
+            {
+                await LoadDataAsync();
+                StateHasChanged();
+            });
+        }
+    }
+
+    private async Task LoadDataAsync()
+    {
+        var active = WorkspaceState.ActiveWorkspace;
+        if (active == null)
+        {
+            _allTasks.Clear();
+            _allDependencies.Clear();
+            _dependenciesMap.Clear();
+            return;
+        }
+
+        _isLoading = true;
+        try
+        {
+            var tasks = await TaskRepository.GetByWorkspaceIdAsync(active.Id);
+            _allTasks = tasks.OrderBy(t => t.Priority).ThenBy(t => t.Id).ToList();
+
+            var deps = await DependencyStore.GetDependenciesForWorkspaceAsync(active.Id);
+            _allDependencies = deps.ToList();
+
+            var map = new Dictionary<int, IReadOnlyList<int>>();
+            foreach (var task in _allTasks)
+            {
+                var prereqIds = _allDependencies
+                    .Where(d => d.TaskId == task.Id)
+                    .Select(d => d.DependsOnTaskId)
+                    .ToList();
+                map[task.Id] = prereqIds;
+            }
+            _dependenciesMap = map;
+
+            // If a task is selected in the drawer, keep its instance updated
+            if (_selectedTask != null)
+            {
+                _selectedTask = _allTasks.FirstOrDefault(t => t.Id == _selectedTask.Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Backlog Sync Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task ReloadTasksAsync()
+    {
+        await LoadDataAsync();
+        StateHasChanged();
+    }
+
+    private void SetView(BacklogViewMode mode)
+    {
+        _currentView = mode;
+    }
+
+    private void FilterByStatus(TaskOverallStatus? status)
+    {
+        _statusFilter = status;
+    }
+
+    private void OnStatusFilterSelectChanged(ChangeEventArgs e)
+    {
+        var str = e.Value?.ToString();
+        if (string.IsNullOrEmpty(str) || str == "ALL")
+        {
+            _statusFilter = null;
+        }
+        else if (Enum.TryParse<TaskOverallStatus>(str, out var parsed))
+        {
+            _statusFilter = parsed;
+        }
+    }
+
+    private List<ForgeTask> GetFilteredTasks()
+    {
+        var query = _allTasks.AsEnumerable();
+
+        if (_statusFilter.HasValue)
+        {
+            if (_statusFilter == TaskOverallStatus.Reviewed)
+            {
+                // Group In-Flight stages
+                query = query.Where(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented);
+            }
+            else
+            {
+                query = query.Where(t => t.Status == _statusFilter.Value);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(_searchQuery))
+        {
+            var q = _searchQuery.Trim();
+            if (int.TryParse(q.TrimStart('#'), out var idQuery))
+            {
+                query = query.Where(t => t.Id == idQuery || t.Title.Contains(q, StringComparison.OrdinalIgnoreCase));
+            }
+            else
+            {
+                query = query.Where(t =>
+                    t.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                    t.Description.Contains(q, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        return query.ToList();
+    }
+
+    private IReadOnlyList<int> GetPrerequisitesForSelected()
+    {
+        if (_selectedTask == null) return Array.Empty<int>();
+        return _dependenciesMap.TryGetValue(_selectedTask.Id, out var deps) ? deps : Array.Empty<int>();
+    }
+
+    private IReadOnlyList<int> GetDependentsForSelected()
+    {
+        if (_selectedTask == null) return Array.Empty<int>();
+        return _allDependencies
+            .Where(d => d.DependsOnTaskId == _selectedTask.Id)
+            .Select(d => d.TaskId)
+            .Distinct()
+            .ToList();
+    }
+
+    private void OpenTaskDrawer(ForgeTask task)
+    {
+        _selectedTask = task;
+        _showDrawer = true;
+    }
+
+    private void CloseDrawer()
+    {
+        _showDrawer = false;
+    }
+
+    private void OpenPromoteModal(ForgeTask task)
+    {
+        _selectedTask = task;
+        _showPromoteModal = true;
+    }
+
+    private void ClosePromoteModal()
+    {
+        _showPromoteModal = false;
+    }
+
+    private void OpenDependencyModal(ForgeTask task)
+    {
+        _selectedTask = task;
+        _showDepModal = true;
+    }
+
+    private void CloseDepModal()
+    {
+        _showDepModal = false;
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+        HubConnection.OnStageTransitionReceived -= HandleStageTransition;
+        HubConnection.OnDeterministicGateResultReceived -= HandleGateResult;
+        HubConnection.OnWorkerStatusReceived -= HandleWorkerStatus;
+    }
 }

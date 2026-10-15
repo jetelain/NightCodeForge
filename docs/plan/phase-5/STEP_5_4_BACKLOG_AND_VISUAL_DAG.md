@@ -2,7 +2,7 @@
 
 > **Phase 5 Implementation Step**  
 > *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.3: Ideation Chat](STEP_5_3_IDEATION_AND_DISCOVERY_CHAT.md) | *Next Step:* [Step 5.5: Monitoring Console](STEP_5_5_MONITORING_CONSOLE_AND_GAUGES.md)  
-> *Project Target:* `src/NightCodeForge.Web/Components/Backlog` & `Pages/Backlog.razor` | *Status:* Ready for Implementation
+> *Project Target:* `src/NightCodeForge.Web/Components/Backlog` & `Pages/Backlog.razor` | *Status:* Completed
 
 ---
 
@@ -275,13 +275,13 @@ Renders nodes and arrows using pure SVG:
 
 ## 6. Definition of Done (DoD) Checklist
 
-- [ ] `Pages/Backlog.razor` created with view toggle (Kanban vs. DAG Graph) and reactive workspace context (`WorkspaceStateService.OnWorkspaceChanged`).
-- [ ] Empty state banner displayed when no workspace is active with modal creation wizard trigger.
-- [ ] `KanbanBoard.razor` renders all lifecycle columns with proper count badges.
-- [ ] `KanbanCard.razor` displays status badges, priority indicator, and `Waiting for Human` pill.
-- [ ] `MaintainerPromotionModal.razor` allows setting `Priority`, `MergeMode`, and promoting/rejecting `Suggested` tasks.
-- [ ] `ITaskMarkdownSyncService.SyncTaskToDiskAsync` syncs task file to `docs/tasks/*.md` on maintainer promotion and dependency updates.
-- [ ] `DagVisualizer.razor` renders SVG dependency edges and nodes with topological ordering.
-- [ ] Prerequisite `Closed` gating rule visually indicated with lock icon and blocked tooltip.
-- [ ] `DependencyLinkingModal.razor` validates cycle freedom via `IDependencyResolutionEngine.HasCycle`.
-- [ ] bUnit component tests verify modal actions and dependency validation.
+- [x] `Pages/Backlog.razor` created with view toggle (Kanban vs. DAG Graph) and reactive workspace context (`WorkspaceStateService.OnWorkspaceChanged`).
+- [x] Empty state banner displayed when no workspace is active with modal creation wizard trigger.
+- [x] `KanbanBoard.razor` renders all lifecycle columns with proper count badges.
+- [x] `KanbanCard.razor` displays status badges, priority indicator, and `Waiting for Human` pill.
+- [x] `MaintainerPromotionModal.razor` allows setting `Priority`, `MergeMode`, and promoting/rejecting `Suggested` tasks.
+- [x] `ITaskMarkdownSyncService.SyncTaskToDiskAsync` syncs task file to `docs/tasks/*.md` on maintainer promotion and dependency updates.
+- [x] `DagVisualizer.razor` renders SVG dependency edges and nodes with topological ordering.
+- [x] Prerequisite `Closed` gating rule visually indicated with lock icon and blocked tooltip.
+- [x] `DependencyLinkingModal.razor` validates cycle freedom via `IDependencyResolutionEngine.HasCycle`.
+- [x] bUnit component tests verify modal actions and dependency validation.

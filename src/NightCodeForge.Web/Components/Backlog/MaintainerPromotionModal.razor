@@ -1,0 +1,146 @@
+@namespace NightCodeForge.Web.Components.Backlog
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Workflow
+@inject ITaskOrchestrator TaskOrchestrator
+@inject ToastService ToastService
+
+@if (IsOpen && TargetTask != null)
+{
+    <div class="forge-modal-backdrop" @onclick="Close">
+        <div class="forge-modal card-glass maintainer-promotion-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="promote-modal-title">
+            <div class="modal-header">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="font-size: 1.25rem;">🚀</span>
+                    <h3 id="promote-modal-title" style="margin: 0; font-size: 1.15rem; font-weight: 600;">
+                        Promote ForgeTask #@TargetTask.Id: @TargetTask.Title
+                    </h3>
+                </div>
+                <button type="button" class="btn-icon" @onclick="Close" aria-label="Close dialog">✕</button>
+            </div>
+
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 1.25rem;">
+                <div class="task-description-box" style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.85rem; font-size: 0.9rem; color: var(--text-secondary); max-height: 140px; overflow-y: auto; white-space: pre-wrap;">@TargetTask.Description</div>
+
+                <div class="form-group">
+                    <label for="priority-select" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                        Priority (1 = Standard, 5 = Critical Urgent)
+                    </label>
+                    <select id="priority-select" class="form-control-dark" @bind="_selectedPriority" disabled="@_isSubmitting">
+                        <option value="1">1 - Low / Standard</option>
+                        <option value="2">2 - Normal</option>
+                        <option value="3">3 - High</option>
+                        <option value="4">4 - Very High</option>
+                        <option value="5">5 - Critical / Urgent</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="merge-mode-select" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                        Merge Mode
+                    </label>
+                    <select id="merge-mode-select" class="form-control-dark" @bind="_selectedMergeMode" disabled="@_isSubmitting">
+                        <option value="@MergeMode.Automatic">Automatic (Auto-merge upon passing all deterministic gates)</option>
+                        <option value="@MergeMode.ManualReviewRequired">ManualReviewRequired (Requires human diff review in Review Room)</option>
+                    </select>
+                    <small style="display: block; margin-top: 0.35rem; color: var(--text-muted); font-size: 0.8rem;">
+                        Automatic mode is recommended for deterministic fixes and test additions. Manual review halts at Stage 6 for maintainer diff inspection.
+                    </small>
+                </div>
+            </div>
+
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-top: 0.5rem;">
+                <button type="button" class="forge-btn forge-btn-danger" @onclick="RejectAsync" disabled="@_isSubmitting">
+                    🗑️ Reject ForgeTask
+                </button>
+                <div style="display: flex; gap: 0.75rem;">
+                    <button type="button" class="forge-btn forge-btn-secondary" @onclick="Close" disabled="@_isSubmitting">
+                        Cancel
+                    </button>
+                    <button type="button" class="forge-btn forge-btn-primary" @onclick="PromoteAsync" disabled="@_isSubmitting">
+                        @(_isSubmitting ? "Promoting..." : "Promote to Open & Enqueue")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public ForgeTask? TargetTask { get; set; }
+    [Parameter] public EventCallback OnClosed { get; set; }
+    [Parameter] public EventCallback OnPromoted { get; set; }
+
+    private int _selectedPriority = 1;
+    private MergeMode _selectedMergeMode = MergeMode.Automatic;
+    private bool _isSubmitting;
+
+    protected override void OnParametersSet()
+    {
+        if (TargetTask != null)
+        {
+            _selectedPriority = TargetTask.Priority > 0 ? TargetTask.Priority : 1;
+            _selectedMergeMode = TargetTask.MergeMode;
+        }
+    }
+
+    private async Task PromoteAsync()
+    {
+        if (TargetTask == null || _isSubmitting) return;
+
+        _isSubmitting = true;
+        try
+        {
+            await TaskOrchestrator.PromoteSuggestedTaskAsync(
+                TargetTask.Id,
+                TaskOverallStatus.Open,
+                _selectedPriority,
+                _selectedMergeMode);
+
+            ToastService.Show("ForgeTask Promoted", $"ForgeTask #{TargetTask.Id} is now Open with Priority {_selectedPriority}.", ToastLevel.Success);
+            await OnPromoted.InvokeAsync();
+            await Close();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Promotion Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private async Task RejectAsync()
+    {
+        if (TargetTask == null || _isSubmitting) return;
+
+        _isSubmitting = true;
+        try
+        {
+            await TaskOrchestrator.PromoteSuggestedTaskAsync(
+                TargetTask.Id,
+                TaskOverallStatus.Rejected,
+                _selectedPriority,
+                _selectedMergeMode);
+
+            ToastService.Show("ForgeTask Rejected", $"ForgeTask #{TargetTask.Id} was archived.", ToastLevel.Warning);
+            await OnPromoted.InvokeAsync();
+            await Close();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Rejection Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private async Task Close()
+    {
+        IsOpen = false;
+        await OnClosed.InvokeAsync();
+    }
+}

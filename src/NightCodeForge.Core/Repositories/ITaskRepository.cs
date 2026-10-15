@@ -54,8 +54,15 @@ public class InMemoryTaskRepository : ITaskRepository
     {
         lock (_lock)
         {
-            IReadOnlyList<ForgeTask> list = _tasks.Values.Where(i => i.WorkspaceId == workspaceId).ToList();
-            return Task.FromResult(list);
+            var list = _tasks.Values.Where(i => i.WorkspaceId == workspaceId).ToList();
+            foreach (var task in list)
+            {
+                if (_dependencies.TryGetValue(task.Id, out var deps))
+                {
+                    task.Dependencies = deps.Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
+                }
+            }
+            return Task.FromResult<IReadOnlyList<ForgeTask>>(list);
         }
     }
 
@@ -72,8 +79,10 @@ public class InMemoryTaskRepository : ITaskRepository
                 _nextId = task.Id + 1;
             }
 
+            var depList = dependsOn != null ? dependsOn.ToList() : new List<int>();
             _tasks[task.Id] = task;
-            _dependencies[task.Id] = dependsOn != null ? dependsOn.ToList() : new List<int>();
+            _dependencies[task.Id] = depList;
+            task.Dependencies = depList.Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
 
             foreach (var q in task.Questions)
             {
@@ -92,7 +101,9 @@ public class InMemoryTaskRepository : ITaskRepository
             _tasks[task.Id] = task;
             if (dependsOn != null)
             {
-                _dependencies[task.Id] = dependsOn.ToList();
+                var depList = dependsOn.ToList();
+                _dependencies[task.Id] = depList;
+                task.Dependencies = depList.Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
             }
 
             foreach (var q in task.Questions)

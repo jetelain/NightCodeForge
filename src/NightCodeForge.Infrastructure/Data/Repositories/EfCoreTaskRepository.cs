@@ -31,6 +31,11 @@ public class EfCoreTaskRepository : ITaskRepository
     public async Task<IReadOnlyList<ForgeTask>> GetByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default)
     {
         return await _context.Tasks
+            .Include(i => i.Dependencies)
+            .Include(i => i.DependentTasks)
+            .Include(i => i.Questions)
+            .Include(i => i.ExecutionRecords)
+            .Include(i => i.ExecutionLogs)
             .Where(i => i.WorkspaceId == workspaceId)
             .OrderBy(i => i.Priority)
             .ThenBy(i => i.CreatedAt)

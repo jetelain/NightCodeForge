@@ -1,0 +1,254 @@
+@namespace NightCodeForge.Web.Components.Backlog
+@using NightCodeForge.Core.Domain
+
+@if (IsOpen && Task != null)
+{
+    <div class="task-drawer-overlay" @onclick="Close">
+        <aside class="task-drawer card-glass" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-label="Task Details">
+            <!-- Header -->
+            <div class="task-drawer-header">
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;">
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                            <span class="font-mono text-secondary" style="font-weight: 700; font-size: 1rem;">#@Task.Id</span>
+                            <span class="forge-badge @GetStatusBadgeClass(Task.Status)">@Task.Status</span>
+                            <span class="forge-badge badge-priority-@Task.Priority">P@(Task.Priority)</span>
+                            <span class="forge-badge @(Task.MergeMode == MergeMode.Automatic ? "badge-teal" : "badge-indigo")">
+                                @(Task.MergeMode == MergeMode.Automatic ? "Auto-Merge" : "Manual Review")
+                            </span>
+                        </div>
+                        <h2 style="font-size: 1.25rem; font-weight: 600; margin: 0; line-height: 1.3; color: var(--text-primary);">
+                            @Task.Title
+                        </h2>
+                    </div>
+                    <button type="button" class="btn-icon" @onclick="Close" aria-label="Close drawer">✕</button>
+                </div>
+
+                @if (Task.IsWaitingForHuman)
+                {
+                    <div class="human-waiting-alert" style="margin-top: 0.75rem; background: rgba(245, 158, 11, 0.15); border: 1px solid var(--accent-amber); border-radius: var(--radius-md); padding: 0.6rem 0.85rem; display: flex; align-items: center; gap: 0.5rem; color: #fde68a; font-size: 0.85rem;">
+                        <span class="pulse-dot-amber"></span>
+                        <div>
+                            <strong>Paused: Awaiting Human Clarification</strong>
+                            <div style="font-size: 0.8rem; color: #fef3c7;">Stage: @(Task.InterruptedStageId ?? "Unknown") | Agent: @(Task.InterruptedAgentProfileId ?? "Default")</div>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- Drawer Body -->
+            <div class="task-drawer-body">
+                <!-- Metadata Grid -->
+                <div class="task-metadata-grid">
+                    <div class="meta-item">
+                        <span class="meta-label">Current Stage</span>
+                        <span class="meta-val font-mono">@(string.IsNullOrWhiteSpace(Task.CurrentStageId) ? "None" : Task.CurrentStageId)</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Base Branch</span>
+                        <span class="meta-val font-mono">@Task.BaseBranch</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Feature Branch</span>
+                        <span class="meta-val font-mono">@(string.IsNullOrWhiteSpace(Task.FeatureBranch) ? "forge/task-" + Task.Id : Task.FeatureBranch)</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Created At</span>
+                        <span class="meta-val">@Task.CreatedAt.ToLocalTime().ToString("g")</span>
+                    </div>
+                </div>
+
+                <!-- Description -->
+                <div class="drawer-section">
+                    <h4 class="section-title">Description &amp; Specification</h4>
+                    <div class="description-view">
+                        @if (string.IsNullOrWhiteSpace(Task.Description))
+                        {
+                            <span class="text-muted">No description provided.</span>
+                        }
+                        else
+                        {
+                            <pre class="formatted-desc">@Task.Description</pre>
+                        }
+                    </div>
+                </div>
+
+                <!-- Prerequisites Gating -->
+                <div class="drawer-section">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <h4 class="section-title" style="margin: 0;">
+                            Prerequisites (@PrerequisiteIds.Count)
+                        </h4>
+                        <button type="button" class="forge-btn forge-btn-secondary btn-sm" @onclick="HandleLinkDependencies">
+                            ✏️ Edit
+                        </button>
+                    </div>
+
+                    @if (PrerequisiteIds.Count == 0)
+                    {
+                        <div class="text-muted" style="font-size: 0.85rem; padding: 0.5rem 0;">
+                            No prerequisites configured. Eligible to execute immediately when Open.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="dependency-list">
+                            @foreach (var prereqId in PrerequisiteIds)
+                            {
+                                var prereqTask = AllTasks.FirstOrDefault(t => t.Id == prereqId);
+                                var isClosed = prereqTask?.Status == TaskOverallStatus.Closed;
+                                <div class="dependency-item @(isClosed ? "satisfied" : "blocking")">
+                                    <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
+                                        <span class="font-mono text-secondary">#@prereqId</span>
+                                        <span class="dep-title">@(prereqTask?.Title ?? "Task #" + prereqId)</span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
+                                        @if (isClosed)
+                                        {
+                                            <span class="forge-badge badge-emerald" style="font-size: 0.75rem;">✅ Satisfied</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="forge-badge badge-amber" style="font-size: 0.75rem;">🔒 Blocking</span>
+                                            <span class="forge-badge @GetStatusBadgeClass(prereqTask?.Status ?? TaskOverallStatus.Open)" style="font-size: 0.75rem;">
+                                                @(prereqTask?.Status.ToString() ?? "Open")
+                                            </span>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <!-- Dependent Tasks (Downstream) -->
+                @if (DependentIds.Count > 0)
+                {
+                    <div class="drawer-section">
+                        <h4 class="section-title">Downstream Dependents (@DependentIds.Count)</h4>
+                        <div class="dependency-list">
+                            @foreach (var depId in DependentIds)
+                            {
+                                var depTask = AllTasks.FirstOrDefault(t => t.Id == depId);
+                                <div class="dependency-item neutral">
+                                    <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
+                                        <span class="font-mono text-secondary">#@depId</span>
+                                        <span class="dep-title">@(depTask?.Title ?? "Task #" + depId)</span>
+                                    </div>
+                                    <span class="forge-badge @GetStatusBadgeClass(depTask?.Status ?? TaskOverallStatus.Open)" style="font-size: 0.75rem;">
+                                        @(depTask?.Status.ToString() ?? "Open")
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                <!-- Execution Timeline -->
+                @if (Task.ExecutionRecords != null && Task.ExecutionRecords.Count > 0)
+                {
+                    <div class="drawer-section">
+                        <h4 class="section-title">Execution History</h4>
+                        <div class="records-timeline">
+                            @foreach (var rec in Task.ExecutionRecords.OrderByDescending(r => r.StartedAt))
+                            {
+                                <div class="timeline-item">
+                                    <div class="timeline-badge @(rec.Status == StageExecutionStatus.Completed ? "success" : "failed")"></div>
+                                    <div class="timeline-content">
+                                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                                            <strong>@rec.StageId</strong>
+                                            <span class="text-muted" style="font-size: 0.75rem;">@(rec.DurationMs)ms</span>
+                                        </div>
+                                        <div style="font-size: 0.8rem; color: var(--text-secondary);">
+                                            Agent: @rec.AgentProfileId | Model: @rec.ModelName
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                <!-- Execution Logs -->
+                @if (Task.ExecutionLogs != null && Task.ExecutionLogs.Count > 0)
+                {
+                    <div class="drawer-section">
+                        <h4 class="section-title">Recent Execution Logs</h4>
+                        <div class="execution-logs-box font-mono">
+                            @foreach (var log in Task.ExecutionLogs.OrderByDescending(l => l.Timestamp).Take(20))
+                            {
+                                <div class="log-line">
+                                    <span class="text-muted">[@log.Timestamp.ToString("HH:mm:ss")]</span>
+                                    <span class="log-level-@log.Level.ToString().ToLowerInvariant()">[@log.Level]</span>
+                                    <span>@log.Message</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- Drawer Footer Actions -->
+            <div class="task-drawer-footer">
+                @if (Task.Status == TaskOverallStatus.Suggested)
+                {
+                    <button type="button" class="forge-btn forge-btn-primary" @onclick="HandlePromote">
+                        🚀 Promote / Triage
+                    </button>
+                }
+                <button type="button" class="forge-btn forge-btn-secondary" @onclick="HandleLinkDependencies">
+                    🔗 Link Dependencies
+                </button>
+                <button type="button" class="forge-btn forge-btn-secondary" @onclick="Close">
+                    Close
+                </button>
+            </div>
+        </aside>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public ForgeTask? Task { get; set; }
+    [Parameter] public IReadOnlyList<ForgeTask> AllTasks { get; set; } = Array.Empty<ForgeTask>();
+    [Parameter] public IReadOnlyList<int> PrerequisiteIds { get; set; } = Array.Empty<int>();
+    [Parameter] public IReadOnlyList<int> DependentIds { get; set; } = Array.Empty<int>();
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback<ForgeTask> OnPromoteClicked { get; set; }
+    [Parameter] public EventCallback<ForgeTask> OnLinkDependenciesClicked { get; set; }
+
+    private async Task Close()
+    {
+        IsOpen = false;
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task HandlePromote()
+    {
+        if (Task != null)
+        {
+            await OnPromoteClicked.InvokeAsync(Task);
+        }
+    }
+
+    private async Task HandleLinkDependencies()
+    {
+        if (Task != null)
+        {
+            await OnLinkDependenciesClicked.InvokeAsync(Task);
+        }
+    }
+
+    private static string GetStatusBadgeClass(TaskOverallStatus status) => status switch
+    {
+        TaskOverallStatus.Suggested => "badge-amber",
+        TaskOverallStatus.Open => "badge-indigo",
+        TaskOverallStatus.Reviewed => "badge-purple",
+        TaskOverallStatus.Implemented => "badge-purple",
+        TaskOverallStatus.Ready => "badge-teal",
+        TaskOverallStatus.Closed => "badge-emerald",
+        TaskOverallStatus.Rejected => "badge-crimson",
+        TaskOverallStatus.Failed => "badge-crimson",
+        _ => "badge-secondary"
+    };
+}
