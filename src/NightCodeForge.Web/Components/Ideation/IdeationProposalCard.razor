@@ -88,6 +88,19 @@
         @if (_showDependencies && !Proposal.IsAdded)
         {
             <div class="dependency-list-panel">
+                @if (Proposal.DependsOnTitles.Count > 0)
+                {
+                    <div class="dependency-implicit-hint">
+                        <span class="dependency-hint-label">Sequential Dependencies:</span>
+                        <div class="dependency-hint-tags">
+                            @foreach (var depTitle in Proposal.DependsOnTitles)
+                            {
+                                <span class="badge badge-indigo font-mono">↳ @depTitle</span>
+                            }
+                        </div>
+                    </div>
+                }
+
                 @if (WorkspaceTasks == null || WorkspaceTasks.Count == 0)
                 {
                     <div class="dependency-empty-hint">No existing workspace tasks available to link.</div>

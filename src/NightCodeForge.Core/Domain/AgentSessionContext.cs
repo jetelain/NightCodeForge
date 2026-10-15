@@ -11,7 +11,7 @@ public class AgentSessionContext
     public Workspace? Workspace { get; init; }
     public required AgentProfile Profile { get; init; }
     public PipelineContext? PipelineContext { get; init; }
-    public LocalOptimizationFlags OptimizationFlags { get; init; } = new();
+    public LocalOptimizationFlags? OptimizationFlags { get; set; }
     public string StageId { get; init; } = string.Empty;
     public string StageDirective { get; init; } = string.Empty;
     public AgentMode RequiredMode { get; init; } = AgentMode.Full;

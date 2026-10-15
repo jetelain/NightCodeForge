@@ -1,6 +1,7 @@
 using Microsoft.Extensions.AI;
 using NightCodeForge.Agents.Ideation;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Agents.Tests;
 
@@ -50,7 +51,7 @@ public class IdeationServiceTests
 Let me know what you think!";
 
         var fakeClient = new FakeChatClient { ResponseToReturn = jsonResponse };
-        var service = new IdeationService(fakeClient);
+        var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
 
         var workspace = new Workspace { Id = 1, Name = "Test WS", RepositoryPath = Directory.GetCurrentDirectory() };
         var result = await service.ConverseAsync(workspace, "How should we optimize prompt token usage?");
@@ -80,7 +81,7 @@ Let me know what you think!";
             ResponseToReturn = "Discovery complete."
         };
 
-        var service = new IdeationService(fakeClient);
+        var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
 
         var workspace = new Workspace
         {
@@ -120,7 +121,7 @@ Let me know what you think!";
             return fakeClient;
         });
 
-        var service = new IdeationService(chatClientFactory: mockFactory);
+        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), chatClientFactory: mockFactory);
 
         var customProfile = new AgentProfile
         {
@@ -163,7 +164,7 @@ Let me know what you think!";
 
         var streamer = new CapturingActivityStreamer();
         var client = new MockStreamingChatClient(chunks);
-        var service = new IdeationService(defaultChatClient: client, activityStreamer: streamer);
+        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, activityStreamer: streamer);
 
         var workspace = new Workspace { Id = 10, RepositoryPath = Directory.GetCurrentDirectory() };
 
@@ -206,7 +207,7 @@ Let me know what you think!";
             ResponseToReturn = "<think>Fast thinking</think>Finished proposals:\n```json\n[{\"title\": \"Fallback Task\", \"description\": \"Test desc\"}]\n```"
         };
 
-        var service = new IdeationService(defaultChatClient: fakeClient, activityStreamer: streamer);
+        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: fakeClient, activityStreamer: streamer);
         var workspace = new Workspace { Id = 11, RepositoryPath = Directory.GetCurrentDirectory() };
 
         var result = await service.ConverseAsync(workspace, "Suggest a fallback task");
@@ -237,7 +238,7 @@ Let me know what you think!";
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, "Proposals are submitted and finalized."));
         });
 
-        var service = new IdeationService(defaultChatClient: client, activityStreamer: streamer);
+        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, activityStreamer: streamer);
         var workspace = new Workspace { Id = 12, RepositoryPath = Directory.GetCurrentDirectory() };
 
         var result = await service.ConverseAsync(workspace, "Create backlog tasks");
@@ -367,6 +368,454 @@ Let me know what you think!";
 
         Assert.NotNull(result);
         Assert.Equal("Exploration complete.", result.AssistantMessage);
+    }
+
+    [Fact]
+    public async Task ConverseStreamingAsync_YieldsToolCallStartedAndCompletedUpdates()
+    {
+        var streamer = new CapturingActivityStreamer();
+        int turn = 0;
+
+        var client = new MultiTurnStreamingChatClient((messages) =>
+        {
+            turn++;
+            if (turn == 1)
+            {
+                return "<tool_call>{\"name\": \"propose_tasks\", \"arguments\": {\"tasks\": [{\"title\": \"Streaming Tool ForgeTask\", \"description\": \"Discovered via tool\"}]}}</tool_call>";
+            }
+            return "Task proposal has been registered.";
+        });
+
+        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, activityStreamer: streamer);
+        var workspace = new Workspace { Id = 50, RepositoryPath = Directory.GetCurrentDirectory() };
+
+        var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
+        await foreach (var update in service.ConverseStreamingAsync(workspace, "Suggest tasks"))
+        {
+            updates.Add(update);
+        }
+
+        var startedUpdate = updates.FirstOrDefault(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ToolCallStarted);
+        Assert.NotNull(startedUpdate);
+        Assert.NotNull(startedUpdate.ToolCall);
+        Assert.Equal("propose_tasks", startedUpdate.ToolCall.ToolName);
+
+        var completedUpdate = updates.FirstOrDefault(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ToolCallCompleted);
+        Assert.NotNull(completedUpdate);
+        Assert.NotNull(completedUpdate.ToolCall);
+        Assert.Equal("propose_tasks", completedUpdate.ToolCall.ToolName);
+        Assert.False(completedUpdate.ToolCall.IsError);
+        Assert.NotNull(completedUpdate.ToolCall.Result);
+
+        var completed = updates.FirstOrDefault(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.Completed);
+        Assert.NotNull(completed?.FinalResult?.ToolCalls);
+        Assert.Single(completed.FinalResult.ToolCalls);
+        Assert.Equal("propose_tasks", completed.FinalResult.ToolCalls[0].ToolName);
+    }
+
+    [Fact]
+    public async Task ConverseStreamingAsync_LogsAndYieldsToolFailure_WhenToolFails()
+    {
+        var logger = new TestLogger<IdeationService>();
+        int turn = 0;
+
+        var client = new MultiTurnStreamingChatClient((messages) =>
+        {
+            turn++;
+            if (turn == 1)
+            {
+                return "<tool_call>{\"name\": \"unknown_magic_tool\", \"arguments\": {\"param\": 123}}</tool_call>";
+            }
+            return "Continuing after tool failure.";
+        });
+
+        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, logger: logger);
+        var workspace = new Workspace { Id = 51, RepositoryPath = Directory.GetCurrentDirectory() };
+
+        var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
+        await foreach (var update in service.ConverseStreamingAsync(workspace, "Run invalid tool"))
+        {
+            updates.Add(update);
+        }
+
+        var startedUpdate = updates.FirstOrDefault(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ToolCallStarted);
+        Assert.NotNull(startedUpdate);
+        Assert.Equal("unknown_magic_tool", startedUpdate.ToolCall?.ToolName);
+
+        var completedUpdate = updates.FirstOrDefault(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ToolCallCompleted);
+        Assert.NotNull(completedUpdate);
+        Assert.NotNull(completedUpdate.ToolCall);
+        Assert.Equal("unknown_magic_tool", completedUpdate.ToolCall.ToolName);
+        Assert.True(completedUpdate.ToolCall.IsError);
+        Assert.Contains("Error executing tool", completedUpdate.ToolCall.Result, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Contains(logger.Logs, l => l.Level >= Microsoft.Extensions.Logging.LogLevel.Warning && l.Message.Contains("unknown_magic_tool"));
+    }
+
+    private class MultiTurnStreamingChatClient : IChatClient
+    {
+        private readonly Func<IEnumerable<ChatMessage>, string> _responseGenerator;
+
+        public MultiTurnStreamingChatClient(Func<IEnumerable<ChatMessage>, string> responseGenerator)
+        {
+            _responseGenerator = responseGenerator;
+        }
+
+        public ChatClientMetadata Metadata => new("MultiTurnStreamingMock");
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            var text = _responseGenerator(chatMessages);
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, text)));
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> chatMessages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var text = _responseGenerator(chatMessages);
+            yield return new ChatResponseUpdate(ChatRole.Assistant, text);
+            await Task.Yield();
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+
+    private class TestLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Logs { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Logs.Add((logLevel, formatter(state, exception)));
+        }
+    }
+
+    [Fact]
+    public async Task ConverseStreamingAsync_SavesTranscript_WhenTranscriptServiceProvided()
+    {
+        var tempTranscriptsDir = Path.Combine(Path.GetTempPath(), "ncf-transcripts-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var transcriptService = new NightCodeForge.Agents.Transcripts.SessionTranscriptService(tempTranscriptsDir);
+            var client = new MultiTurnStreamingChatClient(_ => "<think>Considering tasks</think>Here is the recommendation.");
+            var service = new IdeationService(
+                new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+                defaultChatClient: client,
+                transcriptService: transcriptService);
+
+            var workspace = new Workspace { Id = 77, RepositoryPath = Directory.GetCurrentDirectory() };
+            var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
+
+            await foreach (var update in service.ConverseStreamingAsync(workspace, "Plan new feature"))
+            {
+                updates.Add(update);
+            }
+
+            var completed = updates.FirstOrDefault(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.Completed);
+            Assert.NotNull(completed);
+            Assert.NotNull(completed.FinalResult);
+            Assert.NotNull(completed.FinalResult.TranscriptPath);
+            Assert.True(File.Exists(completed.FinalResult.TranscriptPath));
+            Assert.NotNull(completed.FinalResult.FullTranscriptMarkdown);
+            Assert.Contains("Plan new feature", completed.FinalResult.FullTranscriptMarkdown);
+            Assert.Contains("Considering tasks", completed.FinalResult.FullTranscriptMarkdown);
+            Assert.Contains("Here is the recommendation.", completed.FinalResult.FullTranscriptMarkdown);
+        }
+        finally
+        {
+            if (Directory.Exists(tempTranscriptsDir))
+            {
+                try { Directory.Delete(tempTranscriptsDir, true); } catch { }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ConverseStreamingAsync_HandlesSplitThinkingTokensAcrossChunks()
+    {
+        var chunks = new[] { "<th", "ink>pondering architect", "ural design</th", "ink>Here are the proposals." };
+        var client = new ChunkedStreamingChatClient(chunks);
+
+        var service = new IdeationService(
+            new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+            defaultChatClient: client);
+
+        var workspace = new Workspace { Id = 88, RepositoryPath = Directory.GetCurrentDirectory() };
+        var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
+
+        await foreach (var update in service.ConverseStreamingAsync(workspace, "Explore design"))
+        {
+            updates.Add(update);
+        }
+
+        var thinkingDeltas = updates
+            .Where(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ThinkingDelta)
+            .Select(u => u.TextDelta)
+            .ToList();
+
+        var messageDeltas = updates
+            .Where(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.MessageDelta)
+            .Select(u => u.TextDelta)
+            .ToList();
+
+        var fullThinking = string.Concat(thinkingDeltas);
+        var fullMessage = string.Concat(messageDeltas);
+
+        Assert.Equal("pondering architectural design", fullThinking);
+        Assert.Equal("Here are the proposals.", fullMessage);
+    }
+
+    private class ChunkedStreamingChatClient : IChatClient
+    {
+        private readonly IReadOnlyList<string> _chunks;
+
+        public ChunkedStreamingChatClient(IReadOnlyList<string> chunks)
+        {
+            _chunks = chunks;
+        }
+
+        public ChatClientMetadata Metadata => new("ChunkedStreamingMock");
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, string.Concat(_chunks))));
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> chatMessages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            foreach (var chunk in _chunks)
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant, chunk);
+                await Task.Yield();
+            }
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+
+    private class MessageCapturingChatClient : IChatClient
+    {
+        private readonly Action<IEnumerable<ChatMessage>> _onCall;
+        public string ResponseToReturn { get; set; } = string.Empty;
+        public ChatClientMetadata Metadata => new("MessageCapturingClient");
+
+        public MessageCapturingChatClient(Action<IEnumerable<ChatMessage>> onCall) => _onCall = onCall;
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            _onCall(chatMessages);
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, ResponseToReturn)));
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> chatMessages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            _onCall(chatMessages);
+            yield return new ChatResponseUpdate(ChatRole.Assistant, ResponseToReturn);
+            await Task.Yield();
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void IdeationService_ExposesExplicitMaxTurnsConstants()
+    {
+        Assert.Equal(100, IdeationService.DefaultMaxTurns);
+        Assert.Equal(100, AgentProfile.DefaultMaxTurns);
+        Assert.Equal(500, Crucible.CrucibleHarnessConfig.DefaultMaxTurns);
+
+        var profile = AgentProfile.CreateDefaultIdeationProfile();
+        Assert.Equal(100, profile.MaxTurns);
+    }
+
+    [Fact]
+    public async Task ConverseStreamingAsync_InjectsEnvironmentSectionWithPwd()
+    {
+        List<ChatMessage>? capturedMessages = null;
+        var fakeClient = new MessageCapturingChatClient(msgs => capturedMessages = msgs.ToList())
+        {
+            ResponseToReturn = "I am ready."
+        };
+
+        var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var workspace = new Workspace
+        {
+            Id = 42,
+            Name = "Env Test Workspace",
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            RepositoryPath = Directory.GetCurrentDirectory()
+        };
+
+        var updates = new List<IdeationStreamUpdate>();
+        await foreach (var update in service.ConverseStreamingAsync(workspace, "Hello"))
+        {
+            updates.Add(update);
+        }
+
+        Assert.NotNull(capturedMessages);
+        var systemMsg = capturedMessages.FirstOrDefault(m => m.Role == ChatRole.System);
+        Assert.NotNull(systemMsg);
+        Assert.Contains("<environment>", systemMsg.Text);
+        Assert.Contains("Current Working Directory (PWD):", systemMsg.Text);
+        Assert.Contains("Repository Root:", systemMsg.Text);
+        Assert.Contains("ContainerSandbox", systemMsg.Text);
+    }
+
+    [Fact]
+    public async Task ConverseStreamingAsync_ProposeTasks_EstablishesSequentialDependencies_WhenMultipleTasksProposed()
+    {
+        int turn = 0;
+        var client = new MultiTurnStreamingChatClient((messages) =>
+        {
+            turn++;
+            if (turn == 1)
+            {
+                return "<tool_call>{\"name\": \"propose_tasks\", \"arguments\": {\"tasks\": [" +
+                       "{\"title\": \"Setup DB migrations\", \"description\": \"Configure schema\"}," +
+                       "{\"title\": \"Implement repository layer\", \"description\": \"Build repositories\"}," +
+                       "{\"title\": \"Expose endpoints\", \"description\": \"Add Minimal API endpoints\"}" +
+                       "]}}</tool_call>";
+            }
+            return "I have proposed 3 sequential tasks for your review.";
+        });
+
+        var service = new IdeationService(client, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var workspace = new Workspace { Id = 10, RepositoryPath = Directory.GetCurrentDirectory() };
+
+        var streamUpdates = new List<IdeationStreamUpdate>();
+        await foreach (var update in service.ConverseStreamingAsync(workspace, "Plan feature implementation"))
+        {
+            streamUpdates.Add(update);
+        }
+
+        var completed = streamUpdates.FirstOrDefault(u => u.Kind == IdeationStreamUpdateKind.Completed);
+        Assert.NotNull(completed?.FinalResult);
+        var proposals = completed.FinalResult.ProposedTasks;
+
+        Assert.Equal(3, proposals.Count);
+
+        // Task 0: No predecessor
+        Assert.Equal("Setup DB migrations", proposals[0].Title);
+        Assert.Empty(proposals[0].DependsOnTitles ?? Array.Empty<string>());
+
+        // Task 1: Implicit dependency on Task 0
+        Assert.Equal("Implement repository layer", proposals[1].Title);
+        Assert.NotNull(proposals[1].DependsOnTitles);
+        Assert.Contains("Setup DB migrations", proposals[1].DependsOnTitles!);
+
+        // Task 2: Implicit dependency on Task 1
+        Assert.Equal("Expose endpoints", proposals[2].Title);
+        Assert.NotNull(proposals[2].DependsOnTitles);
+        Assert.Contains("Implement repository layer", proposals[2].DependsOnTitles!);
+
+        // Verify real-time stream events
+        var discoveredUpdates = streamUpdates
+            .Where(u => u.Kind == IdeationStreamUpdateKind.ProposalDiscovered && u.Proposal != null)
+            .Select(u => u.Proposal!)
+            .ToList();
+
+        Assert.Equal(3, discoveredUpdates.Count);
+        Assert.Contains("Setup DB migrations", discoveredUpdates[1].DependsOnTitles!);
+        Assert.Contains("Implement repository layer", discoveredUpdates[2].DependsOnTitles!);
+    }
+
+    [Fact]
+    public async Task ConverseStreamingAsync_ProposeTasks_HandlesSingleTaskWithoutImplicitDependency()
+    {
+        int turn = 0;
+        var client = new MultiTurnStreamingChatClient((messages) =>
+        {
+            turn++;
+            if (turn == 1)
+            {
+                return "<tool_call>{\"name\": \"propose_tasks\", \"arguments\": {\"title\": \"Single Standalone Task\", \"description\": \"Independent task\", \"priority\": 4}}</tool_call>";
+            }
+            return "Task registered.";
+        });
+
+        var service = new IdeationService(client, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var workspace = new Workspace { Id = 11, RepositoryPath = Directory.GetCurrentDirectory() };
+
+        var result = await service.ConverseAsync(workspace, "Suggest a task");
+
+        Assert.Single(result.ProposedTasks);
+        var p = result.ProposedTasks[0];
+        Assert.Equal("Single Standalone Task", p.Title);
+        Assert.Equal("Independent task", p.Description);
+        Assert.Equal(4, p.Priority);
+        Assert.Empty(p.DependsOnTitles ?? Array.Empty<string>());
+    }
+
+    [Fact]
+    public async Task ConverseStreamingAsync_ProposeTasks_HandlesSerializedJsonStringArgument()
+    {
+        int turn = 0;
+        var client = new MultiTurnStreamingChatClient((messages) =>
+        {
+            turn++;
+            if (turn == 1)
+            {
+                var innerJson = "[{\\\"title\\\": \\\"Step Alpha\\\", \\\"description\\\": \\\"Alpha details\\\"}, {\\\"title\\\": \\\"Step Beta\\\", \\\"description\\\": \\\"Beta details\\\"}]";
+                return $"<tool_call>{{\"name\": \"propose_tasks\", \"arguments\": {{\"tasks\": \"{innerJson}\"}}}}</tool_call>";
+            }
+            return "Sequential tasks parsed.";
+        });
+
+        var service = new IdeationService(client, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var workspace = new Workspace { Id = 12, RepositoryPath = Directory.GetCurrentDirectory() };
+
+        var result = await service.ConverseAsync(workspace, "Build pipeline");
+
+        Assert.Equal(2, result.ProposedTasks.Count);
+        Assert.Equal("Step Alpha", result.ProposedTasks[0].Title);
+        Assert.Equal("Step Beta", result.ProposedTasks[1].Title);
+        Assert.Contains("Step Alpha", result.ProposedTasks[1].DependsOnTitles!);
+    }
+
+    [Fact]
+    public async Task ConverseStreamingAsync_SystemPrompt_InstructsProposeTasksInsteadOfMarkdownJson()
+    {
+        List<ChatMessage>? capturedMessages = null;
+        var fakeClient = new MessageCapturingChatClient(msgs => capturedMessages = msgs.ToList())
+        {
+            ResponseToReturn = "Ready."
+        };
+
+        var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var workspace = new Workspace { Id = 13, RepositoryPath = Directory.GetCurrentDirectory() };
+
+        await service.ConverseAsync(workspace, "Help me plan");
+
+        Assert.NotNull(capturedMessages);
+        var systemMsg = capturedMessages.FirstOrDefault(m => m.Role == ChatRole.System);
+        Assert.NotNull(systemMsg);
+
+        // Must instruct using the propose_tasks tool
+        Assert.Contains("propose_tasks", systemMsg.Text);
+        Assert.Contains("sequentially with dependencies established automatically", systemMsg.Text);
+        Assert.Contains("do NOT output markdown JSON codeblocks", systemMsg.Text);
+
+        // Must NOT ask the model for markdown JSON codeblocks
+        Assert.DoesNotContain("```json", systemMsg.Text);
     }
 }
 

@@ -37,7 +37,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer? _activityStreamer;
     private readonly SessionTranscriptService? _transcriptService;
-    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IWorkspacePathResolver _pathResolver;
+    private readonly IGlobalOptimizationSettingsService? _globalOptimizationSettings;
     private readonly ILogger<CrucibleAgentHarness> _logger;
 
     public string HarnessId => "crucible";
@@ -46,6 +47,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private static partial Regex ToolCallTagRegex();
 
     public CrucibleAgentHarness(
+        IWorkspacePathResolver pathResolver,
         IChatClient? baseChatClient = null,
         IOllamaChatClientFactory? chatClientFactory = null,
         IExecutionEnvironment? executionEnv = null,
@@ -59,9 +61,10 @@ public partial class CrucibleAgentHarness : IAgentHarness
         AgentsMdService? agentsMdService = null,
         IAgentActivityStreamer? activityStreamer = null,
         SessionTranscriptService? transcriptService = null,
-        IWorkspacePathResolver? pathResolver = null,
+        IGlobalOptimizationSettingsService? globalOptimizationSettings = null,
         ILogger<CrucibleAgentHarness>? logger = null)
     {
+        ArgumentNullException.ThrowIfNull(pathResolver);
         if (baseChatClient == null && chatClientFactory == null)
         {
             throw new ArgumentNullException(nameof(baseChatClient), "Either baseChatClient or chatClientFactory must be provided.");
@@ -81,11 +84,20 @@ public partial class CrucibleAgentHarness : IAgentHarness
         _activityStreamer = activityStreamer;
         _transcriptService = transcriptService;
         _pathResolver = pathResolver;
+        _globalOptimizationSettings = globalOptimizationSettings;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CrucibleAgentHarness>.Instance;
+    }
+
+    public CrucibleAgentHarness(
+        IChatClient baseChatClient,
+        IWorkspacePathResolver pathResolver)
+        : this(pathResolver, baseChatClient: baseChatClient)
+    {
     }
 
     public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
     {
+        context.OptimizationFlags = context.OptimizationFlags ?? context.Profile.OptimizationFlags ?? _globalOptimizationSettings?.GetFlags() ?? new LocalOptimizationFlags();
         var stopwatch = Stopwatch.StartNew();
         long promptTokens = 0;
         long completionTokens = 0;
@@ -111,15 +123,16 @@ public partial class CrucibleAgentHarness : IAgentHarness
         // 2. Initialize Tools & Lenient Dispatcher
         var canonicalTools = new CanonicalTools(
             workspacePath,
+            _pathResolver,
             effectiveEnv,
             _editorConfigService,
             _editorConfigFileApplier,
             _webSearchService,
             buildTimeoutSeconds: buildTimeout,
             testTimeoutSeconds: testTimeout,
-            pathResolver: _pathResolver,
             workspaceId: context.Workspace?.Id,
-            taskId: context.ForgeTask.Id);
+            taskId: context.ForgeTask.Id,
+            isReadOnly: context.Profile.Mode == AgentMode.ReadOnly || context.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly);
 
         var dispatcher = new LenientToolDispatcher(canonicalTools);
 
@@ -215,7 +228,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         var isContainer = context.Workspace?.ExecutionMode == ExecutionMode.ContainerSandbox;
         var agentWorkingDir = isContainer
-            ? "/workspace"
+            ? (context.ForgeTask.Id > 0
+                ? $"/workspace/task-{context.ForgeTask.Id}"
+                : "/workspace/clone")
             : workspacePath;
 
         var stabilizedPrefix = prefixStabilizer.BuildStabilizedPrefix(
@@ -277,7 +292,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             ? harnessConfig.MaxTurns
             : (context.Profile.MaxTurns.HasValue && context.Profile.MaxTurns.Value > 0
                 ? context.Profile.MaxTurns.Value
-                : 20);
+                : CrucibleHarnessConfig.DefaultMaxTurns);
         int currentTurn = 0;
         string? targetRouting = null;
 
@@ -546,7 +561,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 context.Profile.ModelName,
                 elapsedMs,
                 new AgentRunMetrics(elapsedMs, promptTokens, completionTokens, promptTokens + completionTokens),
-                context.OptimizationFlags,
+                context.OptimizationFlags ?? new LocalOptimizationFlags(),
                 status);
 
             var transcriptDir = Path.Combine(workspacePath, "docs", "transcripts");
@@ -788,7 +803,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         return result;
     }
 
-    public static void CompactOlderToolResults(IList<ChatMessage> messages, int keepVerbatimCount = 4, LocalOptimizationFlags? flags = null)
+    public static void CompactOlderToolResults(IList<ChatMessage> messages, int? keepVerbatimCount = null, LocalOptimizationFlags? flags = null)
     {
         ToolResultCompactor.Compact(messages, flags, keepVerbatimCount);
     }

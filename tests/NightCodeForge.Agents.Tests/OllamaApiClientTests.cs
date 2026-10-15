@@ -103,7 +103,7 @@ public class OllamaApiClientTests
         });
 
         var mockFactory = new TestOllamaChatClientFactory(mockChatClient);
-        var harness = new Crucible.CrucibleAgentHarness(chatClientFactory: mockFactory);
+        var harness = new Crucible.CrucibleAgentHarness(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), chatClientFactory: mockFactory);
 
         var profile = new Core.Domain.AgentProfile
         {

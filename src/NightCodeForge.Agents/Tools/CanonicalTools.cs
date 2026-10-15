@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -20,151 +21,64 @@ public partial class CanonicalTools
     private readonly IEditorConfigService _editorConfigService;
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly IWebSearchService _webSearchService;
-    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly int? _workspaceId;
     private readonly int? _taskId;
 
     private readonly int? _buildTimeoutSeconds;
     private readonly int? _testTimeoutSeconds;
+    private readonly bool _isReadOnly;
+    private readonly ILogger<CanonicalTools>? _logger;
 
     public CanonicalTools(
         string workspaceRoot,
+        IWorkspacePathResolver pathResolver,
         IExecutionEnvironment? executionEnv = null,
         IEditorConfigService? editorConfigService = null,
         IEditorConfigFileApplier? editorConfigFileApplier = null,
         IWebSearchService? webSearchService = null,
         int? buildTimeoutSeconds = null,
         int? testTimeoutSeconds = null,
-        IWorkspacePathResolver? pathResolver = null,
         int? workspaceId = null,
-        int? taskId = null)
+        int? taskId = null,
+        bool isReadOnly = false,
+        ILogger<CanonicalTools>? logger = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        ArgumentNullException.ThrowIfNull(pathResolver);
+
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _pathResolver = pathResolver;
         _executionEnv = executionEnv;
         _editorConfigService = editorConfigService ?? new EditorConfigService();
         _editorConfigFileApplier = editorConfigFileApplier ?? new EditorConfigFileApplier();
         _webSearchService = webSearchService ?? new MockWebSearchService();
         _buildTimeoutSeconds = buildTimeoutSeconds;
         _testTimeoutSeconds = testTimeoutSeconds;
-        _pathResolver = pathResolver;
         _workspaceId = workspaceId;
         _taskId = taskId;
+        _isReadOnly = isReadOnly;
+        _logger = logger;
     }
 
     public string ResolveFullPath(string path)
     {
-        if (_pathResolver != null)
+        if (_workspaceId.HasValue)
         {
-            if (_workspaceId.HasValue)
+            var rootCrucibleDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty, _taskId);
+            if (Directory.Exists(rootCrucibleDir))
             {
-                var rootCrucibleDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty, _taskId);
-                if (Directory.Exists(rootCrucibleDir))
-                {
-                    return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
-                }
-
-                var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
-                if (File.Exists(cruciblePath) || Directory.Exists(cruciblePath))
-                {
-                    return cruciblePath;
-                }
+                return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
             }
 
-            return _pathResolver.ResolveCruciblePath(_workspaceRoot, path, _taskId);
+            var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
+            if (File.Exists(cruciblePath) || Directory.Exists(cruciblePath))
+            {
+                return cruciblePath;
+            }
         }
 
-        var raw = (path ?? string.Empty).Trim();
-        var normalized = raw.Replace('\\', '/');
-
-        if (Path.IsPathRooted(raw) && !normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase))
-        {
-            return Path.GetFullPath(raw);
-        }
-
-        bool isWorkspacePrefixed =
-            normalized.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase) ||
-            normalized.StartsWith("workspace/", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "/workspace", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "workspace", StringComparison.OrdinalIgnoreCase);
-
-        if (isWorkspacePrefixed)
-        {
-            string rel;
-            if (normalized.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
-            {
-                rel = normalized["/workspace/".Length..];
-            }
-            else if (normalized.StartsWith("workspace/", StringComparison.OrdinalIgnoreCase))
-            {
-                rel = normalized["workspace/".Length..];
-            }
-            else
-            {
-                rel = string.Empty;
-            }
-
-            rel = rel.TrimStart('/', '\\');
-
-            var normRoot = _workspaceRoot.Replace('\\', '/').TrimEnd('/');
-            var rootLeaf = Path.GetFileName(normRoot);
-            string parentDir;
-            if (rootLeaf.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.Equals("mirror", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.StartsWith("task-", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.StartsWith("wt-", StringComparison.OrdinalIgnoreCase))
-            {
-                parentDir = Path.GetDirectoryName(normRoot) ?? normRoot;
-            }
-            else
-            {
-                parentDir = normRoot;
-            }
-
-            if (string.IsNullOrEmpty(rel))
-            {
-                return Path.GetFullPath(_workspaceRoot);
-            }
-
-            if (rel.StartsWith("clone/", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(rel, "clone", StringComparison.OrdinalIgnoreCase))
-            {
-                var cloneRel = rel.Length > 5 ? rel[6..].TrimStart('/') : string.Empty;
-                var cloneDir = Path.Combine(parentDir, "clone");
-                return string.IsNullOrEmpty(cloneRel)
-                    ? Path.GetFullPath(cloneDir)
-                    : Path.GetFullPath(Path.Combine(cloneDir, cloneRel));
-            }
-
-            var taskMatch = System.Text.RegularExpressions.Regex.Match(rel, @"^(?:wt/)?task-(\d+)(?:/(.*)|$)");
-            if (taskMatch.Success)
-            {
-                var taskNum = taskMatch.Groups[1].Value;
-                var taskRel = taskMatch.Groups[2].Success ? taskMatch.Groups[2].Value.TrimStart('/') : string.Empty;
-                var taskDir = Path.Combine(parentDir, $"task-{taskNum}");
-                return string.IsNullOrEmpty(taskRel)
-                    ? Path.GetFullPath(taskDir)
-                    : Path.GetFullPath(Path.Combine(taskDir, taskRel));
-            }
-
-            if (_taskId.HasValue && _taskId.Value > 0)
-            {
-                var taskDir = Path.Combine(parentDir, $"task-{_taskId.Value}");
-                if (Directory.Exists(taskDir))
-                {
-                    return Path.GetFullPath(Path.Combine(taskDir, rel));
-                }
-            }
-
-            return Path.GetFullPath(Path.Combine(_workspaceRoot, rel));
-        }
-
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return Path.GetFullPath(_workspaceRoot);
-        }
-
-        return Path.GetFullPath(Path.Combine(_workspaceRoot, raw));
+        return _pathResolver.ResolveCruciblePath(_workspaceRoot, path, _taskId);
     }
 
     /// <summary>
@@ -175,6 +89,7 @@ public partial class CanonicalTools
         var fullPath = ResolveFullPath(path);
         if (!File.Exists(fullPath))
         {
+            _logger?.LogWarning("CanonicalTools.read: File not found '{Path}' (resolved: '{FullPath}')", path, fullPath);
             throw new FileNotFoundException($"File not found: '{path}' (resolved: '{fullPath}')");
         }
 
@@ -205,6 +120,11 @@ public partial class CanonicalTools
     /// </summary>
     public async Task<string> WriteAsync(string path, string content, CancellationToken cancellationToken = default)
     {
+        if (_isReadOnly)
+        {
+            throw new InvalidOperationException("Write operations are not permitted in read-only mode.");
+        }
+
         var fullPath = ResolveFullPath(path);
         var dir = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -225,6 +145,11 @@ public partial class CanonicalTools
     /// </summary>
     public async Task<string> EditAsync(string path, IReadOnlyList<EditChunk> edits, CancellationToken cancellationToken = default)
     {
+        if (_isReadOnly)
+        {
+            throw new InvalidOperationException("Edit operations are not permitted in read-only mode.");
+        }
+
         if (edits == null || edits.Count == 0)
         {
             throw new ArgumentException("At least one edit chunk must be provided.");
@@ -398,7 +323,33 @@ public partial class CanonicalTools
             return "[Empty bash command]";
         }
 
-        var workDir = !string.IsNullOrEmpty(workingDirectory) ? ResolveFullPath(workingDirectory) : _workspaceRoot;
+        if (_isReadOnly)
+        {
+            var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
+            if (!isAllowed)
+            {
+                _logger?.LogWarning("CanonicalTools.bash: Read-only command violation: '{Command}'. Reason: {Error}", command, errorMsg);
+                return $"[READ-ONLY VIOLATION]: {errorMsg}";
+            }
+        }
+
+        string? workDir = null;
+        if (!string.IsNullOrEmpty(workingDirectory))
+        {
+            if (_executionEnv != null && _executionEnv.Tier != ExecutionTier.BareHost &&
+                (workingDirectory.StartsWith('/') || workingDirectory.StartsWith('.') || !Path.IsPathRooted(workingDirectory)))
+            {
+                workDir = workingDirectory;
+            }
+            else
+            {
+                workDir = ResolveFullPath(workingDirectory);
+            }
+        }
+        else if (_executionEnv == null || _executionEnv.Tier == ExecutionTier.BareHost)
+        {
+            workDir = _workspaceRoot;
+        }
 
         int? effectiveTimeout = timeout;
         if (!effectiveTimeout.HasValue)
@@ -426,7 +377,13 @@ public partial class CanonicalTools
             }
             catch (TimeoutException)
             {
+                _logger?.LogWarning("CanonicalTools.bash: Command timed out after {Timeout}s: '{Command}' in '{WorkDir}'", effectiveTimeout, command, workDir);
                 return $"Exit Code: 124\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "CanonicalTools.bash: Execution failed for '{Command}' in '{WorkDir}'", command, workDir);
+                throw;
             }
 
             var output = string.IsNullOrWhiteSpace(res.StandardOutput) ? res.StandardError : res.StandardOutput;
@@ -441,7 +398,14 @@ public partial class CanonicalTools
 
             if (isTimeout)
             {
+                _logger?.LogWarning("CanonicalTools.bash: Command timed out (detected exit code 124 or buffer): '{Command}'", command);
                 return $"Exit Code: 124\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
+            }
+
+            if (res.ExitCode != 0)
+            {
+                _logger?.LogWarning("CanonicalTools.bash: Command returned exit code {ExitCode}: '{Command}'. Output summary: {Output}",
+                    res.ExitCode, command, output.Length > 300 ? output[..300] + "..." : output);
             }
 
             if (command.Contains("build", StringComparison.OrdinalIgnoreCase) || command.Contains("test", StringComparison.OrdinalIgnoreCase))
@@ -457,6 +421,7 @@ public partial class CanonicalTools
             return $"Exit Code: {res.ExitCode}\n{output}".TrimEnd();
         }
 
+        _logger?.LogError("CanonicalTools.bash: No execution environment configured for command '{Command}'", command);
         throw new InvalidOperationException("No execution environment configured for bash tool.");
     }
 

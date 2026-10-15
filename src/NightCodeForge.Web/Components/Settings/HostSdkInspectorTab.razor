@@ -1,0 +1,166 @@
+@namespace NightCodeForge.Web.Components.Settings
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Web.Services
+@inject IHostSdkDiscoveryService SdkDiscoveryService
+@inject ToastService ToastService
+
+<div class="forge-card mt-3">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                <span style="font-size: 1.25rem;">🔍</span>
+                <h3 style="font-weight: 600; font-size: 1.2rem; margin: 0;">Host SDK &amp; Toolchain Discovery</h3>
+                <span class="forge-badge badge-indigo">Execution Sandboxing</span>
+            </div>
+            <p style="margin: 0; font-size: 0.875rem; color: var(--text-secondary); max-width: 720px;">
+                Probed SDK directories, environment variables, and command binaries discovered on the host system (WSL2 or Bare Host). These directories are mounted read-only into execution containers to enable instant toolchain availability without bloating container images.
+            </p>
+        </div>
+        <button type="button" class="forge-btn forge-btn-outline" @onclick="RefreshSdksAsync" disabled="_isProbing">
+            @if (_isProbing)
+            {
+                <span>Probing Host...</span>
+            }
+            else
+            {
+                <span>🔄 Re-probe Host SDKs</span>
+            }
+        </button>
+    </div>
+
+    @if (_isProbing)
+    {
+        <div style="padding: 2rem; text-align: center; color: var(--text-secondary);">
+            <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">🔍</div>
+            <p>Probing host SDKs and toolchains...</p>
+        </div>
+    }
+    else if (_details != null)
+    {
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1.5rem;">
+            <!-- 1. Read-Only Mount Paths -->
+            <div style="background: var(--bg-surface-elevated, rgba(255,255,255,0.03)); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h4 style="font-size: 0.95rem; font-weight: 600; margin: 0; color: var(--text-primary);">
+                        📁 Read-Only Mount Paths
+                    </h4>
+                    <span class="forge-badge badge-teal">@_details.MountPaths.Count paths</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.5rem; max-height: 320px; overflow-y: auto;">
+                    @if (_details.MountPaths.Count == 0)
+                    {
+                        <span style="font-size: 0.85rem; color: var(--text-muted);">No SDK mount paths discovered.</span>
+                    }
+                    else
+                    {
+                        @foreach (var path in _details.MountPaths)
+                        {
+                            <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.5rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem;">
+                                <span class="forge-badge badge-indigo" style="font-size: 0.7rem; padding: 0.1rem 0.4rem;">RO</span>
+                                <span class="font-mono" style="color: var(--text-secondary); word-break: break-all;">@path</span>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+
+            <!-- 2. Discovered Tool Binaries -->
+            <div style="background: var(--bg-surface-elevated, rgba(255,255,255,0.03)); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h4 style="font-size: 0.95rem; font-weight: 600; margin: 0; color: var(--text-primary);">
+                        ⚡ Discovered Command Binaries
+                    </h4>
+                    <span class="forge-badge badge-teal">@_details.CommandPaths.Count tools</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.5rem; max-height: 320px; overflow-y: auto;">
+                    @if (_details.CommandPaths.Count == 0)
+                    {
+                        <span style="font-size: 0.85rem; color: var(--text-muted);">No CLI tool commands discovered.</span>
+                    }
+                    else
+                    {
+                        @foreach (var (tool, path) in _details.CommandPaths)
+                        {
+                            <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.5rem 0.75rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; font-size: 0.8rem;">
+                                <strong style="color: var(--accent-indigo); min-width: 80px;">@tool</strong>
+                                <span class="font-mono" style="color: var(--text-secondary); word-break: break-all; text-align: right;">@path</span>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+
+            <!-- 3. Environment Variables -->
+            <div style="background: var(--bg-surface-elevated, rgba(255,255,255,0.03)); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; grid-column: 1 / -1;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h4 style="font-size: 0.95rem; font-weight: 600; margin: 0; color: var(--text-primary);">
+                        🌐 Toolchain Environment Variables
+                    </h4>
+                    <span class="forge-badge badge-indigo">@_details.EnvironmentVariables.Count variables</span>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem;">
+                    @if (_details.EnvironmentVariables.Count == 0)
+                    {
+                        <span style="font-size: 0.85rem; color: var(--text-muted);">No SDK environment variables detected.</span>
+                    }
+                    else
+                    {
+                        @foreach (var (key, val) in _details.EnvironmentVariables)
+                        {
+                            <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.5rem 0.75rem;">
+                                <div style="font-weight: 600; font-size: 0.8rem; color: var(--text-primary); margin-bottom: 0.2rem;">@key</div>
+                                <div class="font-mono" style="font-size: 0.75rem; color: var(--text-secondary); word-break: break-all;">@val</div>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private HostSdkDiscoveryDetails? _details;
+    private bool _isProbing;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadSdkDetailsAsync();
+    }
+
+    private async Task LoadSdkDetailsAsync()
+    {
+        _isProbing = true;
+        try
+        {
+            _details = await SdkDiscoveryService.DiscoverSdkDetailsAsync();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("SDK Discovery Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isProbing = false;
+        }
+    }
+
+    private async Task RefreshSdksAsync()
+    {
+        _isProbing = true;
+        try
+        {
+            SdkDiscoveryService.ClearCache();
+            _details = await SdkDiscoveryService.DiscoverSdkDetailsAsync();
+            ToastService.Show("SDK Probing Completed", $"Discovered {_details.MountPaths.Count} mount paths and {_details.CommandPaths.Count} CLI tools.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("SDK Discovery Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isProbing = false;
+        }
+    }
+}

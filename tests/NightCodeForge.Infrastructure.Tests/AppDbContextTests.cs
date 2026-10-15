@@ -187,16 +187,9 @@ public class AppDbContextTests : IDisposable
             Assert.Equal("Qwen3.8-27B:latest", p.ModelName);
         }
 
-        // Verify implementation has all 7 optimization flags
+        // Verify standard profiles have null OptimizationFlags by default to inherit global optimizations
         var impl = profiles.First(p => p.Id == "implementation");
-        Assert.NotNull(impl.OptimizationFlags);
-        Assert.True(impl.OptimizationFlags.ThinkingTraceCompaction);
-        Assert.True(impl.OptimizationFlags.LoopCircuitBreaker);
-        Assert.True(impl.OptimizationFlags.GuidedGrammarDecoding);
-        Assert.True(impl.OptimizationFlags.DeterministicSymbolMap);
-        Assert.True(impl.OptimizationFlags.StructuredDiagnosticExtraction);
-        Assert.True(impl.OptimizationFlags.PrefixStabilization);
-        Assert.True(impl.OptimizationFlags.JitModelPreload);
+        Assert.Null(impl.OptimizationFlags);
 
         // Verify triage has restricted sandbox tier
         var triage = profiles.First(p => p.Id == "triage");

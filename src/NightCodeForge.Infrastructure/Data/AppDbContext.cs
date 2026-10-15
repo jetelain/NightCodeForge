@@ -19,6 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<StageCheckpoint> StageCheckpoints => Set<StageCheckpoint>();
     public DbSet<StageExecutionRecord> StageExecutionRecords => Set<StageExecutionRecord>();
     public DbSet<ExecutionLog> ExecutionLogs => Set<ExecutionLog>();
+    public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
 
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {
@@ -200,6 +201,15 @@ public class AppDbContext : DbContext
             b.Property(l => l.Source).IsRequired().HasMaxLength(256);
             b.Property(l => l.Message).IsRequired();
         });
+
+        // 9. SystemSetting
+        modelBuilder.Entity<SystemSetting>(b =>
+        {
+            b.HasKey(s => s.Key);
+            b.Property(s => s.Key).HasMaxLength(128);
+            b.Property(s => s.Value).IsRequired();
+            b.Property(s => s.UpdatedAt).IsRequired();
+        });
     }
 
     /// <summary>
@@ -212,6 +222,11 @@ public class AppDbContext : DbContext
         {
             await Database.ExecuteSqlRawAsync("PRAGMA journal_mode = WAL;", cancellationToken);
             await Database.ExecuteSqlRawAsync("PRAGMA synchronous = NORMAL;", cancellationToken);
+            await Database.ExecuteSqlRawAsync(@"CREATE TABLE IF NOT EXISTS ""SystemSettings"" (
+                ""Key"" TEXT NOT NULL PRIMARY KEY,
+                ""Value"" TEXT NOT NULL,
+                ""UpdatedAt"" TEXT NOT NULL
+            );", cancellationToken);
         }
     }
 

@@ -34,6 +34,7 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<ITaskRepository, EfCoreTaskRepository>();
         services.TryAddScoped<IWorkspaceRepository, EfCoreWorkspaceRepository>();
         services.TryAddScoped<ITaskDependencyStore, EfCoreTaskDependencyStore>();
+        services.TryAddSingleton<IGlobalOptimizationSettingsService, GlobalOptimizationSettingsService>();
 
         // 3. Concurrency & DAG Engine
         services.TryAddSingleton<IWorkspaceLockProvider, WorkspaceLockProvider>();

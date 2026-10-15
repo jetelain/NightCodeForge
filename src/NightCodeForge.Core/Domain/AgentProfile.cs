@@ -4,7 +4,12 @@ namespace NightCodeForge.Core.Domain;
 /// Configuration profile specifying model, reasoning parameters, harness, and permissions for an agent.
 /// </summary>
 public class AgentProfile
-{
+{    
+    /// <summary>
+    /// Default maximum turn budget for autonomous agent deliberation and tool invocation.
+    /// </summary>
+    public const int DefaultMaxTurns = 100;
+
     public string Id { get; set; } = string.Empty;
     public int? WorkspaceId { get; set; }
     public string Name { get; set; } = string.Empty;
@@ -37,16 +42,17 @@ public class AgentProfile
         ModelName = defaultModelName,
         Mode = AgentMode.ReadOnly,
         PermittedTools = DefaultAgentTools.ReadOnly,
-        OptimizationFlags = new LocalOptimizationFlags(),
+        OptimizationFlags = null,
         SystemPrompt = @"You are the NightCodeForge Ideation & Codebase Discovery Agent.
 Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.",
         Temperature = 1,
-        ThinkingEffort = ThinkingEffort.Medium
+        ThinkingEffort = ThinkingEffort.Medium,
+        MaxTurns = DefaultMaxTurns
     };
 
     /// <summary>
     /// Creates the baseline set of 5 standard global agent profiles (WorkspaceId == null)
-    /// configured with the designated default model.
+    /// configured with the designated default model. OptimizationFlags is null by default to inherit global optimizations.
     /// </summary>
     public static IReadOnlyList<AgentProfile> CreateStandardGlobalProfiles(string defaultModelName) => new List<AgentProfile>
     {
@@ -60,7 +66,7 @@ Your objective is to explore the codebase, discuss architectural features, and h
             Mode = AgentMode.ReadOnly,
             SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
             PermittedTools = DefaultAgentTools.ReadOnly,
-            OptimizationFlags = new LocalOptimizationFlags(),
+            OptimizationFlags = null,
             Temperature = 1.0,
             ThinkingEffort = ThinkingEffort.Medium
         },
@@ -75,7 +81,7 @@ Your objective is to explore the codebase, discuss architectural features, and h
             Mode = AgentMode.Full,
             SecurityTier = SandboxSecurityTier.Standard,
             PermittedTools = DefaultAgentTools.Full,
-            OptimizationFlags = new LocalOptimizationFlags(),
+            OptimizationFlags = null,
             Temperature = 1.0,
             ThinkingEffort = ThinkingEffort.High
         },
@@ -89,7 +95,7 @@ Your objective is to explore the codebase, discuss architectural features, and h
             Mode = AgentMode.Full,
             SecurityTier = SandboxSecurityTier.Standard,
             PermittedTools = DefaultAgentTools.Full,
-            OptimizationFlags = new LocalOptimizationFlags(),
+            OptimizationFlags = null,
             Temperature = 1.0,
             ThinkingEffort = ThinkingEffort.Medium
         },
@@ -103,7 +109,7 @@ Your objective is to explore the codebase, discuss architectural features, and h
             Mode = AgentMode.Review,
             SecurityTier = SandboxSecurityTier.Standard,
             PermittedTools = DefaultAgentTools.Review,
-            OptimizationFlags = new LocalOptimizationFlags(),
+            OptimizationFlags = null,
             Temperature = 1.0,
             ThinkingEffort = ThinkingEffort.Medium
         }

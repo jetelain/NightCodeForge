@@ -22,6 +22,7 @@ public class TriageService : ITriageService
     private readonly IExecutionEnvironmentProvider? _envProvider;
     private readonly IExecutionEnvironment? _executionEnv;
     private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IGlobalOptimizationSettingsService? _globalOptimizationSettings;
     private readonly ILogger<TriageService> _logger;
 
     public TriageService(
@@ -32,6 +33,7 @@ public class TriageService : ITriageService
         IExecutionEnvironmentProvider? envProvider = null,
         IExecutionEnvironment? executionEnv = null,
         IWorkspacePathResolver? pathResolver = null,
+        IGlobalOptimizationSettingsService? globalOptimizationSettings = null,
         ILogger<TriageService>? logger = null)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -41,6 +43,7 @@ public class TriageService : ITriageService
         _envProvider = envProvider;
         _executionEnv = executionEnv;
         _pathResolver = pathResolver;
+        _globalOptimizationSettings = globalOptimizationSettings;
         _logger = logger ?? NullLogger<TriageService>.Instance;
     }
 
@@ -118,7 +121,7 @@ public class TriageService : ITriageService
             RequiredMode = AgentMode.ReadOnly,
             WorkspacePath = workspacePath,
             BootstrapPrompt = $"External Report to Triage:\nTitle: {request.Title}\nDescription:\n{request.Description}\n\nPlease inspect the codebase, determine affected components, and invoke propose_tasks to recommend concrete backlog items.",
-            OptimizationFlags = profile.OptimizationFlags ?? new LocalOptimizationFlags(),
+            OptimizationFlags = profile.OptimizationFlags ?? _globalOptimizationSettings?.GetFlags() ?? new LocalOptimizationFlags(),
             PipelineContext = pipelineContext
         };
 

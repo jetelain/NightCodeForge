@@ -34,7 +34,7 @@ I have identified the missing namespace. Let me edit the file.";
             new(ChatRole.User, "Proceed with edits")
         };
 
-        var compacted = ThinkingTraceCompactionChatClient.CompactHistoricalAssistantMessages(messages);
+        var compacted = ThinkingTraceCompactionChatClient.CompactHistoricalAssistantMessages(messages, keepVerbatimCount: 0);
 
         Assert.Equal(4, compacted.Count);
         Assert.Equal("System prompt rules", compacted[0].Text);
@@ -42,6 +42,34 @@ I have identified the missing namespace. Let me edit the file.";
         Assert.Contains("[Reasoned: Thinking deeply about the bug...]", compacted[2].Text);
         Assert.DoesNotContain("<think>", compacted[2].Text);
         Assert.Equal("Proceed with edits", compacted[3].Text);
+    }
+
+    [Fact]
+    public void CompactHistoricalAssistantMessages_PreservesRecentTurnsWithinKeepVerbatimCount()
+    {
+        var messages = new List<ChatMessage>();
+        for (int i = 0; i < 5; i++)
+        {
+            messages.Add(new ChatMessage(ChatRole.Assistant, $"<think>Reasoning step {i}</think>Response {i}"));
+        }
+
+        // Keep 2 verbatim
+        var compacted = ThinkingTraceCompactionChatClient.CompactHistoricalAssistantMessages(messages, keepVerbatimCount: 2);
+
+        Assert.Equal(5, compacted.Count);
+
+        // First 3 should be compacted
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.Contains($"[Reasoned: Reasoning step {i}]", compacted[i].Text);
+            Assert.DoesNotContain("<think>", compacted[i].Text);
+        }
+
+        // Last 2 should be verbatim
+        for (int i = 3; i < 5; i++)
+        {
+            Assert.Contains($"<think>Reasoning step {i}</think>", compacted[i].Text);
+        }
     }
 
     [Fact]
@@ -63,12 +91,36 @@ I have identified the missing namespace. Let me edit the file.";
     }
 
     [Fact]
+    public async Task ChatClient_UsesThinkingKeepVerbatimCountFromFlags_WhenNoOverrideProvided()
+    {
+        var flags = new LocalOptimizationFlags
+        {
+            ThinkingTraceCompaction = true,
+            ThinkingKeepVerbatimCount = 1
+        };
+        var innerClient = new MockChatClient(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Response")));
+        var client = new ThinkingTraceCompactionChatClient(innerClient, flags);
+
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.Assistant, "<think>First thought</think> Turn 1"),
+            new(ChatRole.Assistant, "<think>Second thought</think> Turn 2")
+        };
+
+        await client.GetResponseAsync(messages);
+
+        var forwarded = innerClient.LastReceivedMessages!.ToList();
+        Assert.Equal("[Reasoned: First thought] Turn 1", forwarded[0].Text);
+        Assert.Equal("<think>Second thought</think> Turn 2", forwarded[1].Text);
+    }
+
+    [Fact]
     public void CrucibleAgentHarness_CompactOlderToolResults_TruncatesOlderToolOutputs()
     {
         var messages = new List<ChatMessage>();
         for (int i = 0; i < 6; i++)
         {
-            var longOutput = new string('x', 500);
+            var longOutput = new string('x', 2500);
             messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent($"call-{i}", longOutput)]));
         }
 
@@ -85,7 +137,7 @@ I have identified the missing namespace. Let me edit the file.";
         for (int i = 4; i < 6; i++)
         {
             var frc = messages[i].Contents.OfType<FunctionResultContent>().First();
-            Assert.Equal(500, frc.Result?.ToString()?.Length);
+            Assert.Equal(2500, frc.Result?.ToString()?.Length);
         }
     }
 
@@ -95,7 +147,7 @@ I have identified the missing namespace. Let me edit the file.";
         var messages = new List<ChatMessage>();
         for (int i = 0; i < 6; i++)
         {
-            var longOutput = new string('z', 500);
+            var longOutput = new string('z', 2500);
             messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent($"call-{i}", longOutput)]));
         }
 
@@ -106,7 +158,7 @@ I have identified the missing namespace. Let me edit the file.";
         for (int i = 0; i < 6; i++)
         {
             var frc = messages[i].Contents.OfType<FunctionResultContent>().First();
-            Assert.Equal(500, frc.Result?.ToString()?.Length);
+            Assert.Equal(2500, frc.Result?.ToString()?.Length);
             Assert.DoesNotContain("[Output truncated;", frc.Result?.ToString());
         }
     }

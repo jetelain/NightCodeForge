@@ -8,15 +8,28 @@ public record IdeationProposal(
     int Priority = 1,
     IReadOnlyList<string>? DependsOnTitles = null);
 
+public record IdeationToolCallInfo(
+    string ToolCallId,
+    string ToolName,
+    string Arguments,
+    string? Result = null,
+    bool IsError = false,
+    long DurationMs = 0);
+
 public record IdeationResult(
     string AssistantMessage,
-    IReadOnlyList<IdeationProposal> ProposedTasks);
+    IReadOnlyList<IdeationProposal> ProposedTasks,
+    IReadOnlyList<IdeationToolCallInfo>? ToolCalls = null,
+    string? TranscriptPath = null,
+    string? FullTranscriptMarkdown = null);
 
 public enum IdeationStreamUpdateKind
 {
     ThinkingDelta,
     MessageDelta,
     ProposalDiscovered,
+    ToolCallStarted,
+    ToolCallCompleted,
     Completed
 }
 
@@ -24,6 +37,7 @@ public record IdeationStreamUpdate(
     IdeationStreamUpdateKind Kind,
     string? TextDelta = null,
     IdeationProposal? Proposal = null,
+    IdeationToolCallInfo? ToolCall = null,
     IdeationResult? FinalResult = null);
 
 /// <summary>

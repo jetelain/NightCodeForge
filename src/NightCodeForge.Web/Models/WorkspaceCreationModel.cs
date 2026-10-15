@@ -17,7 +17,7 @@ public class WorkspaceCreationModel
 
     public ExecutionMode ExecutionMode { get; set; } = ExecutionMode.ContainerSandbox;
 
-    public string? ContainerImage { get; set; } = "nightcodeforge-agent:latest";
+    public string? ContainerImage { get; set; } = "ncf-agent-base:latest";
 
     public string? WslDistribution { get; set; }
 

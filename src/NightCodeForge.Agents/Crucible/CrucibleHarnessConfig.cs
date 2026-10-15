@@ -14,12 +14,17 @@ public class CustomToolConfig
 /// Allows database-driven customization of tools, directives, descriptions, and rules.
 /// </summary>
 public class CrucibleHarnessConfig
-{
+{    
+    /// <summary>
+    /// Default maximum turn budget for Crucible harness execution.
+    /// </summary>
+    public const int DefaultMaxTurns = 500;
+
     public List<CustomToolConfig> CustomTools { get; set; } = new();
     public Dictionary<string, string> ToolDirectives { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> StageDirectives { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public List<string>? AllowedTools { get; set; }
-    public int MaxTurns { get; set; } = 20;
+    public int MaxTurns { get; set; } = DefaultMaxTurns;
     public string? CustomSystemRules { get; set; }
     public string? CustomPersona { get; set; }
 }

@@ -1140,6 +1140,132 @@ code, kbd, samp, pre {
     color: var(--text-secondary);
 }
 
+/* Tool Calls Accordion Trace in Chat Bubbles */
+.tool-calls-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-bottom: 0.4rem;
+}
+
+.tool-trace {
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    transition: all var(--transition-fast);
+}
+
+.tool-trace.running {
+    border-color: rgba(99, 102, 241, 0.4);
+    box-shadow: 0 0 8px rgba(99, 102, 241, 0.15);
+}
+
+.tool-trace.completed {
+    border-color: var(--border-subtle);
+}
+
+.tool-trace.error {
+    border-color: rgba(239, 68, 68, 0.45);
+    background: rgba(239, 68, 68, 0.04);
+}
+
+.tool-trace summary {
+    padding: 0.42rem 0.65rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.02);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    user-select: none;
+    transition: background var(--transition-fast);
+}
+
+.tool-trace summary:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.tool-trace.error summary {
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.tool-trace-title {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tool-summary-text {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 320px;
+}
+
+.tool-trace-status {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.tool-trace-badge {
+    font-size: 0.68rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: var(--radius-sm);
+}
+
+.tool-trace-content {
+    padding: 0.65rem 0.75rem;
+    font-size: 0.76rem;
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    background: var(--bg-surface);
+}
+
+.tool-trace-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.tool-trace-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.tool-trace-pre {
+    margin: 0;
+    padding: 0.45rem 0.65rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+    line-height: 1.4;
+    max-height: 240px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.tool-trace-pre.result-error {
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.08);
+}
+
 /* Chat Input Section */
 .chat-input-area {
     padding: 0.85rem 1rem;
@@ -1449,6 +1575,31 @@ code, kbd, samp, pre {
     color: var(--text-muted);
     font-style: italic;
     padding: 0.25rem;
+}
+
+.dependency-implicit-hint {
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px dashed var(--border-subtle);
+}
+
+.dependency-hint-label {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-bottom: 0.25rem;
+    font-weight: 500;
+}
+
+.dependency-hint-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.add-all-btn {
+    font-size: 0.72rem;
+    padding: 0.2rem 0.5rem;
 }
 
 .dependency-items-container {
@@ -2388,5 +2539,89 @@ code, kbd, samp, pre {
 .hero-launch-btn:hover {
     box-shadow: 0 0 30px rgba(99, 102, 241, 0.6);
     transform: translateY(-2px);
+}
+
+/* Transcript Modal Styles */
+.transcript-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 14, 26, 0.75);
+    backdrop-filter: blur(6px);
+    z-index: 1050;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    animation: fadeIn 150ms ease-out;
+}
+
+.transcript-modal-dialog {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 20px 45px rgba(0, 0, 0, 0.5);
+    width: 100%;
+    max-width: 860px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.transcript-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+}
+
+.transcript-modal-title {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.transcript-modal-title h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.transcript-path-badge {
+    background: rgba(99, 102, 241, 0.15);
+    color: var(--accent-indigo);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: var(--radius-sm);
+    padding: 0.15rem 0.45rem;
+    font-size: 0.72rem;
+}
+
+.transcript-modal-body {
+    padding: 1.25rem;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.transcript-actions-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+
+.transcript-pre {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    font-size: 0.82rem;
+    color: var(--text-primary);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 60vh;
+    overflow-y: auto;
 }
 

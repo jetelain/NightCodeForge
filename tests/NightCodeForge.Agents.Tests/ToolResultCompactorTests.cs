@@ -7,13 +7,21 @@ namespace NightCodeForge.Agents.Tests;
 public class ToolResultCompactorTests
 {
     [Fact]
+    public void Defaults_AreAppropriateForDevelopmentAgents()
+    {
+        Assert.Equal(100, ToolResultCompactor.DefaultKeepVerbatimCount);
+        Assert.Equal(2000, ToolResultCompactor.DefaultMaxResultLength);
+        Assert.Equal(1750, ToolResultCompactor.DefaultTruncateToLength);
+    }
+
+    [Fact]
     public void Compact_DefaultEnabled_TruncatesOlderToolOutputsBeyondKeepCount()
     {
         var compactor = new ToolResultCompactor(keepVerbatimCount: 2);
         var messages = new List<ChatMessage>();
         for (int i = 0; i < 5; i++)
         {
-            var content = new string('A', 300);
+            var content = new string('A', 2500);
             messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent($"call-{i}", content)]));
         }
 
@@ -23,14 +31,14 @@ public class ToolResultCompactorTests
         for (int i = 0; i < 3; i++)
         {
             var frc = messages[i].Contents.OfType<FunctionResultContent>().First();
-            Assert.Contains("[Output truncated; 300 characters total]", frc.Result?.ToString());
+            Assert.Contains("[Output truncated; 2500 characters total]", frc.Result?.ToString());
         }
 
         // Last 2 messages should remain verbatim
         for (int i = 3; i < 5; i++)
         {
             var frc = messages[i].Contents.OfType<FunctionResultContent>().First();
-            Assert.Equal(300, frc.Result?.ToString()?.Length);
+            Assert.Equal(2500, frc.Result?.ToString()?.Length);
         }
     }
 
@@ -42,7 +50,7 @@ public class ToolResultCompactorTests
         var messages = new List<ChatMessage>();
         for (int i = 0; i < 5; i++)
         {
-            var content = new string('B', 300);
+            var content = new string('B', 2500);
             messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent($"call-{i}", content)]));
         }
 
@@ -52,7 +60,7 @@ public class ToolResultCompactorTests
         for (int i = 0; i < 5; i++)
         {
             var frc = messages[i].Contents.OfType<FunctionResultContent>().First();
-            Assert.Equal(300, frc.Result?.ToString()?.Length);
+            Assert.Equal(2500, frc.Result?.ToString()?.Length);
             Assert.DoesNotContain("[Output truncated;", frc.Result?.ToString());
         }
     }
@@ -66,7 +74,7 @@ public class ToolResultCompactorTests
         var messages = new List<ChatMessage>();
         for (int i = 0; i < 4; i++)
         {
-            var content = new string('C', 400);
+            var content = new string('C', 2500);
             messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent($"call-{i}", content)]));
         }
 
@@ -75,7 +83,7 @@ public class ToolResultCompactorTests
         for (int i = 0; i < 4; i++)
         {
             var frc = messages[i].Contents.OfType<FunctionResultContent>().First();
-            Assert.Equal(400, frc.Result?.ToString()?.Length);
+            Assert.Equal(2500, frc.Result?.ToString()?.Length);
         }
     }
 
@@ -85,16 +93,43 @@ public class ToolResultCompactorTests
         var compactor = new ToolResultCompactor(keepVerbatimCount: 1);
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.Tool, new string('X', 250)),
-            new(ChatRole.Tool, new string('Y', 250))
+            new(ChatRole.Tool, new string('X', 2500)),
+            new(ChatRole.Tool, new string('Y', 2500))
         };
 
         compactor.Compact(messages);
 
         // First message was text content and should be compacted
-        Assert.Contains("[Output truncated; 250 characters total]", messages[0].Text);
+        Assert.Contains("[Output truncated; 2500 characters total]", messages[0].Text);
 
         // Second message is inside the keep window and should remain intact
-        Assert.Equal(250, messages[1].Text.Length);
+        Assert.Equal(2500, messages[1].Text.Length);
+    }
+
+    [Fact]
+    public void Compact_UsesFlagParameters_WhenNoOverrideProvided()
+    {
+        var flags = new LocalOptimizationFlags
+        {
+            ToolKeepVerbatimCount = 1,
+            ToolMaxResultLength = 500,
+            ToolTruncateToLength = 300
+        };
+
+        var compactor = new ToolResultCompactor(flags);
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.Tool, [new FunctionResultContent("call-0", new string('Z', 600))]),
+            new(ChatRole.Tool, [new FunctionResultContent("call-1", new string('W', 600))])
+        };
+
+        compactor.Compact(messages);
+
+        var first = messages[0].Contents.OfType<FunctionResultContent>().First().Result!.ToString()!;
+        Assert.Contains("[Output truncated; 600 characters total]", first);
+        Assert.StartsWith(new string('Z', 300), first);
+
+        var second = messages[1].Contents.OfType<FunctionResultContent>().First().Result!.ToString()!;
+        Assert.Equal(600, second.Length);
     }
 }

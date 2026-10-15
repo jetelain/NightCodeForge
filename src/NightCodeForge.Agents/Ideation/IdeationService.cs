@@ -10,6 +10,7 @@ using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Tools;
+using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
@@ -24,6 +25,11 @@ namespace NightCodeForge.Agents.Ideation;
 /// </summary>
 public partial class IdeationService : IIdeationService
 {
+    /// <summary>
+    /// Default maximum turns for ideation agent exploration and tool loop.
+    /// </summary>
+    public const int DefaultMaxTurns = AgentProfile.DefaultMaxTurns;
+
     [GeneratedRegex(@"```(?:json)?\s*\[\s*\{.*?\}\s*\]\s*```", RegexOptions.Singleline)]
     private static partial Regex TaskJsonArrayRegex();
 
@@ -37,10 +43,13 @@ public partial class IdeationService : IIdeationService
     private readonly IWebSearchService _webSearchService;
     private readonly AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer? _activityStreamer;
-    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IWorkspacePathResolver _pathResolver;
+    private readonly SessionTranscriptService? _transcriptService;
+    private readonly IGlobalOptimizationSettingsService? _globalOptimizationSettings;
     private readonly ILogger<IdeationService> _logger;
 
     public IdeationService(
+        IWorkspacePathResolver pathResolver,
         IChatClient? defaultChatClient = null,
         IOllamaChatClientFactory? chatClientFactory = null,
         IExecutionEnvironmentProvider? envProvider = null,
@@ -48,14 +57,17 @@ public partial class IdeationService : IIdeationService
         IWebSearchService? webSearchService = null,
         AgentsMdService? agentsMdService = null,
         IAgentActivityStreamer? activityStreamer = null,
-        IWorkspacePathResolver? pathResolver = null,
+        SessionTranscriptService? transcriptService = null,
+        IGlobalOptimizationSettingsService? globalOptimizationSettings = null,
         ILogger<IdeationService>? logger = null)
     {
+        ArgumentNullException.ThrowIfNull(pathResolver);
         if (defaultChatClient == null && chatClientFactory == null)
         {
             throw new ArgumentNullException(nameof(defaultChatClient), "Either defaultChatClient or chatClientFactory must be provided.");
         }
 
+        _pathResolver = pathResolver;
         _defaultChatClient = defaultChatClient;
         _chatClientFactory = chatClientFactory;
         _envProvider = envProvider;
@@ -63,8 +75,16 @@ public partial class IdeationService : IIdeationService
         _webSearchService = webSearchService ?? new MockWebSearchService();
         _agentsMdService = agentsMdService ?? new AgentsMdService();
         _activityStreamer = activityStreamer;
-        _pathResolver = pathResolver;
+        _transcriptService = transcriptService;
+        _globalOptimizationSettings = globalOptimizationSettings;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<IdeationService>.Instance;
+    }
+
+    public IdeationService(
+        IChatClient defaultChatClient,
+        IWorkspacePathResolver pathResolver)
+        : this(pathResolver, defaultChatClient: defaultChatClient)
+    {
     }
 
     /// <summary>
@@ -137,11 +157,13 @@ public partial class IdeationService : IIdeationService
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var profile = ResolveIdeationProfile(workspace, agentProfile);
+        var optFlags = profile.OptimizationFlags ?? _globalOptimizationSettings?.GetFlags() ?? new LocalOptimizationFlags();
 
         // Resolve client dynamically for the agent profile
-        var client = _chatClientFactory != null
+        var rawClient = _chatClientFactory != null
             ? _chatClientFactory.CreateClient(profile)
             : (_defaultChatClient ?? throw new InvalidOperationException("No IChatClient or IOllamaChatClientFactory configured."));
+        var client = new ThinkingTraceCompactionChatClient(rawClient, optFlags);
 
         var sessionId = $"ideation-{workspace.Id}-{Guid.NewGuid():N}";
         var metadata = new Dictionary<string, object?>
@@ -158,26 +180,104 @@ public partial class IdeationService : IIdeationService
         var projectConfig = CodeStackPresets.ResolveConfig(repoPath, null);
         var projectContext = _agentsMdService.FormatProjectContextSection(agentsRules, projectConfig, workspace);
 
+        // Determine agent's effective working directory based on execution mode and workspace paths
+        string agentWorkingDir;
+        if (workspace.ExecutionMode == ExecutionMode.ContainerSandbox)
+        {
+            bool hasClone = !string.IsNullOrEmpty(workspace.Ext4MirrorPath) ||
+                            Directory.Exists(_pathResolver.ResolveCruciblePath(workspace.Id, string.Empty));
+            agentWorkingDir = hasClone ? "/workspace/clone" : "/workspace";
+        }
+        else if (workspace.ExecutionMode == ExecutionMode.WslDirect)
+        {
+            agentWorkingDir = !string.IsNullOrEmpty(workspace.Ext4MirrorPath)
+                ? workspace.Ext4MirrorPath
+                : _pathResolver.GetAgentWorkingClonePath(workspace.Id);
+        }
+        else
+        {
+            agentWorkingDir = repoPath;
+        }
+
+        string? topLevelSummary = null;
+        try
+        {
+            var hostDir = _pathResolver.ResolveCruciblePath(workspace.Id, string.Empty);
+            if (string.IsNullOrEmpty(hostDir) || !Directory.Exists(hostDir))
+            {
+                hostDir = repoPath;
+            }
+            if (!string.IsNullOrEmpty(hostDir) && Directory.Exists(hostDir))
+            {
+                var entries = Directory.GetFileSystemEntries(hostDir)
+                    .Select(Path.GetFileName)
+                    .Where(n => !string.IsNullOrEmpty(n) &&
+                                !n.StartsWith(".git") &&
+                                !n.Equals("bin", StringComparison.OrdinalIgnoreCase) &&
+                                !n.Equals("obj", StringComparison.OrdinalIgnoreCase) &&
+                                !n.Equals(".vs", StringComparison.OrdinalIgnoreCase))
+                    .Take(20)
+                    .ToList();
+                if (entries.Count > 0)
+                {
+                    topLevelSummary = string.Join(", ", entries);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not discover top-level entries for workspace {WorkspaceId}", workspace.Id);
+        }
+
+        var environmentSection = new StringBuilder();
+        environmentSection.AppendLine("<environment>");
+        environmentSection.AppendLine($"- Current Working Directory (PWD): {agentWorkingDir}");
+        environmentSection.AppendLine($"- Repository Root: {agentWorkingDir}");
+        environmentSection.AppendLine($"- Execution Mode: {workspace.ExecutionMode}");
+        environmentSection.AppendLine($"- All relative paths, file operations (read, edit, write), and bash commands execute in this working directory ({agentWorkingDir}).");
+        if (!string.IsNullOrEmpty(topLevelSummary))
+        {
+            environmentSection.AppendLine($"- Top-level files and directories in repository root: {topLevelSummary}");
+        }
+        environmentSection.AppendLine($"- When exploring the codebase, begin by inspecting the directory structure or key files in '{agentWorkingDir}'.");
+        environmentSection.AppendLine("</environment>");
+
         var basePersona = !string.IsNullOrWhiteSpace(customSystemPrompt)
             ? customSystemPrompt
             : (!string.IsNullOrWhiteSpace(profile.SystemPrompt)
                 ? profile.SystemPrompt
                 : "You are the NightCodeForge Ideation & Codebase Discovery Agent.\nYour objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.");
 
-        var systemPrompt = $@"{basePersona}
-{projectContext}
+        var permittedTools = profile.PermittedTools?.Count > 0
+            ? profile.PermittedTools
+            : DefaultAgentTools.GetTools(profile.Mode);
 
-When you recommend one or more implementation tasks, format them as a structured JSON array at the end of your response:
-```json
-[
-  {{
-    ""title"": ""Descriptive ForgeTask Title"",
-    ""description"": ""Detailed technical specification and acceptance criteria"",
-    ""priority"": 1,
-    ""dependsOnTitles"": []
-  }}
-]
-```";
+        var toolsSection = new StringBuilder();
+        toolsSection.AppendLine("<tools>");
+        foreach (var tool in permittedTools)
+        {
+            var desc = tool.ToLowerInvariant() switch
+            {
+                "read" => "- read: Read file contents with line slicing (path, offset, limit)",
+                "bash" => "- bash: Execute shell commands, builds, and file discovery (command, timeout, working_directory)",
+                "web_search" or "search" => "- web_search: Search technical web documentation for APIs, errors, or libraries (query, max_results)",
+                "propose_tasks" => "- propose_tasks: Propose structured backlog items (tasks: [{ title, description, priority, dependsOnTitles }])",
+                _ => $"- {tool}: Execute tool '{tool}'"
+            };
+            toolsSection.AppendLine(desc);
+        }
+        toolsSection.AppendLine("</tools>");
+
+        var taskGuidance = @"When you recommend one or more implementation tasks, do NOT output markdown JSON codeblocks in your response. Instead, invoke the 'propose_tasks' tool with your proposed tasks (each having title, description, and optional priority). If multiple tasks are proposed, they will be scheduled sequentially with dependencies established automatically. After proposing tasks, explain your proposal and architectural rationale clearly to the developer.";
+
+        var systemPrompt = $@"{basePersona}
+{environmentSection.ToString().TrimEnd()}
+{projectContext}
+{toolsSection.ToString().TrimEnd()}
+
+Before executing tools or recommending changes, think step-by-step about what files to inspect or how to answer inside <think>...</think> tags.
+
+{taskGuidance}";
 
         var messages = new List<ChatMessage>
         {
@@ -195,9 +295,11 @@ When you recommend one or more implementation tasks, format them as a structured
 
         messages.Add(new ChatMessage(ChatRole.User, userPrompt));
 
-        var permittedTools = profile.PermittedTools?.Count > 0
-            ? profile.PermittedTools
-            : DefaultAgentTools.GetTools(profile.Mode);
+        var sessionStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var transcriptEntries = new List<TranscriptEntry>
+        {
+            new(DateTime.UtcNow, "USER", userPrompt)
+        };
 
         var effectiveEnv = (workspace != null && _envProvider != null)
             ? _envProvider.GetEnvironment(workspace, profile.SecurityTier)
@@ -208,20 +310,28 @@ When you recommend one or more implementation tasks, format them as a structured
 
         var canonicalTools = new CanonicalTools(
             repoPath,
+            _pathResolver,
             effectiveEnv,
             webSearchService: _webSearchService,
             buildTimeoutSeconds: buildTimeout,
             testTimeoutSeconds: testTimeout,
-            pathResolver: _pathResolver,
             workspaceId: workspace?.Id);
 
-        var dispatcher = new LenientToolDispatcher(canonicalTools);
+        var sessionProposals = new List<IdeationProposal>();
 
-        var aiTools = new List<AITool>();
-        foreach (var t in permittedTools)
-        {
-            aiTools.Add(AIFunctionFactory.Create(() => "ok", t));
-        }
+        var dispatcher = new LenientToolDispatcher(canonicalTools);
+        dispatcher.RegisterTool(new ToolDefinition(
+            CanonicalToolNames.ProposeTasks,
+            "Propose structured backlog items (tasks: [{ title, description, priority, dependsOnTitles }])",
+            (args, _) =>
+            {
+                var argsStr = JsonSerializer.Serialize(args);
+                var (resultText, _) = ExecuteProposeTasks(argsStr, sessionProposals, canonicalTools);
+                return Task.FromResult(resultText);
+            },
+            aliases: ["propose_task", "proposetasks"]));
+
+        var aiTools = BuildAIFunctionList(permittedTools);
 
         var chatOptions = new ChatOptions
         {
@@ -230,16 +340,18 @@ When you recommend one or more implementation tasks, format them as a structured
             Tools = aiTools
         };
 
-        var toolResultCompactor = new ToolResultCompactor(profile.OptimizationFlags);
+        var toolResultCompactor = new ToolResultCompactor(optFlags);
         var fullTextBuilder = new StringBuilder();
-        int maxTurns = profile.MaxTurns.HasValue && profile.MaxTurns.Value > 0 ? profile.MaxTurns.Value : 5;
+        int maxTurns = profile.MaxTurns.HasValue && profile.MaxTurns.Value > 0 ? profile.MaxTurns.Value : DefaultMaxTurns;
         int currentTurn = 0;
+
+        var allToolCalls = new List<IdeationToolCallInfo>();
 
         while (currentTurn < maxTurns && !cancellationToken.IsCancellationRequested)
         {
             currentTurn++;
             toolResultCompactor.Compact(messages);
-            var inThinking = false;
+            var tagFilter = new StreamingTagFilter();
             bool streamingFailed = false;
             var functionCalls = new List<FunctionCallContent>();
             var turnTextBuilder = new StringBuilder();
@@ -297,9 +409,14 @@ When you recommend one or more implementation tasks, format them as a structured
 
                         turnTextBuilder.Append(text);
 
-                        foreach (var (isThinkingDelta, piece) in ParseStreamDeltas(text, ref inThinking))
+                        foreach (var (isThinkingDelta, piece) in tagFilter.ProcessDelta(text))
                         {
                             if (string.IsNullOrEmpty(piece)) continue;
+
+                            transcriptEntries.Add(new TranscriptEntry(
+                                DateTime.UtcNow,
+                                isThinkingDelta ? "THINKING" : "ASSISTANT",
+                                piece));
 
                             var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
                             await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
@@ -307,6 +424,22 @@ When you recommend one or more implementation tasks, format them as a structured
                             var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
                             yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
                         }
+                    }
+
+                    foreach (var (isThinkingDelta, piece) in tagFilter.Flush())
+                    {
+                        if (string.IsNullOrEmpty(piece)) continue;
+
+                        transcriptEntries.Add(new TranscriptEntry(
+                            DateTime.UtcNow,
+                            isThinkingDelta ? "THINKING" : "ASSISTANT",
+                            piece));
+
+                        var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
+                        await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
+
+                        var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
+                        yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
                     }
                 }
                 finally
@@ -346,10 +479,30 @@ When you recommend one or more implementation tasks, format them as a structured
                 turnTextBuilder.Clear();
                 turnTextBuilder.Append(text);
 
-                inThinking = false;
-                foreach (var (isThinkingDelta, piece) in ParseStreamDeltas(text, ref inThinking))
+                foreach (var (isThinkingDelta, piece) in tagFilter.ProcessDelta(text))
                 {
                     if (string.IsNullOrEmpty(piece)) continue;
+
+                    transcriptEntries.Add(new TranscriptEntry(
+                        DateTime.UtcNow,
+                        isThinkingDelta ? "THINKING" : "ASSISTANT",
+                        piece));
+
+                    var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
+                    await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
+
+                    var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
+                    yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
+                }
+
+                foreach (var (isThinkingDelta, piece) in tagFilter.Flush())
+                {
+                    if (string.IsNullOrEmpty(piece)) continue;
+
+                    transcriptEntries.Add(new TranscriptEntry(
+                        DateTime.UtcNow,
+                        isThinkingDelta ? "THINKING" : "ASSISTANT",
+                        piece));
 
                     var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
                     await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
@@ -389,92 +542,359 @@ When you recommend one or more implementation tasks, format them as a structured
             {
                 var canonicalName = dispatcher.ResolveToolName(call.Name);
                 var argsJson = call.Arguments != null ? JsonSerializer.Serialize(call.Arguments) : "{}";
+                var callId = call.CallId ?? Guid.NewGuid().ToString("N");
+
+                var toolCallInfo = new IdeationToolCallInfo(callId, canonicalName, argsJson);
+                allToolCalls.Add(toolCallInfo);
+
+                // Live stream tool call started to Blazor UI
+                yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: toolCallInfo);
 
                 await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken, metadata);
 
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 string toolResult;
+                bool isError = false;
+                List<IdeationProposal>? newlyDiscoveredProposals = null;
                 try
                 {
-                    toolResult = await dispatcher.DispatchAsync(canonicalName, argsJson, cancellationToken);
+                    if (string.Equals(canonicalName, CanonicalToolNames.ProposeTasks, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var (execResult, extractedProposals) = ExecuteProposeTasks(argsJson, sessionProposals, canonicalTools);
+                        toolResult = execResult;
+                        newlyDiscoveredProposals = extractedProposals;
+                    }
+                    else
+                    {
+                        toolResult = await dispatcher.DispatchAsync(canonicalName, argsJson, cancellationToken);
+                        if (toolResult.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ||
+                            toolResult.StartsWith("[READ-ONLY VIOLATION]", StringComparison.OrdinalIgnoreCase) ||
+                            toolResult.StartsWith("[TIMEOUT]", StringComparison.OrdinalIgnoreCase) ||
+                            toolResult.StartsWith("File not found", StringComparison.OrdinalIgnoreCase) ||
+                            (toolResult.StartsWith("Exit Code: ", StringComparison.OrdinalIgnoreCase) &&
+                             !toolResult.StartsWith("Exit Code: 0\n", StringComparison.OrdinalIgnoreCase) &&
+                             !toolResult.StartsWith("Exit Code: 0\r\n", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            isError = true;
+                            _logger.LogWarning("Ideation tool '{ToolName}' returned error or non-zero exit code. Args: {ToolArgs}. Result: {ToolResult}",
+                                canonicalName, argsJson, toolResult);
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
+                    isError = true;
                     toolResult = $"Error executing tool '{canonicalName}': {ex.Message}";
+                    _logger.LogError(ex, "Ideation tool '{ToolName}' failed with exception. Args: {ToolArgs}",
+                        canonicalName, argsJson);
+                }
+                sw.Stop();
+
+                var completedToolInfo = toolCallInfo with
+                {
+                    Result = toolResult,
+                    IsError = isError,
+                    DurationMs = sw.ElapsedMilliseconds
+                };
+
+                var idx = allToolCalls.FindIndex(t => t.ToolCallId == callId);
+                if (idx >= 0) allToolCalls[idx] = completedToolInfo;
+
+                // Live stream tool call completed to Blazor UI
+                yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: completedToolInfo);
+
+                // Live stream newly discovered proposals immediately to Blazor UI
+                if (newlyDiscoveredProposals != null && newlyDiscoveredProposals.Count > 0)
+                {
+                    foreach (var proposal in newlyDiscoveredProposals)
+                    {
+                        yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: proposal);
+                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, $"Proposed task: {proposal.Title}", cancellationToken, metadata);
+                    }
                 }
 
-                messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent(call.CallId ?? Guid.NewGuid().ToString("N"), toolResult)]));
+                transcriptEntries.Add(new TranscriptEntry(
+                    DateTime.UtcNow,
+                    "TOOL",
+                    $"Tool {canonicalName} ({sw.ElapsedMilliseconds}ms)",
+                    ToolName: canonicalName,
+                    ToolArguments: argsJson,
+                    ToolResult: toolResult));
+
+                messages.Add(new ChatMessage(ChatRole.Tool, toolResult)
+                {
+                    Contents = { new FunctionResultContent(callId, toolResult) }
+                });
                 await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, toolResult, cancellationToken, metadata);
+            }
+
+            // If we reached max turns and the agent called tools on the final turn,
+            // execute one final synthesis turn with Tools = null so the agent answers the user rather than cutting off abruptly.
+            if (currentTurn >= maxTurns && !cancellationToken.IsCancellationRequested)
+            {
+                var synthesisFilter = new StreamingTagFilter();
+                var synthesisTurnBuilder = new StringBuilder();
+                var synthesisOptions = new ChatOptions
+                {
+                    ModelId = !string.IsNullOrWhiteSpace(profile.ModelName) ? profile.ModelName : null,
+                    Temperature = (float?)profile.Temperature ?? 0.3f,
+                    Tools = null
+                };
+
+                IAsyncEnumerator<ChatResponseUpdate>? synthesisEnumerator = null;
+                try
+                {
+                    var stream = client.GetStreamingResponseAsync(messages, synthesisOptions, cancellationToken);
+                    synthesisEnumerator = stream.GetAsyncEnumerator(cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "Synthesis turn failed to initialize streaming.");
+                }
+
+                if (synthesisEnumerator != null)
+                {
+                    try
+                    {
+                        while (await synthesisEnumerator.MoveNextAsync())
+                        {
+                            var update = synthesisEnumerator.Current;
+                            var text = update.Text;
+                            if (string.IsNullOrEmpty(text)) continue;
+
+                            synthesisTurnBuilder.Append(text);
+
+                            foreach (var (isThinkingDelta, piece) in synthesisFilter.ProcessDelta(text))
+                            {
+                                if (string.IsNullOrEmpty(piece)) continue;
+
+                                transcriptEntries.Add(new TranscriptEntry(
+                                    DateTime.UtcNow,
+                                    isThinkingDelta ? "THINKING" : "ASSISTANT",
+                                    piece));
+
+                                var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
+                                await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
+
+                                var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
+                                yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
+                            }
+                        }
+
+                        foreach (var (isThinkingDelta, piece) in synthesisFilter.Flush())
+                        {
+                            if (string.IsNullOrEmpty(piece)) continue;
+
+                            transcriptEntries.Add(new TranscriptEntry(
+                                DateTime.UtcNow,
+                                isThinkingDelta ? "THINKING" : "ASSISTANT",
+                                piece));
+
+                            var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
+                            yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
+                        }
+                    }
+                    finally
+                    {
+                        await synthesisEnumerator.DisposeAsync();
+                    }
+                }
+
+                var synthesisText = synthesisTurnBuilder.ToString();
+                fullTextBuilder.Append(synthesisText);
+                messages.Add(new ChatMessage(ChatRole.Assistant, synthesisText));
+                break;
+            }
+        }
+
+        sessionStopwatch.Stop();
+        string? transcriptPath = null;
+        string? fullTranscriptMarkdown = null;
+
+        if (_transcriptService != null)
+        {
+            try
+            {
+                var targetDir = Path.Combine(repoPath, "docs", "transcripts");
+                var metadataRecord = new TranscriptMetadata(
+                    TaskId: workspace?.Id ?? 0,
+                    StageId: "ideation",
+                    AgentProfile: profile.Id,
+                    ModelName: profile.ModelName ?? "default",
+                    DurationMs: sessionStopwatch.ElapsedMilliseconds,
+                    Metrics: new AgentRunMetrics(sessionStopwatch.ElapsedMilliseconds, 0, 0, 0),
+                    Optimizations: profile.OptimizationFlags ?? new LocalOptimizationFlags(),
+                    Status: AgentRunStatus.Completed);
+
+                transcriptPath = await _transcriptService.SaveTranscriptAsync(metadataRecord, transcriptEntries, targetDir, cancellationToken);
+                if (File.Exists(transcriptPath))
+                {
+                    fullTranscriptMarkdown = await File.ReadAllTextAsync(transcriptPath, cancellationToken);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to save ideation session transcript.");
             }
         }
 
         var fullText = fullTextBuilder.ToString();
-        var proposals = ParseProposals(fullText);
+        var fallbackProposals = ParseProposals(fullText);
 
-        if (canonicalTools.PendingProposals.Count > 0)
+        foreach (var p in fallbackProposals)
         {
-            foreach (var p in canonicalTools.PendingProposals)
+            if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
             {
-                if (!proposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
-                {
-                    proposals.Add(new IdeationProposal(p.Title, p.Description, 1, p.AffectedFiles));
-                }
+                sessionProposals.Add(p);
+                yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: p);
             }
         }
 
-        foreach (var proposal in proposals)
-        {
-            yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: proposal);
-        }
-
-        var finalResult = new IdeationResult(fullText, proposals);
-        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.StageCompleted, $"Ideation completed with {proposals.Count} proposal(s).", cancellationToken, metadata);
+        var finalResult = new IdeationResult(fullText, sessionProposals, allToolCalls, transcriptPath, fullTranscriptMarkdown);
+        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.StageCompleted, $"Ideation completed with {sessionProposals.Count} proposal(s).", cancellationToken, metadata);
 
         yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.Completed, FinalResult: finalResult);
     }
 
     private static List<(bool IsThinking, string Text)> ParseStreamDeltas(string text, ref bool inThinking)
     {
+        var filter = new StreamingTagFilter();
         var results = new List<(bool IsThinking, string Text)>();
-        var remaining = text;
-        while (!string.IsNullOrEmpty(remaining))
+        results.AddRange(filter.ProcessDelta(text));
+        results.AddRange(filter.Flush());
+        inThinking = filter.IsInThinking;
+        return results;
+    }
+
+    private sealed class StreamingTagFilter
+    {
+        private readonly StringBuilder _buffer = new();
+        private bool _inThinking;
+
+        public bool IsInThinking => _inThinking;
+
+        public IEnumerable<(bool IsThinking, string Text)> ProcessDelta(string chunk)
         {
-            if (!inThinking)
+            if (string.IsNullOrEmpty(chunk)) yield break;
+
+            _buffer.Append(chunk);
+
+            while (_buffer.Length > 0)
             {
-                var thinkIndex = remaining.IndexOf("<think>", StringComparison.OrdinalIgnoreCase);
-                if (thinkIndex < 0)
+                if (!_inThinking)
                 {
-                    results.Add((false, remaining));
-                    break;
-                }
+                    var current = _buffer.ToString();
+                    var thinkIdx = IndexOfAnyTag(current, ["<think>", "<thought>"], out var matchedTag);
 
-                if (thinkIndex > 0)
+                    if (thinkIdx >= 0)
+                    {
+                        if (thinkIdx > 0)
+                        {
+                            yield return (false, current[..thinkIdx]);
+                        }
+                        _inThinking = true;
+                        _buffer.Remove(0, thinkIdx + matchedTag!.Length);
+                    }
+                    else
+                    {
+                        var prefixLen = GetPotentialPrefixLength(current, ["<think>", "<thought>"]);
+                        if (prefixLen > 0)
+                        {
+                            var emitLen = current.Length - prefixLen;
+                            if (emitLen > 0)
+                            {
+                                yield return (false, current[..emitLen]);
+                                _buffer.Remove(0, emitLen);
+                            }
+                            break;
+                        }
+                        else
+                        {
+                            yield return (false, current);
+                            _buffer.Clear();
+                            break;
+                        }
+                    }
+                }
+                else
                 {
-                    results.Add((false, remaining[..thinkIndex]));
-                }
+                    var current = _buffer.ToString();
+                    var endIdx = IndexOfAnyTag(current, ["</think>", "</thought>"], out var matchedTag);
 
-                inThinking = true;
-                remaining = remaining[(thinkIndex + 7)..];
-            }
-            else
-            {
-                var endThinkIndex = remaining.IndexOf("</think>", StringComparison.OrdinalIgnoreCase);
-                if (endThinkIndex < 0)
-                {
-                    results.Add((true, remaining));
-                    break;
+                    if (endIdx >= 0)
+                    {
+                        if (endIdx > 0)
+                        {
+                            yield return (true, current[..endIdx]);
+                        }
+                        _inThinking = false;
+                        _buffer.Remove(0, endIdx + matchedTag!.Length);
+                    }
+                    else
+                    {
+                        var prefixLen = GetPotentialPrefixLength(current, ["</think>", "</thought>"]);
+                        if (prefixLen > 0)
+                        {
+                            var emitLen = current.Length - prefixLen;
+                            if (emitLen > 0)
+                            {
+                                yield return (true, current[..emitLen]);
+                                _buffer.Remove(0, emitLen);
+                            }
+                            break;
+                        }
+                        else
+                        {
+                            yield return (true, current);
+                            _buffer.Clear();
+                            break;
+                        }
+                    }
                 }
-
-                if (endThinkIndex > 0)
-                {
-                    results.Add((true, remaining[..endThinkIndex]));
-                }
-
-                inThinking = false;
-                remaining = remaining[(endThinkIndex + 8)..];
             }
         }
 
-        return results;
+        public IEnumerable<(bool IsThinking, string Text)> Flush()
+        {
+            if (_buffer.Length > 0)
+            {
+                yield return (_inThinking, _buffer.ToString());
+                _buffer.Clear();
+            }
+        }
+
+        private static int IndexOfAnyTag(string text, string[] tags, out string? matchedTag)
+        {
+            matchedTag = null;
+            int lowestIdx = -1;
+            foreach (var tag in tags)
+            {
+                var idx = text.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0 && (lowestIdx < 0 || idx < lowestIdx))
+                {
+                    lowestIdx = idx;
+                    matchedTag = tag;
+                }
+            }
+            return lowestIdx;
+        }
+
+        private static int GetPotentialPrefixLength(string text, string[] tags)
+        {
+            int maxLen = 0;
+            foreach (var tag in tags)
+            {
+                for (int len = 1; len < tag.Length && len <= text.Length; len++)
+                {
+                    var sub = text[^len..];
+                    if (tag.StartsWith(sub, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (len > maxLen) maxLen = len;
+                    }
+                }
+            }
+            return maxLen;
+        }
     }
 
     private List<IdeationProposal> ParseProposals(string text)
@@ -497,13 +917,35 @@ When you recommend one or more implementation tasks, format them as a structured
         try
         {
             var parsed = JsonSerializer.Deserialize<List<IdeationProposalDto>>(rawJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (parsed != null)
+            if (parsed != null && parsed.Count > 0)
             {
-                proposals.AddRange(parsed.Select(p => new IdeationProposal(
-                    p.Title ?? "Untitled Proposal",
-                    p.Description ?? string.Empty,
-                    p.Priority <= 0 ? 1 : p.Priority,
-                    p.DependsOnTitles)));
+                for (int i = 0; i < parsed.Count; i++)
+                {
+                    var p = parsed[i];
+                    var deps = new List<string>();
+                    if (p.DependsOnTitles != null && p.DependsOnTitles.Count > 0)
+                    {
+                        deps.AddRange(p.DependsOnTitles.Where(d => !string.IsNullOrWhiteSpace(d)));
+                    }
+
+                    // Enforce sequential implicit dependencies if multiple tasks are parsed:
+                    // Task i (for i > 0) depends on Task i - 1.
+                    if (parsed.Count > 1 && i > 0)
+                    {
+                        var prevTitle = parsed[i - 1].Title?.Trim();
+                        if (!string.IsNullOrWhiteSpace(prevTitle) &&
+                            !deps.Any(d => string.Equals(d, prevTitle, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            deps.Add(prevTitle);
+                        }
+                    }
+
+                    proposals.Add(new IdeationProposal(
+                        p.Title ?? "Untitled Proposal",
+                        p.Description ?? string.Empty,
+                        p.Priority <= 0 ? 1 : p.Priority,
+                        deps));
+                }
             }
         }
         catch (Exception ex)
@@ -512,6 +954,219 @@ When you recommend one or more implementation tasks, format them as a structured
         }
 
         return proposals;
+    }
+
+    private static (string ResultText, List<IdeationProposal> Proposals) ExecuteProposeTasks(
+        string argsJson,
+        List<IdeationProposal> sessionProposals,
+        CanonicalTools canonicalTools)
+    {
+        var rawTasks = ExtractRawProposals(argsJson);
+        if (rawTasks.Count == 0)
+        {
+            return ("No valid task proposals could be extracted from the provided arguments. Ensure tasks have at least a title and description.", new List<IdeationProposal>());
+        }
+
+        var newProposals = new List<IdeationProposal>();
+        for (int i = 0; i < rawTasks.Count; i++)
+        {
+            var raw = rawTasks[i];
+            var deps = new List<string>();
+            if (raw.DependsOnTitles != null && raw.DependsOnTitles.Count > 0)
+            {
+                deps.AddRange(raw.DependsOnTitles.Where(d => !string.IsNullOrWhiteSpace(d)));
+            }
+
+            // If multiple tasks are proposed, establish sequential implicit dependencies:
+            // Task i (for i > 0) depends on Task i - 1.
+            if (rawTasks.Count > 1 && i > 0)
+            {
+                var prevTitle = rawTasks[i - 1].Title.Trim();
+                if (!string.IsNullOrWhiteSpace(prevTitle) &&
+                    !deps.Any(d => string.Equals(d, prevTitle, StringComparison.OrdinalIgnoreCase)))
+                {
+                    deps.Add(prevTitle);
+                }
+            }
+
+            var proposal = new IdeationProposal(
+                raw.Title.Trim(),
+                raw.Description.Trim(),
+                raw.Priority <= 0 ? 1 : Math.Clamp(raw.Priority, 1, 5),
+                deps);
+
+            var existingIndex = sessionProposals.FindIndex(p => string.Equals(p.Title, proposal.Title, StringComparison.OrdinalIgnoreCase));
+            if (existingIndex >= 0)
+            {
+                sessionProposals[existingIndex] = proposal;
+            }
+            else
+            {
+                sessionProposals.Add(proposal);
+            }
+
+            newProposals.Add(proposal);
+
+            canonicalTools.PendingProposals.Add(new TaskProposal(
+                proposal.Title,
+                proposal.Description,
+                "feature",
+                proposal.DependsOnTitles));
+        }
+
+        var titles = string.Join(", ", newProposals.Select(p => $"'{p.Title}'"));
+        var resultText = $"Recorded {newProposals.Count} task proposal(s) with sequential dependencies in the ideation workspace for user review: {titles}. The developer can now review, refine, and add them to the backlog in the UI.";
+        return (resultText, newProposals);
+    }
+
+    private record RawTaskProposal(
+        string Title,
+        string Description,
+        int Priority,
+        IReadOnlyList<string>? DependsOnTitles);
+
+    private static List<RawTaskProposal> ExtractRawProposals(string argsJson)
+    {
+        var results = new List<RawTaskProposal>();
+        if (string.IsNullOrWhiteSpace(argsJson)) return results;
+
+        var text = argsJson.Trim();
+        if (text.StartsWith("```"))
+        {
+            var firstLine = text.IndexOf('\n');
+            var lastTicks = text.LastIndexOf("```");
+            if (firstLine > 0 && lastTicks > firstLine)
+            {
+                text = text.Substring(firstLine + 1, lastTicks - firstLine - 1).Trim();
+            }
+        }
+
+        try
+        {
+            var node = JsonNode.Parse(text);
+            if (node is JsonArray rootArray)
+            {
+                foreach (var item in rootArray)
+                {
+                    var p = ParseSingleRawTask(item);
+                    if (p != null) results.Add(p);
+                }
+            }
+            else if (node is JsonObject rootObj)
+            {
+                if (rootObj.TryGetPropertyValue("tasks", out var tasksNode) && tasksNode != null)
+                {
+                    if (tasksNode is JsonArray taskArr)
+                    {
+                        foreach (var item in taskArr)
+                        {
+                            var p = ParseSingleRawTask(item);
+                            if (p != null) results.Add(p);
+                        }
+                    }
+                    else if (tasksNode is JsonValue val && val.TryGetValue<string>(out var strVal))
+                    {
+                        if (strVal.TrimStart().StartsWith("["))
+                        {
+                            var innerNode = JsonNode.Parse(strVal);
+                            if (innerNode is JsonArray innerArr)
+                            {
+                                foreach (var item in innerArr)
+                                {
+                                    var p = ParseSingleRawTask(item);
+                                    if (p != null) results.Add(p);
+                                }
+                            }
+                        }
+                    }
+                    else if (tasksNode is JsonObject singleInTasks)
+                    {
+                        var p = ParseSingleRawTask(singleInTasks);
+                        if (p != null) results.Add(p);
+                    }
+                }
+                else
+                {
+                    var p = ParseSingleRawTask(rootObj);
+                    if (p != null) results.Add(p);
+                }
+            }
+        }
+        catch
+        {
+            // If JsonNode parsing fails, return empty list
+        }
+
+        return results;
+    }
+
+    private static RawTaskProposal? ParseSingleRawTask(JsonNode? node)
+    {
+        if (node is not JsonObject obj) return null;
+
+        string title = string.Empty;
+        if (obj.TryGetPropertyValue("title", out var t) ||
+            obj.TryGetPropertyValue("name", out t) ||
+            obj.TryGetPropertyValue("task_title", out t) ||
+            obj.TryGetPropertyValue("taskTitle", out t))
+        {
+            title = t?.ToString() ?? string.Empty;
+        }
+
+        string desc = string.Empty;
+        if (obj.TryGetPropertyValue("description", out var d) ||
+            obj.TryGetPropertyValue("desc", out d) ||
+            obj.TryGetPropertyValue("scope", out d) ||
+            obj.TryGetPropertyValue("details", out d) ||
+            obj.TryGetPropertyValue("summary", out d))
+        {
+            desc = d?.ToString() ?? string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(desc))
+        {
+            return null;
+        }
+
+        int priority = 1;
+        if (obj.TryGetPropertyValue("priority", out var pr) ||
+            obj.TryGetPropertyValue("prio", out pr))
+        {
+            if (pr is JsonValue jv && jv.TryGetValue<int>(out var intVal))
+            {
+                priority = intVal;
+            }
+            else if (int.TryParse(pr?.ToString(), out var parsedInt))
+            {
+                priority = parsedInt;
+            }
+        }
+
+        var deps = new List<string>();
+        if (obj.TryGetPropertyValue("dependsOnTitles", out var depNode) ||
+            obj.TryGetPropertyValue("depends_on_titles", out depNode) ||
+            obj.TryGetPropertyValue("dependsOn", out depNode) ||
+            obj.TryGetPropertyValue("dependencies", out depNode) ||
+            obj.TryGetPropertyValue("deps", out depNode))
+        {
+            if (depNode is JsonArray depArr)
+            {
+                foreach (var item in depArr)
+                {
+                    var s = item?.ToString();
+                    if (!string.IsNullOrWhiteSpace(s)) deps.Add(s);
+                }
+            }
+            else if (depNode is JsonValue depVal && depVal.TryGetValue<string>(out var depStr))
+            {
+                if (!string.IsNullOrWhiteSpace(depStr))
+                {
+                    deps.AddRange(depStr.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                }
+            }
+        }
+
+        return new RawTaskProposal(title, desc, priority, deps);
     }
 
     private async Task BroadcastAsync(
@@ -535,7 +1190,17 @@ When you recommend one or more implementation tasks, format them as a structured
         var tools = new List<AITool>();
         foreach (var tool in permittedTools)
         {
-            tools.Add(AIFunctionFactory.Create(() => "ok", tool));
+            if (string.Equals(tool, CanonicalToolNames.ProposeTasks, StringComparison.OrdinalIgnoreCase))
+            {
+                tools.Add(AIFunctionFactory.Create(
+                    ([System.ComponentModel.Description("List of task proposals")] IReadOnlyList<IdeationProposalDto> tasks) => "ok",
+                    CanonicalToolNames.ProposeTasks,
+                    "Propose structured backlog items for the workspace"));
+            }
+            else
+            {
+                tools.Add(AIFunctionFactory.Create(() => "ok", tool));
+            }
         }
         return tools;
     }
@@ -558,6 +1223,10 @@ When you recommend one or more implementation tasks, format them as a structured
                 {
                     dict[k] = ParseJsonNodeValue(v);
                 }
+            }
+            else if (node?["arguments"] is JsonArray arrArgs)
+            {
+                dict["tasks"] = arrArgs.Select(ParseJsonNodeValue).ToList();
             }
 
             return new FunctionCallContent(Guid.NewGuid().ToString("N"), name, dict);
@@ -595,11 +1264,11 @@ When you recommend one or more implementation tasks, format them as a structured
         return node.ToString();
     }
 
-    private class IdeationProposalDto
+    public class IdeationProposalDto
     {
         public string? Title { get; set; }
         public string? Description { get; set; }
-        public int Priority { get; set; }
+        public int Priority { get; set; } = 1;
         public List<string>? DependsOnTitles { get; set; }
     }
 }

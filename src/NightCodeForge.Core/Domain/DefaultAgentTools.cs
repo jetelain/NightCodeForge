@@ -8,6 +8,7 @@ public static class DefaultAgentTools
     private static readonly string[] _readOnly =
     [
         CanonicalToolNames.Read,
+        CanonicalToolNames.Bash, // Restricted version of bash (restricted to a subset of commands)
         CanonicalToolNames.ProposeTasks,
         CanonicalToolNames.WebSearch,
         CanonicalToolNames.Ask,

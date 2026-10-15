@@ -119,6 +119,40 @@ public class WorkspacePathResolverTests
         Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "clone", "App.cs")), p5);
     }
 
+    [Fact]
+    public void ResolveCruciblePath_DirectRepositoryRootWithoutCloneSubdir_ResolvesCloneAndWorkspacePrefixesDirectly()
+    {
+        var resolver = new WorkspacePathResolver();
+        var tempRepoRoot = Path.Combine(Path.GetTempPath(), "repo-root-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRepoRoot);
+
+        try
+        {
+            // /clone/src/App.cs falls back to tempRepoRoot/src/App.cs because tempRepoRoot/clone does not exist
+            var p1 = resolver.ResolveCruciblePath(tempRepoRoot, "/clone/src/App.cs");
+            Assert.Equal(Path.GetFullPath(Path.Combine(tempRepoRoot, "src", "App.cs")), p1);
+
+            // /workspace/clone/src/App.cs falls back to tempRepoRoot/src/App.cs
+            var p2 = resolver.ResolveCruciblePath(tempRepoRoot, "/workspace/clone/src/App.cs");
+            Assert.Equal(Path.GetFullPath(Path.Combine(tempRepoRoot, "src", "App.cs")), p2);
+
+            // /workspace/src/App.cs resolves directly to tempRepoRoot/src/App.cs
+            var p3 = resolver.ResolveCruciblePath(tempRepoRoot, "/workspace/src/App.cs");
+            Assert.Equal(Path.GetFullPath(Path.Combine(tempRepoRoot, "src", "App.cs")), p3);
+
+            // Pure relative path resolves to tempRepoRoot/src/App.cs
+            var p4 = resolver.ResolveCruciblePath(tempRepoRoot, "src/App.cs");
+            Assert.Equal(Path.GetFullPath(Path.Combine(tempRepoRoot, "src", "App.cs")), p4);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRepoRoot))
+            {
+                Directory.Delete(tempRepoRoot, true);
+            }
+        }
+    }
+
     private class FakeWslMetadata : NightCodeForge.Core.Interfaces.IWslMetadataService
     {
         public string Distro { get; set; } = "openSUSE";

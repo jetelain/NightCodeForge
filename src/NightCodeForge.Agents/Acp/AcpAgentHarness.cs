@@ -718,7 +718,7 @@ public class AcpAgentHarness : IAgentHarness
                 context.Profile.ModelName,
                 elapsedMs,
                 new AgentRunMetrics(elapsedMs, promptTokens, completionTokens, promptTokens + completionTokens),
-                context.OptimizationFlags,
+                context.OptimizationFlags ?? new LocalOptimizationFlags(),
                 status);
 
             var transcriptDir = Path.Combine(workspacePath, "docs", "transcripts");

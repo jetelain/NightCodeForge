@@ -259,6 +259,25 @@ public class WslDockerExecutionTests
     }
 
     [Fact]
+    public void BuildVolumeMounts_WhenCanonicalClonePathIsInsideHostWorkspacePath_DoesNotMountDuplicateClone()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/home/developer/.nightcodeforge/wks/42",
+            CanonicalClonePath = "/home/developer/.nightcodeforge/wks/42/clone",
+            ContainerWorkspacePath = "/workspace"
+        };
+
+        var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options);
+
+        // Workspace is mounted
+        Assert.Contains(mounts, m => m.ContainerPath == "/workspace");
+
+        // Duplicate /clone mount is NOT added
+        Assert.DoesNotContain(mounts, m => m.ContainerPath == "/clone");
+    }
+
+    [Fact]
     public void BuildVolumeMounts_RestrictedReadOnly_MarksWorkspaceMountReadOnly()
     {
         var options = new ContainerExecutorOptions
@@ -410,6 +429,59 @@ public class WslDockerExecutionTests
         Assert.Equal("--name", argList[6]);
         Assert.Equal("wsl-container", argList[7]);
         Assert.Contains("/home/wsluser/.nightcodeforge/wks/1:/workspace", argList);
+    }
+
+    [Fact]
+    public void ResolveHostPath_WithBackslashesOnWsl_ConvertsToForwardSlashes()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            UseWsl = true,
+            HostWorkspacePath = @"\home\developer\.nightcodeforge\wks\1"
+        };
+
+        var resolved = NightCodeForgeContainerExecutor.ResolveHostPath(options.HostWorkspacePath, options);
+
+        Assert.Equal("/home/developer/.nightcodeforge/wks/1", resolved);
+    }
+
+    [Fact]
+    public void ResolveContainerWorkingDirectory_HostRepoPath_ResolvesToDefaultWorkingDirectory()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/home/developer/.nightcodeforge/wks/1",
+            CanonicalClonePath = "/home/developer/.nightcodeforge/wks/1/clone",
+            DefaultWorkingDirectory = "/workspace/clone",
+            ContainerWorkspacePath = "/workspace"
+        };
+
+        // 1. Host repo path passed as working directory
+        var resolved = NightCodeForgeContainerExecutor.ResolveContainerWorkingDirectory(@"C:\repos\myproject", options);
+        Assert.Equal("/workspace/clone", resolved);
+
+        // 2. Relative subpath under CanonicalClonePath
+        var subpath = NightCodeForgeContainerExecutor.ResolveContainerWorkingDirectory("/home/developer/.nightcodeforge/wks/1/clone/src/Engine", options);
+        Assert.Equal("/workspace/clone/src/Engine", subpath);
+
+        // 3. /workspace passed directly
+        var root = NightCodeForgeContainerExecutor.ResolveContainerWorkingDirectory("/workspace", options);
+        Assert.Equal("/workspace/clone", root);
+
+        // 4. Dot or dot-slash resolves to defaultWorkingDirectory
+        var dot = NightCodeForgeContainerExecutor.ResolveContainerWorkingDirectory(".", options);
+        Assert.Equal("/workspace/clone", dot);
+
+        // 5. /clone resolves to defaultWorkingDirectory
+        var clone = NightCodeForgeContainerExecutor.ResolveContainerWorkingDirectory("/clone", options);
+        Assert.Equal("/workspace/clone", clone);
+
+        var cloneSub = NightCodeForgeContainerExecutor.ResolveContainerWorkingDirectory("/clone/src/Engine", options);
+        Assert.Equal("/workspace/clone/src/Engine", cloneSub);
+
+        // 6. Relative path resolves under defaultWorkingDirectory
+        var rel = NightCodeForgeContainerExecutor.ResolveContainerWorkingDirectory("src/Engine", options);
+        Assert.Equal("/workspace/clone/src/Engine", rel);
     }
 }
 

@@ -85,6 +85,27 @@ public class IdeationProposalCardTests : BunitContext
     }
 
     [Fact]
+    public void ToggleDependencies_DisplaysSequentialDependenciesHint_WhenPresent()
+    {
+        var proposal = new IdeationProposalViewModel
+        {
+            Title = "Dependent Task",
+            DependsOnTitles = new List<string> { "Predecessor Task A", "Predecessor Task B" }
+        };
+
+        var cut = Render<IdeationProposalCard>(parameters => parameters
+            .Add(p => p.Proposal, proposal));
+
+        // Open accordion
+        cut.Find("button.dependency-toggle-btn").Click();
+
+        var hintPanel = cut.Find(".dependency-implicit-hint");
+        Assert.NotNull(hintPanel);
+        Assert.Contains("Predecessor Task A", hintPanel.InnerHtml);
+        Assert.Contains("Predecessor Task B", hintPanel.InnerHtml);
+    }
+
+    [Fact]
     public void ClickAddToBacklog_TriggersCallback()
     {
         var proposal = new IdeationProposalViewModel

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
 
@@ -19,6 +20,7 @@ public partial class LenientToolDispatcher
     private readonly ConcurrentDictionary<string, ToolDefinition> _tools = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _aliasToCanonical = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ToolTranslationRule> _translations = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ILogger<LenientToolDispatcher>? _logger;
 
     [GeneratedRegex(@"^```(?:json|xml)?\s*", RegexOptions.IgnoreCase)]
     private static partial Regex MarkdownFenceStartRegex();
@@ -28,8 +30,9 @@ public partial class LenientToolDispatcher
 
     public IReadOnlyCollection<ToolDefinition> RegisteredTools => _tools.Values.ToList();
 
-    public LenientToolDispatcher(CanonicalTools? canonicalTools = null)
+    public LenientToolDispatcher(CanonicalTools? canonicalTools = null, ILogger<LenientToolDispatcher>? logger = null)
     {
+        _logger = logger;
         if (canonicalTools != null)
         {
             RegisterCanonicalTools(canonicalTools);
@@ -155,9 +158,18 @@ public partial class LenientToolDispatcher
     {
         if (_tools.TryGetValue(canonicalName, out var tool) && tool.Handler != null)
         {
-            return await tool.Handler(args, cancellationToken);
+            try
+            {
+                return await tool.Handler(args, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "LenientToolDispatcher: Error executing handler for tool '{CanonicalName}'", canonicalName);
+                throw;
+            }
         }
 
+        _logger?.LogWarning("LenientToolDispatcher: Unknown or unregistered tool: '{CanonicalName}'", canonicalName);
         throw new NotSupportedException($"Unknown or unregistered tool: '{canonicalName}'");
     }
 
@@ -500,12 +512,22 @@ public partial class LenientToolDispatcher
             return new Dictionary<string, object?> { ["command"] = $"rg -n \"^(public|private|protected|internal|class|interface|record|def|function)\" {p}" };
         }));
 
+        RegisterTranslation(new ToolTranslationRule("find_files", CanonicalToolNames.Bash, args =>
+        {
+            var pat = args.TryGetValue("pattern", out var pVal) ? pVal?.ToString() : (args.TryGetValue("name", out var nVal) ? nVal?.ToString() : "*");
+            var p = args.TryGetValue("path", out var pathVal) ? pathVal?.ToString() : ".";
+            return new Dictionary<string, object?> { ["command"] = $"find {p} -name \"{pat}\"" };
+        }));
+
         _aliasToCanonical["listdir"] = "list_dir";
         _aliasToCanonical["list_directory"] = "list_dir";
         _aliasToCanonical["ls"] = "list_dir";
         _aliasToCanonical["grep"] = "grep_search";
         _aliasToCanonical["search_files"] = "grep_search";
         _aliasToCanonical["find_in_files"] = "grep_search";
+        _aliasToCanonical["find"] = "find_files";
+        _aliasToCanonical["findfiles"] = "find_files";
+        _aliasToCanonical["locate_files"] = "find_files";
         _aliasToCanonical["outline"] = "get_file_outline";
         _aliasToCanonical["view_outline"] = "get_file_outline";
         _aliasToCanonical["file_outline"] = "get_file_outline";

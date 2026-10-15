@@ -1,0 +1,254 @@
+@namespace NightCodeForge.Web.Components.Settings
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.DependencyInjection
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Infrastructure.Data
+@using NightCodeForge.Web.Services
+@inject IServiceScopeFactory ScopeFactory
+@inject IOllamaModelCatalogService ModelCatalogService
+@inject WorkspaceStateService WorkspaceState
+@inject ToastService ToastService
+
+<div class="forge-card mt-3">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                <span style="font-size: 1.25rem;">🤖</span>
+                <h3 style="font-weight: 600; font-size: 1.2rem; margin: 0;">Agent Reasoning Profiles</h3>
+                <span class="forge-badge badge-teal">Global Defaults</span>
+            </div>
+            <p style="margin: 0; font-size: 0.875rem; color: var(--text-secondary); max-width: 720px;">
+                Configure the LLM models, temperature, thinking budgets, and turn limits for each pipeline stage. By default, profiles inherit global optimization settings unless explicitly customized below.
+            </p>
+        </div>
+        <div style="display: flex; gap: 0.75rem;">
+            <button type="button" class="forge-btn forge-btn-primary" @onclick="SaveProfilesAsync" disabled="_isSaving">
+                @if (_isSaving)
+                {
+                    <span>Saving...</span>
+                }
+                else
+                {
+                    <span>💾 Save Profiles</span>
+                }
+            </button>
+        </div>
+    </div>
+
+    @if (_isLoading)
+    {
+        <div style="padding: 2rem; text-align: center; color: var(--text-secondary);">
+            Loading agent profiles...
+        </div>
+    }
+    else
+    {
+        <div style="display: flex; flex-direction: column; gap: 1.25rem;">
+            @foreach (var profile in _profiles)
+            {
+                <div style="background: var(--bg-surface-elevated, rgba(255,255,255,0.03)); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <strong style="font-size: 1.05rem; color: var(--text-primary);">@profile.Name</strong>
+                                <span class="font-mono forge-badge badge-indigo" style="font-size: 0.75rem;">@profile.Id</span>
+                                <span class="forge-badge badge-gray" style="font-size: 0.75rem;">@profile.Mode</span>
+                            </div>
+                            <span style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.2rem;">
+                                Harness: <span class="font-mono">@profile.HarnessId</span> | Security: <span>@profile.SecurityTier</span>
+                            </span>
+                        </div>
+                        <div>
+                            @if (profile.OptimizationFlags == null)
+                            {
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <span class="forge-badge badge-teal" style="font-size: 0.8rem;">
+                                        ⚡ Inheriting Global Optimizations
+                                    </span>
+                                    <button type="button" class="forge-btn forge-btn-outline" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;" @onclick="() => CustomizeFlags(profile)">
+                                        Override
+                                    </button>
+                                </div>
+                            }
+                            else
+                            {
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <span class="forge-badge badge-indigo" style="font-size: 0.8rem;">
+                                        🔧 Custom Optimization Flags
+                                    </span>
+                                    <button type="button" class="forge-btn forge-btn-outline" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;" @onclick="() => RevertToGlobal(profile)">
+                                        Revert to Global
+                                    </button>
+                                </div>
+                            }
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; font-size: 0.85rem;">
+                        <div>
+                            <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">
+                                Model Name
+                            </label>
+                            <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" list="availableModelsList" />
+                        </div>
+
+                        <div>
+                            <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">
+                                Thinking Effort
+                            </label>
+                            <select class="forge-input" style="width: 100%;" @bind="profile.ThinkingEffort">
+                                <option value="@ThinkingEffort.None">None (Instant)</option>
+                                <option value="@ThinkingEffort.Low">Low (~1k tokens)</option>
+                                <option value="@ThinkingEffort.Medium">Medium (~4k tokens)</option>
+                                <option value="@ThinkingEffort.High">High (~8k tokens)</option>
+                                <option value="@ThinkingEffort.CustomBudget">Custom Token Budget</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">
+                                Temperature
+                            </label>
+                            <input type="number" step="0.1" min="0" max="2" class="forge-input font-mono" style="width: 100%;" @bind="profile.Temperature" />
+                        </div>
+
+                        <div>
+                            <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">
+                                Max Turn Budget
+                            </label>
+                            <input type="number" step="10" min="5" max="1000" class="forge-input font-mono" style="width: 100%;" @bind="profile.MaxTurns" />
+                        </div>
+                    </div>
+
+                    @if (profile.OptimizationFlags != null)
+                    {
+                        <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed var(--border-subtle); background: var(--bg-input); border-radius: var(--radius-sm); padding: 0.75rem;">
+                            <div style="font-size: 0.8rem; font-weight: 600; color: var(--accent-indigo); margin-bottom: 0.5rem;">
+                                🔧 Custom Profile Optimizations Override:
+                            </div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.8rem;">
+                                <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer;">
+                                    <input type="checkbox" @bind="profile.OptimizationFlags.ThinkingTraceCompaction" /> Thinking Compaction
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer;">
+                                    <input type="checkbox" @bind="profile.OptimizationFlags.CompactOlderToolResults" /> Tool Compaction
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer;">
+                                    <input type="checkbox" @bind="profile.OptimizationFlags.LoopCircuitBreaker" /> Circuit Breaker
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer;">
+                                    <input type="checkbox" @bind="profile.OptimizationFlags.GuidedGrammarDecoding" /> Guided Grammar
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer;">
+                                    <input type="checkbox" @bind="profile.OptimizationFlags.DeterministicSymbolMap" /> Symbol Map
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer;">
+                                    <input type="checkbox" @bind="profile.OptimizationFlags.PrefixStabilization" /> Prefix Stabilizer
+                                </label>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <datalist id="availableModelsList">
+            @foreach (var m in _availableModels)
+            {
+                <option value="@m.Name" />
+            }
+        </datalist>
+    }
+</div>
+
+@code {
+    private List<AgentProfile> _profiles = new();
+    private List<OllamaModelInfo> _availableModels = new();
+    private bool _isLoading = true;
+    private bool _isSaving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadProfilesAsync();
+    }
+
+    private async Task LoadProfilesAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            using var scope = ScopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            _profiles = await db.AgentProfiles
+                .Where(p => p.WorkspaceId == null)
+                .OrderBy(p => p.Id)
+                .ToListAsync();
+
+            try
+            {
+                var models = await ModelCatalogService.GetAvailableModelsAsync();
+                _availableModels = models.ToList();
+            }
+            catch
+            {
+                // Non-fatal if Ollama is currently unreachable
+            }
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Error Loading Profiles", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void CustomizeFlags(AgentProfile profile)
+    {
+        profile.OptimizationFlags = new LocalOptimizationFlags();
+    }
+
+    private void RevertToGlobal(AgentProfile profile)
+    {
+        profile.OptimizationFlags = null;
+    }
+
+    private async Task SaveProfilesAsync()
+    {
+        if (_isSaving) return;
+        _isSaving = true;
+
+        try
+        {
+            using var scope = ScopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            foreach (var p in _profiles)
+            {
+                var existing = await db.AgentProfiles.FindAsync(p.Id);
+                if (existing != null)
+                {
+                    existing.ModelName = p.ModelName;
+                    existing.ThinkingEffort = p.ThinkingEffort;
+                    existing.Temperature = p.Temperature;
+                    existing.MaxTurns = p.MaxTurns;
+                    existing.OptimizationFlags = p.OptimizationFlags;
+                }
+            }
+
+            await db.SaveChangesAsync();
+            ToastService.Show("Profiles Saved", "Agent profiles successfully updated.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Error Saving Profiles", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+}

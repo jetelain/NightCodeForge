@@ -63,5 +63,48 @@ public class LocalOptimizationFlags
         get => CompactOlderToolResults;
         set => CompactOlderToolResults = value;
     }
+
+    /// <summary>
+    /// Number of recent assistant turns where &lt;think&gt;...&lt;/think&gt; traces are kept verbatim before older turns are compacted.
+    /// Default: 100.
+    /// </summary>
+    public int ThinkingKeepVerbatimCount { get; set; } = 100;
+
+    /// <summary>
+    /// Number of recent tool results kept verbatim before older outputs are eligible for truncation/compaction.
+    /// Default: 100.
+    /// </summary>
+    public int ToolKeepVerbatimCount { get; set; } = 100;
+
+    /// <summary>
+    /// Character threshold length above which older tool results are eligible for truncation/compaction.
+    /// Default: 2000 characters.
+    /// </summary>
+    public int ToolMaxResultLength { get; set; } = 2000;
+
+    /// <summary>
+    /// Number of characters to retain in the summary prefix when truncating bulky tool results.
+    /// Default: 1750 characters.
+    /// </summary>
+    public int ToolTruncateToLength { get; set; } = 1750;
+
+    /// <summary>
+    /// Creates a deep memberwise clone of this configuration.
+    /// </summary>
+    public LocalOptimizationFlags Clone() => new()
+    {
+        ThinkingTraceCompaction = ThinkingTraceCompaction,
+        LoopCircuitBreaker = LoopCircuitBreaker,
+        GuidedGrammarDecoding = GuidedGrammarDecoding,
+        DeterministicSymbolMap = DeterministicSymbolMap,
+        StructuredDiagnosticExtraction = StructuredDiagnosticExtraction,
+        PrefixStabilization = PrefixStabilization,
+        JitModelPreload = JitModelPreload,
+        CompactOlderToolResults = CompactOlderToolResults,
+        ThinkingKeepVerbatimCount = ThinkingKeepVerbatimCount,
+        ToolKeepVerbatimCount = ToolKeepVerbatimCount,
+        ToolMaxResultLength = ToolMaxResultLength,
+        ToolTruncateToLength = ToolTruncateToLength
+    };
 }
 

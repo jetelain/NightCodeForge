@@ -180,6 +180,88 @@ public class IdeationPageTests : BunitContext
         Assert.Empty(_sessionState.Proposals);
         Assert.Equal(2, _sessionState.BoundWorkspaceId);
     }
+
+    [Fact]
+    public async Task SendMessage_StreamsToolCalls_RendersToolTraceAndBadges()
+    {
+        var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 1;
+
+        var toolStarted = new IdeationToolCallInfo("call_test_1", "read_file", "{\"path\": \"src/Program.cs\"}");
+        var toolCompleted = toolStarted with
+        {
+            Result = "using System;\nConsole.WriteLine(\"Hello\");",
+            IsError = false,
+            DurationMs = 85
+        };
+
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: toolStarted),
+            new(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: toolCompleted),
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "I examined Program.cs."),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("I examined Program.cs.", Array.Empty<IdeationProposal>(), new[] { toolCompleted }))
+        };
+
+        var cut = Render<Ideation>();
+
+        var textarea = cut.Find("textarea.chat-textarea");
+        textarea.Input("Read Program.cs");
+
+        var sendBtn = cut.Find("button.send-btn");
+        await cut.InvokeAsync(() => sendBtn.Click());
+
+        cut.WaitForAssertion(() => Assert.Equal(2, _sessionState.Messages.Count));
+
+        var assistantMsg = _sessionState.Messages[1];
+        Assert.NotNull(assistantMsg.ToolCalls);
+        Assert.Single(assistantMsg.ToolCalls);
+        Assert.Equal("read_file", assistantMsg.ToolCalls[0].ToolName);
+        Assert.Equal(85, assistantMsg.ToolCalls[0].DurationMs);
+        Assert.False(assistantMsg.ToolCalls[0].IsError);
+
+        Assert.Contains("read_file", cut.Markup);
+        Assert.Contains("src/Program.cs", cut.Markup);
+        Assert.Contains("85ms", cut.Markup);
+        Assert.Contains("tool-trace completed", cut.Markup);
+
+        var summary = cut.Find(".tool-trace summary");
+        Assert.NotNull(summary);
+        Assert.Contains("Console.WriteLine", cut.Markup);
+    }
+
+    [Fact]
+    public async Task SendMessage_StreamsToolFailure_RendersErrorBadge()
+    {
+        var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 1;
+
+        var failedTool = new IdeationToolCallInfo("call_fail", "run_command", "{\"command\": \"cat missing.txt\"}", "File not found: missing.txt", IsError: true, DurationMs: 120);
+
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: failedTool with { Result = null, DurationMs = 0 }),
+            new(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: failedTool),
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Command failed as expected."),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Command failed as expected.", Array.Empty<IdeationProposal>(), new[] { failedTool }))
+        };
+
+        var cut = Render<Ideation>();
+
+        var textarea = cut.Find("textarea.chat-textarea");
+        textarea.Input("Run missing");
+
+        var sendBtn = cut.Find("button.send-btn");
+        await cut.InvokeAsync(() => sendBtn.Click());
+
+        cut.WaitForAssertion(() => Assert.Equal(2, _sessionState.Messages.Count));
+
+        Assert.Contains("tool-trace error", cut.Markup);
+        Assert.Contains("Failed", cut.Markup);
+        Assert.Contains("run_command", cut.Markup);
+    }
 }
 
 public class MockIdeationService : IIdeationService

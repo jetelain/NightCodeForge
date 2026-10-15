@@ -407,8 +407,8 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             {
                 if (!string.IsNullOrWhiteSpace(_options.HostWorkspacePath))
                 {
-                    var expectedHostWks = ResolveHostPath(_options.HostWorkspacePath, _options).Replace('\\', '/').TrimEnd('/');
-                    var mountInspectCmd = $"inspect -f \"{{{{range .Mounts}}}}{{{{if eq .Destination \\\"{_options.ContainerWorkspacePath}\\\"}}}}{{{{.Source}}}}{{{{end}}}}{{{{end}}}}\" {_options.ContainerNameOrId}";
+                    var expectedHostWks = NormalizeMountSourcePath(ResolveHostPath(_options.HostWorkspacePath, _options));
+                    var mountInspectCmd = $"inspect -f \"{{{{range .Mounts}}}}{{{{.Destination}}}}={{{{.Source}}}};{{{{end}}}}\" {_options.ContainerNameOrId}";
                     var (mountExe, mountArgs) = BuildDockerCommand(
                         mountInspectCmd,
                         _options.UseWsl,
@@ -416,11 +416,36 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                         _options.ShellExecutable,
                         _options.WslExecutable);
                     var mountResult = _processRunner.Run(mountExe, mountArgs, timeoutSeconds: 5);
-                    var currentSource = mountResult.StandardOutput.Trim().Replace('\\', '/').TrimEnd('/');
-                    if (!string.IsNullOrWhiteSpace(currentSource) && !string.Equals(currentSource, expectedHostWks, StringComparison.OrdinalIgnoreCase))
+                    string currentSource = string.Empty;
+                    bool currentHasClone = false;
+                    if (mountResult.ExitCode == 0)
                     {
-                        _logger.LogInformation("Recreating container {Container} because mounted workspace '{Current}' does not match expected '{Expected}'",
-                            _options.ContainerNameOrId, currentSource, expectedHostWks);
+                        var mountsStr = mountResult.StandardOutput.Trim();
+                        foreach (var entry in mountsStr.Split(';', StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            var parts = entry.Split('=', 2);
+                            if (parts.Length == 2)
+                            {
+                                if (string.Equals(parts[0].Trim(), _options.ContainerWorkspacePath, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    currentSource = NormalizeMountSourcePath(parts[1].Trim());
+                                }
+                                if (string.Equals(parts[0].Trim(), "/clone", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    currentHasClone = true;
+                                }
+                            }
+                        }
+                    }
+
+                    var expectedMounts = BuildVolumeMounts(_options);
+                    var expectedHasClone = expectedMounts.Any(m => string.Equals(m.ContainerPath, "/clone", StringComparison.OrdinalIgnoreCase));
+
+                    if ((!string.IsNullOrWhiteSpace(currentSource) && !string.Equals(currentSource, expectedHostWks, StringComparison.OrdinalIgnoreCase)) ||
+                        (currentHasClone != expectedHasClone))
+                    {
+                        _logger.LogInformation("Recreating container {Container} because mounts do not match expected configuration (source: '{Current}' vs '{Expected}', cloneMount: {CurrentClone} vs {ExpectedClone})",
+                            _options.ContainerNameOrId, currentSource, expectedHostWks, currentHasClone, expectedHasClone);
                         var (rmExe, rmArgs) = BuildDockerCommand(
                             $"rm -f {_options.ContainerNameOrId}",
                             _options.UseWsl,
@@ -449,13 +474,26 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                     _options.WslDistribution,
                     _options.ShellExecutable,
                     _options.WslExecutable);
-                _processRunner.Run(startExe, startArgs, timeoutSeconds: 15);
+                var startResult = _processRunner.Run(startExe, startArgs, timeoutSeconds: 15);
+                if (startResult.ExitCode != 0)
+                {
+                    _logger.LogError("Failed to start stopped container {Container} (exit code {ExitCode}): {Error}",
+                        _options.ContainerNameOrId, startResult.ExitCode, startResult.StandardError);
+                    throw new InvalidOperationException($"Failed to start container '{_options.ContainerNameOrId}': {startResult.StandardError}");
+                }
                 return;
             }
 
             _logger.LogInformation("Spawning container {Container} with volume mounts", _options.ContainerNameOrId);
             var runSpec = BuildDockerRunProcessSpec(_options);
-            _processRunner.Run(runSpec);
+            var runResult = _processRunner.Run(runSpec);
+            if (runResult.ExitCode != 0)
+            {
+                _logger.LogError("Failed to spawn container {Container} (exit code {ExitCode}): {Error}",
+                    _options.ContainerNameOrId, runResult.ExitCode, runResult.StandardError);
+                throw new InvalidOperationException(
+                    $"Failed to spawn container '{_options.ContainerNameOrId}' (exit code {runResult.ExitCode}): {runResult.StandardError}");
+            }
         }
         catch (NotImplementedException)
         {
@@ -467,8 +505,23 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         }
     }
 
+    private static string NormalizeMountSourcePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+        var norm = path.Replace('\\', '/').TrimEnd('/');
+        if (norm.StartsWith("/host_mnt/", StringComparison.OrdinalIgnoreCase))
+        {
+            norm = "/mnt/" + norm["/host_mnt/".Length..];
+        }
+        else if (norm.StartsWith("/run/desktop/mnt/host/", StringComparison.OrdinalIgnoreCase))
+        {
+            norm = "/mnt/" + norm["/run/desktop/mnt/host/".Length..];
+        }
+        return norm;
+    }
+
     /// <summary>
-    /// Ensures that the local agent base container image (ncf-agent-base:latest) exists and is fresh (&lt; 30 days old).
+    /// Ensures that the local agent base container image exists and is fresh (&lt; 30 days old).
     /// If absent or expired, generates it locally via docker build using the embedded DefaultAgentBaseDockerfile.
     /// </summary>
     public void EnsureImageReady()
@@ -477,8 +530,11 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             ? _options.ContainerImage
             : ContainerExecutorOptions.DefaultAgentBaseImage;
 
-        // Only manage/auto-build the local ncf-agent-base image
-        if (!image.StartsWith("ncf-agent-base", StringComparison.OrdinalIgnoreCase))
+        bool isManagedBaseImage =
+            image.StartsWith("ncf-agent-base", StringComparison.OrdinalIgnoreCase) ||
+            image.StartsWith("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase);
+
+        if (!isManagedBaseImage)
         {
             return;
         }
@@ -488,6 +544,27 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             if (IsImageFresh(_processRunner, image, _options, TimeSpan.FromDays(30)))
             {
                 return;
+            }
+
+            // If the alternate image exists and is fresh, tag it
+            var altImage = image.StartsWith("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase)
+                ? "ncf-agent-base:latest"
+                : "nightcodeforge-agent:latest";
+
+            if (IsImageFresh(_processRunner, altImage, _options, TimeSpan.FromDays(30)))
+            {
+                var (tagExe, tagArgs) = BuildDockerCommand(
+                    $"tag {altImage} {image}",
+                    _options.UseWsl,
+                    _options.WslDistribution,
+                    _options.ShellExecutable,
+                    _options.WslExecutable);
+                var tagResult = _processRunner.Run(tagExe, tagArgs, timeoutSeconds: 10);
+                if (tagResult.ExitCode == 0)
+                {
+                    _logger.LogInformation("Tagged existing image {AltImage} as {Image}", altImage, image);
+                    return;
+                }
             }
 
             BuildLocalAgentBaseImage(_processRunner, image, _options, _logger);
@@ -729,16 +806,22 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             mounts.Add(new ContainerVolumeMount(hostWks, containerWks, isReadOnly: options.IsRestrictedReadOnly));
 
             // Layered protection and isolated task worktree support:
+            var normHost = hostWks.TrimEnd('/', '\\');
+            var normContainer = containerWks.TrimEnd('/', '\\');
+
             if (!string.IsNullOrWhiteSpace(options.CanonicalClonePath))
             {
                 var normClone = ResolveHostPath(options.CanonicalClonePath, options).TrimEnd('/', '\\');
-                mounts.Add(new ContainerVolumeMount(normClone, "/clone", isReadOnly: true));
-                mounts.Add(new ContainerVolumeMount($"{normClone}/.git", "/clone/.git", isReadOnly: options.IsRestrictedReadOnly));
+                // Only mount /clone if the clone is NOT already within HostWorkspacePath (e.g. isolated task worktree)
+                if (!normClone.StartsWith(normHost + "/", StringComparison.OrdinalIgnoreCase) &&
+                    !normClone.Equals(normHost, StringComparison.OrdinalIgnoreCase))
+                {
+                    mounts.Add(new ContainerVolumeMount(normClone, "/clone", isReadOnly: true));
+                    mounts.Add(new ContainerVolumeMount($"{normClone}/.git", "/clone/.git", isReadOnly: options.IsRestrictedReadOnly));
+                }
             }
             else if (options.ProtectCloneWorkingTree && !options.IsRestrictedReadOnly)
             {
-                var normHost = hostWks.TrimEnd('/', '\\');
-                var normContainer = containerWks.TrimEnd('/', '\\');
                 mounts.Add(new ContainerVolumeMount($"{normHost}/clone", $"{normContainer}/clone", isReadOnly: true));
                 mounts.Add(new ContainerVolumeMount($"{normHost}/clone/.git", $"{normContainer}/clone/.git", isReadOnly: false));
             }
@@ -828,9 +911,22 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             return path;
         }
 
-        if (options.UseWsl && (path.Contains(":\\") || path.Contains(":/")))
+        if (options.UseWsl)
         {
-            return Git.WslPathConverter.ToWslPath(path);
+            if (path.Contains(":\\") || path.Contains(":/"))
+            {
+                return Git.WslPathConverter.ToWslPath(path);
+            }
+
+            if (path.StartsWith('\\') || path.Contains('\\'))
+            {
+                var norm = path.Replace('\\', '/');
+                if (path.StartsWith('\\') && !norm.StartsWith('/'))
+                {
+                    norm = "/" + norm;
+                }
+                return norm;
+            }
         }
 
         if (options.ExpandTildeInMounts && (path == "~" || path.StartsWith("~/") || path.StartsWith("~\\")))
@@ -858,17 +954,35 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
     /// </summary>
     public static string ResolveContainerWorkingDirectory(string? workingDirectory, ContainerExecutorOptions options)
     {
-        var targetDir = !string.IsNullOrWhiteSpace(workingDirectory)
-            ? workingDirectory.Trim()
-            : options.DefaultWorkingDirectory;
+        var defaultDir = !string.IsNullOrWhiteSpace(options.DefaultWorkingDirectory)
+            ? options.DefaultWorkingDirectory
+            : (!string.IsNullOrWhiteSpace(options.ContainerWorkspacePath) ? options.ContainerWorkspacePath : "/workspace");
 
-        if (string.IsNullOrWhiteSpace(targetDir) ||
-            targetDir == "/workspace" ||
-            string.Equals(targetDir, options.ContainerWorkspacePath, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(workingDirectory))
         {
-            return !string.IsNullOrWhiteSpace(options.DefaultWorkingDirectory)
-                ? options.DefaultWorkingDirectory
-                : "/workspace";
+            return defaultDir;
+        }
+
+        var targetDir = workingDirectory.Trim();
+        if (targetDir == "/workspace" || string.Equals(targetDir, options.ContainerWorkspacePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return defaultDir;
+        }
+
+        if (targetDir == "." || targetDir == "./")
+        {
+            return defaultDir;
+        }
+
+        if (targetDir.Equals("/clone", StringComparison.OrdinalIgnoreCase))
+        {
+            return defaultDir;
+        }
+
+        if (targetDir.StartsWith("/clone/", StringComparison.OrdinalIgnoreCase))
+        {
+            var rel = targetDir[7..].TrimStart('/');
+            return string.IsNullOrEmpty(rel) ? defaultDir : $"{defaultDir}/{rel}";
         }
 
         if (targetDir.StartsWith("/workspace/", StringComparison.Ordinal))
@@ -876,21 +990,44 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             return targetDir;
         }
 
+        if (!Path.IsPathRooted(targetDir) && !targetDir.StartsWith('/') && !targetDir.StartsWith('\\'))
+        {
+            var cleanRel = targetDir.Replace('\\', '/').TrimStart('.', '/');
+            return string.IsNullOrEmpty(cleanRel) ? defaultDir : $"{defaultDir}/{cleanRel}";
+        }
+
         var containerWks = !string.IsNullOrWhiteSpace(options.ContainerWorkspacePath)
             ? options.ContainerWorkspacePath
             : "/workspace";
 
+        var normTarget = targetDir.Replace('\\', '/').TrimEnd('/');
+
+        // 1. Check CanonicalClonePath match/subpath
+        if (!string.IsNullOrWhiteSpace(options.CanonicalClonePath))
+        {
+            var normClone = options.CanonicalClonePath.Replace('\\', '/').TrimEnd('/');
+            if (normTarget.Equals(normClone, StringComparison.OrdinalIgnoreCase))
+            {
+                return defaultDir;
+            }
+            if (normTarget.StartsWith(normClone + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                var rel = normTarget[(normClone.Length + 1)..];
+                return $"{defaultDir}/{rel}";
+            }
+        }
+
+        // 2. Check HostWorkspacePath match/subpath
         var hostWks = options.HostWorkspacePath;
         if (!string.IsNullOrWhiteSpace(hostWks))
         {
-            var normTarget = targetDir.Replace('\\', '/').TrimEnd('/');
             var normHost = hostWks.Replace('\\', '/').TrimEnd('/');
             var normHostWsl = Git.WslPathConverter.ToWslPath(hostWks).Replace('\\', '/').TrimEnd('/');
 
             if (normTarget.Equals(normHost, StringComparison.OrdinalIgnoreCase) ||
                 normTarget.Equals(normHostWsl, StringComparison.OrdinalIgnoreCase))
             {
-                return containerWks;
+                return defaultDir;
             }
 
             if (normTarget.StartsWith(normHost + "/", StringComparison.OrdinalIgnoreCase))
@@ -908,7 +1045,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
         if (targetDir.Contains(":\\") || targetDir.Contains(":/") || targetDir.StartsWith("/mnt/") || targetDir.StartsWith("/home/"))
         {
-            return containerWks;
+            return defaultDir;
         }
 
         return targetDir;

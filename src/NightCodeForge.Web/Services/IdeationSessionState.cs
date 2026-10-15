@@ -4,9 +4,70 @@ using NightCodeForge.Core.Interfaces;
 namespace NightCodeForge.Web.Services;
 
 /// <summary>
+/// Mutable view model for a tool call executed during ideation.
+/// </summary>
+public class IdeationToolCallViewModel
+{
+    public string ToolCallId { get; set; } = string.Empty;
+    public string ToolName { get; set; } = string.Empty;
+    public string Arguments { get; set; } = string.Empty;
+    public string? Result { get; set; }
+    public bool IsCompleted { get; set; }
+    public bool IsError { get; set; }
+    public long DurationMs { get; set; }
+}
+
+/// <summary>
+/// Base class for chronological content parts within a chat turn.
+/// </summary>
+public abstract record ChatContentPart;
+
+public record TextContentPart(string Text) : ChatContentPart;
+
+public record ThinkingContentPart(string Thinking) : ChatContentPart;
+
+public record ToolCallContentPart(IdeationToolCallViewModel ToolCall) : ChatContentPart;
+
+/// <summary>
 /// Immutable chat turn record within an ideation conversational session.
 /// </summary>
-public record ChatMessage(string Role, string Content, string? ThinkingTrace = null, DateTime? Timestamp = null);
+public record ChatMessage(
+    string Role,
+    string Content,
+    string? ThinkingTrace = null,
+    DateTime? Timestamp = null,
+    IReadOnlyList<IdeationToolCallViewModel>? ToolCalls = null,
+    IReadOnlyList<ChatContentPart>? Parts = null)
+{
+    public string GetEffectiveHistoryContent()
+    {
+        if (Parts != null && Parts.Count > 0)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var part in Parts)
+            {
+                if (part is TextContentPart tp && !string.IsNullOrWhiteSpace(tp.Text))
+                {
+                    sb.AppendLine(tp.Text);
+                }
+                else if (part is ToolCallContentPart tcp)
+                {
+                    var tc = tcp.ToolCall;
+                    sb.AppendLine($"[Tool: {tc.ToolName}({tc.Arguments})]");
+                    if (!string.IsNullOrWhiteSpace(tc.Result))
+                    {
+                        var resSummary = tc.Result.Length > 400 ? tc.Result[..400] + "... [truncated]" : tc.Result;
+                        sb.AppendLine($"[Result: {resSummary}]");
+                    }
+                }
+            }
+            var text = sb.ToString().Trim();
+            if (!string.IsNullOrWhiteSpace(text)) return text;
+        }
+
+        return Content;
+    }
+}
 
 /// <summary>
 /// Mutable view model for a backlog task candidate discovered during ideation.
@@ -18,6 +79,7 @@ public class IdeationProposalViewModel
     public string Description { get; set; } = string.Empty;
     public int Priority { get; set; } = 1;
     public List<int> SelectedDependencyIds { get; set; } = new();
+    public List<string> DependsOnTitles { get; set; } = new();
     public bool IsAdded { get; set; }
     public int? CreatedTaskId { get; set; }
     public bool IsEditingDescription { get; set; }
@@ -31,21 +93,41 @@ public class IdeationProposalViewModel
             Priority = proposal.Priority > 0 ? proposal.Priority : 1
         };
 
-        if (proposal.DependsOnTitles != null && existingTasks != null)
+        if (proposal.DependsOnTitles != null)
         {
             foreach (var depTitle in proposal.DependsOnTitles)
             {
-                var matched = existingTasks.FirstOrDefault(t =>
-                    string.Equals(t.Title, depTitle, StringComparison.OrdinalIgnoreCase) ||
-                    t.Title.Contains(depTitle, StringComparison.OrdinalIgnoreCase));
-                if (matched != null && !vm.SelectedDependencyIds.Contains(matched.Id))
+                if (!string.IsNullOrWhiteSpace(depTitle) && !vm.DependsOnTitles.Contains(depTitle, StringComparer.OrdinalIgnoreCase))
                 {
-                    vm.SelectedDependencyIds.Add(matched.Id);
+                    vm.DependsOnTitles.Add(depTitle.Trim());
                 }
             }
         }
 
+        vm.ResolveDependencies(existingTasks);
+
         return vm;
+    }
+
+    public void ResolveDependencies(IReadOnlyList<ForgeTask>? existingTasks)
+    {
+        if (DependsOnTitles.Count == 0 || existingTasks == null || existingTasks.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var depTitle in DependsOnTitles)
+        {
+            var matched = existingTasks.FirstOrDefault(t =>
+                string.Equals(t.Title, depTitle, StringComparison.OrdinalIgnoreCase) ||
+                t.Title.Contains(depTitle, StringComparison.OrdinalIgnoreCase) ||
+                depTitle.Contains(t.Title, StringComparison.OrdinalIgnoreCase));
+
+            if (matched != null && !SelectedDependencyIds.Contains(matched.Id))
+            {
+                SelectedDependencyIds.Add(matched.Id);
+            }
+        }
     }
 }
 
@@ -56,11 +138,15 @@ public class IdeationSessionState
 {
     public List<ChatMessage> Messages { get; } = new();
     public List<IdeationProposalViewModel> Proposals { get; } = new();
+    public List<IdeationToolCallViewModel> CurrentToolCalls { get; } = new();
+    public List<ChatContentPart> CurrentParts { get; } = new();
     public bool IsGenerating { get; set; }
     public string CurrentThinkingBuffer { get; set; } = string.Empty;
     public string CurrentMessageBuffer { get; set; } = string.Empty;
     public string? CustomSystemPrompt { get; set; }
     public int? BoundWorkspaceId { get; set; }
+    public string? LatestTranscriptPath { get; set; }
+    public string? LatestFullTranscriptMarkdown { get; set; }
 
     public event Action? OnChange;
 
@@ -88,8 +174,12 @@ public class IdeationSessionState
     {
         Messages.Clear();
         Proposals.Clear();
+        CurrentToolCalls.Clear();
+        CurrentParts.Clear();
         CurrentThinkingBuffer = string.Empty;
         CurrentMessageBuffer = string.Empty;
+        LatestTranscriptPath = null;
+        LatestFullTranscriptMarkdown = null;
         IsGenerating = false;
         NotifyStateChanged();
     }

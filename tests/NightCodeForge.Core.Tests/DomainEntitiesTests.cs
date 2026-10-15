@@ -269,12 +269,12 @@ public class DomainEntitiesTests
     [Fact]
     public void DefaultAgentTools_ProvidesAppropriateToolSetsPerMode()
     {
-        // ReadOnly mode should not allow destructive edit/write/bash or request_changes
+        // ReadOnly mode allows Read, Bash (with read-only enforcement), and ProposeTasks, but not destructive edit/write or request_changes
         Assert.Contains(CanonicalToolNames.Read, DefaultAgentTools.ReadOnly);
+        Assert.Contains(CanonicalToolNames.Bash, DefaultAgentTools.ReadOnly);
         Assert.Contains(CanonicalToolNames.ProposeTasks, DefaultAgentTools.ReadOnly);
         Assert.DoesNotContain(CanonicalToolNames.Edit, DefaultAgentTools.ReadOnly);
         Assert.DoesNotContain(CanonicalToolNames.Write, DefaultAgentTools.ReadOnly);
-        Assert.DoesNotContain(CanonicalToolNames.Bash, DefaultAgentTools.ReadOnly);
         Assert.DoesNotContain(CanonicalToolNames.RequestChanges, DefaultAgentTools.ReadOnly);
 
         // Full mode includes write, edit, bash

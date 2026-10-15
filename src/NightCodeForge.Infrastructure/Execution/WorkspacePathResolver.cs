@@ -181,9 +181,75 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             return raw.Replace('/', '\\');
         }
 
-        if (Path.IsPathRooted(raw) && !normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase))
+        if (Path.IsPathRooted(raw) &&
+            !normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("/clone", StringComparison.OrdinalIgnoreCase))
         {
             return Path.GetFullPath(raw);
+        }
+
+        bool isClonePrefixed =
+            normalized.StartsWith("/clone/", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "/clone", StringComparison.OrdinalIgnoreCase);
+
+        if (isClonePrefixed)
+        {
+            string cloneRel = normalized.StartsWith("/clone/", StringComparison.OrdinalIgnoreCase)
+                ? normalized["/clone/".Length..]
+                : string.Empty;
+
+            cloneRel = cloneRel.TrimStart('/', '\\');
+
+            var normRoot = workspaceRoot.Replace('\\', '/').TrimEnd('/');
+            var rootLeaf = Path.GetFileName(normRoot);
+            string parentDir;
+            if (rootLeaf.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
+                rootLeaf.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
+                rootLeaf.Equals("mirror", StringComparison.OrdinalIgnoreCase) ||
+                rootLeaf.StartsWith("task-", StringComparison.OrdinalIgnoreCase) ||
+                rootLeaf.StartsWith("wt-", StringComparison.OrdinalIgnoreCase))
+            {
+                parentDir = Path.GetDirectoryName(normRoot) ?? normRoot;
+            }
+            else
+            {
+                parentDir = normRoot;
+            }
+
+            bool isUnix = !IsWindows || (normRoot.StartsWith('/') && !normRoot.StartsWith("//")) || normRoot.StartsWith('~');
+            bool isUnc = normRoot.StartsWith("//") || normRoot.StartsWith(@"\\");
+
+            string FormatPath(string baseDir, string subPath)
+            {
+                if (string.IsNullOrEmpty(subPath))
+                {
+                    if (isUnc) return baseDir.Replace('/', '\\');
+                    return isUnix ? baseDir.Replace('\\', '/') : Path.GetFullPath(baseDir);
+                }
+
+                if (isUnc)
+                {
+                    var cleanBase = baseDir.Replace('/', '\\').TrimEnd('\\');
+                    var cleanSub = subPath.Replace('/', '\\').TrimStart('\\');
+                    return $@"{cleanBase}\{cleanSub}";
+                }
+
+                if (isUnix)
+                {
+                    var cleanBase = baseDir.Replace('\\', '/').TrimEnd('/');
+                    var cleanSub = subPath.Replace('\\', '/').TrimStart('/');
+                    return $"{cleanBase}/{cleanSub}";
+                }
+
+                return Path.GetFullPath(Path.Combine(baseDir, subPath));
+            }
+
+            var cloneDir = Path.Combine(parentDir, "clone");
+            if (Directory.Exists(cloneDir))
+            {
+                return FormatPath(cloneDir, cloneRel);
+            }
+            return FormatPath(workspaceRoot, cloneRel);
         }
 
         // Only remap "/workspace" or "workspace" virtual prefixes
@@ -267,7 +333,11 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             {
                 var cloneRel = rel.Length > 5 ? rel[6..].TrimStart('/') : string.Empty;
                 var cloneDir = Path.Combine(parentDir, "clone");
-                return FormatPath(cloneDir, cloneRel);
+                if (Directory.Exists(cloneDir))
+                {
+                    return FormatPath(cloneDir, cloneRel);
+                }
+                return FormatPath(workspaceRoot, cloneRel);
             }
 
             var taskMatch = System.Text.RegularExpressions.Regex.Match(rel, @"^(?:wt/)?task-(\d+)(?:/(.*)|$)");

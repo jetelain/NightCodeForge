@@ -86,7 +86,7 @@ Use records for immutable data.
             Assert.NotNull(skillsContext.Tools);
             Assert.Contains(skillsContext.Tools, t => t is Microsoft.Extensions.AI.AIFunction f && f.Name == "load_skill");
 
-            var canonicalTools = new CanonicalTools(tempDir);
+            var canonicalTools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
             var dispatcher = new LenientToolDispatcher(canonicalTools);
             dispatcher.RegisterAITools(skillsContext.Tools);
 

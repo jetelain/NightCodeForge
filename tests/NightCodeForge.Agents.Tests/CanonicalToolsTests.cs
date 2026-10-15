@@ -16,7 +16,7 @@ public class CanonicalToolsTests
             var content = string.Join("\n", Enumerable.Range(1, 20).Select(i => $"Line {i}"));
             await File.WriteAllTextAsync(filePath, content);
 
-            var tools = new CanonicalTools(tempDir);
+            var tools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
             var result = await tools.ReadAsync("file.txt", offset: 5, limit: 3);
 
             Assert.Contains("Line 5", result);
@@ -53,7 +53,7 @@ public class Service
 }";
             await File.WriteAllTextAsync(filePath, code);
 
-            var tools = new CanonicalTools(tempDir);
+            var tools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
             var edits = new List<EditChunk>
             {
                 new("using System;", "using System;\nusing System.Threading.Tasks;"),
@@ -86,7 +86,7 @@ public class Service
             var code = "namespace MyNamespace\n{\n    public class Foo\n    {\n        public void Bar()\n        {\n            int a = 10;\n        }\n    }\n}";
             await File.WriteAllTextAsync(filePath, code);
 
-            var tools = new CanonicalTools(tempDir);
+            var tools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
             // LLM sends edit with only 2 spaces indent
             var edits = new List<EditChunk>
             {
@@ -133,6 +133,7 @@ public class Service
         var env = new FakeEnv();
         var tools = new CanonicalTools(
             workspaceRoot: AppContext.BaseDirectory,
+            pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
             executionEnv: env,
             testTimeoutSeconds: 75,
             buildTimeoutSeconds: 45);
@@ -152,6 +153,7 @@ public class Service
         };
         var tools = new CanonicalTools(
             workspaceRoot: AppContext.BaseDirectory,
+            pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
             executionEnv: env,
             testTimeoutSeconds: 30);
 
@@ -168,6 +170,7 @@ public class Service
         var env = new FakeEnv();
         var tools = new CanonicalTools(
             workspaceRoot: AppContext.BaseDirectory,
+            pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
             executionEnv: env);
 
         await tools.BashAsync("git status");
@@ -195,6 +198,7 @@ public class Service
     {
         var tools = new CanonicalTools(
             workspaceRoot: AppContext.BaseDirectory,
+            pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
             executionEnv: new TimeoutThrowingEnv());
 
         var output = await tools.BashAsync("rg -n 'foo' -r .");
@@ -247,7 +251,7 @@ public class Service
     [Fact]
     public void ProposeTasks_AddsToPendingProposals_ReturnsFormattedJson()
     {
-        var tools = new CanonicalTools(AppContext.BaseDirectory);
+        var tools = new CanonicalTools(AppContext.BaseDirectory, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
         var proposals = new List<NightCodeForge.Core.Domain.TaskProposal>
         {
             new("Fix memory leak", "Disposed streams properly", "bug"),
@@ -272,7 +276,7 @@ public class Service
         Directory.CreateDirectory(cloneDir);
         Directory.CreateDirectory(taskDir);
 
-        var cloneTools = new CanonicalTools(cloneDir);
+        var cloneTools = new CanonicalTools(cloneDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
 
         // 1. /workspace/clone/Calculator.cs resolves to cloneDir/Calculator.cs
         var res1 = cloneTools.ResolveFullPath("/workspace/clone/Calculator.cs");
@@ -290,8 +294,12 @@ public class Service
         var res4 = cloneTools.ResolveFullPath("clone/Calculator.cs");
         Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "clone", "Calculator.cs")), res4);
 
+        // 4b. /clone/Calculator.cs (rooted container clone path) resolves to cloneDir/Calculator.cs
+        var res4b = cloneTools.ResolveFullPath("/clone/Calculator.cs");
+        Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "Calculator.cs")), res4b);
+
         // 5. Worktree-scoped tools
-        var taskTools = new CanonicalTools(taskDir, taskId: 42);
+        var taskTools = new CanonicalTools(taskDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), taskId: 42);
         var res5 = taskTools.ResolveFullPath("/workspace/task-42/Calculator.cs");
         Assert.Equal(Path.GetFullPath(Path.Combine(taskDir, "Calculator.cs")), res5);
 
@@ -300,6 +308,37 @@ public class Service
 
         var res7 = taskTools.ResolveFullPath("/workspace/clone/Calculator.cs");
         Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "Calculator.cs")), res7);
+    }
+
+    [Fact]
+    public void ResolveFullPath_DirectRepositoryRootWithoutCloneSubdir_ResolvesCloneAndWorkspacePrefixesDirectly()
+    {
+        var tempRepo = Path.Combine(Path.GetTempPath(), "repo-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRepo);
+
+        try
+        {
+            var tools = new CanonicalTools(tempRepo, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+
+            var p1 = tools.ResolveFullPath("/clone/Calculator.cs");
+            Assert.Equal(Path.GetFullPath(Path.Combine(tempRepo, "Calculator.cs")), p1);
+
+            var p2 = tools.ResolveFullPath("/workspace/clone/Calculator.cs");
+            Assert.Equal(Path.GetFullPath(Path.Combine(tempRepo, "Calculator.cs")), p2);
+
+            var p3 = tools.ResolveFullPath("/workspace/Calculator.cs");
+            Assert.Equal(Path.GetFullPath(Path.Combine(tempRepo, "Calculator.cs")), p3);
+
+            var p4 = tools.ResolveFullPath("Calculator.cs");
+            Assert.Equal(Path.GetFullPath(Path.Combine(tempRepo, "Calculator.cs")), p4);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRepo))
+            {
+                Directory.Delete(tempRepo, true);
+            }
+        }
     }
 }
 

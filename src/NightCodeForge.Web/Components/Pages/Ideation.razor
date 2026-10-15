@@ -26,6 +26,12 @@
                 @(Session.IsGenerating ? "Architect Deliberating..." : "Architect Agent Ready")
             </span>
             <button type="button" 
+                    class="forge-btn forge-btn-secondary transcript-btn" 
+                    @onclick="OpenTranscriptModal"
+                    title="View Full Execution Transcript">
+                📄 Transcript
+            </button>
+            <button type="button" 
                     class="forge-btn forge-btn-secondary prompt-config-toggle-btn" 
                     @onclick="() => _showCustomPromptConfig = !_showCustomPromptConfig"
                     title="Customize System Prompt">
@@ -33,6 +39,46 @@
             </button>
         </div>
     </div>
+
+    @if (_showTranscriptModal)
+    {
+        <div class="transcript-modal-overlay" @onclick="() => _showTranscriptModal = false">
+            <div class="transcript-modal-dialog" @onclick:stopPropagation="true">
+                <div class="transcript-modal-header">
+                    <div class="transcript-modal-title">
+                        <span style="font-size: 1.25rem;">📄</span>
+                        <h3>Ideation Session Transcript</h3>
+                        @if (!string.IsNullOrEmpty(Session.LatestTranscriptPath))
+                        {
+                            <span class="transcript-path-badge font-mono">@Path.GetFileName(Session.LatestTranscriptPath)</span>
+                        }
+                    </div>
+                    <button type="button" class="forge-btn forge-btn-secondary close-btn" @onclick="() => _showTranscriptModal = false">✕</button>
+                </div>
+                <div class="transcript-modal-body">
+                    @if (!string.IsNullOrWhiteSpace(Session.LatestFullTranscriptMarkdown))
+                    {
+                        <div class="transcript-actions-bar">
+                            <button type="button" class="forge-btn forge-btn-secondary btn-sm" @onclick="CopyTranscriptAsync">
+                                📋 Copy Markdown
+                            </button>
+                            @if (!string.IsNullOrEmpty(Session.LatestTranscriptPath))
+                            {
+                                <span class="font-mono text-muted" style="font-size: 0.75rem;">File: @Session.LatestTranscriptPath</span>
+                            }
+                        </div>
+                        <pre class="transcript-pre font-mono">@Session.LatestFullTranscriptMarkdown</pre>
+                    }
+                    else
+                    {
+                        <div class="text-muted" style="padding: 2rem; text-align: center;">
+                            No transcript generated yet for this session. Send a message to the architect agent to generate a full turn-by-turn markdown transcript.
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
 
     <!-- Optional Custom System Prompt Config Accordion -->
     @if (_showCustomPromptConfig)
@@ -112,20 +158,131 @@
                                 }
                             </div>
 
-                            @if (!string.IsNullOrEmpty(msg.ThinkingTrace))
+                            @if (msg.Parts != null && msg.Parts.Count > 0)
                             {
-                                <details class="think-trace">
-                                    <summary>
-                                        <span>🧠 Reasoning Trace</span>
-                                        <span class="font-mono text-muted">(@msg.ThinkingTrace.Length chars)</span>
-                                    </summary>
-                                    <div class="think-content font-mono">@msg.ThinkingTrace</div>
-                                </details>
+                                @foreach (var part in msg.Parts)
+                                {
+                                    if (part is ThinkingContentPart thinkPart && !string.IsNullOrWhiteSpace(thinkPart.Thinking))
+                                    {
+                                        <details class="think-trace">
+                                            <summary>
+                                                <span>🧠 Reasoning Trace</span>
+                                                <span class="font-mono text-muted">(@thinkPart.Thinking.Length chars)</span>
+                                            </summary>
+                                            <div class="think-content font-mono">@thinkPart.Thinking</div>
+                                        </details>
+                                    }
+                                    else if (part is ToolCallContentPart tcp)
+                                    {
+                                        var tool = tcp.ToolCall;
+                                        <details class="tool-trace @(tool.IsError ? "error" : "completed")" open="@tool.IsError">
+                                            <summary>
+                                                <span class="tool-trace-title">
+                                                    <span>@(GetToolIcon(tool.ToolName))</span>
+                                                    <span class="font-mono font-semibold">@tool.ToolName</span>
+                                                    <span class="text-muted font-mono tool-summary-text">@GetToolSummary(tool.Arguments)</span>
+                                                </span>
+                                                <span class="tool-trace-status">
+                                                    @if (tool.IsError)
+                                                    {
+                                                        <span class="forge-badge badge-danger tool-trace-badge">Failed</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="forge-badge badge-success tool-trace-badge">✓ @(tool.DurationMs)ms</span>
+                                                    }
+                                                </span>
+                                            </summary>
+                                            <div class="tool-trace-content">
+                                                @if (!string.IsNullOrWhiteSpace(tool.Arguments))
+                                                {
+                                                    <div class="tool-trace-block">
+                                                        <span class="tool-trace-label">Parameters</span>
+                                                        <pre class="tool-trace-pre font-mono">@tool.Arguments</pre>
+                                                    </div>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(tool.Result))
+                                                {
+                                                    <div class="tool-trace-block">
+                                                        <span class="tool-trace-label">Result @(tool.IsError ? "(Error)" : "")</span>
+                                                        <pre class="tool-trace-pre font-mono @(tool.IsError ? "result-error" : "")">@tool.Result</pre>
+                                                    </div>
+                                                }
+                                            </div>
+                                        </details>
+                                    }
+                                    else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
+                                    {
+                                        <div class="chat-content-wrap">
+                                            <MarkdownRenderer Content="@textPart.Text" />
+                                        </div>
+                                    }
+                                }
                             }
+                            else
+                            {
+                                @if (!string.IsNullOrEmpty(msg.ThinkingTrace))
+                                {
+                                    <details class="think-trace">
+                                        <summary>
+                                            <span>🧠 Reasoning Trace</span>
+                                            <span class="font-mono text-muted">(@msg.ThinkingTrace.Length chars)</span>
+                                        </summary>
+                                        <div class="think-content font-mono">@msg.ThinkingTrace</div>
+                                    </details>
+                                }
 
-                            <div class="chat-content-wrap">
-                                <MarkdownRenderer Content="@msg.Content" />
-                            </div>
+                                @if (msg.ToolCalls != null && msg.ToolCalls.Count > 0)
+                                {
+                                    <div class="tool-calls-list">
+                                        @foreach (var tool in msg.ToolCalls)
+                                        {
+                                            <details class="tool-trace @(tool.IsError ? "error" : "completed")" open="@tool.IsError">
+                                                <summary>
+                                                    <span class="tool-trace-title">
+                                                        <span>@(GetToolIcon(tool.ToolName))</span>
+                                                        <span class="font-mono font-semibold">@tool.ToolName</span>
+                                                        <span class="text-muted font-mono tool-summary-text">@GetToolSummary(tool.Arguments)</span>
+                                                    </span>
+                                                    <span class="tool-trace-status">
+                                                        @if (tool.IsError)
+                                                        {
+                                                            <span class="forge-badge badge-danger tool-trace-badge">Failed</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span class="forge-badge badge-success tool-trace-badge">✓ @(tool.DurationMs)ms</span>
+                                                        }
+                                                    </span>
+                                                </summary>
+                                                <div class="tool-trace-content">
+                                                    @if (!string.IsNullOrWhiteSpace(tool.Arguments))
+                                                    {
+                                                        <div class="tool-trace-block">
+                                                            <span class="tool-trace-label">Parameters</span>
+                                                            <pre class="tool-trace-pre font-mono">@tool.Arguments</pre>
+                                                        </div>
+                                                    }
+                                                    @if (!string.IsNullOrWhiteSpace(tool.Result))
+                                                    {
+                                                        <div class="tool-trace-block">
+                                                            <span class="tool-trace-label">Result @(tool.IsError ? "(Error)" : "")</span>
+                                                            <pre class="tool-trace-pre font-mono @(tool.IsError ? "result-error" : "")">@tool.Result</pre>
+                                                        </div>
+                                                    }
+                                                </div>
+                                            </details>
+                                        }
+                                    </div>
+                                }
+
+                                @if (!string.IsNullOrEmpty(msg.Content))
+                                {
+                                    <div class="chat-content-wrap">
+                                        <MarkdownRenderer Content="@msg.Content" />
+                                    </div>
+                                }
+                            }
                         </div>
                     </div>
                 }
@@ -141,25 +298,80 @@
                                 <span class="forge-badge badge-indigo live-badge">Streaming</span>
                             </div>
 
-                            @if (!string.IsNullOrEmpty(Session.CurrentThinkingBuffer))
+                            @if (Session.CurrentParts.Count > 0)
                             {
-                                <details class="think-trace" open>
-                                    <summary>
-                                        <span>🧠 Reasoning Trace</span>
-                                        <span class="status-dot running" style="margin-left: 0.25rem;"></span>
-                                    </summary>
-                                    <div class="think-content font-mono">@Session.CurrentThinkingBuffer<span class="cursor-blink">▌</span></div>
-                                </details>
+                                @foreach (var part in Session.CurrentParts)
+                                {
+                                    if (part is ThinkingContentPart thinkPart && !string.IsNullOrWhiteSpace(thinkPart.Thinking))
+                                    {
+                                        <details class="think-trace" open>
+                                            <summary>
+                                                <span>🧠 Reasoning Trace</span>
+                                                @if (part == Session.CurrentParts.LastOrDefault())
+                                                {
+                                                    <span class="status-dot running" style="margin-left: 0.25rem;"></span>
+                                                }
+                                            </summary>
+                                            <div class="think-content font-mono">@thinkPart.Thinking @(part == Session.CurrentParts.LastOrDefault() ? "▌" : "")</div>
+                                        </details>
+                                    }
+                                    else if (part is ToolCallContentPart toolPart)
+                                    {
+                                        var tool = toolPart.ToolCall;
+                                        <details class="tool-trace @(tool.IsError ? "error" : (tool.IsCompleted ? "completed" : "running"))" open="@(tool.IsError || !tool.IsCompleted)">
+                                            <summary>
+                                                <span class="tool-trace-title">
+                                                    <span>@(GetToolIcon(tool.ToolName))</span>
+                                                    <span class="font-mono font-semibold">@tool.ToolName</span>
+                                                    <span class="text-muted font-mono tool-summary-text">@GetToolSummary(tool.Arguments)</span>
+                                                </span>
+                                                <span class="tool-trace-status">
+                                                    @if (!tool.IsCompleted)
+                                                    {
+                                                        <span class="status-dot running" style="margin-right: 0.35rem;"></span>
+                                                        <span class="forge-badge badge-indigo tool-trace-badge">Running</span>
+                                                    }
+                                                    else if (tool.IsError)
+                                                    {
+                                                        <span class="forge-badge badge-danger tool-trace-badge">Failed</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="forge-badge badge-success tool-trace-badge">✓ @(tool.DurationMs)ms</span>
+                                                    }
+                                                </span>
+                                            </summary>
+                                            <div class="tool-trace-content">
+                                                @if (!string.IsNullOrWhiteSpace(tool.Arguments))
+                                                {
+                                                    <div class="tool-trace-block">
+                                                        <span class="tool-trace-label">Parameters</span>
+                                                        <pre class="tool-trace-pre font-mono">@tool.Arguments</pre>
+                                                    </div>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(tool.Result))
+                                                {
+                                                    <div class="tool-trace-block">
+                                                        <span class="tool-trace-label">Result @(tool.IsError ? "(Error)" : "")</span>
+                                                        <pre class="tool-trace-pre font-mono @(tool.IsError ? "result-error" : "")">@tool.Result</pre>
+                                                    </div>
+                                                }
+                                            </div>
+                                        </details>
+                                    }
+                                    else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
+                                    {
+                                        <div class="chat-content-wrap">
+                                            <MarkdownRenderer Content="@textPart.Text" />
+                                            @if (part == Session.CurrentParts.LastOrDefault())
+                                            {
+                                                <span class="cursor-blink">▌</span>
+                                            }
+                                        </div>
+                                    }
+                                }
                             }
-
-                            @if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer))
-                            {
-                                <div class="chat-content-wrap">
-                                    <MarkdownRenderer Content="@Session.CurrentMessageBuffer" />
-                                    <span class="cursor-blink">▌</span>
-                                </div>
-                            }
-                            else if (string.IsNullOrEmpty(Session.CurrentThinkingBuffer))
+                            else
                             {
                                 <div class="generating-wait-box">
                                     <span class="status-dot running"></span>
@@ -225,6 +437,15 @@
                     <h2>Discovered Proposals</h2>
                 </div>
                 <div class="proposals-header-right">
+                    @if (Session.Proposals.Any(p => !p.IsAdded))
+                    {
+                        <button type="button" 
+                                class="forge-btn forge-btn-xs forge-btn-primary add-all-btn"
+                                @onclick="AddAllProposalsToBacklogAsync"
+                                title="Add all proposals sequentially to backlog">
+                            ➕ Ingest All (@Session.Proposals.Count(p => !p.IsAdded))
+                        </button>
+                    }
                     <span class="forge-badge badge-indigo font-mono">@Session.Proposals.Count</span>
                     @if (Session.Proposals.Any(p => p.IsAdded))
                     {
@@ -336,6 +557,29 @@
         }
     }
 
+    private bool _showTranscriptModal;
+
+    private void OpenTranscriptModal()
+    {
+        _showTranscriptModal = true;
+    }
+
+    private async Task CopyTranscriptAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(Session.LatestFullTranscriptMarkdown))
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("navigator.clipboard.writeText", Session.LatestFullTranscriptMarkdown);
+                ToastService.Show("Transcript Copied", "Markdown transcript copied to clipboard.", ToastLevel.Success);
+            }
+            catch
+            {
+                ToastService.Show("Copy Failed", "Unable to access clipboard.", ToastLevel.Warning);
+            }
+        }
+    }
+
     private async Task SendMessageAsync()
     {
         if (string.IsNullOrWhiteSpace(_userInput) || WorkspaceState.ActiveWorkspace == null)
@@ -344,15 +588,18 @@
         var prompt = _userInput.Trim();
         _userInput = string.Empty;
 
-        // Build history from existing completed turns
+        // Build history from existing completed turns, retaining text & action summaries
         var history = Session.Messages
-            .Select(m => (m.Role, m.Content))
+            .Select(m => (m.Role, m.GetEffectiveHistoryContent()))
+            .Where(m => !string.IsNullOrWhiteSpace(m.Item2))
             .ToList();
 
-        Session.Messages.Add(new ChatMessage("user", prompt, Timestamp: DateTime.UtcNow));
+        Session.Messages.Add(new ChatMessage("user", prompt, Timestamp: DateTime.UtcNow, Parts: [new TextContentPart(prompt)]));
         Session.IsGenerating = true;
         Session.CurrentThinkingBuffer = string.Empty;
         Session.CurrentMessageBuffer = string.Empty;
+        Session.CurrentToolCalls.Clear();
+        Session.CurrentParts.Clear();
 
         _cts?.Dispose();
         _cts = new CancellationTokenSource();
@@ -374,6 +621,15 @@
                         if (!string.IsNullOrEmpty(update.TextDelta))
                         {
                             Session.CurrentThinkingBuffer += update.TextDelta;
+                            if (Session.CurrentParts.LastOrDefault() is ThinkingContentPart lastThink)
+                            {
+                                var idx = Session.CurrentParts.Count - 1;
+                                Session.CurrentParts[idx] = new ThinkingContentPart(lastThink.Thinking + update.TextDelta);
+                            }
+                            else
+                            {
+                                Session.CurrentParts.Add(new ThinkingContentPart(update.TextDelta));
+                            }
                             StateHasChanged();
                         }
                         break;
@@ -382,8 +638,56 @@
                         if (!string.IsNullOrEmpty(update.TextDelta))
                         {
                             Session.CurrentMessageBuffer += update.TextDelta;
+                            if (Session.CurrentParts.LastOrDefault() is TextContentPart lastText)
+                            {
+                                var idx = Session.CurrentParts.Count - 1;
+                                Session.CurrentParts[idx] = new TextContentPart(lastText.Text + update.TextDelta);
+                            }
+                            else
+                            {
+                                Session.CurrentParts.Add(new TextContentPart(update.TextDelta));
+                            }
                             StateHasChanged();
                         }
+                        break;
+
+                    case IdeationStreamUpdateKind.ToolCallStarted when update.ToolCall != null:
+                        var call = update.ToolCall;
+                        var existing = Session.CurrentToolCalls.FirstOrDefault(t => t.ToolCallId == call.ToolCallId);
+                        if (existing == null)
+                        {
+                            var vm = new IdeationToolCallViewModel
+                            {
+                                ToolCallId = call.ToolCallId,
+                                ToolName = call.ToolName,
+                                Arguments = call.Arguments,
+                                IsCompleted = false
+                            };
+                            Session.CurrentToolCalls.Add(vm);
+                            Session.CurrentParts.Add(new ToolCallContentPart(vm));
+                        }
+                        StateHasChanged();
+                        break;
+
+                    case IdeationStreamUpdateKind.ToolCallCompleted when update.ToolCall != null:
+                        var comp = update.ToolCall;
+                        var match = Session.CurrentToolCalls.FirstOrDefault(t => t.ToolCallId == comp.ToolCallId);
+                        if (match != null)
+                        {
+                            match.Result = comp.Result;
+                            match.IsCompleted = true;
+                            match.IsError = comp.IsError;
+                            match.DurationMs = comp.DurationMs;
+                        }
+                        var partMatch = Session.CurrentParts.OfType<ToolCallContentPart>().FirstOrDefault(p => p.ToolCall.ToolCallId == comp.ToolCallId);
+                        if (partMatch != null)
+                        {
+                            partMatch.ToolCall.Result = comp.Result;
+                            partMatch.ToolCall.IsCompleted = true;
+                            partMatch.ToolCall.IsError = comp.IsError;
+                            partMatch.ToolCall.DurationMs = comp.DurationMs;
+                        }
+                        StateHasChanged();
                         break;
 
                     case IdeationStreamUpdateKind.ProposalDiscovered when update.Proposal != null:
@@ -397,6 +701,9 @@
                         break;
 
                     case IdeationStreamUpdateKind.Completed when update.FinalResult != null:
+                        Session.LatestTranscriptPath = update.FinalResult.TranscriptPath;
+                        Session.LatestFullTranscriptMarkdown = update.FinalResult.FullTranscriptMarkdown;
+
                         if (update.FinalResult.ProposedTasks != null)
                         {
                             foreach (var p in update.FinalResult.ProposedTasks)
@@ -411,25 +718,63 @@
                 }
             }
 
-            if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer) || !string.IsNullOrEmpty(Session.CurrentThinkingBuffer))
+            var toolsForMessage = Session.CurrentToolCalls.Count > 0
+                ? Session.CurrentToolCalls.Select(t => new IdeationToolCallViewModel
+                {
+                    ToolCallId = t.ToolCallId,
+                    ToolName = t.ToolName,
+                    Arguments = t.Arguments,
+                    Result = t.Result,
+                    IsCompleted = t.IsCompleted,
+                    IsError = t.IsError,
+                    DurationMs = t.DurationMs
+                }).ToList()
+                : null;
+
+            var partsForMessage = Session.CurrentParts.Count > 0
+                ? Session.CurrentParts.ToList()
+                : null;
+
+            if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer) || !string.IsNullOrEmpty(Session.CurrentThinkingBuffer) || (toolsForMessage != null && toolsForMessage.Count > 0))
             {
                 Session.Messages.Add(new ChatMessage(
                     "assistant",
                     Session.CurrentMessageBuffer,
                     string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
-                    DateTime.UtcNow));
+                    DateTime.UtcNow,
+                    toolsForMessage,
+                    partsForMessage));
             }
         }
         catch (OperationCanceledException)
         {
             ToastService.Show("Generation Cancelled", "Exploration agent stopped.", ToastLevel.Warning);
-            if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer))
+            var toolsForMessage = Session.CurrentToolCalls.Count > 0
+                ? Session.CurrentToolCalls.Select(t => new IdeationToolCallViewModel
+                {
+                    ToolCallId = t.ToolCallId,
+                    ToolName = t.ToolName,
+                    Arguments = t.Arguments,
+                    Result = t.Result,
+                    IsCompleted = t.IsCompleted,
+                    IsError = t.IsError,
+                    DurationMs = t.DurationMs
+                }).ToList()
+                : null;
+
+            var partsForMessage = Session.CurrentParts.Count > 0
+                ? Session.CurrentParts.ToList()
+                : null;
+
+            if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer) || (toolsForMessage != null && toolsForMessage.Count > 0))
             {
                 Session.Messages.Add(new ChatMessage(
                     "assistant",
                     Session.CurrentMessageBuffer + "\n\n*(Generation stopped by user)*",
                     string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
-                    DateTime.UtcNow));
+                    DateTime.UtcNow,
+                    toolsForMessage,
+                    partsForMessage));
             }
         }
         catch (Exception ex)
@@ -441,6 +786,8 @@
             Session.IsGenerating = false;
             Session.CurrentThinkingBuffer = string.Empty;
             Session.CurrentMessageBuffer = string.Empty;
+            Session.CurrentToolCalls.Clear();
+            Session.CurrentParts.Clear();
             StateHasChanged();
             await ScrollChatToBottomAsync();
         }
@@ -509,6 +856,11 @@
             // Refresh existing workspace tasks so subsequent proposals can link to this new task
             _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(workspace.Id);
 
+            foreach (var pending in Session.Proposals.Where(p => !p.IsAdded))
+            {
+                pending.ResolveDependencies(_workspaceTasks);
+            }
+
             ToastService.Show("Added to Backlog", $"ForgeTask #{created.Id} created with status Suggested.", ToastLevel.Success);
             StateHasChanged();
         }
@@ -516,6 +868,24 @@
         {
             ToastService.Show("Creation Error", $"Failed to add proposal to backlog: {ex.Message}", ToastLevel.Error);
         }
+    }
+
+    private async Task AddAllProposalsToBacklogAsync()
+    {
+        var pendingProposals = Session.Proposals.Where(p => !p.IsAdded && !string.IsNullOrWhiteSpace(p.Title)).ToList();
+        if (pendingProposals.Count == 0) return;
+
+        int addedCount = 0;
+        foreach (var proposal in pendingProposals)
+        {
+            await AddProposalToBacklogAsync(proposal);
+            if (proposal.IsAdded)
+            {
+                addedCount++;
+            }
+        }
+
+        ToastService.Show("All Proposals Ingested", $"Successfully added {addedCount} proposal(s) sequentially into the backlog.", ToastLevel.Success);
     }
 
     private void DismissProposal(IdeationProposalViewModel proposal)
@@ -534,6 +904,44 @@
         {
             // Suppress JS error if in non-interactive or testing environment
         }
+    }
+
+    private static string GetToolIcon(string toolName) => toolName.ToLowerInvariant() switch
+    {
+        "bash" or "run_command" or "exec" or "cmd" => "⚡",
+        "read" or "read_file" or "view_file" or "cat" => "📄",
+        "write" or "edit" or "write_file" or "replace_file_content" => "✏️",
+        "grep_search" or "find_files" or "find" => "🔍",
+        "list_dir" or "ls" => "📁",
+        "web_search" => "🌐",
+        "propose_tasks" => "📋",
+        "ask" => "❓",
+        _ => "⚙️"
+    };
+
+    private static string GetToolSummary(string? argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson)) return string.Empty;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(argumentsJson);
+            var root = doc.RootElement;
+            if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("command", out var cmd)) return $"({TruncateString(cmd.GetString(), 45)})";
+                if (root.TryGetProperty("path", out var path)) return $"({TruncateString(path.GetString(), 45)})";
+                if (root.TryGetProperty("query", out var query)) return $"(\"{TruncateString(query.GetString(), 35)}\")";
+                if (root.TryGetProperty("prompt", out var prompt)) return $"(\"{TruncateString(prompt.GetString(), 35)}\")";
+            }
+        }
+        catch { }
+        return string.Empty;
+    }
+
+    private static string TruncateString(string? value, int maxLen)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        return value.Length <= maxLen ? value : value[..maxLen] + "...";
     }
 
     public void Dispose()

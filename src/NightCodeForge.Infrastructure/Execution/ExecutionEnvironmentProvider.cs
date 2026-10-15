@@ -154,39 +154,60 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                         ? workspace.RepositoryPath
                         : _pathResolver?.GetAgentWorkspaceRootPath(workspace.Id));
 
+                if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && _pathResolver != null && workspace.Id > 0)
+                {
+                    var resolvedClone = _pathResolver.ResolveCruciblePath(workspace.Id, string.Empty);
+                    if (Directory.Exists(resolvedClone))
+                    {
+                        rawPath = _pathResolver.GetAgentWorkingClonePath(workspace.Id);
+                    }
+                }
+
                 string? hostWorkspacePath = null;
                 string? canonicalClonePath = null;
 
                 if (!string.IsNullOrWhiteSpace(rawPath))
                 {
                     var normRaw = rawPath.TrimEnd('/', '\\');
+                    var isUnixOrWsl = normRaw.StartsWith('/') || normRaw.StartsWith('~') || normRaw.StartsWith('\\');
                     var dirName = Path.GetFileName(normRaw);
                     string parentDir;
-                    string cloneDir;
+                    string? cloneDir;
 
                     if (dirName.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
                         dirName.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
                         dirName.Equals("mirror", StringComparison.OrdinalIgnoreCase))
                     {
-                        cloneDir = normRaw;
-                        parentDir = Path.GetDirectoryName(normRaw) ?? normRaw;
+                        cloneDir = normRaw.Replace('\\', '/');
+                        parentDir = (Path.GetDirectoryName(normRaw) ?? normRaw).Replace('\\', '/');
+                    }
+                    else if (Directory.Exists(Path.Combine(normRaw, "clone")))
+                    {
+                        parentDir = normRaw.Replace('\\', '/');
+                        cloneDir = $"{normRaw.Replace('\\', '/')}/clone";
                     }
                     else
                     {
-                        parentDir = normRaw;
-                        cloneDir = $"{normRaw}/clone";
+                        parentDir = normRaw.Replace('\\', '/');
+                        cloneDir = null;
                     }
 
-                    // In container, agent has "/workspace/clone" and "/workspace/task-nnn" (when working on task).
-                    // The host workspace root (parentDir) is mounted to /workspace.
+                    if (isUnixOrWsl)
+                    {
+                        if (normRaw.StartsWith('/') && !parentDir.StartsWith('/')) parentDir = "/" + parentDir;
+                        if (cloneDir != null && normRaw.StartsWith('/') && !cloneDir.StartsWith('/')) cloneDir = "/" + cloneDir;
+                    }
+
+                    // In container, agent has "/workspace/clone" and "/workspace/task-nnn" (when working on task) if cloneDir is present.
+                    // If no clone subdirectory exists, the host workspace root (parentDir) is mounted directly to /workspace.
                     hostWorkspacePath = parentDir;
                     canonicalClonePath = cloneDir;
                 }
 
-                // When working on a task PWD should be "/workspace/task-nnn", and "/workspace/clone" if not scoped to a task.
+                // When working on a task PWD should be "/workspace/task-nnn", and "/workspace/clone" if clone subdirectory exists, or "/workspace".
                 var defaultWorkingDir = effectiveTaskId.HasValue
                     ? $"/workspace/task-{effectiveTaskId.Value}"
-                    : "/workspace/clone";
+                    : (!string.IsNullOrEmpty(canonicalClonePath) ? "/workspace/clone" : "/workspace");
 
                 var targetDistro = workspace.WslDistribution ?? _options.DefaultWslDistribution;
                 var sdkMountPaths = _sdkDiscoveryService != null

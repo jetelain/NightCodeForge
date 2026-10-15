@@ -276,6 +276,19 @@ Take advantage of **Deterministic Stages (`DeterministicWorkflowStage`)**:
 
 ---
 
+### Optimization 8: Speculative CPU SLM Compaction (via `Pmad.AI.LlamaSharp`)
+
+#### The Problem
+While `ToolResultCompactor` and `ThinkingTraceCompactionChatClient` successfully bound quadratic token inflation via sliding windows (`DefaultKeepVerbatimCount = 20` for tools, `10` for thoughts), older entries were historically truncated deterministically (`output[..1750] + "..."` or single-line stubs), losing valuable semantic context, function signatures, and reasoning deductions.
+
+#### The Solution
+Detailed architectural blueprint in [**`docs/SPECULATIVE_CPU_SLM_COMPACTION.md`**](SPECULATIVE_CPU_SLM_COMPACTION.md).
+* **0 VRAM Contention:** Host CPU runs a dedicated 2B SLM (`Qwen 3.5 2B (Q4_K_XL)` or `Gemma 4 E2B (Q4_K_XL)`) via the native [**`Pmad.AI.LlamaSharp`**](file:///C:/Users/Julien/source/repos/jetelain/PmadAI) library (~1.6 GB RAM, 0 VRAM, ~37 tok/s on Intel Core i7-14700KF).
+* **Speculative Pre-computation:** Long before turn $T$ slides past the 20-turn verbatim threshold (1–3 minutes of agent execution), a background worker generates a 50-token semantic summary in ~1.3s on CPU at `ThreadPriority.BelowNormal`.
+* **Zero Turn Latency:** When compaction is reached, the raw 8,000-char text is instantly swapped with the precomputed semantic summary from an in-memory cache ($O(1)$ hit) with deterministic fallback.
+
+---
+
 ## 3. Opt-Out Architecture & A/B Testing Framework
 
 Every optimization described above provides substantial benefits for mainstream models like Qwen 2.5 Coder and DeepSeek-R1. However, to guarantee **scientific rigor, empirical validation, and compatibility with diverse open weights**, all optimizations are strictly **opt-out**.

@@ -28,6 +28,7 @@ public class TaskOrchestrator : ITaskOrchestrator
     private readonly IGitMirrorSyncService? _gitMirrorSyncService;
     private readonly Services.ITaskMarkdownSyncService? _markdownSyncService;
     private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IGlobalOptimizationSettingsService? _globalOptimizationSettings;
     private readonly ILogger<TaskOrchestrator> _logger;
 
     public TaskOrchestrator(
@@ -43,6 +44,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         IGitMirrorSyncService? gitMirrorSyncService = null,
         Services.ITaskMarkdownSyncService? markdownSyncService = null,
         IWorkspacePathResolver? pathResolver = null,
+        IGlobalOptimizationSettingsService? globalOptimizationSettings = null,
         ILogger<TaskOrchestrator>? logger = null)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -57,6 +59,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         _gitMirrorSyncService = gitMirrorSyncService;
         _markdownSyncService = markdownSyncService;
         _pathResolver = pathResolver;
+        _globalOptimizationSettings = globalOptimizationSettings;
         _logger = logger ?? NullLogger<TaskOrchestrator>.Instance;
     }
 
@@ -320,7 +323,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             SerializedStateJson = resumeMemory,
                             PendingHumanAnswer = lastHumanAnswer,
                             BootstrapPrompt = BuildBootstrapPrompt(stage.StageId, task, pipelineContext, stageDirective),
-                            OptimizationFlags = profile?.OptimizationFlags ?? new LocalOptimizationFlags(),
+                            OptimizationFlags = profile?.OptimizationFlags ?? _globalOptimizationSettings?.GetFlags() ?? new LocalOptimizationFlags(),
                             PipelineContext = pipelineContext
                         };
 

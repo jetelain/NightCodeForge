@@ -1,33 +1,67 @@
 @page "/settings"
+@using NightCodeForge.Web.Components.Settings
+@using NightCodeForge.Web.Components.Workspaces
+@using NightCodeForge.Web.Services
 
-<PageTitle>Settings &amp; A/B - NightCodeForge</PageTitle>
+<PageTitle>Settings &amp; Optimizations - NightCodeForge</PageTitle>
 
 <div class="page-header" style="margin-bottom: 1.5rem;">
-    <div style="display: flex; align-items: center; gap: 0.75rem;">
-        <span style="font-size: 1.75rem;">⚙️</span>
-        <div>
-            <h1>Settings, Host SDKs &amp; A/B Testing</h1>
-            <p>LLM inference providers, GPU runtime configurations, sandbox mounts, and agent model tournaments.</p>
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span style="font-size: 1.75rem;">⚙️</span>
+            <div>
+                <h1>Settings, Host SDKs &amp; Optimizations</h1>
+                <p>Global LLM optimizations, context compaction thresholds, agent profiles, sandbox toolchains, and model tournaments.</p>
+            </div>
+        </div>
+        <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.5rem 1rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-secondary);">
+            Active Workspace: <span style="color: var(--accent-indigo); font-weight: 600;">@(WorkspaceState.ActiveWorkspace?.Name ?? "None selected")</span>
         </div>
     </div>
 </div>
 
-<div class="forge-card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <div style="font-weight: 600; font-size: 1.1rem;">LLM Provider &amp; Model Configurations</div>
-        <span class="forge-badge badge-indigo">A/B Evaluation Matrix</span>
-    </div>
-    <p style="margin-bottom: 1.25rem;">
-        Tune temperature, context window size, model fallbacks, Ollama / vLLM local endpoints, and cloud API tokens.
-    </p>
-    <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem; font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-secondary);">
-        Active Workspace: <span style="color: var(--accent-indigo);">@(WorkspaceState.ActiveWorkspace?.Name ?? "None selected")</span>
-    </div>
+<div class="settings-tabs" style="display: flex; gap: 0.5rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem; overflow-x: auto;">
+    <button type="button" class="forge-btn @(_activeTab == "optimizations" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeTab = "optimizations"'>
+        ⚡ Global Optimizations &amp; Tuning
+    </button>
+    <button type="button" class="forge-btn @(_activeTab == "profiles" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeTab = "profiles"'>
+        🤖 Agent Profiles
+    </button>
+    <button type="button" class="forge-btn @(_activeTab == "workspace" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeTab = "workspace"'>
+        🏢 Workspace &amp; Sandboxing
+    </button>
+    <button type="button" class="forge-btn @(_activeTab == "sdks" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeTab = "sdks"'>
+        🔍 Host SDK Inspector
+    </button>
+    <button type="button" class="forge-btn @(_activeTab == "abtesting" ? "forge-btn-primary" : "forge-btn-outline")" @onclick='() => _activeTab = "abtesting"'>
+        📊 A/B Testing Comparator
+    </button>
 </div>
 
-<WorkspaceSettingsTab />
+<div class="settings-tab-content">
+    @switch (_activeTab)
+    {
+        case "optimizations":
+            <GlobalOptimizationSettingsTab />
+            break;
+        case "profiles":
+            <AgentProfilesTab />
+            break;
+        case "workspace":
+            <WorkspaceSettingsTab />
+            break;
+        case "sdks":
+            <HostSdkInspectorTab />
+            break;
+        case "abtesting":
+            <ABTestingComparatorTab />
+            break;
+    }
+</div>
 
 @code {
     [Inject]
     private WorkspaceStateService WorkspaceState { get; set; } = default!;
+
+    private string _activeTab = "optimizations";
 }
