@@ -6,21 +6,11 @@ namespace NightCodeForge.Agents.Tests;
 
 public class ThinkingCompactionTests
 {
-    [Fact]
-    public void CompactThinkBlock_PrunesMonologue_PreservesFirstLineStub()
+    private static ChatMessage Reasoned(string reasoning, string text)
     {
-        var input = @"<think>
-Examining the namespace dependencies in OrderService.
-Need to add Microsoft.AspNetCore.Authentication.
-Checking if IOrderRepository has required methods.
-</think>
-I have identified the missing namespace. Let me edit the file.";
-
-        var compacted = ThinkingTraceCompactionChatClient.CompactThinkBlock(input);
-
-        Assert.DoesNotContain("Checking if IOrderRepository has required methods.", compacted);
-        Assert.Contains("[Reasoned: Examining the namespace dependencies in OrderService.]", compacted);
-        Assert.Contains("I have identified the missing namespace.", compacted);
+        var msg = new ChatMessage(ChatRole.Assistant, text);
+        msg.Contents.Add(new TextReasoningContent(reasoning));
+        return msg;
     }
 
     [Fact]
@@ -30,7 +20,7 @@ I have identified the missing namespace. Let me edit the file.";
         {
             new(ChatRole.System, "System prompt rules"),
             new(ChatRole.User, "Fix bug in OrderService"),
-            new(ChatRole.Assistant, "<think>Thinking deeply about the bug...</think>Here is the plan."),
+            Reasoned("Thinking deeply about the bug...", "Here is the plan."),
             new(ChatRole.User, "Proceed with edits")
         };
 
@@ -39,8 +29,8 @@ I have identified the missing namespace. Let me edit the file.";
         Assert.Equal(4, compacted.Count);
         Assert.Equal("System prompt rules", compacted[0].Text);
         Assert.Equal("Fix bug in OrderService", compacted[1].Text);
-        Assert.Contains("[Reasoned: Thinking deeply about the bug...]", compacted[2].Text);
-        Assert.DoesNotContain("<think>", compacted[2].Text);
+        Assert.Equal("Here is the plan.", compacted[2].Text);
+        Assert.Equal("[Reasoned: Thinking deeply about the bug...]", compacted[2].Contents.OfType<TextReasoningContent>().Single().Text);
         Assert.Equal("Proceed with edits", compacted[3].Text);
     }
 
@@ -50,7 +40,7 @@ I have identified the missing namespace. Let me edit the file.";
         var messages = new List<ChatMessage>();
         for (int i = 0; i < 5; i++)
         {
-            messages.Add(new ChatMessage(ChatRole.Assistant, $"<think>Reasoning step {i}</think>Response {i}"));
+            messages.Add(Reasoned($"Reasoning step {i}\nMore detail", $"Response {i}"));
         }
 
         // Keep 2 verbatim
@@ -61,19 +51,19 @@ I have identified the missing namespace. Let me edit the file.";
         // First 3 should be compacted
         for (int i = 0; i < 3; i++)
         {
-            Assert.Contains($"[Reasoned: Reasoning step {i}]", compacted[i].Text);
-            Assert.DoesNotContain("<think>", compacted[i].Text);
+            Assert.Equal($"[Reasoned: Reasoning step {i}]", compacted[i].Contents.OfType<TextReasoningContent>().Single().Text);
+            Assert.Equal($"Response {i}", compacted[i].Text);
         }
 
         // Last 2 should be verbatim
         for (int i = 3; i < 5; i++)
         {
-            Assert.Contains($"<think>Reasoning step {i}</think>", compacted[i].Text);
+            Assert.Contains("More detail", compacted[i].Contents.OfType<TextReasoningContent>().Single().Text);
         }
     }
 
     [Fact]
-    public async Task ChatClient_WhenOptedOut_PreservesVerbatimThinkBlock()
+    public async Task ChatClient_WhenOptedOut_PreservesVerbatimReasoning()
     {
         var flags = new LocalOptimizationFlags { ThinkingTraceCompaction = false };
         var innerClient = new MockChatClient(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Response")));
@@ -81,13 +71,14 @@ I have identified the missing namespace. Let me edit the file.";
         var client = new ThinkingTraceCompactionChatClient(innerClient, flags);
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.Assistant, "<think>Unpruned reasoning monologue</think>Result")
+            Reasoned("Unpruned reasoning monologue", "Result")
         };
 
         var response = await client.GetResponseAsync(messages);
 
         Assert.NotNull(response);
-        Assert.Equal("<think>Unpruned reasoning monologue</think>Result", innerClient.LastReceivedMessages?.FirstOrDefault()?.Text);
+        var forwarded = innerClient.LastReceivedMessages!.First();
+        Assert.Equal("Unpruned reasoning monologue", forwarded.Contents.OfType<TextReasoningContent>().Single().Text);
     }
 
     [Fact]
@@ -103,15 +94,46 @@ I have identified the missing namespace. Let me edit the file.";
 
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.Assistant, "<think>First thought</think> Turn 1"),
-            new(ChatRole.Assistant, "<think>Second thought</think> Turn 2")
+            Reasoned("First thought", "Turn 1"),
+            Reasoned("Second thought", "Turn 2")
         };
 
         await client.GetResponseAsync(messages);
 
         var forwarded = innerClient.LastReceivedMessages!.ToList();
-        Assert.Equal("[Reasoned: First thought] Turn 1", forwarded[0].Text);
-        Assert.Equal("<think>Second thought</think> Turn 2", forwarded[1].Text);
+        Assert.Equal("[Reasoned: First thought]", forwarded[0].Contents.OfType<TextReasoningContent>().Single().Text);
+        Assert.Equal("Second thought", forwarded[1].Contents.OfType<TextReasoningContent>().Single().Text);
+    }
+
+    [Fact]
+    public void CompactHistoricalAssistantMessages_CompactsTextReasoningContent_PreservingVerbatimWindow()
+    {
+        var messages = new List<ChatMessage>();
+        for (int i = 0; i < 4; i++)
+        {
+            var msg = new ChatMessage(ChatRole.Assistant, $"Assistant response {i}");
+            msg.Contents.Add(new TextReasoningContent($"Detailed reasoning monologue for turn {i}\nSecond line of reasoning"));
+            messages.Add(msg);
+        }
+
+        // Keep 1 verbatim
+        var compacted = ThinkingTraceCompactionChatClient.CompactHistoricalAssistantMessages(messages, keepVerbatimCount: 1);
+
+        Assert.Equal(4, compacted.Count);
+
+        // First 3 should have compacted TextReasoningContent
+        for (int i = 0; i < 3; i++)
+        {
+            var reasoning = compacted[i].Contents.OfType<TextReasoningContent>().FirstOrDefault();
+            Assert.NotNull(reasoning);
+            Assert.Equal($"[Reasoned: Detailed reasoning monologue for turn {i}]", reasoning.Text);
+            Assert.Equal($"Assistant response {i}", compacted[i].Text);
+        }
+
+        // 4th should be verbatim
+        var lastReasoning = compacted[3].Contents.OfType<TextReasoningContent>().FirstOrDefault();
+        Assert.NotNull(lastReasoning);
+        Assert.Contains("Second line of reasoning", lastReasoning.Text);
     }
 
     [Fact]

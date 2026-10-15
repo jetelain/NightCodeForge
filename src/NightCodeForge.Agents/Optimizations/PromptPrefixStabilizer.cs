@@ -14,18 +14,6 @@ public record PromptLayers(
 /// </summary>
 public class PromptPrefixStabilizer
 {
-    public const string CanonicalToolDefinitionsPrompt = @"<tools>
-- read: Read file contents with line slicing (path, offset, limit)
-- edit: Make precise file edits with exact search-and-replace, supporting multiple disjoint edits in one turn (path, edits: [{ oldText, newText }])
-- write: Create new files or completely rewrite files (path, content)
-- bash: Execute shell commands, builds, and file discovery (command, timeout, working_directory)
-- ask: Ask clarifying questions to the user when blocked (prompt, rationale, options)
-- web_search: Search technical web documentation for APIs, errors, or libraries (query, max_results)
-- propose_tasks: Propose structured backlog items (tasks: [{ title, description, type }])
-- request_changes: Reject implementation and send task back to the implementation agent for rework (feedback, reason)
-- load_skill: Load full instructions and reference documentation for a modular skill (skillName)
-</tools>";
-
     public const string CanonicalRulesPrompt = @"<rules>
 - Use bash for file discovery commands like ls, rg, find, git log.
 - Use read to examine files instead of cat or sed.
@@ -43,7 +31,6 @@ public class PromptPrefixStabilizer
         string? skillsCatalog = null,
         string? discoveredSymbols = null,
         LocalOptimizationFlags? flags = null,
-        string? customToolsPrompt = null,
         string? customRulesPrompt = null,
         string? customRolePersona = null,
         string? workingDirectory = null)
@@ -54,7 +41,6 @@ public class PromptPrefixStabilizer
         sb.AppendLine(!string.IsNullOrWhiteSpace(customRolePersona)
             ? customRolePersona
             : "You are an expert AI software engineer operating in NightCodeForge.");
-        sb.AppendLine(!string.IsNullOrWhiteSpace(customToolsPrompt) ? customToolsPrompt : CanonicalToolDefinitionsPrompt);
         sb.AppendLine(!string.IsNullOrWhiteSpace(customRulesPrompt) ? customRulesPrompt : CanonicalRulesPrompt);
 
         if (!string.IsNullOrWhiteSpace(projectGuidelines))

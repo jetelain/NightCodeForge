@@ -1,20 +1,16 @@
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Agents.Optimizations;
 
 /// <summary>
-/// IChatClient middleware that prunes or compacts <think>...</think> monologue blocks
+/// IChatClient middleware that prunes or compacts structured reasoning (TextReasoningContent)
 /// from older historical assistant turns outside a protected recent window (default: last 10 turns)
 /// to save 60%-80% prompt tokens on local reasoning models without discarding recent chain of thought.
 /// </summary>
-public partial class ThinkingTraceCompactionChatClient : DelegatingChatClient
+public class ThinkingTraceCompactionChatClient : DelegatingChatClient
 {
     public const int DefaultKeepVerbatimCount = 100;
-
-    [GeneratedRegex(@"<think>(.*?)</think>", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
-    private static partial Regex ThinkBlockRegex();
 
     private readonly LocalOptimizationFlags _flags;
     private readonly int _keepVerbatimCount;
@@ -76,7 +72,7 @@ public partial class ThinkingTraceCompactionChatClient : DelegatingChatClient
         for (int i = 0; i < messages.Count; i++)
         {
             var msg = messages[i];
-            if (msg.Role == ChatRole.Assistant && !string.IsNullOrEmpty(msg.Text) && ThinkBlockRegex().IsMatch(msg.Text))
+            if (msg.Role == ChatRole.Assistant && msg.Contents.OfType<TextReasoningContent>().Any())
             {
                 thinkIndices.Add(i);
             }
@@ -95,11 +91,24 @@ public partial class ThinkingTraceCompactionChatClient : DelegatingChatClient
             var msg = messages[i];
             if (indicesToCompact.Contains(i))
             {
-                var stripped = CompactThinkBlock(msg.Text!);
-                var newMsg = new ChatMessage(msg.Role, stripped);
+                var newMsg = new ChatMessage(msg.Role, msg.Text ?? string.Empty);
+
+                var reasoningContents = msg.Contents.OfType<TextReasoningContent>().ToList();
+                if (reasoningContents.Count > 0)
+                {
+                    var combinedReasoning = string.Concat(reasoningContents.Select(r => r.Text)).Trim();
+                    var firstLine = combinedReasoning.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? string.Empty;
+                    if (firstLine.Length > 80)
+                    {
+                        firstLine = firstLine.Substring(0, 77) + "...";
+                    }
+                    var summary = string.IsNullOrWhiteSpace(firstLine) ? "[Reasoned]" : $"[Reasoned: {firstLine}]";
+                    newMsg.Contents.Add(new TextReasoningContent(summary));
+                }
+
                 foreach (var content in msg.Contents)
                 {
-                    if (content is not TextContent)
+                    if (content is not TextContent && content is not TextReasoningContent)
                     {
                         newMsg.Contents.Add(content);
                     }
@@ -113,30 +122,5 @@ public partial class ThinkingTraceCompactionChatClient : DelegatingChatClient
         }
 
         return result;
-    }
-
-    public static string CompactThinkBlock(string text)
-    {
-        if (string.IsNullOrEmpty(text) || !ThinkBlockRegex().IsMatch(text))
-        {
-            return text;
-        }
-
-        return ThinkBlockRegex().Replace(text, match =>
-        {
-            var thoughts = match.Groups[1].Value.Trim();
-            if (string.IsNullOrWhiteSpace(thoughts))
-            {
-                return string.Empty;
-            }
-
-            // Summarize into a concise single-line stub
-            var firstLine = thoughts.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? string.Empty;
-            if (firstLine.Length > 80)
-            {
-                firstLine = firstLine.Substring(0, 77) + "...";
-            }
-            return $"[Reasoned: {firstLine}]";
-        }).Trim();
     }
 }

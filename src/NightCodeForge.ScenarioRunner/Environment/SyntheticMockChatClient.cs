@@ -38,7 +38,7 @@ public class SyntheticMockChatClient : IChatClient
         // Yield synthetic reasoning thinking block
         yield return new ChatResponseUpdate
         {
-            Contents = [new TextContent("<think>Inspecting codebase structure and evaluating directives...</think>\n")]
+            Contents = [new TextReasoningContent("Inspecting codebase structure and evaluating directives...")]
         };
 
         await Task.Yield();

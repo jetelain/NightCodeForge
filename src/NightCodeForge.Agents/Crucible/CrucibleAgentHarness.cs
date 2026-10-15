@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Context;
@@ -40,11 +41,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IGlobalOptimizationSettingsService? _globalOptimizationSettings;
     private readonly ILogger<CrucibleAgentHarness> _logger;
+    private readonly LlmProviderOptions? _llmOptions;
 
     public string HarnessId => "crucible";
-
-    [GeneratedRegex(@"<tool_call>\s*({.*?})\s*</tool_call>", RegexOptions.Singleline)]
-    private static partial Regex ToolCallTagRegex();
 
     public CrucibleAgentHarness(
         IWorkspacePathResolver pathResolver,
@@ -62,7 +61,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         IAgentActivityStreamer? activityStreamer = null,
         SessionTranscriptService? transcriptService = null,
         IGlobalOptimizationSettingsService? globalOptimizationSettings = null,
-        ILogger<CrucibleAgentHarness>? logger = null)
+        ILogger<CrucibleAgentHarness>? logger = null,
+        Microsoft.Extensions.Options.IOptions<LlmProviderOptions>? llmOptions = null)
     {
         ArgumentNullException.ThrowIfNull(pathResolver);
         if (baseChatClient == null && chatClientFactory == null)
@@ -86,6 +86,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         _pathResolver = pathResolver;
         _globalOptimizationSettings = globalOptimizationSettings;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CrucibleAgentHarness>.Instance;
+        _llmOptions = llmOptions?.Value;
     }
 
     public CrucibleAgentHarness(
@@ -187,17 +188,6 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var agentsMdRules = await _agentsMdService.IngestRulesAsync(workspacePath, cancellationToken);
         var projectContext = _agentsMdService.FormatProjectContextSection(agentsMdRules, projectConfig, context.Workspace);
 
-        // Discover skills and format catalog using minimalist Pi syntax (~25 tokens/skill)
-        var skills = await _skillsService.DiscoverSkillsAsync(workspacePath, cancellationToken: cancellationToken);
-        var skillsCatalog = _skillsService.FormatSkillsCatalogPrompt(skills);
-
-        // Register framework skill tools (load_skill, read_skill_resource, run_skill_script) into dispatcher
-        var skillsContext = await _skillsService.GetSkillsContextAsync(workspacePath, cancellationToken: cancellationToken);
-        if (skillsContext?.Tools != null && skillsContext.Tools.Any())
-        {
-            dispatcher.RegisterAITools(skillsContext.Tools);
-        }
-
         string discoveredSymbols = string.Empty;
         if (context.OptimizationFlags.DeterministicSymbolMap)
         {
@@ -208,8 +198,19 @@ public partial class CrucibleAgentHarness : IAgentHarness
         // 4. Resolve Active Stage Permitted Tools (Database/Profile Configurable)
         var permittedTools = ResolvePermittedTools(harnessConfig, context.Profile, context.RequiredMode);
 
-        // 5. Build dynamic tool descriptions prompt
-        var customToolsPrompt = BuildDynamicToolsPrompt(dispatcher, permittedTools, harnessConfig.ToolDirectives);
+        // Discover skills and format catalog using minimalist Pi syntax (~25 tokens/skill).
+        // The catalog is only useful (and only injected) when the agent can call load_skill;
+        // skill resources/scripts are reached through the canonical read and bash tools.
+        IReadOnlyList<SkillDescriptor> skills = Array.Empty<SkillDescriptor>();
+        if (permittedTools.Contains(CanonicalToolNames.LoadSkill, StringComparer.OrdinalIgnoreCase))
+        {
+            skills = await _skillsService.DiscoverSkillsAsync(workspacePath, cancellationToken: cancellationToken);
+        }
+        var skillsCatalog = _skillsService.FormatSkillsCatalogPrompt(skills);
+        var activeSkills = skills.Select(s => s.Name).ToList();
+
+        // 5. Tool schemas are provided natively via typed AIFunctions (see BuildAIFunctionList);
+        //    no hand-written <tools> prompt is injected.
 
         // 6. Build 4-Layer Stabilized Prompt Prefix
         var prefixStabilizer = new PromptPrefixStabilizer();
@@ -240,22 +241,24 @@ public partial class CrucibleAgentHarness : IAgentHarness
             skillsCatalog,
             discoveredSymbols,
             context.OptimizationFlags,
-            customToolsPrompt: customToolsPrompt,
             customRulesPrompt: harnessConfig.CustomSystemRules,
             customRolePersona: customPersona,
             workingDirectory: agentWorkingDir);
 
-        // 7. Restore or Initialize Conversation History
+        // 7. Restore or Initialize Conversation History.
+        // The system prompt is NOT part of the history: it is supplied to HarnessAgent as HarnessInstructions
+        // (ChatOptions.Instructions), so adding it as a System message too would send it to the model twice.
         List<ChatMessage> chatHistory;
         if (!string.IsNullOrEmpty(context.SerializedStateJson))
         {
             chatHistory = DeserializeSession(context.SerializedStateJson);
+            // Legacy checkpoints stored the system prompt as the first message; it is rebuilt each run.
+            chatHistory.RemoveAll(m => m.Role == ChatRole.System);
         }
         else
         {
             chatHistory = new List<ChatMessage>
             {
-                new(ChatRole.System, stabilizedPrefix),
                 new(ChatRole.User, !string.IsNullOrWhiteSpace(context.BootstrapPrompt) ? context.BootstrapPrompt : "Please inspect the requirements and begin execution.")
             };
         }
@@ -277,57 +280,200 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         string latestSerializedState = SerializeSession(chatHistory);
 
+        // The tracer sits closest to the model (below persistence and compaction) so that it records the exact
+        // requests sent to the LLM: everything MAF injects, plus the history after compaction.
+        var tracingClient = new ThinkingAndActivityTracingChatClient(baseClient);
+
         var persistingClient = new PerServiceCallChatHistoryPersistingChatClient(
-            baseClient,
+            tracingClient,
             history =>
             {
-                latestSerializedState = SerializeSession(history.ToList());
+                chatHistory.Clear();
+                chatHistory.AddRange(history);
+                latestSerializedState = SerializeSession(chatHistory);
                 return Task.CompletedTask;
             });
 
-        IChatClient activeClient = new ThinkingTraceCompactionChatClient(persistingClient, context.OptimizationFlags);
+        var compactedClient = new ThinkingTraceCompactionChatClient(persistingClient, context.OptimizationFlags);
+        var activeClient = new LenientToolCallChatClient(compactedClient);
 
-        // 10. Main Agentic Reasoning Loop with Real-Time Streaming
+        // 10. Main Agentic Reasoning Loop with HarnessAgent & Real-Time Streaming
         int maxTurns = harnessConfig.MaxTurns > 0
             ? harnessConfig.MaxTurns
             : (context.Profile.MaxTurns.HasValue && context.Profile.MaxTurns.Value > 0
                 ? context.Profile.MaxTurns.Value
                 : CrucibleHarnessConfig.DefaultMaxTurns);
-        int currentTurn = 0;
-        string? targetRouting = null;
 
-        while (currentTurn < maxTurns && !cancellationToken.IsCancellationRequested)
+        var aiTools = BuildAIFunctionList(canonicalTools, permittedTools, dispatcher, harnessConfig.CustomTools, harnessConfig.ToolDirectives);
+
+        var chatOptions = new ChatOptions
         {
-            currentTurn++;
-            toolResultCompactor.Compact(chatHistory);
+            ModelId = !string.IsNullOrWhiteSpace(effectiveModel) ? effectiveModel : null,
+            Temperature = (float?)context.Profile.Temperature,
+            Tools = aiTools,
+            AdditionalProperties = ModelCapabilityResolver.BuildReasoningProperties(_llmOptions, effectiveModel ?? _llmOptions?.ModelId)
+        };
 
-            var chatOptions = new ChatOptions
-            {
-                ModelId = !string.IsNullOrWhiteSpace(effectiveModel) ? effectiveModel : null,
-                Temperature = (float?)context.Profile.Temperature,
-                Tools = BuildAIFunctionList(permittedTools)
-            };
+        if (context.OptimizationFlags.GuidedGrammarDecoding)
+        {
+            GuidedGrammarHelper.ApplyGrammarConstraints(chatOptions, context.OptimizationFlags);
+        }
 
-            if (context.OptimizationFlags.GuidedGrammarDecoding)
+        var harnessOptions = new HarnessAgentOptions
+        {
+            Id = context.StageId,
+            Name = context.Profile.Name ?? context.Profile.Id,
+            HarnessInstructions = stabilizedPrefix,
+            ChatOptions = chatOptions,
+            MaximumIterationsPerRequest = maxTurns,
+            CompactionStrategy = ModelCapabilityResolver.BuildCompactionStrategy(_llmOptions, effectiveModel ?? _llmOptions?.ModelId),
+            DisableTodoProvider = true,
+            DisableAgentModeProvider = true,
+            DisableFileMemory = true,
+            DisableAgentSkillsProvider = true,
+            DisableWebSearch = true,
+            DisableToolAutoApproval = false
+        };
+
+        var agent = new HarnessAgent(activeClient, harnessOptions);
+        var session = await agent.CreateSessionAsync(cancellationToken);
+
+        string? targetRouting = null;
+        var accumulatedText = new StringBuilder();
+        var accumulatedReasoning = new StringBuilder();
+        bool streamingFailed = false;
+
+        IAsyncEnumerator<AgentResponseUpdate>? enumerator = null;
+        try
+        {
+            var stream = agent.RunStreamingAsync(chatHistory, session, cancellationToken: cancellationToken);
+            enumerator = stream.GetAsyncEnumerator(cancellationToken);
+        }
+        catch (RequestChangesException reqChange)
+        {
+            stopwatch.Stop();
+            latestSerializedState = SerializeSession(chatHistory);
+
+            if (context.PipelineContext != null)
             {
-                GuidedGrammarHelper.ApplyGrammarConstraints(chatOptions, context.OptimizationFlags);
+                context.PipelineContext.DataBag.Set("ReviewerFeedback", reqChange.Feedback);
             }
 
-            var accumulatedText = new StringBuilder();
-            var functionCalls = new List<FunctionCallContent>();
-            bool isThinking = false;
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, $"Changes requested: {reqChange.Feedback}", cancellationToken);
+            await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken, tracingClient, harnessOptions, activeSkills);
 
+            return AgentRunResult.Completed(
+                new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+                commitHash: null,
+                updatedState: latestSerializedState,
+                summary: $"Reviewer requested changes: {reqChange.Feedback}",
+                targetRouting: reqChange.TargetStageId);
+        }
+        catch (HumanInterruptionException interruption)
+        {
+            stopwatch.Stop();
+            latestSerializedState = SerializeSession(chatHistory);
+
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, interruption.Question.Prompt, cancellationToken);
+            await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken, tracingClient, harnessOptions, activeSkills);
+
+            return AgentRunResult.WaitingForHuman(
+                interruption.Question.Prompt,
+                new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+                updatedState: latestSerializedState,
+                summary: "Crucible paused awaiting human clarification");
+        }
+        catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
+        {
+            streamingFailed = true;
+        }
+
+        if (!streamingFailed && enumerator != null)
+        {
             try
             {
-                await foreach (var update in activeClient.GetStreamingResponseAsync(chatHistory, chatOptions, cancellationToken))
+                while (true)
                 {
+                    bool hasMore;
+                    try
+                    {
+                        hasMore = await enumerator.MoveNextAsync();
+                    }
+                    catch (RequestChangesException reqChange)
+                    {
+                        stopwatch.Stop();
+                        latestSerializedState = SerializeSession(chatHistory);
+
+                        if (context.PipelineContext != null)
+                        {
+                            context.PipelineContext.DataBag.Set("ReviewerFeedback", reqChange.Feedback);
+                        }
+
+                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, $"Changes requested: {reqChange.Feedback}", cancellationToken);
+                        await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken, tracingClient, harnessOptions, activeSkills);
+
+                        return AgentRunResult.Completed(
+                            new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+                            commitHash: null,
+                            updatedState: latestSerializedState,
+                            summary: $"Reviewer requested changes: {reqChange.Feedback}",
+                            targetRouting: reqChange.TargetStageId);
+                    }
+                    catch (HumanInterruptionException interruption)
+                    {
+                        stopwatch.Stop();
+                        latestSerializedState = SerializeSession(chatHistory);
+
+                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, interruption.Question.Prompt, cancellationToken);
+                        await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken, tracingClient, harnessOptions, activeSkills);
+
+                        return AgentRunResult.WaitingForHuman(
+                            interruption.Question.Prompt,
+                            new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+                            updatedState: latestSerializedState,
+                            summary: "Crucible paused awaiting human clarification");
+                    }
+                    catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
+                    {
+                        streamingFailed = true;
+                        break;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogError(ex, "Error during Crucible streaming LLM invocation");
+                        stopwatch.Stop();
+                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+                        await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken, tracingClient, harnessOptions, activeSkills);
+
+                        return AgentRunResult.Failed(
+                            ex.Message,
+                            new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+                            latestSerializedState);
+                    }
+
+                    if (!hasMore) break;
+
+                    var update = enumerator.Current;
+
                     if (update.Contents != null)
                     {
                         foreach (var content in update.Contents)
                         {
                             if (content is FunctionCallContent fc)
                             {
-                                functionCalls.Add(fc);
+                                var canonicalName = dispatcher.ResolveToolName(fc.Name);
+                                var argsJson = fc.Arguments != null ? JsonSerializer.Serialize(fc.Arguments) : "{}";
+                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken);
+                            }
+                            else if (content is FunctionResultContent frc)
+                            {
+                                var resultStr = frc.Result?.ToString() ?? string.Empty;
+                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, resultStr, cancellationToken);
+                            }
+                            else if (content is TextReasoningContent reasoning && !string.IsNullOrEmpty(reasoning.Text))
+                            {
+                                accumulatedReasoning.Append(reasoning.Text);
+                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ThinkingDelta, reasoning.Text, cancellationToken);
                             }
                             else if (content is UsageContent uc && uc.Details != null)
                             {
@@ -337,30 +483,26 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         }
                     }
 
-                    if (update.AdditionalProperties != null && update.AdditionalProperties.TryGetValue("usage", out var rawUsage) && rawUsage is JsonElement usageJe)
+                    if (update.RawRepresentation is ChatResponseUpdate chatUpdate && chatUpdate.AdditionalProperties != null)
                     {
-                        if (usageJe.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt64(out var ptVal)) promptTokens = Math.Max(promptTokens, ptVal);
-                        if (usageJe.TryGetProperty("completion_tokens", out var ct) && ct.TryGetInt64(out var ctVal)) completionTokens = Math.Max(completionTokens, ctVal);
-                    }
+                        if (chatUpdate.AdditionalProperties.TryGetValue("usage", out var rawUsage) && rawUsage is JsonElement je)
+                        {
+                            if (je.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt64(out var ptVal)) promptTokens = Math.Max(promptTokens, ptVal);
+                            if (je.TryGetProperty("completion_tokens", out var ct) && ct.TryGetInt64(out var ctVal)) completionTokens = Math.Max(completionTokens, ctVal);
+                        }
 
-                    if (update.AdditionalProperties != null && update.AdditionalProperties.TryGetValue("target_routing", out var trObj) && trObj is string trStr)
-                    {
-                        targetRouting = trStr;
+                        if (chatUpdate.AdditionalProperties.TryGetValue("target_routing", out var trObj) && trObj is string strVal)
+                        {
+                            targetRouting = strVal;
+                        }
                     }
 
                     if (!string.IsNullOrEmpty(update.Text))
                     {
                         accumulatedText.Append(update.Text);
 
-                        // Detect thinking tag transitions for streaming activity
-                        if (update.Text.Contains("<think>")) isThinking = true;
-                        
-                        var kind = isThinking ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
-                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, kind, update.Text, cancellationToken);
+                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.MessageDelta, update.Text, cancellationToken);
 
-                        if (update.Text.Contains("</think>")) isThinking = false;
-
-                        // Check circuit breaker repetition in streaming buffer
                         if (context.OptimizationFlags.LoopCircuitBreaker && circuitBreaker.DetectStreamingRepetition(accumulatedText.ToString()))
                         {
                             _logger.LogWarning("Circuit breaker detected repeating n-gram monologue in streaming output. Aborting turn.");
@@ -369,129 +511,111 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     }
                 }
             }
+            finally
+            {
+                await enumerator.DisposeAsync();
+            }
+        }
+
+        if (streamingFailed)
+        {
+            try
+            {
+                var response = await agent.RunAsync(chatHistory, session, cancellationToken: cancellationToken);
+                foreach (var update in response.ToAgentResponseUpdates())
+                {
+                    if (update.Contents != null)
+                    {
+                        foreach (var content in update.Contents)
+                        {
+                            if (content is FunctionCallContent fc)
+                            {
+                                var canonicalName = dispatcher.ResolveToolName(fc.Name);
+                                var argsJson = fc.Arguments != null ? JsonSerializer.Serialize(fc.Arguments) : "{}";
+                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken);
+                            }
+                            else if (content is FunctionResultContent frc)
+                            {
+                                var resultStr = frc.Result?.ToString() ?? string.Empty;
+                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, resultStr, cancellationToken);
+                            }
+                            else if (content is TextReasoningContent reasoning && !string.IsNullOrEmpty(reasoning.Text))
+                            {
+                                accumulatedReasoning.Append(reasoning.Text);
+                                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ThinkingDelta, reasoning.Text, cancellationToken);
+                            }
+                            else if (content is UsageContent uc && uc.Details != null)
+                            {
+                                if (uc.Details.InputTokenCount.HasValue) promptTokens = Math.Max(promptTokens, uc.Details.InputTokenCount.Value);
+                                if (uc.Details.OutputTokenCount.HasValue) completionTokens = Math.Max(completionTokens, uc.Details.OutputTokenCount.Value);
+                            }
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(update.Text))
+                    {
+                        accumulatedText.Append(update.Text);
+                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.MessageDelta, update.Text, cancellationToken);
+                    }
+                }
+            }
+            catch (RequestChangesException reqChange)
+            {
+                stopwatch.Stop();
+                latestSerializedState = SerializeSession(chatHistory);
+
+                if (context.PipelineContext != null)
+                {
+                    context.PipelineContext.DataBag.Set("ReviewerFeedback", reqChange.Feedback);
+                }
+
+                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, $"Changes requested: {reqChange.Feedback}", cancellationToken);
+                await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken, tracingClient, harnessOptions, activeSkills);
+
+                return AgentRunResult.Completed(
+                    new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+                    commitHash: null,
+                    updatedState: latestSerializedState,
+                    summary: $"Reviewer requested changes: {reqChange.Feedback}",
+                    targetRouting: reqChange.TargetStageId);
+            }
+            catch (HumanInterruptionException interruption)
+            {
+                stopwatch.Stop();
+                latestSerializedState = SerializeSession(chatHistory);
+
+                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, interruption.Question.Prompt, cancellationToken);
+                await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken, tracingClient, harnessOptions, activeSkills);
+
+                return AgentRunResult.WaitingForHuman(
+                    interruption.Question.Prompt,
+                    new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+                    updatedState: latestSerializedState,
+                    summary: "Crucible paused awaiting human clarification");
+            }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogError(ex, "Error during Crucible streaming LLM invocation");
+                _logger.LogError(ex, "Error during Crucible non-streaming LLM invocation");
                 stopwatch.Stop();
                 await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
-
-                await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken);
+                await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken, tracingClient, harnessOptions, activeSkills);
 
                 return AgentRunResult.Failed(
                     ex.Message,
                     new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
                     latestSerializedState);
             }
+        }
 
-            var textResult = accumulatedText.ToString();
-            var assistantMsg = new ChatMessage(ChatRole.Assistant, textResult);
-            foreach (var fc in functionCalls)
+        if (accumulatedText.Length > 0 && chatHistory.LastOrDefault()?.Role != ChatRole.Assistant)
+        {
+            var assistantMsg = new ChatMessage(ChatRole.Assistant, accumulatedText.ToString());
+            if (accumulatedReasoning.Length > 0)
             {
-                assistantMsg.Contents.Add(fc);
+                assistantMsg.Contents.Add(new TextReasoningContent(accumulatedReasoning.ToString()));
             }
-
             chatHistory.Add(assistantMsg);
             latestSerializedState = SerializeSession(chatHistory);
-
-            // Also check for raw text fallback tool call emitted by models without native tool tokens
-            if (functionCalls.Count == 0 && !string.IsNullOrEmpty(textResult))
-            {
-                var fallbackCall = TryExtractTextToolCall(textResult);
-                if (fallbackCall != null)
-                {
-                    functionCalls.Add(fallbackCall);
-                }
-            }
-
-            if (functionCalls.Count == 0)
-            {
-                // Agent finished its reasoning turn without requesting any further tool calls
-                break;
-            }
-
-            // Process tool calls
-            foreach (var call in functionCalls)
-            {
-                var canonicalName = dispatcher.ResolveToolName(call.Name);
-                var argsJson = call.Arguments != null ? JsonSerializer.Serialize(call.Arguments) : "{}";
-
-                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken);
-
-                // Enforce Tool Whitelist Security Gate
-                if (!permittedTools.Contains(canonicalName, StringComparer.OrdinalIgnoreCase))
-                {
-                    var securityReject = $"Security Error: Tool '{canonicalName}' is prohibited in stage '{context.StageId}'. Permitted tools: {string.Join(", ", permittedTools)}";
-                    chatHistory.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent(call.CallId ?? Guid.NewGuid().ToString("N"), securityReject)]));
-                    await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, securityReject, cancellationToken);
-                    continue;
-                }
-
-                // Check Circuit Breaker for duplicate invocations
-                var loopCheck = circuitBreaker.EvaluateToolInvocation(canonicalName, call.Arguments, null);
-                if (loopCheck.IsBlocked)
-                {
-                    chatHistory.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent(call.CallId ?? Guid.NewGuid().ToString("N"), loopCheck.CorrectiveMessage!)]));
-                    await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, loopCheck.CorrectiveMessage!, cancellationToken);
-                    continue;
-                }
-
-                // Execute via LenientToolDispatcher
-                string toolResult;
-                var toolSw = Stopwatch.StartNew();
-                try
-                {
-                    toolResult = await dispatcher.DispatchAsync(canonicalName, argsJson, cancellationToken);
-                    toolSw.Stop();
-                }
-                catch (RequestChangesException reqChange)
-                {
-                    toolSw.Stop();
-                    stopwatch.Stop();
-                    latestSerializedState = SerializeSession(chatHistory);
-
-                    if (context.PipelineContext != null)
-                    {
-                        context.PipelineContext.DataBag.Set("ReviewerFeedback", reqChange.Feedback);
-                    }
-
-                    await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, $"Changes requested: {reqChange.Feedback}", cancellationToken);
-
-                    await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
-
-                    return AgentRunResult.Completed(
-                        new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
-                        commitHash: null,
-                        updatedState: latestSerializedState,
-                        summary: $"Reviewer requested changes: {reqChange.Feedback}",
-                        targetRouting: reqChange.TargetStageId);
-                }
-                catch (HumanInterruptionException interruption)
-                {
-                    toolSw.Stop();
-                    stopwatch.Stop();
-                    latestSerializedState = SerializeSession(chatHistory);
-
-                    await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, interruption.Question.Prompt, cancellationToken);
-
-                    await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
-
-                    return AgentRunResult.WaitingForHuman(
-                        interruption.Question.Prompt,
-                        new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
-                        updatedState: latestSerializedState,
-                        summary: "Crucible paused awaiting human clarification");
-                }
-                catch (Exception ex)
-                {
-                    toolSw.Stop();
-                    toolResult = $"Error executing tool '{canonicalName}': {ex.Message}";
-                }
-
-                chatHistory.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent(call.CallId ?? Guid.NewGuid().ToString("N"), toolResult)]));
-                latestSerializedState = SerializeSession(chatHistory);
-
-                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, $"Completed in {toolSw.ElapsedMilliseconds}ms: {toolResult}", cancellationToken);
-            }
         }
 
         stopwatch.Stop();
@@ -520,7 +644,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, lastAssistantMessage ?? "Stage finished", cancellationToken);
 
-        await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
+        await SaveTranscriptAsync(context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken, tracingClient, harnessOptions, activeSkills);
 
         return AgentRunResult.Completed(
             new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
@@ -547,13 +671,26 @@ public partial class CrucibleAgentHarness : IAgentHarness
         long promptTokens,
         long completionTokens,
         AgentRunStatus status,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ThinkingAndActivityTracingChatClient? tracingClient = null,
+        HarnessAgentOptions? harnessOptions = null,
+        IReadOnlyList<string>? activeSkills = null)
     {
         if (_transcriptService == null) return;
 
         try
         {
+            var systemPrompt = tracingClient?.LastCapturedSystemPrompt
+                ?? chatHistory.FirstOrDefault(m => m.Role == ChatRole.System)?.Text
+                ?? context.Profile.SystemPrompt;
+            IReadOnlyList<string>? availableTools = tracingClient is { LastCapturedTools.Count: > 0 }
+                ? tracingClient.LastCapturedTools
+                : context.Profile.PermittedTools;
+            var mafConfig = harnessOptions != null
+                ? MafConfigurationSummary.Build(harnessOptions, tracingClient?.DetectedMafConfiguration)
+                : null;
             var entries = BuildTranscriptEntries(chatHistory);
+
             var meta = new TranscriptMetadata(
                 context.ForgeTask.Id,
                 context.StageId,
@@ -562,7 +699,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 elapsedMs,
                 new AgentRunMetrics(elapsedMs, promptTokens, completionTokens, promptTokens + completionTokens),
                 context.OptimizationFlags ?? new LocalOptimizationFlags(),
-                status);
+                status,
+                KvCacheHitRate: null,
+                SystemPrompt: systemPrompt,
+                AvailableTools: availableTools,
+                ActiveSkills: activeSkills,
+                MafConfiguration: mafConfig,
+                ModelCalls: tracingClient?.ModelCalls);
 
             var transcriptDir = Path.Combine(workspacePath, "docs", "transcripts");
             await _transcriptService.SaveTranscriptAsync(meta, entries, transcriptDir, cancellationToken);
@@ -582,6 +725,16 @@ public partial class CrucibleAgentHarness : IAgentHarness
         {
             var role = msg.Role.Value;
             var text = msg.Text ?? string.Empty;
+
+            // Structured reasoning (TextReasoningContent) is not part of msg.Text; emit it as its own step.
+            if (msg.Role == ChatRole.Assistant)
+            {
+                var reasoning = string.Concat(msg.Contents.OfType<TextReasoningContent>().Select(r => r.Text));
+                if (!string.IsNullOrWhiteSpace(reasoning))
+                {
+                    entries.Add(new TranscriptEntry(now, "THINKING", reasoning));
+                }
+            }
 
             var functionCalls = msg.Contents.OfType<FunctionCallContent>().ToList();
             var functionResults = msg.Contents.OfType<FunctionResultContent>().ToList();
@@ -668,30 +821,6 @@ public partial class CrucibleAgentHarness : IAgentHarness
         return DefaultAgentTools.GetTools(profile.Mode == AgentMode.ReadOnly ? AgentMode.ReadOnly : requiredMode);
     }
 
-    private static string BuildDynamicToolsPrompt(
-        LenientToolDispatcher dispatcher,
-        IReadOnlyList<string> permittedTools,
-        Dictionary<string, string> customDirectives)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("<tools>");
-
-        foreach (var tool in dispatcher.RegisteredTools)
-        {
-            if (permittedTools.Contains(tool.Name, StringComparer.OrdinalIgnoreCase))
-            {
-                var desc = customDirectives.TryGetValue(tool.Name, out var customDesc)
-                    ? customDesc
-                    : tool.Description;
-
-                sb.AppendLine($"- {tool.Name}: {desc}");
-            }
-        }
-
-        sb.AppendLine("</tools>");
-        return sb.ToString().TrimEnd();
-    }
-
     private static string GetStageDirective(CrucibleHarnessConfig config, string stageId)
     {
         if (config.StageDirectives.TryGetValue(stageId, out var customDirective) && !string.IsNullOrWhiteSpace(customDirective))
@@ -713,37 +842,53 @@ public partial class CrucibleAgentHarness : IAgentHarness
         };
     }
 
-    private static IList<AITool> BuildAIFunctionList(IReadOnlyList<string> permittedTools)
+    private static IList<AITool> BuildAIFunctionList(
+        CanonicalTools tools,
+        IReadOnlyList<string> permittedTools,
+        LenientToolDispatcher dispatcher,
+        List<CustomToolConfig>? customTools = null,
+        IReadOnlyDictionary<string, string>? toolDirectives = null)
     {
-        var tools = new List<AITool>();
+        var aiFunctions = CanonicalAIFunctionFactory.CreateTools(tools, permittedTools).Cast<AIFunction>().ToList();
+        var knownNames = new HashSet<string>(aiFunctions.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
         foreach (var tool in permittedTools)
         {
-            tools.Add(AIFunctionFactory.Create(() => "ok", tool));
+            // Only expose non-canonical tools that are actually registered (custom DB tools, MCP servers);
+            // names such as the legacy read_skill_resource/run_skill_script have no handler and are skipped.
+            if (!knownNames.Contains(tool) && dispatcher.TryGetTool(tool, out _))
+            {
+                var custom = customTools?.FirstOrDefault(c => string.Equals(c.Name, tool, StringComparison.OrdinalIgnoreCase));
+                var desc = custom?.Description ?? $"Execute tool '{tool}'";
+                var toolName = tool;
+                aiFunctions.Add(AIFunctionFactory.Create(
+                    async (object? args, CancellationToken ct) =>
+                    {
+                        var argsJson = args != null ? JsonSerializer.Serialize(args) : "{}";
+                        return await dispatcher.DispatchAsync(toolName, argsJson, ct);
+                    },
+                    toolName,
+                    desc));
+            }
         }
-        return tools;
+
+        if (toolDirectives is { Count: > 0 })
+        {
+            for (int i = 0; i < aiFunctions.Count; i++)
+            {
+                if (toolDirectives.TryGetValue(aiFunctions[i].Name, out var directive) && !string.IsNullOrWhiteSpace(directive))
+                {
+                    aiFunctions[i] = new DescriptionOverrideAIFunction(aiFunctions[i], directive);
+                }
+            }
+        }
+
+        return aiFunctions.Cast<AITool>().ToList();
     }
 
-    private static FunctionCallContent? TryExtractTextToolCall(string text)
+    /// <summary>Overrides the description exposed to the model (database-configured tool directives).</summary>
+    private sealed class DescriptionOverrideAIFunction(AIFunction inner, string description) : DelegatingAIFunction(inner)
     {
-        var match = ToolCallTagRegex().Match(text);
-        if (!match.Success) return null;
-
-        try
-        {
-            var node = JsonNode.Parse(match.Groups[1].Value);
-            var name = node?["name"]?.ToString();
-            if (string.IsNullOrEmpty(name)) return null;
-
-            var args = node?["arguments"] as JsonObject ?? new JsonObject();
-            var dict = new Dictionary<string, object?>();
-            foreach (var (k, v) in args) dict[k] = v?.ToString();
-
-            return new FunctionCallContent(Guid.NewGuid().ToString("N"), name, dict);
-        }
-        catch
-        {
-            return null;
-        }
+        public override string Description => description;
     }
 
     public static string SerializeSession(List<ChatMessage> messages)

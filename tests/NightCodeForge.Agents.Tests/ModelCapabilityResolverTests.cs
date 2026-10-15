@@ -1,0 +1,89 @@
+using NightCodeForge.Agents.Inference;
+using NightCodeForge.Agents.Transcripts;
+using NightCodeForge.Core.Domain;
+
+namespace NightCodeForge.Agents.Tests;
+
+public class ModelCapabilityResolverTests
+{
+    [Theory]
+    [InlineData("qwen3.8:35b", "high", "xhigh")]
+    [InlineData("qwen3.8:35b", "xhigh", "xhigh")]
+    [InlineData("qwen3.8:35b", "medium", "medium")]
+    [InlineData("qwen3.8:35b", "low", "low")]
+    [InlineData("QWEN-3.8-coder", "high", "xhigh")]
+    [InlineData("Qwen3.8-27B:latest", "high", "xhigh")]
+    public void Qwen38_MapsHighToXhigh_AndKeepsSupportedLevels(string model, string requested, string expected)
+    {
+        var options = new LlmProviderOptions();
+        Assert.Equal(expected, ModelCapabilityResolver.ResolveReasoningEffort(options, model, requested));
+    }
+
+    [Fact]
+    public void Qwen38_UnsupportedLevel_FallsBackToNearestSupported()
+    {
+        var options = new LlmProviderOptions();
+        options.ModelProfiles["qwen3.8"].EffortMap.Clear();
+        Assert.Equal("xhigh", ModelCapabilityResolver.ResolveReasoningEffort(options, "qwen3.8:35b", "high"));
+    }
+
+    [Fact]
+    public void UnknownModel_UsesConfiguredDefault_AndOpenAiNormalization()
+    {
+        var options = new LlmProviderOptions { ReasoningEffort = "medium" };
+        Assert.Equal("medium", ModelCapabilityResolver.ResolveReasoningEffort(options, "llama3:8b"));
+
+        var xhigh = new LlmProviderOptions();
+        Assert.Equal("xhigh", ModelCapabilityResolver.ResolveReasoningEffort(xhigh, "llama3:8b"));
+        Assert.Equal("high", ModelCapabilityResolver.ResolveReasoningEffort(xhigh, "o3-mini", isOpenAi: true));
+    }
+
+    [Fact]
+    public void BuildReasoningProperties_EnablesThinkingWithResolvedEffort()
+    {
+        var props = ModelCapabilityResolver.BuildReasoningProperties(new LlmProviderOptions { ReasoningEffort = "high" }, "qwen3.8:35b");
+        Assert.Equal(true, props["think"]);
+        Assert.Equal("xhigh", props["reasoning_effort"]);
+    }
+
+    [Fact]
+    public void BuildCompactionStrategy_ReturnsStrategy()
+    {
+        Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy(new LlmProviderOptions(), "qwen3.8:35b"));
+        Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy(null, null));
+    }
+
+    [Fact]
+    public void Transcript_FormatOffset_RendersElapsedMinutesAndSeconds()
+    {
+        Assert.Equal("[ 00:00 ]", SessionTranscriptService.FormatOffset(TimeSpan.Zero));
+        Assert.Equal("[ 01:05 ]", SessionTranscriptService.FormatOffset(TimeSpan.FromSeconds(65)));
+        Assert.Equal("[ 75:00 ]", SessionTranscriptService.FormatOffset(TimeSpan.FromMinutes(75)));
+    }
+
+    [Fact]
+    public async Task Transcript_UsesElapsedOffsetsRelativeToFirstEntry()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ncf-offset-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var start = new DateTime(2026, 1, 1, 10, 0, 0, DateTimeKind.Utc);
+            var entries = new List<TranscriptEntry>
+            {
+                new(start, "USER", "hi"),
+                new(start.AddSeconds(125), "ASSISTANT", "hello")
+            };
+            var metadata = new TranscriptMetadata(1, "s", "p", "m", 1, new AgentRunMetrics(), new LocalOptimizationFlags(), AgentRunStatus.Completed);
+
+            var path = await new SessionTranscriptService(dir).SaveTranscriptAsync(metadata, entries);
+            var text = await File.ReadAllTextAsync(path);
+
+            Assert.Contains("### [ 00:00 ] 🧑 USER", text);
+            Assert.Contains("### [ 02:05 ] 🤖 ASSISTANT", text);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        }
+    }
+}

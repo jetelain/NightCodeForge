@@ -180,6 +180,14 @@ public partial class CanonicalTools
         return $"Successfully applied {edits.Count} edit(s) to '{path}'.";
     }
 
+    /// <summary>
+    /// edit: Precision search-and-replace for a single chunk.
+    /// </summary>
+    public Task<string> EditAsync(string path, string oldText, string newText, CancellationToken cancellationToken = default)
+    {
+        return EditAsync(path, new[] { new EditChunk(oldText, newText) }, cancellationToken);
+    }
+
     private string ApplySingleEdit(string source, string oldText, string newText, bool isStrictWhitespace, string path, int editIndex)
     {
         // Pass 1: Exact substring match
@@ -464,15 +472,166 @@ public partial class CanonicalTools
     /// </summary>
     public string ProposeTasks(IReadOnlyList<TaskProposal> tasks)
     {
-        if (tasks == null || tasks.Count == 0)
+        return ProposeTasks((object?)tasks, null, null, null);
+    }
+
+    /// <summary>
+    /// propose_tasks: Flexible overload that handles JSON collections, single-task parameters, and raw JSON strings.
+    /// </summary>
+    public string ProposeTasks(
+        object? tasks = null,
+        string? title = null,
+        string? description = null,
+        int? priority = null)
+    {
+        var discovered = new List<TaskProposal>();
+
+        if (!string.IsNullOrWhiteSpace(title) || !string.IsNullOrWhiteSpace(description))
+        {
+            discovered.Add(new TaskProposal(title ?? "Task", description ?? string.Empty, priority ?? 1));
+        }
+
+        if (tasks != null)
+        {
+            if (tasks is IEnumerable<TaskProposal> enumProposals)
+            {
+                discovered.AddRange(enumProposals);
+            }
+            else if (tasks is JsonElement je)
+            {
+                discovered.AddRange(ParseJsonElementTasks(je));
+            }
+            else if (tasks is string str)
+            {
+                if (!string.IsNullOrWhiteSpace(str))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(str);
+                        discovered.AddRange(ParseJsonElementTasks(doc.RootElement));
+                    }
+                    catch
+                    {
+                        // Ignore parse error
+                    }
+                }
+            }
+            else
+            {
+                try
+                {
+                    var jsonStr = JsonSerializer.Serialize(tasks);
+                    using var doc = JsonDocument.Parse(jsonStr);
+                    discovered.AddRange(ParseJsonElementTasks(doc.RootElement));
+                }
+                catch
+                {
+                    // Ignore parse error
+                }
+            }
+        }
+
+        if (discovered.Count == 0)
         {
             return "No tasks proposed.";
         }
 
-        PendingProposals.AddRange(tasks);
+        for (int i = 0; i < discovered.Count; i++)
+        {
+            var task = discovered[i];
+            var deps = task.DependsOnTitles?.ToList() ?? new List<string>();
+            if (deps.Count == 0 && i > 0 && discovered.Count > 1)
+            {
+                deps.Add(discovered[i - 1].Title);
+            }
+            PendingProposals.Add(task with { DependsOnTitles = deps });
+        }
 
-        var json = JsonSerializer.Serialize(tasks, new JsonSerializerOptions { WriteIndented = true });
-        return $"Proposed {tasks.Count} backlog task(s):\n{json}";
+        var json = JsonSerializer.Serialize(PendingProposals, new JsonSerializerOptions { WriteIndented = true });
+        return $"Proposed {discovered.Count} backlog task(s):\n{json}";
+    }
+
+    private static List<TaskProposal> ParseJsonElementTasks(JsonElement element)
+    {
+        var list = new List<TaskProposal>();
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var p = ParseSingleTaskElement(item);
+                if (p != null) list.Add(p);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("tasks", out var tasksProp))
+            {
+                list.AddRange(ParseJsonElementTasks(tasksProp));
+            }
+            else
+            {
+                var p = ParseSingleTaskElement(element);
+                if (p != null) list.Add(p);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.String)
+        {
+            var str = element.GetString();
+            if (!string.IsNullOrWhiteSpace(str) && str.TrimStart().StartsWith("["))
+            {
+                try
+                {
+                    using var innerDoc = JsonDocument.Parse(str);
+                    list.AddRange(ParseJsonElementTasks(innerDoc.RootElement));
+                }
+                catch { }
+            }
+        }
+        return list;
+    }
+
+    private static TaskProposal? ParseSingleTaskElement(JsonElement item)
+    {
+        if (item.ValueKind != JsonValueKind.Object) return null;
+
+        string title = string.Empty;
+        if (item.TryGetProperty("title", out var t) || item.TryGetProperty("name", out t))
+        {
+            title = t.GetString() ?? string.Empty;
+        }
+
+        string desc = string.Empty;
+        if (item.TryGetProperty("description", out var d) || item.TryGetProperty("desc", out d))
+        {
+            desc = d.GetString() ?? string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(desc)) return null;
+
+        int priority = 1;
+        if (item.TryGetProperty("priority", out var p) && p.TryGetInt32(out var pVal))
+        {
+            priority = pVal;
+        }
+
+        List<string>? deps = null;
+        if (item.TryGetProperty("dependsOnTitles", out var depsProp) && depsProp.ValueKind == JsonValueKind.Array)
+        {
+            deps = new List<string>();
+            foreach (var dep in depsProp.EnumerateArray())
+            {
+                var depStr = dep.GetString();
+                if (!string.IsNullOrEmpty(depStr)) deps.Add(depStr);
+            }
+        }
+
+        string type = "feature";
+        if (item.TryGetProperty("type", out var ty))
+        {
+            type = ty.GetString() ?? "feature";
+        }
+
+        return new TaskProposal(title, desc, type, null, null, priority, deps);
     }
 
     /// <summary>
@@ -481,6 +640,20 @@ public partial class CanonicalTools
     public string RequestChanges(string feedback, string? reason = null)
     {
         throw new RequestChangesException(feedback, reason);
+    }
+
+    /// <summary>
+    /// load_skill: Loads full instructions and reference documentation for a modular skill on demand.
+    /// </summary>
+    public async Task<string> LoadSkillAsync(string skillName, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(skillName))
+        {
+            return "Error: skill_name parameter is required.";
+        }
+
+        var skillsService = new Skills.SkillsService();
+        return await skillsService.LoadSkillAsync(_workspaceRoot, skillName, cancellationToken);
     }
 }
 

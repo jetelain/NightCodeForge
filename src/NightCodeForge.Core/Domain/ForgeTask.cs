@@ -35,10 +35,38 @@ public class ForgeTask
 /// <summary>
 /// Structured backlog proposal emitted by triage or discovery agents via propose_tasks.
 /// </summary>
-public record TaskProposal(
-    string Title,
-    string Description,
-    string? Type = "feature",
-    IReadOnlyList<string>? AffectedFiles = null,
-    IReadOnlyList<string>? AcceptanceCriteria = null);
+public record TaskProposal
+{
+    [System.Text.Json.Serialization.JsonConstructor]
+    public TaskProposal(
+        string title,
+        string description,
+        string? type = "feature",
+        IReadOnlyList<string>? affectedFiles = null,
+        IReadOnlyList<string>? acceptanceCriteria = null,
+        int priority = 1,
+        IReadOnlyList<string>? dependsOnTitles = null)
+    {
+        Title = title;
+        Description = description;
+        Type = type;
+        AffectedFiles = affectedFiles;
+        AcceptanceCriteria = acceptanceCriteria;
+        Priority = priority;
+        DependsOnTitles = dependsOnTitles;
+    }
+
+    public TaskProposal(string title, string description, int priority, IReadOnlyList<string>? dependsOnTitles = null)
+        : this(title, description, "feature", null, null, priority, dependsOnTitles)
+    {
+    }
+
+    public string Title { get; init; } = string.Empty;
+    public string Description { get; init; } = string.Empty;
+    public string? Type { get; init; } = "feature";
+    public IReadOnlyList<string>? AffectedFiles { get; init; }
+    public IReadOnlyList<string>? AcceptanceCriteria { get; init; }
+    public int Priority { get; init; } = 1;
+    public IReadOnlyList<string>? DependsOnTitles { get; init; }
+}
 

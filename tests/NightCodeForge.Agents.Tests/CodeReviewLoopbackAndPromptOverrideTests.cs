@@ -306,6 +306,10 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             async IAsyncEnumerable<ChatResponseUpdate> StreamGen(IEnumerable<ChatMessage> msgs, ChatOptions? opts)
             {
                 receivedMessages = msgs.ToList();
+                if (!string.IsNullOrEmpty(opts?.Instructions))
+                {
+                    receivedMessages.Insert(0, new ChatMessage(ChatRole.System, opts.Instructions));
+                }
                 yield return new ChatResponseUpdate
                 {
                     Contents = [new TextContent("Done.")]

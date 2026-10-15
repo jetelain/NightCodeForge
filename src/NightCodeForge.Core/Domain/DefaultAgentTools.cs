@@ -12,8 +12,7 @@ public static class DefaultAgentTools
         CanonicalToolNames.ProposeTasks,
         CanonicalToolNames.WebSearch,
         CanonicalToolNames.Ask,
-        CanonicalToolNames.LoadSkill,
-        CanonicalToolNames.ReadSkillResource
+        CanonicalToolNames.LoadSkill
     ];
 
     private static readonly string[] _full =
@@ -25,9 +24,7 @@ public static class DefaultAgentTools
         CanonicalToolNames.WebSearch,
         CanonicalToolNames.Ask,
         CanonicalToolNames.ProposeTasks,
-        CanonicalToolNames.LoadSkill,
-        CanonicalToolNames.ReadSkillResource,
-        CanonicalToolNames.RunSkillScript
+        CanonicalToolNames.LoadSkill
     ];
 
     private static readonly string[] _review =
@@ -40,9 +37,7 @@ public static class DefaultAgentTools
         CanonicalToolNames.Ask,
         CanonicalToolNames.ProposeTasks,
         CanonicalToolNames.RequestChanges,
-        CanonicalToolNames.LoadSkill,
-        CanonicalToolNames.ReadSkillResource,
-        CanonicalToolNames.RunSkillScript
+        CanonicalToolNames.LoadSkill
     ];
 
     public static IReadOnlyList<string> ReadOnly => _readOnly;

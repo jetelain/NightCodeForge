@@ -63,47 +63,6 @@ Always write tests before code.
     }
 
     [Fact]
-    public async Task FrameworkSkillsProvider_ProvidesTools_RegisteredAndDispatchedViaLenientToolDispatcher()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-skills-tool-test-" + Guid.NewGuid().ToString("N"));
-        var skillDir = Path.Combine(tempDir, ".agents", "skills", "csharp-best-practices");
-        Directory.CreateDirectory(skillDir);
-
-        var skillContent = @"---
-name: csharp-best-practices
-description: C# best practices
----
-Use records for immutable data.
-";
-        await File.WriteAllTextAsync(Path.Combine(skillDir, "SKILL.md"), skillContent);
-
-        try
-        {
-            var skillsService = new SkillsService();
-            var skillsContext = await skillsService.GetSkillsContextAsync(tempDir);
-
-            Assert.NotNull(skillsContext);
-            Assert.NotNull(skillsContext.Tools);
-            Assert.Contains(skillsContext.Tools, t => t is Microsoft.Extensions.AI.AIFunction f && f.Name == "load_skill");
-
-            var canonicalTools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
-            var dispatcher = new LenientToolDispatcher(canonicalTools);
-            dispatcher.RegisterAITools(skillsContext.Tools);
-
-            var result = await dispatcher.DispatchAsync("load_skill", "{\"skillName\": \"csharp-best-practices\"}");
-
-            Assert.Contains("Use records for immutable data.", result);
-        }
-        finally
-        {
-            if (Directory.Exists(tempDir))
-            {
-                Directory.Delete(tempDir, true);
-            }
-        }
-    }
-
-    [Fact]
     public void SkillsService_FormatSkillsCatalogPrompt_UsesPiMinimalSyntax()
     {
         var skillsService = new SkillsService();
@@ -138,11 +97,115 @@ Use records for immutable data.
             taskScopeAndPlan: "ForgeTask #1",
             skillsCatalog: catalog);
 
-        Assert.Contains("<tools>", prefix);
-        Assert.Contains("- load_skill: Load full instructions and reference documentation for a modular skill (skillName)", prefix);
+        Assert.DoesNotContain("<tools>", prefix);
+        Assert.DoesNotContain("skillName", prefix);
         Assert.Contains("<skills>", prefix);
         Assert.Contains("- unit-testing: Unit testing guidelines with xUnit", prefix);
         Assert.Contains("</skills>", prefix);
         Assert.Contains("<stage_directives>", prefix);
+    }
+
+    [Fact]
+    public async Task CanonicalAIFunctionFactory_CreatesLoadSkill_AndExecutesCleanly()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-skills-canon-test-" + Guid.NewGuid().ToString("N"));
+        var skillDir = Path.Combine(tempDir, ".agents", "skills", "debugging");
+        Directory.CreateDirectory(skillDir);
+
+        var skillContent = @"---
+name: debugging
+description: Systematic debugging workflows
+---
+Check logs first.
+";
+        await File.WriteAllTextAsync(Path.Combine(skillDir, "SKILL.md"), skillContent);
+
+        try
+        {
+            var canonicalTools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var tools = CanonicalAIFunctionFactory.CreateTools(canonicalTools);
+
+            var loadSkillTool = tools.FirstOrDefault(t => t.Name == "load_skill");
+            Assert.NotNull(loadSkillTool);
+            Assert.Equal("Loads full instructions and reference documentation for a modular skill on demand.", loadSkillTool.Description);
+
+            var result = await loadSkillTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?> { ["skill_name"] = "debugging" }));
+            Assert.NotNull(result);
+            Assert.Contains("Check logs first.", result.ToString());
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task CanonicalAIFunctionFactory_EditTool_AppliesMultipleDisjointEdits_AndSingleEditShortcut()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-edit-schema-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var filePath = Path.Combine(tempDir, "notes.txt");
+        await File.WriteAllTextAsync(filePath, "alpha\nbeta\ngamma\n");
+
+        try
+        {
+            var canonicalTools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var editTool = CanonicalAIFunctionFactory.CreateTools(canonicalTools).Single(t => t.Name == "edit");
+
+            // The schema must expose the multi-edit array alongside the single-edit shortcut.
+            var schema = editTool.JsonSchema.GetRawText();
+            Assert.Contains("\"edits\"", schema);
+            Assert.Contains("oldText", schema);
+            Assert.Contains("old_text", schema);
+
+            var editsJson = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                "[{\"oldText\":\"alpha\",\"newText\":\"ALPHA\"},{\"oldText\":\"gamma\",\"newText\":\"GAMMA\"}]");
+            var multi = await editTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["path"] = "notes.txt",
+                ["edits"] = editsJson
+            }));
+            Assert.Contains("2 edit(s)", multi?.ToString());
+
+            var single = await editTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["path"] = "notes.txt",
+                ["old_text"] = "beta",
+                ["new_text"] = "BETA"
+            }));
+            Assert.Contains("1 edit(s)", single?.ToString());
+
+            var content = await File.ReadAllTextAsync(filePath);
+            Assert.Contains("ALPHA", content);
+            Assert.Contains("BETA", content);
+            Assert.Contains("GAMMA", content);
+
+            var missing = await editTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["path"] = "notes.txt"
+            }));
+            Assert.StartsWith("Error:", missing?.ToString());
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public void DefaultAgentTools_DoNotExposeSkillResourceOrScriptTools_ButKeepLoadSkill()
+    {
+        foreach (var set in new[] { Core.Domain.DefaultAgentTools.ReadOnly, Core.Domain.DefaultAgentTools.Full, Core.Domain.DefaultAgentTools.Review })
+        {
+            Assert.Contains(Core.Domain.CanonicalToolNames.LoadSkill, set);
+            Assert.DoesNotContain(Core.Domain.CanonicalToolNames.ReadSkillResource, set);
+            Assert.DoesNotContain(Core.Domain.CanonicalToolNames.RunSkillScript, set);
+        }
     }
 }

@@ -262,6 +262,35 @@ public class IdeationPageTests : BunitContext
         Assert.Contains("Failed", cut.Markup);
         Assert.Contains("run_command", cut.Markup);
     }
+
+    [Fact]
+    public async Task ReasoningTraceAccordion_RendersThinkingContentAndStatus()
+    {
+        var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 1;
+
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.ThinkingDelta, TextDelta: "Deep chain-of-thought analysis in progress..."),
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Here is the architectural answer."),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Finished", Array.Empty<IdeationProposal>()))
+        };
+
+        var cut = Render<Ideation>();
+
+        var textarea = cut.Find("textarea.chat-textarea");
+        textarea.Input("How does thinking work?");
+
+        var sendBtn = cut.Find("button.send-btn");
+        await cut.InvokeAsync(() => sendBtn.Click());
+
+        cut.WaitForAssertion(() => Assert.Equal(2, _sessionState.Messages.Count));
+
+        Assert.Contains("think-trace", cut.Markup);
+        Assert.Contains("🧠 Reasoning Trace", cut.Markup);
+        Assert.Contains("Deep chain-of-thought analysis in progress...", cut.Markup);
+    }
 }
 
 public class MockIdeationService : IIdeationService

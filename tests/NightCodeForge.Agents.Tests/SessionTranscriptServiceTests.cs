@@ -153,4 +153,84 @@ public class SessionTranscriptServiceTests
             }
         }
     }
+
+    [Fact]
+    public async Task SessionTranscriptService_RendersFullFidelityEnvironment_AndTruncatesLargeEntries()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-transcripts-fullfidelity-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var service = new SessionTranscriptService();
+            var systemPrompt = "You are an expert coder.\nUse the following guidelines:\n```csharp\npublic void Run() {}\n```";
+            var availableTools = new[]
+            {
+                "read: Reads file with line slicing",
+                "bash: Executes shell command",
+                "load_skill: Loads modular skill"
+            };
+
+            var hugeOutput = new string('A', 40000);
+
+            var meta = new TranscriptMetadata(
+                TaskId: 99,
+                StageId: "stage-crucible",
+                AgentProfile: "Architect",
+                ModelName: "qwen2.5:32b",
+                DurationMs: 2500,
+                Metrics: new AgentRunMetrics(2500, 1000, 200, 1200),
+                Optimizations: new LocalOptimizationFlags(),
+                Status: AgentRunStatus.Completed,
+                SystemPrompt: systemPrompt,
+                AvailableTools: availableTools,
+                MafConfiguration: "TodoProvider: disabled, FileMemory: disabled");
+
+            var entries = new List<TranscriptEntry>
+            {
+                new(DateTime.UtcNow, "THINKING", "Deep model reasoning trace"),
+                new(DateTime.UtcNow, "USER", "Implement feature"),
+                new(DateTime.UtcNow, "TOOL", "", "bash", "{\"command\": \"cat huge.txt\"}", hugeOutput),
+                new(DateTime.UtcNow, "ASSISTANT", "Feature implemented.")
+            };
+
+            var path = await service.SaveTranscriptAsync(meta, entries, tempDir);
+            Assert.True(File.Exists(path));
+
+            var content = await File.ReadAllTextAsync(path);
+
+            // Verify Environment section
+            Assert.Contains("### Environment", content);
+            Assert.Contains("**Available tools**", content);
+            Assert.Contains("- read: Reads file with line slicing", content);
+            Assert.Contains("- bash: Executes shell command", content);
+            Assert.Contains("- load_skill: Loads modular skill", content);
+            Assert.Contains("**System prompt**", content);
+            Assert.Contains("````", content);
+            Assert.Contains("public void Run() {}", content);
+
+            // Verify MAF configuration
+            Assert.Contains("### MAF Pipeline Configuration", content);
+            Assert.Contains("TodoProvider: disabled", content);
+
+            // Verify ordered icons
+            Assert.Contains("💭 THINKING", content);
+            Assert.Contains("Deep model reasoning trace", content);
+            Assert.Contains("🧑 USER", content);
+            Assert.Contains("🔧 TOOL", content);
+            Assert.Contains("🤖 ASSISTANT", content);
+
+            // Verify 4-tick safe fences and truncation
+            Assert.Contains("````json", content);
+            Assert.Contains("````", content);
+            Assert.Contains("... [Output truncated; exceeded 32768 characters]", content);
+            Assert.DoesNotContain(new string('A', 35000), content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
 }

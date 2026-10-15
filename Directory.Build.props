@@ -5,8 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <!-- Ignore XML doc warnings (CS1591) across the solution -->
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- Ignore XML doc warnings (CS1591) and Microsoft.Agents.AI experimental evaluation warnings (MAAI001) -->
+    <NoWarn>$(NoWarn);CS1591;MAAI001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

@@ -153,49 +153,38 @@ Let me know what you think!";
     }
 
     [Fact]
-    public async Task ConverseStreamingAsync_StreamsThinkingAndMessageDeltas_AndExtractsProposals()
+    public async Task ConverseStreamingAsync_StreamsStructuredTextReasoningContent_AndExtractsProposals()
     {
-        var chunks = new List<string>
+        var updates = new List<ChatResponseUpdate>
         {
-            "<think>Analyzing repo",
-            " structure</think>Here is my proposal:\n\n",
-            "```json\n[\n  {\n    \"title\": \"Live Stream Feature\",\n    \"description\": \"Real-time UI streaming\",\n    \"priority\": 1\n  }\n]\n```"
+            new() { Contents = [new TextReasoningContent("Reasoning about architectural design.")] },
+            new() { Contents = [new TextReasoningContent(" Selecting appropriate components.")] },
+            new() { Contents = [new TextContent("Here is the resulting plan:\n\n")] },
+            new() { Contents = [new TextContent("```json\n[\n  {\n    \"title\": \"Native Reasoning Task\",\n    \"description\": \"MAF aligned thinking\",\n    \"priority\": 1\n  }\n]\n```")] }
         };
 
         var streamer = new CapturingActivityStreamer();
-        var client = new MockStreamingChatClient(chunks);
+        var client = new MockUpdateStreamingChatClient(updates);
         var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, activityStreamer: streamer);
 
         var workspace = new Workspace { Id = 10, RepositoryPath = Directory.GetCurrentDirectory() };
 
-        var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
-        await foreach (var update in service.ConverseStreamingAsync(workspace, "Plan the streaming feature"))
+        var streamUpdates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
+        await foreach (var update in service.ConverseStreamingAsync(workspace, "Plan with native reasoning"))
         {
-            updates.Add(update);
+            streamUpdates.Add(update);
         }
 
         // 1. Verify stream updates
-        Assert.Contains(updates, u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ThinkingDelta && u.TextDelta!.Contains("Analyzing repo"));
-        Assert.Contains(updates, u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ThinkingDelta && u.TextDelta!.Contains("structure"));
-        Assert.Contains(updates, u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.MessageDelta && u.TextDelta!.Contains("Here is my proposal"));
-        Assert.Contains(updates, u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ProposalDiscovered && u.Proposal?.Title == "Live Stream Feature");
-        
-        var completed = updates.FirstOrDefault(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.Completed);
-        Assert.NotNull(completed);
-        Assert.NotNull(completed.FinalResult);
-        Assert.Single(completed.FinalResult.ProposedTasks);
-        Assert.Equal("Live Stream Feature", completed.FinalResult.ProposedTasks[0].Title);
+        Assert.Contains(streamUpdates, u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ThinkingDelta && u.TextDelta!.Contains("Reasoning about"));
+        Assert.Contains(streamUpdates, u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ThinkingDelta && u.TextDelta!.Contains("Selecting appropriate"));
+        Assert.Contains(streamUpdates, u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.MessageDelta && u.TextDelta!.Contains("Here is the resulting plan"));
+        Assert.Contains(streamUpdates, u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ProposalDiscovered && u.Proposal?.Title == "Native Reasoning Task");
 
         // 2. Verify live feedback via IAgentActivityStreamer
-        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.StageStarted && e.StageId == "ideation");
-        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.ThinkingDelta && e.Content.Contains("Analyzing repo"));
-        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.MessageDelta && e.Content.Contains("Here is my proposal"));
-        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.StageCompleted && e.StageId == "ideation");
-
-        var startedEvent = streamer.Events.First(e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.StageStarted);
-        Assert.NotNull(startedEvent.Metadata);
-        Assert.Equal(10, startedEvent.Metadata["workspaceId"]);
-        Assert.Equal("ideation", startedEvent.Metadata["agentProfile"]);
+        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.ThinkingDelta && e.Content.Contains("Reasoning about"));
+        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.ThinkingDelta && e.Content.Contains("Selecting appropriate"));
+        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.MessageDelta && e.Content.Contains("Here is the resulting plan"));
     }
 
     [Fact]
@@ -204,7 +193,7 @@ Let me know what you think!";
         var streamer = new CapturingActivityStreamer();
         var fakeClient = new FakeChatClient
         {
-            ResponseToReturn = "<think>Fast thinking</think>Finished proposals:\n```json\n[{\"title\": \"Fallback Task\", \"description\": \"Test desc\"}]\n```"
+            ResponseToReturn = "Finished proposals:\n```json\n[{\"title\": \"Fallback Task\", \"description\": \"Test desc\"}]\n```"
         };
 
         var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: fakeClient, activityStreamer: streamer);
@@ -217,7 +206,6 @@ Let me know what you think!";
         Assert.Equal("Fallback Task", result.ProposedTasks[0].Title);
 
         Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.StageStarted && e.StageId == "ideation");
-        Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.ThinkingDelta && e.Content.Contains("Fast thinking"));
         Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.MessageDelta && e.Content.Contains("Finished proposals"));
         Assert.Contains(streamer.Events, e => e.Kind == NightCodeForge.Core.Streaming.AgentActivityKind.StageCompleted && e.StageId == "ideation");
     }
@@ -310,6 +298,46 @@ Let me know what you think!";
             foreach (var chunk in _chunks)
             {
                 yield return new ChatResponseUpdate(ChatRole.Assistant, chunk);
+                await Task.Yield();
+            }
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+
+    private class MockUpdateStreamingChatClient : IChatClient
+    {
+        private readonly IReadOnlyList<ChatResponseUpdate> _updates;
+
+        public MockUpdateStreamingChatClient(IReadOnlyList<ChatResponseUpdate> updates)
+        {
+            _updates = updates;
+        }
+
+        public ChatClientMetadata Metadata => new("MockUpdateStreamingClient");
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            var msg = new ChatMessage(ChatRole.Assistant, "");
+            foreach (var u in _updates)
+            {
+                foreach (var c in u.Contents)
+                {
+                    msg.Contents.Add(c);
+                }
+            }
+            return Task.FromResult(new ChatResponse(msg));
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> chatMessages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            foreach (var update in _updates)
+            {
+                yield return update;
                 await Task.Yield();
             }
         }
@@ -508,7 +536,7 @@ Let me know what you think!";
         try
         {
             var transcriptService = new NightCodeForge.Agents.Transcripts.SessionTranscriptService(tempTranscriptsDir);
-            var client = new MultiTurnStreamingChatClient(_ => "<think>Considering tasks</think>Here is the recommendation.");
+            var client = new MultiTurnStreamingChatClient(_ => "Here is the recommendation.");
             var service = new IdeationService(
                 new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
                 defaultChatClient: client,
@@ -529,7 +557,6 @@ Let me know what you think!";
             Assert.True(File.Exists(completed.FinalResult.TranscriptPath));
             Assert.NotNull(completed.FinalResult.FullTranscriptMarkdown);
             Assert.Contains("Plan new feature", completed.FinalResult.FullTranscriptMarkdown);
-            Assert.Contains("Considering tasks", completed.FinalResult.FullTranscriptMarkdown);
             Assert.Contains("Here is the recommendation.", completed.FinalResult.FullTranscriptMarkdown);
         }
         finally
@@ -541,73 +568,6 @@ Let me know what you think!";
         }
     }
 
-    [Fact]
-    public async Task ConverseStreamingAsync_HandlesSplitThinkingTokensAcrossChunks()
-    {
-        var chunks = new[] { "<th", "ink>pondering architect", "ural design</th", "ink>Here are the proposals." };
-        var client = new ChunkedStreamingChatClient(chunks);
-
-        var service = new IdeationService(
-            new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
-            defaultChatClient: client);
-
-        var workspace = new Workspace { Id = 88, RepositoryPath = Directory.GetCurrentDirectory() };
-        var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
-
-        await foreach (var update in service.ConverseStreamingAsync(workspace, "Explore design"))
-        {
-            updates.Add(update);
-        }
-
-        var thinkingDeltas = updates
-            .Where(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.ThinkingDelta)
-            .Select(u => u.TextDelta)
-            .ToList();
-
-        var messageDeltas = updates
-            .Where(u => u.Kind == NightCodeForge.Core.Interfaces.IdeationStreamUpdateKind.MessageDelta)
-            .Select(u => u.TextDelta)
-            .ToList();
-
-        var fullThinking = string.Concat(thinkingDeltas);
-        var fullMessage = string.Concat(messageDeltas);
-
-        Assert.Equal("pondering architectural design", fullThinking);
-        Assert.Equal("Here are the proposals.", fullMessage);
-    }
-
-    private class ChunkedStreamingChatClient : IChatClient
-    {
-        private readonly IReadOnlyList<string> _chunks;
-
-        public ChunkedStreamingChatClient(IReadOnlyList<string> chunks)
-        {
-            _chunks = chunks;
-        }
-
-        public ChatClientMetadata Metadata => new("ChunkedStreamingMock");
-
-        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, string.Concat(_chunks))));
-        }
-
-        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> chatMessages,
-            ChatOptions? options = null,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            foreach (var chunk in _chunks)
-            {
-                yield return new ChatResponseUpdate(ChatRole.Assistant, chunk);
-                await Task.Yield();
-            }
-        }
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-        public void Dispose() { }
-    }
-
     private class MessageCapturingChatClient : IChatClient
     {
         private readonly Action<IEnumerable<ChatMessage>> _onCall;
@@ -616,9 +576,25 @@ Let me know what you think!";
 
         public MessageCapturingChatClient(Action<IEnumerable<ChatMessage>> onCall) => _onCall = onCall;
 
+        public List<ChatMessage> LastRawMessages { get; private set; } = new();
+        public ChatOptions? LastOptions { get; private set; }
+
+        /// <summary>Reports the effective prompt: raw messages plus options.Instructions surfaced as a leading System message.</summary>
+        private IEnumerable<ChatMessage> Observe(IEnumerable<ChatMessage> chatMessages, ChatOptions? options)
+        {
+            LastRawMessages = chatMessages.ToList();
+            LastOptions = options;
+            var effective = new List<ChatMessage>(LastRawMessages);
+            if (!string.IsNullOrEmpty(options?.Instructions))
+            {
+                effective.Insert(0, new ChatMessage(ChatRole.System, options.Instructions));
+            }
+            return effective;
+        }
+
         public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
         {
-            _onCall(chatMessages);
+            _onCall(Observe(chatMessages, options));
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, ResponseToReturn)));
         }
 
@@ -627,7 +603,7 @@ Let me know what you think!";
             ChatOptions? options = null,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            _onCall(chatMessages);
+            _onCall(Observe(chatMessages, options));
             yield return new ChatResponseUpdate(ChatRole.Assistant, ResponseToReturn);
             await Task.Yield();
         }

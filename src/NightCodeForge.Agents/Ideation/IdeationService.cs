@@ -3,12 +3,15 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Optimizations;
+using NightCodeForge.Agents.Skills;
+using NightCodeForge.Agents.Streaming;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
@@ -33,9 +36,6 @@ public partial class IdeationService : IIdeationService
     [GeneratedRegex(@"```(?:json)?\s*\[\s*\{.*?\}\s*\]\s*```", RegexOptions.Singleline)]
     private static partial Regex TaskJsonArrayRegex();
 
-    [GeneratedRegex(@"<tool_call>\s*({.*?})\s*</tool_call>", RegexOptions.Singleline)]
-    private static partial Regex ToolCallTagRegex();
-
     private readonly IChatClient? _defaultChatClient;
     private readonly IOllamaChatClientFactory? _chatClientFactory;
     private readonly IExecutionEnvironmentProvider? _envProvider;
@@ -47,6 +47,8 @@ public partial class IdeationService : IIdeationService
     private readonly SessionTranscriptService? _transcriptService;
     private readonly IGlobalOptimizationSettingsService? _globalOptimizationSettings;
     private readonly ILogger<IdeationService> _logger;
+    private readonly LlmProviderOptions? _llmOptions;
+    private readonly SkillsService _skillsService;
 
     public IdeationService(
         IWorkspacePathResolver pathResolver,
@@ -59,7 +61,9 @@ public partial class IdeationService : IIdeationService
         IAgentActivityStreamer? activityStreamer = null,
         SessionTranscriptService? transcriptService = null,
         IGlobalOptimizationSettingsService? globalOptimizationSettings = null,
-        ILogger<IdeationService>? logger = null)
+        ILogger<IdeationService>? logger = null,
+        Microsoft.Extensions.Options.IOptions<LlmProviderOptions>? llmOptions = null,
+        SkillsService? skillsService = null)
     {
         ArgumentNullException.ThrowIfNull(pathResolver);
         if (defaultChatClient == null && chatClientFactory == null)
@@ -78,6 +82,8 @@ public partial class IdeationService : IIdeationService
         _transcriptService = transcriptService;
         _globalOptimizationSettings = globalOptimizationSettings;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<IdeationService>.Instance;
+        _llmOptions = llmOptions?.Value;
+        _skillsService = skillsService ?? new SkillsService();
     }
 
     public IdeationService(
@@ -252,37 +258,27 @@ public partial class IdeationService : IIdeationService
             ? profile.PermittedTools
             : DefaultAgentTools.GetTools(profile.Mode);
 
-        var toolsSection = new StringBuilder();
-        toolsSection.AppendLine("<tools>");
-        foreach (var tool in permittedTools)
-        {
-            var desc = tool.ToLowerInvariant() switch
-            {
-                "read" => "- read: Read file contents with line slicing (path, offset, limit)",
-                "bash" => "- bash: Execute shell commands, builds, and file discovery (command, timeout, working_directory)",
-                "web_search" or "search" => "- web_search: Search technical web documentation for APIs, errors, or libraries (query, max_results)",
-                "propose_tasks" => "- propose_tasks: Propose structured backlog items (tasks: [{ title, description, priority, dependsOnTitles }])",
-                _ => $"- {tool}: Execute tool '{tool}'"
-            };
-            toolsSection.AppendLine(desc);
-        }
-        toolsSection.AppendLine("</tools>");
-
         var taskGuidance = @"When you recommend one or more implementation tasks, do NOT output markdown JSON codeblocks in your response. Instead, invoke the 'propose_tasks' tool with your proposed tasks (each having title, description, and optional priority). If multiple tasks are proposed, they will be scheduled sequentially with dependencies established automatically. After proposing tasks, explain your proposal and architectural rationale clearly to the developer.";
+
+        // Skills catalog (lean ~25 tokens/skill) is only injected when the agent can call load_skill.
+        IReadOnlyList<SkillDescriptor> discoveredSkills = Array.Empty<SkillDescriptor>();
+        if (permittedTools.Contains(CanonicalToolNames.LoadSkill, StringComparer.OrdinalIgnoreCase))
+        {
+            discoveredSkills = await _skillsService.DiscoverSkillsAsync(repoPath, cancellationToken: cancellationToken);
+        }
+        var activeSkills = discoveredSkills.Select(s => s.Name).ToList();
+        var skillsCatalog = _skillsService.FormatSkillsCatalogPrompt(discoveredSkills);
+        var skillsSection = string.IsNullOrEmpty(skillsCatalog) ? string.Empty : "\n\n" + skillsCatalog;
 
         var systemPrompt = $@"{basePersona}
 {environmentSection.ToString().TrimEnd()}
-{projectContext}
-{toolsSection.ToString().TrimEnd()}
-
-Before executing tools or recommending changes, think step-by-step about what files to inspect or how to answer inside <think>...</think> tags.
+{projectContext}{skillsSection}
 
 {taskGuidance}";
 
-        var messages = new List<ChatMessage>
-        {
-            new(ChatRole.System, systemPrompt)
-        };
+        // The system prompt is supplied to HarnessAgent as HarnessInstructions (ChatOptions.Instructions);
+        // adding it as a System message too would send it to the model twice.
+        var messages = new List<ChatMessage>();
 
         if (conversationHistory != null)
         {
@@ -300,6 +296,8 @@ Before executing tools or recommending changes, think step-by-step about what fi
         {
             new(DateTime.UtcNow, "USER", userPrompt)
         };
+
+        var transcriptBuffer = new TranscriptStreamBuffer(transcriptEntries);
 
         var effectiveEnv = (workspace != null && _envProvider != null)
             ? _envProvider.GetEnvironment(workspace, profile.SecurityTier)
@@ -319,394 +317,238 @@ Before executing tools or recommending changes, think step-by-step about what fi
 
         var sessionProposals = new List<IdeationProposal>();
 
-        var dispatcher = new LenientToolDispatcher(canonicalTools);
-        dispatcher.RegisterTool(new ToolDefinition(
-            CanonicalToolNames.ProposeTasks,
-            "Propose structured backlog items (tasks: [{ title, description, priority, dependsOnTitles }])",
-            (args, _) =>
-            {
-                var argsStr = JsonSerializer.Serialize(args);
-                var (resultText, _) = ExecuteProposeTasks(argsStr, sessionProposals, canonicalTools);
-                return Task.FromResult(resultText);
-            },
-            aliases: ["propose_task", "proposetasks"]));
+        var aiTools = BuildAIFunctionList(canonicalTools, permittedTools);
 
-        var aiTools = BuildAIFunctionList(permittedTools);
+        var effectiveModelId = !string.IsNullOrWhiteSpace(profile.ModelName)
+            ? profile.ModelName
+            : (client.GetService<ChatClientMetadata>()?.DefaultModelId ?? _llmOptions?.ModelId);
 
         var chatOptions = new ChatOptions
         {
             ModelId = !string.IsNullOrWhiteSpace(profile.ModelName) ? profile.ModelName : null,
             Temperature = (float?)profile.Temperature ?? 0.3f,
-            Tools = aiTools
+            Tools = aiTools,
+            AdditionalProperties = ModelCapabilityResolver.BuildReasoningProperties(_llmOptions, effectiveModelId)
         };
 
-        var toolResultCompactor = new ToolResultCompactor(optFlags);
-        var fullTextBuilder = new StringBuilder();
         int maxTurns = profile.MaxTurns.HasValue && profile.MaxTurns.Value > 0 ? profile.MaxTurns.Value : DefaultMaxTurns;
-        int currentTurn = 0;
 
+        var harnessOptions = new HarnessAgentOptions
+        {
+            Id = "ideation-agent",
+            Name = "IdeationAgent",
+            HarnessInstructions = systemPrompt,
+            ChatOptions = chatOptions,
+            MaximumIterationsPerRequest = maxTurns,
+            CompactionStrategy = ModelCapabilityResolver.BuildCompactionStrategy(_llmOptions, effectiveModelId),
+            DisableTodoProvider = true,
+            DisableAgentModeProvider = true,
+            DisableFileMemory = true,
+            DisableAgentSkillsProvider = true,
+            DisableWebSearch = true,
+            DisableToolAutoApproval = false
+        };
+
+        var tracingClient = new ThinkingAndActivityTracingChatClient(client);
+        var effectiveClient = new LenientToolCallChatClient(tracingClient);
+        var agent = new HarnessAgent(effectiveClient, harnessOptions);
+        var session = await agent.CreateSessionAsync(cancellationToken);
+
+        var projector = new AgentStreamProjector();
+        var fullTextBuilder = new StringBuilder();
+        var fullReasoningBuilder = new StringBuilder();
         var allToolCalls = new List<IdeationToolCallInfo>();
 
-        while (currentTurn < maxTurns && !cancellationToken.IsCancellationRequested)
+        bool streamingFailed = false;
+        IAsyncEnumerator<AgentResponseUpdate>? enumerator = null;
+        try
         {
-            currentTurn++;
-            toolResultCompactor.Compact(messages);
-            var tagFilter = new StreamingTagFilter();
-            bool streamingFailed = false;
-            var functionCalls = new List<FunctionCallContent>();
-            var turnTextBuilder = new StringBuilder();
+            var stream = agent.RunStreamingAsync(messages, session, cancellationToken: cancellationToken);
+            enumerator = stream.GetAsyncEnumerator(cancellationToken);
+        }
+        catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
+        {
+            streamingFailed = true;
+        }
 
-            IAsyncEnumerator<ChatResponseUpdate>? enumerator = null;
+        if (!streamingFailed && enumerator != null)
+        {
             try
             {
-                var stream = client.GetStreamingResponseAsync(messages, chatOptions, cancellationToken);
-                enumerator = stream.GetAsyncEnumerator(cancellationToken);
-            }
-            catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
-            {
-                streamingFailed = true;
-            }
-
-            if (!streamingFailed && enumerator != null)
-            {
-                try
+                while (true)
                 {
-                    while (true)
-                    {
-                        ChatResponseUpdate? update = null;
-                        bool hasMore = false;
-                        try
-                        {
-                            hasMore = await enumerator.MoveNextAsync();
-                            if (hasMore)
-                            {
-                                update = enumerator.Current;
-                            }
-                        }
-                        catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
-                        {
-                            streamingFailed = true;
-                            break;
-                        }
-                        catch (Exception ex)
-                        {
-                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
-                            throw;
-                        }
-
-                        if (!hasMore || update == null) break;
-
-                        if (update.Contents != null)
-                        {
-                            foreach (var c in update.Contents)
-                            {
-                                if (c is FunctionCallContent fc) functionCalls.Add(fc);
-                            }
-                        }
-
-                        var text = update.Text;
-                        if (string.IsNullOrEmpty(text)) continue;
-
-                        turnTextBuilder.Append(text);
-
-                        foreach (var (isThinkingDelta, piece) in tagFilter.ProcessDelta(text))
-                        {
-                            if (string.IsNullOrEmpty(piece)) continue;
-
-                            transcriptEntries.Add(new TranscriptEntry(
-                                DateTime.UtcNow,
-                                isThinkingDelta ? "THINKING" : "ASSISTANT",
-                                piece));
-
-                            var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
-                            await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
-
-                            var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
-                            yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
-                        }
-                    }
-
-                    foreach (var (isThinkingDelta, piece) in tagFilter.Flush())
-                    {
-                        if (string.IsNullOrEmpty(piece)) continue;
-
-                        transcriptEntries.Add(new TranscriptEntry(
-                            DateTime.UtcNow,
-                            isThinkingDelta ? "THINKING" : "ASSISTANT",
-                            piece));
-
-                        var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
-                        await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
-
-                        var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
-                        yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
-                    }
-                }
-                finally
-                {
-                    await enumerator.DisposeAsync();
-                }
-            }
-
-            if (streamingFailed)
-            {
-                ChatResponse response;
-                try
-                {
-                    response = await client.GetResponseAsync(messages, chatOptions, cancellationToken: cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
-                    throw;
-                }
-
-                if (response.Messages != null)
-                {
-                    foreach (var msg in response.Messages)
-                    {
-                        if (msg.Contents != null)
-                        {
-                            foreach (var c in msg.Contents)
-                            {
-                                if (c is FunctionCallContent fc) functionCalls.Add(fc);
-                            }
-                        }
-                    }
-                }
-
-                var text = response.Text ?? string.Empty;
-                turnTextBuilder.Clear();
-                turnTextBuilder.Append(text);
-
-                foreach (var (isThinkingDelta, piece) in tagFilter.ProcessDelta(text))
-                {
-                    if (string.IsNullOrEmpty(piece)) continue;
-
-                    transcriptEntries.Add(new TranscriptEntry(
-                        DateTime.UtcNow,
-                        isThinkingDelta ? "THINKING" : "ASSISTANT",
-                        piece));
-
-                    var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
-                    await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
-
-                    var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
-                    yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
-                }
-
-                foreach (var (isThinkingDelta, piece) in tagFilter.Flush())
-                {
-                    if (string.IsNullOrEmpty(piece)) continue;
-
-                    transcriptEntries.Add(new TranscriptEntry(
-                        DateTime.UtcNow,
-                        isThinkingDelta ? "THINKING" : "ASSISTANT",
-                        piece));
-
-                    var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
-                    await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
-
-                    var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
-                    yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
-                }
-            }
-
-            var turnText = turnTextBuilder.ToString();
-            fullTextBuilder.Append(turnText);
-
-            var assistantMsg = new ChatMessage(ChatRole.Assistant, turnText);
-            foreach (var fc in functionCalls)
-            {
-                assistantMsg.Contents.Add(fc);
-            }
-            messages.Add(assistantMsg);
-
-            // Also check for raw text fallback tool call emitted by models without native tool tokens
-            if (functionCalls.Count == 0 && !string.IsNullOrEmpty(turnText))
-            {
-                var fallbackCall = TryExtractTextToolCall(turnText);
-                if (fallbackCall != null)
-                {
-                    functionCalls.Add(fallbackCall);
-                }
-            }
-
-            if (functionCalls.Count == 0)
-            {
-                break;
-            }
-
-            // Process tool calls
-            foreach (var call in functionCalls)
-            {
-                var canonicalName = dispatcher.ResolveToolName(call.Name);
-                var argsJson = call.Arguments != null ? JsonSerializer.Serialize(call.Arguments) : "{}";
-                var callId = call.CallId ?? Guid.NewGuid().ToString("N");
-
-                var toolCallInfo = new IdeationToolCallInfo(callId, canonicalName, argsJson);
-                allToolCalls.Add(toolCallInfo);
-
-                // Live stream tool call started to Blazor UI
-                yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: toolCallInfo);
-
-                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken, metadata);
-
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                string toolResult;
-                bool isError = false;
-                List<IdeationProposal>? newlyDiscoveredProposals = null;
-                try
-                {
-                    if (string.Equals(canonicalName, CanonicalToolNames.ProposeTasks, StringComparison.OrdinalIgnoreCase))
-                    {
-                        var (execResult, extractedProposals) = ExecuteProposeTasks(argsJson, sessionProposals, canonicalTools);
-                        toolResult = execResult;
-                        newlyDiscoveredProposals = extractedProposals;
-                    }
-                    else
-                    {
-                        toolResult = await dispatcher.DispatchAsync(canonicalName, argsJson, cancellationToken);
-                        if (toolResult.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ||
-                            toolResult.StartsWith("[READ-ONLY VIOLATION]", StringComparison.OrdinalIgnoreCase) ||
-                            toolResult.StartsWith("[TIMEOUT]", StringComparison.OrdinalIgnoreCase) ||
-                            toolResult.StartsWith("File not found", StringComparison.OrdinalIgnoreCase) ||
-                            (toolResult.StartsWith("Exit Code: ", StringComparison.OrdinalIgnoreCase) &&
-                             !toolResult.StartsWith("Exit Code: 0\n", StringComparison.OrdinalIgnoreCase) &&
-                             !toolResult.StartsWith("Exit Code: 0\r\n", StringComparison.OrdinalIgnoreCase)))
-                        {
-                            isError = true;
-                            _logger.LogWarning("Ideation tool '{ToolName}' returned error or non-zero exit code. Args: {ToolArgs}. Result: {ToolResult}",
-                                canonicalName, argsJson, toolResult);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    isError = true;
-                    toolResult = $"Error executing tool '{canonicalName}': {ex.Message}";
-                    _logger.LogError(ex, "Ideation tool '{ToolName}' failed with exception. Args: {ToolArgs}",
-                        canonicalName, argsJson);
-                }
-                sw.Stop();
-
-                var completedToolInfo = toolCallInfo with
-                {
-                    Result = toolResult,
-                    IsError = isError,
-                    DurationMs = sw.ElapsedMilliseconds
-                };
-
-                var idx = allToolCalls.FindIndex(t => t.ToolCallId == callId);
-                if (idx >= 0) allToolCalls[idx] = completedToolInfo;
-
-                // Live stream tool call completed to Blazor UI
-                yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: completedToolInfo);
-
-                // Live stream newly discovered proposals immediately to Blazor UI
-                if (newlyDiscoveredProposals != null && newlyDiscoveredProposals.Count > 0)
-                {
-                    foreach (var proposal in newlyDiscoveredProposals)
-                    {
-                        yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: proposal);
-                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, $"Proposed task: {proposal.Title}", cancellationToken, metadata);
-                    }
-                }
-
-                transcriptEntries.Add(new TranscriptEntry(
-                    DateTime.UtcNow,
-                    "TOOL",
-                    $"Tool {canonicalName} ({sw.ElapsedMilliseconds}ms)",
-                    ToolName: canonicalName,
-                    ToolArguments: argsJson,
-                    ToolResult: toolResult));
-
-                messages.Add(new ChatMessage(ChatRole.Tool, toolResult)
-                {
-                    Contents = { new FunctionResultContent(callId, toolResult) }
-                });
-                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, toolResult, cancellationToken, metadata);
-            }
-
-            // If we reached max turns and the agent called tools on the final turn,
-            // execute one final synthesis turn with Tools = null so the agent answers the user rather than cutting off abruptly.
-            if (currentTurn >= maxTurns && !cancellationToken.IsCancellationRequested)
-            {
-                var synthesisFilter = new StreamingTagFilter();
-                var synthesisTurnBuilder = new StringBuilder();
-                var synthesisOptions = new ChatOptions
-                {
-                    ModelId = !string.IsNullOrWhiteSpace(profile.ModelName) ? profile.ModelName : null,
-                    Temperature = (float?)profile.Temperature ?? 0.3f,
-                    Tools = null
-                };
-
-                IAsyncEnumerator<ChatResponseUpdate>? synthesisEnumerator = null;
-                try
-                {
-                    var stream = client.GetStreamingResponseAsync(messages, synthesisOptions, cancellationToken);
-                    synthesisEnumerator = stream.GetAsyncEnumerator(cancellationToken);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    _logger.LogWarning(ex, "Synthesis turn failed to initialize streaming.");
-                }
-
-                if (synthesisEnumerator != null)
-                {
+                    bool hasMore;
                     try
                     {
-                        while (await synthesisEnumerator.MoveNextAsync())
+                        hasMore = await enumerator.MoveNextAsync();
+                    }
+                    catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
+                    {
+                        streamingFailed = true;
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
+                        throw;
+                    }
+
+                    if (!hasMore) break;
+
+                    var update = enumerator.Current;
+                    foreach (var domainEvt in projector.ProjectUpdate(update))
+                    {
+                        if (domainEvt.Kind == IdeationStreamUpdateKind.ThinkingDelta && !string.IsNullOrEmpty(domainEvt.TextDelta))
                         {
-                            var update = synthesisEnumerator.Current;
-                            var text = update.Text;
-                            if (string.IsNullOrEmpty(text)) continue;
+                            fullReasoningBuilder.Append(domainEvt.TextDelta);
+                            transcriptBuffer.Append("THINKING", domainEvt.TextDelta);
+                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ThinkingDelta, domainEvt.TextDelta, cancellationToken, metadata);
+                        }
+                        else if (domainEvt.Kind == IdeationStreamUpdateKind.MessageDelta && !string.IsNullOrEmpty(domainEvt.TextDelta))
+                        {
+                            fullTextBuilder.Append(domainEvt.TextDelta);
+                            transcriptBuffer.Append("ASSISTANT", domainEvt.TextDelta);
+                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.MessageDelta, domainEvt.TextDelta, cancellationToken, metadata);
+                        }
+                        else if (domainEvt.Kind == IdeationStreamUpdateKind.ToolCallStarted && domainEvt.ToolCall != null)
+                        {
+                            allToolCalls.Add(domainEvt.ToolCall);
+                            transcriptBuffer.Flush();
+                            transcriptEntries.Add(new TranscriptEntry(DateTime.UtcNow, "TOOL", string.Empty, domainEvt.ToolCall.ToolName, domainEvt.ToolCall.Arguments));
+                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolStarted, $"{domainEvt.ToolCall.ToolName}: {domainEvt.ToolCall.Arguments}", cancellationToken, metadata);
+                        }
+                        else if (domainEvt.Kind == IdeationStreamUpdateKind.ToolCallCompleted && domainEvt.ToolCall != null)
+                        {
+                            transcriptEntries.Add(new TranscriptEntry(DateTime.UtcNow, domainEvt.ToolCall.IsError ? "TOOL_ERROR" : "TOOL_RESULT", domainEvt.ToolCall.Result ?? string.Empty, domainEvt.ToolCall.ToolName));
 
-                            synthesisTurnBuilder.Append(text);
+                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, domainEvt.ToolCall.Result ?? string.Empty, cancellationToken, metadata);
 
-                            foreach (var (isThinkingDelta, piece) in synthesisFilter.ProcessDelta(text))
+                            if (domainEvt.ToolCall.IsError)
                             {
-                                if (string.IsNullOrEmpty(piece)) continue;
+                                _logger.LogWarning("Ideation tool '{ToolName}' failed or returned error: {ToolResult}",
+                                    domainEvt.ToolCall.ToolName, domainEvt.ToolCall.Result);
+                            }
 
-                                transcriptEntries.Add(new TranscriptEntry(
-                                    DateTime.UtcNow,
-                                    isThinkingDelta ? "THINKING" : "ASSISTANT",
-                                    piece));
-
-                                var activityKind = isThinkingDelta ? AgentActivityKind.ThinkingDelta : AgentActivityKind.MessageDelta;
-                                await BroadcastAsync(sessionId, 0, "ideation", activityKind, piece, cancellationToken, metadata);
-
-                                var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
-                                yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
+                            // Sync any newly discovered proposals from canonicalTools
+                            foreach (var p in canonicalTools.PendingProposals)
+                            {
+                                if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles);
+                                    sessionProposals.Add(ideationProp);
+                                    yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
+                                    await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
+                                }
                             }
                         }
 
-                        foreach (var (isThinkingDelta, piece) in synthesisFilter.Flush())
-                        {
-                            if (string.IsNullOrEmpty(piece)) continue;
-
-                            transcriptEntries.Add(new TranscriptEntry(
-                                DateTime.UtcNow,
-                                isThinkingDelta ? "THINKING" : "ASSISTANT",
-                                piece));
-
-                            var streamKind = isThinkingDelta ? IdeationStreamUpdateKind.ThinkingDelta : IdeationStreamUpdateKind.MessageDelta;
-                            yield return new IdeationStreamUpdate(streamKind, TextDelta: piece);
-                        }
-                    }
-                    finally
-                    {
-                        await synthesisEnumerator.DisposeAsync();
+                        yield return domainEvt;
                     }
                 }
-
-                var synthesisText = synthesisTurnBuilder.ToString();
-                fullTextBuilder.Append(synthesisText);
-                messages.Add(new ChatMessage(ChatRole.Assistant, synthesisText));
-                break;
+            }
+            finally
+            {
+                await enumerator.DisposeAsync();
             }
         }
 
+        if (streamingFailed)
+        {
+            AgentResponse response;
+            try
+            {
+                response = await agent.RunAsync(messages, session, cancellationToken: cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
+                throw;
+            }
+
+            foreach (var update in response.ToAgentResponseUpdates())
+            {
+                foreach (var domainEvt in projector.ProjectUpdate(update))
+                {
+                    if (domainEvt.Kind == IdeationStreamUpdateKind.ThinkingDelta && !string.IsNullOrEmpty(domainEvt.TextDelta))
+                    {
+                        fullReasoningBuilder.Append(domainEvt.TextDelta);
+                        transcriptBuffer.Append("THINKING", domainEvt.TextDelta);
+                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ThinkingDelta, domainEvt.TextDelta, cancellationToken, metadata);
+                    }
+                    else if (domainEvt.Kind == IdeationStreamUpdateKind.MessageDelta && !string.IsNullOrEmpty(domainEvt.TextDelta))
+                    {
+                        fullTextBuilder.Append(domainEvt.TextDelta);
+                        transcriptBuffer.Append("ASSISTANT", domainEvt.TextDelta);
+                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.MessageDelta, domainEvt.TextDelta, cancellationToken, metadata);
+                    }
+                    else if (domainEvt.Kind == IdeationStreamUpdateKind.ToolCallStarted && domainEvt.ToolCall != null)
+                    {
+                        allToolCalls.Add(domainEvt.ToolCall);
+                        transcriptBuffer.Flush();
+                        transcriptEntries.Add(new TranscriptEntry(DateTime.UtcNow, "TOOL", string.Empty, domainEvt.ToolCall.ToolName, domainEvt.ToolCall.Arguments));
+                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolStarted, $"{domainEvt.ToolCall.ToolName}: {domainEvt.ToolCall.Arguments}", cancellationToken, metadata);
+                    }
+                    else if (domainEvt.Kind == IdeationStreamUpdateKind.ToolCallCompleted && domainEvt.ToolCall != null)
+                    {
+                        transcriptEntries.Add(new TranscriptEntry(DateTime.UtcNow, domainEvt.ToolCall.IsError ? "TOOL_ERROR" : "TOOL_RESULT", domainEvt.ToolCall.Result ?? string.Empty, domainEvt.ToolCall.ToolName));
+
+                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, domainEvt.ToolCall.Result ?? string.Empty, cancellationToken, metadata);
+
+                        if (domainEvt.ToolCall.IsError)
+                        {
+                            _logger.LogWarning("Ideation tool '{ToolName}' failed or returned error: {ToolResult}",
+                                domainEvt.ToolCall.ToolName, domainEvt.ToolCall.Result);
+                        }
+
+                        // Sync any newly discovered proposals from canonicalTools
+                        foreach (var p in canonicalTools.PendingProposals)
+                        {
+                            if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles);
+                                sessionProposals.Add(ideationProp);
+                                yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
+                                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
+                            }
+                        }
+                    }
+
+                    yield return domainEvt;
+                }
+            }
+        }
+
+        foreach (var domainEvt in projector.Flush())
+        {
+            if (domainEvt.Kind == IdeationStreamUpdateKind.ThinkingDelta && !string.IsNullOrEmpty(domainEvt.TextDelta))
+            {
+                fullReasoningBuilder.Append(domainEvt.TextDelta);
+                transcriptBuffer.Append("THINKING", domainEvt.TextDelta);
+                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ThinkingDelta, domainEvt.TextDelta, cancellationToken, metadata);
+            }
+            else if (domainEvt.Kind == IdeationStreamUpdateKind.MessageDelta && !string.IsNullOrEmpty(domainEvt.TextDelta))
+            {
+                fullTextBuilder.Append(domainEvt.TextDelta);
+                transcriptBuffer.Append("ASSISTANT", domainEvt.TextDelta);
+                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.MessageDelta, domainEvt.TextDelta, cancellationToken, metadata);
+            }
+
+            yield return domainEvt;
+        }
+
+        // Final sync of any pending proposals from canonicalTools
+        foreach (var p in canonicalTools.PendingProposals)
+        {
+            if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
+            {
+                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles);
+                sessionProposals.Add(ideationProp);
+                yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
+                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
+            }
+        }
+
+        transcriptBuffer.Flush();
         sessionStopwatch.Stop();
         string? transcriptPath = null;
         string? fullTranscriptMarkdown = null;
@@ -724,7 +566,13 @@ Before executing tools or recommending changes, think step-by-step about what fi
                     DurationMs: sessionStopwatch.ElapsedMilliseconds,
                     Metrics: new AgentRunMetrics(sessionStopwatch.ElapsedMilliseconds, 0, 0, 0),
                     Optimizations: profile.OptimizationFlags ?? new LocalOptimizationFlags(),
-                    Status: AgentRunStatus.Completed);
+                    Status: AgentRunStatus.Completed,
+                    KvCacheHitRate: null,
+                    SystemPrompt: tracingClient.LastCapturedSystemPrompt ?? systemPrompt,
+                    AvailableTools: tracingClient.LastCapturedTools.Count > 0 ? tracingClient.LastCapturedTools : permittedTools,
+                    ActiveSkills: activeSkills,
+                    MafConfiguration: MafConfigurationSummary.Build(harnessOptions, tracingClient.DetectedMafConfiguration),
+                    ModelCalls: tracingClient.ModelCalls);
 
                 transcriptPath = await _transcriptService.SaveTranscriptAsync(metadataRecord, transcriptEntries, targetDir, cancellationToken);
                 if (File.Exists(transcriptPath))
@@ -754,147 +602,6 @@ Before executing tools or recommending changes, think step-by-step about what fi
         await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.StageCompleted, $"Ideation completed with {sessionProposals.Count} proposal(s).", cancellationToken, metadata);
 
         yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.Completed, FinalResult: finalResult);
-    }
-
-    private static List<(bool IsThinking, string Text)> ParseStreamDeltas(string text, ref bool inThinking)
-    {
-        var filter = new StreamingTagFilter();
-        var results = new List<(bool IsThinking, string Text)>();
-        results.AddRange(filter.ProcessDelta(text));
-        results.AddRange(filter.Flush());
-        inThinking = filter.IsInThinking;
-        return results;
-    }
-
-    private sealed class StreamingTagFilter
-    {
-        private readonly StringBuilder _buffer = new();
-        private bool _inThinking;
-
-        public bool IsInThinking => _inThinking;
-
-        public IEnumerable<(bool IsThinking, string Text)> ProcessDelta(string chunk)
-        {
-            if (string.IsNullOrEmpty(chunk)) yield break;
-
-            _buffer.Append(chunk);
-
-            while (_buffer.Length > 0)
-            {
-                if (!_inThinking)
-                {
-                    var current = _buffer.ToString();
-                    var thinkIdx = IndexOfAnyTag(current, ["<think>", "<thought>"], out var matchedTag);
-
-                    if (thinkIdx >= 0)
-                    {
-                        if (thinkIdx > 0)
-                        {
-                            yield return (false, current[..thinkIdx]);
-                        }
-                        _inThinking = true;
-                        _buffer.Remove(0, thinkIdx + matchedTag!.Length);
-                    }
-                    else
-                    {
-                        var prefixLen = GetPotentialPrefixLength(current, ["<think>", "<thought>"]);
-                        if (prefixLen > 0)
-                        {
-                            var emitLen = current.Length - prefixLen;
-                            if (emitLen > 0)
-                            {
-                                yield return (false, current[..emitLen]);
-                                _buffer.Remove(0, emitLen);
-                            }
-                            break;
-                        }
-                        else
-                        {
-                            yield return (false, current);
-                            _buffer.Clear();
-                            break;
-                        }
-                    }
-                }
-                else
-                {
-                    var current = _buffer.ToString();
-                    var endIdx = IndexOfAnyTag(current, ["</think>", "</thought>"], out var matchedTag);
-
-                    if (endIdx >= 0)
-                    {
-                        if (endIdx > 0)
-                        {
-                            yield return (true, current[..endIdx]);
-                        }
-                        _inThinking = false;
-                        _buffer.Remove(0, endIdx + matchedTag!.Length);
-                    }
-                    else
-                    {
-                        var prefixLen = GetPotentialPrefixLength(current, ["</think>", "</thought>"]);
-                        if (prefixLen > 0)
-                        {
-                            var emitLen = current.Length - prefixLen;
-                            if (emitLen > 0)
-                            {
-                                yield return (true, current[..emitLen]);
-                                _buffer.Remove(0, emitLen);
-                            }
-                            break;
-                        }
-                        else
-                        {
-                            yield return (true, current);
-                            _buffer.Clear();
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        public IEnumerable<(bool IsThinking, string Text)> Flush()
-        {
-            if (_buffer.Length > 0)
-            {
-                yield return (_inThinking, _buffer.ToString());
-                _buffer.Clear();
-            }
-        }
-
-        private static int IndexOfAnyTag(string text, string[] tags, out string? matchedTag)
-        {
-            matchedTag = null;
-            int lowestIdx = -1;
-            foreach (var tag in tags)
-            {
-                var idx = text.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
-                if (idx >= 0 && (lowestIdx < 0 || idx < lowestIdx))
-                {
-                    lowestIdx = idx;
-                    matchedTag = tag;
-                }
-            }
-            return lowestIdx;
-        }
-
-        private static int GetPotentialPrefixLength(string text, string[] tags)
-        {
-            int maxLen = 0;
-            foreach (var tag in tags)
-            {
-                for (int len = 1; len < tag.Length && len <= text.Length; len++)
-                {
-                    var sub = text[^len..];
-                    if (tag.StartsWith(sub, StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (len > maxLen) maxLen = len;
-                    }
-                }
-            }
-            return maxLen;
-        }
     }
 
     private List<IdeationProposal> ParseProposals(string text)
@@ -956,219 +663,6 @@ Before executing tools or recommending changes, think step-by-step about what fi
         return proposals;
     }
 
-    private static (string ResultText, List<IdeationProposal> Proposals) ExecuteProposeTasks(
-        string argsJson,
-        List<IdeationProposal> sessionProposals,
-        CanonicalTools canonicalTools)
-    {
-        var rawTasks = ExtractRawProposals(argsJson);
-        if (rawTasks.Count == 0)
-        {
-            return ("No valid task proposals could be extracted from the provided arguments. Ensure tasks have at least a title and description.", new List<IdeationProposal>());
-        }
-
-        var newProposals = new List<IdeationProposal>();
-        for (int i = 0; i < rawTasks.Count; i++)
-        {
-            var raw = rawTasks[i];
-            var deps = new List<string>();
-            if (raw.DependsOnTitles != null && raw.DependsOnTitles.Count > 0)
-            {
-                deps.AddRange(raw.DependsOnTitles.Where(d => !string.IsNullOrWhiteSpace(d)));
-            }
-
-            // If multiple tasks are proposed, establish sequential implicit dependencies:
-            // Task i (for i > 0) depends on Task i - 1.
-            if (rawTasks.Count > 1 && i > 0)
-            {
-                var prevTitle = rawTasks[i - 1].Title.Trim();
-                if (!string.IsNullOrWhiteSpace(prevTitle) &&
-                    !deps.Any(d => string.Equals(d, prevTitle, StringComparison.OrdinalIgnoreCase)))
-                {
-                    deps.Add(prevTitle);
-                }
-            }
-
-            var proposal = new IdeationProposal(
-                raw.Title.Trim(),
-                raw.Description.Trim(),
-                raw.Priority <= 0 ? 1 : Math.Clamp(raw.Priority, 1, 5),
-                deps);
-
-            var existingIndex = sessionProposals.FindIndex(p => string.Equals(p.Title, proposal.Title, StringComparison.OrdinalIgnoreCase));
-            if (existingIndex >= 0)
-            {
-                sessionProposals[existingIndex] = proposal;
-            }
-            else
-            {
-                sessionProposals.Add(proposal);
-            }
-
-            newProposals.Add(proposal);
-
-            canonicalTools.PendingProposals.Add(new TaskProposal(
-                proposal.Title,
-                proposal.Description,
-                "feature",
-                proposal.DependsOnTitles));
-        }
-
-        var titles = string.Join(", ", newProposals.Select(p => $"'{p.Title}'"));
-        var resultText = $"Recorded {newProposals.Count} task proposal(s) with sequential dependencies in the ideation workspace for user review: {titles}. The developer can now review, refine, and add them to the backlog in the UI.";
-        return (resultText, newProposals);
-    }
-
-    private record RawTaskProposal(
-        string Title,
-        string Description,
-        int Priority,
-        IReadOnlyList<string>? DependsOnTitles);
-
-    private static List<RawTaskProposal> ExtractRawProposals(string argsJson)
-    {
-        var results = new List<RawTaskProposal>();
-        if (string.IsNullOrWhiteSpace(argsJson)) return results;
-
-        var text = argsJson.Trim();
-        if (text.StartsWith("```"))
-        {
-            var firstLine = text.IndexOf('\n');
-            var lastTicks = text.LastIndexOf("```");
-            if (firstLine > 0 && lastTicks > firstLine)
-            {
-                text = text.Substring(firstLine + 1, lastTicks - firstLine - 1).Trim();
-            }
-        }
-
-        try
-        {
-            var node = JsonNode.Parse(text);
-            if (node is JsonArray rootArray)
-            {
-                foreach (var item in rootArray)
-                {
-                    var p = ParseSingleRawTask(item);
-                    if (p != null) results.Add(p);
-                }
-            }
-            else if (node is JsonObject rootObj)
-            {
-                if (rootObj.TryGetPropertyValue("tasks", out var tasksNode) && tasksNode != null)
-                {
-                    if (tasksNode is JsonArray taskArr)
-                    {
-                        foreach (var item in taskArr)
-                        {
-                            var p = ParseSingleRawTask(item);
-                            if (p != null) results.Add(p);
-                        }
-                    }
-                    else if (tasksNode is JsonValue val && val.TryGetValue<string>(out var strVal))
-                    {
-                        if (strVal.TrimStart().StartsWith("["))
-                        {
-                            var innerNode = JsonNode.Parse(strVal);
-                            if (innerNode is JsonArray innerArr)
-                            {
-                                foreach (var item in innerArr)
-                                {
-                                    var p = ParseSingleRawTask(item);
-                                    if (p != null) results.Add(p);
-                                }
-                            }
-                        }
-                    }
-                    else if (tasksNode is JsonObject singleInTasks)
-                    {
-                        var p = ParseSingleRawTask(singleInTasks);
-                        if (p != null) results.Add(p);
-                    }
-                }
-                else
-                {
-                    var p = ParseSingleRawTask(rootObj);
-                    if (p != null) results.Add(p);
-                }
-            }
-        }
-        catch
-        {
-            // If JsonNode parsing fails, return empty list
-        }
-
-        return results;
-    }
-
-    private static RawTaskProposal? ParseSingleRawTask(JsonNode? node)
-    {
-        if (node is not JsonObject obj) return null;
-
-        string title = string.Empty;
-        if (obj.TryGetPropertyValue("title", out var t) ||
-            obj.TryGetPropertyValue("name", out t) ||
-            obj.TryGetPropertyValue("task_title", out t) ||
-            obj.TryGetPropertyValue("taskTitle", out t))
-        {
-            title = t?.ToString() ?? string.Empty;
-        }
-
-        string desc = string.Empty;
-        if (obj.TryGetPropertyValue("description", out var d) ||
-            obj.TryGetPropertyValue("desc", out d) ||
-            obj.TryGetPropertyValue("scope", out d) ||
-            obj.TryGetPropertyValue("details", out d) ||
-            obj.TryGetPropertyValue("summary", out d))
-        {
-            desc = d?.ToString() ?? string.Empty;
-        }
-
-        if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(desc))
-        {
-            return null;
-        }
-
-        int priority = 1;
-        if (obj.TryGetPropertyValue("priority", out var pr) ||
-            obj.TryGetPropertyValue("prio", out pr))
-        {
-            if (pr is JsonValue jv && jv.TryGetValue<int>(out var intVal))
-            {
-                priority = intVal;
-            }
-            else if (int.TryParse(pr?.ToString(), out var parsedInt))
-            {
-                priority = parsedInt;
-            }
-        }
-
-        var deps = new List<string>();
-        if (obj.TryGetPropertyValue("dependsOnTitles", out var depNode) ||
-            obj.TryGetPropertyValue("depends_on_titles", out depNode) ||
-            obj.TryGetPropertyValue("dependsOn", out depNode) ||
-            obj.TryGetPropertyValue("dependencies", out depNode) ||
-            obj.TryGetPropertyValue("deps", out depNode))
-        {
-            if (depNode is JsonArray depArr)
-            {
-                foreach (var item in depArr)
-                {
-                    var s = item?.ToString();
-                    if (!string.IsNullOrWhiteSpace(s)) deps.Add(s);
-                }
-            }
-            else if (depNode is JsonValue depVal && depVal.TryGetValue<string>(out var depStr))
-            {
-                if (!string.IsNullOrWhiteSpace(depStr))
-                {
-                    deps.AddRange(depStr.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-                }
-            }
-        }
-
-        return new RawTaskProposal(title, desc, priority, deps);
-    }
-
     private async Task BroadcastAsync(
         string sessionId,
         int taskId,
@@ -1185,84 +679,11 @@ Before executing tools or recommending changes, think step-by-step about what fi
         }
     }
 
-    private static IList<AITool> BuildAIFunctionList(IReadOnlyList<string> permittedTools)
+    private static IList<AITool> BuildAIFunctionList(CanonicalTools canonicalTools, IReadOnlyList<string> permittedTools)
     {
-        var tools = new List<AITool>();
-        foreach (var tool in permittedTools)
-        {
-            if (string.Equals(tool, CanonicalToolNames.ProposeTasks, StringComparison.OrdinalIgnoreCase))
-            {
-                tools.Add(AIFunctionFactory.Create(
-                    ([System.ComponentModel.Description("List of task proposals")] IReadOnlyList<IdeationProposalDto> tasks) => "ok",
-                    CanonicalToolNames.ProposeTasks,
-                    "Propose structured backlog items for the workspace"));
-            }
-            else
-            {
-                tools.Add(AIFunctionFactory.Create(() => "ok", tool));
-            }
-        }
-        return tools;
+        return CanonicalAIFunctionFactory.CreateTools(canonicalTools, permittedTools).Cast<AITool>().ToList();
     }
 
-    private static FunctionCallContent? TryExtractTextToolCall(string text)
-    {
-        var match = ToolCallTagRegex().Match(text);
-        if (!match.Success) return null;
-
-        try
-        {
-            var node = JsonNode.Parse(match.Groups[1].Value);
-            var name = node?["name"]?.ToString();
-            if (string.IsNullOrEmpty(name)) return null;
-
-            var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            if (node?["arguments"] is JsonObject args)
-            {
-                foreach (var (k, v) in args)
-                {
-                    dict[k] = ParseJsonNodeValue(v);
-                }
-            }
-            else if (node?["arguments"] is JsonArray arrArgs)
-            {
-                dict["tasks"] = arrArgs.Select(ParseJsonNodeValue).ToList();
-            }
-
-            return new FunctionCallContent(Guid.NewGuid().ToString("N"), name, dict);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static object? ParseJsonNodeValue(JsonNode? node)
-    {
-        if (node == null) return null;
-        if (node is JsonValue val)
-        {
-            if (val.TryGetValue<long>(out var l)) return l;
-            if (val.TryGetValue<double>(out var d)) return d;
-            if (val.TryGetValue<bool>(out var b)) return b;
-            if (val.TryGetValue<string>(out var s)) return s;
-            return val.ToString();
-        }
-        if (node is JsonArray arr)
-        {
-            return arr.Select(ParseJsonNodeValue).ToList();
-        }
-        if (node is JsonObject obj)
-        {
-            var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (k, v) in obj)
-            {
-                dict[k] = ParseJsonNodeValue(v);
-            }
-            return dict;
-        }
-        return node.ToString();
-    }
 
     public class IdeationProposalDto
     {
