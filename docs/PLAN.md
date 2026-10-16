@@ -24,7 +24,8 @@ NightCodeForge/
 │       ├── 06_END_TO_END_TESTING_AND_HARDENING.md
 │       ├── 07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md
 │       ├── 08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md
-│       └── 09_EXTEND_FEATURES.md
+│       ├── 09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md
+│       └── 10_EXTEND_FEATURES.md
 ├── src/
 │   ├── NightCodeForge.Core/
 │   │   ├── Domain/              # Entities: ForgeTask, TaskDependency, Question, StageCheckpoint, ExecutionLog
@@ -106,7 +107,8 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 | **Phase 6** | [docs/plan/06_END_TO_END_TESTING_AND_HARDENING.md](plan/06_END_TO_END_TESTING_AND_HARDENING.md) | End-to-end workflow simulation, chaos & sudden reboot resilience, multi-workspace VRAM protection validation, and empirical A/B benchmark validation. |
 | **Phase 7** | [docs/plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md](plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md) | Playwright automated browser test suite driving workspace creation, task ideation, promotion, execution, deterministic gates, and diff review. |
 | **Phase 8** | [docs/plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md](plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md) | Database-persisted `WorkflowDefinition` & `StageDefinition`, dynamic C# stage dispatcher, default 6-stage seeding, and permanent ideation chat persistence in SQLite. |
-| **Phase 9** | [docs/plan/09_EXTEND_FEATURES.md](plan/09_EXTEND_FEATURES.md) | Extensible capabilities, Model Context Protocol (MCP) HTTP/SSE and ContainerSandbox stdio client integration, and ecosystem expansion. |
+| **Phase 9** | [docs/plan/09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md](plan/09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md) | Architectural cleanup aligning with `AGENTS.md`: elimination of optional constructor parameters, hard errors on missing database records, constants/enums, and clean-break pruning. |
+| **Phase 10** | [docs/plan/10_EXTEND_FEATURES.md](plan/10_EXTEND_FEATURES.md) | Extensible capabilities, Model Context Protocol (MCP) HTTP/SSE and ContainerSandbox stdio client integration, and ecosystem expansion. |
 
 ---
 
@@ -443,12 +445,25 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 
 ---
 
-### Phase 9: Extend Features & Integrations
-> 📖 **Detailed Implementation Guide:** [docs/plan/09_EXTEND_FEATURES.md](plan/09_EXTEND_FEATURES.md)  
+### Phase 9: Codebase Remediation & Robustness
+> 📖 **Detailed Implementation Guide:** [docs/plan/09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md](plan/09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md)  
 > 📂 **Step Specifications:** [docs/plan/phase-9/](plan/phase-9/)
+* **Objective:** Streamline the codebase and enforce strict architectural policies defined in `AGENTS.md`: fail-fast dependency injection, hard errors on missing database entities, centralization of magic strings/numbers, and clean-break pruning of dead legacy code.
+* **Tasks:**
+  1. **Constants, Enums & Literals (Step 9.1):** Introduce `StandardStageIds`, `PipelineDataBagKeys`, `StandardHarnessIds`, `StageImplementationTypes`, and `WorkflowDefaults`. Refactor raw literals across all layers.
+  2. **Database Integrity & Hard Errors (Step 9.2):** Disallow on-the-fly synthetic workflows and profiles; throw explicit exceptions (`WorkflowNotFoundException`, `AgentProfileNotFoundException`) when database records are missing.
+  3. **Clean Break & Dead Code Pruning (Step 9.3):** Prune obsolete deterministic stages (`DeterministicPreImplementationStage`, `DeterministicPostImplementationStage`, `DeterministicPostReviewStage`), redundant `SystemProcessRunner` subclass, legacy string prompt formatters, and dead sync-over-async interface methods.
+  4. **Required Constructor DI & Fail Fast (Step 9.4):** Remove `= null` defaults and fallback instantiations across all service constructors. Introduce reusable test fixture builders (`TestOrchestratorBuilder`).
+* **Deliverables:** Streamlined, robust, fail-fast codebase strictly adhering to `AGENTS.md` guidelines.
+
+---
+
+### Phase 10: Extend Features & Integrations
+> 📖 **Detailed Implementation Guide:** [docs/plan/10_EXTEND_FEATURES.md](plan/10_EXTEND_FEATURES.md)  
+> 📂 **Step Specifications:** [docs/plan/phase-10/](plan/phase-10/)
 * **Objective:** Expand NightCodeForge beyond core lifecycle orchestration with modular extensions, external integrations, and advanced protocols.
 * **Tasks:**
-  1. **MCP Integration (Step 9.1):** First-class Model Context Protocol (MCP) discovery and execution via official Microsoft Agent Framework packages (`ModelContextProtocol`), supporting streamable HTTP/SSE remote servers (Phase 1) and isolated stdio servers running inside `ContainerSandbox` via `docker exec -i` (Phase 2).
+  1. **MCP Integration (Step 10.1):** First-class Model Context Protocol (MCP) discovery and execution via official Microsoft Agent Framework packages (`ModelContextProtocol`), supporting streamable HTTP/SSE remote servers (Phase 1) and isolated stdio servers running inside `ContainerSandbox` via `docker exec -i` (Phase 2).
   2. **Future Extended Features:** Modular additions, external integrations, and specialized tooling to be specified and incorporated incrementally.
 * **Deliverables:** Operational MCP client integration and extensibility framework for future capabilities.
 

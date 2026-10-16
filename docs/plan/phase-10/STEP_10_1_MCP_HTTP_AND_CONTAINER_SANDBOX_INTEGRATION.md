@@ -1,7 +1,7 @@
-# ⚡ Step 9.1: Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio
+# ⚡ Step 10.1: Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio
 
-> **Phase 9 Implementation Step**  
-> *Parent Plan:* [Phase 9 Master Plan](../09_EXTEND_FEATURES.md)  
+> **Phase 10 Implementation Step**  
+> *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Agents/Mcp`, `src/NightCodeForge.Agents/Crucible`, `tests/NightCodeForge.Agents.Tests` | *Status:* Planned
 
 ---
