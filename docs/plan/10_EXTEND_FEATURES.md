@@ -26,6 +26,8 @@ The core architecture of **NightCodeForge** delivers an autonomous software engi
 | **10.3** | [🐙 Step 10.3: GitHub Integration (Untrusted Intake Triage, PR Delivery & Task Mirroring)](phase-10/STEP_10_3_GITHUB_INTEGRATION_ISSUES_AND_PRS.md) | Modular, fully optional GitHub integration: untrusted issue intake routed to sandboxed triage (`RestrictedReadOnly` / `ITriageService`) to generate vetted proposals, Pull Request delivery mode with rich PR metadata, and bi-directional task mirroring (status labels and milestone comments). | Planned |
 | **10.4** | [🧹 Step 10.4: Smart CLI & Build Tool Output Filtering (Context Compression & Noise Reduction)](phase-10/STEP_10_4_SMART_CLI_AND_BASH_OUTPUT_FILTERING.md) | Semantic output filtering for verbose CLI tools (`dotnet build`, `msbuild`, `dotnet test`, `tsc`, `npm`). Relativizes full paths to workspace root, suppresses internal SDK boilerplates, drops non-fatal warnings when errors exist, and caps warning bursts while preserving raw audit logs in disk transcripts, with an optional agent parameter (`disable_filter`) to bypass filtering on demand. | Planned |
 | **10.5** | [💡 Step 10.5: Interactive Ideation Database Tasks & Lifecycle Management](phase-10/STEP_10_5_IDEATION_DATABASE_TASKS_AND_LIFECYCLE.md) | Immediate SQLite database task creation in `Draft` status during ideation chat, returning numeric task IDs for DAG dependencies. Provides scoped `edit_task` and `remove_task` tools for read-only agents, instant user Discard action, and automated TTL pruning for unapproved drafts after 24 hours. | Planned |
+| **10.6** | [🕰️ Step 10.6: Task State History & Temporal Snapshot Audit Trail](phase-10/STEP_10_6_TASK_STATE_HISTORY_AND_AUDIT_TRAIL.md) | Temporal audit history for `ForgeTask` records: primary table maintains current state while secondary `TaskHistories` table stores immutable point-in-time snapshots with versioning, change attribution (`ChangedBy`, `ChangeReason`), and visual text diffing. | Planned |
+| **10.7** | [📄 Step 10.7: Dedicated Task Creation Page & MergeMode Management](phase-10/STEP_10_7_TASK_CREATION_PAGE_AND_MERGE_MODE.md) | Direct task authoring page (`/tasks/new`) bypassing the AI ideation chat, expanded `MergeMode` options (`Automatic`, `ManualReviewRequired`, `ExternalPullRequest`), and interactive merge mode editing in the Task Detail Drawer and Review Room. | Planned |
 | **10.x** | *Future Extended Features* | Additional integrations, advanced toolchains, and plugin capabilities will be appended here as requirements evolve. | Planned |
 
 ---
@@ -116,7 +118,7 @@ flowchart TD
 
     GH_Issue --> TriageService --> Proposals --> Exec
     Exec -.-> MirrorService -.-> GH_Mirror
-    Exec -->|DeliveryMode: PullRequest| PushPR --> GH_PR
+    Exec -->|MergeMode: ExternalPullRequest| PushPR --> GH_PR
 ```
 
 ### 3.4 Step 10.4: Smart CLI & Build Tool Output Filtering
@@ -136,6 +138,24 @@ flowchart TD
     IdeationAgent -->|edit_task / remove_task| DB
     DB --> UI["Ideation UI (Approve vs Discard)"]
     DB -.->|Stale Drafts > 24h| Reaper["IdeationDraftPruningService"]
+```
+
+### 3.6 Step 10.6: Task State History & Snapshots
+```mermaid
+flowchart LR
+    Mutation["Task Mutation<br/>(Ideation, UI Drawer, Stage Advance)"] --> Interceptor["History Interceptor"]
+    Interceptor --> Latest["Tasks Table<br/>(Current Active State)"]
+    Interceptor --> History["TaskHistories Table<br/>(Immutable Revisions & Diffs)"]
+    History --> Timeline["UI Revision Timeline & Diff View"]
+```
+
+### 3.7 Step 10.7: Dedicated Task Creation & MergeMode Management
+```mermaid
+flowchart LR
+    CreatePage["CreateTask.razor (/tasks/new)"] --> DirectSave["Direct Task Creation<br/>(Suggested / Open / Run Now)"]
+    DirectSave --> Task["ForgeTask Entity"]
+    Task --> Mode["MergeMode Selector<br/>(Automatic, ManualReviewRequired, ExternalPullRequest)"]
+    Mode --> DetailDrawer["Editable in TaskDetailDrawer & Review"]
 ```
 
 ---
@@ -159,7 +179,7 @@ flowchart TD
 - [ ] **Step 10.3 (Optional GitHub Integration):**
   - [ ] Implement `IGitHubClientService` with fail-fast constructor DI.
   - [ ] Implement Sub-Feature A: `GitHubIssueSyncService` feeding discovered untrusted issues to `ITriageService.TriageExternalReportAsync` in `RestrictedReadOnly` sandbox.
-  - [ ] Implement Sub-Feature B: `DeliveryMode.PullRequest` pushing feature branches and creating rich markdown PRs with quality gate metrics.
+  - [ ] Implement Sub-Feature B: `MergeMode.ExternalPullRequest` pushing feature branches and creating rich markdown PRs with quality gate metrics.
   - [ ] Implement Sub-Feature C: `GitHubTaskMirrorService` synchronizing task status labels and milestone comments.
   - [ ] Add UI controls in Workspace Settings (enable toggles, token, repo configuration) and Review Room (PR creation button and link badge).
 
@@ -175,8 +195,23 @@ flowchart TD
   - [ ] Strictly isolate and exclude `Draft` tasks from `Backlog.razor`, `KanbanBoard.razor`, and `DagVisualizer.razor` views.
   - [ ] Immediately write proposed tasks to database and return numeric `Id` for concrete DAG dependencies.
   - [ ] Implement `edit_task` and `remove_task` tools for ideation agents, strictly scoped to unapproved `Draft` tasks.
+  - [ ] Enable maintainers to select `MergeMode` in `IdeationProposalCard.razor` upon approval (agent cannot alter merge mode).
   - [ ] Implement UI actions in `IdeationProposalCard.razor`: instant "Discard" (delete) and "Approve" (promote).
   - [ ] Implement Hangfire recurring job `IdeationDraftPruningService` to purge stale unapproved drafts older than 24h.
+
+- [ ] **Step 10.6 (Task State History & Audit Trail):**
+  - [ ] Add `ForgeTaskHistory` entity and configure EF Core table `TaskHistories` with unique `(TaskId, Version)` index.
+  - [ ] Capture immutable snapshots automatically on task creation, field edits, and status transitions with attribution (`ChangedBy`, `ChangeReason`).
+  - [ ] Build `TaskHistoryTimeline.razor` revision viewer with DiffPlex text diff comparison.
+  - [ ] Unit and integration tests covering version incrementation, rollback queries, and cascade deletion.
+
+- [ ] **Step 10.7 (Dedicated Task Creation Page & MergeMode Management):**
+  - [ ] Implement `CreateTask.razor` page at `/tasks/new` supporting direct creation without ideation chat.
+  - [ ] Extend `MergeMode` enum with `ExternalPullRequest = 2` (available when GitHub is enabled).
+  - [ ] Enable editing `MergeMode` (`Automatic`, `ManualReviewRequired`, `ExternalPullRequest`) in `TaskDetailDrawer.razor` and `Review.razor`.
+  - [ ] Wire `MergeMode.ExternalPullRequest` to the GitHub PR creation pipeline in `TaskOrchestrator`.
+
+
 
 
 

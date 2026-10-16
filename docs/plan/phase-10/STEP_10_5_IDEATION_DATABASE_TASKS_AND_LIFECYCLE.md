@@ -113,7 +113,9 @@ public enum TaskOverallStatus
 ### 4.2 Tool Signatures & Schemas
 
 #### 1. `propose_tasks` (or `create_task`)
-- **Action:** Inserts `ForgeTask` records with `Status = TaskOverallStatus.Draft` and creates associated `TaskDependency` entries.
+- **Action:** Inserts `ForgeTask` records with `Status = TaskOverallStatus.Draft` (with default `MergeMode.ManualReviewRequired`) and creates associated `TaskDependency` entries.
+- **Parameters:** `title`, `description`, `priority?`, `depends_on_task_ids?`.  
+  *(Note: The AI agent cannot set or modify `MergeMode`; delivery mode is strictly a human maintainer decision configured in the UI).*
 - **Return to Agent:**
   ```json
   [
@@ -137,6 +139,8 @@ public async Task<string> EditTaskAsync(
 - **Validation Guardrails:**
   - `task.WorkspaceId == context.Workspace.Id`
   - `task.Status == TaskOverallStatus.Draft` (fails fast if task is already `Suggested`, `Open`, or beyond).
+  - Updates title, description, priority, or dependencies based on developer feedback. The agent is not permitted to alter merge strategies.
+
 
 #### 3. `remove_task`
 ```csharp
@@ -179,15 +183,17 @@ public class IdeationDraftPruningService
 
 ---
 
----
-
 ### 4.4 UI Integration ([IdeationProposalCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Ideation/IdeationProposalCard.razor))
 
 - Displays badge: `[Draft #104]`
+- **Maintainer MergeMode Configuration:**
+  - Includes a selector for [MergeMode](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/Enums.cs) (`ManualReviewRequired`, `Automatic`, or `ExternalPullRequest` if GitHub is enabled).
+  - Fixes the current UI limitation where users cannot choose or edit the merge mode before approving.
 - Direct actions on the card:
-  - **✅ Approve Task:** Transitions `Status` from `Draft` $\rightarrow$ `Suggested` (or `Open`).
+  - **✅ Approve Task:** Saves selected `MergeMode` and transitions `Status` from `Draft` $\rightarrow$ `Suggested` (or `Open`).
   - **🗑️ Discard:** Deletes task immediately from database with a confirmation toast.
   - Renders dependency badges linking to parent task IDs (`Depends on #102`).
+
 
 ---
 

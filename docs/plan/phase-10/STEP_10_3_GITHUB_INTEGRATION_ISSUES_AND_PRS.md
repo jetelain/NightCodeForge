@@ -15,8 +15,9 @@ Provide a modular, **fully optional** GitHub integration enabling autonomous, se
    - Instead of blindly mapping 1:1 to executable tasks, discovered issues are routed directly into the **Untrusted Intake / Triage Pipeline** via [ITriageService.TriageExternalReportAsync](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Triage/TriageService.cs).
    - The Triage Agent executes strictly in `SandboxSecurityTier.RestrictedReadOnly` and `AgentMode.ReadOnly` against the base branch. It inspects the codebase, verifies reproducibility, determines affected components, and invokes `propose_tasks` to create structured, vetted backlog items in [TaskOverallStatus.Suggested](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/Enums.cs) with references back to the originating issue number.
 
-2. **Sub-Feature B: Pull Request Delivery Mode (Optional):**
+2. **Sub-Feature B: Pull Request Delivery Mode via `MergeMode.ExternalPullRequest` (Optional):**
    - Provide an alternative to direct squash-and-merge into the developer's local working copy: deliver completed tasks via **GitHub Pull Requests**.
+   - Configured directly on the task via **[MergeMode.ExternalPullRequest](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/Enums.cs)**.
    - Pushes the isolated feature branch (`feature/task-{id}`) to the remote GitHub repository.
    - Opens a GitHub Pull Request against `task.BaseBranch` with an automated summary markdown description detailing:
      - Task objective & resolution summary
@@ -65,11 +66,23 @@ public class GitHubIntegrationSettings
 }
 ```
 
-### 2.2 Domain Alignment
-- `ForgeTask.ExternalSource`: `GitHub`
-- `ForgeTask.ExternalReferenceId`: `#123` (Issue or PR number)
-- `ForgeTask.PullRequestUrl`: URL to created GitHub PR (e.g. `https://github.com/owner/repo/pull/45`)
-- `DeliveryMode` in task / workspace: `DirectMerge` vs `PullRequest`
+### 2.2 Domain Alignment with `MergeMode`
+Rather than introducing a parallel delivery mode or merge strategy, GitHub PR delivery is fully unified with the core **[MergeMode](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/Enums.cs)** enumeration:
+
+```csharp
+public enum MergeMode
+{
+    Automatic = 0,             // Auto-squashes and merges to base branch once status reaches Ready
+    ManualReviewRequired = 1,  // Maintainer manually reviews diff/tests before triggering merge in UI
+    ExternalPullRequest = 2    // Pushes branch to origin and opens a GitHub PR (enabled when GitHub is active)
+}
+```
+
+- **`ForgeTask.MergeMode`:** Set to `MergeMode.ExternalPullRequest` when PR delivery is selected.
+- **`ForgeTask.ExternalSource`:** `"GitHub"` (set when created from an issue or linked to a repository).
+- **`ForgeTask.ExternalReferenceId`:** `#123` (Issue or PR number).
+- **`ForgeTask.PullRequestUrl`:** URL to created GitHub PR (e.g. `https://github.com/owner/repo/pull/45`).
+- **UI Availability:** When `GitHubIntegrationSettings.Enabled && PullRequestDeliveryEnabled` is true, `MergeMode.ExternalPullRequest` is enabled as an option across the dedicated creation page (`/tasks/new`), backlog promotion modals, triage approval cards, and the task detail drawer.
 
 ---
 
@@ -103,10 +116,10 @@ flowchart TD
         Orchestrator["TaskOrchestrator<br/>(Stages 1 to 6)"]
     end
 
-    subgraph PRDelivery ["Sub-Feature B: PR Delivery"]
+    subgraph PRDelivery ["Sub-Feature B: PR Delivery (MergeMode.ExternalPullRequest)"]
         CompleteStep["CompleteTaskAndCascadeAsync"]
-        DeliveryChoice{"DeliveryMode?"}
-        DirectMerge["Local Squash & Merge<br/>Ext4 Mirror Sync"]
+        MergeModeDecision{"task.MergeMode?"}
+        DirectMerge["Local Workspace Squash & Merge<br/>(MergeMode.Automatic / ManualReviewRequired)"]
         PushBranch["git push origin feature/task-42"]
         CreatePR["Create Pull Request<br/>(via GitHub Client)"]
     end
@@ -117,9 +130,9 @@ flowchart TD
     OpenTask --> Orchestrator
     OpenTask -.->|Mirror Lifecycle| MirrorSync -.-> GH_Mirror
 
-    Orchestrator --> CompleteStep --> DeliveryChoice
-    DeliveryChoice -- "DirectMerge" --> DirectMerge
-    DeliveryChoice -- "PullRequest" --> PushBranch --> CreatePR --> GH_PR
+    Orchestrator --> CompleteStep --> MergeModeDecision
+    MergeModeDecision -- "Automatic / ManualReviewRequired" --> DirectMerge
+    MergeModeDecision -- "ExternalPullRequest" --> PushBranch --> CreatePR --> GH_PR
 ```
 
 ---
@@ -153,7 +166,7 @@ flowchart TD
 ## 5. Sub-Feature B: Pull Request Delivery Specification
 
 ### 5.1 Pull Request Generation Flow
-When a task reaches completion and `DeliveryMode == DeliveryMode.PullRequest`:
+When a task reaches completion and `task.MergeMode == MergeMode.ExternalPullRequest`:
 1. **Push Branch:** The orchestrator pushes `feature/task-{id}` to the configured GitHub remote (`git push origin feature/task-{id}`).
 2. **Build PR Body:** Formats a structured PR description:
    ```markdown
@@ -202,8 +215,8 @@ When a `ForgeTask` changes status or advances stages:
   - Register Hangfire recurring job `GitHubIssueSyncService.SyncOpenIssuesAsync`.
   - Feed issues into `ITriageService.TriageExternalReportAsync` in `RestrictedReadOnly` sandbox.
   - Ingest proposals into `Suggested` tasks with `ExternalReferenceId`.
-- [ ] **Sub-Feature B (PR Delivery):**
-  - Extend [ITaskOrchestrator](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/ITaskOrchestrator.cs) and [TaskOrchestrator](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) to support `DeliveryMode.PullRequest`.
+- [ ] **Sub-Feature B (PR Delivery via `MergeMode.ExternalPullRequest`):**
+  - Extend [ITaskOrchestrator](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/ITaskOrchestrator.cs) and [TaskOrchestrator](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) to support `MergeMode.ExternalPullRequest`.
   - Push branch and create rich markdown PRs.
 - [ ] **Sub-Feature C (Task Mirroring):**
   - Implement `GitHubTaskMirrorService` to synchronize labels and post progress comments on stage transitions.
