@@ -314,8 +314,8 @@
     [Parameter] public int TaskId { get; set; }
 
     private ForgeTask? _task;
-    private List<StageConversation> _conversations = new();
-    private StageConversation? _selectedConversation;
+    private List<Conversation> _conversations = new();
+    private Conversation? _selectedConversation;
     private List<FileDiffSummary> _diffFiles = new();
     private FileDiffSummary? _selectedDiffFile;
 
@@ -386,7 +386,7 @@
             _task = await TaskRepository.GetByIdAsync(TaskId);
             if (_task != null)
             {
-                _conversations = _task.StageConversations?.OrderBy(c => c.StartedAt).ToList() ?? new List<StageConversation>();
+                _conversations = _task.Conversations?.OrderBy(c => c.StartedAt).ToList() ?? new List<Conversation>();
                 if (_conversations.Any())
                 {
                     var previousId = _selectedConversation?.Id;
@@ -452,7 +452,7 @@
         }
     }
 
-    private async Task HandleConversationSelected(StageConversation conv)
+    private async Task HandleConversationSelected(Conversation conv)
     {
         _selectedConversation = conv;
         _selectedTurnCount = 0;
@@ -474,7 +474,7 @@
         try
         {
             var selectedId = _selectedConversation.Id;
-            var loaded = await TaskRepository.GetStageConversationWithTurnsAsync(selectedId);
+            var loaded = await TaskRepository.GetConversationWithTurnsAsync(selectedId);
             if (loaded == null || _selectedConversation?.Id != selectedId) return;
 
             _selectedConversation = loaded;

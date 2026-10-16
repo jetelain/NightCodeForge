@@ -537,13 +537,13 @@ flowchart LR
   - `src/NightCodeForge.Core/Workflow/Configuration/DeterministicStageConfig.cs` (New)
   - `src/NightCodeForge.Core/Domain/ForgeTask.cs` (Update: add `WorkflowId`, `Workflow`)
   - `src/NightCodeForge.Core/Domain/Workspace.cs` (Update: add `DefaultWorkflowId`, `Workflows`)
-  - `src/NightCodeForge.Core/Domain/StageConversation.cs` (Update: nullable `TaskId`, add `WorkspaceId`, `ConversationType`, `Title`)
-  - `src/NightCodeForge.Infrastructure/Data/AppDbContext.cs` (Update: entity mappings, value converters, SQLite WAL table creations & alter commands)
+  - `src/NightCodeForge.Core/Domain/Conversation.cs` (Generalized entity: nullable `TaskId`, add `WorkspaceId`, `ConversationType`, `Title`)
+  - `src/NightCodeForge.Infrastructure/Data/AppDbContext.cs` (Update: entity mappings, value converters, SQLite WAL mode)
 * **Key Actions:**
-  - Map `WorkflowDefinitions` and `StageDefinitions` sets in `AppDbContext`.
+  - Map `WorkflowDefinitions`, `StageDefinitions`, `Conversations`, and `ConversationTurns` sets in `AppDbContext`.
   - Configure one-to-many relationship `WorkflowDefinition.Stages` with cascading delete.
-  - Make `StageConversation.TaskId` nullable and add foreign key to `Workspace`.
-  - Update `EnsureDatabaseCreatedAndWalAsync` to run non-destructive DDL (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ADD COLUMN`).
+  - Make `Conversation.TaskId` nullable and add foreign key to `Workspace`.
+  - Configure `EnsureDatabaseCreatedAndWalAsync` to rely on standard `Database.EnsureCreatedAsync()` + SQLite WAL pragmas for development, targeting EF Core migrations for v1 shipping.
 
 ---
 
@@ -668,7 +668,8 @@ flowchart LR
    - The default standard workflow (`standard-3-agent`) mirrors the existing hardcoded 6 stages identically.
    - Any task without a specified `WorkflowId` automatically resolves to the default standard workflow.
 2. **Database Integrity**:
-   - DDL changes in `EnsureDatabaseCreatedAndWalAsync` use `CREATE TABLE IF NOT EXISTS` and safe column additions.
+   - In development, `Database.EnsureCreatedAsync()` builds the complete, normalized schema directly from entity configurations.
+   - For initial release (v1), formal EF Core migrations (`dotnet ef migrations add ...`) will manage incremental schema evolutions.
    - Foreign key constraints use `ON DELETE RESTRICT` for workflows referenced by active tasks, and `ON DELETE CASCADE` for stage definitions belonging to a deleted workflow.
 3. **Graceful Fallbacks**:
    - If a stage references an unknown C# implementation type, `WorkflowStageFactory` emits an explicit configuration failure rather than crashing the orchestrator process.

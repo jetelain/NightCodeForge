@@ -412,13 +412,13 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         await _taskRepository.AddExecutionRecordAsync(record, cancellationToken);
 
-        // Record StageConversation for deterministic stages
+        // Record Conversation for deterministic stages
         if (stage.Kind == WorkflowStageKind.Deterministic)
         {
             try
             {
                 int attemptIndex = (pipelineContext.StageRetries.GetValueOrDefault(stage.StageId, 0)) + 1;
-                var deterministicConv = await _taskRepository.StartStageConversationAsync(
+                var deterministicConv = await _taskRepository.StartConversationAsync(
                     task.Id,
                     stage.StageId,
                     WorkflowStageKind.Deterministic,
@@ -462,7 +462,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     content: summary,
                     cancellationToken: cancellationToken);
 
-                await _taskRepository.CompleteStageConversationAsync(
+                await _taskRepository.CompleteConversationAsync(
                     deterministicConv.Id,
                     result.IsSuccess ? StageExecutionStatus.Completed : StageExecutionStatus.Failed,
                     summary: summary,
@@ -470,7 +470,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to persist deterministic StageConversation for task #{TaskId}, stage '{StageId}'", task.Id, stage.StageId);
+                _logger.LogWarning(ex, "Failed to persist deterministic Conversation for task #{TaskId}, stage '{StageId}'", task.Id, stage.StageId);
             }
         }
 

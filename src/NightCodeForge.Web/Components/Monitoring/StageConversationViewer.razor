@@ -78,7 +78,7 @@
         <!-- Turns Stream -->
         <div class="conversation-turns-list" style="display: flex; flex-direction: column; gap: 1rem;">
             @{
-                var turns = Conversation.Turns?.OrderBy(t => t.TurnIndex).ToList() ?? new List<StageConversationTurn>();
+                var turns = Conversation.Turns?.OrderBy(t => t.TurnIndex).ToList() ?? new List<ConversationTurn>();
                 var (mergedResults, hiddenResults) = PairToolResults(turns);
             }
 
@@ -200,7 +200,7 @@
 </div>
 
 @code {
-    [Parameter] public StageConversation? Conversation { get; set; }
+    [Parameter] public Conversation? Conversation { get; set; }
     [Parameter] public bool IsActiveStage { get; set; }
     [Parameter] public string? LiveStreamingThinking { get; set; }
     [Parameter] public string? LiveStreamingMessage { get; set; }
@@ -209,11 +209,11 @@
     /// Pairs every tool result turn with the closest preceding tool call turn of the same tool that has no
     /// result yet, so a call and its result render as a single card.
     /// </summary>
-    private static (Dictionary<int, StageConversationTurn> Merged, HashSet<int> Hidden) PairToolResults(IReadOnlyList<StageConversationTurn> turns)
+    private static (Dictionary<int, ConversationTurn> Merged, HashSet<int> Hidden) PairToolResults(IReadOnlyList<ConversationTurn> turns)
     {
-        var merged = new Dictionary<int, StageConversationTurn>();
+        var merged = new Dictionary<int, ConversationTurn>();
         var hidden = new HashSet<int>();
-        var open = new List<StageConversationTurn>();
+        var open = new List<ConversationTurn>();
 
         foreach (var turn in turns)
         {
@@ -264,7 +264,7 @@
         };
     }
 
-    private static (string ActionType, string Description, int TokensSaved, string? Details) ParseOptimizationPayload(StageConversationTurn turn)
+    private static (string ActionType, string Description, int TokensSaved, string? Details) ParseOptimizationPayload(ConversationTurn turn)
     {
         var actionType = "ToolResultCompaction";
         var desc = turn.Content ?? "Optimized conversation memory";

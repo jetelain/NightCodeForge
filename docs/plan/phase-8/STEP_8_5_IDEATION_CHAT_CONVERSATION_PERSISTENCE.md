@@ -1,4 +1,4 @@
-# 💬 Step 8.5: Ideation Chat Persistence via StageConversation
+# 💬 Step 8.5: Ideation Chat Persistence via Conversation
 
 > **Technical Specification & Implementation Guide**  
 > *Parent Plan:* [docs/plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md](../08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md)  
@@ -8,14 +8,14 @@
 
 ## 1. Objective
 
-Reuse and generalize `StageConversation` and `StageConversationTurn` to store interactive **Ideation & Discovery Chat** sessions in SQLite, ensuring that conversational history, DeepSeek thinking traces, tool execution records, human answers, and discovered task proposals survive page navigation, application restarts, and multi-tab sessions.
+Reuse and generalize `Conversation` and `ConversationTurn` (formerly `StageConversation` and `StageConversationTurn`) to store interactive **Ideation & Discovery Chat** sessions in SQLite, ensuring that conversational history, DeepSeek thinking traces, tool execution records, human answers, and discovered task proposals survive page navigation, application restarts, and multi-tab sessions.
 
 ---
 
 ## 2. Technical Design & Schema Generalization
 
 ### 2.1 Domain Model Updates
-In `StageConversation`:
+In `Conversation`:
 - `public int? TaskId { get; set; }` (Nullable: null for Ideation)
 - `public int? WorkspaceId { get; set; }` (Required for Ideation)
 - `public ConversationType ConversationType { get; set; }` (`StageRun = 0`, `Ideation = 1`)
@@ -24,25 +24,25 @@ In `StageConversation`:
 ### 2.2 Repository Extensions (`ITaskRepository` / `IConversationRepository`)
 Add dedicated Ideation conversation lifecycle methods:
 ```csharp
-Task<StageConversation> StartIdeationConversationAsync(
+Task<Conversation> StartIdeationConversationAsync(
     int workspaceId,
     string? title = null,
     string? modelName = null,
     string? agentProfileId = null,
     CancellationToken cancellationToken = default);
 
-Task<IReadOnlyList<StageConversation>> GetIdeationConversationsAsync(
+Task<IReadOnlyList<Conversation>> GetIdeationConversationsAsync(
     int workspaceId,
     CancellationToken cancellationToken = default);
 
-Task<StageConversation?> GetActiveIdeationConversationAsync(
+Task<Conversation?> GetActiveIdeationConversationAsync(
     int workspaceId,
     CancellationToken cancellationToken = default);
 ```
 
-### 2.3 Turn Mapping Matrix: Ideation to `StageConversationTurn`
+### 2.3 Turn Mapping Matrix: Ideation to `ConversationTurn`
 
-| Ideation Element | `StageConversationTurn` Field | Value / Format |
+| Ideation Element | `ConversationTurn` Field | Value / Format |
 | :--- | :--- | :--- |
 | **User Prompt** | `Role` = `StageTurnRole.User`, `Content` | Raw user question or requirement description |
 | **Architect Reply** | `Role` = `StageTurnRole.Assistant`, `Content` | Markdown text emitted by architect agent |
@@ -62,12 +62,12 @@ Task<StageConversation?> GetActiveIdeationConversationAsync(
    - Upon completion, save assistant turn with thinking trace, tool executions, and discovered proposal metadata.
 3. **Session Management UI**:
    - Add session dropdown in header to switch between previous ideation chats.
-   - "🔄 Clear Chat" button completes current conversation (`Status = Completed`) and spawns a fresh `StageConversation`.
+   - "🔄 Clear Chat" button completes current conversation (`Status = Completed`) and spawns a fresh `Conversation`.
 
 ---
 
 ## 3. Verification Criteria
-1. Sending messages in `/ideation` creates a `StageConversation` with `ConversationType = Ideation` and `TaskId = null`.
+1. Sending messages in `/ideation` creates a `Conversation` with `ConversationType = Ideation` and `TaskId = null`.
 2. Refreshing the browser or switching between `/ideation` and `/backlog` preserves all messages, thinking traces, and proposal cards.
 3. Ingesting a proposal creates a `ForgeTask` linked to the active workspace and standard workflow.
 4. Unit and integration tests verify persistence, turn ordering, and retrieval.

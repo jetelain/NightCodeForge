@@ -59,7 +59,7 @@
     [Parameter] public string? CurrentStageId { get; set; }
     [Parameter] public StageExecutionStatus? CurrentStageStatus { get; set; }
     [Parameter] public TaskOverallStatus? OverallStatus { get; set; }
-    [Parameter] public IEnumerable<StageConversation>? Conversations { get; set; }
+    [Parameter] public IEnumerable<Conversation>? Conversations { get; set; }
     [Parameter] public EventCallback<string> OnStageSelected { get; set; }
 
     public class StageDefinition

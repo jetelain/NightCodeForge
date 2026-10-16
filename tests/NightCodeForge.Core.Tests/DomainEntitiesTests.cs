@@ -293,5 +293,167 @@ public class DomainEntitiesTests
         Assert.Same(DefaultAgentTools.Review, DefaultAgentTools.GetTools(AgentMode.Review));
         Assert.Same(DefaultAgentTools.Full, DefaultAgentTools.GetTools(AgentMode.Full));
     }
+
+    [Fact]
+    public void WorkflowDefinition_And_StageDefinition_DefaultValuesAndProperties_WorkAsExpected()
+    {
+        var now = DateTime.UtcNow;
+        var workflow = new WorkflowDefinition
+        {
+            Id = 1,
+            Name = "Standard 3-Agent",
+            Code = "standard-3-agent",
+            Icon = "⚡",
+            Description = "Standard workflow",
+            IsDefault = true,
+            WorkspaceId = null,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        Assert.Equal(1, workflow.Id);
+        Assert.Equal("Standard 3-Agent", workflow.Name);
+        Assert.Equal("standard-3-agent", workflow.Code);
+        Assert.Equal("⚡", workflow.Icon);
+        Assert.Equal("Standard workflow", workflow.Description);
+        Assert.True(workflow.IsDefault);
+        Assert.Null(workflow.WorkspaceId);
+        Assert.Equal(now, workflow.CreatedAt);
+        Assert.Equal(now, workflow.UpdatedAt);
+        Assert.NotNull(workflow.Stages);
+        Assert.NotNull(workflow.Tasks);
+        Assert.Empty(workflow.Stages);
+        Assert.Empty(workflow.Tasks);
+
+        var stage = new StageDefinition
+        {
+            Id = 10,
+            WorkflowId = 1,
+            StageId = "task-review",
+            DisplayName = "Task Review",
+            Icon = "🔍",
+            SequenceOrder = 1,
+            Kind = WorkflowStageKind.Agentic,
+            CsharpImplementationType = "agentic-review",
+            ConfigurationJson = "{\"RequiredMode\": 1}",
+            CreatedAt = now,
+            Workflow = workflow
+        };
+
+        Assert.Equal(10, stage.Id);
+        Assert.Equal(1, stage.WorkflowId);
+        Assert.Equal("task-review", stage.StageId);
+        Assert.Equal("Task Review", stage.DisplayName);
+        Assert.Equal("🔍", stage.Icon);
+        Assert.Equal(1, stage.SequenceOrder);
+        Assert.Equal(WorkflowStageKind.Agentic, stage.Kind);
+        Assert.Equal("agentic-review", stage.CsharpImplementationType);
+        Assert.Equal("{\"RequiredMode\": 1}", stage.ConfigurationJson);
+        Assert.Equal(now, stage.CreatedAt);
+        Assert.Same(workflow, stage.Workflow);
+
+        workflow.Stages.Add(stage);
+        Assert.Single(workflow.Stages);
+    }
+
+    [Fact]
+    public void StageConfigurationModels_SerializationAndDefaults_WorkAsExpected()
+    {
+        // AgenticStageConfig defaults and serialization
+        var agenticConfig = new NightCodeForge.Core.Workflow.Configuration.AgenticStageConfig();
+        Assert.Null(agenticConfig.AgentProfileId);
+        Assert.Null(agenticConfig.StageDirective);
+        Assert.Equal(AgentMode.Full, agenticConfig.RequiredMode);
+        Assert.Null(agenticConfig.LoopBackStageId);
+        Assert.Equal(3, agenticConfig.MaxRetries);
+        Assert.Null(agenticConfig.TimeoutMinutes);
+
+        agenticConfig.AgentProfileId = "task-review-architect";
+        agenticConfig.StageDirective = "Review the specification thoroughly.";
+        agenticConfig.RequiredMode = AgentMode.Review;
+        agenticConfig.LoopBackStageId = "implementation";
+        agenticConfig.MaxRetries = 2;
+        agenticConfig.TimeoutMinutes = 45;
+
+        var agenticJson = System.Text.Json.JsonSerializer.Serialize(agenticConfig);
+        var deserializedAgentic = System.Text.Json.JsonSerializer.Deserialize<NightCodeForge.Core.Workflow.Configuration.AgenticStageConfig>(agenticJson);
+        Assert.NotNull(deserializedAgentic);
+        Assert.Equal("task-review-architect", deserializedAgentic.AgentProfileId);
+        Assert.Equal("Review the specification thoroughly.", deserializedAgentic.StageDirective);
+        Assert.Equal(AgentMode.Review, deserializedAgentic.RequiredMode);
+        Assert.Equal("implementation", deserializedAgentic.LoopBackStageId);
+        Assert.Equal(2, deserializedAgentic.MaxRetries);
+        Assert.Equal(45, deserializedAgentic.TimeoutMinutes);
+
+        // DeterministicStageConfig defaults and serialization
+        var deterministicConfig = new NightCodeForge.Core.Workflow.Configuration.DeterministicStageConfig();
+        Assert.Equal("Build", deterministicConfig.Action);
+        Assert.Null(deterministicConfig.Command);
+        Assert.Equal("implementation", deterministicConfig.LoopBackStageId);
+        Assert.True(deterministicConfig.FailOnError);
+        Assert.Equal(300, deterministicConfig.TimeoutSeconds);
+        Assert.NotNull(deterministicConfig.ExtraParameters);
+        Assert.Empty(deterministicConfig.ExtraParameters);
+
+        deterministicConfig.Action = "Coverage";
+        deterministicConfig.Command = "dotnet test /p:CollectCoverage=true";
+        deterministicConfig.LoopBackStageId = "code-review-fix";
+        deterministicConfig.FailOnError = false;
+        deterministicConfig.TimeoutSeconds = 600;
+        deterministicConfig.ExtraParameters["MinimumLineCoveragePercent"] = "80.0";
+
+        var deterministicJson = System.Text.Json.JsonSerializer.Serialize(deterministicConfig);
+        var deserializedDeterministic = System.Text.Json.JsonSerializer.Deserialize<NightCodeForge.Core.Workflow.Configuration.DeterministicStageConfig>(deterministicJson);
+        Assert.NotNull(deserializedDeterministic);
+        Assert.Equal("Coverage", deserializedDeterministic.Action);
+        Assert.Equal("dotnet test /p:CollectCoverage=true", deserializedDeterministic.Command);
+        Assert.Equal("code-review-fix", deserializedDeterministic.LoopBackStageId);
+        Assert.False(deserializedDeterministic.FailOnError);
+        Assert.Equal(600, deserializedDeterministic.TimeoutSeconds);
+        Assert.Equal("80.0", deserializedDeterministic.ExtraParameters["MinimumLineCoveragePercent"]);
+    }
+
+    [Fact]
+    public void Conversation_And_ConversationType_NullableTaskIdAndProperties_WorkAsExpected()
+    {
+        Assert.Equal(0, (int)ConversationType.StageRun);
+        Assert.Equal(1, (int)ConversationType.Ideation);
+        Assert.Equal(2, (int)ConversationType.AdHoc);
+
+        var conv = new Conversation
+        {
+            Id = 42,
+            TaskId = null,
+            WorkspaceId = 7,
+            ConversationType = ConversationType.Ideation,
+            Title = "Ideation Architecture Review",
+            StageId = "ideation",
+            StageKind = WorkflowStageKind.Agentic,
+            AttemptIndex = 1
+        };
+
+        Assert.Equal(42, conv.Id);
+        Assert.Null(conv.TaskId);
+        Assert.Equal(7, conv.WorkspaceId);
+        Assert.Equal(ConversationType.Ideation, conv.ConversationType);
+        Assert.Equal("Ideation Architecture Review", conv.Title);
+        Assert.Equal("ideation", conv.StageId);
+        Assert.Equal(WorkflowStageKind.Agentic, conv.StageKind);
+        Assert.Equal(1, conv.AttemptIndex);
+        Assert.Null(conv.ForgeTask);
+        Assert.Null(conv.Workspace);
+        Assert.NotNull(conv.Turns);
+
+        var workspace = new Workspace
+        {
+            Id = 7,
+            DefaultWorkflowId = 3
+        };
+        conv.Workspace = workspace;
+        Assert.Same(workspace, conv.Workspace);
+        Assert.Equal(3, workspace.DefaultWorkflowId);
+        Assert.NotNull(workspace.Workflows);
+        Assert.NotNull(workspace.Conversations);
+    }
 }
 

@@ -49,7 +49,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
     [Fact]
     public void StageRunSelector_RendersGroupedRunsAndSelects()
     {
-        var conv1 = new StageConversation
+        var conv1 = new Conversation
         {
             Id = 1,
             TaskId = 10,
@@ -60,7 +60,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             StartedAt = DateTime.UtcNow.AddMinutes(-10)
         };
 
-        var conv2 = new StageConversation
+        var conv2 = new Conversation
         {
             Id = 2,
             TaskId = 10,
@@ -71,7 +71,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             StartedAt = DateTime.UtcNow.AddMinutes(-8)
         };
 
-        var conv3 = new StageConversation
+        var conv3 = new Conversation
         {
             Id = 3,
             TaskId = 10,
@@ -82,9 +82,9 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             StartedAt = DateTime.UtcNow.AddMinutes(-5)
         };
 
-        StageConversation? selected = null;
+        Conversation? selected = null;
         var cut = Render<StageRunSelector>(p => p
-            .Add(x => x.Conversations, new List<StageConversation> { conv1, conv2, conv3 })
+            .Add(x => x.Conversations, new List<Conversation> { conv1, conv2, conv3 })
             .Add(x => x.SelectedConversation, conv1)
             .Add(x => x.OnConversationSelected, conv => selected = conv));
 
@@ -105,7 +105,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
     [Fact]
     public void StageConversationViewer_RendersUserThinkingToolAndAssistantTurns()
     {
-        var conv = new StageConversation
+        var conv = new Conversation
         {
             Id = 1,
             TaskId = 20,
@@ -117,7 +117,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             HarnessId = "Crucible",
             StartedAt = DateTime.UtcNow.AddMinutes(-2),
             CompletedAt = DateTime.UtcNow,
-            Turns = new List<StageConversationTurn>
+            Turns = new List<ConversationTurn>
             {
                 new()
                 {
@@ -255,7 +255,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
     [Fact]
     public void StageRunSelector_FormatsDeterministicAndCodeReviewStageAliases()
     {
-        var c1 = new StageConversation
+        var c1 = new Conversation
         {
             Id = 1,
             TaskId = 10,
@@ -264,7 +264,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             Status = StageExecutionStatus.Completed,
             StartedAt = DateTime.UtcNow.AddMinutes(-10)
         };
-        var c2 = new StageConversation
+        var c2 = new Conversation
         {
             Id = 2,
             TaskId = 10,
@@ -273,7 +273,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             Status = StageExecutionStatus.Completed,
             StartedAt = DateTime.UtcNow.AddMinutes(-5)
         };
-        var c3 = new StageConversation
+        var c3 = new Conversation
         {
             Id = 3,
             TaskId = 10,
@@ -284,7 +284,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         };
 
         var cut = Render<StageRunSelector>(p => p
-            .Add(x => x.Conversations, new List<StageConversation> { c1, c2, c3 }));
+            .Add(x => x.Conversations, new List<Conversation> { c1, c2, c3 }));
 
         Assert.Contains("2. Pre-Check Gate", cut.Markup);
         Assert.Contains("4. Post-Check Gate", cut.Markup);
@@ -294,7 +294,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
     [Fact]
     public void StageConversationViewer_FormatsStageAliasesAndDurationFallback()
     {
-        var conv = new StageConversation
+        var conv = new Conversation
         {
             Id = 1,
             TaskId = 20,
@@ -302,7 +302,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             AttemptIndex = 1,
             Status = StageExecutionStatus.Completed,
             StartedAt = DateTime.UtcNow.AddMinutes(-2),
-            Turns = new List<StageConversationTurn>
+            Turns = new List<ConversationTurn>
             {
                 new()
                 {
@@ -432,12 +432,12 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         };
         await _taskRepository.CreateAsync(task);
 
-        var conv1 = await _taskRepository.StartStageConversationAsync(85, "task-review", WorkflowStageKind.Deterministic, 1);
-        await _taskRepository.CompleteStageConversationAsync(conv1.Id, StageExecutionStatus.Completed, "Review passed");
+        var conv1 = await _taskRepository.StartConversationAsync(85, "task-review", WorkflowStageKind.Deterministic, 1);
+        await _taskRepository.CompleteConversationAsync(conv1.Id, StageExecutionStatus.Completed, "Review passed");
 
-        var conv2 = await _taskRepository.StartStageConversationAsync(85, "implementation", WorkflowStageKind.Agentic, 1);
+        var conv2 = await _taskRepository.StartConversationAsync(85, "implementation", WorkflowStageKind.Agentic, 1);
         await _taskRepository.AddConversationTurnAsync(conv2.Id, StageTurnRole.User, "Implement feature X");
-        await _taskRepository.CompleteStageConversationAsync(conv2.Id, StageExecutionStatus.Completed, "Feature X completed");
+        await _taskRepository.CompleteConversationAsync(conv2.Id, StageExecutionStatus.Completed, "Feature X completed");
 
         var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 85));
 
@@ -460,7 +460,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
     [Fact]
     public void StageConversationViewer_RendersUserAndAgentTurnsAsFormattedMarkdown()
     {
-        var conv = new StageConversation
+        var conv = new Conversation
         {
             Id = 1,
             TaskId = 90,
@@ -471,7 +471,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             Summary = "Stage completed with **zero errors** in `DiscountService.cs`.",
             StartedAt = DateTime.UtcNow.AddMinutes(-1),
             CompletedAt = DateTime.UtcNow,
-            Turns = new List<StageConversationTurn>
+            Turns = new List<ConversationTurn>
             {
                 new()
                 {

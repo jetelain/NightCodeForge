@@ -107,12 +107,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var sessionId = Guid.NewGuid().ToString("N");
 
         int attemptIndex = (context.PipelineContext?.StageRetries.GetValueOrDefault(context.StageId, 0) ?? 0) + 1;
-        StageConversation? conversation = null;
+        Conversation? conversation = null;
         if (_taskRepository != null)
         {
             try
             {
-                conversation = await _taskRepository.StartStageConversationAsync(
+                conversation = await _taskRepository.StartConversationAsync(
                     context.ForgeTask.Id,
                     context.StageId,
                     WorkflowStageKind.Agentic,
@@ -120,7 +120,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     context.Profile.Id,
                     HarnessId,
                     context.Profile.ModelName,
-                    cancellationToken);
+                    cancellationToken: cancellationToken);
 
                 if (!string.IsNullOrWhiteSpace(context.BootstrapPrompt))
                 {
@@ -828,7 +828,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     }
 
     private async Task<string?> SaveTranscriptAsync(
-        StageConversation? conversation,
+        Conversation? conversation,
         AgentSessionContext context,
         string workspacePath,
         IReadOnlyList<ChatMessage> chatHistory,
@@ -897,7 +897,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     _ => StageExecutionStatus.Failed
                 };
 
-                await _taskRepository.CompleteStageConversationAsync(
+                await _taskRepository.CompleteConversationAsync(
                     conversation.Id,
                     stageStatus,
                     summary: summary,
@@ -906,7 +906,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to complete StageConversation #{ConversationId}", conversation.Id);
+                _logger.LogWarning(ex, "Failed to complete Conversation #{ConversationId}", conversation.Id);
             }
         }
 

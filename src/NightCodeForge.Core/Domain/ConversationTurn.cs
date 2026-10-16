@@ -1,9 +1,9 @@
 namespace NightCodeForge.Core.Domain;
 
 /// <summary>
-/// An individual turn or interaction within a stage conversation (prompt, response, thinking trace, tool invocation, optimization action).
+/// An individual turn or interaction within a conversation (prompt, response, thinking trace, tool invocation, optimization action).
 /// </summary>
-public class StageConversationTurn
+public class ConversationTurn
 {
     public int Id { get; set; }
     public int ConversationId { get; set; }
@@ -19,5 +19,5 @@ public class StageConversationTurn
     public string? MetadataJson { get; set; }
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
 
-    public StageConversation? Conversation { get; set; }
+    public Conversation? Conversation { get; set; }
 }

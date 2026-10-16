@@ -20,24 +20,27 @@ public interface ITaskRepository
     Task AddCheckpointAsync(StageCheckpoint checkpoint, CancellationToken cancellationToken = default);
     Task AddExecutionLogAsync(ExecutionLog log, CancellationToken cancellationToken = default);
 
-    Task<StageConversation> StartStageConversationAsync(
-        int taskId,
+    Task<Conversation> StartConversationAsync(
+        int? taskId,
         string stageId,
         WorkflowStageKind stageKind,
         int attemptIndex,
         string? agentProfileId = null,
         string? harnessId = null,
         string? modelName = null,
+        int? workspaceId = null,
+        ConversationType conversationType = ConversationType.StageRun,
+        string? title = null,
         CancellationToken cancellationToken = default);
 
-    Task CompleteStageConversationAsync(
+    Task CompleteConversationAsync(
         int conversationId,
         StageExecutionStatus status,
         string? summary = null,
         string? transcriptFileName = null,
         CancellationToken cancellationToken = default);
 
-    Task<StageConversationTurn> AddConversationTurnAsync(
+    Task<ConversationTurn> AddConversationTurnAsync(
         int conversationId,
         StageTurnRole role,
         string? content = null,
@@ -50,13 +53,43 @@ public interface ITaskRepository
         string? metadataJson = null,
         CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<StageConversation>> GetStageConversationsAsync(
+    Task<IReadOnlyList<Conversation>> GetConversationsAsync(
         int taskId,
         CancellationToken cancellationToken = default);
 
-    Task<StageConversation?> GetStageConversationWithTurnsAsync(
+    Task<Conversation?> GetConversationWithTurnsAsync(
         int conversationId,
         CancellationToken cancellationToken = default);
+
+    // Backward-compatibility aliases
+    Task<Conversation> StartStageConversationAsync(
+        int taskId,
+        string stageId,
+        WorkflowStageKind stageKind,
+        int attemptIndex,
+        string? agentProfileId = null,
+        string? harnessId = null,
+        string? modelName = null,
+        CancellationToken cancellationToken = default) =>
+        StartConversationAsync(taskId, stageId, stageKind, attemptIndex, agentProfileId, harnessId, modelName, null, ConversationType.StageRun, null, cancellationToken);
+
+    Task CompleteStageConversationAsync(
+        int conversationId,
+        StageExecutionStatus status,
+        string? summary = null,
+        string? transcriptFileName = null,
+        CancellationToken cancellationToken = default) =>
+        CompleteConversationAsync(conversationId, status, summary, transcriptFileName, cancellationToken);
+
+    Task<IReadOnlyList<Conversation>> GetStageConversationsAsync(
+        int taskId,
+        CancellationToken cancellationToken = default) =>
+        GetConversationsAsync(taskId, cancellationToken);
+
+    Task<Conversation?> GetStageConversationWithTurnsAsync(
+        int conversationId,
+        CancellationToken cancellationToken = default) =>
+        GetConversationWithTurnsAsync(conversationId, cancellationToken);
 }
 
 /// <summary>
@@ -71,8 +104,8 @@ public class InMemoryTaskRepository : ITaskRepository
     private readonly List<StageExecutionRecord> _records = new();
     private readonly List<StageCheckpoint> _checkpoints = new();
     private readonly List<ExecutionLog> _logs = new();
-    private readonly Dictionary<int, StageConversation> _conversations = new();
-    private readonly List<StageConversationTurn> _turns = new();
+    private readonly Dictionary<int, Conversation> _conversations = new();
+    private readonly List<ConversationTurn> _turns = new();
     private int _nextId = 1;
     private int _nextQuestionId = 1;
     private int _nextCheckpointId = 1;
@@ -289,22 +322,28 @@ public class InMemoryTaskRepository : ITaskRepository
         }
     }
 
-    public Task<StageConversation> StartStageConversationAsync(
-        int taskId,
+    public Task<Conversation> StartConversationAsync(
+        int? taskId,
         string stageId,
         WorkflowStageKind stageKind,
         int attemptIndex,
         string? agentProfileId = null,
         string? harnessId = null,
         string? modelName = null,
+        int? workspaceId = null,
+        ConversationType conversationType = ConversationType.StageRun,
+        string? title = null,
         CancellationToken cancellationToken = default)
     {
         lock (_lock)
         {
-            var conversation = new StageConversation
+            var conversation = new Conversation
             {
                 Id = _nextConversationId++,
                 TaskId = taskId,
+                WorkspaceId = workspaceId,
+                ConversationType = conversationType,
+                Title = title,
                 StageId = stageId,
                 StageKind = stageKind,
                 AttemptIndex = attemptIndex,
@@ -313,13 +352,13 @@ public class InMemoryTaskRepository : ITaskRepository
                 ModelName = modelName,
                 StartedAt = DateTime.UtcNow,
                 Status = StageExecutionStatus.Running,
-                Turns = new List<StageConversationTurn>()
+                Turns = new List<ConversationTurn>()
             };
 
             _conversations[conversation.Id] = conversation;
-            if (_tasks.TryGetValue(taskId, out var task))
+            if (taskId.HasValue && _tasks.TryGetValue(taskId.Value, out var task))
             {
-                task.StageConversations.Add(conversation);
+                task.Conversations.Add(conversation);
                 conversation.ForgeTask = task;
             }
 
@@ -327,7 +366,7 @@ public class InMemoryTaskRepository : ITaskRepository
         }
     }
 
-    public Task CompleteStageConversationAsync(
+    public Task CompleteConversationAsync(
         int conversationId,
         StageExecutionStatus status,
         string? summary = null,
@@ -347,7 +386,7 @@ public class InMemoryTaskRepository : ITaskRepository
         }
     }
 
-    public Task<StageConversationTurn> AddConversationTurnAsync(
+    public Task<ConversationTurn> AddConversationTurnAsync(
         int conversationId,
         StageTurnRole role,
         string? content = null,
@@ -362,7 +401,7 @@ public class InMemoryTaskRepository : ITaskRepository
     {
         lock (_lock)
         {
-            var turn = new StageConversationTurn
+            var turn = new ConversationTurn
             {
                 Id = _nextTurnId++,
                 ConversationId = conversationId,
@@ -390,7 +429,7 @@ public class InMemoryTaskRepository : ITaskRepository
         }
     }
 
-    public Task<IReadOnlyList<StageConversation>> GetStageConversationsAsync(
+    public Task<IReadOnlyList<Conversation>> GetConversationsAsync(
         int taskId,
         CancellationToken cancellationToken = default)
     {
@@ -401,11 +440,11 @@ public class InMemoryTaskRepository : ITaskRepository
                 .OrderBy(c => c.StartedAt)
                 .ThenBy(c => c.AttemptIndex)
                 .ToList();
-            return Task.FromResult<IReadOnlyList<StageConversation>>(list);
+            return Task.FromResult<IReadOnlyList<Conversation>>(list);
         }
     }
 
-    public Task<StageConversation?> GetStageConversationWithTurnsAsync(
+    public Task<Conversation?> GetConversationWithTurnsAsync(
         int conversationId,
         CancellationToken cancellationToken = default)
     {
@@ -414,9 +453,9 @@ public class InMemoryTaskRepository : ITaskRepository
             if (_conversations.TryGetValue(conversationId, out var conversation))
             {
                 conversation.Turns = conversation.Turns.OrderBy(t => t.TurnIndex).ToList();
-                return Task.FromResult<StageConversation?>(conversation);
+                return Task.FromResult<Conversation?>(conversation);
             }
-            return Task.FromResult<StageConversation?>(null);
+            return Task.FromResult<Conversation?>(null);
         }
     }
 
@@ -444,7 +483,7 @@ public class InMemoryTaskRepository : ITaskRepository
         }
     }
 
-    public IReadOnlyList<StageConversation> GetAllConversations()
+    public IReadOnlyList<Conversation> GetAllConversations()
     {
         lock (_lock)
         {
@@ -452,7 +491,7 @@ public class InMemoryTaskRepository : ITaskRepository
         }
     }
 
-    public IReadOnlyList<StageConversationTurn> GetAllConversationTurns()
+    public IReadOnlyList<ConversationTurn> GetAllConversationTurns()
     {
         lock (_lock)
         {

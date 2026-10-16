@@ -277,7 +277,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
         Assert.True(roles.IndexOf(StageTurnRole.Thinking) < roles.IndexOf(StageTurnRole.Assistant), string.Join(",", roles));
 
         // All turns were persisted before the conversation was completed.
-        var conversation = Assert.Single(await inner.GetStageConversationsAsync(context.ForgeTask.Id));
+        var conversation = Assert.Single(await inner.GetConversationsAsync(context.ForgeTask.Id));
         Assert.Equal(StageExecutionStatus.Completed, conversation.Status);
         Assert.Equal(roles.Count, repo.CompletedTurnWrites);
         Assert.Equal(repo.CompletedTurnWritesAtCompletion, repo.CompletedTurnWrites);
@@ -298,7 +298,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => harness.RunStageAsync(context, cts.Token));
 
-        var conversation = Assert.Single(await repo.GetStageConversationsAsync(context.ForgeTask.Id));
+        var conversation = Assert.Single(await repo.GetConversationsAsync(context.ForgeTask.Id));
         Assert.Equal(StageExecutionStatus.Failed, conversation.Status);
 
         static async IAsyncEnumerable<ChatResponseUpdate> HangingStream([EnumeratorCancellation] CancellationToken ct)
@@ -423,10 +423,10 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
                 if (targetMethod!.Name == nameof(ITaskRepository.AddConversationTurnAsync))
                 {
                     var role = (StageTurnRole)args![1]!;
-                    return TrackTurnWriteAsync(role, () => (Task<StageConversationTurn>)targetMethod.Invoke(Target, args)!);
+                    return TrackTurnWriteAsync(role, () => (Task<ConversationTurn>)targetMethod.Invoke(Target, args)!);
                 }
 
-                if (targetMethod.Name == nameof(ITaskRepository.CompleteStageConversationAsync))
+                if (targetMethod.Name is nameof(ITaskRepository.CompleteConversationAsync) or nameof(ITaskRepository.CompleteStageConversationAsync))
                 {
                     lock (_gate) CompletedTurnWritesAtCompletion = CompletedTurnWrites;
                 }
@@ -439,7 +439,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
             }
         }
 
-        private async Task<StageConversationTurn> TrackTurnWriteAsync(StageTurnRole role, Func<Task<StageConversationTurn>> write)
+        private async Task<ConversationTurn> TrackTurnWriteAsync(StageTurnRole role, Func<Task<ConversationTurn>> write)
         {
             lock (_gate)
             {

@@ -19,9 +19,11 @@ public class AppDbContext : DbContext
     public DbSet<StageCheckpoint> StageCheckpoints => Set<StageCheckpoint>();
     public DbSet<StageExecutionRecord> StageExecutionRecords => Set<StageExecutionRecord>();
     public DbSet<ExecutionLog> ExecutionLogs => Set<ExecutionLog>();
-    public DbSet<StageConversation> StageConversations => Set<StageConversation>();
-    public DbSet<StageConversationTurn> StageConversationTurns => Set<StageConversationTurn>();
+    public DbSet<Conversation> Conversations => Set<Conversation>();
+    public DbSet<ConversationTurn> ConversationTurns => Set<ConversationTurn>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
+    public DbSet<WorkflowDefinition> WorkflowDefinitions => Set<WorkflowDefinition>();
+    public DbSet<StageDefinition> StageDefinitions => Set<StageDefinition>();
 
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {
@@ -46,6 +48,7 @@ public class AppDbContext : DbContext
             b.Property(w => w.WslDistribution).HasMaxLength(128);
             b.Property(w => w.BuildTimeoutSeconds);
             b.Property(w => w.TestTimeoutSeconds);
+            b.Property(w => w.DefaultWorkflowId);
 
             b.HasMany(w => w.Tasks)
                 .WithOne(i => i.Workspace)
@@ -56,6 +59,16 @@ public class AppDbContext : DbContext
                 .WithOne(p => p.Workspace)
                 .HasForeignKey(p => p.WorkspaceId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            b.HasMany(w => w.Workflows)
+                .WithOne(wf => wf.Workspace)
+                .HasForeignKey(wf => wf.WorkspaceId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            b.HasMany(w => w.Conversations)
+                .WithOne(c => c.Workspace)
+                .HasForeignKey(c => c.WorkspaceId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // 2. AgentProfile
@@ -126,6 +139,12 @@ public class AppDbContext : DbContext
             b.Property(i => i.FeatureBranch).HasMaxLength(256);
             b.Property(i => i.LastHangfireJobId).HasMaxLength(128);
             b.Property(i => i.SquashCommitSha).HasMaxLength(64);
+            b.Property(i => i.WorkflowId);
+
+            b.HasOne(i => i.Workflow)
+                .WithMany(w => w.Tasks)
+                .HasForeignKey(i => i.WorkflowId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             b.HasMany(i => i.Dependencies)
                 .WithOne(d => d.ForgeTask)
@@ -157,7 +176,7 @@ public class AppDbContext : DbContext
                 .HasForeignKey(l => l.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            b.HasMany(i => i.StageConversations)
+            b.HasMany(i => i.Conversations)
                 .WithOne(c => c.ForgeTask)
                 .HasForeignKey(c => c.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
@@ -220,10 +239,12 @@ public class AppDbContext : DbContext
             b.Property(s => s.UpdatedAt).IsRequired();
         });
 
-        // 10. StageConversation
-        modelBuilder.Entity<StageConversation>(b =>
+        // 10. Conversation
+        modelBuilder.Entity<Conversation>(b =>
         {
             b.HasKey(c => c.Id);
+            b.Property(c => c.ConversationType).HasConversion<int>();
+            b.Property(c => c.Title).HasMaxLength(256);
             b.Property(c => c.StageId).IsRequired().HasMaxLength(128);
             b.Property(c => c.StageKind).HasConversion<int>();
             b.Property(c => c.Status).HasConversion<int>();
@@ -233,6 +254,17 @@ public class AppDbContext : DbContext
             b.Property(c => c.TranscriptFileName).HasMaxLength(256);
 
             b.HasIndex(c => new { c.TaskId, c.StageId, c.AttemptIndex });
+            b.HasIndex(c => c.WorkspaceId);
+
+            b.HasOne(c => c.ForgeTask)
+                .WithMany(t => t.Conversations)
+                .HasForeignKey(c => c.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasOne(c => c.Workspace)
+                .WithMany(w => w.Conversations)
+                .HasForeignKey(c => c.WorkspaceId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             b.HasMany(c => c.Turns)
                 .WithOne(t => t.Conversation)
@@ -240,8 +272,8 @@ public class AppDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // 11. StageConversationTurn
-        modelBuilder.Entity<StageConversationTurn>(b =>
+        // 11. ConversationTurn
+        modelBuilder.Entity<ConversationTurn>(b =>
         {
             b.HasKey(t => t.Id);
             b.Property(t => t.Role).HasConversion<int>();
@@ -249,10 +281,60 @@ public class AppDbContext : DbContext
 
             b.HasIndex(t => new { t.ConversationId, t.TurnIndex });
         });
+
+        // 12. WorkflowDefinition
+        modelBuilder.Entity<WorkflowDefinition>(b =>
+        {
+            b.HasKey(w => w.Id);
+            b.Property(w => w.Name).IsRequired().HasMaxLength(256);
+            b.Property(w => w.Code).IsRequired().HasMaxLength(128);
+            b.Property(w => w.Icon).HasMaxLength(32).HasDefaultValue("⚡");
+            b.Property(w => w.Description).HasMaxLength(2048);
+            b.Property(w => w.IsDefault).HasDefaultValue(false);
+
+            b.HasIndex(w => w.Code).IsUnique();
+
+            b.HasOne(w => w.Workspace)
+                .WithMany(ws => ws.Workflows)
+                .HasForeignKey(w => w.WorkspaceId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            b.HasMany(w => w.Stages)
+                .WithOne(s => s.Workflow)
+                .HasForeignKey(s => s.WorkflowId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasMany(w => w.Tasks)
+                .WithOne(t => t.Workflow)
+                .HasForeignKey(t => t.WorkflowId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // 13. StageDefinition
+        modelBuilder.Entity<StageDefinition>(b =>
+        {
+            b.HasKey(s => s.Id);
+            b.Property(s => s.StageId).IsRequired().HasMaxLength(128);
+            b.Property(s => s.DisplayName).IsRequired().HasMaxLength(256);
+            b.Property(s => s.Icon).HasMaxLength(32).HasDefaultValue("⚙️");
+            b.Property(s => s.SequenceOrder).IsRequired();
+            b.Property(s => s.Kind).HasConversion<int>();
+            b.Property(s => s.CsharpImplementationType).IsRequired().HasMaxLength(256);
+            b.Property(s => s.ConfigurationJson).IsRequired();
+
+            b.HasIndex(s => new { s.WorkflowId, s.StageId }).IsUnique();
+            b.HasIndex(s => new { s.WorkflowId, s.SequenceOrder });
+
+            b.HasOne(s => s.Workflow)
+                .WithMany(w => w.Stages)
+                .HasForeignKey(s => s.WorkflowId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
     }
 
     /// <summary>
-    /// Applies migrations and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
+    /// Ensures the database schema is created and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
+    /// In early development, schema changes are handled via database recreation. EF Core migrations will be adopted for production releases.
     /// </summary>
     public async Task EnsureDatabaseCreatedAndWalAsync(CancellationToken cancellationToken = default)
     {
@@ -261,73 +343,6 @@ public class AppDbContext : DbContext
         {
             await Database.ExecuteSqlRawAsync("PRAGMA journal_mode = WAL;", cancellationToken);
             await Database.ExecuteSqlRawAsync("PRAGMA synchronous = NORMAL;", cancellationToken);
-            await Database.ExecuteSqlRawAsync(@"CREATE TABLE IF NOT EXISTS ""SystemSettings"" (
-                ""Key"" TEXT NOT NULL PRIMARY KEY,
-                ""Value"" TEXT NOT NULL,
-                ""UpdatedAt"" TEXT NOT NULL
-            );", cancellationToken);
-
-            try
-            {
-                await Database.ExecuteSqlRawAsync(@"ALTER TABLE ""AgentProfiles"" ADD COLUMN ""RoutingTarget"" INTEGER NOT NULL DEFAULT 0;", cancellationToken);
-            }
-            catch
-            {
-                // Column already exists or table was just created
-            }
-
-            try
-            {
-                await Database.ExecuteSqlRawAsync(@"ALTER TABLE ""Tasks"" ADD COLUMN ""SquashCommitSha"" TEXT NULL;", cancellationToken);
-            }
-            catch
-            {
-                // Column already exists or table was just created
-            }
-
-            try
-            {
-                await Database.ExecuteSqlRawAsync(@"CREATE TABLE IF NOT EXISTS ""StageConversations"" (
-                    ""Id"" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                    ""TaskId"" INTEGER NOT NULL,
-                    ""StageId"" TEXT NOT NULL,
-                    ""StageKind"" INTEGER NOT NULL,
-                    ""AttemptIndex"" INTEGER NOT NULL,
-                    ""AgentProfileId"" TEXT NULL,
-                    ""HarnessId"" TEXT NULL,
-                    ""ModelName"" TEXT NULL,
-                    ""StartedAt"" TEXT NOT NULL,
-                    ""CompletedAt"" TEXT NULL,
-                    ""Status"" INTEGER NOT NULL,
-                    ""Summary"" TEXT NULL,
-                    ""TranscriptFileName"" TEXT NULL,
-                    CONSTRAINT ""FK_StageConversations_Tasks_TaskId"" FOREIGN KEY (""TaskId"") REFERENCES ""Tasks"" (""Id"") ON DELETE CASCADE
-                );", cancellationToken);
-
-                await Database.ExecuteSqlRawAsync(@"CREATE TABLE IF NOT EXISTS ""StageConversationTurns"" (
-                    ""Id"" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                    ""ConversationId"" INTEGER NOT NULL,
-                    ""TurnIndex"" INTEGER NOT NULL,
-                    ""Role"" INTEGER NOT NULL,
-                    ""Content"" TEXT NULL,
-                    ""ThinkingTrace"" TEXT NULL,
-                    ""ToolName"" TEXT NULL,
-                    ""ToolArguments"" TEXT NULL,
-                    ""ToolResult"" TEXT NULL,
-                    ""DurationMs"" INTEGER NULL,
-                    ""IsError"" INTEGER NOT NULL,
-                    ""MetadataJson"" TEXT NULL,
-                    ""Timestamp"" TEXT NOT NULL,
-                    CONSTRAINT ""FK_StageConversationTurns_StageConversations_ConversationId"" FOREIGN KEY (""ConversationId"") REFERENCES ""StageConversations"" (""Id"") ON DELETE CASCADE
-                );", cancellationToken);
-
-                await Database.ExecuteSqlRawAsync(@"CREATE INDEX IF NOT EXISTS ""IX_StageConversations_TaskId_StageId_AttemptIndex"" ON ""StageConversations"" (""TaskId"", ""StageId"", ""AttemptIndex"");", cancellationToken);
-                await Database.ExecuteSqlRawAsync(@"CREATE INDEX IF NOT EXISTS ""IX_StageConversationTurns_ConversationId_TurnIndex"" ON ""StageConversationTurns"" (""ConversationId"", ""TurnIndex"");", cancellationToken);
-            }
-            catch
-            {
-                // Tables already created by EnsureCreatedAsync
-            }
         }
     }
 

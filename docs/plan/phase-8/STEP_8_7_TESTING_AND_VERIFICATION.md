@@ -32,7 +32,7 @@ Establish an exhaustive automated test suite covering database entities, schema 
   - Asserts that `EnsureDefaultWorkflowsAsync()` creates the standard 6-stage workflow idempotently.
   - Verifies that pre-existing tasks with `WorkflowId == 0` are backfilled properly.
 - **`IdeationConversationPersistenceTests.cs`**:
-  - Tests creating `StageConversation` with `ConversationType = Ideation` and `TaskId = null`.
+  - Tests creating `Conversation` with `ConversationType = Ideation` and `TaskId = null`.
   - Validates inserting turns (User, Assistant, Thinking, Tool, ToolResult) and rehydrating in correct chronological order.
 
 ### 2.3 Orchestrator Integration Tests (`NightCodeForge.Core.Tests` / `Agents.Tests`)

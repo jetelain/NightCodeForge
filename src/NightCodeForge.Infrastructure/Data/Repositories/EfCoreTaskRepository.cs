@@ -25,7 +25,7 @@ public class EfCoreTaskRepository : ITaskRepository
             .Include(i => i.Checkpoints)
             .Include(i => i.ExecutionRecords)
             .Include(i => i.ExecutionLogs)
-            .Include(i => i.StageConversations)
+            .Include(i => i.Conversations)
             .FirstOrDefaultAsync(i => i.Id == id, cancellationToken);
     }
 
@@ -173,19 +173,25 @@ public class EfCoreTaskRepository : ITaskRepository
         await _context.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task<StageConversation> StartStageConversationAsync(
-        int taskId,
+    public async Task<Conversation> StartConversationAsync(
+        int? taskId,
         string stageId,
         WorkflowStageKind stageKind,
         int attemptIndex,
         string? agentProfileId = null,
         string? harnessId = null,
         string? modelName = null,
+        int? workspaceId = null,
+        ConversationType conversationType = ConversationType.StageRun,
+        string? title = null,
         CancellationToken cancellationToken = default)
     {
-        var conversation = new StageConversation
+        var conversation = new Conversation
         {
             TaskId = taskId,
+            WorkspaceId = workspaceId,
+            ConversationType = conversationType,
+            Title = title,
             StageId = stageId,
             StageKind = stageKind,
             AttemptIndex = attemptIndex,
@@ -196,19 +202,19 @@ public class EfCoreTaskRepository : ITaskRepository
             Status = StageExecutionStatus.Running
         };
 
-        _context.StageConversations.Add(conversation);
+        _context.Conversations.Add(conversation);
         await _context.SaveChangesAsync(cancellationToken);
         return conversation;
     }
 
-    public async Task CompleteStageConversationAsync(
+    public async Task CompleteConversationAsync(
         int conversationId,
         StageExecutionStatus status,
         string? summary = null,
         string? transcriptFileName = null,
         CancellationToken cancellationToken = default)
     {
-        var conversation = await _context.StageConversations.FindAsync(new object[] { conversationId }, cancellationToken);
+        var conversation = await _context.Conversations.FindAsync(new object[] { conversationId }, cancellationToken);
         if (conversation != null)
         {
             conversation.Status = status;
@@ -219,7 +225,7 @@ public class EfCoreTaskRepository : ITaskRepository
         }
     }
 
-    public async Task<StageConversationTurn> AddConversationTurnAsync(
+    public async Task<ConversationTurn> AddConversationTurnAsync(
         int conversationId,
         StageTurnRole role,
         string? content = null,
@@ -232,11 +238,11 @@ public class EfCoreTaskRepository : ITaskRepository
         string? metadataJson = null,
         CancellationToken cancellationToken = default)
     {
-        var nextIndex = await _context.StageConversationTurns
+        var nextIndex = await _context.ConversationTurns
             .Where(t => t.ConversationId == conversationId)
             .CountAsync(cancellationToken);
 
-        var turn = new StageConversationTurn
+        var turn = new ConversationTurn
         {
             ConversationId = conversationId,
             TurnIndex = nextIndex,
@@ -252,16 +258,16 @@ public class EfCoreTaskRepository : ITaskRepository
             Timestamp = DateTime.UtcNow
         };
 
-        _context.StageConversationTurns.Add(turn);
+        _context.ConversationTurns.Add(turn);
         await _context.SaveChangesAsync(cancellationToken);
         return turn;
     }
 
-    public async Task<IReadOnlyList<StageConversation>> GetStageConversationsAsync(
+    public async Task<IReadOnlyList<Conversation>> GetConversationsAsync(
         int taskId,
         CancellationToken cancellationToken = default)
     {
-        return await _context.StageConversations
+        return await _context.Conversations
             .AsNoTracking()
             .Where(c => c.TaskId == taskId)
             .OrderBy(c => c.StartedAt)
@@ -269,11 +275,11 @@ public class EfCoreTaskRepository : ITaskRepository
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<StageConversation?> GetStageConversationWithTurnsAsync(
+    public async Task<Conversation?> GetConversationWithTurnsAsync(
         int conversationId,
         CancellationToken cancellationToken = default)
     {
-        return await _context.StageConversations
+        return await _context.Conversations
             .AsNoTracking()
             .Include(c => c.Turns.OrderBy(t => t.TurnIndex))
             .FirstOrDefaultAsync(c => c.Id == conversationId, cancellationToken);

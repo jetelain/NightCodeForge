@@ -2,7 +2,7 @@
 
 > **Technical Specification & Implementation Guide**  
 > *Parent Plan:* [docs/plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md](../08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md)  
-> *Status:* Ready for Implementation
+> *Status:* Completed
 
 ---
 
@@ -67,32 +67,40 @@ Define and establish the core database domain entities for extensible workflows 
   }
   ```
 
-### 2.4 Updates to Existing Domain Entities
+### 2.4 Domain Entity Generalization (`Conversation.cs` & `ConversationTurn.cs`)
+- **`Conversation.cs`** (formerly `StageConversation.cs`, generalized for stage runs, ideation sessions, and ad-hoc chat):
+  - Primary Key: `int Id`
+  - Nullable Task link: `public int? TaskId { get; set; }` (null for workspace-level sessions like Ideation)
+  - Nullable Workspace link: `public int? WorkspaceId { get; set; }`
+  - Session categorization: `public ConversationType ConversationType { get; set; } = ConversationType.StageRun;`
+  - Optional title: `public string? Title { get; set; }`
+  - Navigation properties: `public ForgeTask? ForgeTask { get; set; }`, `public Workspace? Workspace { get; set; }`, `public ICollection<ConversationTurn> Turns { get; set; }`
+  - Legacy backward-compatibility alias: `StageConversation : Conversation` (marked `[Obsolete]`).
+- **`ConversationTurn.cs`** (formerly `StageConversationTurn.cs`):
+  - Legacy backward-compatibility alias: `StageConversationTurn : ConversationTurn` (marked `[Obsolete]`).
 - **`ForgeTask.cs`**:
-  - Add: `public int WorkflowId { get; set; }`
+  - Add: `public int? WorkflowId { get; set; }`
   - Add: `public WorkflowDefinition? Workflow { get; set; }`
+  - Navigation: `public ICollection<Conversation> Conversations { get; set; } = new List<Conversation>();`
 - **`Workspace.cs`**:
   - Add: `public int? DefaultWorkflowId { get; set; }`
   - Add: `public ICollection<WorkflowDefinition> Workflows { get; set; } = new List<WorkflowDefinition>();`
-- **`StageConversation.cs`**:
-  - Change: `public int? TaskId { get; set; }` (make nullable)
-  - Add: `public int? WorkspaceId { get; set; }`
-  - Add: `public ConversationType ConversationType { get; set; } = ConversationType.StageRun;`
-  - Add: `public string? Title { get; set; }`
-  - Add: `public Workspace? Workspace { get; set; }`
+  - Add: `public ICollection<Conversation> Conversations { get; set; } = new List<Conversation>();`
 
 ### 2.5 `src/NightCodeForge.Infrastructure/Data/AppDbContext.cs`
 - Add `DbSet<WorkflowDefinition> WorkflowDefinitions => Set<WorkflowDefinition>();`
 - Add `DbSet<StageDefinition> StageDefinitions => Set<StageDefinition>();`
+- Add `DbSet<Conversation> Conversations => Set<Conversation>();`
+- Add `DbSet<ConversationTurn> ConversationTurns => Set<ConversationTurn>();`
 - Configure Fluent API:
   - `WorkflowDefinition`: Key, index on `Code` (unique), foreign key to `Workspace` (`OnDelete(DeleteBehavior.SetNull)`).
   - `StageDefinition`: Key, index on `{ WorkflowId, StageId }` (unique), index on `{ WorkflowId, SequenceOrder }`, foreign key to `WorkflowDefinition` (`OnDelete(DeleteBehavior.Cascade)`).
   - `ForgeTask`: Foreign key to `WorkflowDefinition` (`OnDelete(DeleteBehavior.Restrict)`).
-  - `StageConversation`: Foreign key to `Workspace` (`OnDelete(DeleteBehavior.Cascade)`), optional foreign key to `ForgeTask` (`OnDelete(DeleteBehavior.Cascade)`).
-- Update `EnsureDatabaseCreatedAndWalAsync`:
-  - Non-destructive SQLite table creations for `WorkflowDefinitions` and `StageDefinitions`.
-  - Add column `WorkflowId` to `Tasks`.
-  - Add columns `WorkspaceId`, `ConversationType`, `Title` to `StageConversations`.
+  - `Conversation`: Foreign key to `Workspace` (`OnDelete(DeleteBehavior.Cascade)`), optional foreign key to `ForgeTask` (`OnDelete(DeleteBehavior.Cascade)`).
+- `EnsureDatabaseCreatedAndWalAsync`:
+  - Delegates schema creation directly to `Database.EnsureCreatedAsync()`, generating all tables, indexes, and foreign keys from EF Core model mappings.
+  - Enables SQLite `PRAGMA journal_mode = WAL;` and `PRAGMA synchronous = NORMAL;`.
+  - Manual DDL/ALTER TABLE workarounds removed; official EF Core migrations will be adopted prior to shipping v1.
 
 ---
 

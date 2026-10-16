@@ -23,15 +23,17 @@ public class ForgeTask
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public string? LastHangfireJobId { get; set; }
     public string? SquashCommitSha { get; set; }
+    public int? WorkflowId { get; set; }
 
     public Workspace? Workspace { get; set; }
+    public WorkflowDefinition? Workflow { get; set; }
     public ICollection<TaskDependency> Dependencies { get; set; } = new List<TaskDependency>();
     public ICollection<TaskDependency> DependentTasks { get; set; } = new List<TaskDependency>();
     public ICollection<Question> Questions { get; set; } = new List<Question>();
     public ICollection<StageCheckpoint> Checkpoints { get; set; } = new List<StageCheckpoint>();
     public ICollection<StageExecutionRecord> ExecutionRecords { get; set; } = new List<StageExecutionRecord>();
     public ICollection<ExecutionLog> ExecutionLogs { get; set; } = new List<ExecutionLog>();
-    public ICollection<StageConversation> StageConversations { get; set; } = new List<StageConversation>();
+    public ICollection<Conversation> Conversations { get; set; } = new List<Conversation>();
 }
 
 /// <summary>

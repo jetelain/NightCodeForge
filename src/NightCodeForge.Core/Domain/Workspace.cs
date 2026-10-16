@@ -17,8 +17,11 @@ public class Workspace
     public string? WslDistribution { get; set; }
     public int? BuildTimeoutSeconds { get; set; }
     public int? TestTimeoutSeconds { get; set; }
+    public int? DefaultWorkflowId { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public ICollection<ForgeTask> Tasks { get; set; } = new List<ForgeTask>();
     public ICollection<AgentProfile> AgentProfiles { get; set; } = new List<AgentProfile>();
+    public ICollection<WorkflowDefinition> Workflows { get; set; } = new List<WorkflowDefinition>();
+    public ICollection<Conversation> Conversations { get; set; } = new List<Conversation>();
 }

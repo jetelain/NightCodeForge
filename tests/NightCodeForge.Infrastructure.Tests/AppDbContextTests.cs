@@ -350,4 +350,124 @@ public class AppDbContextTests : IDisposable
         Assert.Equal("RenamedWsName", reloaded.Name);
         Assert.Equal("develop", reloaded.DefaultBaseBranch);
     }
+
+    [Fact]
+    public async Task WorkflowDefinitions_And_StageDefinitions_Persist_WithCascadingDelete()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var workflow = new WorkflowDefinition
+        {
+            Name = "Custom 2-Stage",
+            Code = "custom-2-stage",
+            Icon = "⚡",
+            Description = "Custom workflow pipeline",
+            IsDefault = false
+        };
+
+        var stage1 = new StageDefinition
+        {
+            StageId = "task-review",
+            DisplayName = "Task Review",
+            Icon = "🔍",
+            SequenceOrder = 1,
+            Kind = WorkflowStageKind.Agentic,
+            CsharpImplementationType = "agentic-review",
+            ConfigurationJson = "{}"
+        };
+
+        var stage2 = new StageDefinition
+        {
+            StageId = "deterministic-build",
+            DisplayName = "Deterministic Build",
+            Icon = "⚙️",
+            SequenceOrder = 2,
+            Kind = WorkflowStageKind.Deterministic,
+            CsharpImplementationType = "deterministic-composite",
+            ConfigurationJson = "{\"Action\":\"Build\"}"
+        };
+
+        workflow.Stages.Add(stage1);
+        workflow.Stages.Add(stage2);
+
+        context.WorkflowDefinitions.Add(workflow);
+        await context.SaveChangesAsync();
+
+        Assert.True(workflow.Id > 0);
+        Assert.True(stage1.Id > 0);
+        Assert.True(stage2.Id > 0);
+
+        // Reload fresh context to verify eager/explicit loading
+        using var context2 = new AppDbContext(_options);
+        var loaded = await context2.WorkflowDefinitions
+            .Include(w => w.Stages)
+            .FirstOrDefaultAsync(w => w.Code == "custom-2-stage");
+
+        Assert.NotNull(loaded);
+        Assert.Equal(2, loaded.Stages.Count);
+        Assert.Contains(loaded.Stages, s => s.StageId == "task-review");
+        Assert.Contains(loaded.Stages, s => s.StageId == "deterministic-build");
+
+        // Verify cascading delete of stages when workflow is deleted
+        context2.WorkflowDefinitions.Remove(loaded);
+        await context2.SaveChangesAsync();
+
+        var remainingStages = await context2.StageDefinitions.Where(s => s.WorkflowId == loaded.Id).ToListAsync();
+        Assert.Empty(remainingStages);
+    }
+
+    [Fact]
+    public async Task Conversation_Persists_WithNullableTaskId_AndIdeationType()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var ws = new Workspace
+        {
+            Name = "IdeationWS",
+            RepositoryPath = "/repos/ideation",
+            DefaultBaseBranch = "main"
+        };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        var ideationConv = new Conversation
+        {
+            TaskId = null,
+            WorkspaceId = ws.Id,
+            ConversationType = ConversationType.Ideation,
+            Title = "Feature Planning Session",
+            StageId = "ideation",
+            StageKind = WorkflowStageKind.Agentic,
+            Status = StageExecutionStatus.Completed
+        };
+
+        var turn = new ConversationTurn
+        {
+            TurnIndex = 1,
+            Role = StageTurnRole.User,
+            Content = "Let's plan a task."
+        };
+        ideationConv.Turns.Add(turn);
+
+        context.Conversations.Add(ideationConv);
+        await context.SaveChangesAsync();
+
+        Assert.True(ideationConv.Id > 0);
+        Assert.Null(ideationConv.TaskId);
+        Assert.Equal(ws.Id, ideationConv.WorkspaceId);
+
+        using var context2 = new AppDbContext(_options);
+        var loaded = await context2.Conversations
+            .Include(c => c.Turns)
+            .FirstOrDefaultAsync(c => c.Id == ideationConv.Id);
+
+        Assert.NotNull(loaded);
+        Assert.Null(loaded.TaskId);
+        Assert.Equal(ConversationType.Ideation, loaded.ConversationType);
+        Assert.Equal("Feature Planning Session", loaded.Title);
+        Assert.Single(loaded.Turns);
+        Assert.Equal("Let's plan a task.", loaded.Turns.First().Content);
+    }
 }

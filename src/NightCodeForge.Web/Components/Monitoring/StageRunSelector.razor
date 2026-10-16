@@ -69,11 +69,11 @@
 </div>
 
 @code {
-    [Parameter] public IReadOnlyList<StageConversation> Conversations { get; set; } = Array.Empty<StageConversation>();
-    [Parameter] public StageConversation? SelectedConversation { get; set; }
-    [Parameter] public EventCallback<StageConversation> OnConversationSelected { get; set; }
+    [Parameter] public IReadOnlyList<Conversation> Conversations { get; set; } = Array.Empty<Conversation>();
+    [Parameter] public Conversation? SelectedConversation { get; set; }
+    [Parameter] public EventCallback<Conversation> OnConversationSelected { get; set; }
 
-    private async Task SelectConversation(StageConversation conversation)
+    private async Task SelectConversation(Conversation conversation)
     {
         if (OnConversationSelected.HasDelegate)
         {
@@ -81,14 +81,14 @@
         }
     }
 
-    private Dictionary<string, List<StageConversation>> GroupConversationsByStage()
+    private Dictionary<string, List<Conversation>> GroupConversationsByStage()
     {
-        var dict = new Dictionary<string, List<StageConversation>>(StringComparer.OrdinalIgnoreCase);
+        var dict = new Dictionary<string, List<Conversation>>(StringComparer.OrdinalIgnoreCase);
         foreach (var conv in Conversations.OrderBy(c => c.StartedAt).ThenBy(c => c.AttemptIndex))
         {
             if (!dict.TryGetValue(conv.StageId, out var list))
             {
-                list = new List<StageConversation>();
+                list = new List<Conversation>();
                 dict[conv.StageId] = list;
             }
             list.Add(conv);

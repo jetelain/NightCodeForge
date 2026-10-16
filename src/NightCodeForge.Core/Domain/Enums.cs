@@ -123,6 +123,16 @@ public enum StageTurnRole
 }
 
 /// <summary>
+/// Type or scope of a conversation.
+/// </summary>
+public enum ConversationType
+{
+    StageRun = 0,    // Autonomous pipeline stage execution (tied to a task)
+    Ideation = 1,    // Interactive discovery & task formulation chat (workspace-level)
+    AdHoc = 2        // Standalone developer consultation
+}
+
+/// <summary>
 /// Known harness identifiers.
 /// </summary>
 public static class HarnessType
