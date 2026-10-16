@@ -73,10 +73,8 @@ public class TaskOrchestratorTests
         });
         _depStore.AddTask(10, 1, TaskOverallStatus.Open);
 
-        var reviewStage = new TaskReviewStage
-        {
-            Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success())
-        };
+        var reviewStage = TestWorkflowPipelines.CreateReviewStage(
+            (ctx, ct) => Task.FromResult(StageExecutionResult.Success()));
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { reviewStage });
 
         var orchestrator = new TaskOrchestrator(

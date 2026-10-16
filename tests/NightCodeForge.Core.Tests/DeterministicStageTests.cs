@@ -381,7 +381,7 @@ public class DeterministicStageTests
         var profile = new AgentProfile { Id = "implementation", Name = "qwen-coder", ModelName = "qwen2.5-coder:14b" };
         workspace.AgentProfiles.Add(profile);
 
-        var pipeline = Default3AgentPipeline.Create(executionEnv: fakeEnv, preloadService: preloadService);
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage, TestWorkflowPipelines.CreateImplementationStage() });
         var context = new PipelineContext(task, workspace)
         {
             Pipeline = pipeline

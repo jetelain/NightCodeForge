@@ -20,6 +20,10 @@ public static class DefaultBootstrapPromptBuilder
         if (!string.IsNullOrWhiteSpace(promptTemplate))
         {
             renderer ??= new ScribanPromptTemplateRenderer();
+            var effectiveDirective = !string.IsNullOrWhiteSpace(stageDirective)
+                ? stageDirective
+                : stage.StageDirective;
+
             var reviewerFeedback = context.DataBag.Get<string>("ReviewerFeedback");
             var approvedPlan = context.DataBag.Get<string>("Stage1.ApprovedPlan") ?? context.DataBag.Get<string>("StageSummary_task-review");
             var taskPath = context.DataBag.Get<string>("TaskMarkdownPath");
@@ -33,7 +37,8 @@ public static class DefaultBootstrapPromptBuilder
             var model = new
             {
                 task = new { id = task.Id, title = task.Title, description = task.Description },
-                stage = new { id = stage.StageId, display_name = stage.DisplayName },
+                stage = new { id = stage.StageId, display_name = stage.DisplayName, directive = effectiveDirective },
+                stage_directive = effectiveDirective,
                 context = new
                 {
                     task_markdown_path = string.IsNullOrWhiteSpace(taskPath) ? null : taskPath,
@@ -45,7 +50,13 @@ public static class DefaultBootstrapPromptBuilder
                 }
             };
 
-            return renderer.Render(promptTemplate, model).Trim();
+            var rendered = renderer.Render(promptTemplate, model).Trim();
+            if (!string.IsNullOrWhiteSpace(effectiveDirective) && !rendered.Contains(effectiveDirective))
+            {
+                rendered = $"{rendered}\n\n[Stage Directive]:\n{effectiveDirective}".Trim();
+            }
+
+            return rendered;
         }
 
         return BuildLegacyFormat(stage.StageId, task, context, stageDirective);
@@ -65,14 +76,12 @@ public static class DefaultBootstrapPromptBuilder
 
         var taskPath = context.DataBag.Get<string>("TaskMarkdownPath");
         var taskPathSection = !string.IsNullOrWhiteSpace(taskPath)
-            ? (string.Equals(stageId, "task-review", StringComparison.OrdinalIgnoreCase)
-                ? $"\n\n[ForgeTask Specification Document]:\n{taskPath}\n(CRITICAL: You are required to edit this file directly on disk using 'edit' or 'write' to document your approved architecture, step-by-step implementation plan, and acceptance criteria. Your disk changes will be read back automatically upon stage completion to update the task specification and guide the implementation agent.)\n"
-                : $"\n\n[ForgeTask Specification Document]:\n{taskPath} (You can read or update this document with read/edit tools.)\n")
+            ? $"\n\n[ForgeTask Specification Document]:\n{taskPath}\n"
             : string.Empty;
 
         var implSummary = context.DataBag.Get<string>("StageSummary_implementation");
-        var implHandoffSection = !string.IsNullOrWhiteSpace(implSummary) && string.Equals(stageId, "code-review-fix", StringComparison.OrdinalIgnoreCase)
-            ? $"\n\n[Implementation Agent Completion Summary]:\n{TruncateText(implSummary, 1500)}\n(Note: Treat these reported achievements as claims to verify against the git diff and test results. Do not assume claims are true without checking the code.)\n"
+        var implHandoffSection = !string.IsNullOrWhiteSpace(implSummary)
+            ? $"\n\n[Implementation Agent Completion Summary]:\n{TruncateText(implSummary, 1500)}\n"
             : string.Empty;
 
         var bootstrapOverride = WorkspacePromptResolver.ResolveBootstrapPromptOverride(context.WorkingDirectory, stageId);
@@ -82,7 +91,7 @@ public static class DefaultBootstrapPromptBuilder
         }
 
         var approvedPlan = context.DataBag.Get<string>("Stage1.ApprovedPlan") ?? context.DataBag.Get<string>("StageSummary_task-review");
-        var planSection = !string.IsNullOrWhiteSpace(approvedPlan) && !string.Equals(stageId, "task-review", StringComparison.OrdinalIgnoreCase)
+        var planSection = !string.IsNullOrWhiteSpace(approvedPlan)
             ? $"\n\n[Approved Implementation Plan]:\n{approvedPlan}\n"
             : string.Empty;
 

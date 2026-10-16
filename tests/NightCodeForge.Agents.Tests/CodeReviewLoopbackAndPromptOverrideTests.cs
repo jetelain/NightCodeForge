@@ -5,6 +5,7 @@ using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Workflow;
+using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
 
 namespace NightCodeForge.Agents.Tests;
@@ -154,7 +155,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
                 ForgeTask = task,
                 Workspace = new Workspace { Id = 1, RepositoryPath = tempDir },
                 Profile = new AgentProfile { Id = "reviewer", Mode = AgentMode.Review },
-                StageId = CodeReviewAndFixStage.DefaultStageId,
+                StageId = "code-review-fix",
                 RequiredMode = AgentMode.Review,
                 WorkspacePath = tempDir,
                 PipelineContext = pipelineContext
@@ -204,7 +205,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
                 ForgeTask = task,
                 Workspace = new Workspace { Id = 1, RepositoryPath = tempDir },
                 Profile = new AgentProfile { Id = "reviewer", Mode = AgentMode.Review },
-                StageId = CodeReviewAndFixStage.DefaultStageId,
+                StageId = "code-review-fix",
                 RequiredMode = AgentMode.Review,
                 WorkspacePath = tempDir,
                 PipelineContext = pipelineContext
@@ -222,10 +223,17 @@ public class CodeReviewLoopbackAndPromptOverrideTests
     }
 
     [Fact]
-    public void CodeReviewAndFixStage_DefaultsToAgentModeReview_AndComprehensiveDirective()
+    public void GenericAgenticStage_ConfiguredForReview_RequiresReviewModeAndLoopback()
     {
-        var stage = new CodeReviewAndFixStage();
+        var config = new AgenticStageConfig
+        {
+            RequiredMode = AgentMode.Review,
+            LoopBackStageId = "implementation",
+            StageDirective = "You are a Principal Code Reviewer and Quality Gatekeeper.\nrequest_changes"
+        };
+        var stage = new GenericAgenticStage("code-review-fix", "Code Review & Fix", config);
         Assert.Equal(AgentMode.Review, stage.RequiredMode);
+        Assert.Equal("implementation", stage.LoopBackStageId);
         Assert.Contains("Principal Code Reviewer", stage.StageDirective);
         Assert.Contains("request_changes", stage.StageDirective);
     }
@@ -276,7 +284,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
                 ForgeTask = task,
                 Workspace = new Workspace { Id = 1, RepositoryPath = tempDir },
                 Profile = new AgentProfile { Id = "coder", Mode = AgentMode.Full },
-                StageId = ImplementationStage.DefaultStageId,
+                StageId = "implementation",
                 RequiredMode = AgentMode.Full,
                 WorkspacePath = tempDir,
                 PipelineContext = pipelineContext
@@ -333,7 +341,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
                 ForgeTask = task,
                 Workspace = new Workspace { Id = 1, RepositoryPath = tempDir },
                 Profile = new AgentProfile { Id = "coder", Mode = AgentMode.Full },
-                StageId = ImplementationStage.DefaultStageId,
+                StageId = "implementation",
                 RequiredMode = AgentMode.Full,
                 WorkspacePath = tempDir,
                 PipelineContext = pipelineContext
@@ -355,14 +363,36 @@ public class CodeReviewLoopbackAndPromptOverrideTests
     [Fact]
     public void StageDirectives_ReflectTaskDocumentEditing_AndTwoTierReviewPolicy()
     {
-        var reviewStage = new TaskReviewStage();
+        var reviewStage = new GenericAgenticStage(
+            "task-review",
+            "ForgeTask Review",
+            new AgenticStageConfig
+            {
+                RequiredMode = AgentMode.Full,
+                StageDirective = "1. MANDATORY FILE EDIT: You must edit the task specification document on disk (specified in docs/tasks/)... 4. Do not write or modify production code in this stage."
+            });
         Assert.Contains("docs/tasks/", reviewStage.StageDirective);
         Assert.Contains("Do not write or modify production code", reviewStage.StageDirective);
 
-        var implStage = new ImplementationStage();
+        var implStage = new GenericAgenticStage(
+            "implementation",
+            "Implementation",
+            new AgenticStageConfig
+            {
+                RequiredMode = AgentMode.Full,
+                StageDirective = "1. Implement clean, robust, and maintainable code adhering to the task specification document in docs/tasks/..."
+            });
         Assert.Contains("docs/tasks/", implStage.StageDirective);
 
-        var codeReviewStage = new CodeReviewAndFixStage();
+        var codeReviewStage = new GenericAgenticStage(
+            "code-review-fix",
+            "Code Review & Fix",
+            new AgenticStageConfig
+            {
+                RequiredMode = AgentMode.Review,
+                LoopBackStageId = "implementation",
+                StageDirective = "2. TIER 1 - MINOR POLISH: ... 3. TIER 2 - REJECTION GATE: Rejection is strictly reserved for major tasks or missing features..."
+            });
         Assert.Contains("TIER 1 - MINOR POLISH", codeReviewStage.StageDirective);
         Assert.Contains("TIER 2 - REJECTION GATE", codeReviewStage.StageDirective);
         Assert.Contains("Rejection is strictly reserved for major tasks or missing features", codeReviewStage.StageDirective);

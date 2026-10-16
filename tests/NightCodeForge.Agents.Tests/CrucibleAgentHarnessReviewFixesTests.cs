@@ -426,7 +426,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
                     return TrackTurnWriteAsync(role, () => (Task<ConversationTurn>)targetMethod.Invoke(Target, args)!);
                 }
 
-                if (targetMethod.Name is nameof(ITaskRepository.CompleteConversationAsync) or nameof(ITaskRepository.CompleteStageConversationAsync))
+                if (targetMethod.Name is nameof(ITaskRepository.CompleteConversationAsync))
                 {
                     lock (_gate) CompletedTurnWritesAtCompletion = CompletedTurnWrites;
                 }

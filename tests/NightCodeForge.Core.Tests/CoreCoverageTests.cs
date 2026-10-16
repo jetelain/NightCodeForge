@@ -5,6 +5,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
+using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
 
 namespace NightCodeForge.Core.Tests;
@@ -29,25 +30,14 @@ public class CoreCoverageTests : IDisposable
     }
 
     [Fact]
-    public void Default3AgentPipeline_CreatesConfiguredPipeline()
+    public void DefaultWorkflowPipelineProvider_ReturnsConfiguredPipeline()
     {
-        var pipeline = Default3AgentPipeline.Create();
-        Assert.NotNull(pipeline);
-        Assert.Equal(6, pipeline.Stages.Count);
+        var stage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full });
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
+        var provider = new DefaultWorkflowPipelineProvider(pipeline);
 
-        Assert.IsType<TaskReviewStage>(pipeline.Stages[0]);
-        Assert.IsType<DeterministicPreImplementationStage>(pipeline.Stages[1]);
-        Assert.IsType<ImplementationStage>(pipeline.Stages[2]);
-        Assert.IsType<DeterministicPostImplementationStage>(pipeline.Stages[3]);
-        Assert.IsType<CodeReviewAndFixStage>(pipeline.Stages[4]);
-        Assert.IsType<DeterministicPostReviewStage>(pipeline.Stages[5]);
-
-        Assert.Equal(TaskReviewStage.DefaultStageId, pipeline.Stages[0].StageId);
-        Assert.Equal(DeterministicPreImplementationStage.DefaultStageId, pipeline.Stages[1].StageId);
-        Assert.Equal(ImplementationStage.DefaultStageId, pipeline.Stages[2].StageId);
-        Assert.Equal(DeterministicPostImplementationStage.DefaultStageId, pipeline.Stages[3].StageId);
-        Assert.Equal(CodeReviewAndFixStage.DefaultStageId, pipeline.Stages[4].StageId);
-        Assert.Equal(DeterministicPostReviewStage.DefaultStageId, pipeline.Stages[5].StageId);
+        Assert.Same(pipeline, provider.GetPipeline(new ForgeTask()));
+        Assert.Single(provider.GetPipeline(new ForgeTask()).Stages);
     }
 
     [Fact]

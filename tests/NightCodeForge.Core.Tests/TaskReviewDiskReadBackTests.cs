@@ -134,8 +134,8 @@ public class TaskReviewDiskReadBackTests : IDisposable
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
         {
-            new TaskReviewStage(),
-            new ImplementationStage()
+            TestWorkflowPipelines.CreateReviewStage(),
+            TestWorkflowPipelines.CreateImplementationStage()
         });
 
         var orchestrator = new TaskOrchestrator(

@@ -75,36 +75,6 @@ public interface ITaskRepository
     Task<Conversation?> GetActiveIdeationConversationAsync(
         int workspaceId,
         CancellationToken cancellationToken = default);
-
-    // Backward-compatibility aliases
-    Task<Conversation> StartStageConversationAsync(
-        int taskId,
-        string stageId,
-        WorkflowStageKind stageKind,
-        int attemptIndex,
-        string? agentProfileId = null,
-        string? harnessId = null,
-        string? modelName = null,
-        CancellationToken cancellationToken = default) =>
-        StartConversationAsync(taskId, stageId, stageKind, attemptIndex, agentProfileId, harnessId, modelName, null, ConversationType.StageRun, null, cancellationToken);
-
-    Task CompleteStageConversationAsync(
-        int conversationId,
-        StageExecutionStatus status,
-        string? summary = null,
-        string? transcriptFileName = null,
-        CancellationToken cancellationToken = default) =>
-        CompleteConversationAsync(conversationId, status, summary, transcriptFileName, cancellationToken);
-
-    Task<IReadOnlyList<Conversation>> GetStageConversationsAsync(
-        int taskId,
-        CancellationToken cancellationToken = default) =>
-        GetConversationsAsync(taskId, cancellationToken);
-
-    Task<Conversation?> GetStageConversationWithTurnsAsync(
-        int conversationId,
-        CancellationToken cancellationToken = default) =>
-        GetConversationWithTurnsAsync(conversationId, cancellationToken);
 }
 
 /// <summary>

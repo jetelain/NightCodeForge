@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Workflow;
+using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
 using NightCodeForge.Infrastructure.Data;
 using NightCodeForge.ScenarioRunner.Common;
@@ -54,7 +55,7 @@ public class HumanInterruptionScenario : IScenario
         }
 
         // Step 2: Configure custom stage handler that triggers human interruption on turn 1
-        var reviewStage = new TaskReviewStage
+        var reviewStage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full })
         {
             Handler = (pipelineContext, ct) =>
             {
@@ -74,7 +75,7 @@ public class HumanInterruptionScenario : IScenario
         var customPipeline = new WorkflowPipeline(new IWorkflowStage[]
         {
             reviewStage,
-            new ImplementationStage()
+            new GenericAgenticStage("implementation", "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full })
         });
 
         context.Environment.SetCustomPipeline(customPipeline);
@@ -88,7 +89,7 @@ public class HumanInterruptionScenario : IScenario
                 await db.SaveChangesAsync(context.CancellationToken);
 
                 var orchestrator = scope.ServiceProvider.GetRequiredService<ITaskOrchestrator>();
-                ConsoleFormatting.PrintStep("3.2", "Executing TaskReviewStage (expecting human clarification pause)...");
+                ConsoleFormatting.PrintStep("3.2", "Executing task-review stage (expecting human clarification pause)...");
                 await orchestrator.ProcessTaskAsync(task.Id, context.CancellationToken);
             }
 

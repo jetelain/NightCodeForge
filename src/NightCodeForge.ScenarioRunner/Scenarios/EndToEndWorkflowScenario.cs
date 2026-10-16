@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
+using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
 using NightCodeForge.Infrastructure.Data;
 using NightCodeForge.ScenarioRunner.Common;
@@ -40,7 +41,7 @@ public class EndToEndWorkflowScenario : IScenario
                 Title = "Implement Multiply Operation in Calculator",
                 Description = "Add a Multiply(int a, int b) method to Calculator with full XML documentation.",
                 Status = TaskOverallStatus.Open,
-                CurrentStageId = TaskReviewStage.DefaultStageId,
+                CurrentStageId = "task-review",
                 BaseBranch = "main",
                 Priority = 1,
                 MergeMode = MergeMode.Automatic
@@ -54,7 +55,7 @@ public class EndToEndWorkflowScenario : IScenario
         }
 
         // Step 2: Configure custom stage handlers for deterministic end-to-end progression
-        var reviewStage = new TaskReviewStage
+        var reviewStage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full })
         {
             Handler = (pipelineCtx, ct) =>
             {
@@ -63,7 +64,7 @@ public class EndToEndWorkflowScenario : IScenario
             }
         };
 
-        var implStage = new ImplementationStage
+        var implStage = new GenericAgenticStage("implementation", "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full })
         {
             Handler = (pipelineCtx, ct) =>
             {
@@ -73,7 +74,7 @@ public class EndToEndWorkflowScenario : IScenario
             }
         };
 
-        var reviewFixStage = new CodeReviewAndFixStage
+        var reviewFixStage = new GenericAgenticStage("code-review-fix", "Code Review & Fix", new AgenticStageConfig { RequiredMode = AgentMode.Review, LoopBackStageId = "implementation" })
         {
             Handler = (pipelineCtx, ct) =>
             {
@@ -87,13 +88,23 @@ public class EndToEndWorkflowScenario : IScenario
         var execEnv = scopeServices.ServiceProvider.GetRequiredService<IExecutionEnvironment>();
         var preloadService = scopeServices.ServiceProvider.GetRequiredService<IOllamaModelPreloadService>();
 
-        var pipeline = Default3AgentPipeline.Create(
-            reviewStage: reviewStage,
-            implStage: implStage,
-            fixStage: reviewFixStage,
-            envProvider: envProvider,
-            executionEnv: execEnv,
-            preloadService: preloadService);
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[]
+        {
+            reviewStage,
+            new DeterministicPreImplementationStage(
+                envProvider: envProvider,
+                executionEnv: execEnv,
+                preloadService: preloadService),
+            implStage,
+            new DeterministicPostImplementationStage(
+                envProvider: envProvider,
+                executionEnv: execEnv),
+            reviewFixStage,
+            new DeterministicPostReviewStage(
+                envProvider: envProvider,
+                executionEnv: execEnv,
+                preloadService: preloadService)
+        });
 
         context.Environment.SetCustomPipeline(pipeline);
 

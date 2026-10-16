@@ -137,7 +137,7 @@ public class ResumptionTests
             WorkspaceId = 1,
             Status = TaskOverallStatus.Reviewed,
             IsWaitingForHuman = true,
-            CurrentStageId = ImplementationStage.DefaultStageId,
+            CurrentStageId = "implementation",
             Questions = new List<Question>
             {
                 new()
@@ -153,14 +153,11 @@ public class ResumptionTests
         _depStore.SetWaitingForHuman(101, true);
 
         string? consumedAnswer = null;
-        var stage = new ImplementationStage
+        var stage = TestWorkflowPipelines.CreateImplementationStage((ctx, ct) =>
         {
-            Handler = (ctx, ct) =>
-            {
-                consumedAnswer = ctx.DataBag.Get<string>("LastHumanAnswer");
-                return Task.FromResult(StageExecutionResult.Success());
-            }
-        };
+            consumedAnswer = ctx.DataBag.Get<string>("LastHumanAnswer");
+            return Task.FromResult(StageExecutionResult.Success());
+        });
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var orchestrator = new TaskOrchestrator(
@@ -201,7 +198,7 @@ public class ResumptionTests
         var updated = await _taskRepo.GetByIdAsync(102);
         Assert.NotNull(updated);
         Assert.Equal(TaskOverallStatus.Reviewed, updated.Status);
-        Assert.Equal(ImplementationStage.DefaultStageId, updated.CurrentStageId);
+        Assert.Equal("implementation", updated.CurrentStageId);
 
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);
         Assert.Equal("Please add XML documentation to all public interfaces and fix indentation.", bag.Get<string>("ReviewerFeedback"));

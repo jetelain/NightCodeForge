@@ -13,7 +13,7 @@
 
         <div class="modal-body font-sans">
             <p class="text-secondary mb-3">
-                Submitting this review will route ForgeTask #@TaskId back to <strong>Stage 3 (ImplementationStage)</strong>
+                Submitting this review will route ForgeTask #@TaskId back to <strong>Implementation</strong>
                 and enqueue it to <strong><code>llm-urgent</code></strong> with top priority.
             </p>
 
@@ -98,7 +98,7 @@
         {
             await TaskOrchestrator.RequestChangesAsync(TaskId, feedback);
             CommentState.Clear();
-            ToastService.Show("Changes Requested", $"ForgeTask #{TaskId} routed to ImplementationStage on llm-urgent.", ToastLevel.Success);
+            ToastService.Show("Changes Requested", $"ForgeTask #{TaskId} routed to Implementation on llm-urgent.", ToastLevel.Success);
             await OnSubmitted.InvokeAsync();
         }
         finally

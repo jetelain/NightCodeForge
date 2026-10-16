@@ -114,20 +114,20 @@ public class StartupRecoveryTests : IDisposable
             Id = 301,
             WorkspaceId = 1,
             Status = TaskOverallStatus.Open,
-            CurrentStageId = TaskReviewStage.DefaultStageId,
+            CurrentStageId = "task-review",
             Checkpoints = new List<StageCheckpoint>
             {
                 new()
                 {
                     TaskId = 301,
-                    StageId = TaskReviewStage.DefaultStageId,
+                    StageId = "task-review",
                     SerializedMemory = "Prior conversation history...",
                     CreatedAt = DateTime.UtcNow.AddMinutes(-5)
                 }
             }
         });
 
-        var stage = new TaskReviewStage();
+        var stage = TestWorkflowPipelines.CreateReviewStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var recovery = new StartupRecoveryService(

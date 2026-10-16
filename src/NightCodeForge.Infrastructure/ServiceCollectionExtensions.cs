@@ -82,15 +82,6 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPostImplementationStage>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPostReviewStage>();
 
-        services.TryAddScoped<IWorkflowPipeline>(sp => Default3AgentPipeline.Create(
-            preImplStage: sp.GetService<NightCodeForge.Core.Workflow.Stages.DeterministicPreImplementationStage>(),
-            postImplStage: sp.GetService<NightCodeForge.Core.Workflow.Stages.DeterministicPostImplementationStage>(),
-            postReviewStage: sp.GetService<NightCodeForge.Core.Workflow.Stages.DeterministicPostReviewStage>(),
-            envProvider: sp.GetService<IExecutionEnvironmentProvider>(),
-            executionEnv: sp.GetService<IExecutionEnvironment>(),
-            preloadService: sp.GetService<IOllamaModelPreloadService>()
-        ));
-
         // 10. Streaming & Activity Streamer
         services.TryAddSingleton<NightCodeForge.Core.Streaming.IAgentActivityStreamer, NightCodeForge.Core.Streaming.InMemoryAgentActivityStreamer>();
 

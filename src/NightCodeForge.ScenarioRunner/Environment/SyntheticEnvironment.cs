@@ -70,7 +70,7 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
         });
 
         // Dynamic Workflow Pipeline Provider
-        PipelineProvider = new DynamicPipelineProvider(task => Default3AgentPipeline.Create());
+        PipelineProvider = new DynamicPipelineProvider();
         serviceCollection.AddSingleton(PipelineProvider);
         serviceCollection.AddSingleton<IWorkflowPipelineProvider>(PipelineProvider);
 
@@ -305,16 +305,22 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
 
     public class DynamicPipelineProvider : IWorkflowPipelineProvider
     {
-        private readonly Func<ForgeTask, IWorkflowPipeline> _defaultPipelineFactory;
+        private readonly Func<ForgeTask, IWorkflowPipeline>? _defaultPipelineFactory;
         public IWorkflowPipeline? CustomPipeline { get; set; }
 
-        public DynamicPipelineProvider(Func<ForgeTask, IWorkflowPipeline> defaultPipelineFactory)
+        public DynamicPipelineProvider(Func<ForgeTask, IWorkflowPipeline>? defaultPipelineFactory = null)
         {
-            _defaultPipelineFactory = defaultPipelineFactory ?? throw new ArgumentNullException(nameof(defaultPipelineFactory));
+            _defaultPipelineFactory = defaultPipelineFactory;
         }
 
-        public IWorkflowPipeline GetPipeline(ForgeTask task) => CustomPipeline ?? _defaultPipelineFactory(task);
+        public IWorkflowPipeline GetPipeline(ForgeTask task)
+        {
+            if (CustomPipeline != null) return CustomPipeline;
+            if (_defaultPipelineFactory != null) return _defaultPipelineFactory(task);
+            return new WorkflowPipeline(Array.Empty<IWorkflowStage>());
+        }
+
         public Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default)
-            => Task.FromResult(CustomPipeline ?? _defaultPipelineFactory(task));
+            => Task.FromResult(GetPipeline(task));
     }
 }

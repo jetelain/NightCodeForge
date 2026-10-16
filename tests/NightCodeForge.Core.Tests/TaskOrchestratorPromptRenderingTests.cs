@@ -191,7 +191,7 @@ public class TaskOrchestratorPromptRenderingTests
         await taskRepo.CreateAsync(task);
         depStore.AddTask(task.Id, workspace.Id, TaskOverallStatus.Open);
 
-        var legacyStage = new TaskReviewStage();
+        var legacyStage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full });
         var pipeline = new SingleStagePipeline(legacyStage);
         var pipelineProvider = new SingleStagePipelineProvider(pipeline);
 
@@ -233,7 +233,7 @@ public class TaskOrchestratorPromptRenderingTests
     [Fact]
     public void BuildBootstrapPrompt_DefaultStageDirectCall_RendersDefaultFormat()
     {
-        IWorkflowStage stage = new TaskReviewStage();
+        IWorkflowStage stage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full });
         var task = new ForgeTask { Id = 8, Title = "Review Task", Description = "Review details" };
         var context = new PipelineContext(task, new Workspace());
 

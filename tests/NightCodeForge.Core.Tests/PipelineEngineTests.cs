@@ -9,9 +9,9 @@ public class PipelineEngineTests
     [Fact]
     public async Task Pipeline_AdvancesSequentiallyToCompletion()
     {
-        var stage1 = new TaskReviewStage();
-        var stage2 = new ImplementationStage();
-        var stage3 = new CodeReviewAndFixStage();
+        var stage1 = TestWorkflowPipelines.CreateReviewStage();
+        var stage2 = TestWorkflowPipelines.CreateImplementationStage();
+        var stage3 = TestWorkflowPipelines.CreateCodeReviewStage();
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2, stage3 });
         var engine = new WorkflowPipelineEngine();
@@ -41,12 +41,10 @@ public class PipelineEngineTests
     [Fact]
     public async Task Pipeline_LoopsBackOnStageFailure()
     {
-        var stage1 = new TaskReviewStage();
-        var stage2 = new ImplementationStage();
-        var stage3 = new CodeReviewAndFixStage
-        {
-            Handler = (_, _) => Task.FromResult(StageExecutionResult.Failure("Missing test cases", "implementation"))
-        };
+        var stage1 = TestWorkflowPipelines.CreateReviewStage();
+        var stage2 = TestWorkflowPipelines.CreateImplementationStage();
+        var stage3 = TestWorkflowPipelines.CreateCodeReviewStage(
+            (_, _) => Task.FromResult(StageExecutionResult.Failure("Missing test cases", "implementation")));
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2, stage3 });
         var engine = new WorkflowPipelineEngine();
@@ -71,10 +69,8 @@ public class PipelineEngineTests
     [Fact]
     public async Task Pipeline_TripsCircuitBreakerAfterMaxRetries()
     {
-        var failingStage = new ImplementationStage
-        {
-            Handler = (_, _) => Task.FromResult(StageExecutionResult.Failure("Build error CS1002", "implementation"))
-        };
+        var failingStage = TestWorkflowPipelines.CreateImplementationStage(
+            (_, _) => Task.FromResult(StageExecutionResult.Failure("Build error CS1002", "implementation")));
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { failingStage });
         var engine = new WorkflowPipelineEngine { MaxRetries = 3 };
@@ -104,9 +100,8 @@ public class PipelineEngineTests
     [Fact]
     public async Task Pipeline_TransitionsToWaitingForHumanWhenClarificationNeeded()
     {
-        var reviewStage = new TaskReviewStage
-        {
-            Handler = (_, _) =>
+        var reviewStage = TestWorkflowPipelines.CreateReviewStage(
+            (_, _) =>
             {
                 var q = new Question
                 {
@@ -114,8 +109,7 @@ public class PipelineEngineTests
                     Rationale = "OIDC vs Local DB"
                 };
                 return Task.FromResult(StageExecutionResult.QuestionRequired(q));
-            }
-        };
+            });
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { reviewStage });
         var engine = new WorkflowPipelineEngine();

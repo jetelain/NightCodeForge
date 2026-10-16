@@ -135,8 +135,8 @@ public class OrchestratorHarnessTests
         var mirrorSync = new FakeMirrorSyncService();
         var mdSync = new FakeMarkdownSyncService();
 
-        // Default TaskReviewStage without custom handler
-        var stage1 = new TaskReviewStage();
+        // Default review stage without custom handler
+        var stage1 = TestWorkflowPipelines.CreateReviewStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1 });
 
         var orchestrator = new TaskOrchestrator(
@@ -216,7 +216,7 @@ public class OrchestratorHarnessTests
         var fakeHarness = new FakeAgentHarness();
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
 
-        var stage = new ImplementationStage();
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var orchestrator = new TaskOrchestrator(
@@ -277,8 +277,8 @@ public class OrchestratorHarnessTests
         var fakeHarness = new FakeAgentHarness();
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
 
-        // ImplementationStage requires AgentMode.Full by default
-        var stage = new ImplementationStage();
+        // Implementation stage requires AgentMode.Full by default
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var orchestrator = new TaskOrchestrator(
@@ -342,7 +342,7 @@ public class OrchestratorHarnessTests
         var fakeHarness = new FakeAgentHarness();
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
 
-        var stage = new ImplementationStage();
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var orchestrator = new TaskOrchestrator(
@@ -402,7 +402,7 @@ public class OrchestratorHarnessTests
         var fakeHarness = new FakeAgentHarness();
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
 
-        var stage = new ImplementationStage();
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var orchestrator = new TaskOrchestrator(
@@ -452,7 +452,7 @@ public class OrchestratorHarnessTests
         var fakeHarness = new FakeAgentHarness();
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
 
-        var stage = new ImplementationStage();
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var orchestrator = new TaskOrchestrator(
@@ -511,7 +511,7 @@ public class OrchestratorHarnessTests
         var fakeHarness = new FakeAgentHarness();
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
 
-        var stage = new ImplementationStage();
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var orchestrator = new TaskOrchestrator(
