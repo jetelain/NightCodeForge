@@ -48,6 +48,7 @@ Define and establish the core database domain entities for extensible workflows 
   {
       public string? AgentProfileId { get; set; }
       public string? StageDirective { get; set; }
+      public string? PromptTemplate { get; set; }
       public AgentMode RequiredMode { get; set; } = AgentMode.Full;
       public string? LoopBackStageId { get; set; }
       public int MaxRetries { get; set; } = 3;

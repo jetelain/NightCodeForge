@@ -19,6 +19,12 @@ public class AgenticStageConfig
     public string? StageDirective { get; set; }
 
     /// <summary>
+    /// Scriban template for rendering the bootstrap input prompt provided to the agent.
+    /// Available model variables: task, stage, context.
+    /// </summary>
+    public string? PromptTemplate { get; set; }
+
+    /// <summary>
     /// Minimum required tool capability mode.
     /// </summary>
     public AgentMode RequiredMode { get; set; } = AgentMode.Full;

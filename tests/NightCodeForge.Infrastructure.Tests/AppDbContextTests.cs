@@ -493,8 +493,10 @@ public class AppDbContextTests : IDisposable
         Assert.Equal("ForgeTask Review", stages[0].DisplayName);
         Assert.Equal("🔍", stages[0].Icon);
         Assert.Equal(WorkflowStageKind.Agentic, stages[0].Kind);
-        Assert.Equal("agentic-review", stages[0].CsharpImplementationType);
+        Assert.Equal("agentic", stages[0].CsharpImplementationType);
         Assert.Contains("\"RequiredMode\": 1", stages[0].ConfigurationJson);
+        Assert.Contains("PromptTemplate", stages[0].ConfigurationJson);
+        Assert.Contains("StageDirective", stages[0].ConfigurationJson);
 
         Assert.Equal("deterministic-pre-impl", stages[1].StageId);
         Assert.Equal("Pre-Implementation Baseline", stages[1].DisplayName);
@@ -507,8 +509,10 @@ public class AppDbContextTests : IDisposable
         Assert.Equal("Implementation", stages[2].DisplayName);
         Assert.Equal("💻", stages[2].Icon);
         Assert.Equal(WorkflowStageKind.Agentic, stages[2].Kind);
-        Assert.Equal("agentic-impl", stages[2].CsharpImplementationType);
+        Assert.Equal("agentic", stages[2].CsharpImplementationType);
         Assert.Contains("\"RequiredMode\": 1", stages[2].ConfigurationJson);
+        Assert.Contains("PromptTemplate", stages[2].ConfigurationJson);
+        Assert.Contains("StageDirective", stages[2].ConfigurationJson);
 
         Assert.Equal("deterministic-post-impl", stages[3].StageId);
         Assert.Equal("Post-Implementation Gates", stages[3].DisplayName);
@@ -521,8 +525,10 @@ public class AppDbContextTests : IDisposable
         Assert.Equal("Code Review & Fix", stages[4].DisplayName);
         Assert.Equal("🧐", stages[4].Icon);
         Assert.Equal(WorkflowStageKind.Agentic, stages[4].Kind);
-        Assert.Equal("agentic-review-fix", stages[4].CsharpImplementationType);
+        Assert.Equal("agentic", stages[4].CsharpImplementationType);
         Assert.Contains("\"RequiredMode\": 2", stages[4].ConfigurationJson);
+        Assert.Contains("PromptTemplate", stages[4].ConfigurationJson);
+        Assert.Contains("StageDirective", stages[4].ConfigurationJson);
 
         Assert.Equal("deterministic-post-review", stages[5].StageId);
         Assert.Equal("Post-Review Verification", stages[5].DisplayName);

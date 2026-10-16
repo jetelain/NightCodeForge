@@ -363,6 +363,7 @@ public class DomainEntitiesTests
         var agenticConfig = new NightCodeForge.Core.Workflow.Configuration.AgenticStageConfig();
         Assert.Null(agenticConfig.AgentProfileId);
         Assert.Null(agenticConfig.StageDirective);
+        Assert.Null(agenticConfig.PromptTemplate);
         Assert.Equal(AgentMode.Full, agenticConfig.RequiredMode);
         Assert.Null(agenticConfig.LoopBackStageId);
         Assert.Equal(3, agenticConfig.MaxRetries);
@@ -370,6 +371,7 @@ public class DomainEntitiesTests
 
         agenticConfig.AgentProfileId = "task-review-architect";
         agenticConfig.StageDirective = "Review the specification thoroughly.";
+        agenticConfig.PromptTemplate = "Execute stage '{{ stage.display_name }}' for task #{{ task.id }}";
         agenticConfig.RequiredMode = AgentMode.Review;
         agenticConfig.LoopBackStageId = "implementation";
         agenticConfig.MaxRetries = 2;
@@ -380,6 +382,7 @@ public class DomainEntitiesTests
         Assert.NotNull(deserializedAgentic);
         Assert.Equal("task-review-architect", deserializedAgentic.AgentProfileId);
         Assert.Equal("Review the specification thoroughly.", deserializedAgentic.StageDirective);
+        Assert.Equal("Execute stage '{{ stage.display_name }}' for task #{{ task.id }}", deserializedAgentic.PromptTemplate);
         Assert.Equal(AgentMode.Review, deserializedAgentic.RequiredMode);
         Assert.Equal("implementation", deserializedAgentic.LoopBackStageId);
         Assert.Equal(2, deserializedAgentic.MaxRetries);

@@ -648,6 +648,21 @@ flowchart LR
 
 ---
 
+### Step 8.8: Legacy & Dead Code Cleanup
+* **File Targets:**
+  - `src/NightCodeForge.Core/Workflow/Stages/StandardStages.cs` (Delete/Cleanup)
+  - `src/NightCodeForge.Core/Workflow/Default3AgentPipeline.cs` (Delete/Cleanup)
+  - `src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs` (Remove hardcoded stage conditionals)
+  - `src/NightCodeForge.Core/Domain/StageConversation.cs` (Finalize model alias deprecation)
+  - `src/NightCodeForge.ScenarioRunner/Scenarios/*.cs` (Migrate mocks to `GenericAgenticStage`)
+* **Key Actions:**
+  - Eliminate redundant C# stage classes (`TaskReviewStage`, `ImplementationStage`, `CodeReviewAndFixStage`) now superseded by `GenericAgenticStage` and Scriban templates.
+  - Remove deprecated static pipeline factories (`Default3AgentPipeline`).
+  - Strip hardcoded `if (stageId == "...")` logic from `BuildBootstrapPrompt`.
+  - Migrate all remaining test and scenario runner references to dynamic stage definitions.
+
+---
+
 ## 6. Detailed Step Breakdown Matrix
 
 | Step | Focus Area | Complexity | Deliverables | Verification Gates |
@@ -659,6 +674,7 @@ flowchart LR
 | **8.5** | **Ideation Chat Persistence**| High | `StageConversation` generalization, repository queries, `Ideation.razor` sync | Ideation messages, thinking traces, and tool calls persist to DB; survive page reloads |
 | **8.6** | **Dynamic Blazor UI** | Medium | `PipelineStepper` dynamic rendering, Task Creation workflow picker, Settings Workflow tab | Stepper dynamically adapts to N-stage workflows; users can select workflow on task creation |
 | **8.7** | **Hardening & Test Suite**| Medium | Unit, integration, and Playwright E2E tests | 100% test pass rate across Core, Infrastructure, Agents, and Web test suites |
+| **8.8** | **Dead Code Cleanup** | Low-Med | Removal of `StandardStages.cs`, `Default3AgentPipeline.cs`, hardcoded stage branching | 0 warnings/errors; 100% test pass rate without obsolete types |
 
 ---
 
