@@ -424,28 +424,6 @@ textarea.forge-input, textarea.form-control-dark {
     box-shadow: 0 10px 20px -5px rgba(99, 102, 241, 0.2);
 }
 
-.spinner-pulse {
-    width: 52px;
-    height: 52px;
-    margin: 0 auto;
-    border-radius: 50%;
-    background: radial-gradient(circle, var(--accent-indigo) 0%, rgba(99, 102, 241, 0.1) 70%);
-    box-shadow: 0 0 20px var(--accent-indigo);
-    animation: pulseGlow 1.5s infinite ease-in-out;
-}
-
-@keyframes pulseGlow {
-    0%, 100% {
-        transform: scale(0.85);
-        opacity: 0.6;
-    }
-    50% {
-        transform: scale(1.15);
-        opacity: 1;
-        box-shadow: 0 0 30px var(--accent-indigo-hover);
-    }
-}
-
 .remediation-card {
     background: var(--bg-surface);
     border: 1px solid var(--border-subtle);

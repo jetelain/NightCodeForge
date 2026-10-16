@@ -3711,17 +3711,19 @@ code, kbd, samp, pre {
     50% { box-shadow: 0 0 20px rgba(245, 158, 11, 0.85); transform: scale(1.05); }
 }
 
-.spinner-pulse {
-    width: 18px;
-    height: 18px;
-    border: 2px solid rgba(255, 255, 255, 0.3);
+/* Stepper Active Stage Spinner Ring */
+.step-icon-circle .spinner-pulse {
+    position: absolute;
+    inset: 3px;
+    width: calc(100% - 6px);
+    height: calc(100% - 6px);
+    border: 2px solid rgba(255, 255, 255, 0.35);
     border-top-color: #ffffff;
     border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
+    margin: 0;
+    pointer-events: none;
+    box-shadow: none;
+    animation: spinner-pulse-spin 0.85s linear infinite;
 }
 
 .stage-icon-text {
@@ -5202,23 +5204,48 @@ code, kbd, samp, pre {
     display: inline-block;
 }
 
+/* ==========================================================================
+   Global Spinner Pulse Component
+   ========================================================================== */
 .spinner-pulse {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid rgba(99, 102, 241, 0.25);
+    border-top-color: var(--accent-indigo, #6366f1);
+    box-sizing: border-box;
+    vertical-align: middle;
+    flex-shrink: 0;
+    animation: spinner-pulse-spin 0.85s linear infinite, spinner-pulse-glow 1.6s ease-in-out infinite;
+}
+
+div.spinner-pulse {
+    display: block;
     width: 48px;
     height: 48px;
     margin: 0 auto;
-    border-radius: 50%;
-    border: 3px solid rgba(99, 102, 241, 0.2);
-    border-top-color: var(--accent-indigo);
-    animation: spin 1s infinite linear, pulseGlow 1.5s infinite ease-in-out;
+    border-width: 3px;
 }
 
-@keyframes spin {
-    to { transform: rotate(360deg); }
+@keyframes spinner-pulse-spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
-@keyframes pulseGlow {
-    0%, 100% { filter: drop-shadow(0 0 4px rgba(99, 102, 241, 0.3)); }
-    50% { filter: drop-shadow(0 0 12px rgba(99, 102, 241, 0.7)); }
+@keyframes spinner-pulse-glow {
+    0%, 100% {
+        opacity: 0.8;
+        filter: drop-shadow(0 0 3px rgba(99, 102, 241, 0.35));
+    }
+    50% {
+        opacity: 1;
+        filter: drop-shadow(0 0 12px rgba(99, 102, 241, 0.85));
+    }
 }
 
 /* Task Proposal Card */

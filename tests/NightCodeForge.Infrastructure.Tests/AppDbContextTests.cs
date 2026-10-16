@@ -637,4 +637,141 @@ public class AppDbContextTests : IDisposable
         Assert.Single(allConversations);
         Assert.Equal(StageExecutionStatus.Completed, allConversations[0].Status);
     }
+
+    [Fact]
+    public async Task GetByIdAsync_WithSplitQuery_LoadsCompleteTaskGraph()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        // 1. Setup Workspace and Workflow with Stages
+        var ws = new Workspace
+        {
+            Name = "SplitQueryTestRepo",
+            RepositoryPath = "/test/repo",
+            DefaultBaseBranch = "main"
+        };
+        context.Workspaces.Add(ws);
+
+        var workflow = new WorkflowDefinition
+        {
+            Code = "test-split-query-wf",
+            Name = "Test Split Query Workflow"
+        };
+        context.WorkflowDefinitions.Add(workflow);
+        await context.SaveChangesAsync();
+
+        var stage1 = new StageDefinition
+        {
+            WorkflowId = workflow.Id,
+            StageId = "stage-1",
+            DisplayName = "Stage 1",
+            SequenceOrder = 1,
+            Kind = WorkflowStageKind.Agentic
+        };
+        var stage2 = new StageDefinition
+        {
+            WorkflowId = workflow.Id,
+            StageId = "stage-2",
+            DisplayName = "Stage 2",
+            SequenceOrder = 2,
+            Kind = WorkflowStageKind.Deterministic
+        };
+        context.StageDefinitions.AddRange(stage1, stage2);
+
+        // 2. Setup Task
+        var task = new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            WorkflowId = workflow.Id,
+            Title = "Task with full graph",
+            BaseBranch = "main"
+        };
+        context.Tasks.Add(task);
+
+        var depTask = new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Predecessor Task",
+            BaseBranch = "main"
+        };
+        context.Tasks.Add(depTask);
+        await context.SaveChangesAsync();
+
+        // 3. Setup Collections: Dependencies, Questions, Checkpoints, Records, Logs, Conversations
+        context.TaskDependencies.Add(new TaskDependency { TaskId = task.Id, DependsOnTaskId = depTask.Id });
+
+        context.Questions.Add(new Question
+        {
+            TaskId = task.Id,
+            StageId = "stage-1",
+            Prompt = "Which framework?",
+            QuestionType = QuestionType.MultipleChoice,
+            Status = QuestionStatus.Pending
+        });
+
+        context.StageCheckpoints.Add(new StageCheckpoint
+        {
+            TaskId = task.Id,
+            StageId = "stage-1",
+            GitCommitHash = "abcdef123456"
+        });
+
+        context.StageExecutionRecords.Add(new StageExecutionRecord
+        {
+            TaskId = task.Id,
+            StageId = "stage-1",
+            StageKind = "Agentic",
+            AgentProfileId = "architect",
+            HarnessId = "crucible",
+            ModelName = "gpt-4o",
+            Status = StageExecutionStatus.Completed
+        });
+
+        context.ExecutionLogs.Add(new ExecutionLog
+        {
+            TaskId = task.Id,
+            StageId = "stage-1",
+            Level = Microsoft.Extensions.Logging.LogLevel.Information,
+            Source = "TestRunner",
+            Message = "Initialized test run"
+        });
+
+        context.Conversations.Add(new Conversation
+        {
+            TaskId = task.Id,
+            WorkspaceId = ws.Id,
+            StageId = "stage-1",
+            StageKind = WorkflowStageKind.Agentic,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed
+        });
+
+        await context.SaveChangesAsync();
+
+        // 4. Query using EfCoreTaskRepository
+        var repo = new EfCoreTaskRepository(context);
+        var loaded = await repo.GetByIdAsync(task.Id);
+
+        // 5. Verify entire graph is fully and correctly hydrated
+        Assert.NotNull(loaded);
+        Assert.Equal(task.Id, loaded.Id);
+        Assert.NotNull(loaded.Workspace);
+        Assert.Equal(ws.Id, loaded.Workspace.Id);
+        Assert.NotNull(loaded.Workflow);
+        Assert.Equal(workflow.Id, loaded.Workflow.Id);
+        Assert.Equal(2, loaded.Workflow.Stages.Count);
+        Assert.Single(loaded.Dependencies);
+        Assert.Equal(depTask.Id, loaded.Dependencies.First().DependsOnTaskId);
+        Assert.Single(loaded.Questions);
+        Assert.Equal("Which framework?", loaded.Questions.First().Prompt);
+        Assert.Single(loaded.Checkpoints);
+        Assert.Equal("abcdef123456", loaded.Checkpoints.First().GitCommitHash);
+        Assert.Single(loaded.ExecutionRecords);
+        Assert.Equal("architect", loaded.ExecutionRecords.First().AgentProfileId);
+        Assert.Single(loaded.ExecutionLogs);
+        Assert.Equal("Initialized test run", loaded.ExecutionLogs.First().Message);
+        Assert.Single(loaded.Conversations);
+        Assert.Equal(StageExecutionStatus.Completed, loaded.Conversations.First().Status);
+    }
 }

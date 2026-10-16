@@ -343,6 +343,7 @@ public class AppDbContext : DbContext
         {
             await Database.ExecuteSqlRawAsync("PRAGMA journal_mode = WAL;", cancellationToken);
             await Database.ExecuteSqlRawAsync("PRAGMA synchronous = NORMAL;", cancellationToken);
+            await Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = ON;", cancellationToken);
         }
     }
 

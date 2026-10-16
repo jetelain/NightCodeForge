@@ -1,4 +1,4 @@
-# ⚡ NightCodeForge
+# 🌙 NightCode**Forge**
 
 > **Asynchronous AI Orchestrator & Dev-Queue for Local Large Language Models**
 

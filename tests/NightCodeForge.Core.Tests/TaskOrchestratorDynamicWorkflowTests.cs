@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Configuration;
@@ -45,11 +46,26 @@ public class TaskOrchestratorDynamicWorkflowTests
 
         var sp = new TestServiceProvider();
         sp.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
+        sp.AddService<IExecutionEnvironment>(new DynamicFakeExecutionEnvironment());
 
         _registry = new WorkflowStageRegistry();
         _stageFactory = new WorkflowStageFactory(_registry, sp);
         _workflowRepo = new InMemoryWorkflowRepository();
         _pipelineProvider = new DatabaseWorkflowPipelineProvider(_workflowRepo, _stageFactory);
+    }
+
+    private class DynamicFakeExecutionEnvironment : IExecutionEnvironment
+    {
+        public ExecutionTier Tier => ExecutionTier.BareHost;
+        public Task<CommandResult> ExecuteAsync(
+            string command,
+            string? workingDirectory = null,
+            int? timeoutSeconds = null,
+            IReadOnlyDictionary<string, string>? environmentVariables = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new CommandResult(0, "Build succeeded: 0 Error(s), 0 Warning(s)", string.Empty, TimeSpan.FromMilliseconds(20)));
+        }
     }
 
     private class TestServiceProvider : IServiceProvider
@@ -338,6 +354,134 @@ public class TaskOrchestratorDynamicWorkflowTests
         var updated = await _taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(updated);
         Assert.Equal(77, updated.WorkflowId);
+    }
+
+    [Fact]
+    public async Task Custom3StageWorkflow_TaskReview_DeterministicBuild_Implementation_ExecutesSequentiallyAndCompletesToReady()
+    {
+        // Custom 3-stage: task-review -> deterministic-build -> implementation
+        var workflow = new WorkflowDefinition
+        {
+            Id = 404,
+            Name = "Review Build Impl Pipeline",
+            Code = "review-build-impl",
+            Stages = new List<StageDefinition>
+            {
+                new()
+                {
+                    StageId = "task-review",
+                    DisplayName = "Task Review",
+                    SequenceOrder = 1,
+                    Kind = WorkflowStageKind.Agentic,
+                    CsharpImplementationType = "agentic",
+                    ConfigurationJson = """{"RequiredMode": 1}"""
+                },
+                new()
+                {
+                    StageId = "deterministic-build",
+                    DisplayName = "Deterministic Build",
+                    SequenceOrder = 2,
+                    Kind = WorkflowStageKind.Deterministic,
+                    CsharpImplementationType = "deterministic-build",
+                    ConfigurationJson = """{"Action": "Build", "FailOnError": true}"""
+                },
+                new()
+                {
+                    StageId = "implementation",
+                    DisplayName = "Implementation",
+                    SequenceOrder = 3,
+                    Kind = WorkflowStageKind.Agentic,
+                    CsharpImplementationType = "agentic",
+                    ConfigurationJson = """{"RequiredMode": 1}"""
+                }
+            }
+        };
+        await _workflowRepo.CreateWorkflowAsync(workflow);
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 60,
+            WorkspaceId = _workspace.Id,
+            WorkflowId = 404,
+            Status = TaskOverallStatus.Open
+        });
+        _depStore.AddTask(60, _workspace.Id, TaskOverallStatus.Open);
+
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
+            _gitManager, _pipelineProvider, _jobQueue, _depStore);
+
+        // Stage 1: task-review completes -> advances to deterministic-build
+        await orchestrator.ProcessTaskAsync(task.Id);
+        var state1 = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(state1);
+        Assert.Equal("deterministic-build", state1.CurrentStageId);
+
+        // Stage 2: deterministic-build completes -> advances to implementation
+        await orchestrator.ProcessTaskAsync(task.Id);
+        var state2 = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(state2);
+        Assert.Equal("implementation", state2.CurrentStageId);
+
+        // Stage 3: implementation completes -> pipeline finished -> transitions to Ready
+        await orchestrator.ProcessTaskAsync(task.Id);
+        var state3 = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(state3);
+        Assert.Equal(TaskOverallStatus.Ready, state3.Status);
+    }
+
+    [Fact]
+    public async Task DynamicFailureLoopback_Stage4Failure_RoutesBackToStage3AsConfigured()
+    {
+        _registry.RegisterHandler("failing-stage-4", (sp, def) =>
+        {
+            var config = System.Text.Json.JsonSerializer.Deserialize<DeterministicStageConfig>(def.ConfigurationJson) ?? new DeterministicStageConfig();
+            return new FailingQualityGateStage(def.StageId, def.DisplayName, config.LoopBackStageId);
+        });
+
+        var workflow = new WorkflowDefinition
+        {
+            Id = 505,
+            Name = "4-Stage Loopback Workflow",
+            Code = "4stage-loopback",
+            Stages = new List<StageDefinition>
+            {
+                new() { StageId = "stage-1", DisplayName = "Stage 1", SequenceOrder = 1, CsharpImplementationType = "agentic" },
+                new() { StageId = "stage-2", DisplayName = "Stage 2", SequenceOrder = 2, CsharpImplementationType = "agentic" },
+                new() { StageId = "stage-3", DisplayName = "Stage 3", SequenceOrder = 3, CsharpImplementationType = "agentic" },
+                new()
+                {
+                    StageId = "stage-4",
+                    DisplayName = "Stage 4 Failing Gate",
+                    SequenceOrder = 4,
+                    CsharpImplementationType = "failing-stage-4",
+                    ConfigurationJson = """{"LoopBackStageId": "stage-3"}"""
+                }
+            }
+        };
+        await _workflowRepo.CreateWorkflowAsync(workflow);
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 70,
+            WorkspaceId = _workspace.Id,
+            WorkflowId = 505,
+            CurrentStageId = "stage-4",
+            Status = TaskOverallStatus.Open
+        });
+        _depStore.AddTask(70, _workspace.Id, TaskOverallStatus.Open);
+
+        var orchestrator = new TaskOrchestrator(
+            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
+            _gitManager, _pipelineProvider, _jobQueue, _depStore);
+
+        // Process stage 4 -> fails and routes back to stage-3 with urgent enqueue
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var updated = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updated);
+        Assert.Equal("stage-3", updated.CurrentStageId);
+        Assert.Contains(task.Id, _jobQueue.UrgentQueue);
     }
 
     private class FailingQualityGateStage : IWorkflowStage

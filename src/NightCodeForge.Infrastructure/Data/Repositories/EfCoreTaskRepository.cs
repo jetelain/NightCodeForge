@@ -19,6 +19,7 @@ public class EfCoreTaskRepository : ITaskRepository
     public async Task<ForgeTask?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         return await _context.Tasks
+            .AsSplitQuery()
             .Include(i => i.Workspace)
             .Include(i => i.Workflow)
                 .ThenInclude(w => w!.Stages)
@@ -35,6 +36,7 @@ public class EfCoreTaskRepository : ITaskRepository
     {
         return await _context.Tasks
             .AsNoTracking()
+            .AsSplitQuery()
             .Include(i => i.Workflow)
             .Include(i => i.Dependencies)
             .Include(i => i.DependentTasks)
@@ -151,6 +153,7 @@ public class EfCoreTaskRepository : ITaskRepository
     {
         return await _context.Tasks
             .AsNoTracking()
+            .AsSplitQuery()
             .Include(i => i.Workspace)
             .Include(i => i.Checkpoints)
             .Include(i => i.ExecutionRecords)

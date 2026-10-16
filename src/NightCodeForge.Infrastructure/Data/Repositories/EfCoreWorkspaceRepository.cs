@@ -19,6 +19,7 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
     public async Task<Workspace?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         return await _context.Workspaces
+            .AsSplitQuery()
             .Include(w => w.AgentProfiles)
             .Include(w => w.Tasks)
             .FirstOrDefaultAsync(w => w.Id == id, cancellationToken);

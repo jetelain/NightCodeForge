@@ -28,7 +28,8 @@ public static class ServiceCollectionExtensions
     {
         // 1. Database
         services.AddDbContext<AppDbContext>(options =>
-            options.UseSqlite(dbConnectionString));
+            options.UseSqlite(dbConnectionString, sqliteOptions =>
+                sqliteOptions.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)));
 
         // 2. Repositories & Stores
         services.TryAddScoped<ITaskRepository, EfCoreTaskRepository>();
@@ -80,8 +81,6 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPreImplementationStage>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPostImplementationStage>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPostReviewStage>();
-        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.CompositeDeterministicStage>();
-        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicScriptStage>();
 
         services.TryAddScoped<IWorkflowPipeline>(sp => Default3AgentPipeline.Create(
             preImplStage: sp.GetService<NightCodeForge.Core.Workflow.Stages.DeterministicPreImplementationStage>(),

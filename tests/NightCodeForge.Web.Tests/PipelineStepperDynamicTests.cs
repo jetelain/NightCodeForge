@@ -132,4 +132,56 @@ public class PipelineStepperDynamicTests : BunitContext
         Assert.Contains("✓", step.TextContent);
         Assert.NotNull(step.QuerySelector(".status-overlay-success"));
     }
+
+    [Fact]
+    public void PipelineStepper_With7StageWorkflow_Renders8Steps7ConnectorsAndCorrectBadges()
+    {
+        var stages = new List<StageDefinition>
+        {
+            new() { Id = 1, SequenceOrder = 1, StageId = "triage", DisplayName = "Triage", Icon = "📋", Kind = WorkflowStageKind.Agentic },
+            new() { Id = 2, SequenceOrder = 2, StageId = "plan", DisplayName = "Plan", Icon = "📐", Kind = WorkflowStageKind.Agentic },
+            new() { Id = 3, SequenceOrder = 3, StageId = "build", DisplayName = "Build Baseline", Icon = "⚙️", Kind = WorkflowStageKind.Deterministic },
+            new() { Id = 4, SequenceOrder = 4, StageId = "code", DisplayName = "Implementation", Icon = "💻", Kind = WorkflowStageKind.Agentic },
+            new() { Id = 5, SequenceOrder = 5, StageId = "test", DisplayName = "Unit Tests", Icon = "🧪", Kind = WorkflowStageKind.Deterministic },
+            new() { Id = 6, SequenceOrder = 6, StageId = "audit", DisplayName = "Security Audit", Icon = "🛡️", Kind = WorkflowStageKind.Deterministic },
+            new() { Id = 7, SequenceOrder = 7, StageId = "review", DisplayName = "Maintainer Review", Icon = "🧐", Kind = WorkflowStageKind.Agentic }
+        };
+
+        var cut = Render<PipelineStepper>(p => p
+            .Add(s => s.WorkflowStages, stages)
+            .Add(s => s.CurrentStageId, "code")
+            .Add(s => s.CurrentStageStatus, StageExecutionStatus.Running));
+
+        // 7 configured stages + 1 implicit Merge stage = 8 step items
+        var steps = cut.FindAll(".step-item");
+        Assert.Equal(8, steps.Count);
+
+        // 7 connectors connecting the 8 steps
+        var connectors = cut.FindAll(".step-connector");
+        Assert.Equal(7, connectors.Count);
+
+        // Assert step circles are present on each step
+        var circles = cut.FindAll(".step-icon-circle");
+        Assert.Equal(8, circles.Count);
+
+        // GPU vs CPU badges
+        Assert.Contains("⚡ GPU", steps[0].TextContent); // triage (Agentic)
+        Assert.Contains("⚡ GPU", steps[1].TextContent); // plan (Agentic)
+        Assert.Contains("⚙️ CPU", steps[2].TextContent); // build (Deterministic)
+        Assert.Contains("⚡ GPU", steps[3].TextContent); // code (Agentic)
+        Assert.Contains("⚙️ CPU", steps[4].TextContent); // test (Deterministic)
+        Assert.Contains("⚙️ CPU", steps[5].TextContent); // audit (Deterministic)
+        Assert.Contains("⚡ GPU", steps[6].TextContent); // review (Agentic)
+        Assert.Contains("⚙️ CPU", steps[7].TextContent); // merge (Deterministic)
+
+        // Status circle states
+        Assert.Contains("step-completed", steps[0].ClassName);
+        Assert.Contains("step-completed", steps[1].ClassName);
+        Assert.Contains("step-completed", steps[2].ClassName);
+        Assert.Contains("step-active", steps[3].ClassName);
+        Assert.Contains("step-pending", steps[4].ClassName);
+        Assert.Contains("step-pending", steps[5].ClassName);
+        Assert.Contains("step-pending", steps[6].ClassName);
+        Assert.Contains("step-pending", steps[7].ClassName);
+    }
 }
