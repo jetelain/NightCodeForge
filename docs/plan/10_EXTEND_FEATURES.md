@@ -24,6 +24,8 @@ The core architecture of **NightCodeForge** delivers an autonomous software engi
 | **10.1** | [🔌 Step 10.1: Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio](phase-10/STEP_10_1_MCP_HTTP_AND_CONTAINER_SANDBOX_INTEGRATION.md) | First-class MCP tool discovery and execution via official Microsoft Agent Framework standards (`ModelContextProtocol`), streamable HTTP/SSE remote servers (Phase 1), and isolated stdio MCP servers running inside `ContainerSandbox` via `docker exec -i` (Phase 2). | Planned |
 | **10.2** | [📜 Step 10.2: Custom Repository Scripts for Deterministic Steps (Bash, Python, PowerShell)](phase-10/STEP_10_2_CUSTOM_SCRIPTS_FOR_DETERMINISTIC_STEPS.md) | Execution of custom repository scripts in `.nightcodeforge/scripts/` during deterministic stages across Bash, Python, and PowerShell. Automatic injection of `PipelineDataBag` as environment variables (`NCF_DATABAG_*`) and special stdout syntax (`::set-databag name=...` / `NCF_SET_DATA_*`) to set string properties in the data bag. | Planned |
 | **10.3** | [🐙 Step 10.3: GitHub Integration (Untrusted Intake Triage, PR Delivery & Task Mirroring)](phase-10/STEP_10_3_GITHUB_INTEGRATION_ISSUES_AND_PRS.md) | Modular, fully optional GitHub integration: untrusted issue intake routed to sandboxed triage (`RestrictedReadOnly` / `ITriageService`) to generate vetted proposals, Pull Request delivery mode with rich PR metadata, and bi-directional task mirroring (status labels and milestone comments). | Planned |
+| **10.4** | [🧹 Step 10.4: Smart CLI & Build Tool Output Filtering (Context Compression & Noise Reduction)](phase-10/STEP_10_4_SMART_CLI_AND_BASH_OUTPUT_FILTERING.md) | Semantic output filtering for verbose CLI tools (`dotnet build`, `msbuild`, `dotnet test`, `tsc`, `npm`). Relativizes full paths to workspace root, suppresses internal SDK boilerplates, drops non-fatal warnings when errors exist, and caps warning bursts while preserving raw audit logs in disk transcripts, with an optional agent parameter (`disable_filter`) to bypass filtering on demand. | Planned |
+| **10.5** | [💡 Step 10.5: Interactive Ideation Database Tasks & Lifecycle Management](phase-10/STEP_10_5_IDEATION_DATABASE_TASKS_AND_LIFECYCLE.md) | Immediate SQLite database task creation in `Draft` status during ideation chat, returning numeric task IDs for DAG dependencies. Provides scoped `edit_task` and `remove_task` tools for read-only agents, instant user Discard action, and automated TTL pruning for unapproved drafts after 24 hours. | Planned |
 | **10.x** | *Future Extended Features* | Additional integrations, advanced toolchains, and plugin capabilities will be appended here as requirements evolve. | Planned |
 
 ---
@@ -117,6 +119,25 @@ flowchart TD
     Exec -->|DeliveryMode: PullRequest| PushPR --> GH_PR
 ```
 
+### 3.4 Step 10.4: Smart CLI & Build Tool Output Filtering
+```mermaid
+flowchart LR
+    RawOutput["Raw CLI Output<br/>(dotnet build / test)"] --> Filter["SmartCliOutputFilter<br/>- Relativize Paths<br/>- Strip SDK Boilerplate<br/>- Suppress Warnings on Errors"]
+    Filter --> CompactContext["Agent Context (bash tool return)<br/>(95% Token Reduction)"]
+    RawOutput --> FullTranscripts["Disk Transcripts & Inspector<br/>(Full Raw Auditability)"]
+```
+
+### 3.5 Step 10.5: Ideation Database Tasks & Lifecycle
+```mermaid
+flowchart TD
+    IdeationAgent["Ideation Agent<br/>(ReadOnly)"] -->|propose_tasks| DB[("ForgeTask (Status = Draft)")]
+    DB -->|Returns Task #104| IdeationAgent
+    IdeationAgent -->|Next task depends_on: [104]| DB
+    IdeationAgent -->|edit_task / remove_task| DB
+    DB --> UI["Ideation UI (Approve vs Discard)"]
+    DB -.->|Stale Drafts > 24h| Reaper["IdeationDraftPruningService"]
+```
+
 ---
 
 ## 4. Phase 10 Definition of Done (DoD) Checklist
@@ -141,5 +162,22 @@ flowchart TD
   - [ ] Implement Sub-Feature B: `DeliveryMode.PullRequest` pushing feature branches and creating rich markdown PRs with quality gate metrics.
   - [ ] Implement Sub-Feature C: `GitHubTaskMirrorService` synchronizing task status labels and milestone comments.
   - [ ] Add UI controls in Workspace Settings (enable toggles, token, repo configuration) and Review Room (PR creation button and link badge).
+
+- [ ] **Step 10.4 (Smart CLI Output Filtering):**
+  - [ ] Implement `ICliOutputFilter` and `DotNetCliOutputFilter` with workspace path relativization.
+  - [ ] Implement warning suppression policy (drop warnings when fatal errors exist, cap warnings when no errors).
+  - [ ] Strip internal SDK boilerplate and verbose package restore lines.
+  - [ ] Wire into `CanonicalTools.BashAsync` (with `disable_filter` parameter) and deterministic stage diagnostics.
+  - [ ] Containerized synthetic test suite validating 5 test cases against real compiler output.
+
+- [ ] **Step 10.5 (Ideation Database Tasks & Lifecycle):**
+  - [ ] Add `TaskOverallStatus.Draft = -1` and update database queries to exclude drafts from active execution queues.
+  - [ ] Strictly isolate and exclude `Draft` tasks from `Backlog.razor`, `KanbanBoard.razor`, and `DagVisualizer.razor` views.
+  - [ ] Immediately write proposed tasks to database and return numeric `Id` for concrete DAG dependencies.
+  - [ ] Implement `edit_task` and `remove_task` tools for ideation agents, strictly scoped to unapproved `Draft` tasks.
+  - [ ] Implement UI actions in `IdeationProposalCard.razor`: instant "Discard" (delete) and "Approve" (promote).
+  - [ ] Implement Hangfire recurring job `IdeationDraftPruningService` to purge stale unapproved drafts older than 24h.
+
+
 
 

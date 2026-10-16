@@ -108,7 +108,7 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 | **Phase 7** | [docs/plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md](plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md) | Playwright automated browser test suite driving workspace creation, task ideation, promotion, execution, deterministic gates, and diff review. |
 | **Phase 8** | [docs/plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md](plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md) | Database-persisted `WorkflowDefinition` & `StageDefinition`, dynamic C# stage dispatcher, default 6-stage seeding, and permanent ideation chat persistence in SQLite. |
 | **Phase 9** | [docs/plan/09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md](plan/09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md) | Architectural cleanup aligning with `AGENTS.md`: elimination of optional constructor parameters, hard errors on missing database records, constants/enums, and clean-break pruning. |
-| **Phase 10** | [docs/plan/10_EXTEND_FEATURES.md](plan/10_EXTEND_FEATURES.md) | Extensible capabilities: MCP client integration (HTTP & container stdio), custom repository deterministic scripts (.sh, .py, .ps1) with bi-directional data bag interop, and optional GitHub integration (issue scanner and PR delivery). |
+| **Phase 10** | [docs/plan/10_EXTEND_FEATURES.md](plan/10_EXTEND_FEATURES.md) | Extensible capabilities: MCP client integration (HTTP & container stdio), custom repository deterministic scripts (.sh, .py, .ps1), optional GitHub integration (triage, PR delivery, mirroring), smart CLI output filtering, and ideation database tasks with draft lifecycle management. |
 
 ---
 
@@ -469,7 +469,11 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
      * **Untrusted Issue Intake & Triage:** Discovered issues are ingested as external untrusted reports into the sandboxed `ITriageService` (`RestrictedReadOnly` / `AgentMode.ReadOnly`) to reproduce, verify context, and propose vetted `Suggested` backlog tasks.
      * **Pull Request Delivery Mode:** Alternate delivery flow pushing feature branches to GitHub and opening rich pull requests with stage history and quality gate metrics instead of direct workspace merges.
      * **Task Mirroring:** Bi-directional lifecycle synchronization mirroring task states to GitHub Issues via progress labels (`ncf:in-progress`, `ncf:ready`) and milestone comments.
-  4. **Future Extended Features:** Modular additions, external integrations, and specialized tooling to be specified and incorporated incrementally.
-* **Deliverables:** Operational MCP client integration, repository custom deterministic script runner with data bag interop, and optional GitHub untrusted issue triage, PR delivery, and task mirroring integration.
+  4. **Smart CLI & Build Tool Output Filtering (Step 10.4):** Semantic output filtering for verbose CLI tools (`dotnet build`, `msbuild`, `dotnet test`, `tsc`, `npm`) executed via `bash` or deterministic stages. Relativizes paths to workspace root, suppresses internal SDK boilerplate, drops non-fatal warnings when errors exist, and caps warning bursts while preserving raw audit logs in disk transcripts, with an optional agent parameter (`disable_filter`) to bypass filtering on demand.
+  5. **Ideation Database Tasks & Lifecycle Management (Step 10.5):** Immediately writes proposed tasks to the database with `TaskOverallStatus.Draft` so numeric task IDs are returned to the agent for concrete DAG dependencies (`depends_on`). Provides scoped `edit_task` and `remove_task` tools for read-only ideation agents, instant user Discard action, and automated Hangfire TTL pruning of unapproved drafts after 24 hours.
+  6. **Future Extended Features:** Modular additions, external integrations, and specialized tooling to be specified and incorporated incrementally.
+* **Deliverables:** Operational MCP client integration, repository custom deterministic script runner with data bag interop, optional GitHub integration suite, smart CLI output filter pipeline, and interactive ideation database task lifecycle management.
+
+
 
 
