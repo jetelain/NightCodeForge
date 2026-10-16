@@ -108,7 +108,7 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 | **Phase 7** | [docs/plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md](plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md) | Playwright automated browser test suite driving workspace creation, task ideation, promotion, execution, deterministic gates, and diff review. |
 | **Phase 8** | [docs/plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md](plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md) | Database-persisted `WorkflowDefinition` & `StageDefinition`, dynamic C# stage dispatcher, default 6-stage seeding, and permanent ideation chat persistence in SQLite. |
 | **Phase 9** | [docs/plan/09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md](plan/09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md) | Architectural cleanup aligning with `AGENTS.md`: elimination of optional constructor parameters, hard errors on missing database records, constants/enums, and clean-break pruning. |
-| **Phase 10** | [docs/plan/10_EXTEND_FEATURES.md](plan/10_EXTEND_FEATURES.md) | Extensible capabilities, Model Context Protocol (MCP) HTTP/SSE and ContainerSandbox stdio client integration, and ecosystem expansion. |
+| **Phase 10** | [docs/plan/10_EXTEND_FEATURES.md](plan/10_EXTEND_FEATURES.md) | Extensible capabilities: MCP client integration (HTTP & container stdio), custom repository deterministic scripts (.sh, .py, .ps1) with bi-directional data bag interop, and optional GitHub integration (issue scanner and PR delivery). |
 
 ---
 
@@ -461,9 +461,15 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 ### Phase 10: Extend Features & Integrations
 > 📖 **Detailed Implementation Guide:** [docs/plan/10_EXTEND_FEATURES.md](plan/10_EXTEND_FEATURES.md)  
 > 📂 **Step Specifications:** [docs/plan/phase-10/](plan/phase-10/)
-* **Objective:** Expand NightCodeForge beyond core lifecycle orchestration with modular extensions, external integrations, and advanced protocols.
+* **Objective:** Expand NightCodeForge beyond core lifecycle orchestration with modular extensions, external integrations, custom repository deterministic scripts, and advanced protocols.
 * **Tasks:**
   1. **MCP Integration (Step 10.1):** First-class Model Context Protocol (MCP) discovery and execution via official Microsoft Agent Framework packages (`ModelContextProtocol`), supporting streamable HTTP/SSE remote servers (Phase 1) and isolated stdio servers running inside `ContainerSandbox` via `docker exec -i` (Phase 2).
-  2. **Future Extended Features:** Modular additions, external integrations, and specialized tooling to be specified and incorporated incrementally.
-* **Deliverables:** Operational MCP client integration and extensibility framework for future capabilities.
+  2. **Custom Deterministic Repository Scripts (Step 10.2):** Run Bash (`.sh`), Python (`.py`), or PowerShell (`.ps1`) scripts located in workspace repositories under `.nightcodeforge/scripts/` during deterministic stages. Expose cross-stage `PipelineDataBag` state as environment variables (`NCF_DATABAG_<KEY>`) and intercept special stdout directives (`::set-databag name=<key>::<value>` or `NCF_SET_DATA_<KEY>=<VALUE>`) to update string properties back into the data bag.
+  3. **GitHub Integration (Step 10.3 - Optional Sub-Features):**
+     * **Untrusted Issue Intake & Triage:** Discovered issues are ingested as external untrusted reports into the sandboxed `ITriageService` (`RestrictedReadOnly` / `AgentMode.ReadOnly`) to reproduce, verify context, and propose vetted `Suggested` backlog tasks.
+     * **Pull Request Delivery Mode:** Alternate delivery flow pushing feature branches to GitHub and opening rich pull requests with stage history and quality gate metrics instead of direct workspace merges.
+     * **Task Mirroring:** Bi-directional lifecycle synchronization mirroring task states to GitHub Issues via progress labels (`ncf:in-progress`, `ncf:ready`) and milestone comments.
+  4. **Future Extended Features:** Modular additions, external integrations, and specialized tooling to be specified and incorporated incrementally.
+* **Deliverables:** Operational MCP client integration, repository custom deterministic script runner with data bag interop, and optional GitHub untrusted issue triage, PR delivery, and task mirroring integration.
+
 
