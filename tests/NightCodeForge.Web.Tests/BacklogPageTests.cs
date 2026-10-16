@@ -35,6 +35,7 @@ public class BacklogPageTests : BunitContext
 
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
+        Services.AddSingleton<IWorkflowRepository>(new InMemoryWorkflowRepository());
         Services.AddSingleton<ITaskDependencyStore>(_depStore);
         Services.AddSingleton<IDependencyResolutionEngine>(_dependencyEngine);
         Services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);

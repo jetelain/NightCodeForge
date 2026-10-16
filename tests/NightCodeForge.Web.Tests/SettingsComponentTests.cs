@@ -58,6 +58,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
         Services.AddDbContext<AppDbContext>(opts => opts.UseSqlite(_connection));
         Services.AddScoped<IWorkspaceRepository, EfCoreWorkspaceRepository>();
+        Services.AddScoped<IWorkflowRepository, EfCoreWorkflowRepository>();
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton(_toastService);
         Services.AddSingleton<IGlobalOptimizationSettingsService>(_optService);

@@ -7,10 +7,29 @@ namespace NightCodeForge.Web.Tests;
 
 public class PipelineStepperTests : BunitContext
 {
+    private static List<StageDefinition> CreateTestStages() => new()
+    {
+        new() { SequenceOrder = 1, StageId = "task-review", DisplayName = "ForgeTask Review", Kind = WorkflowStageKind.Agentic, Icon = "🔍" },
+        new() { SequenceOrder = 2, StageId = "deterministic-pre-impl", DisplayName = "Pre-Impl Baseline", Kind = WorkflowStageKind.Deterministic, Icon = "⚙️" },
+        new() { SequenceOrder = 3, StageId = "implementation", DisplayName = "Implementation", Kind = WorkflowStageKind.Agentic, Icon = "💻" },
+        new() { SequenceOrder = 4, StageId = "deterministic-post-impl", DisplayName = "Post-Impl Gates", Kind = WorkflowStageKind.Deterministic, Icon = "🧪" },
+        new() { SequenceOrder = 5, StageId = "code-review-fix", DisplayName = "Code Review", Kind = WorkflowStageKind.Agentic, Icon = "🧐" },
+        new() { SequenceOrder = 6, StageId = "deterministic-post-review", DisplayName = "Post-Review Verification", Kind = WorkflowStageKind.Deterministic, Icon = "🛡️" },
+        new() { SequenceOrder = 7, StageId = "merge", DisplayName = "Merge Resolution", Kind = WorkflowStageKind.Deterministic, Icon = "🔀" }
+    };
+
     [Fact]
-    public void PipelineStepper_RendersAllSevenStagesWithBadges()
+    public void PipelineStepper_WhenNoStagesProvided_RendersEmpty()
     {
         var cut = Render<PipelineStepper>();
+        var steps = cut.FindAll(".step-item");
+        Assert.Empty(steps);
+    }
+
+    [Fact]
+    public void PipelineStepper_RendersConfiguredStagesWithBadges()
+    {
+        var cut = Render<PipelineStepper>(p => p.Add(s => s.WorkflowStages, CreateTestStages()));
 
         var steps = cut.FindAll(".step-item");
         Assert.Equal(7, steps.Count);
@@ -39,8 +58,8 @@ public class PipelineStepperTests : BunitContext
         Assert.Contains("⚙️ CPU", steps[5].TextContent);
         Assert.Contains("Post-Review Verification", steps[5].TextContent);
 
-        // Stage 7 is Merge Gate
-        Assert.Contains("🔀 Gate", steps[6].TextContent);
+        // Stage 7 is Deterministic CPU
+        Assert.Contains("⚙️ CPU", steps[6].TextContent);
         Assert.Contains("Merge Resolution", steps[6].TextContent);
     }
 
@@ -48,7 +67,8 @@ public class PipelineStepperTests : BunitContext
     public void PipelineStepper_WhenStageRunning_DisplaysActiveClassAndPulsingSpinner()
     {
         var cut = Render<PipelineStepper>(p => p
-            .Add(c => c.CurrentStageId, "ImplementationStage")
+            .Add(c => c.WorkflowStages, CreateTestStages())
+            .Add(c => c.CurrentStageId, "implementation")
             .Add(c => c.CurrentStageStatus, StageExecutionStatus.Running));
 
         var steps = cut.FindAll(".step-item");
@@ -69,11 +89,11 @@ public class PipelineStepperTests : BunitContext
     [Fact]
     public void PipelineStepper_WhenDeterministicGateResultReceived_DisplaysMetricsBadge()
     {
-        var cut = Render<PipelineStepper>();
+        var cut = Render<PipelineStepper>(p => p.Add(c => c.WorkflowStages, CreateTestStages()));
 
         cut.InvokeAsync(() =>
         {
-            cut.Instance.ApplyGateResult("CoverageGate", true, "+1.4% Coverage");
+            cut.Instance.ApplyGateResult("deterministic-post-impl", true, "+1.4% Coverage");
         });
 
         var steps = cut.FindAll(".step-item");
@@ -88,11 +108,11 @@ public class PipelineStepperTests : BunitContext
     [Fact]
     public void PipelineStepper_WhenWaitingForHuman_RendersWaitingIconAndClass()
     {
-        var cut = Render<PipelineStepper>();
+        var cut = Render<PipelineStepper>(p => p.Add(c => c.WorkflowStages, CreateTestStages()));
 
         cut.InvokeAsync(() =>
         {
-            cut.Instance.ApplyStageTransition("MergeGate", StageExecutionStatus.WaitingForHuman);
+            cut.Instance.ApplyStageTransition("merge", StageExecutionStatus.WaitingForHuman);
         });
 
         var steps = cut.FindAll(".step-item");
@@ -103,9 +123,10 @@ public class PipelineStepperTests : BunitContext
     }
 
     [Fact]
-    public void PipelineStepper_WhenHyphenatedStageIdRunning_CorrectlyActivatesStep()
+    public void PipelineStepper_WhenStageIdRunning_CorrectlyActivatesStep()
     {
         var cut = Render<PipelineStepper>(p => p
+            .Add(c => c.WorkflowStages, CreateTestStages())
             .Add(c => c.CurrentStageId, "task-review")
             .Add(c => c.CurrentStageStatus, StageExecutionStatus.Running));
 

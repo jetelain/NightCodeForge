@@ -11,7 +11,11 @@ public class InMemoryWorkflowRepository : IWorkflowRepository
     private readonly ConcurrentDictionary<int, WorkflowDefinition> _workflows = new();
     private int _nextId = 1;
 
-    public InMemoryWorkflowRepository(IEnumerable<WorkflowDefinition>? initialWorkflows = null)
+    public InMemoryWorkflowRepository()
+    {
+    }
+
+    public InMemoryWorkflowRepository(IEnumerable<WorkflowDefinition>? initialWorkflows)
     {
         if (initialWorkflows != null)
         {
@@ -46,7 +50,12 @@ public class InMemoryWorkflowRepository : IWorkflowRepository
             ?? _workflows.Values.FirstOrDefault(w => string.Equals(w.Code, "standard-3-agent", StringComparison.OrdinalIgnoreCase))
             ?? _workflows.Values.FirstOrDefault();
 
-        return Task.FromResult(def != null ? CloneWorkflow(def) : null);
+        if (def == null)
+        {
+            throw new InvalidOperationException("Default workflow does not exist in database.");
+        }
+
+        return Task.FromResult<WorkflowDefinition?>(CloneWorkflow(def));
     }
 
     public Task<IReadOnlyList<WorkflowDefinition>> GetWorkflowsAsync(int? workspaceId = null, CancellationToken cancellationToken = default)

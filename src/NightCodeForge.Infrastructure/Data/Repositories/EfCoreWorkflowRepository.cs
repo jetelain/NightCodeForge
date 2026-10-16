@@ -36,6 +36,11 @@ public class EfCoreWorkflowRepository : IWorkflowRepository
                 .FirstOrDefaultAsync(w => w.Code == "standard-3-agent", cancellationToken);
         }
 
+        if (def == null)
+        {
+            throw new InvalidOperationException("Default workflow does not exist in database.");
+        }
+
         return def;
     }
 

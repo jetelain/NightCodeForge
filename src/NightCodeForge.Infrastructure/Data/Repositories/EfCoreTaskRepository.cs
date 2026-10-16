@@ -20,6 +20,8 @@ public class EfCoreTaskRepository : ITaskRepository
     {
         return await _context.Tasks
             .Include(i => i.Workspace)
+            .Include(i => i.Workflow)
+                .ThenInclude(w => w!.Stages)
             .Include(i => i.Dependencies)
             .Include(i => i.Questions)
             .Include(i => i.Checkpoints)
@@ -33,6 +35,7 @@ public class EfCoreTaskRepository : ITaskRepository
     {
         return await _context.Tasks
             .AsNoTracking()
+            .Include(i => i.Workflow)
             .Include(i => i.Dependencies)
             .Include(i => i.DependentTasks)
             .Include(i => i.Questions)

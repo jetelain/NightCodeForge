@@ -3718,6 +3718,52 @@ code, kbd, samp, pre {
     border-top-color: #ffffff;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.stage-icon-text {
+    font-size: 1rem;
+    line-height: 1;
+    z-index: 1;
+}
+
+.step-active .stage-icon-text {
+    opacity: 0.85;
+}
+
+.status-overlay {
+    position: absolute;
+    bottom: -3px;
+    right: -3px;
+    font-size: 0.62rem;
+    font-weight: 800;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    border: 1.5px solid var(--bg-surface);
+    z-index: 2;
+}
+
+.status-overlay-success {
+    background: #10b981;
+    color: #ffffff;
+}
+
+.status-overlay-failed {
+    background: #ef4444;
+    color: #ffffff;
+}
+
+.status-overlay-waiting {
+    background: #f59e0b;
+    color: #ffffff;
 }
 
 .step-title {
@@ -5593,6 +5639,67 @@ code, kbd, samp, pre {
     background: rgba(20, 184, 166, 0.18);
     border: 1px solid rgba(20, 184, 166, 0.4);
     color: #5eead4;
+}
+
+/* Workflow Management & Stage Inspector */
+.workflow-management-grid {
+    display: grid;
+    grid-template-columns: minmax(320px, 400px) minmax(0, 1fr);
+    gap: 1.5rem;
+    align-items: start;
+}
+
+@media (max-width: 1024px) {
+    .workflow-management-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.workflow-card-item {
+    padding: 1.25rem;
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    cursor: pointer;
+    transition: all var(--transition-normal);
+}
+
+.workflow-card-item:hover {
+    border-color: var(--accent-indigo);
+    transform: translateY(-1px);
+}
+
+.workflow-card-item.selected {
+    border-color: var(--accent-indigo);
+    background: rgba(99, 102, 241, 0.08);
+    box-shadow: 0 0 16px rgba(99, 102, 241, 0.15);
+}
+
+.stage-inspector-item {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.85rem;
+    transition: border-color var(--transition-normal);
+}
+
+.stage-inspector-item:hover {
+    border-color: var(--border-strong);
+}
+
+.stage-config-json-viewer {
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 0.75rem 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    max-height: 240px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
 }
 
 

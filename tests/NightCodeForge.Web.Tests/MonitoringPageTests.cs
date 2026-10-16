@@ -27,6 +27,7 @@ public class MonitoringPageTests : BunitContext
         Services.AddSingleton(_workerState);
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
+        Services.AddSingleton<IWorkflowRepository>(new InMemoryWorkflowRepository(new[] { TestWorkflowFixtures.CreateStandardWorkflow() }));
         Services.AddSingleton(_hubConnection);
     }
 
@@ -52,8 +53,8 @@ public class MonitoringPageTests : BunitContext
     {
         var cut = Render<Monitoring>();
 
-        // Simulate SignalR event
-        _hubConnection.TriggerStageTransition(15, "ImplementationStage", "Agentic", "Running");
+        // Simulate SignalR event with exact stage ID
+        _hubConnection.TriggerStageTransition(15, "implementation", "Agentic", "Running");
 
         // Stepper reflects running stage 3
         cut.WaitForState(() => cut.FindAll("#stage-step-3.step-active").Any());
@@ -62,7 +63,7 @@ public class MonitoringPageTests : BunitContext
 
         // Terminal console has log
         var terminalLogs = cut.FindAll(".log-line");
-        Assert.Contains(terminalLogs, l => l.TextContent.Contains("Stage transition: ImplementationStage"));
+        Assert.Contains(terminalLogs, l => l.TextContent.Contains("Stage transition: implementation"));
     }
 
     [Fact]
@@ -70,7 +71,7 @@ public class MonitoringPageTests : BunitContext
     {
         var cut = Render<Monitoring>();
 
-        _hubConnection.TriggerDeterministicGateResult(15, "CoverageGate", true, "+1.4% Coverage");
+        _hubConnection.TriggerDeterministicGateResult(15, "deterministic-post-impl", true, "+1.4% Coverage");
 
         var stage4 = cut.Find("#stage-step-4");
         Assert.Contains("step-completed", stage4.ClassName);

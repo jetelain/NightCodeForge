@@ -3,50 +3,57 @@
 
 <div class="pipeline-stepper-container card-surface">
     <div class="pipeline-stepper">
-        @foreach (var stage in Stages)
+        @for (int i = 0; i < Stages.Count; i++)
         {
+            var stage = Stages[i];
             var isClickable = OnStageSelected.HasDelegate;
+            var isLast = i == Stages.Count - 1;
+            var isMergeStage = stage.StageId.Equals(MergeStageId, StringComparison.OrdinalIgnoreCase);
             <div class="step-item @GetStepClass(stage) @(isClickable ? "step-clickable" : "")"
-                 id="stage-step-@stage.Order"
+                 id="stage-step-@stage.SequenceOrder"
                  style="@(isClickable ? "cursor: pointer;" : "")"
-                 @onclick="() => HandleStageClick(stage.Id)"
-                 title="@(isClickable ? $"Select {stage.Name} conversation" : stage.Name)">
+                 @onclick="() => HandleStageClick(stage.StageId)"
+                 title="@(isClickable ? $"Select {stage.DisplayName} conversation" : stage.DisplayName)">
                 <div class="step-header">
-                    <span class="step-badge @(stage.IsAgentic ? "badge-gpu" : (stage.Order == 7 ? "badge-gate" : "badge-cpu"))">
-                        @(stage.IsAgentic ? "⚡ GPU" : (stage.Order == 7 ? "🔀 Gate" : "⚙️ CPU"))
+                    <span class="step-badge @(stage.IsAgentic ? "badge-gpu" : "badge-cpu")">
+                        @(stage.IsAgentic ? "⚡ GPU" : "⚙️ CPU")
                     </span>
-                    <span class="step-index">#@stage.Order</span>
+                    <span class="step-index">#@stage.SequenceOrder</span>
                 </div>
                 <div class="step-icon-circle">
                     @if (stage.Status == StageExecutionStatus.Running)
                     {
                         <div class="spinner-pulse"></div>
+                        <span class="stage-icon-text">@stage.Icon</span>
                     }
                     else if (stage.Status == StageExecutionStatus.Completed)
                     {
-                        <span>✓</span>
+                        <span class="stage-icon-text">@stage.Icon</span>
+                        <span class="status-overlay status-overlay-success">✓</span>
                     }
                     else if (stage.Status == StageExecutionStatus.Failed)
                     {
-                        <span>✕</span>
+                        <span class="stage-icon-text">@stage.Icon</span>
+                        <span class="status-overlay status-overlay-failed">✕</span>
                     }
                     else if (stage.Status == StageExecutionStatus.WaitingForHuman)
                     {
-                        <span>✋</span>
+                        <span class="stage-icon-text">@stage.Icon</span>
+                        <span class="status-overlay status-overlay-waiting">✋</span>
                     }
                     else
                     {
-                        <span>@stage.Order</span>
+                        <span class="stage-icon-text">@stage.Icon</span>
                     }
                 </div>
-                <div class="step-title">@stage.Name</div>
+                <div class="step-title">@stage.DisplayName</div>
                 <div class="step-status">@stage.StatusText</div>
                 @if (!string.IsNullOrEmpty(stage.MetricsSummary))
                 {
                     <div class="step-metrics-badge">@stage.MetricsSummary</div>
                 }
             </div>
-            @if (stage.Order < 7)
+            @if (!isLast)
             {
                 <div class="step-connector @(IsConnectorActive(stage) ? "connector-completed" : "")"></div>
             }
@@ -55,99 +62,139 @@
 </div>
 
 @code {
+    public const string MergeStageId = "merge";
+    public const string MergeStageDisplayName = "Merge Resolution";
+    public const string MergeStageIcon = "🔀";
+
     [Parameter] public int? TaskId { get; set; }
+    [Parameter] public IReadOnlyList<StageDefinition>? WorkflowStages { get; set; }
     [Parameter] public string? CurrentStageId { get; set; }
     [Parameter] public StageExecutionStatus? CurrentStageStatus { get; set; }
     [Parameter] public TaskOverallStatus? OverallStatus { get; set; }
     [Parameter] public IEnumerable<Conversation>? Conversations { get; set; }
     [Parameter] public EventCallback<string> OnStageSelected { get; set; }
 
-    public class StageDefinition
+    public class StageStepItem
     {
-        public int Order { get; set; }
-        public string Id { get; set; } = "";
-        public string Name { get; set; } = "";
-        public bool IsAgentic { get; set; }
+        public int SequenceOrder { get; set; }
+        public string StageId { get; set; } = "";
+        public string DisplayName { get; set; } = "";
+        public string Icon { get; set; } = "⚙️";
+        public WorkflowStageKind Kind { get; set; } = WorkflowStageKind.Agentic;
+        public bool IsAgentic => Kind == WorkflowStageKind.Agentic;
         public StageExecutionStatus Status { get; set; } = StageExecutionStatus.Pending;
         public string StatusText { get; set; } = "Pending";
         public string? MetricsSummary { get; set; }
+
+        public int Order => SequenceOrder;
+        public string Id => StageId;
+        public string Name => DisplayName;
     }
 
-    public List<StageDefinition> Stages { get; set; } = CreateDefaultStages();
+    public List<StageStepItem> Stages { get; set; } = new();
 
-    private static List<StageDefinition> CreateDefaultStages() => new()
+    private List<StageStepItem> InitializeStages()
     {
-        new StageDefinition { Order = 1, Id = "task-review", Name = "ForgeTask Review", IsAgentic = true, StatusText = "Awaiting review" },
-        new StageDefinition { Order = 2, Id = "deterministic-pre-impl", Name = "Pre-Impl Baseline", IsAgentic = false, StatusText = "Baseline build & tests" },
-        new StageDefinition { Order = 3, Id = "implementation", Name = "Implementation", IsAgentic = true, StatusText = "Code modification" },
-        new StageDefinition { Order = 4, Id = "deterministic-post-impl", Name = "Post-Impl Gates", IsAgentic = false, StatusText = "Ratchets & coverage" },
-        new StageDefinition { Order = 5, Id = "code-review-fix", Name = "Code Review", IsAgentic = true, StatusText = "Gap analysis & fixes" },
-        new StageDefinition { Order = 6, Id = "deterministic-post-review", Name = "Post-Review Verification", IsAgentic = false, StatusText = "Deterministic validation" },
-        new StageDefinition { Order = 7, Id = "merge", Name = "Merge Resolution", IsAgentic = false, StatusText = "Squash & merge gate" }
-    };
+        if (WorkflowStages != null && WorkflowStages.Count > 0)
+        {
+            var items = WorkflowStages
+                .OrderBy(s => s.SequenceOrder)
+                .Select(s => new StageStepItem
+                {
+                    SequenceOrder = s.SequenceOrder,
+                    StageId = s.StageId,
+                    DisplayName = s.DisplayName,
+                    Icon = string.IsNullOrWhiteSpace(s.Icon) ? (s.Kind == WorkflowStageKind.Agentic ? "⚡" : "⚙️") : s.Icon,
+                    Kind = s.Kind,
+                    Status = StageExecutionStatus.Pending,
+                    StatusText = "Pending"
+                })
+                .ToList();
+
+            // Merge is an implicit final stage of all workflows
+            if (!items.Any(s => s.StageId.Equals(MergeStageId, StringComparison.OrdinalIgnoreCase)))
+            {
+                items.Add(new StageStepItem
+                {
+                    SequenceOrder = items.Count + 1,
+                    StageId = MergeStageId,
+                    DisplayName = MergeStageDisplayName,
+                    Icon = MergeStageIcon,
+                    Kind = WorkflowStageKind.Deterministic,
+                    Status = StageExecutionStatus.Pending,
+                    StatusText = "Squash & merge gate"
+                });
+            }
+
+            return items;
+        }
+
+        return new List<StageStepItem>();
+    }
 
     private int? _lastTaskId;
 
     protected override void OnParametersSet()
     {
-        if (OverallStatus.HasValue || (Conversations != null && Conversations.Any()) || (TaskId.HasValue && TaskId != _lastTaskId))
+        Stages = InitializeStages();
+        _lastTaskId = TaskId;
+
+        if (Stages.Count == 0) return;
+
+        if (OverallStatus == TaskOverallStatus.Closed)
         {
-            Stages = CreateDefaultStages();
-            _lastTaskId = TaskId;
-
-            if (OverallStatus == TaskOverallStatus.Closed)
+            foreach (var st in Stages)
             {
-                foreach (var st in Stages)
-                {
-                    st.Status = StageExecutionStatus.Completed;
-                    st.StatusText = "Completed";
-                }
-                return;
+                st.Status = StageExecutionStatus.Completed;
+                st.StatusText = "Completed";
             }
-            if (OverallStatus == TaskOverallStatus.Ready)
-            {
-                foreach (var st in Stages)
-                {
-                    st.Status = StageExecutionStatus.Completed;
-                    st.StatusText = st.Order < 7 ? "Completed" : "Ready to Merge";
-                }
-                return;
-            }
+            return;
+        }
 
-            if (Conversations != null && Conversations.Any())
+        if (OverallStatus == TaskOverallStatus.Ready)
+        {
+            for (int i = 0; i < Stages.Count; i++)
             {
-                foreach (var conv in Conversations.OrderByDescending(c => c.StartedAt))
+                var st = Stages[i];
+                st.Status = StageExecutionStatus.Completed;
+                st.StatusText = (i == Stages.Count - 1) ? "Ready to Merge" : "Completed";
+            }
+            return;
+        }
+
+        if (Conversations != null && Conversations.Any())
+        {
+            foreach (var conv in Conversations.OrderByDescending(c => c.StartedAt))
+            {
+                var order = ResolveStageOrder(conv.StageId);
+                var st = Stages.FirstOrDefault(s => s.SequenceOrder == order);
+                if (st != null)
                 {
-                    var order = ResolveStageOrder(conv.StageId);
-                    var st = Stages.FirstOrDefault(s => s.Order == order);
-                    if (st != null)
+                    if (conv.Status is StageExecutionStatus.Completed or StageExecutionStatus.Failed
+                        or StageExecutionStatus.Running or StageExecutionStatus.WaitingForHuman)
                     {
-                        if (conv.Status is StageExecutionStatus.Completed or StageExecutionStatus.Failed
-                            or StageExecutionStatus.Running or StageExecutionStatus.WaitingForHuman)
-                        {
-                            st.Status = conv.Status;
-                            st.StatusText = GetDefaultStatusText(conv.Status);
-                        }
-                        if (!string.IsNullOrWhiteSpace(conv.Summary))
-                        {
-                            st.MetricsSummary = conv.Summary;
-                        }
+                        st.Status = conv.Status;
+                        st.StatusText = GetDefaultStatusText(conv.Status);
+                    }
+                    if (!string.IsNullOrWhiteSpace(conv.Summary))
+                    {
+                        st.MetricsSummary = conv.Summary;
                     }
                 }
             }
+        }
 
-            if (OverallStatus == TaskOverallStatus.Failed)
+        if (OverallStatus == TaskOverallStatus.Failed)
+        {
+            var failedStage = Stages.FirstOrDefault(s => s.Status == StageExecutionStatus.Failed);
+            if (failedStage == null && !string.IsNullOrEmpty(CurrentStageId))
             {
-                var failedStage = Stages.FirstOrDefault(s => s.Status == StageExecutionStatus.Failed);
-                if (failedStage == null && !string.IsNullOrEmpty(CurrentStageId))
+                var order = ResolveStageOrder(CurrentStageId);
+                var target = Stages.FirstOrDefault(s => s.SequenceOrder == order);
+                if (target != null)
                 {
-                    var order = ResolveStageOrder(CurrentStageId);
-                    var target = Stages.FirstOrDefault(s => s.Order == order);
-                    if (target != null)
-                    {
-                        target.Status = StageExecutionStatus.Failed;
-                        target.StatusText = "Failed";
-                    }
+                    target.Status = StageExecutionStatus.Failed;
+                    target.StatusText = "Failed";
                 }
             }
         }
@@ -186,7 +233,7 @@
         for (int i = 0; i < Stages.Count; i++)
         {
             var st = Stages[i];
-            if (st.Order < order)
+            if (st.SequenceOrder < order)
             {
                 if (st.Status != StageExecutionStatus.Failed)
                 {
@@ -194,7 +241,7 @@
                     st.StatusText = "Completed";
                 }
             }
-            else if (st.Order == order)
+            else if (st.SequenceOrder == order)
             {
                 st.Status = status;
                 st.StatusText = GetDefaultStatusText(status);
@@ -218,45 +265,41 @@
         _ => status.ToString()
     };
 
-    public void ApplyGateResult(string gateName, bool passed, string metricsSummary)
+    public void ApplyGateResult(string stageId, bool passed, string metricsSummary)
     {
-        var order = gateName.Contains("Pre", StringComparison.OrdinalIgnoreCase) || gateName.Contains("Baseline", StringComparison.OrdinalIgnoreCase) ? 2 : 4;
-        if (gateName.Contains("Review", StringComparison.OrdinalIgnoreCase)) order = 6;
-        if (gateName.Contains("Merge", StringComparison.OrdinalIgnoreCase)) order = 7;
+        if (string.IsNullOrWhiteSpace(stageId)) return;
 
-        var stage = Stages.FirstOrDefault(s => s.Order == order);
+        var stage = Stages.FirstOrDefault(s =>
+            s.StageId.Equals(stageId, StringComparison.OrdinalIgnoreCase) ||
+            s.DisplayName.Equals(stageId, StringComparison.OrdinalIgnoreCase));
+
         if (stage != null)
         {
             stage.Status = passed ? StageExecutionStatus.Completed : StageExecutionStatus.Failed;
             stage.StatusText = passed ? "Passed" : "Failed";
             stage.MetricsSummary = metricsSummary;
+            StateHasChanged();
         }
-        StateHasChanged();
     }
 
     public void Reset()
     {
-        Stages = CreateDefaultStages();
+        Stages = InitializeStages();
         StateHasChanged();
     }
 
     private int ResolveStageOrder(string? stageId)
     {
         if (string.IsNullOrWhiteSpace(stageId)) return 0;
-        var s = stageId.Trim().ToLowerInvariant().Replace("-", "").Replace("_", "");
-        if (s.Contains("merge") || s == "7") return 7;
-        if (s.Contains("taskreview") || s.Contains("reviewtask") || s == "1") return 1;
-        if (s.Contains("preimpl") || s.Contains("baseline") || s == "2") return 2;
-        if (s.Contains("postreview") || s == "6") return 6;
-        if (s.Contains("codereview") || s == "5") return 5;
-        if (s.Contains("postimpl") || s.Contains("ratchet") || s.Contains("coverage") || s == "4") return 4;
-        if (s.Contains("implementation") || s.Contains("implement") || s == "3") return 3;
 
-        var match = Stages.FirstOrDefault(st => st.Id.Equals(stageId, StringComparison.OrdinalIgnoreCase) || st.Name.Equals(stageId, StringComparison.OrdinalIgnoreCase));
-        return match?.Order ?? 0;
+        var match = Stages.FirstOrDefault(st =>
+            st.StageId.Equals(stageId, StringComparison.OrdinalIgnoreCase) ||
+            st.DisplayName.Equals(stageId, StringComparison.OrdinalIgnoreCase));
+
+        return match?.SequenceOrder ?? 0;
     }
 
-    private string GetStepClass(StageDefinition stage)
+    private string GetStepClass(StageStepItem stage)
     {
         return stage.Status switch
         {
@@ -268,10 +311,14 @@
         };
     }
 
-    private bool IsConnectorActive(StageDefinition stage)
+    private bool IsConnectorActive(StageStepItem stage)
     {
-        var next = Stages.FirstOrDefault(s => s.Order == stage.Order + 1);
-        return stage.Status == StageExecutionStatus.Completed || (next != null && next.Status == StageExecutionStatus.Running);
+        var currentIndex = Stages.IndexOf(stage);
+        if (currentIndex >= 0 && currentIndex < Stages.Count - 1)
+        {
+            var next = Stages[currentIndex + 1];
+            return stage.Status == StageExecutionStatus.Completed || next.Status == StageExecutionStatus.Running;
+        }
+        return false;
     }
 }
-

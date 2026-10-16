@@ -54,7 +54,11 @@
                     </button>
                 </div>
 
-                <a href="/ideation" class="forge-btn forge-btn-primary">
+                <button type="button" class="forge-btn forge-btn-primary" @onclick="() => _showCreateModal = true" id="btn-create-task">
+                    ➕ New Task
+                </button>
+
+                <a href="/ideation" class="forge-btn forge-btn-secondary">
                     💡 Ideate / Propose Tasks
                 </a>
 
@@ -154,6 +158,14 @@
         </div>
 
         <!-- Modals & Drawers -->
+        <TaskCreationModal IsOpen="_showCreateModal"
+                           WorkspaceId="@(WorkspaceState.ActiveWorkspace?.Id ?? 0)"
+                           DefaultBaseBranch="@(WorkspaceState.ActiveWorkspace?.DefaultBaseBranch)"
+                           DefaultWorkflowId="@(WorkspaceState.ActiveWorkspace?.DefaultWorkflowId)"
+                           RepositoryPath="@(WorkspaceState.ActiveWorkspace?.RepositoryPath)"
+                           OnClosed="() => _showCreateModal = false"
+                           OnTaskCreated="HandleTaskCreated" />
+
         <MaintainerPromotionModal IsOpen="_showPromoteModal"
                                   TargetTask="_selectedTask"
                                   OnClosed="ClosePromoteModal"
@@ -191,9 +203,16 @@
 
     // Modals state
     private ForgeTask? _selectedTask;
+    private bool _showCreateModal;
     private bool _showPromoteModal;
     private bool _showDepModal;
     private bool _showDrawer;
+
+    private async Task HandleTaskCreated(ForgeTask createdTask)
+    {
+        _showCreateModal = false;
+        await ReloadTasksAsync();
+    }
 
     protected override async Task OnInitializedAsync()
     {

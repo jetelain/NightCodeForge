@@ -5,6 +5,7 @@
 @inject WorkerStateService WorkerState
 @inject WorkspaceStateService WorkspaceState
 @inject ITaskRepository TaskRepository
+@inject IWorkflowRepository WorkflowRepository
 @inject NavigationManager Navigation
 
 <PageTitle>Live Telemetry - NightCodeForge</PageTitle>
@@ -62,6 +63,7 @@
 <!-- 2. 7-Step Visual Pipeline Stepper -->
 <PipelineStepper @ref="_stepperRef"
                  TaskId="WorkerState.Current.ActiveTaskId"
+                 WorkflowStages="_workflowStages"
                  CurrentStageId="@WorkerState.Current.StageId" />
 
 <!-- 3. Live Tool Call Activity Strip -->
@@ -87,6 +89,7 @@
     private ToolActivityStrip? _toolStripRef;
     private ThinkingAccordion? _thinkingRef;
     private TerminalConsole? _terminalRef;
+    private IReadOnlyList<StageDefinition>? _workflowStages;
 
     private int? _selectedTaskId;
     private int? _joinedTaskId;
@@ -106,6 +109,16 @@
         HubClient.OnExecutionLogReceived += HandleExecutionLog;
         HubClient.OnOptimizationActionReceived += HandleOptimizationAction;
         HubClient.OnConnectionStateChanged += HandleConnectionStateChanged;
+
+        try
+        {
+            var defaultWf = await WorkflowRepository.GetDefaultWorkflowWithStagesAsync();
+            _workflowStages = defaultWf?.Stages?.OrderBy(s => s.SequenceOrder).ToList();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading default workflow stages for monitoring: {ex.Message}");
+        }
 
         try
         {

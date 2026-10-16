@@ -13,6 +13,7 @@ namespace NightCodeForge.Web.Tests;
 public class TaskInspectorPageTests : BunitContext
 {
     private readonly InMemoryTaskRepository _taskRepository;
+    private readonly InMemoryWorkflowRepository _workflowRepository;
     private readonly WorkerStateService _workerState;
     private readonly WorkspaceStateService _workspaceState;
     private readonly OrchestratorHubClientConnection _hubConnection;
@@ -24,6 +25,7 @@ public class TaskInspectorPageTests : BunitContext
         JSInterop.Mode = JSRuntimeMode.Loose;
 
         _taskRepository = new InMemoryTaskRepository();
+        _workflowRepository = new InMemoryWorkflowRepository(new[] { TestWorkflowFixtures.CreateStandardWorkflow() });
         _workerState = new WorkerStateService();
         _workspaceState = new WorkspaceStateService();
         _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
@@ -31,6 +33,7 @@ public class TaskInspectorPageTests : BunitContext
         _taskReviewService = new FakeTaskReviewService();
 
         Services.AddSingleton<ITaskRepository>(_taskRepository);
+        Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
         Services.AddSingleton(_workerState);
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton(_hubConnection);

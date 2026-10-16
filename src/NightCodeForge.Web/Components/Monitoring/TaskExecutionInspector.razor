@@ -5,6 +5,7 @@
 @using NightCodeForge.Web.Components.Review
 @implements IAsyncDisposable
 @inject ITaskRepository TaskRepository
+@inject IWorkflowRepository WorkflowRepository
 @inject IServiceProvider ServiceProvider
 @inject OrchestratorHubClientConnection HubClient
 @inject IJSRuntime JSRuntime
@@ -36,6 +37,13 @@
                     <span class="forge-badge @GetStatusBadgeClass(_task.Status)" style="font-size: 0.78rem;">
                         @_task.Status
                     </span>
+                    @if (_task.Workflow != null)
+                    {
+                        <span class="forge-badge badge-indigo" style="font-size: 0.78rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Active Workflow Pipeline">
+                            <span>@_task.Workflow.Icon</span>
+                            <span>Workflow: @_task.Workflow.Name (@(_task.Workflow.Stages?.Count ?? 0) stages)</span>
+                        </span>
+                    }
                     @if (!string.IsNullOrWhiteSpace(_task.SquashCommitSha))
                     {
                         <span class="forge-badge badge-teal" style="font-size: 0.76rem; font-family: var(--font-mono);" title="Squash Commit SHA">
@@ -77,7 +85,7 @@
                         style="padding: 0.35rem 0.75rem; font-size: 0.8rem;"
                         disabled="@_isActionInProgress"
                         @onclick="RestartPipelineAsync"
-                        title="Restart the entire 7-stage workflow pipeline from stage 1">
+                        title="Restart the entire workflow pipeline from stage 1">
                     ⏮ Restart Pipeline
                 </button>
 
@@ -92,10 +100,11 @@
             </div>
         </div>
 
-        <!-- 1-7 Phases Workflow Pipeline Stepper -->
+        <!-- Workflow Pipeline Stepper -->
         <div style="margin-bottom: 1.25rem;">
             <PipelineStepper @ref="_stepperRef"
                              TaskId="_task!.Id"
+                             WorkflowStages="_workflowStages"
                              CurrentStageId="@_task.CurrentStageId"
                              OverallStatus="_task.Status"
                              Conversations="_conversations"
@@ -314,6 +323,7 @@
     [Parameter] public int TaskId { get; set; }
 
     private ForgeTask? _task;
+    private List<StageDefinition>? _workflowStages;
     private List<Conversation> _conversations = new();
     private Conversation? _selectedConversation;
     private List<FileDiffSummary> _diffFiles = new();
@@ -386,6 +396,16 @@
             _task = await TaskRepository.GetByIdAsync(TaskId);
             if (_task != null)
             {
+                if (_task.Workflow == null && _task.WorkflowId.HasValue)
+                {
+                    _task.Workflow = await WorkflowRepository.GetByIdWithStagesAsync(_task.WorkflowId.Value);
+                }
+                if (_task.Workflow == null)
+                {
+                    _task.Workflow = await WorkflowRepository.GetDefaultWorkflowWithStagesAsync();
+                }
+
+                _workflowStages = _task.Workflow?.Stages?.OrderBy(s => s.SequenceOrder).ToList();
                 _conversations = _task.Conversations?.OrderBy(c => c.StartedAt).ToList() ?? new List<Conversation>();
                 if (_conversations.Any())
                 {
@@ -648,18 +668,15 @@
         StateHasChanged();
     }
 
-    private static int ResolveStageOrder(string? stageId)
+    private int ResolveStageOrder(string? stageId)
     {
-        if (string.IsNullOrWhiteSpace(stageId)) return 0;
-        var s = stageId.Trim().ToLowerInvariant().Replace("-", "").Replace("_", "");
-        if (s.Contains("merge") || s == "7") return 7;
-        if (s.Contains("taskreview") || s.Contains("reviewtask") || s == "1") return 1;
-        if (s.Contains("preimpl") || s.Contains("baseline") || s == "2") return 2;
-        if (s.Contains("postreview") || s == "6") return 6;
-        if (s.Contains("codereview") || s == "5") return 5;
-        if (s.Contains("postimpl") || s.Contains("ratchet") || s.Contains("coverage") || s == "4") return 4;
-        if (s.Contains("implementation") || s.Contains("implement") || s == "3") return 3;
-        return 0;
+        if (string.IsNullOrWhiteSpace(stageId) || _workflowStages == null) return 0;
+
+        var matched = _workflowStages.FirstOrDefault(s =>
+            s.StageId.Equals(stageId, StringComparison.OrdinalIgnoreCase) ||
+            s.DisplayName.Equals(stageId, StringComparison.OrdinalIgnoreCase));
+
+        return matched?.SequenceOrder ?? 0;
     }
 
     private static string GetStatusBadgeClass(TaskOverallStatus status)

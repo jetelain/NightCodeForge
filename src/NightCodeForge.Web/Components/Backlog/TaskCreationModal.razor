@@ -1,0 +1,240 @@
+@namespace NightCodeForge.Web.Components.Backlog
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Services
+@inject ITaskRepository TaskRepository
+@inject IWorkflowRepository WorkflowRepository
+@inject ToastService ToastService
+@inject IServiceProvider ServiceProvider
+
+@if (IsOpen)
+{
+    <div class="forge-modal-backdrop" @onclick="Close">
+        <div class="forge-modal card-glass task-creation-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="create-task-modal-title" style="max-width: 620px;">
+            <div class="modal-header">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="font-size: 1.25rem;">📝</span>
+                    <h3 id="create-task-modal-title" style="margin: 0; font-size: 1.15rem; font-weight: 600;">
+                        Create New Task
+                    </h3>
+                </div>
+                <button type="button" class="btn-icon" @onclick="Close" aria-label="Close dialog">✕</button>
+            </div>
+
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 1.15rem;">
+                <div class="form-group">
+                    <label for="task-title-input" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                        Task Title <span style="color: var(--accent-crimson);">*</span>
+                    </label>
+                    <input id="task-title-input"
+                           type="text"
+                           class="form-control-dark"
+                           placeholder="e.g. Implement OAuth2 token refresh endpoint"
+                           @bind="_title"
+                           disabled="@_isSubmitting" />
+                </div>
+
+                <div class="form-group">
+                    <label for="task-desc-input" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                        Description / Requirements
+                    </label>
+                    <textarea id="task-desc-input"
+                              class="form-control-dark"
+                              rows="4"
+                              placeholder="Detail requirements, edge cases, target classes or test expectations..."
+                              @bind="_description"
+                              disabled="@_isSubmitting"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="workflow-select" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                        Execution Workflow Pipeline
+                    </label>
+                    <select id="workflow-select"
+                            class="form-control-dark"
+                            @bind="_selectedWorkflowId"
+                            disabled="@_isSubmitting">
+                        @foreach (var w in _workflows)
+                        {
+                            <option value="@w.Id">
+                                @w.Icon @w.Name (@w.Stages.Count stages)@(w.IsDefault ? " [Default]" : "")
+                            </option>
+                        }
+                    </select>
+                    <small style="display: block; margin-top: 0.35rem; color: var(--text-muted); font-size: 0.8rem;">
+                        Determines the stage gates and autonomous agent sequence used to execute this task.
+                    </small>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="form-group">
+                        <label for="task-priority-select" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                            Priority
+                        </label>
+                        <select id="task-priority-select" class="form-control-dark" @bind="_selectedPriority" disabled="@_isSubmitting">
+                            <option value="1">1 - Standard / Low</option>
+                            <option value="2">2 - Normal</option>
+                            <option value="3">3 - High</option>
+                            <option value="4">4 - Very High</option>
+                            <option value="5">5 - Critical / Urgent</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="task-mergemode-select" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                            Merge Mode
+                        </label>
+                        <select id="task-mergemode-select" class="form-control-dark" @bind="_selectedMergeMode" disabled="@_isSubmitting">
+                            <option value="@MergeMode.Automatic">Automatic</option>
+                            <option value="@MergeMode.ManualReviewRequired">Manual Review Required</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="task-basebranch-input" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                        Target Base Branch
+                    </label>
+                    <input id="task-basebranch-input"
+                           type="text"
+                           class="form-control-dark"
+                           placeholder="main"
+                           @bind="_baseBranch"
+                           disabled="@_isSubmitting" />
+                </div>
+            </div>
+
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; align-items: center; gap: 0.75rem; margin-top: 0.75rem;">
+                <button type="button" class="forge-btn forge-btn-secondary" @onclick="Close" disabled="@_isSubmitting">
+                    Cancel
+                </button>
+                <button type="button"
+                        id="btn-confirm-create-task"
+                        class="forge-btn forge-btn-primary"
+                        @onclick="CreateTaskAsync"
+                        disabled="@(_isSubmitting || string.IsNullOrWhiteSpace(_title))">
+                    @(_isSubmitting ? "Creating..." : "➕ Create Task")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public int WorkspaceId { get; set; }
+    [Parameter] public string? DefaultBaseBranch { get; set; }
+    [Parameter] public int? DefaultWorkflowId { get; set; }
+    [Parameter] public string? RepositoryPath { get; set; }
+    [Parameter] public EventCallback OnClosed { get; set; }
+    [Parameter] public EventCallback<ForgeTask> OnTaskCreated { get; set; }
+
+    private string _title = string.Empty;
+    private string _description = string.Empty;
+    private int? _selectedWorkflowId;
+    private int _selectedPriority = 1;
+    private MergeMode _selectedMergeMode = MergeMode.ManualReviewRequired;
+    private string _baseBranch = "main";
+    private bool _isSubmitting;
+    private List<WorkflowDefinition> _workflows = new();
+
+    private ITaskMarkdownSyncService? MarkdownSync => ServiceProvider.GetService<ITaskMarkdownSyncService>();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (IsOpen)
+        {
+            if (string.IsNullOrWhiteSpace(_baseBranch) || _baseBranch == "main")
+            {
+                _baseBranch = string.IsNullOrWhiteSpace(DefaultBaseBranch) ? "main" : DefaultBaseBranch;
+            }
+
+            await LoadWorkflowsAsync();
+        }
+    }
+
+    private async Task LoadWorkflowsAsync()
+    {
+        try
+        {
+            var list = await WorkflowRepository.GetWorkflowsAsync(WorkspaceId > 0 ? WorkspaceId : null);
+            _workflows = list.ToList();
+
+            if (!_selectedWorkflowId.HasValue || !_workflows.Any(w => w.Id == _selectedWorkflowId.Value))
+            {
+                if (DefaultWorkflowId.HasValue && _workflows.Any(w => w.Id == DefaultWorkflowId.Value))
+                {
+                    _selectedWorkflowId = DefaultWorkflowId.Value;
+                }
+                else
+                {
+                    var def = _workflows.FirstOrDefault(w => w.IsDefault) ?? _workflows.FirstOrDefault();
+                    _selectedWorkflowId = def?.Id;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading workflows: {ex.Message}");
+        }
+    }
+
+    private async Task CreateTaskAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_title) || _isSubmitting) return;
+
+        _isSubmitting = true;
+        try
+        {
+            var task = new ForgeTask
+            {
+                WorkspaceId = WorkspaceId,
+                WorkflowId = _selectedWorkflowId,
+                Title = _title.Trim(),
+                Description = _description.Trim(),
+                Priority = _selectedPriority,
+                MergeMode = _selectedMergeMode,
+                BaseBranch = string.IsNullOrWhiteSpace(_baseBranch) ? "main" : _baseBranch.Trim(),
+                Status = TaskOverallStatus.Open,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            var created = await TaskRepository.CreateAsync(task);
+            created.FeatureBranch = $"feature/task-{created.Id}";
+            await TaskRepository.UpdateAsync(created);
+
+            if (MarkdownSync != null && !string.IsNullOrWhiteSpace(RepositoryPath) && Directory.Exists(RepositoryPath))
+            {
+                try
+                {
+                    await MarkdownSync.SyncTaskToDiskAsync(created, RepositoryPath);
+                }
+                catch (Exception syncEx)
+                {
+                    Console.WriteLine($"Markdown sync warning: {syncEx.Message}");
+                }
+            }
+
+            ToastService.Show("Task Created", $"Task #{created.Id} created in Open status.", ToastLevel.Success);
+            _title = string.Empty;
+            _description = string.Empty;
+            await OnTaskCreated.InvokeAsync(created);
+            await Close();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Creation Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private async Task Close()
+    {
+        IsOpen = false;
+        await OnClosed.InvokeAsync();
+    }
+}
