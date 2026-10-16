@@ -1,0 +1,52 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+
+<div class="optimization-marker-card card-surface" style="background: rgba(99, 102, 241, 0.06); border: 1px dashed var(--accent-indigo); border-radius: var(--radius-md); padding: 0.85rem 1.15rem; margin: 0.75rem 0;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span style="font-size: 1.15rem;">⚡</span>
+            <span style="font-weight: 700; color: #a5b4fc; font-size: 0.88rem; text-transform: uppercase; letter-spacing: 0.04em;">
+                @(ActionType ?? "Context Optimization")
+            </span>
+            @if (TokensOrBytesSaved > 0)
+            {
+                <span class="forge-badge badge-indigo" style="font-size: 0.72rem; padding: 0.15rem 0.5rem;">
+                    Saved ~@TokensOrBytesSaved.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) @Unit
+                </span>
+            }
+            <span style="font-size: 0.75rem; color: var(--text-muted);">
+                @Timestamp.ToLocalTime().ToString("HH:mm:ss")
+            </span>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(Details))
+        {
+            <button type="button" class="forge-btn-ghost" style="padding: 0.15rem 0.45rem; font-size: 0.72rem;" @onclick="ToggleDetails">
+                @(_showDetails ? "Hide Details ▲" : "View Details ▼")
+            </button>
+        }
+    </div>
+
+    <div style="margin-top: 0.4rem; color: var(--text-secondary); font-size: 0.82rem; line-height: 1.4;">
+        @Description
+    </div>
+
+    @if (_showDetails && !string.IsNullOrWhiteSpace(Details))
+    {
+        <div style="margin-top: 0.6rem;">
+            <pre style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem; font-size: 0.76rem; overflow-x: auto; color: var(--text-muted); margin: 0;"><code>@Details</code></pre>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? ActionType { get; set; } = "ToolResultCompaction";
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public int TokensOrBytesSaved { get; set; }
+    [Parameter] public string Unit { get; set; } = "chars";
+    [Parameter] public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    [Parameter] public string? Details { get; set; }
+
+    private bool _showDetails = false;
+
+    private void ToggleDetails() => _showDetails = !_showDetails;
+}

@@ -1,0 +1,302 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Web.Components.Transcripts
+@using NightCodeForge.Web.Services
+@using System.Text.Json
+@inject IJSRuntime JSRuntime
+
+<div class="stage-conversation-viewer card-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem;">
+    @if (Conversation == null)
+    {
+        <div style="text-align: center; color: var(--text-muted); padding: 2rem 0;">
+            <span style="font-size: 1.5rem; display: block; margin-bottom: 0.5rem;">💬</span>
+            <span>No stage conversation selected. Please choose a stage or run above.</span>
+        </div>
+    }
+    else
+    {
+        <!-- Stage Header Metadata -->
+        <div style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 1rem; margin-bottom: 1.25rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+                <div>
+                    <div style="display: flex; align-items: center; gap: 0.65rem; margin-bottom: 0.25rem;">
+                        <h3 style="margin: 0; font-size: 1.15rem; color: var(--text-primary);">
+                            @FormatStageName(Conversation.StageId)
+                        </h3>
+                        <span class="forge-badge badge-indigo" style="font-size: 0.72rem;">
+                            Run #@Conversation.AttemptIndex
+                        </span>
+                        <span class="forge-badge @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "badge-teal" : "badge-indigo")" style="font-size: 0.72rem;">
+                            @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "Deterministic CPU" : "Agentic GPU")
+                        </span>
+                        <span class="forge-badge @GetStatusClass(Conversation.Status)" style="font-size: 0.72rem;">
+                            @Conversation.Status
+                        </span>
+                        @if (IsActiveStage)
+                        {
+                            <span class="step-badge badge-gpu" style="font-size: 0.68rem;">
+                                LIVE STREAMING
+                                <span class="cursor-blink">▊</span>
+                            </span>
+                        }
+                    </div>
+
+                    <div style="font-size: 0.78rem; color: var(--text-secondary); display: flex; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                        @if (!string.IsNullOrWhiteSpace(Conversation.ModelName))
+                        {
+                            <span>🧠 Model: <strong>@Conversation.ModelName</strong></span>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(Conversation.HarnessId))
+                        {
+                            <span>⚙️ Harness: <strong>@Conversation.HarnessId</strong></span>
+                        }
+                        <span>🕒 Started: <strong>@Conversation.StartedAt.ToLocalTime().ToString("HH:mm:ss")</strong></span>
+                        @if (Conversation.CompletedAt.HasValue)
+                        {
+                            <span>🏁 Finished: <strong>@Conversation.CompletedAt.Value.ToLocalTime().ToString("HH:mm:ss")</strong></span>
+                            <span>⏱ Duration: <strong>@((Conversation.CompletedAt.Value - Conversation.StartedAt).TotalSeconds.ToString("F1"))s</strong></span>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(Conversation.TranscriptFileName))
+                        {
+                            <span>📄 File: <code>@Conversation.TranscriptFileName</code></span>
+                        }
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(Conversation.Summary))
+                {
+                    <div class="stage-summary-box" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem 0.85rem; font-size: 0.82rem; max-width: 480px; flex: 1 1 300px;">
+                        <span style="color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; font-weight: 600; display: block; margin-bottom: 0.25rem;">Summary</span>
+                        <div class="forge-markdown stage-summary-markdown" style="font-size: 0.82rem; line-height: 1.5;">
+                            @MarkdownHelper.ToMarkupString(Conversation.Summary)
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Turns Stream -->
+        <div class="conversation-turns-list" style="display: flex; flex-direction: column; gap: 1rem;">
+            @{
+                var turns = Conversation.Turns?.OrderBy(t => t.TurnIndex).ToList() ?? new List<StageConversationTurn>();
+                var (mergedResults, hiddenResults) = PairToolResults(turns);
+            }
+
+            @if (!turns.Any() && !IsActiveStage)
+            {
+                <div style="color: var(--text-muted); font-style: italic; font-size: 0.84rem;">
+                    No turns recorded for this stage run.
+                </div>
+            }
+
+            @foreach (var turn in turns)
+            {
+                if (hiddenResults.Contains(turn.Id))
+                {
+                    continue;
+                }
+                <div class="turn-item" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    @switch (turn.Role)
+                    {
+                        case StageTurnRole.User:
+                        case StageTurnRole.System:
+                            <div class="turn-user card-surface" style="background: var(--bg-card); border-left: 3px solid var(--accent-indigo); border-radius: var(--radius-sm); padding: 0.85rem 1rem;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.45rem;">
+                                    <div style="display: flex; align-items: center; gap: 0.4rem; font-weight: 600; font-size: 0.82rem; color: #a5b4fc;">
+                                        <span>👤</span>
+                                        <span>@(turn.Role == StageTurnRole.System ? "System Directive" : "User / Orchestrator Prompt")</span>
+                                    </div>
+                                    <span style="font-size: 0.72rem; color: var(--text-muted);">
+                                        @turn.Timestamp.ToLocalTime().ToString("HH:mm:ss")
+                                    </span>
+                                </div>
+                                <div class="forge-markdown turn-content-markdown" style="font-size: 0.86rem; line-height: 1.55; max-height: 450px; overflow-y: auto;">
+                                    @MarkdownHelper.ToMarkupString(turn.Content)
+                                </div>
+                            </div>
+                            break;
+
+                        case StageTurnRole.Thinking:
+                            <div class="turn-thinking">
+                                <ThinkingAccordion InitialContent="@(turn.ThinkingTrace ?? turn.Content)" />
+                            </div>
+                            break;
+
+                        case StageTurnRole.Tool:
+                        case StageTurnRole.ToolResult:
+                            var pairedResult = mergedResults.TryGetValue(turn.Id, out var resultTurn) ? resultTurn : null;
+                            var effectiveDuration = pairedResult?.DurationMs ?? turn.DurationMs;
+                            <div class="turn-tool">
+                                <ToolCallCard ToolName="@turn.ToolName"
+                                              Arguments="@turn.ToolArguments"
+                                              Result="@(pairedResult?.ToolResult ?? turn.ToolResult)"
+                                              IsError="@(turn.IsError || (pairedResult?.IsError ?? false))"
+                                              Offset="@(effectiveDuration.HasValue ? $"{effectiveDuration.Value}ms" : null)" />
+                            </div>
+                            break;
+
+                        case StageTurnRole.Optimization:
+                            var (actionType, desc, tokensSaved, details) = ParseOptimizationPayload(turn);
+                            <div class="turn-optimization">
+                                <OptimizationMarkerCard ActionType="@actionType"
+                                                        Description="@desc"
+                                                        TokensOrBytesSaved="@tokensSaved"
+                                                        Unit="@(tokensSaved > 0 && (actionType.Contains("Compaction") || turn.MetadataJson?.Contains("TokensSaved") == true) ? "tokens" : "chars")"
+                                                        Timestamp="@turn.Timestamp"
+                                                        Details="@details" />
+                            </div>
+                            break;
+
+                        case StageTurnRole.Assistant:
+                            <div class="turn-assistant card-surface" style="background: var(--bg-surface); border-left: 3px solid var(--accent-teal); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                    <div style="display: flex; align-items: center; gap: 0.4rem; font-weight: 600; font-size: 0.82rem; color: #5eead4;">
+                                        <span>🤖</span>
+                                        <span>Agent Response</span>
+                                    </div>
+                                    <span style="font-size: 0.72rem; color: var(--text-muted);">
+                                        @turn.Timestamp.ToLocalTime().ToString("HH:mm:ss")
+                                    </span>
+                                </div>
+
+                                @if (!string.IsNullOrWhiteSpace(turn.ThinkingTrace))
+                                {
+                                    <div style="margin-bottom: 0.75rem;">
+                                        <ThinkingAccordion InitialContent="@turn.ThinkingTrace" />
+                                    </div>
+                                }
+
+                                <div class="forge-markdown turn-content-markdown" style="font-size: 0.88rem; line-height: 1.6;">
+                                    @MarkdownHelper.ToMarkupString(turn.Content)
+                                </div>
+                            </div>
+                            break;
+                    }
+                </div>
+            }
+
+            @if (IsActiveStage && !string.IsNullOrEmpty(LiveStreamingThinking))
+            {
+                <div class="turn-live-thinking">
+                    <ThinkingAccordion InitialContent="@LiveStreamingThinking" IsStreaming="true" />
+                </div>
+            }
+
+            @if (IsActiveStage && !string.IsNullOrEmpty(LiveStreamingMessage))
+            {
+                <div class="turn-live-message card-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-left: 3px solid var(--accent-teal); border-radius: var(--radius-sm); padding: 1rem;">
+                    <div style="display: flex; align-items: center; gap: 0.4rem; font-weight: 600; font-size: 0.82rem; color: #5eead4; margin-bottom: 0.5rem;">
+                        <span>🤖</span>
+                        <span>Agent Response</span>
+                        <span class="cursor-blink">▊</span>
+                    </div>
+                    <div class="forge-markdown turn-content-markdown" style="font-size: 0.88rem; line-height: 1.6;">
+                        @MarkdownHelper.ToMarkupString(LiveStreamingMessage)
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public StageConversation? Conversation { get; set; }
+    [Parameter] public bool IsActiveStage { get; set; }
+    [Parameter] public string? LiveStreamingThinking { get; set; }
+    [Parameter] public string? LiveStreamingMessage { get; set; }
+
+    /// <summary>
+    /// Pairs every tool result turn with the closest preceding tool call turn of the same tool that has no
+    /// result yet, so a call and its result render as a single card.
+    /// </summary>
+    private static (Dictionary<int, StageConversationTurn> Merged, HashSet<int> Hidden) PairToolResults(IReadOnlyList<StageConversationTurn> turns)
+    {
+        var merged = new Dictionary<int, StageConversationTurn>();
+        var hidden = new HashSet<int>();
+        var open = new List<StageConversationTurn>();
+
+        foreach (var turn in turns)
+        {
+            if (turn.Role == StageTurnRole.Tool)
+            {
+                open.Add(turn);
+            }
+            else if (turn.Role == StageTurnRole.ToolResult)
+            {
+                var call = open.FirstOrDefault(c => string.Equals(c.ToolName, turn.ToolName, StringComparison.Ordinal));
+                if (call != null)
+                {
+                    open.Remove(call);
+                    merged[call.Id] = turn;
+                    hidden.Add(turn.Id);
+                }
+            }
+        }
+
+        return (merged, hidden);
+    }
+
+    private static string FormatStageName(string stageId)
+    {
+        return stageId switch
+        {
+            "task-review" => "1. ForgeTask Review",
+            "deterministic-pre-check" or "deterministic-pre-impl" => "2. Pre-Check Gate",
+            "implementation" => "3. Implementation",
+            "deterministic-post-check" or "deterministic-post-impl" => "4. Post-Check Gate",
+            "pr-review" or "code-review-fix" => "5. Pull Request Review",
+            "deterministic-post-review" => "6. Post-Review Verification",
+            "merge" => "7. Squash & Merge",
+            _ => stageId
+        };
+    }
+
+    private static string GetStatusClass(StageExecutionStatus status)
+    {
+        return status switch
+        {
+            StageExecutionStatus.Completed => "badge-emerald",
+            StageExecutionStatus.Running => "badge-amber",
+            StageExecutionStatus.Failed => "badge-crimson",
+            StageExecutionStatus.Skipped => "badge-zinc",
+            StageExecutionStatus.Pending => "badge-zinc",
+            _ => "badge-zinc"
+        };
+    }
+
+    private static (string ActionType, string Description, int TokensSaved, string? Details) ParseOptimizationPayload(StageConversationTurn turn)
+    {
+        var actionType = "ToolResultCompaction";
+        var desc = turn.Content ?? "Optimized conversation memory";
+        var tokensSaved = 0;
+        string? details = null;
+
+        if (!string.IsNullOrWhiteSpace(turn.MetadataJson))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(turn.MetadataJson);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("ActionType", out var atProp))
+                {
+                    actionType = atProp.GetString() ?? actionType;
+                }
+                if (root.TryGetProperty("TokensSaved", out var tsProp))
+                {
+                    tokensSaved = tsProp.GetInt32();
+                }
+                else if (root.TryGetProperty("CharactersSaved", out var csProp))
+                {
+                    tokensSaved = csProp.GetInt32();
+                }
+                details = turn.MetadataJson;
+            }
+            catch
+            {
+                // Fallback to text parsing
+            }
+        }
+
+        return (actionType, desc, tokensSaved, details);
+    }
+}

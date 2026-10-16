@@ -251,6 +251,51 @@ public class DevQueueService : IDevQueueService
         }
     }
 
+    public async Task<bool> RescheduleTaskAsync(int taskId, bool restartPipeline = false, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+            var task = await taskRepo.GetByIdAsync(taskId, cancellationToken);
+            if (task == null)
+            {
+                _logger.LogWarning("Cannot reschedule Task #{TaskId}: task not found", taskId);
+                return false;
+            }
+
+            if (restartPipeline)
+            {
+                task.CurrentStageId = string.Empty;
+                task.Status = TaskOverallStatus.Open;
+                task.SquashCommitSha = null;
+            }
+            else
+            {
+                if (task.Status == TaskOverallStatus.Failed || task.Status == TaskOverallStatus.Cancelled)
+                {
+                    task.Status = TaskOverallStatus.Open;
+                }
+            }
+
+            task.IsWaitingForHuman = false;
+            task.InterruptedAgentProfileId = null;
+            task.InterruptedStageId = null;
+            task.UpdatedAt = DateTime.UtcNow;
+
+            await taskRepo.UpdateAsync(task, dependsOn: null, cancellationToken);
+
+            var jobId = _taskJobQueue.EnqueueInference(taskId);
+            _logger.LogInformation("Rescheduled Task #{TaskId} (RestartPipeline={RestartPipeline}, JobId={JobId})", taskId, restartPipeline, jobId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to reschedule Task #{TaskId}", taskId);
+            return false;
+        }
+    }
+
     private static (int TaskId, string FallbackTitle, string FallbackStage) ParseJobInfo(Job? job)
     {
         if (job == null) return (0, "Background Job", "System");

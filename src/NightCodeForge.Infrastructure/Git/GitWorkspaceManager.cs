@@ -314,12 +314,133 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             ":(exclude)*.generated.cs"
         ];
 
-        var result = await _gitCliRunner.ExecuteAsync(workingPath, diffArgs, cancellationToken: cancellationToken);
-        return result.StandardOutput;
+        string rawDiff = string.Empty;
+        try
+        {
+            var result = await _gitCliRunner.ExecuteAsync(workingPath, diffArgs, cancellationToken: cancellationToken);
+            rawDiff = result.StandardOutput;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to generate branch diff for ForgeTask #{TaskId} in '{WorkingPath}'", taskId, workingPath);
+        }
+
+        if (string.IsNullOrWhiteSpace(rawDiff) &&
+            !string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
+            !string.Equals(workspace.RepositoryPath, workingPath, StringComparison.OrdinalIgnoreCase) &&
+            Directory.Exists(workspace.RepositoryPath))
+        {
+            try
+            {
+                var fallbackResult = await _gitCliRunner.ExecuteAsync(workspace.RepositoryPath, diffArgs, cancellationToken: cancellationToken);
+                rawDiff = fallbackResult.StandardOutput;
+            }
+            catch { }
+        }
+
+        return rawDiff;
     }
 
     /// <inheritdoc />
-    public async Task SquashAndMergeAsync(
+    public async Task<string> GenerateLiveDiffAsync(
+        Workspace workspace,
+        int taskId,
+        string baseBranch = "main",
+        CancellationToken cancellationToken = default)
+    {
+        var workingPath = GetWorkingPath(workspace, taskId);
+        if (!WorktreeDirectoryExists(workingPath) && !Directory.Exists(workingPath))
+        {
+            return await GenerateDiffAsync(workspace, taskId, baseBranch, cancellationToken);
+        }
+
+        _logger.LogInformation("Generating live diff for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorkingPath}'",
+            taskId, baseBranch, workingPath);
+
+        string[] diffArgs = [
+            "diff",
+            baseBranch,
+            "-U2",
+            "--",
+            ".",
+            ":(exclude)package-lock.json",
+            ":(exclude)pnpm-lock.yaml",
+            ":(exclude)yarn.lock",
+            ":(exclude)*.Designer.cs",
+            ":(exclude)*.generated.cs"
+        ];
+
+        try
+        {
+            var result = await _gitCliRunner.ExecuteAsync(workingPath, diffArgs, cancellationToken: cancellationToken);
+            return result.StandardOutput;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to run live git diff in '{WorkingPath}', falling back to branch diff", workingPath);
+            return await GenerateDiffAsync(workspace, taskId, baseBranch, cancellationToken);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<string> GetCommitDiffAsync(
+        Workspace workspace,
+        string commitSha,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commitSha);
+        var canonicalPath = GetCanonicalWorkingPath(workspace);
+
+        _logger.LogInformation("Retrieving commit diff for SHA '{CommitSha}' in canonical repo '{CanonicalPath}'",
+            commitSha, canonicalPath);
+
+        string[] diffArgs = [
+            "show",
+            "--format=",
+            "-U2",
+            commitSha,
+            "--",
+            ".",
+            ":(exclude)package-lock.json",
+            ":(exclude)pnpm-lock.yaml",
+            ":(exclude)yarn.lock",
+            ":(exclude)*.Designer.cs",
+            ":(exclude)*.generated.cs"
+        ];
+
+        string rawDiff = string.Empty;
+        try
+        {
+            var result = await _gitCliRunner.ExecuteAsync(canonicalPath, diffArgs, cancellationToken: cancellationToken);
+            rawDiff = result.StandardOutput;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to retrieve commit diff for SHA '{CommitSha}' in canonical repo '{CanonicalPath}'", commitSha, canonicalPath);
+        }
+
+        if (string.IsNullOrWhiteSpace(rawDiff) &&
+            !string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
+            !string.Equals(workspace.RepositoryPath, canonicalPath, StringComparison.OrdinalIgnoreCase) &&
+            Directory.Exists(workspace.RepositoryPath))
+        {
+            try
+            {
+                _logger.LogInformation("Attempting fallback commit diff for SHA '{CommitSha}' in host repo '{RepositoryPath}'", commitSha, workspace.RepositoryPath);
+                var fallbackResult = await _gitCliRunner.ExecuteAsync(workspace.RepositoryPath, diffArgs, cancellationToken: cancellationToken);
+                rawDiff = fallbackResult.StandardOutput;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Fallback commit diff also failed in host repo '{RepositoryPath}'", workspace.RepositoryPath);
+            }
+        }
+
+        return rawDiff;
+    }
+
+    /// <inheritdoc />
+    public async Task<string> SquashAndMergeAsync(
         Workspace workspace,
         int taskId,
         string baseBranch,
@@ -377,10 +498,15 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             ["commit", "-m", safeMessage, "--no-verify"],
             cancellationToken: cancellationToken);
 
-        _logger.LogInformation("Squash merge completed for ForgeTask #{TaskId} on '{BaseBranch}'", taskId, baseBranch);
+        var revParse = await _gitCliRunner.ExecuteAsync(canonicalPath, ["rev-parse", "HEAD"], cancellationToken: cancellationToken);
+        var squashSha = revParse.StandardOutput.Trim();
+
+        _logger.LogInformation("Squash merge completed for ForgeTask #{TaskId} on '{BaseBranch}' with SHA {Sha}", taskId, baseBranch, squashSha);
 
         // 4. Remove the task's ephemeral worktree
         await RemoveWorktreeAsync(workspace, taskId, cancellationToken);
+
+        return squashSha;
     }
 
     /// <inheritdoc />
@@ -403,8 +529,8 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         if (taskId.HasValue)
         {
             var wt = GetWorktreePath(workspace, taskId.Value);
-            // If the worktree directory already exists or is in WSL/Linux, use it
-            if (Directory.Exists(wt) || wt.StartsWith('/') || wt.StartsWith('~') || WslPathConverter.IsWslUncPath(wt))
+            // If the worktree directory actually exists, use it
+            if (WorktreeDirectoryExists(wt))
             {
                 return wt;
             }

@@ -398,7 +398,16 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
         if (_activityStreamer != null && !string.IsNullOrEmpty(_sessionId))
         {
             var evt = new AgentActivityEvent(_sessionId, _taskId, _stageId, kind, content, DateTime.UtcNow);
-            _ = _activityStreamer.BroadcastAsync(evt, ct);
+            try
+            {
+                var broadcast = _activityStreamer.BroadcastAsync(evt, ct);
+                // Observe faults: a failing live feed must not surface as an unobserved task exception.
+                _ = broadcast.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+            }
+            catch (Exception)
+            {
+                // A failing live feed must never break the model stream.
+            }
         }
     }
 }

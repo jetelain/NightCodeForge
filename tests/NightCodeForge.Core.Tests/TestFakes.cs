@@ -51,10 +51,20 @@ public class FakeGitWorkspaceManager : IGitWorkspaceManager
         return Task.FromResult(GeneratedDiff);
     }
 
-    public Task SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default)
+    public Task<string> GenerateLiveDiffAsync(Workspace workspace, int taskId, string baseBranch = "main", CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(GeneratedDiff);
+    }
+
+    public Task<string> GetCommitDiffAsync(Workspace workspace, string commitSha, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(GeneratedDiff);
+    }
+
+    public Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default)
     {
         SquashMerges.Add((taskId, baseBranch, commitMessage));
-        return Task.CompletedTask;
+        return Task.FromResult($"squash-sha-{taskId:D4}");
     }
 
     public Task<string> EnsureWorktreeAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default)

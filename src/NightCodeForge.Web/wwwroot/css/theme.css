@@ -525,22 +525,32 @@ textarea.forge-input, textarea.form-control-dark {
     overflow-y: auto;
 }
 
-/* Diagnostic Markdown Rendering */
+/* General Markdown & Diagnostic Markdown Rendering */
+.forge-markdown,
 .diagnostic-markdown {
     color: var(--text-primary);
-    font-size: 0.94rem;
-    line-height: 1.65;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    white-space: normal;
+    word-break: break-word;
 }
 
+.forge-markdown p,
 .diagnostic-markdown p {
     margin-bottom: 0.65rem;
     color: var(--text-primary);
 }
 
+.forge-markdown p:last-child,
 .diagnostic-markdown p:last-child {
     margin-bottom: 0;
 }
 
+.forge-markdown h1,
+.forge-markdown h2,
+.forge-markdown h3,
+.forge-markdown h4,
+.forge-markdown h5,
 .diagnostic-markdown h1,
 .diagnostic-markdown h2,
 .diagnostic-markdown h3,
@@ -552,11 +562,12 @@ textarea.forge-input, textarea.form-control-dark {
     margin-bottom: 0.5rem;
 }
 
-.diagnostic-markdown h1 { font-size: 1.25rem; }
-.diagnostic-markdown h2 { font-size: 1.15rem; }
-.diagnostic-markdown h3 { font-size: 1.05rem; }
-.diagnostic-markdown h4 { font-size: 0.95rem; }
+.forge-markdown h1 { font-size: 1.25rem; }
+.forge-markdown h2 { font-size: 1.15rem; }
+.forge-markdown h3 { font-size: 1.05rem; }
+.forge-markdown h4 { font-size: 0.95rem; }
 
+.forge-markdown code,
 .diagnostic-markdown code {
     background: var(--bg-input);
     color: #93c5fd;
@@ -567,6 +578,7 @@ textarea.forge-input, textarea.form-control-dark {
     border: 1px solid var(--border-subtle);
 }
 
+.forge-markdown pre,
 .diagnostic-markdown pre {
     background: var(--bg-input);
     border: 1px solid var(--border-subtle);
@@ -576,6 +588,7 @@ textarea.forge-input, textarea.form-control-dark {
     margin: 0.75rem 0;
 }
 
+.forge-markdown pre code,
 .diagnostic-markdown pre code {
     background: transparent;
     padding: 0;
@@ -584,6 +597,8 @@ textarea.forge-input, textarea.form-control-dark {
     font-size: 0.85rem;
 }
 
+.forge-markdown ul,
+.forge-markdown ol,
 .diagnostic-markdown ul,
 .diagnostic-markdown ol {
     margin: 0.5rem 0 0.75rem 1.25rem;
@@ -591,11 +606,13 @@ textarea.forge-input, textarea.form-control-dark {
     color: var(--text-secondary);
 }
 
+.forge-markdown li,
 .diagnostic-markdown li {
     margin-bottom: 0.35rem;
     line-height: 1.6;
 }
 
+.forge-markdown blockquote,
 .diagnostic-markdown blockquote {
     border-left: 3px solid var(--accent-indigo);
     background: rgba(99, 102, 241, 0.06);
@@ -605,10 +622,49 @@ textarea.forge-input, textarea.form-control-dark {
     color: var(--text-secondary);
 }
 
+.forge-markdown strong,
+.forge-markdown b,
 .diagnostic-markdown strong,
 .diagnostic-markdown b {
     color: var(--text-primary);
     font-weight: 600;
+}
+
+.forge-markdown a,
+.diagnostic-markdown a {
+    color: var(--accent-teal);
+    text-decoration: underline;
+}
+
+.forge-markdown a:hover,
+.diagnostic-markdown a:hover {
+    color: #5eead4;
+}
+
+.forge-markdown table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+    font-size: 0.86rem;
+}
+
+.forge-markdown th,
+.forge-markdown td {
+    border: 1px solid var(--border-subtle);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+}
+
+.forge-markdown th {
+    background: var(--bg-card);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.forge-markdown hr {
+    border: none;
+    border-top: 1px solid var(--border-subtle);
+    margin: 1rem 0;
 }
 
 .diagnostic-markdown-inline {

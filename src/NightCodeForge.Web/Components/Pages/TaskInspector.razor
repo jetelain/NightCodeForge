@@ -1,0 +1,199 @@
+@page "/inspector"
+@page "/inspector/{TaskId:int?}"
+@page "/tasks/{TaskId:int}"
+@implements IDisposable
+@inject ITaskRepository TaskRepository
+@inject WorkerStateService WorkerState
+@inject WorkspaceStateService WorkspaceState
+@inject NavigationManager Navigation
+
+<PageTitle>Task Inspector - NightCodeForge</PageTitle>
+
+<div class="page-header" style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <span style="font-size: 1.75rem;">🔎</span>
+        <div>
+            <h1 style="margin: 0; font-size: 1.5rem;">Task Execution Inspector</h1>
+            <p style="margin: 0.25rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;">
+                Historical and live inspection: 1-7 phases workflow pipeline, turn-by-turn stage conversations, diffs, and execution logs.
+            </p>
+        </div>
+    </div>
+
+    <!-- Quick Navigation & Workspace Info -->
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <a href="/monitoring" class="forge-btn forge-btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem; text-decoration: none;">
+            ⚡ Live Telemetry
+        </a>
+        <span class="forge-badge badge-indigo" style="font-size: 0.78rem;">
+            📁 @(WorkspaceState.ActiveWorkspace?.Name ?? "All Workspaces")
+        </span>
+    </div>
+</div>
+
+<!-- Task Selector & Action Toolbar -->
+<div class="card-surface" id="task-inspector-toolbar" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.85rem 1.25rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem;">
+    <div style="display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;">
+        <span style="font-size: 1.15rem;">🎯</span>
+        <span style="font-weight: 700; font-size: 0.92rem; color: var(--text-primary);">Inspected Task:</span>
+        <select class="form-control-dark" id="task-selector-dropdown" style="min-width: 280px; padding: 0.3rem 0.6rem; font-size: 0.84rem;"
+                value="@(_inspectedTaskId ?? 0)"
+                @onchange="HandleTaskSelectionChanged">
+            @if (!_availableTasks.Any())
+            {
+                <option value="0">No tasks found</option>
+            }
+            @foreach (var t in _availableTasks)
+            {
+                <option value="@t.Id">#@t.Id - @t.Title (@t.Status)</option>
+            }
+        </select>
+    </div>
+
+    @if (_inspectedTaskId.HasValue && WorkerState.Current.ActiveTaskId.HasValue && _inspectedTaskId.Value != WorkerState.Current.ActiveTaskId.Value)
+    {
+        <button type="button" class="forge-btn forge-btn-secondary" id="switch-to-active-task-btn" style="padding: 0.25rem 0.65rem; font-size: 0.78rem;" @onclick="SwitchToActiveTask">
+            ⚡ Switch to Running Task (#@WorkerState.Current.ActiveTaskId.Value)
+        </button>
+    }
+</div>
+
+@if (_inspectedTaskId.HasValue && _inspectedTaskId.Value > 0)
+{
+    <TaskExecutionInspector TaskId="_inspectedTaskId.Value" />
+}
+else if (!_isLoadingTasks)
+{
+    <div class="card-surface" id="task-inspector-empty" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 3rem 1.5rem; text-align: center; color: var(--text-muted);">
+        <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">📂</div>
+        <h3 style="font-size: 1.1rem; color: var(--text-primary); margin-bottom: 0.5rem;">No Tasks Available</h3>
+        <p style="font-size: 0.85rem; margin: 0 auto 1.25rem auto; max-width: 480px;">
+            There are currently no tasks in this workspace. Create a task via Ideation or Intake Triage to begin execution and review.
+        </p>
+        <a href="/ideation" class="forge-btn forge-btn-primary" style="padding: 0.4rem 0.9rem; font-size: 0.82rem; text-decoration: none;">
+            💡 Start Ideation Chat
+        </a>
+    </div>
+}
+
+@code {
+    [Parameter] public int? TaskId { get; set; }
+
+    private int? _inspectedTaskId;
+    private List<ForgeTask> _availableTasks = new();
+    private bool _isLoadingTasks = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
+
+        await LoadAvailableTasksAsync();
+        ResolveInitialInspectedTask();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (TaskId.HasValue && TaskId.Value > 0 && TaskId.Value != _inspectedTaskId)
+        {
+            _inspectedTaskId = TaskId.Value;
+            if (!_availableTasks.Any(t => t.Id == _inspectedTaskId.Value))
+            {
+                await LoadAvailableTasksAsync();
+            }
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadAvailableTasksAsync()
+    {
+        _isLoadingTasks = true;
+        try
+        {
+            var wsId = WorkspaceState.ActiveWorkspace?.Id;
+            IReadOnlyList<ForgeTask> allTasks;
+            if (wsId.HasValue)
+            {
+                allTasks = await TaskRepository.GetByWorkspaceIdAsync(wsId.Value);
+            }
+            else
+            {
+                var open = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Open);
+                var reviewed = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Reviewed);
+                var implemented = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Implemented);
+                var ready = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Ready);
+                var closed = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Closed);
+                var failed = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Failed);
+                allTasks = open.Concat(reviewed).Concat(implemented).Concat(ready).Concat(closed).Concat(failed).ToList();
+            }
+
+            _availableTasks = allTasks.OrderByDescending(t => t.UpdatedAt).ToList();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading available tasks for inspector: {ex.Message}");
+        }
+        finally
+        {
+            _isLoadingTasks = false;
+        }
+    }
+
+    private void ResolveInitialInspectedTask()
+    {
+        if (TaskId.HasValue && TaskId.Value > 0)
+        {
+            _inspectedTaskId = TaskId.Value;
+        }
+        else if (WorkerState.Current.ActiveTaskId.HasValue && WorkerState.Current.ActiveTaskId.Value > 0)
+        {
+            _inspectedTaskId = WorkerState.Current.ActiveTaskId.Value;
+        }
+        else if (_availableTasks.Any())
+        {
+            _inspectedTaskId = _availableTasks[0].Id;
+        }
+    }
+
+    private void HandleTaskSelectionChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var selectedId) && selectedId > 0)
+        {
+            _inspectedTaskId = selectedId;
+            Navigation.NavigateTo($"/inspector/{selectedId}", replace: false);
+            StateHasChanged();
+        }
+    }
+
+    private void SwitchToActiveTask()
+    {
+        if (WorkerState.Current.ActiveTaskId.HasValue)
+        {
+            var activeId = WorkerState.Current.ActiveTaskId.Value;
+            _inspectedTaskId = activeId;
+            Navigation.NavigateTo($"/inspector/{activeId}", replace: false);
+            StateHasChanged();
+        }
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        InvokeAsync(async () =>
+        {
+            await LoadAvailableTasksAsync();
+            ResolveInitialInspectedTask();
+            StateHasChanged();
+        });
+    }
+
+    private void HandleWorkerStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+        WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
+    }
+}

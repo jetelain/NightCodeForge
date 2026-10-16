@@ -85,7 +85,7 @@ public class GitCliRunner : IGitCliRunner
             ProcessStartSpec spec;
             if (isWslTarget)
             {
-                var wslArgs = new List<string> { "-d", distro, "--", "git", "-c", "core.pager=cat", "-C", linuxDir };
+                var wslArgs = new List<string> { "-d", distro, "--exec", "git", "-c", "core.pager=cat", "-C", linuxDir };
                 wslArgs.AddRange(argsArray);
 
                 spec = new ProcessStartSpec

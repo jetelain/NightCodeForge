@@ -129,4 +129,190 @@ deleted file mode 100644
         Assert.Single(snapshot.Files);
         Assert.Equal("src/Calculator.cs", snapshot.Files[0].Path);
     }
+
+    [Fact]
+    public async Task GetTaskDiffFilesAsync_WhenTaskClosedWithSquashSha_UsesCommitDiff()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var gitManager = new TestGitWorkspaceManager
+        {
+            CommitDiffResult = @"diff --git a/src/ClosedFeature.cs b/src/ClosedFeature.cs
+new file mode 100644
+--- /dev/null
++++ b/src/ClosedFeature.cs
+@@ -0,0 +1,3 @@
++public class ClosedFeature
++{
++}"
+        };
+
+        var service = new TaskReviewService(taskRepo, workspaceRepo, NullLogger<TaskReviewService>.Instance, gitManager);
+
+        var workspace = new Workspace
+        {
+            Id = 1,
+            Name = "Main Repo",
+            RepositoryPath = "/fake/repo"
+        };
+        await workspaceRepo.CreateAsync(workspace);
+
+        var task = new ForgeTask
+        {
+            Id = 200,
+            WorkspaceId = 1,
+            Title = "Closed Feature Task",
+            Status = TaskOverallStatus.Closed,
+            SquashCommitSha = "c0ffee1234567890abcdef1234567890abcdef12",
+            BaseBranch = "main",
+            FeatureBranch = "feature/task-200"
+        };
+        await taskRepo.CreateAsync(task);
+
+        var diffs = await service.GetTaskDiffFilesAsync(200);
+
+        Assert.True(gitManager.GetCommitDiffCalled);
+        Assert.Equal("c0ffee1234567890abcdef1234567890abcdef12", gitManager.LastCommitSha);
+        Assert.False(gitManager.GenerateLiveDiffCalled);
+        Assert.Single(diffs);
+        Assert.Equal("src/ClosedFeature.cs", diffs[0].Path);
+        Assert.Equal(FileChangeType.Added, diffs[0].ChangeType);
+    }
+
+    [Fact]
+    public async Task GetTaskDiffFilesAsync_WhenTaskNotClosed_IgnoresSquashShaAndUsesLiveDiff()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var gitManager = new TestGitWorkspaceManager
+        {
+            LiveDiffResult = @"diff --git a/src/WipFeature.cs b/src/WipFeature.cs
+new file mode 100644
+--- /dev/null
++++ b/src/WipFeature.cs
+@@ -0,0 +1,3 @@
++public class WipFeature
++{
++}"
+        };
+
+        var service = new TaskReviewService(taskRepo, workspaceRepo, NullLogger<TaskReviewService>.Instance, gitManager);
+
+        var workspace = new Workspace
+        {
+            Id = 1,
+            Name = "Main Repo",
+            RepositoryPath = "/fake/repo"
+        };
+        await workspaceRepo.CreateAsync(workspace);
+
+        var task = new ForgeTask
+        {
+            Id = 201,
+            WorkspaceId = 1,
+            Title = "Active Ready Task with Stale Squash SHA",
+            Status = TaskOverallStatus.Ready,
+            SquashCommitSha = "stale_sha_1234567890abcdef1234567890abcdef",
+            BaseBranch = "main",
+            FeatureBranch = "feature/task-201"
+        };
+        await taskRepo.CreateAsync(task);
+
+        var diffs = await service.GetTaskDiffFilesAsync(201);
+
+        Assert.False(gitManager.GetCommitDiffCalled);
+        Assert.True(gitManager.GenerateLiveDiffCalled);
+        Assert.Single(diffs);
+        Assert.Equal("src/WipFeature.cs", diffs[0].Path);
+        Assert.Equal(FileChangeType.Added, diffs[0].ChangeType);
+    }
+
+    [Fact]
+    public void ParseGitDiff_HandlesWindowsCrlfLineEndings()
+    {
+        var rawDiff = "diff --git a/src/File.cs b/src/File.cs\r\nindex 1234..5678 100644\r\n--- a/src/File.cs\r\n+++ b/src/File.cs\r\n@@ -1,2 +1,3 @@\r\n line1\r\n-line2\r\n+line2_mod\r\n+line3\r\n";
+
+        var files = TaskReviewService.ParseGitDiff(rawDiff);
+
+        Assert.Single(files);
+        Assert.Equal("src/File.cs", files[0].Path);
+        Assert.False(files[0].Path.EndsWith('\r'));
+        Assert.Equal(2, files[0].Additions);
+        Assert.Equal(1, files[0].Deletions);
+        Assert.Contains("line2_mod", files[0].NewContent);
+        Assert.Contains("line3", files[0].NewContent);
+        Assert.Contains("line2", files[0].OldContent);
+    }
+
+    [Fact]
+    public async Task GetTaskDiffFilesAsync_ClosedTaskWithSquashSha_CallsGetCommitDiffAsync()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var gitManager = new TestGitWorkspaceManager
+        {
+            CommitDiffResult = "diff --git a/src/Calculator.cs b/src/Calculator.cs\n--- a/src/Calculator.cs\n+++ b/src/Calculator.cs\n@@ -1,1 +1,2 @@\n+public int Multiply(int a, int b) => a * b;\n"
+        };
+        var service = new TaskReviewService(taskRepo, workspaceRepo, NullLogger<TaskReviewService>.Instance, gitManager);
+
+        var workspace = new Workspace
+        {
+            Id = 1,
+            Name = "Main Repo",
+            RepositoryPath = "/fake/repo"
+        };
+        await workspaceRepo.CreateAsync(workspace);
+
+        var task = new ForgeTask
+        {
+            Id = 301,
+            WorkspaceId = 1,
+            Title = "Closed Task",
+            Status = TaskOverallStatus.Closed,
+            SquashCommitSha = "26c69f5a7a48891ee7fc4b834b119b0221c58f56",
+            BaseBranch = "main"
+        };
+        await taskRepo.CreateAsync(task);
+
+        var diffs = await service.GetTaskDiffFilesAsync(301);
+
+        Assert.True(gitManager.GetCommitDiffCalled);
+        Assert.Equal("26c69f5a7a48891ee7fc4b834b119b0221c58f56", gitManager.LastCommitSha);
+        Assert.Single(diffs);
+        Assert.Equal("src/Calculator.cs", diffs[0].Path);
+        Assert.Equal(1, diffs[0].Additions);
+    }
+
+    private class TestGitWorkspaceManager : NightCodeForge.Core.Interfaces.IGitWorkspaceManager
+    {
+        public bool GetCommitDiffCalled { get; private set; }
+        public string? LastCommitSha { get; private set; }
+        public bool GenerateLiveDiffCalled { get; private set; }
+        public string CommitDiffResult { get; set; } = string.Empty;
+        public string LiveDiffResult { get; set; } = string.Empty;
+
+        public Task EnsureRepositoryValidAsync(string repoPath, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task CheckoutTaskBranchAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<string> CreateWipCheckpointAsync(Workspace workspace, int taskId, string stageName, string summary, CancellationToken cancellationToken = default) => Task.FromResult("wip-commit-sha");
+        public Task<string> GenerateDiffAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.FromResult("");
+
+        public Task<string> GenerateLiveDiffAsync(Workspace workspace, int taskId, string baseBranch = "main", CancellationToken cancellationToken = default)
+        {
+            GenerateLiveDiffCalled = true;
+            return Task.FromResult(LiveDiffResult);
+        }
+
+        public Task<string> GetCommitDiffAsync(Workspace workspace, string commitSha, CancellationToken cancellationToken = default)
+        {
+            GetCommitDiffCalled = true;
+            LastCommitSha = commitSha;
+            return Task.FromResult(CommitDiffResult);
+        }
+
+        public Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default) => Task.FromResult("squash-commit-sha");
+        public Task<string> EnsureWorktreeAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.FromResult($"/wks/task-{taskId}");
+        public Task RemoveWorktreeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public string GetWorktreePath(Workspace workspace, int taskId) => $"/wks/task-{taskId}";
+        public Task RevertOrCleanAsync(Workspace workspace, int? taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
 }

@@ -214,6 +214,72 @@ public class DevQueueServiceTests : IDisposable
         Assert.False(File.Exists(indexLock), ".git/index.lock should have been purged");
     }
 
+    [Fact]
+    public async Task RescheduleTaskAsync_RestartPipelineTrue_ResetsSquashCommitShaAndStatusAndStage()
+    {
+        var task = new ForgeTask
+        {
+            Id = 301,
+            WorkspaceId = 1,
+            Title = "Failed Task Restart",
+            Status = TaskOverallStatus.Failed,
+            CurrentStageId = "deterministic-post-impl",
+            SquashCommitSha = "deadbeef1234567890abcdef1234567890abcdef",
+            Priority = 1
+        };
+        await _taskRepo.CreateAsync(task);
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            jobStorage: null);
+
+        var result = await service.RescheduleTaskAsync(301, restartPipeline: true);
+
+        Assert.True(result);
+        var reloaded = await _taskRepo.GetByIdAsync(301);
+        Assert.NotNull(reloaded);
+        Assert.Null(reloaded.SquashCommitSha);
+        Assert.Equal(string.Empty, reloaded.CurrentStageId);
+        Assert.Equal(TaskOverallStatus.Open, reloaded.Status);
+        Assert.Equal(301, _jobQueue.LastEnqueuedInferenceTaskId);
+    }
+
+    [Fact]
+    public async Task RescheduleTaskAsync_RestartPipelineFalse_PreservesSquashCommitShaAndStage()
+    {
+        var task = new ForgeTask
+        {
+            Id = 302,
+            WorkspaceId = 1,
+            Title = "Failed Task Retry Stage",
+            Status = TaskOverallStatus.Failed,
+            CurrentStageId = "deterministic-post-impl",
+            SquashCommitSha = "c0ffee1234567890abcdef1234567890abcdef",
+            Priority = 1
+        };
+        await _taskRepo.CreateAsync(task);
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            jobStorage: null);
+
+        var result = await service.RescheduleTaskAsync(302, restartPipeline: false);
+
+        Assert.True(result);
+        var reloaded = await _taskRepo.GetByIdAsync(302);
+        Assert.NotNull(reloaded);
+        Assert.Equal("c0ffee1234567890abcdef1234567890abcdef", reloaded.SquashCommitSha);
+        Assert.Equal("deterministic-post-impl", reloaded.CurrentStageId);
+        Assert.Equal(TaskOverallStatus.Open, reloaded.Status);
+        Assert.Equal(302, _jobQueue.LastEnqueuedInferenceTaskId);
+    }
+
     public void Dispose()
     {
         _serviceProvider.Dispose();

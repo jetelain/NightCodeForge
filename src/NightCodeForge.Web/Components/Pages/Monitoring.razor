@@ -1,4 +1,5 @@
 @page "/monitoring"
+@page "/monitoring/{TaskId:int?}"
 @implements IAsyncDisposable
 @inject OrchestratorHubClientConnection HubClient
 @inject WorkerStateService WorkerState
@@ -34,6 +35,20 @@
             </button>
         }
 
+        <!-- Link to Dedicated Task Inspector -->
+        @if (WorkerState.Current.ActiveTaskId.HasValue)
+        {
+            <a href="/inspector/@WorkerState.Current.ActiveTaskId.Value" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; text-decoration: none;">
+                🔎 Inspect Task #@WorkerState.Current.ActiveTaskId.Value
+            </a>
+        }
+        else
+        {
+            <a href="/inspector" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; text-decoration: none;">
+                🔎 Task Inspector
+            </a>
+        }
+
         <!-- Workspace Indicator -->
         <span class="forge-badge badge-indigo" style="font-size: 0.78rem;">
             📁 @(WorkspaceState.ActiveWorkspace?.Name ?? "All Workspaces")
@@ -47,13 +62,13 @@
 <!-- 2. 7-Step Visual Pipeline Stepper -->
 <PipelineStepper @ref="_stepperRef"
                  TaskId="WorkerState.Current.ActiveTaskId"
-                 CurrentStageId="WorkerState.Current.StageId" />
+                 CurrentStageId="@WorkerState.Current.StageId" />
 
 <!-- 3. Live Tool Call Activity Strip -->
 <ToolActivityStrip @ref="_toolStripRef" />
 
 <!-- 4. Split Grid: Thinking Trace & Live Terminal Stream -->
-<div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1.25rem; align-items: start;">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1.25rem; align-items: start; margin-bottom: 2rem;">
     <!-- Model Reasoning Accordion (<think>) -->
     <div>
         <ThinkingAccordion @ref="_thinkingRef" TaskId="WorkerState.Current.ActiveTaskId" />
@@ -66,6 +81,8 @@
 </div>
 
 @code {
+    [Parameter] public int? TaskId { get; set; }
+
     private PipelineStepper? _stepperRef;
     private ToolActivityStrip? _toolStripRef;
     private ThinkingAccordion? _thinkingRef;
@@ -87,6 +104,7 @@
         HubClient.OnDeterministicGateResultReceived += HandleDeterministicGateResult;
         HubClient.OnHostDirtyAlertReceived += HandleHostDirtyAlert;
         HubClient.OnExecutionLogReceived += HandleExecutionLog;
+        HubClient.OnOptimizationActionReceived += HandleOptimizationAction;
         HubClient.OnConnectionStateChanged += HandleConnectionStateChanged;
 
         try
@@ -95,10 +113,10 @@
         }
         catch
         {
-            // Silently handle initial start failure; auto-reconnect or manual reconnect available
+            // Handled
         }
 
-        // Auto-discover in-flight active task from repository if worker state has not received status event yet
+        // Auto-discover in-flight active task from repository
         if (!WorkerState.Current.ActiveTaskId.HasValue)
         {
             try
@@ -133,13 +151,20 @@
             }
         }
 
-        if (WorkerState.Current.ActiveTaskId.HasValue)
+        if (WorkerState.Current.ActiveTaskId.HasValue && WorkerState.Current.ActiveTaskId.Value > 0)
         {
-            var activeId = WorkerState.Current.ActiveTaskId.Value;
-            await JoinTaskGroupAsync(activeId);
+            await JoinTaskGroupAsync(WorkerState.Current.ActiveTaskId.Value);
         }
 
         StateHasChanged();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (TaskId.HasValue && TaskId.Value > 0)
+        {
+            Navigation.NavigateTo($"/inspector/{TaskId.Value}", replace: true);
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -222,12 +247,12 @@
 
     private void HandleWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget)
     {
-        InvokeAsync(async () =>
+        InvokeAsync(() =>
         {
             WorkerState.HandleWorkerStatus(status, activeTaskId, stageId, hardwareTarget);
             if (activeTaskId.HasValue && activeTaskId.Value != _joinedTaskId)
             {
-                await JoinTaskGroupAsync(activeTaskId.Value);
+                _ = JoinTaskGroupAsync(activeTaskId.Value);
             }
             StateHasChanged();
         });
@@ -235,7 +260,7 @@
 
     private void HandleStageTransition(int taskId, string stageId, string stageKind, string status)
     {
-        InvokeAsync(async () =>
+        InvokeAsync(() =>
         {
             _stepperRef?.ApplyStageTransition(stageId, status);
             _terminalRef?.AddLog(taskId, stageId, "Info", $"Stage transition: {stageId} [{stageKind}] -> {status}", DateTime.UtcNow);
@@ -244,7 +269,7 @@
                 WorkerState.HandleWorkerStatus("Running", taskId, stageId, stageKind.Contains("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU");
                 if (taskId != _joinedTaskId)
                 {
-                    await JoinTaskGroupAsync(taskId);
+                    _ = JoinTaskGroupAsync(taskId);
                 }
             }
             StateHasChanged();
@@ -275,6 +300,14 @@
         InvokeAsync(() =>
         {
             _terminalRef?.AddLog(taskId, stageId, level, message, timestamp);
+        });
+    }
+
+    private void HandleOptimizationAction(int taskId, string stageId, string actionType, string description, int tokensSaved, DateTime timestamp)
+    {
+        InvokeAsync(() =>
+        {
+            _terminalRef?.AddLog(taskId, stageId, "Info", $"[OPTIMIZATION] {actionType}: {description} (Saved {tokensSaved} tokens)", timestamp);
         });
     }
 
@@ -343,6 +376,7 @@
         HubClient.OnDeterministicGateResultReceived -= HandleDeterministicGateResult;
         HubClient.OnHostDirtyAlertReceived -= HandleHostDirtyAlert;
         HubClient.OnExecutionLogReceived -= HandleExecutionLog;
+        HubClient.OnOptimizationActionReceived -= HandleOptimizationAction;
         HubClient.OnConnectionStateChanged -= HandleConnectionStateChanged;
 
         if (_joinedTaskId.HasValue)

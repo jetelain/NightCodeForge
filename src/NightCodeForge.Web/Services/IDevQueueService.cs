@@ -30,4 +30,9 @@ public interface IDevQueueService
     /// Forcibly releases an active concurrency lock and purges any dangling .git/index.lock files.
     /// </summary>
     Task<bool> EmergencyReleaseLockAsync(int workspaceId, int? taskId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reschedules a task to run again, either retrying the current stage or restarting the entire pipeline from scratch.
+    /// </summary>
+    Task<bool> RescheduleTaskAsync(int taskId, bool restartPipeline = false, CancellationToken cancellationToken = default);
 }

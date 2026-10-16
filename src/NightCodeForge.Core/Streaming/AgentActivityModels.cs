@@ -13,7 +13,8 @@ public enum AgentActivityKind
     StageStarted,
     StageCompleted,
     Interrupted,
-    Error
+    Error,
+    OptimizationAction
 }
 
 /// <summary>

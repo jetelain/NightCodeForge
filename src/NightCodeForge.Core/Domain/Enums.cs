@@ -108,6 +108,20 @@ public enum WorkflowStageKind
 }
 
 /// <summary>
+/// Role of a message or activity turn within a stage conversation.
+/// </summary>
+public enum StageTurnRole
+{
+    User = 0,
+    Assistant = 1,
+    Thinking = 2,
+    Tool = 3,
+    ToolResult = 4,
+    Optimization = 5,
+    System = 6
+}
+
+/// <summary>
 /// Known harness identifiers.
 /// </summary>
 public static class HarnessType

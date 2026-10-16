@@ -21,7 +21,12 @@
                             @Task.Title
                         </h2>
                     </div>
-                    <button type="button" class="btn-icon" @onclick="Close" aria-label="Close drawer">✕</button>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <a href="/inspector/@Task.Id" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.78rem; text-decoration: none;">
+                            🔍 Inspect
+                        </a>
+                        <button type="button" class="btn-icon" @onclick="Close" aria-label="Close drawer">✕</button>
+                    </div>
                 </div>
 
                 @if (Task.IsWaitingForHuman)
@@ -68,7 +73,9 @@
                         }
                         else
                         {
-                            <pre class="formatted-desc">@Task.Description</pre>
+                            <div class="formatted-desc forge-markdown">
+                                @MarkdownHelper.ToMarkupString(Task.Description)
+                            </div>
                         }
                     </div>
                 </div>
@@ -196,6 +203,9 @@
                         🚀 Promote / Triage
                     </button>
                 }
+                <a href="/inspector/@Task.Id" class="forge-btn forge-btn-secondary" style="font-size: 0.82rem; text-decoration: none;">
+                    🔍 Inspect Execution &amp; Stages
+                </a>
                 <button type="button" class="forge-btn forge-btn-secondary" @onclick="HandleLinkDependencies">
                     🔗 Link Dependencies
                 </button>

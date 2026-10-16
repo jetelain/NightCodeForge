@@ -40,7 +40,21 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
 
     public async Task UpdateAsync(Workspace workspace, CancellationToken cancellationToken = default)
     {
-        _context.Workspaces.Update(workspace);
+        var existing = _context.Workspaces.Local.FirstOrDefault(entry => entry.Id == workspace.Id)
+                       ?? await _context.Workspaces.FindAsync(new object[] { workspace.Id }, cancellationToken);
+
+        if (existing != null)
+        {
+            if (!ReferenceEquals(existing, workspace))
+            {
+                _context.Entry(existing).CurrentValues.SetValues(workspace);
+            }
+        }
+        else
+        {
+            _context.Workspaces.Update(workspace);
+        }
+
         await _context.SaveChangesAsync(cancellationToken);
     }
 

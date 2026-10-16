@@ -26,7 +26,8 @@ public record TranscriptMetadata(
     IReadOnlyList<string>? AvailableTools = null,
     IReadOnlyList<string>? ActiveSkills = null,
     string? MafConfiguration = null,
-    IReadOnlyList<ModelCallSnapshot>? ModelCalls = null);
+    IReadOnlyList<ModelCallSnapshot>? ModelCalls = null,
+    int AttemptIndex = 1);
 
 /// <summary>
 /// Saves turn-by-turn markdown execution logs embedding active optimization flags in YAML frontmatter,
@@ -61,7 +62,8 @@ public class SessionTranscriptService
 
         var dateStr = DateTime.UtcNow.ToString("yyyy-MM-dd");
         var statusStr = metadata.Status.ToString().ToLowerInvariant();
-        var fileName = $"{dateStr}-task-{metadata.TaskId}-{metadata.StageId}-{statusStr}.md";
+        var runSuffix = metadata.AttemptIndex > 1 ? $"-run{metadata.AttemptIndex}" : "";
+        var fileName = $"{dateStr}-task-{metadata.TaskId}-{metadata.StageId}{runSuffix}-{statusStr}.md";
         var filePath = Path.Combine(targetDir, fileName);
 
         var sb = new StringBuilder();

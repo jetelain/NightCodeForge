@@ -3,6 +3,8 @@ using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Agents.Optimizations;
 
+public record ToolCompactionResult(int ItemsCompacted, int CharactersSaved);
+
 /// <summary>
 /// Conversation history optimizer that compacts older, bulky tool outputs
 /// outside a protected recent window into concise summary stubs to prevent quadratic token inflation.
@@ -34,9 +36,9 @@ public class ToolResultCompactor
     /// <summary>
     /// Compacts older tool results in-place if optimization is enabled.
     /// </summary>
-    public void Compact(IList<ChatMessage> messages, int? keepVerbatimCount = null)
+    public ToolCompactionResult Compact(IList<ChatMessage> messages, int? keepVerbatimCount = null)
     {
-        Compact(
+        return Compact(
             messages,
             _flags,
             keepVerbatimCount ?? _keepVerbatimCount,
@@ -47,7 +49,7 @@ public class ToolResultCompactor
     /// <summary>
     /// Static compaction utility method with opt-out support via <see cref="LocalOptimizationFlags.CompactOlderToolResults"/>.
     /// </summary>
-    public static void Compact(
+    public static ToolCompactionResult Compact(
         IList<ChatMessage> messages,
         LocalOptimizationFlags? flags = null,
         int? keepVerbatimCount = null,
@@ -56,7 +58,7 @@ public class ToolResultCompactor
     {
         if (flags != null && !flags.CompactOlderToolResults)
         {
-            return; // Opted out
+            return new ToolCompactionResult(0, 0); // Opted out
         }
 
         var effectiveKeep = keepVerbatimCount ?? flags?.ToolKeepVerbatimCount ?? DefaultKeepVerbatimCount;
@@ -74,8 +76,11 @@ public class ToolResultCompactor
 
         if (toolIndices.Count <= effectiveKeep)
         {
-            return;
+            return new ToolCompactionResult(0, 0);
         }
+
+        int itemsCompacted = 0;
+        int charactersSaved = 0;
 
         var toCompact = toolIndices.Take(toolIndices.Count - effectiveKeep);
         foreach (var idx in toCompact)
@@ -93,6 +98,8 @@ public class ToolResultCompactor
                     {
                         var prefixLen = Math.Min(effectiveTruncate, resultStr.Length);
                         var truncated = resultStr[..prefixLen] + $"\n... [Output truncated; {resultStr.Length} characters total]";
+                        charactersSaved += Math.Max(0, resultStr.Length - truncated.Length);
+                        itemsCompacted++;
                         newContents.Add(new FunctionResultContent(frc.CallId, truncated));
                         modified = true;
                     }
@@ -105,6 +112,8 @@ public class ToolResultCompactor
                 {
                     var prefixLen = Math.Min(effectiveTruncate, tc.Text.Length);
                     var truncated = tc.Text[..prefixLen] + $"\n... [Output truncated; {tc.Text.Length} characters total]";
+                    charactersSaved += Math.Max(0, tc.Text.Length - truncated.Length);
+                    itemsCompacted++;
                     newContents.Add(new TextContent(truncated));
                     modified = true;
                 }
@@ -119,5 +128,7 @@ public class ToolResultCompactor
                 messages[idx] = new ChatMessage(msg.Role, newContents);
             }
         }
+
+        return new ToolCompactionResult(itemsCompacted, charactersSaved);
     }
 }

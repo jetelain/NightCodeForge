@@ -158,9 +158,12 @@ public class GitWorkspaceManagerTests : IDisposable
 
         // Act: Squash and merge into main
         var finalMessage = "feat: Completed task #105 with multi-part feature";
-        await _manager.SquashAndMergeAsync(_workspace, 105, "main", finalMessage);
+        var squashSha = await _manager.SquashAndMergeAsync(_workspace, 105, "main", finalMessage);
 
         // Assert: on main branch
+        Assert.False(string.IsNullOrWhiteSpace(squashSha));
+        Assert.Equal(40, squashSha.Length);
+
         var currentBranch = await _runner.ExecuteAsync(_repo.RepositoryPath, ["branch", "--show-current"]);
         Assert.Equal("main", currentBranch.StandardOutput.Trim());
 
@@ -171,6 +174,11 @@ public class GitWorkspaceManagerTests : IDisposable
         // Last commit message matches approved final message
         var log = await _runner.ExecuteAsync(_repo.RepositoryPath, ["log", "-1", "--pretty=%B"]);
         Assert.Contains(finalMessage, log.StandardOutput);
+
+        // Commit diff via GetCommitDiffAsync matches squashed files
+        var commitDiff = await _manager.GetCommitDiffAsync(_workspace, squashSha);
+        Assert.Contains("feature1.txt", commitDiff);
+        Assert.Contains("feature2.txt", commitDiff);
 
         // Ephemeral worktree has been removed
         Assert.False(Directory.Exists(wtPath));

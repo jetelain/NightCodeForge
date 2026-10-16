@@ -11,6 +11,7 @@ public interface ITaskReviewService
 {
     Task<TaskReviewSnapshot?> GetSnapshotAsync(int taskId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TaskReviewSnapshot>> GetPendingReviewsAsync(int? workspaceId = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<FileDiffSummary>> GetTaskDiffFilesAsync(int taskId, CancellationToken cancellationToken = default);
 }
 
 public partial class TaskReviewService : ITaskReviewService
@@ -20,7 +21,7 @@ public partial class TaskReviewService : ITaskReviewService
     private readonly IGitWorkspaceManager? _gitWorkspaceManager;
     private readonly ILogger<TaskReviewService> _logger;
 
-    [GeneratedRegex(@"^diff --git a/(?<oldPath>.+?) b/(?<newPath>.+?)$", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^diff --git a/(?<oldPath>.+?) b/(?<newPath>.+?)\r?$", RegexOptions.Multiline)]
     private static partial Regex DiffHeaderRegex();
 
     public TaskReviewService(
@@ -143,6 +144,14 @@ public partial class TaskReviewService : ITaskReviewService
             DurationMs: durationMs);
     }
 
+    public async Task<IReadOnlyList<FileDiffSummary>> GetTaskDiffFilesAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
+        if (task == null) return Array.Empty<FileDiffSummary>();
+        var baseBranch = string.IsNullOrWhiteSpace(task.BaseBranch) ? "main" : task.BaseBranch;
+        return await LoadChangedFilesAsync(task, baseBranch, cancellationToken);
+    }
+
     private async Task<IReadOnlyList<FileDiffSummary>> LoadChangedFilesAsync(
         ForgeTask task,
         string baseBranch,
@@ -161,7 +170,26 @@ public partial class TaskReviewService : ITaskReviewService
                 var workspace = await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken);
                 if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
                 {
-                    var rawDiff = await _gitWorkspaceManager.GenerateDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
+                    string rawDiff = string.Empty;
+
+                    // 1. If task is finished/merged and has a recorded SquashCommitSha, retrieve commit patch diff
+                    if (task.Status == TaskOverallStatus.Closed && !string.IsNullOrWhiteSpace(task.SquashCommitSha))
+                    {
+                        rawDiff = await _gitWorkspaceManager.GetCommitDiffAsync(workspace, task.SquashCommitSha, cancellationToken);
+                    }
+
+                    // 2. If active (not Closed), retrieve live diff directly from the worktree
+                    if (string.IsNullOrWhiteSpace(rawDiff) && task.Status != TaskOverallStatus.Closed)
+                    {
+                        rawDiff = await _gitWorkspaceManager.GenerateLiveDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
+                    }
+
+                    // 3. Fallback to branch diff
+                    if (string.IsNullOrWhiteSpace(rawDiff))
+                    {
+                        rawDiff = await _gitWorkspaceManager.GenerateDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
+                    }
+
                     if (!string.IsNullOrWhiteSpace(rawDiff))
                     {
                         var parsed = ParseGitDiff(rawDiff);
@@ -186,6 +214,8 @@ public partial class TaskReviewService : ITaskReviewService
         var results = new List<FileDiffSummary>();
         if (string.IsNullOrWhiteSpace(diffText)) return results;
 
+        diffText = diffText.Replace("\r\n", "\n").Replace('\r', '\n');
+
         var fileSections = Regex.Split(diffText, @"(?=^diff --git )", RegexOptions.Multiline);
 
         foreach (var section in fileSections)
@@ -193,7 +223,7 @@ public partial class TaskReviewService : ITaskReviewService
             if (string.IsNullOrWhiteSpace(section) || !section.StartsWith("diff --git")) continue;
 
             var match = DiffHeaderRegex().Match(section);
-            var filePath = match.Success ? match.Groups["newPath"].Value : "file.txt";
+            var filePath = match.Success ? match.Groups["newPath"].Value.Trim() : "file.txt";
 
             var isNewFile = section.Contains("new file mode");
             var isDeletedFile = section.Contains("deleted file mode");

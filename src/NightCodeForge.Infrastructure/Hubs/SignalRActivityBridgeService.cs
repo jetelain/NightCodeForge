@@ -142,6 +142,17 @@ public class SignalRActivityBridgeService : BackgroundService
                 await _hubContext.Clients.Group(groupName)
                     .ReceiveExecutionLog(evt.TaskId, evt.StageId, "Info", $"Turn completed: {evt.Content}", evt.Timestamp);
                 break;
+
+            case AgentActivityKind.OptimizationAction:
+                var actionType = evt.Metadata?.TryGetValue("ActionType", out var at) == true && at != null
+                    ? at.ToString()!
+                    : "Compaction";
+                var tokensSaved = evt.Metadata?.TryGetValue("TokensSaved", out var ts) == true && ts != null && int.TryParse(ts.ToString(), out var parsedTs)
+                    ? parsedTs
+                    : 0;
+                await _hubContext.Clients.Group(groupName)
+                    .ReceiveOptimizationAction(evt.TaskId, evt.StageId, actionType, evt.Content, tokensSaved, evt.Timestamp);
+                break;
         }
     }
 }

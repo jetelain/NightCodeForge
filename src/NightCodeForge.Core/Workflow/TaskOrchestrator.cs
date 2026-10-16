@@ -412,6 +412,68 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         await _taskRepository.AddExecutionRecordAsync(record, cancellationToken);
 
+        // Record StageConversation for deterministic stages
+        if (stage.Kind == WorkflowStageKind.Deterministic)
+        {
+            try
+            {
+                int attemptIndex = (pipelineContext.StageRetries.GetValueOrDefault(stage.StageId, 0)) + 1;
+                var deterministicConv = await _taskRepository.StartStageConversationAsync(
+                    task.Id,
+                    stage.StageId,
+                    WorkflowStageKind.Deterministic,
+                    attemptIndex,
+                    agentProfileId: null,
+                    harnessId: "native-cli",
+                    modelName: "deterministic-cpu",
+                    cancellationToken: cancellationToken);
+
+                // Turn 1: User prompt
+                await _taskRepository.AddConversationTurnAsync(
+                    deterministicConv.Id,
+                    StageTurnRole.User,
+                    content: $"Execute deterministic gate '{stage.DisplayName}' ({stage.StageId})",
+                    cancellationToken: cancellationToken);
+
+                // Turn 2: Tool execution
+                var cmd = pipelineContext.DataBag.Get<string>($"{stage.StageId}.command") 
+                    ?? pipelineContext.DataBag.Get<string>("build.command") 
+                    ?? "dotnet build";
+                var output = pipelineContext.DataBag.Get<string>($"{stage.StageId}.output") 
+                    ?? (result.IsSuccess ? "Verification completed successfully with exit code 0." : result.ErrorMessage ?? "Deterministic step failed");
+                await _taskRepository.AddConversationTurnAsync(
+                    deterministicConv.Id,
+                    StageTurnRole.Tool,
+                    content: $"Execute {cmd}",
+                    toolName: stage.StageId,
+                    toolArguments: cmd,
+                    toolResult: output,
+                    durationMs: durationMs,
+                    isError: !result.IsSuccess,
+                    cancellationToken: cancellationToken);
+
+                // Turn 3: Assistant result summary
+                var summary = result.IsSuccess 
+                    ? $"Deterministic gate '{stage.DisplayName}' passed successfully."
+                    : $"Deterministic gate '{stage.DisplayName}' failed: {result.ErrorMessage}";
+                await _taskRepository.AddConversationTurnAsync(
+                    deterministicConv.Id,
+                    StageTurnRole.Assistant,
+                    content: summary,
+                    cancellationToken: cancellationToken);
+
+                await _taskRepository.CompleteStageConversationAsync(
+                    deterministicConv.Id,
+                    result.IsSuccess ? StageExecutionStatus.Completed : StageExecutionStatus.Failed,
+                    summary: summary,
+                    cancellationToken: cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to persist deterministic StageConversation for task #{TaskId}, stage '{StageId}'", task.Id, stage.StageId);
+            }
+        }
+
         // Auto-persist any backlog proposals emitted by triage or discovery agents (propose_tasks)
         var pendingProposals = pipelineContext.DataBag.Get<List<TaskProposal>>("PendingProposals");
         if (pendingProposals != null && pendingProposals.Count > 0)
@@ -838,12 +900,14 @@ public class TaskOrchestrator : ITaskOrchestrator
         CancellationToken cancellationToken)
     {
         // 1. Squash & Merge feature branch into base branch
-        await _gitWorkspaceManager.SquashAndMergeAsync(
+        var squashSha = await _gitWorkspaceManager.SquashAndMergeAsync(
             workspace,
             task.Id,
             task.BaseBranch,
             finalCommitMessage,
             cancellationToken);
+
+        task.SquashCommitSha = squashSha;
 
         // If ext4 mirror is active, push the merged base branch back to host-origin so developer host repository is updated!
         if (_gitMirrorSyncService != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))

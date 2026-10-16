@@ -52,6 +52,7 @@
 @code {
     [Parameter] public int? TaskId { get; set; }
     [Parameter] public string? InitialContent { get; set; }
+    [Parameter] public bool? IsStreaming { get; set; }
 
     private string _content = "";
     private int _tokenCount = 0;
@@ -64,6 +65,25 @@
         {
             _content = InitialContent;
             _tokenCount = _content.Split(new[] { ' ', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries).Length;
+        }
+
+        if (IsStreaming.HasValue)
+        {
+            _isStreaming = IsStreaming.Value;
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (InitialContent != null && InitialContent != _content)
+        {
+            _content = InitialContent;
+            _tokenCount = string.IsNullOrWhiteSpace(_content) ? 0 : _content.Split(new[] { ' ', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries).Length;
+        }
+
+        if (IsStreaming.HasValue)
+        {
+            _isStreaming = IsStreaming.Value;
         }
     }
 

@@ -30,9 +30,20 @@ public interface IGitWorkspaceManager
     Task<string> GenerateDiffAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Checks out baseBranch, performs a squash merge of feature/task-{id}, and commits the final message.
+    /// Generates a live git diff of uncommitted and committed changes in the task's worktree against baseBranch.
     /// </summary>
-    Task SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default);
+    Task<string> GenerateLiveDiffAsync(Workspace workspace, int taskId, string baseBranch = "main", CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves the noise-filtered patch diff (-U2) of a specific commit SHA (e.g. squashed task commit).
+    /// </summary>
+    Task<string> GetCommitDiffAsync(Workspace workspace, string commitSha, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Checks out baseBranch, performs a squash merge of feature/task-{id}, and commits the final message.
+    /// Returns the 40-character commit SHA of the squashed commit.
+    /// </summary>
+    Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Ensures that an isolated Git worktree exists for the given task (task-{id}) checked out on feature/task-{id}.

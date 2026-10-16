@@ -10,7 +10,7 @@
         <div class="header-left">
             <span class="badge-stage" id="badge-stage-@Question.Id">@Question.StageId</span>
             <span class="badge-profile" id="badge-profile-@Question.Id">🤖 @(Question.AgentProfileId ?? "Default Profile")</span>
-            <a href="/monitoring/@Question.TaskId" class="task-link" id="task-link-@Question.Id">
+            <a href="/inspector/@Question.TaskId" class="task-link" id="task-link-@Question.Id">
                 ForgeTask #@Question.TaskId: @(Question.ForgeTask?.Title ?? $"Task #{Question.TaskId}")
             </a>
             @if (!string.IsNullOrWhiteSpace(Question.ForgeTask?.Workspace?.Name))

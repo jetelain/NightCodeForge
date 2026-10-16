@@ -19,6 +19,8 @@ public class AppDbContext : DbContext
     public DbSet<StageCheckpoint> StageCheckpoints => Set<StageCheckpoint>();
     public DbSet<StageExecutionRecord> StageExecutionRecords => Set<StageExecutionRecord>();
     public DbSet<ExecutionLog> ExecutionLogs => Set<ExecutionLog>();
+    public DbSet<StageConversation> StageConversations => Set<StageConversation>();
+    public DbSet<StageConversationTurn> StageConversationTurns => Set<StageConversationTurn>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
 
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
@@ -123,6 +125,7 @@ public class AppDbContext : DbContext
             b.Property(i => i.BaseBranch).IsRequired().HasMaxLength(128);
             b.Property(i => i.FeatureBranch).HasMaxLength(256);
             b.Property(i => i.LastHangfireJobId).HasMaxLength(128);
+            b.Property(i => i.SquashCommitSha).HasMaxLength(64);
 
             b.HasMany(i => i.Dependencies)
                 .WithOne(d => d.ForgeTask)
@@ -152,6 +155,11 @@ public class AppDbContext : DbContext
             b.HasMany(i => i.ExecutionLogs)
                 .WithOne(l => l.ForgeTask)
                 .HasForeignKey(l => l.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasMany(i => i.StageConversations)
+                .WithOne(c => c.ForgeTask)
+                .HasForeignKey(c => c.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -211,6 +219,36 @@ public class AppDbContext : DbContext
             b.Property(s => s.Value).IsRequired();
             b.Property(s => s.UpdatedAt).IsRequired();
         });
+
+        // 10. StageConversation
+        modelBuilder.Entity<StageConversation>(b =>
+        {
+            b.HasKey(c => c.Id);
+            b.Property(c => c.StageId).IsRequired().HasMaxLength(128);
+            b.Property(c => c.StageKind).HasConversion<int>();
+            b.Property(c => c.Status).HasConversion<int>();
+            b.Property(c => c.AgentProfileId).HasMaxLength(128);
+            b.Property(c => c.HarnessId).HasMaxLength(64);
+            b.Property(c => c.ModelName).HasMaxLength(256);
+            b.Property(c => c.TranscriptFileName).HasMaxLength(256);
+
+            b.HasIndex(c => new { c.TaskId, c.StageId, c.AttemptIndex });
+
+            b.HasMany(c => c.Turns)
+                .WithOne(t => t.Conversation)
+                .HasForeignKey(t => t.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // 11. StageConversationTurn
+        modelBuilder.Entity<StageConversationTurn>(b =>
+        {
+            b.HasKey(t => t.Id);
+            b.Property(t => t.Role).HasConversion<int>();
+            b.Property(t => t.ToolName).HasMaxLength(128);
+
+            b.HasIndex(t => new { t.ConversationId, t.TurnIndex });
+        });
     }
 
     /// <summary>
@@ -236,6 +274,59 @@ public class AppDbContext : DbContext
             catch
             {
                 // Column already exists or table was just created
+            }
+
+            try
+            {
+                await Database.ExecuteSqlRawAsync(@"ALTER TABLE ""Tasks"" ADD COLUMN ""SquashCommitSha"" TEXT NULL;", cancellationToken);
+            }
+            catch
+            {
+                // Column already exists or table was just created
+            }
+
+            try
+            {
+                await Database.ExecuteSqlRawAsync(@"CREATE TABLE IF NOT EXISTS ""StageConversations"" (
+                    ""Id"" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    ""TaskId"" INTEGER NOT NULL,
+                    ""StageId"" TEXT NOT NULL,
+                    ""StageKind"" INTEGER NOT NULL,
+                    ""AttemptIndex"" INTEGER NOT NULL,
+                    ""AgentProfileId"" TEXT NULL,
+                    ""HarnessId"" TEXT NULL,
+                    ""ModelName"" TEXT NULL,
+                    ""StartedAt"" TEXT NOT NULL,
+                    ""CompletedAt"" TEXT NULL,
+                    ""Status"" INTEGER NOT NULL,
+                    ""Summary"" TEXT NULL,
+                    ""TranscriptFileName"" TEXT NULL,
+                    CONSTRAINT ""FK_StageConversations_Tasks_TaskId"" FOREIGN KEY (""TaskId"") REFERENCES ""Tasks"" (""Id"") ON DELETE CASCADE
+                );", cancellationToken);
+
+                await Database.ExecuteSqlRawAsync(@"CREATE TABLE IF NOT EXISTS ""StageConversationTurns"" (
+                    ""Id"" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    ""ConversationId"" INTEGER NOT NULL,
+                    ""TurnIndex"" INTEGER NOT NULL,
+                    ""Role"" INTEGER NOT NULL,
+                    ""Content"" TEXT NULL,
+                    ""ThinkingTrace"" TEXT NULL,
+                    ""ToolName"" TEXT NULL,
+                    ""ToolArguments"" TEXT NULL,
+                    ""ToolResult"" TEXT NULL,
+                    ""DurationMs"" INTEGER NULL,
+                    ""IsError"" INTEGER NOT NULL,
+                    ""MetadataJson"" TEXT NULL,
+                    ""Timestamp"" TEXT NOT NULL,
+                    CONSTRAINT ""FK_StageConversationTurns_StageConversations_ConversationId"" FOREIGN KEY (""ConversationId"") REFERENCES ""StageConversations"" (""Id"") ON DELETE CASCADE
+                );", cancellationToken);
+
+                await Database.ExecuteSqlRawAsync(@"CREATE INDEX IF NOT EXISTS ""IX_StageConversations_TaskId_StageId_AttemptIndex"" ON ""StageConversations"" (""TaskId"", ""StageId"", ""AttemptIndex"");", cancellationToken);
+                await Database.ExecuteSqlRawAsync(@"CREATE INDEX IF NOT EXISTS ""IX_StageConversationTurns_ConversationId_TurnIndex"" ON ""StageConversationTurns"" (""ConversationId"", ""TurnIndex"");", cancellationToken);
+            }
+            catch
+            {
+                // Tables already created by EnsureCreatedAsync
             }
         }
     }

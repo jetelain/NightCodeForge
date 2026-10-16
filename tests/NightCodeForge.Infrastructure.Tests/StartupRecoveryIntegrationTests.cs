@@ -106,6 +106,64 @@ public class StartupRecoveryIntegrationTests : IDisposable
         Assert.Equal(TaskOverallStatus.Open, updated.Status);
         Assert.Contains(task.Id, jobQueue.UrgentQueue);
     }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_OnHostRebootWithAgenticCheckpoint_RehydratesMemoryWithoutWorkspaceTrackingConflict()
+    {
+        // 1. Setup workspace and task in DB with agentic stage and checkpoint
+        var workspace = new Workspace
+        {
+            Name = "Reboot Workspace",
+            RepositoryPath = _repo.RepositoryPath,
+            DefaultBaseBranch = "main"
+        };
+        _context.Workspaces.Add(workspace);
+        await _context.SaveChangesAsync();
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Orphaned Agentic Task",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "task-review"
+        };
+        _context.Tasks.Add(task);
+        await _context.SaveChangesAsync();
+
+        _context.StageCheckpoints.Add(new StageCheckpoint
+        {
+            TaskId = task.Id,
+            StageId = "task-review",
+            SerializedMemory = "{\"thoughts\":\"analyzing\"}",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync();
+
+        // Simulate host restart: clear ChangeTracker so nothing is locally tracked
+        _context.ChangeTracker.Clear();
+
+        var workspaceRepo = new EfCoreWorkspaceRepository(_context);
+        var taskRepo = new EfCoreTaskRepository(_context);
+        var jobQueue = new FakeTestJobQueue();
+
+        var recoveryService = new StartupRecoveryService(
+            workspaceRepo,
+            taskRepo,
+            _runner,
+            new DefaultWorkflowPipelineProvider(),
+            jobQueue);
+
+        // Run recovery - previously threw:
+        // System.InvalidOperationException: The instance of entity type 'Workspace' cannot be tracked because another instance with the same key value for {'Id'} is already being tracked.
+        var ex = await Record.ExceptionAsync(() => recoveryService.ReconcileWorkspacesAsync());
+        Assert.Null(ex);
+
+        // Verify rehydrated memory
+        var updatedTask = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        Assert.Contains("[System Notice: Host restarted unexpectedly; workspace restored]", updatedTask.PipelineDataJson);
+        Assert.Contains(task.Id, jobQueue.UrgentQueue);
+    }
 }
 
 public class FakeTestJobQueue : ITaskJobQueue

@@ -76,4 +76,32 @@ public class ThinkingAccordionTests : BunitContext
         header.Click();
         Assert.NotEmpty(cut.FindAll(".think-accordion-content"));
     }
+
+    [Fact]
+    public void ThinkingAccordion_WhenInitialContentUpdatedViaParameter_UpdatesContentAndTokenCount()
+    {
+        var cut = Render<ThinkingAccordion>(p => p.Add(x => x.InitialContent, "Initial reasoning thought"));
+
+        Assert.Contains("Initial reasoning thought", cut.Find(".think-accordion-content").TextContent);
+        Assert.Contains("3 tokens", cut.Find(".think-token-pill").TextContent);
+
+        cut.Render(parameters => parameters.Add(p => p.InitialContent, "Revised reasoning thought with additional deep tokens"));
+
+        Assert.Contains("Revised reasoning thought with additional deep tokens", cut.Find(".think-accordion-content").TextContent);
+        Assert.Contains("7 tokens", cut.Find(".think-token-pill").TextContent);
+    }
+
+    [Fact]
+    public void ThinkingAccordion_WhenIsStreamingParameterProvided_RendersAndUpdatesStreamingIndicator()
+    {
+        var cut = Render<ThinkingAccordion>(p => p
+            .Add(x => x.InitialContent, "Streaming reasoning...")
+            .Add(x => x.IsStreaming, true));
+
+        Assert.Contains("STREAMING REASONING", cut.Markup);
+
+        cut.Render(parameters => parameters.Add(p => p.IsStreaming, false));
+
+        Assert.DoesNotContain("STREAMING REASONING", cut.Markup);
+    }
 }

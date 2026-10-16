@@ -56,6 +56,7 @@ public class MonitoringPageTests : BunitContext
         _hubConnection.TriggerStageTransition(15, "ImplementationStage", "Agentic", "Running");
 
         // Stepper reflects running stage 3
+        cut.WaitForState(() => cut.FindAll("#stage-step-3.step-active").Any());
         var stage3 = cut.Find("#stage-step-3");
         Assert.Contains("step-active", stage3.ClassName);
 
@@ -138,5 +139,35 @@ public class MonitoringPageTests : BunitContext
 
         Assert.Contains("RUNNING", cut.Find("#worker-telemetry-card").TextContent);
         Assert.Contains("#42", cut.Find("#worker-telemetry-card").TextContent);
+    }
+
+    [Fact]
+    public void MonitoringPage_WhenOptimizationActionReceived_LogsWithTokensUnit()
+    {
+        var cut = Render<Monitoring>();
+
+        _hubConnection.TriggerOptimizationAction(15, "implementation", "ToolResultCompaction", "Pruned 3 outputs", 1500, DateTime.UtcNow);
+
+        var terminalLogs = cut.FindAll(".log-line");
+        Assert.Contains(terminalLogs, l => l.TextContent.Contains("(Saved 1500 tokens)"));
+    }
+
+    [Fact]
+    public void MonitoringPage_RendersLinkToTaskInspector()
+    {
+        var cut = Render<Monitoring>();
+
+        var links = cut.FindAll("a");
+        Assert.Contains(links, a => a.GetAttribute("href") == "/inspector" || a.GetAttribute("href")!.StartsWith("/inspector/"));
+    }
+
+    [Fact]
+    public void MonitoringPage_WhenRouteTaskIdProvided_RedirectsToDedicatedInspector()
+    {
+        var navMan = Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();
+
+        Render<Monitoring>(p => p.Add(x => x.TaskId, 99));
+
+        Assert.Contains("/inspector/99", navMan.Uri);
     }
 }

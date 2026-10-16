@@ -19,6 +19,44 @@ public interface ITaskRepository
     Task AddExecutionRecordAsync(StageExecutionRecord record, CancellationToken cancellationToken = default);
     Task AddCheckpointAsync(StageCheckpoint checkpoint, CancellationToken cancellationToken = default);
     Task AddExecutionLogAsync(ExecutionLog log, CancellationToken cancellationToken = default);
+
+    Task<StageConversation> StartStageConversationAsync(
+        int taskId,
+        string stageId,
+        WorkflowStageKind stageKind,
+        int attemptIndex,
+        string? agentProfileId = null,
+        string? harnessId = null,
+        string? modelName = null,
+        CancellationToken cancellationToken = default);
+
+    Task CompleteStageConversationAsync(
+        int conversationId,
+        StageExecutionStatus status,
+        string? summary = null,
+        string? transcriptFileName = null,
+        CancellationToken cancellationToken = default);
+
+    Task<StageConversationTurn> AddConversationTurnAsync(
+        int conversationId,
+        StageTurnRole role,
+        string? content = null,
+        string? thinkingTrace = null,
+        string? toolName = null,
+        string? toolArguments = null,
+        string? toolResult = null,
+        long? durationMs = null,
+        bool isError = false,
+        string? metadataJson = null,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<StageConversation>> GetStageConversationsAsync(
+        int taskId,
+        CancellationToken cancellationToken = default);
+
+    Task<StageConversation?> GetStageConversationWithTurnsAsync(
+        int conversationId,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -33,11 +71,15 @@ public class InMemoryTaskRepository : ITaskRepository
     private readonly List<StageExecutionRecord> _records = new();
     private readonly List<StageCheckpoint> _checkpoints = new();
     private readonly List<ExecutionLog> _logs = new();
+    private readonly Dictionary<int, StageConversation> _conversations = new();
+    private readonly List<StageConversationTurn> _turns = new();
     private int _nextId = 1;
     private int _nextQuestionId = 1;
     private int _nextCheckpointId = 1;
     private int _nextRecordId = 1;
     private int _nextLogId = 1;
+    private int _nextConversationId = 1;
+    private int _nextTurnId = 1;
 
     public Task<ForgeTask?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
@@ -135,6 +177,12 @@ public class InMemoryTaskRepository : ITaskRepository
         {
             _tasks.Remove(id);
             _dependencies.Remove(id);
+            var convsToRemove = _conversations.Values.Where(c => c.TaskId == id).Select(c => c.Id).ToList();
+            foreach (var convId in convsToRemove)
+            {
+                _conversations.Remove(convId);
+                _turns.RemoveAll(t => t.ConversationId == convId);
+            }
             return Task.CompletedTask;
         }
     }
@@ -241,6 +289,137 @@ public class InMemoryTaskRepository : ITaskRepository
         }
     }
 
+    public Task<StageConversation> StartStageConversationAsync(
+        int taskId,
+        string stageId,
+        WorkflowStageKind stageKind,
+        int attemptIndex,
+        string? agentProfileId = null,
+        string? harnessId = null,
+        string? modelName = null,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var conversation = new StageConversation
+            {
+                Id = _nextConversationId++,
+                TaskId = taskId,
+                StageId = stageId,
+                StageKind = stageKind,
+                AttemptIndex = attemptIndex,
+                AgentProfileId = agentProfileId,
+                HarnessId = harnessId,
+                ModelName = modelName,
+                StartedAt = DateTime.UtcNow,
+                Status = StageExecutionStatus.Running,
+                Turns = new List<StageConversationTurn>()
+            };
+
+            _conversations[conversation.Id] = conversation;
+            if (_tasks.TryGetValue(taskId, out var task))
+            {
+                task.StageConversations.Add(conversation);
+                conversation.ForgeTask = task;
+            }
+
+            return Task.FromResult(conversation);
+        }
+    }
+
+    public Task CompleteStageConversationAsync(
+        int conversationId,
+        StageExecutionStatus status,
+        string? summary = null,
+        string? transcriptFileName = null,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            if (_conversations.TryGetValue(conversationId, out var conversation))
+            {
+                conversation.Status = status;
+                conversation.CompletedAt = DateTime.UtcNow;
+                if (summary != null) conversation.Summary = summary;
+                if (transcriptFileName != null) conversation.TranscriptFileName = transcriptFileName;
+            }
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task<StageConversationTurn> AddConversationTurnAsync(
+        int conversationId,
+        StageTurnRole role,
+        string? content = null,
+        string? thinkingTrace = null,
+        string? toolName = null,
+        string? toolArguments = null,
+        string? toolResult = null,
+        long? durationMs = null,
+        bool isError = false,
+        string? metadataJson = null,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var turn = new StageConversationTurn
+            {
+                Id = _nextTurnId++,
+                ConversationId = conversationId,
+                Role = role,
+                Content = content,
+                ThinkingTrace = thinkingTrace,
+                ToolName = toolName,
+                ToolArguments = toolArguments,
+                ToolResult = toolResult,
+                DurationMs = durationMs,
+                IsError = isError,
+                MetadataJson = metadataJson,
+                Timestamp = DateTime.UtcNow
+            };
+
+            if (_conversations.TryGetValue(conversationId, out var conversation))
+            {
+                turn.TurnIndex = conversation.Turns.Count;
+                turn.Conversation = conversation;
+                conversation.Turns.Add(turn);
+            }
+            _turns.Add(turn);
+
+            return Task.FromResult(turn);
+        }
+    }
+
+    public Task<IReadOnlyList<StageConversation>> GetStageConversationsAsync(
+        int taskId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var list = _conversations.Values
+                .Where(c => c.TaskId == taskId)
+                .OrderBy(c => c.StartedAt)
+                .ThenBy(c => c.AttemptIndex)
+                .ToList();
+            return Task.FromResult<IReadOnlyList<StageConversation>>(list);
+        }
+    }
+
+    public Task<StageConversation?> GetStageConversationWithTurnsAsync(
+        int conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            if (_conversations.TryGetValue(conversationId, out var conversation))
+            {
+                conversation.Turns = conversation.Turns.OrderBy(t => t.TurnIndex).ToList();
+                return Task.FromResult<StageConversation?>(conversation);
+            }
+            return Task.FromResult<StageConversation?>(null);
+        }
+    }
+
     public IReadOnlyList<ExecutionLog> GetAllLogs()
     {
         lock (_lock)
@@ -262,6 +441,22 @@ public class InMemoryTaskRepository : ITaskRepository
         lock (_lock)
         {
             return _records.ToList();
+        }
+    }
+
+    public IReadOnlyList<StageConversation> GetAllConversations()
+    {
+        lock (_lock)
+        {
+            return _conversations.Values.ToList();
+        }
+    }
+
+    public IReadOnlyList<StageConversationTurn> GetAllConversationTurns()
+    {
+        lock (_lock)
+        {
+            return _turns.ToList();
         }
     }
 }

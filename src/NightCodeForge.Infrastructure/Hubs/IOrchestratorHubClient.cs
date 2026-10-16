@@ -44,4 +44,9 @@ public interface IOrchestratorHubClient
     /// Execution log line for real-time terminal streaming.
     /// </summary>
     Task ReceiveExecutionLog(int taskId, string stageId, string level, string message, DateTime timestamp);
+
+    /// <summary>
+    /// Context or memory optimization telemetry (e.g. tool compaction, thinking pruning, token eviction).
+    /// </summary>
+    Task ReceiveOptimizationAction(int taskId, string stageId, string actionType, string description, int tokensSaved, DateTime timestamp);
 }

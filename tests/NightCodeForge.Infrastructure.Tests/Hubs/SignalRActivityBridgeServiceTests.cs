@@ -153,6 +153,39 @@ public class SignalRActivityBridgeServiceTests
     }
 
     [Fact]
+    public async Task DispatchActivityEventAsync_OptimizationAction_RoutesToTaskGroup()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var bridge = new SignalRActivityBridgeService(
+            new InMemoryAgentActivityStreamer(),
+            fakeHubContext,
+            NullLogger<SignalRActivityBridgeService>.Instance);
+
+        var evt = new AgentActivityEvent(
+            SessionId: "sess-1",
+            TaskId: 42,
+            StageId: "impl",
+            Kind: AgentActivityKind.OptimizationAction,
+            Content: "ToolResultCompaction: compacted 3 tools",
+            Timestamp: DateTime.UtcNow,
+            Metadata: new Dictionary<string, object?>
+            {
+                ["ActionType"] = "ToolResultCompaction",
+                ["TokensSaved"] = 1200
+            });
+
+        await bridge.DispatchActivityEventAsync(evt);
+
+        var groupClient = fakeHubContext.GetGroupClient("task-42");
+        Assert.NotNull(groupClient);
+        Assert.Single(groupClient.OptimizationActions);
+        Assert.Equal(42, groupClient.OptimizationActions[0].TaskId);
+        Assert.Equal("impl", groupClient.OptimizationActions[0].StageId);
+        Assert.Equal("ToolResultCompaction", groupClient.OptimizationActions[0].ActionType);
+        Assert.Equal(1200, groupClient.OptimizationActions[0].TokensOrBytesSaved);
+    }
+
+    [Fact]
     public async Task DispatchActivityEventAsync_ErrorEvent_RoutesExecutionLogToTaskGroup()
     {
         var fakeHubContext = new FakeHubContext();
@@ -278,6 +311,13 @@ public class SignalRActivityBridgeServiceTests
         public List<(int TaskId, string GateName, bool Passed, string MetricsSummary)> GateResults { get; } = new();
         public List<(int TaskId, string BranchName)> HostDirtyAlerts { get; } = new();
         public List<(int TaskId, string StageId, string Level, string Message, DateTime Timestamp)> ExecutionLogs { get; } = new();
+        public List<(int TaskId, string StageId, string ActionType, string Description, int TokensOrBytesSaved, DateTime Timestamp)> OptimizationActions { get; } = new();
+
+        public Task ReceiveOptimizationAction(int taskId, string stageId, string actionType, string description, int tokensOrBytesSaved, DateTime timestamp)
+        {
+            OptimizationActions.Add((taskId, stageId, actionType, description, tokensOrBytesSaved, timestamp));
+            return Task.CompletedTask;
+        }
 
         public Task ReceiveTokenDelta(int taskId, string token, bool isThinking)
         {

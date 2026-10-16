@@ -1,0 +1,605 @@
+using Bunit;
+using Microsoft.Extensions.DependencyInjection;
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
+using NightCodeForge.Web.Components.Monitoring;
+using NightCodeForge.Web.Services;
+using Xunit;
+
+namespace NightCodeForge.Web.Tests;
+
+public class TaskExecutionInspectorComponentTests : BunitContext
+{
+    private readonly InMemoryTaskRepository _taskRepository;
+    private readonly OrchestratorHubClientConnection _hubConnection;
+    private readonly FakeDevQueueService _devQueueService;
+    private readonly FakeTaskReviewService _taskReviewService;
+
+    public TaskExecutionInspectorComponentTests()
+    {
+        JSInterop.Mode = JSRuntimeMode.Loose;
+
+        _taskRepository = new InMemoryTaskRepository();
+        _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        _devQueueService = new FakeDevQueueService();
+        _taskReviewService = new FakeTaskReviewService();
+
+        Services.AddSingleton<ITaskRepository>(_taskRepository);
+        Services.AddSingleton(_hubConnection);
+        Services.AddSingleton<IDevQueueService>(_devQueueService);
+        Services.AddSingleton<ITaskReviewService>(_taskReviewService);
+        Services.AddSingleton<ReviewCommentStateService>();
+    }
+
+    [Fact]
+    public void OptimizationMarkerCard_RendersActionTypeAndSavedChars()
+    {
+        var cut = Render<OptimizationMarkerCard>(p => p
+            .Add(x => x.ActionType, "ToolResultCompaction")
+            .Add(x => x.TokensOrBytesSaved, 1420)
+            .Add(x => x.Description, "Compacted 3 older read_file tool outputs")
+            .Add(x => x.Details, "{\"CompactedCount\": 3}"));
+
+        Assert.Contains("ToolResultCompaction", cut.Markup);
+        Assert.Contains("Saved ~1,420 chars", cut.Markup);
+        Assert.Contains("Compacted 3 older read_file tool outputs", cut.Markup);
+    }
+
+    [Fact]
+    public void StageRunSelector_RendersGroupedRunsAndSelects()
+    {
+        var conv1 = new StageConversation
+        {
+            Id = 1,
+            TaskId = 10,
+            StageId = "task-review",
+            StageKind = WorkflowStageKind.Deterministic,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-10)
+        };
+
+        var conv2 = new StageConversation
+        {
+            Id = 2,
+            TaskId = 10,
+            StageId = "implementation",
+            StageKind = WorkflowStageKind.Agentic,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Failed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-8)
+        };
+
+        var conv3 = new StageConversation
+        {
+            Id = 3,
+            TaskId = 10,
+            StageId = "implementation",
+            StageKind = WorkflowStageKind.Agentic,
+            AttemptIndex = 2,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-5)
+        };
+
+        StageConversation? selected = null;
+        var cut = Render<StageRunSelector>(p => p
+            .Add(x => x.Conversations, new List<StageConversation> { conv1, conv2, conv3 })
+            .Add(x => x.SelectedConversation, conv1)
+            .Add(x => x.OnConversationSelected, conv => selected = conv));
+
+        Assert.Contains("1. ForgeTask Review", cut.Markup);
+        Assert.Contains("3. Implementation", cut.Markup);
+        Assert.Contains("Run 1", cut.Markup);
+        Assert.Contains("Run 2", cut.Markup);
+
+        var buttons = cut.FindAll("button");
+        var run2Button = buttons.First(b => b.TextContent.Contains("Run 2"));
+        run2Button.Click();
+
+        Assert.NotNull(selected);
+        Assert.Equal(3, selected.Id);
+        Assert.Equal(2, selected.AttemptIndex);
+    }
+
+    [Fact]
+    public void StageConversationViewer_RendersUserThinkingToolAndAssistantTurns()
+    {
+        var conv = new StageConversation
+        {
+            Id = 1,
+            TaskId = 20,
+            StageId = "implementation",
+            StageKind = WorkflowStageKind.Agentic,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            ModelName = "deepseek-r1:32b",
+            HarnessId = "Crucible",
+            StartedAt = DateTime.UtcNow.AddMinutes(-2),
+            CompletedAt = DateTime.UtcNow,
+            Turns = new List<StageConversationTurn>
+            {
+                new()
+                {
+                    Id = 101,
+                    ConversationId = 1,
+                    TurnIndex = 0,
+                    Role = StageTurnRole.User,
+                    Content = "Please implement JWT authentication."
+                },
+                new()
+                {
+                    Id = 102,
+                    ConversationId = 1,
+                    TurnIndex = 1,
+                    Role = StageTurnRole.Thinking,
+                    Content = "Analyzing the security middleware..."
+                },
+                new()
+                {
+                    Id = 103,
+                    ConversationId = 1,
+                    TurnIndex = 2,
+                    Role = StageTurnRole.Tool,
+                    ToolName = "write_file",
+                    ToolArguments = "{\"path\": \"JwtAuth.cs\"}",
+                    ToolResult = "File written successfully.",
+                    DurationMs = 120
+                },
+                new()
+                {
+                    Id = 104,
+                    ConversationId = 1,
+                    TurnIndex = 3,
+                    Role = StageTurnRole.Assistant,
+                    Content = "JWT authentication has been implemented."
+                }
+            }
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.IsActiveStage, false));
+
+        Assert.Contains("deepseek-r1:32b", cut.Markup);
+        Assert.Contains("Please implement JWT authentication.", cut.Markup);
+        Assert.Contains("Analyzing the security middleware...", cut.Markup);
+        Assert.Contains("write_file", cut.Markup);
+        Assert.Contains("JWT authentication has been implemented.", cut.Markup);
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_RendersOverviewTabAndSquashSha()
+    {
+        var task = new ForgeTask
+        {
+            Id = 55,
+            WorkspaceId = 1,
+            Title = "Refactor Auth Middleware",
+            Description = "Full architectural overhaul of JWT validation.",
+            Status = TaskOverallStatus.Closed,
+            SquashCommitSha = "e89c3140ab89ef451234567890abcdef12345678",
+            FeatureBranch = "feature/task-55",
+            BaseBranch = "main",
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 1,
+                    TaskId = 55,
+                    Prompt = "Should we enforce refresh tokens?",
+                    Answer = "Yes, with 7-day sliding expiration."
+                }
+            }
+        };
+
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 55));
+
+        // Header displays squash commit SHA
+        Assert.Contains("e89c3140", cut.Markup);
+
+        // Switch to Overview tab
+        var overviewBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Task Overview"));
+        overviewBtn.Click();
+
+        Assert.Contains("Full architectural overhaul of JWT validation.", cut.Markup);
+        Assert.Contains("Should we enforce refresh tokens?", cut.Markup);
+        Assert.Contains("Yes, with 7-day sliding expiration.", cut.Markup);
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_RetryAndRestartButtons_TriggerDevQueueService()
+    {
+        var task = new ForgeTask
+        {
+            Id = 60,
+            WorkspaceId = 1,
+            Title = "Bugfix in Token Parser",
+            Status = TaskOverallStatus.Failed
+        };
+
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 60));
+
+        var retryBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Retry Stage"));
+        retryBtn.Click();
+
+        Assert.Equal(60, _devQueueService.LastRescheduledTaskId);
+        Assert.False(_devQueueService.LastRescheduledRestartPipeline);
+
+        var restartBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Restart Pipeline"));
+        restartBtn.Click();
+
+        Assert.Equal(60, _devQueueService.LastRescheduledTaskId);
+        Assert.True(_devQueueService.LastRescheduledRestartPipeline);
+    }
+
+    [Fact]
+    public void OptimizationMarkerCard_WithTokensUnit_RendersTokensLabel()
+    {
+        var cut = Render<OptimizationMarkerCard>(p => p
+            .Add(x => x.ActionType, "ThinkingCompaction")
+            .Add(x => x.TokensOrBytesSaved, 840)
+            .Add(x => x.Unit, "tokens")
+            .Add(x => x.Description, "Compacted thinking trace across 4 turns")
+            .Add(x => x.Details, "{\"TokensBefore\": 1200, \"TokensAfter\": 360}"));
+
+        Assert.Contains("ThinkingCompaction", cut.Markup);
+        Assert.Contains("Saved ~840 tokens", cut.Markup);
+        Assert.DoesNotContain("chars", cut.Markup);
+    }
+
+    [Fact]
+    public void StageRunSelector_FormatsDeterministicAndCodeReviewStageAliases()
+    {
+        var c1 = new StageConversation
+        {
+            Id = 1,
+            TaskId = 10,
+            StageId = "deterministic-pre-impl",
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-10)
+        };
+        var c2 = new StageConversation
+        {
+            Id = 2,
+            TaskId = 10,
+            StageId = "deterministic-post-impl",
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-5)
+        };
+        var c3 = new StageConversation
+        {
+            Id = 3,
+            TaskId = 10,
+            StageId = "code-review-fix",
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-2)
+        };
+
+        var cut = Render<StageRunSelector>(p => p
+            .Add(x => x.Conversations, new List<StageConversation> { c1, c2, c3 }));
+
+        Assert.Contains("2. Pre-Check Gate", cut.Markup);
+        Assert.Contains("4. Post-Check Gate", cut.Markup);
+        Assert.Contains("5. Pull Request Review", cut.Markup);
+    }
+
+    [Fact]
+    public void StageConversationViewer_FormatsStageAliasesAndDurationFallback()
+    {
+        var conv = new StageConversation
+        {
+            Id = 1,
+            TaskId = 20,
+            StageId = "code-review-fix",
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-2),
+            Turns = new List<StageConversationTurn>
+            {
+                new()
+                {
+                    Id = 201,
+                    ConversationId = 1,
+                    TurnIndex = 0,
+                    Role = StageTurnRole.User,
+                    Content = "Please fix Sonar warnings."
+                },
+                new()
+                {
+                    Id = 202,
+                    ConversationId = 1,
+                    TurnIndex = 1,
+                    Role = StageTurnRole.Optimization,
+                    Content = "Compacted thinking token log",
+                    MetadataJson = "{\"ActionType\": \"ThinkingCompaction\", \"TokensSaved\": 420}"
+                },
+                new()
+                {
+                    Id = 203,
+                    ConversationId = 1,
+                    TurnIndex = 2,
+                    Role = StageTurnRole.Tool,
+                    ToolName = "run_tests",
+                    DurationMs = 350,
+                    ToolResult = "All tests green."
+                }
+            }
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.IsActiveStage, false));
+
+        Assert.Contains("5. Pull Request Review", cut.Markup);
+        Assert.Contains("Compacted thinking token log", cut.Markup);
+        Assert.Contains("tokens", cut.Markup);
+        Assert.Contains("350ms", cut.Markup);
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_WhenTaskClosed_RetryStageButtonIsDisabled()
+    {
+        var task = new ForgeTask
+        {
+            Id = 70,
+            WorkspaceId = 1,
+            Title = "Closed Finished Task",
+            Status = TaskOverallStatus.Closed
+        };
+
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 70));
+
+        var retryBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Retry Stage"));
+        Assert.True(retryBtn.HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_TerminalConsole_KeepsMountedAcrossTabSwitches()
+    {
+        var task = new ForgeTask
+        {
+            Id = 75,
+            WorkspaceId = 1,
+            Title = "Task with Terminal Logs",
+            Status = TaskOverallStatus.Open
+        };
+
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 75));
+
+        // Terminal container exists in DOM even while conversations tab is active
+        var terminalContainer = cut.Find("#terminal-console-container");
+        Assert.NotNull(terminalContainer);
+
+        // Switch to Terminal tab
+        var terminalBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Terminal & Logs"));
+        terminalBtn.Click();
+
+        // Still mounted
+        terminalContainer = cut.Find("#terminal-console-container");
+        Assert.NotNull(terminalContainer);
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_DiffTab_LoadsAndDisplaysChangedFiles()
+    {
+        var task = new ForgeTask
+        {
+            Id = 80,
+            WorkspaceId = 1,
+            Title = "Task with Diffs",
+            Status = TaskOverallStatus.Ready,
+            BaseBranch = "main"
+        };
+        await _taskRepository.CreateAsync(task);
+
+        _taskReviewService.DiffFilesToReturn = new List<FileDiffSummary>
+        {
+            new("src/ImportantLogic.cs", FileChangeType.Modified, 15, 3, "old line", "new line")
+        };
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 80));
+
+        var diffBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Git Diff & Changes"));
+        diffBtn.Click();
+
+        cut.WaitForState(() => cut.Markup.Contains("src/ImportantLogic.cs"));
+        Assert.Contains("src/ImportantLogic.cs", cut.Markup);
+        Assert.Contains("+15", cut.Markup);
+        Assert.Contains("-3", cut.Markup);
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_Renders1To7PhasesPipelineStepper_AndStageClickSelectsConversation()
+    {
+        var task = new ForgeTask
+        {
+            Id = 85,
+            WorkspaceId = 1,
+            Title = "Task with Pipeline Stepper Interaction",
+            Status = TaskOverallStatus.Open
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var conv1 = await _taskRepository.StartStageConversationAsync(85, "task-review", WorkflowStageKind.Deterministic, 1);
+        await _taskRepository.CompleteStageConversationAsync(conv1.Id, StageExecutionStatus.Completed, "Review passed");
+
+        var conv2 = await _taskRepository.StartStageConversationAsync(85, "implementation", WorkflowStageKind.Agentic, 1);
+        await _taskRepository.AddConversationTurnAsync(conv2.Id, StageTurnRole.User, "Implement feature X");
+        await _taskRepository.CompleteStageConversationAsync(conv2.Id, StageExecutionStatus.Completed, "Feature X completed");
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 85));
+
+        // PipelineStepper is rendered
+        Assert.NotNull(cut.Find(".pipeline-stepper-container"));
+
+        // Stage 1 (Review) and Stage 3 (Implementation) are completed in stepper
+        var step1 = cut.Find("#stage-step-1");
+        var step3 = cut.Find("#stage-step-3");
+        Assert.Contains("step-completed", step1.ClassName);
+        Assert.Contains("step-completed", step3.ClassName);
+
+        // Click on stage 3 step to select its conversation
+        step3.Click();
+
+        cut.WaitForState(() => cut.Markup.Contains("Implement feature X"));
+        Assert.Contains("Implement feature X", cut.Markup);
+    }
+
+    [Fact]
+    public void StageConversationViewer_RendersUserAndAgentTurnsAsFormattedMarkdown()
+    {
+        var conv = new StageConversation
+        {
+            Id = 1,
+            TaskId = 90,
+            StageId = "implementation",
+            StageKind = WorkflowStageKind.Agentic,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            Summary = "Stage completed with **zero errors** in `DiscountService.cs`.",
+            StartedAt = DateTime.UtcNow.AddMinutes(-1),
+            CompletedAt = DateTime.UtcNow,
+            Turns = new List<StageConversationTurn>
+            {
+                new()
+                {
+                    Id = 201,
+                    ConversationId = 1,
+                    TurnIndex = 0,
+                    Role = StageTurnRole.User,
+                    Content = "Please implement **JWT Authentication** with `TokenService`."
+                },
+                new()
+                {
+                    Id = 202,
+                    ConversationId = 1,
+                    TurnIndex = 1,
+                    Role = StageTurnRole.Assistant,
+                    Content = "### Completed Implementation\n\n- Created `JwtTokenGenerator`\n- Added unit tests in `AuthTests.cs`\n\nSee [RFC 7519](https://tools.ietf.org/html/rfc7519) for specs."
+                }
+            }
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.IsActiveStage, false));
+
+        // Stage summary markdown elements
+        Assert.Contains("<strong>zero errors</strong>", cut.Markup);
+        Assert.Contains("<code>DiscountService.cs</code>", cut.Markup);
+
+        // User turn markdown elements
+        Assert.Contains("<strong>JWT Authentication</strong>", cut.Markup);
+        Assert.Contains("<code>TokenService</code>", cut.Markup);
+
+        // Assistant turn markdown elements
+        Assert.Contains("Completed Implementation", cut.Find(".turn-assistant h3").TextContent);
+        Assert.Contains("<code>JwtTokenGenerator</code>", cut.Markup);
+        Assert.Contains("RFC 7519", cut.Markup);
+        Assert.Contains("href=\"https://tools.ietf.org/html/rfc7519\"", cut.Markup);
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_RendersOverviewTab_FormatsMarkdownDescriptionAndQuestions()
+    {
+        var task = new ForgeTask
+        {
+            Id = 91,
+            WorkspaceId = 1,
+            Title = "Task with Rich Markdown Overview",
+            Description = "## Acceptance Criteria\n\n- Configure `IAuthenticationService`\n- Verify **security ratchet** passes\n\n> Note: Must support RS256 algorithm.",
+            Status = TaskOverallStatus.Open,
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 1,
+                    TaskId = 91,
+                    Prompt = "Which key size?",
+                    Answer = "Use **2048-bit** or higher `RSA` keys."
+                }
+            }
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 91));
+
+        // Switch to Overview tab
+        var overviewBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Task Overview"));
+        overviewBtn.Click();
+
+        // Formatted description elements
+        Assert.Contains("Acceptance Criteria", cut.Find("h2").TextContent);
+        Assert.Contains("<code>IAuthenticationService</code>", cut.Markup);
+        Assert.Contains("<strong>security ratchet</strong>", cut.Markup);
+        Assert.Contains("<blockquote>", cut.Markup);
+
+        // Formatted clarification answer
+        Assert.Contains("<strong>2048-bit</strong>", cut.Markup);
+        Assert.Contains("<code>RSA</code>", cut.Markup);
+    }
+
+    #region Fakes
+
+    private class FakeDevQueueService : IDevQueueService
+    {
+        public int? LastRescheduledTaskId { get; private set; }
+        public bool? LastRescheduledRestartPipeline { get; private set; }
+
+        public Task<DevQueueSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new DevQueueSnapshot(
+                new List<QueuedJobItem>(),
+                new List<QueuedJobItem>(),
+                new List<QueuedJobItem>(),
+                new List<QueuedJobItem>(),
+                new List<QueuedJobItem>(),
+                new List<ActiveLockSnapshot>()));
+
+        public Task<bool> PromoteToUrgentAsync(string jobId, int taskId, CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+
+        public Task<bool> CancelJobAsync(string jobId, int? taskId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+
+        public Task<bool> RequeueJobAsync(string jobId, int? taskId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+
+        public Task<bool> EmergencyReleaseLockAsync(int workspaceId, int? taskId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+
+        public Task<bool> RescheduleTaskAsync(int taskId, bool restartPipeline = false, CancellationToken cancellationToken = default)
+        {
+            LastRescheduledTaskId = taskId;
+            LastRescheduledRestartPipeline = restartPipeline;
+            return Task.FromResult(true);
+        }
+    }
+
+    private class FakeTaskReviewService : ITaskReviewService
+    {
+        public List<FileDiffSummary> DiffFilesToReturn { get; set; } = new();
+
+        public Task<TaskReviewSnapshot?> GetSnapshotAsync(int taskId, CancellationToken cancellationToken = default)
+            => Task.FromResult<TaskReviewSnapshot?>(null);
+
+        public Task<IReadOnlyList<TaskReviewSnapshot>> GetPendingReviewsAsync(int? workspaceId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<TaskReviewSnapshot>>(Array.Empty<TaskReviewSnapshot>());
+
+        public Task<IReadOnlyList<FileDiffSummary>> GetTaskDiffFilesAsync(int taskId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<FileDiffSummary>>(DiffFilesToReturn);
+    }
+
+    #endregion
+}

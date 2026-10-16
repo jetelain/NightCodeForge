@@ -1,10 +1,16 @@
 @namespace NightCodeForge.Web.Components.Monitoring
+@using NightCodeForge.Core.Domain
 
 <div class="pipeline-stepper-container card-surface">
     <div class="pipeline-stepper">
         @foreach (var stage in Stages)
         {
-            <div class="step-item @GetStepClass(stage)" id="stage-step-@stage.Order">
+            var isClickable = OnStageSelected.HasDelegate;
+            <div class="step-item @GetStepClass(stage) @(isClickable ? "step-clickable" : "")"
+                 id="stage-step-@stage.Order"
+                 style="@(isClickable ? "cursor: pointer;" : "")"
+                 @onclick="() => HandleStageClick(stage.Id)"
+                 title="@(isClickable ? $"Select {stage.Name} conversation" : stage.Name)">
                 <div class="step-header">
                     <span class="step-badge @(stage.IsAgentic ? "badge-gpu" : (stage.Order == 7 ? "badge-gate" : "badge-cpu"))">
                         @(stage.IsAgentic ? "⚡ GPU" : (stage.Order == 7 ? "🔀 Gate" : "⚙️ CPU"))
@@ -52,6 +58,9 @@
     [Parameter] public int? TaskId { get; set; }
     [Parameter] public string? CurrentStageId { get; set; }
     [Parameter] public string? CurrentStageStatus { get; set; }
+    [Parameter] public TaskOverallStatus? OverallStatus { get; set; }
+    [Parameter] public IEnumerable<StageConversation>? Conversations { get; set; }
+    [Parameter] public EventCallback<string> OnStageSelected { get; set; }
 
     public class StageDefinition
     {
@@ -77,11 +86,100 @@
         new StageDefinition { Order = 7, Id = "merge", Name = "Merge Resolution", IsAgentic = false, Status = "Pending", StatusText = "Squash & merge gate" }
     };
 
+    private int? _lastTaskId;
+
     protected override void OnParametersSet()
     {
-        if (!string.IsNullOrEmpty(CurrentStageId))
+        if (OverallStatus.HasValue || (Conversations != null && Conversations.Any()) || (TaskId.HasValue && TaskId != _lastTaskId))
+        {
+            Stages = CreateDefaultStages();
+            _lastTaskId = TaskId;
+
+            if (OverallStatus == TaskOverallStatus.Closed)
+            {
+                foreach (var st in Stages)
+                {
+                    st.Status = "Completed";
+                    st.StatusText = "Completed";
+                }
+                return;
+            }
+            if (OverallStatus == TaskOverallStatus.Ready)
+            {
+                foreach (var st in Stages)
+                {
+                    if (st.Order < 7)
+                    {
+                        st.Status = "Completed";
+                        st.StatusText = "Completed";
+                    }
+                    else
+                    {
+                        st.Status = "Passed";
+                        st.StatusText = "Ready to Merge";
+                    }
+                }
+                return;
+            }
+
+            if (Conversations != null && Conversations.Any())
+            {
+                foreach (var conv in Conversations.OrderBy(c => c.StartedAt))
+                {
+                    var order = ResolveStageOrder(conv.StageId);
+                    var st = Stages.FirstOrDefault(s => s.Order == order);
+                    if (st != null)
+                    {
+                        if (conv.Status == StageExecutionStatus.Completed)
+                        {
+                            st.Status = "Completed";
+                            st.StatusText = "Completed";
+                        }
+                        else if (conv.Status == StageExecutionStatus.Failed)
+                        {
+                            st.Status = "Failed";
+                            st.StatusText = "Failed";
+                        }
+                        else if (conv.Status == StageExecutionStatus.Running)
+                        {
+                            st.Status = "Running";
+                            st.StatusText = "In Progress";
+                        }
+                        if (!string.IsNullOrWhiteSpace(conv.Summary))
+                        {
+                            st.MetricsSummary = conv.Summary;
+                        }
+                    }
+                }
+            }
+
+            if (OverallStatus == TaskOverallStatus.Failed)
+            {
+                var failedStage = Stages.FirstOrDefault(s => s.Status == "Failed");
+                if (failedStage == null && !string.IsNullOrEmpty(CurrentStageId))
+                {
+                    var order = ResolveStageOrder(CurrentStageId);
+                    var target = Stages.FirstOrDefault(s => s.Order == order);
+                    if (target != null)
+                    {
+                        target.Status = "Failed";
+                        target.StatusText = "Failed";
+                    }
+                }
+            }
+        }
+
+        if (!string.IsNullOrEmpty(CurrentStageId) && OverallStatus != TaskOverallStatus.Closed && OverallStatus != TaskOverallStatus.Ready && OverallStatus != TaskOverallStatus.Failed)
         {
             ApplyStageTransition(CurrentStageId, CurrentStageStatus ?? "Running");
+        }
+    }
+
+    private async Task HandleStageClick(string stageId)
+    {
+        if (OnStageSelected.HasDelegate)
+        {
+            await OnStageSelected.InvokeAsync(stageId);
         }
     }
 
@@ -171,3 +269,4 @@
         return stage.Status == "Completed" || stage.Status == "Passed" || (next != null && next.Status == "Running");
     }
 }
+

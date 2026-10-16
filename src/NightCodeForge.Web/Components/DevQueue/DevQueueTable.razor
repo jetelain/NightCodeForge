@@ -54,7 +54,7 @@
                                 <td>
                                     @if (job.TaskId > 0)
                                     {
-                                        <a href="/monitoring/@job.TaskId" style="color: var(--text-primary); text-decoration: none; font-weight: 600;">
+                                        <a href="/inspector/@job.TaskId" style="color: var(--text-primary); text-decoration: none; font-weight: 600;">
                                             #@job.TaskId: @job.TaskTitle
                                         </a>
                                     }
@@ -78,6 +78,15 @@
                                                 id="prioritize-btn-@job.JobId">
                                             ⬆️ Prioritize
                                         </button>
+                                    }
+                                    @if (job.TaskId > 0)
+                                    {
+                                        <a href="/inspector/@job.TaskId"
+                                           class="btn btn-sm btn-secondary me-2"
+                                           style="border: 1px solid var(--border-subtle); color: var(--text-secondary); background: var(--bg-card); font-size: 0.8rem; padding: 0.25rem 0.65rem; border-radius: var(--radius-sm); text-decoration: none;"
+                                           title="Inspect task execution">
+                                            🔍 Inspect
+                                        </a>
                                     }
                                     <button class="btn btn-sm btn-secondary"
                                             style="border: 1px solid var(--border-subtle); color: var(--text-secondary); background: var(--bg-card); font-size: 0.8rem; padding: 0.25rem 0.65rem; border-radius: var(--radius-sm);"

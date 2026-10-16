@@ -43,6 +43,61 @@ public class CrucibleCheckpointTests
     }
 
     [Fact]
+    public void SerializeAndDeserializeSession_PreservesReasoningOrderAndAuthor()
+    {
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Do it"),
+            new(ChatRole.Assistant, [
+                new TextReasoningContent("step one") { ProtectedData = "opaque-blob" },
+                new TextContent("I will read"),
+                new FunctionCallContent("call-1", "read", new Dictionary<string, object?> { ["path"] = "a.cs" }),
+                new TextReasoningContent("step two")
+            ]) { AuthorName = "crucible" },
+            new(ChatRole.Tool, [new FunctionResultContent("call-1", "content")])
+        };
+
+        var restored = CrucibleAgentHarness.DeserializeSession(CrucibleAgentHarness.SerializeSession(messages));
+
+        Assert.Equal(3, restored.Count);
+        var assistant = restored[1];
+        Assert.Equal("crucible", assistant.AuthorName);
+        Assert.Collection(assistant.Contents,
+            c => { var r = Assert.IsType<TextReasoningContent>(c); Assert.Equal("step one", r.Text); Assert.Equal("opaque-blob", r.ProtectedData); },
+            c => Assert.Equal("I will read", Assert.IsType<TextContent>(c).Text),
+            c => Assert.Equal("read", Assert.IsType<FunctionCallContent>(c).Name),
+            c => Assert.Equal("step two", Assert.IsType<TextReasoningContent>(c).Text));
+        Assert.Equal("a.cs", assistant.Contents.OfType<FunctionCallContent>().Single().Arguments!["path"]?.ToString());
+        Assert.Equal("content", restored[2].Contents.OfType<FunctionResultContent>().Single().Result);
+
+        // Re-serializing the restored session is lossless.
+        Assert.Equal(CrucibleAgentHarness.SerializeSession(messages), CrucibleAgentHarness.SerializeSession(restored));
+    }
+
+    [Fact]
+    public void DeserializeSession_ReadsLegacyCheckpointFormat()
+    {
+        var legacy = """[{"Role":"user","Text":"hi","FunctionCalls":[],"FunctionResults":[]},{"Role":"assistant","Text":"calling","FunctionCalls":[{"CallId":"c1","Name":"read","Arguments":{"path":"x"}}],"FunctionResults":[]},{"Role":"tool","Text":"","FunctionCalls":[],"FunctionResults":[{"CallId":"c1","Result":"ok"}]}]""";
+
+        var restored = CrucibleAgentHarness.DeserializeSession(legacy);
+
+        Assert.Equal(3, restored.Count);
+        Assert.Equal("hi", restored[0].Text);
+        Assert.Equal("read", restored[1].Contents.OfType<FunctionCallContent>().Single().Name);
+        Assert.Equal("ok", restored[2].Contents.OfType<FunctionResultContent>().Single().Result);
+    }
+
+    [Fact]
+    public void BuildTranscriptEntries_ToolResultWithUnknownCallId_FallsBackToCallId()
+    {
+        var entries = CrucibleAgentHarness.BuildTranscriptEntries([
+            new ChatMessage(ChatRole.Tool, [new FunctionResultContent("orphan-1", "out")])
+        ]);
+
+        Assert.Equal("orphan-1", Assert.Single(entries).ToolName);
+    }
+
+    [Fact]
     public async Task MessageInjectingChatClient_InjectsAnswerOnResumption()
     {
         var inner = new CapturingChatClient(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Resumed response")));

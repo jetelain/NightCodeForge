@@ -1,0 +1,695 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Web.Services
+@using NightCodeForge.Web.Components.Review
+@implements IAsyncDisposable
+@inject ITaskRepository TaskRepository
+@inject IServiceProvider ServiceProvider
+@inject OrchestratorHubClientConnection HubClient
+@inject IJSRuntime JSRuntime
+
+<div class="task-execution-inspector card-surface" id="task-execution-inspector" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.5rem; margin-top: 1.5rem;">
+    @if (_isLoading)
+    {
+        <div style="text-align: center; padding: 3rem 0; color: var(--text-muted);">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">⏳</div>
+            <span>Loading task execution details and conversations...</span>
+        </div>
+    }
+    else if (_task == null)
+    {
+        <div style="text-align: center; padding: 3rem 0; color: var(--accent-crimson);">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">❌</div>
+            <span>Task #@TaskId was not found.</span>
+        </div>
+    }
+    else
+    {
+        <!-- Header Bar -->
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 1.25rem;">
+            <div>
+                <div style="display: flex; align-items: center; gap: 0.65rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                    <span style="font-weight: 800; font-size: 1.25rem; color: var(--text-primary);">
+                        Task #@_task.Id: @_task.Title
+                    </span>
+                    <span class="forge-badge @GetStatusBadgeClass(_task.Status)" style="font-size: 0.78rem;">
+                        @_task.Status
+                    </span>
+                    @if (!string.IsNullOrWhiteSpace(_task.SquashCommitSha))
+                    {
+                        <span class="forge-badge badge-teal" style="font-size: 0.76rem; font-family: var(--font-mono);" title="Squash Commit SHA">
+                            🔀 Commit: @_task.SquashCommitSha[..Math.Min(8, _task.SquashCommitSha.Length)]
+                        </span>
+                    }
+                    @if (_task.IsWaitingForHuman)
+                    {
+                        <span class="forge-badge badge-amber" style="font-size: 0.76rem;">
+                            ⚠️ Waiting For Human
+                        </span>
+                    }
+                </div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); display: flex; gap: 1.25rem; flex-wrap: wrap;">
+                    <span>Branch: <code>@_task.FeatureBranch</code> → <code>@_task.BaseBranch</code></span>
+                    <span>Priority: <strong>@_task.Priority</strong></span>
+                    <span>Updated: <strong>@_task.UpdatedAt.ToLocalTime().ToString("g")</strong></span>
+                </div>
+            </div>
+
+            <!-- Action Buttons: Reschedule & Refresh -->
+            <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                @if (!string.IsNullOrWhiteSpace(_actionMessage))
+                {
+                    <span style="font-size: 0.78rem; color: var(--accent-teal);">@_actionMessage</span>
+                }
+
+                <button type="button"
+                        class="forge-btn forge-btn-secondary"
+                        style="padding: 0.35rem 0.75rem; font-size: 0.8rem;"
+                        disabled="@(_isActionInProgress || _task?.Status == TaskOverallStatus.Closed)"
+                        @onclick="RetryCurrentStageAsync"
+                        title="Retry the current or failed stage">
+                    🔄 Retry Stage
+                </button>
+
+                <button type="button"
+                        class="forge-btn forge-btn-secondary"
+                        style="padding: 0.35rem 0.75rem; font-size: 0.8rem;"
+                        disabled="@_isActionInProgress"
+                        @onclick="RestartPipelineAsync"
+                        title="Restart the entire 7-stage workflow pipeline from stage 1">
+                    ⏮ Restart Pipeline
+                </button>
+
+                <button type="button"
+                        class="forge-btn forge-btn-secondary"
+                        style="padding: 0.35rem 0.75rem; font-size: 0.8rem;"
+                        disabled="@_isActionInProgress"
+                        @onclick="RefreshTaskAsync"
+                        title="Reload execution data">
+                    🔍 Refresh
+                </button>
+            </div>
+        </div>
+
+        <!-- 1-7 Phases Workflow Pipeline Stepper -->
+        <div style="margin-bottom: 1.25rem;">
+            <PipelineStepper @ref="_stepperRef"
+                             TaskId="_task!.Id"
+                             CurrentStageId="@_task.CurrentStageId"
+                             OverallStatus="_task.Status"
+                             Conversations="_conversations"
+                             OnStageSelected="HandlePipelineStageSelected" />
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div style="display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border-subtle); margin-bottom: 1.25rem; padding-bottom: 0.5rem; flex-wrap: wrap;">
+            <button type="button"
+                    class="forge-btn @(_activeTab == "conversations" ? "forge-btn-primary" : "forge-btn-secondary")"
+                    style="font-size: 0.84rem; padding: 0.4rem 0.9rem;"
+                    @onclick='() => _activeTab = "conversations"'>
+                💬 Stage Conversations (@_conversations.Count)
+            </button>
+            <button type="button"
+                    class="forge-btn @(_activeTab == "overview" ? "forge-btn-primary" : "forge-btn-secondary")"
+                    style="font-size: 0.84rem; padding: 0.4rem 0.9rem;"
+                    @onclick='() => _activeTab = "overview"'>
+                📋 Task Overview &amp; Requirements
+            </button>
+            <button type="button"
+                    class="forge-btn @(_activeTab == "diff" ? "forge-btn-primary" : "forge-btn-secondary")"
+                    style="font-size: 0.84rem; padding: 0.4rem 0.9rem;"
+                    @onclick='SwitchToDiffTabAsync'>
+                🔀 Git Diff &amp; Changes @(_diffFiles.Count > 0 ? $"({_diffFiles.Count})" : "")
+            </button>
+            <button type="button"
+                    class="forge-btn @(_activeTab == "terminal" ? "forge-btn-primary" : "forge-btn-secondary")"
+                    style="font-size: 0.84rem; padding: 0.4rem 0.9rem;"
+                    @onclick='() => _activeTab = "terminal"'>
+                🖥 Terminal &amp; Logs
+            </button>
+        </div>
+
+        <!-- TAB CONTENT -->
+
+        <!-- Tab 1: Stage Conversations -->
+        @if (_activeTab == "conversations")
+        {
+            <div style="display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 1.25rem; align-items: start;">
+                <!-- Left: Stage and Run Selector -->
+                <div>
+                    <StageRunSelector Conversations="@_conversations"
+                                      SelectedConversation="@_selectedConversation"
+                                      OnConversationSelected="HandleConversationSelected" />
+                </div>
+
+                <!-- Right: Active / Selected Conversation Viewer -->
+                <div>
+                    <StageConversationViewer Conversation="@_selectedConversation"
+                                             IsActiveStage="@IsStageActive(_selectedConversation?.StageId)"
+                                             LiveStreamingThinking="@_liveStreamingThinking"
+                                             LiveStreamingMessage="@_liveStreamingMessage" />
+                </div>
+            </div>
+        }
+
+        <!-- Tab 2: Task Overview & Requirements -->
+        @if (_activeTab == "overview")
+        {
+            <div class="task-overview-tab" style="display: flex; flex-direction: column; gap: 1.25rem;">
+                <!-- Full Description Card -->
+                <div class="card-surface" style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1.25rem;">
+                    <div style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.4rem;">
+                        <span>📝</span>
+                        <span>Full Task Description</span>
+                    </div>
+                    <div class="task-description-markdown forge-markdown" style="font-size: 0.9rem; line-height: 1.65;">
+                        @if (string.IsNullOrWhiteSpace(_task!.Description))
+                        {
+                            <span class="text-muted" style="color: var(--text-muted); font-style: italic;">No description provided.</span>
+                        }
+                        else
+                        {
+                            @MarkdownHelper.ToMarkupString(_task!.Description)
+                        }
+                    </div>
+                </div>
+
+                <!-- Target Branch & Isolation Details -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem;">
+                    <div class="card-surface" style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem;">
+                        <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 0.35rem;">Base Branch (Target)</span>
+                        <code style="color: var(--text-primary); font-size: 0.9rem;">@_task.BaseBranch</code>
+                    </div>
+                    <div class="card-surface" style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem;">
+                        <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 0.35rem;">Feature Branch</span>
+                        <code style="color: var(--text-primary); font-size: 0.9rem;">@_task.FeatureBranch</code>
+                    </div>
+                    <div class="card-surface" style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem;">
+                        <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 0.35rem;">Merge Mode</span>
+                        <span class="forge-badge badge-indigo" style="font-size: 0.8rem;">@_task.MergeMode</span>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_task.SquashCommitSha))
+                    {
+                        <div class="card-surface" style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem;">
+                            <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 0.35rem;">Squash Commit SHA</span>
+                            <code style="color: var(--accent-teal); font-size: 0.88rem;">@_task.SquashCommitSha</code>
+                        </div>
+                    }
+                </div>
+
+                <!-- Questions & Clarifications -->
+                @if (_task.Questions != null && _task.Questions.Any())
+                {
+                    <div class="card-surface" style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1.25rem;">
+                        <div style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.4rem;">
+                            <span>❓</span>
+                            <span>Clarification Questions (@_task.Questions.Count)</span>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                            @foreach (var q in _task.Questions)
+                            {
+                                <div style="border-left: 3px solid var(--accent-amber); padding-left: 0.75rem;">
+                                    <div style="font-weight: 600; font-size: 0.84rem; color: var(--text-primary);">@q.Prompt</div>
+                                    @if (!string.IsNullOrWhiteSpace(q.Answer))
+                                    {
+                                        <div class="forge-markdown" style="color: #a5b4fc; font-size: 0.84rem; margin-top: 0.25rem;">
+                                            <strong>Answer:</strong> @MarkdownHelper.ToMarkupString(q.Answer)
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+
+        <!-- Tab 3: Git Diff & Changes -->
+        @if (_activeTab == "diff")
+        {
+            <div class="git-diff-tab">
+                <div style="margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                    <div style="font-size: 0.84rem; color: var(--text-secondary);">
+                        @if (!string.IsNullOrWhiteSpace(_task?.SquashCommitSha))
+                        {
+                            <span>Displaying squashed commit diff for closed task (SHA: <code>@_task!.SquashCommitSha![..Math.Min(8, _task!.SquashCommitSha!.Length)]</code>).</span>
+                        }
+                        else
+                        {
+                            <span>Displaying live/branch worktree diff against <code>@(_task?.BaseBranch ?? "")</code>.</span>
+                        }
+                    </div>
+                    <button type="button" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem;" @onclick="LoadDiffFilesAsync">
+                        🔄 Refresh Diff
+                    </button>
+                </div>
+
+                @if (_isLoadingDiff)
+                {
+                    <div style="text-align: center; padding: 2.5rem 0; color: var(--text-muted);">
+                        <span>Calculating diff...</span>
+                    </div>
+                }
+                else if (!_diffFiles.Any())
+                {
+                    <div style="text-align: center; padding: 3rem 0; color: var(--text-muted); background: var(--bg-input); border-radius: var(--radius-sm);">
+                        <span style="font-size: 1.5rem; display: block; margin-bottom: 0.5rem;">📂</span>
+                        <span>No file modifications detected between feature branch and base branch.</span>
+                    </div>
+                }
+                else
+                {
+                    <div style="display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 1.25rem; align-items: start;">
+                        <!-- File List Sidebar -->
+                        <div class="card-surface" style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.75rem;">
+                            <div style="font-weight: 700; font-size: 0.84rem; color: var(--text-primary); margin-bottom: 0.5rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border-subtle);">
+                                Changed Files (@_diffFiles.Count)
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 0.35rem; max-height: 550px; overflow-y: auto;">
+                                @foreach (var file in _diffFiles)
+                                {
+                                    var isSelected = _selectedDiffFile?.Path == file.Path;
+                                    <button type="button"
+                                            class="forge-btn @(isSelected ? "forge-btn-primary" : "forge-btn-secondary")"
+                                            style="text-align: left; padding: 0.4rem 0.6rem; font-size: 0.78rem; display: flex; justify-content: space-between; align-items: center; width: 100%; border-radius: var(--radius-sm);"
+                                            @onclick="() => _selectedDiffFile = file">
+                                        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px;" title="@file.Path">
+                                            @file.Path
+                                        </span>
+                                        <span style="font-size: 0.7rem; font-family: var(--font-mono); opacity: 0.85;">
+                                            +@file.Additions -@file.Deletions
+                                        </span>
+                                    </button>
+                                }
+                            </div>
+                        </div>
+
+                        <!-- Diff Viewer Pane -->
+                        <div>
+                            @if (_selectedDiffFile != null)
+                            {
+                                <DiffViewer File="_selectedDiffFile" />
+                            }
+                            else
+                            {
+                                <div style="text-align: center; padding: 3rem 0; color: var(--text-muted);">
+                                    Select a changed file from the list to view its diff.
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+
+        <!-- Tab 4: Terminal & Logs -->
+        <div style="display: @(_activeTab == "terminal" ? "block" : "none");">
+            <TerminalConsole @ref="_terminalRef" FilterTaskId="@(_task?.Id ?? TaskId)" />
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public int TaskId { get; set; }
+
+    private ForgeTask? _task;
+    private List<StageConversation> _conversations = new();
+    private StageConversation? _selectedConversation;
+    private List<FileDiffSummary> _diffFiles = new();
+    private FileDiffSummary? _selectedDiffFile;
+
+    private string _activeTab = "conversations";
+    private bool _isLoading = true;
+    private bool _isLoadingDiff = false;
+    private bool _isActionInProgress = false;
+    private string? _actionMessage;
+    private string? _liveStreamingThinking;
+    private string? _liveStreamingMessage;
+    private int _selectedTurnCount;
+    private readonly SemaphoreSlim _loadGate = new(1, 1);
+    private TerminalConsole? _terminalRef;
+    private PipelineStepper? _stepperRef;
+
+    private ITaskReviewService? TaskReviewService => ServiceProvider.GetService<ITaskReviewService>();
+    private IDevQueueService? DevQueueService => ServiceProvider.GetService<IDevQueueService>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (HubClient != null)
+        {
+            HubClient.OnTokenDeltaReceived += HandleTokenDelta;
+            HubClient.OnToolExecutionReceived += HandleToolExecution;
+            HubClient.OnOptimizationActionReceived += HandleOptimizationAction;
+            HubClient.OnExecutionLogReceived += HandleExecutionLog;
+            HubClient.OnStageTransitionReceived += HandleStageTransition;
+            HubClient.OnDeterministicGateResultReceived += HandleDeterministicGateResult;
+        }
+
+        await LoadTaskDataAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_task != null && _task.Id != TaskId)
+        {
+            await LoadTaskDataAsync();
+        }
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            HydrateTerminalLogs();
+        }
+    }
+
+    private void HydrateTerminalLogs()
+    {
+        if (_terminalRef != null && _task?.ExecutionLogs != null)
+        {
+            foreach (var log in _task.ExecutionLogs)
+            {
+                _terminalRef.AddLog(log.TaskId, "Orchestrator", log.Level.ToString(), log.Message, log.Timestamp);
+            }
+        }
+    }
+
+    private async Task LoadTaskDataAsync()
+    {
+        _isLoading = true;
+        _diffFiles.Clear();
+        _selectedDiffFile = null;
+        try
+        {
+            _task = await TaskRepository.GetByIdAsync(TaskId);
+            if (_task != null)
+            {
+                _conversations = _task.StageConversations?.OrderBy(c => c.StartedAt).ToList() ?? new List<StageConversation>();
+                if (_conversations.Any())
+                {
+                    var previousId = _selectedConversation?.Id;
+                    var target = (previousId.HasValue ? _conversations.FirstOrDefault(c => c.Id == previousId.Value) : null)
+                                 ?? _conversations.LastOrDefault(c => c.Status == StageExecutionStatus.Running)
+                                 ?? _conversations.LastOrDefault();
+                    _selectedConversation = target;
+                    await ReloadSelectedTurnsAsync();
+                }
+                else
+                {
+                    _selectedConversation = null;
+                }
+
+                HydrateTerminalLogs();
+
+                if (_activeTab == "diff")
+                {
+                    await LoadDiffFilesAsync();
+                }
+            }
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task SwitchToDiffTabAsync()
+    {
+        _activeTab = "diff";
+        if (!_diffFiles.Any())
+        {
+            await LoadDiffFilesAsync();
+        }
+    }
+
+    private async Task LoadDiffFilesAsync()
+    {
+        if (_task == null || TaskReviewService == null) return;
+        _isLoadingDiff = true;
+        StateHasChanged();
+        try
+        {
+            var files = await TaskReviewService.GetTaskDiffFilesAsync(_task.Id);
+            _diffFiles = files.ToList();
+            if (_diffFiles.Any())
+            {
+                if (_selectedDiffFile == null || !_diffFiles.Any(f => f.Path == _selectedDiffFile.Path))
+                {
+                    _selectedDiffFile = _diffFiles[0];
+                }
+            }
+            else
+            {
+                _selectedDiffFile = null;
+            }
+        }
+        finally
+        {
+            _isLoadingDiff = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task HandleConversationSelected(StageConversation conv)
+    {
+        _selectedConversation = conv;
+        _selectedTurnCount = 0;
+        _liveStreamingThinking = null;
+        _liveStreamingMessage = null;
+        await ReloadSelectedTurnsAsync();
+    }
+
+    /// <summary>
+    /// Reloads the selected conversation together with its persisted turns. The task graph loaded by
+    /// <c>GetByIdAsync</c> only carries the conversation headers, never their turns.
+    /// Live buffers are dropped once a new turn is persisted: the persisted turn supersedes them.
+    /// </summary>
+    private async Task ReloadSelectedTurnsAsync()
+    {
+        if (_selectedConversation == null) return;
+
+        await _loadGate.WaitAsync();
+        try
+        {
+            var selectedId = _selectedConversation.Id;
+            var loaded = await TaskRepository.GetStageConversationWithTurnsAsync(selectedId);
+            if (loaded == null || _selectedConversation?.Id != selectedId) return;
+
+            _selectedConversation = loaded;
+            var index = _conversations.FindIndex(c => c.Id == selectedId);
+            if (index >= 0) _conversations[index] = loaded;
+
+            var count = loaded.Turns?.Count ?? 0;
+            if (count > _selectedTurnCount || loaded.Status != StageExecutionStatus.Running)
+            {
+                _liveStreamingThinking = null;
+                _liveStreamingMessage = null;
+            }
+            _selectedTurnCount = count;
+        }
+        finally
+        {
+            _loadGate.Release();
+        }
+    }
+
+    private bool IsStageActive(string? stageId)
+    {
+        if (_task == null || string.IsNullOrWhiteSpace(stageId)) return false;
+        return string.Equals(_task.CurrentStageId, stageId, StringComparison.OrdinalIgnoreCase) &&
+               _task.Status != TaskOverallStatus.Closed &&
+               _task.Status != TaskOverallStatus.Failed;
+    }
+
+    private async Task RetryCurrentStageAsync()
+    {
+        if (_task == null || _isActionInProgress || DevQueueService == null) return;
+        _isActionInProgress = true;
+        _actionMessage = "Rescheduling stage...";
+        try
+        {
+            var ok = await DevQueueService.RescheduleTaskAsync(_task.Id, restartPipeline: false);
+            _actionMessage = ok ? "Stage queued for execution!" : "Failed to reschedule stage.";
+            await RefreshTaskAsync();
+        }
+        finally
+        {
+            _isActionInProgress = false;
+        }
+    }
+
+    private async Task RestartPipelineAsync()
+    {
+        if (_task == null || _isActionInProgress || DevQueueService == null) return;
+        _isActionInProgress = true;
+        _actionMessage = "Restarting pipeline from Stage 1...";
+        try
+        {
+            var ok = await DevQueueService.RescheduleTaskAsync(_task.Id, restartPipeline: true);
+            _actionMessage = ok ? "Pipeline restarted and queued!" : "Failed to restart pipeline.";
+            await RefreshTaskAsync();
+        }
+        finally
+        {
+            _isActionInProgress = false;
+        }
+    }
+
+    private async Task RefreshTaskAsync()
+    {
+        await LoadTaskDataAsync();
+        if (_activeTab == "diff")
+        {
+            await LoadDiffFilesAsync();
+        }
+        StateHasChanged();
+    }
+
+    private void HandleTokenDelta(int taskId, string token, bool isThinking)
+    {
+        if (taskId != TaskId) return;
+
+        InvokeAsync(() =>
+        {
+            if (isThinking)
+            {
+                _liveStreamingThinking = (_liveStreamingThinking ?? "") + token;
+            }
+            else
+            {
+                _liveStreamingMessage = (_liveStreamingMessage ?? "") + token;
+            }
+            StateHasChanged();
+        });
+    }
+
+    private void HandleToolExecution(int taskId, string toolName, string arguments, string status, int? durationMs)
+    {
+        if (taskId != TaskId) return;
+
+        InvokeAsync(async () =>
+        {
+            _terminalRef?.AddLog(taskId, "Tool", status.Equals("Running", StringComparison.OrdinalIgnoreCase) ? "Info" : "Debug",
+                $"[{toolName}] {status} {(durationMs.HasValue ? $"({durationMs}ms)" : "")}: {arguments}", DateTime.UtcNow);
+
+            // A model response just ended: surface what was persisted (thinking, tool call, tool result).
+            await ReloadSelectedTurnsAsync();
+            StateHasChanged();
+        });
+    }
+
+    private void HandleOptimizationAction(int taskId, string stageId, string actionType, string description, int tokensSaved, DateTime timestamp)
+    {
+        if (taskId != TaskId) return;
+
+        InvokeAsync(async () =>
+        {
+            _terminalRef?.AddLog(taskId, stageId, "Info", $"[OPTIMIZATION] {actionType}: {description} (Saved {tokensSaved} chars)", timestamp);
+            await ReloadSelectedTurnsAsync();
+            StateHasChanged();
+        });
+    }
+
+    private void HandleExecutionLog(int taskId, string stageId, string level, string message, DateTime timestamp)
+    {
+        if (taskId != TaskId) return;
+
+        InvokeAsync(() =>
+        {
+            _terminalRef?.AddLog(taskId, stageId, level, message, timestamp);
+        });
+    }
+
+    private void HandleStageTransition(int taskId, string stageId, string stageKind, string status)
+    {
+        if (taskId != TaskId) return;
+
+        InvokeAsync(async () =>
+        {
+            _liveStreamingThinking = null;
+            _liveStreamingMessage = null;
+            _selectedTurnCount = 0;
+            _stepperRef?.ApplyStageTransition(stageId, status);
+            if (status.Equals("Running", StringComparison.OrdinalIgnoreCase))
+            {
+                // A stage run just started: follow the live conversation.
+                _selectedConversation = null;
+            }
+            await RefreshTaskAsync();
+        });
+    }
+
+    private void HandleDeterministicGateResult(int taskId, string gateName, bool passed, string metricsSummary)
+    {
+        if (taskId != TaskId) return;
+        InvokeAsync(() =>
+        {
+            _stepperRef?.ApplyGateResult(gateName, passed, metricsSummary);
+            StateHasChanged();
+        });
+    }
+
+    private async Task HandlePipelineStageSelected(string stageId)
+    {
+        _activeTab = "conversations";
+        if (_conversations != null && _conversations.Any())
+        {
+            var target = _conversations.LastOrDefault(c =>
+                string.Equals(c.StageId, stageId, StringComparison.OrdinalIgnoreCase) ||
+                ResolveStageOrder(c.StageId) == ResolveStageOrder(stageId));
+
+            if (target != null)
+            {
+                await HandleConversationSelected(target);
+            }
+        }
+        StateHasChanged();
+    }
+
+    private static int ResolveStageOrder(string? stageId)
+    {
+        if (string.IsNullOrWhiteSpace(stageId)) return 0;
+        var s = stageId.Trim().ToLowerInvariant().Replace("-", "").Replace("_", "");
+        if (s.Contains("merge") || s == "7") return 7;
+        if (s.Contains("taskreview") || s.Contains("reviewtask") || s == "1") return 1;
+        if (s.Contains("preimpl") || s.Contains("baseline") || s == "2") return 2;
+        if (s.Contains("postreview") || s == "6") return 6;
+        if (s.Contains("codereview") || s == "5") return 5;
+        if (s.Contains("postimpl") || s.Contains("ratchet") || s.Contains("coverage") || s == "4") return 4;
+        if (s.Contains("implementation") || s.Contains("implement") || s == "3") return 3;
+        return 0;
+    }
+
+    private static string GetStatusBadgeClass(TaskOverallStatus status)
+    {
+        return status switch
+        {
+            TaskOverallStatus.Closed => "badge-emerald",
+            TaskOverallStatus.Ready => "badge-teal",
+            TaskOverallStatus.Implemented => "badge-indigo",
+            TaskOverallStatus.Reviewed => "badge-indigo",
+            TaskOverallStatus.Open => "badge-blue",
+            TaskOverallStatus.Failed => "badge-crimson",
+            TaskOverallStatus.Cancelled => "badge-zinc",
+            TaskOverallStatus.Rejected => "badge-zinc",
+            _ => "badge-zinc"
+        };
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (HubClient != null)
+        {
+            HubClient.OnTokenDeltaReceived -= HandleTokenDelta;
+            HubClient.OnToolExecutionReceived -= HandleToolExecution;
+            HubClient.OnOptimizationActionReceived -= HandleOptimizationAction;
+            HubClient.OnExecutionLogReceived -= HandleExecutionLog;
+            HubClient.OnStageTransitionReceived -= HandleStageTransition;
+            HubClient.OnDeterministicGateResultReceived -= HandleDeterministicGateResult;
+        }
+
+        _loadGate.Dispose();
+    }
+}

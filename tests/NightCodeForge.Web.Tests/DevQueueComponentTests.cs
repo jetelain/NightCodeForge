@@ -256,6 +256,16 @@ public class DevQueueComponentTests : BunitContext
             LastReleasedTaskId = taskId;
             return Task.FromResult(true);
         }
+
+        public int? LastRescheduledTaskId { get; private set; }
+        public bool? LastRescheduledRestartPipeline { get; private set; }
+
+        public Task<bool> RescheduleTaskAsync(int taskId, bool restartPipeline = false, CancellationToken cancellationToken = default)
+        {
+            LastRescheduledTaskId = taskId;
+            LastRescheduledRestartPipeline = restartPipeline;
+            return Task.FromResult(true);
+        }
     }
 
     #endregion

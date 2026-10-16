@@ -47,7 +47,7 @@ public class SessionTranscriptServiceTests
 
         // 4. Tool output
         Assert.Equal("tool", entries[3].Role);
-        Assert.Equal("call_1", entries[3].ToolName);
+        Assert.Equal("read", entries[3].ToolName);
         Assert.Equal("Assert.True failed on line 42", entries[3].ToolResult);
 
         // 5. Final Assistant text

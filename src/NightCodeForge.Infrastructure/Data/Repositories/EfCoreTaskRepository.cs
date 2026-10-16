@@ -25,6 +25,7 @@ public class EfCoreTaskRepository : ITaskRepository
             .Include(i => i.Checkpoints)
             .Include(i => i.ExecutionRecords)
             .Include(i => i.ExecutionLogs)
+            .Include(i => i.StageConversations)
             .FirstOrDefaultAsync(i => i.Id == id, cancellationToken);
     }
 
@@ -66,12 +67,14 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task UpdateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
     {
-        var local = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == task.Id);
-        if (local != null)
+        var existing = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == task.Id)
+                       ?? await _context.Tasks.FindAsync(new object[] { task.Id }, cancellationToken);
+
+        if (existing != null)
         {
-            if (!ReferenceEquals(local, task))
+            if (!ReferenceEquals(existing, task))
             {
-                _context.Entry(local).CurrentValues.SetValues(task);
+                _context.Entry(existing).CurrentValues.SetValues(task);
             }
         }
         else
@@ -168,5 +171,111 @@ public class EfCoreTaskRepository : ITaskRepository
     {
         _context.ExecutionLogs.Add(log);
         await _context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<StageConversation> StartStageConversationAsync(
+        int taskId,
+        string stageId,
+        WorkflowStageKind stageKind,
+        int attemptIndex,
+        string? agentProfileId = null,
+        string? harnessId = null,
+        string? modelName = null,
+        CancellationToken cancellationToken = default)
+    {
+        var conversation = new StageConversation
+        {
+            TaskId = taskId,
+            StageId = stageId,
+            StageKind = stageKind,
+            AttemptIndex = attemptIndex,
+            AgentProfileId = agentProfileId,
+            HarnessId = harnessId,
+            ModelName = modelName,
+            StartedAt = DateTime.UtcNow,
+            Status = StageExecutionStatus.Running
+        };
+
+        _context.StageConversations.Add(conversation);
+        await _context.SaveChangesAsync(cancellationToken);
+        return conversation;
+    }
+
+    public async Task CompleteStageConversationAsync(
+        int conversationId,
+        StageExecutionStatus status,
+        string? summary = null,
+        string? transcriptFileName = null,
+        CancellationToken cancellationToken = default)
+    {
+        var conversation = await _context.StageConversations.FindAsync(new object[] { conversationId }, cancellationToken);
+        if (conversation != null)
+        {
+            conversation.Status = status;
+            conversation.CompletedAt = DateTime.UtcNow;
+            if (summary != null) conversation.Summary = summary;
+            if (transcriptFileName != null) conversation.TranscriptFileName = transcriptFileName;
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    public async Task<StageConversationTurn> AddConversationTurnAsync(
+        int conversationId,
+        StageTurnRole role,
+        string? content = null,
+        string? thinkingTrace = null,
+        string? toolName = null,
+        string? toolArguments = null,
+        string? toolResult = null,
+        long? durationMs = null,
+        bool isError = false,
+        string? metadataJson = null,
+        CancellationToken cancellationToken = default)
+    {
+        var nextIndex = await _context.StageConversationTurns
+            .Where(t => t.ConversationId == conversationId)
+            .CountAsync(cancellationToken);
+
+        var turn = new StageConversationTurn
+        {
+            ConversationId = conversationId,
+            TurnIndex = nextIndex,
+            Role = role,
+            Content = content,
+            ThinkingTrace = thinkingTrace,
+            ToolName = toolName,
+            ToolArguments = toolArguments,
+            ToolResult = toolResult,
+            DurationMs = durationMs,
+            IsError = isError,
+            MetadataJson = metadataJson,
+            Timestamp = DateTime.UtcNow
+        };
+
+        _context.StageConversationTurns.Add(turn);
+        await _context.SaveChangesAsync(cancellationToken);
+        return turn;
+    }
+
+    public async Task<IReadOnlyList<StageConversation>> GetStageConversationsAsync(
+        int taskId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.StageConversations
+            .AsNoTracking()
+            .Where(c => c.TaskId == taskId)
+            .OrderBy(c => c.StartedAt)
+            .ThenBy(c => c.AttemptIndex)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<StageConversation?> GetStageConversationWithTurnsAsync(
+        int conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.StageConversations
+            .AsNoTracking()
+            .Include(c => c.Turns.OrderBy(t => t.TurnIndex))
+            .FirstOrDefaultAsync(c => c.Id == conversationId, cancellationToken);
     }
 }

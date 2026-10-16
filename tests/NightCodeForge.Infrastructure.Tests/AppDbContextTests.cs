@@ -264,4 +264,90 @@ public class AppDbContextTests : IDisposable
         Assert.Null(triage.WorkspaceId);
         Assert.Equal("Qwen3.8-27B:latest", triage.ModelName);
     }
+
+    [Fact]
+    public async Task TaskRepository_UpdateAsync_WithDetachedGraphAndTrackedWorkspace_DoesNotConflict()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var ws = new Workspace { Name = "TrackingWs", RepositoryPath = "/path/test", DefaultBaseBranch = "main" };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Original Title",
+            Status = TaskOverallStatus.Open
+        };
+        context.Tasks.Add(task);
+        await context.SaveChangesAsync();
+
+        // Clear change tracker to simulate detached state across requests / scopes
+        context.ChangeTracker.Clear();
+
+        var workspaceRepo = new EfCoreWorkspaceRepository(context);
+        var taskRepo = new EfCoreTaskRepository(context);
+
+        // 1. Track the workspace in the context
+        var trackedWorkspaces = await workspaceRepo.GetAllAsync();
+        Assert.Single(trackedWorkspaces);
+
+        // 2. Fetch the task with AsNoTracking (which also includes detached Workspace instance)
+        var detachedTasks = await taskRepo.GetByStatusAsync(TaskOverallStatus.Open);
+        Assert.Single(detachedTasks);
+        var detachedTask = detachedTasks[0];
+        Assert.NotNull(detachedTask.Workspace);
+        Assert.False(ReferenceEquals(trackedWorkspaces[0], detachedTask.Workspace));
+
+        // 3. Mutate detached task and update
+        detachedTask.Title = "Updated Title";
+        detachedTask.PipelineDataJson = "{\"status\":\"updated\"}";
+
+        var ex = await Record.ExceptionAsync(() => taskRepo.UpdateAsync(detachedTask));
+        Assert.Null(ex);
+
+        // Verify update persisted
+        context.ChangeTracker.Clear();
+        var reloaded = await taskRepo.GetByIdAsync(detachedTask.Id);
+        Assert.NotNull(reloaded);
+        Assert.Equal("Updated Title", reloaded.Title);
+        Assert.Equal("{\"status\":\"updated\"}", reloaded.PipelineDataJson);
+    }
+
+    [Fact]
+    public async Task WorkspaceRepository_UpdateAsync_WithDetachedWorkspaceAndTrackedInstance_DoesNotConflict()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var ws = new Workspace { Name = "OriginalWsName", RepositoryPath = "/path/ws", DefaultBaseBranch = "main" };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        var workspaceRepo = new EfCoreWorkspaceRepository(context);
+
+        // Track original workspace
+        var tracked = await workspaceRepo.GetByIdAsync(ws.Id);
+        Assert.NotNull(tracked);
+
+        // Create a detached workspace instance with same Id
+        var detached = new Workspace
+        {
+            Id = ws.Id,
+            Name = "RenamedWsName",
+            RepositoryPath = "/path/ws-renamed",
+            DefaultBaseBranch = "develop"
+        };
+
+        var ex = await Record.ExceptionAsync(() => workspaceRepo.UpdateAsync(detached));
+        Assert.Null(ex);
+
+        context.ChangeTracker.Clear();
+        var reloaded = await workspaceRepo.GetByIdAsync(ws.Id);
+        Assert.NotNull(reloaded);
+        Assert.Equal("RenamedWsName", reloaded.Name);
+        Assert.Equal("develop", reloaded.DefaultBaseBranch);
+    }
 }
