@@ -45,6 +45,9 @@ public static class ServiceCollectionExtensions
         services.AddGitInfrastructure();
 
         // 5. Workflow Pipeline & Orchestration
+        services.TryAddSingleton<IPromptTemplateRenderer, ScribanPromptTemplateRenderer>();
+        services.TryAddSingleton<IWorkflowStageRegistry, WorkflowStageRegistry>();
+        services.TryAddScoped<IWorkflowStageFactory, WorkflowStageFactory>();
         services.TryAddScoped<IWorkflowPipelineProvider, DefaultWorkflowPipelineProvider>();
         services.TryAddScoped<ITaskOrchestrator, TaskOrchestrator>();
         services.TryAddScoped<IStartupRecoveryService, StartupRecoveryService>();
@@ -76,6 +79,8 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPreImplementationStage>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPostImplementationStage>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPostReviewStage>();
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.CompositeDeterministicStage>();
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicScriptStage>();
 
         services.TryAddScoped<IWorkflowPipeline>(sp => Default3AgentPipeline.Create(
             preImplStage: sp.GetService<NightCodeForge.Core.Workflow.Stages.DeterministicPreImplementationStage>(),
