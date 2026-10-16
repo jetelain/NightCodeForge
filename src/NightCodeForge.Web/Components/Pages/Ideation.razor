@@ -2,6 +2,7 @@
 @inject IIdeationService IdeationService
 @inject WorkspaceStateService WorkspaceState
 @inject ITaskRepository TaskRepository
+@inject IWorkflowRepository WorkflowRepository
 @inject ITaskMarkdownSyncService MarkdownSync
 @inject ToastService ToastService
 @inject IdeationSessionState Session
@@ -21,6 +22,24 @@
             </div>
         </div>
         <div class="ideation-header-status">
+            @if (_workspaceSessions != null && _workspaceSessions.Count > 0)
+            {
+                <div class="session-dropdown-container">
+                    <select class="form-control-dark session-select"
+                            value="@Session.ActiveConversationId"
+                            @onchange="HandleSessionSelectedAsync"
+                            disabled="@Session.IsGenerating"
+                            title="Switch Ideation Session">
+                        @foreach (var s in _workspaceSessions)
+                        {
+                            <option value="@s.Id">
+                                @(s.Status == StageExecutionStatus.Running ? "🟢" : "📁") @(string.IsNullOrWhiteSpace(s.Title) ? $"Session #{s.Id}" : s.Title) (@s.StartedAt.ToLocalTime().ToString("MMM d, HH:mm"))
+                            </option>
+                        }
+                    </select>
+                </div>
+            }
+
             <span class="forge-badge @(Session.IsGenerating ? "badge-indigo" : "badge-agentic")">
                 <span class="status-dot @(Session.IsGenerating ? "running" : "idle")"></span>
                 @(Session.IsGenerating ? "Architect Deliberating..." : "Architect Agent Ready")
@@ -640,6 +659,7 @@
     private bool _showCustomPromptConfig;
     private CancellationTokenSource? _cts;
     private IReadOnlyList<ForgeTask> _workspaceTasks = Array.Empty<ForgeTask>();
+    private IReadOnlyList<Conversation> _workspaceSessions = Array.Empty<Conversation>();
 
     protected override async Task OnInitializedAsync()
     {
@@ -669,27 +689,185 @@
         var active = WorkspaceState.ActiveWorkspace;
         if (active != null)
         {
-            if (Session.BoundWorkspaceId != active.Id)
-            {
-                Session.Reset();
-                Session.BoundWorkspaceId = active.Id;
-            }
-
             try
             {
                 _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(active.Id);
+                _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(active.Id);
+
+                if (Session.BoundWorkspaceId != active.Id)
+                {
+                    var activeConv = await TaskRepository.GetActiveIdeationConversationAsync(active.Id);
+                    if (activeConv != null)
+                    {
+                        LoadConversationIntoSession(activeConv);
+                    }
+                    else
+                    {
+                        var newConv = await TaskRepository.StartIdeationConversationAsync(
+                            active.Id,
+                            title: $"Discovery Chat #{DateTime.UtcNow:MMdd-HHmm}");
+                        Session.Reset();
+                        Session.BoundWorkspaceId = active.Id;
+                        Session.ActiveConversationId = newConv.Id;
+                        Session.ActiveConversationTitle = newConv.Title;
+                        _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(active.Id);
+                    }
+                }
+                else if (!Session.ActiveConversationId.HasValue)
+                {
+                    var activeConv = await TaskRepository.GetActiveIdeationConversationAsync(active.Id);
+                    if (activeConv != null && Session.Messages.Count == 0)
+                    {
+                        LoadConversationIntoSession(activeConv);
+                    }
+                    else if (activeConv != null)
+                    {
+                        Session.ActiveConversationId = activeConv.Id;
+                        Session.ActiveConversationTitle = activeConv.Title;
+                    }
+                    else
+                    {
+                        var newConv = await TaskRepository.StartIdeationConversationAsync(
+                            active.Id,
+                            title: $"Discovery Chat #{DateTime.UtcNow:MMdd-HHmm}");
+                        Session.ActiveConversationId = newConv.Id;
+                        Session.ActiveConversationTitle = newConv.Title;
+                        _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(active.Id);
+                    }
+                }
             }
             catch
             {
                 _workspaceTasks = Array.Empty<ForgeTask>();
+                _workspaceSessions = Array.Empty<Conversation>();
             }
         }
         else
         {
             _workspaceTasks = Array.Empty<ForgeTask>();
+            _workspaceSessions = Array.Empty<Conversation>();
         }
 
         await InvokeAsync(StateHasChanged);
+    }
+
+    private void LoadConversationIntoSession(Conversation conv)
+    {
+        Session.Reset();
+        Session.BoundWorkspaceId = conv.WorkspaceId;
+        Session.ActiveConversationId = conv.Id;
+        Session.ActiveConversationTitle = conv.Title;
+
+        var pendingTools = new List<IdeationToolCallViewModel>();
+        var pendingParts = new List<ChatContentPart>();
+
+        foreach (var turn in conv.Turns.OrderBy(t => t.TurnIndex))
+        {
+            if (turn.Role == StageTurnRole.User)
+            {
+                Session.Messages.Add(new ChatMessage(
+                    "user",
+                    turn.Content ?? string.Empty,
+                    Timestamp: turn.Timestamp,
+                    Parts: [new TextContentPart(turn.Content ?? string.Empty)]));
+            }
+            else if (turn.Role == StageTurnRole.ToolResult)
+            {
+                var vm = new IdeationToolCallViewModel
+                {
+                    ToolCallId = Guid.NewGuid().ToString("N")[..8],
+                    ToolName = turn.ToolName ?? "tool",
+                    Arguments = turn.ToolArguments ?? string.Empty,
+                    Result = turn.ToolResult ?? turn.Content,
+                    IsCompleted = true,
+                    IsError = turn.IsError,
+                    DurationMs = turn.DurationMs ?? 0
+                };
+                pendingTools.Add(vm);
+                pendingParts.Add(new ToolCallContentPart(vm));
+            }
+            else if (turn.Role == StageTurnRole.Assistant)
+            {
+                var parts = new List<ChatContentPart>();
+                if (!string.IsNullOrEmpty(turn.ThinkingTrace))
+                {
+                    parts.Add(new ThinkingContentPart(turn.ThinkingTrace));
+                }
+
+                var tools = new List<IdeationToolCallViewModel>(pendingTools);
+                parts.AddRange(pendingParts);
+                pendingTools.Clear();
+                pendingParts.Clear();
+
+                if (!string.IsNullOrEmpty(turn.ToolName) && !tools.Any(t => t.ToolName == turn.ToolName && t.Arguments == turn.ToolArguments))
+                {
+                    var vm = new IdeationToolCallViewModel
+                    {
+                        ToolCallId = Guid.NewGuid().ToString("N")[..8],
+                        ToolName = turn.ToolName,
+                        Arguments = turn.ToolArguments ?? string.Empty,
+                        Result = turn.ToolResult,
+                        IsCompleted = true,
+                        IsError = turn.IsError,
+                        DurationMs = turn.DurationMs ?? 0
+                    };
+                    tools.Add(vm);
+                    parts.Add(new ToolCallContentPart(vm));
+                }
+
+                if (!string.IsNullOrEmpty(turn.Content))
+                {
+                    parts.Add(new TextContentPart(turn.Content));
+                }
+
+                Session.Messages.Add(new ChatMessage(
+                    "assistant",
+                    turn.Content ?? string.Empty,
+                    turn.ThinkingTrace,
+                    turn.Timestamp,
+                    tools.Count > 0 ? tools : null,
+                    parts.Count > 0 ? parts : null));
+
+                if (!string.IsNullOrWhiteSpace(turn.MetadataJson))
+                {
+                    try
+                    {
+                        var proposals = System.Text.Json.JsonSerializer.Deserialize<List<IdeationProposal>>(
+                            turn.MetadataJson,
+                            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        if (proposals != null)
+                        {
+                            foreach (var p in proposals)
+                            {
+                                if (!Session.Proposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    Session.Proposals.Add(IdeationProposalViewModel.FromProposal(p, _workspaceTasks));
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore malformed metadata
+                    }
+                }
+            }
+        }
+    }
+
+    private async Task HandleSessionSelectedAsync(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var selectedId))
+        {
+            var conv = await TaskRepository.GetConversationWithTurnsAsync(selectedId);
+            if (conv != null)
+            {
+                LoadConversationIntoSession(conv);
+                ToastService.Show("Session Loaded", conv.Title ?? $"Session #{conv.Id}", ToastLevel.Info);
+                StateHasChanged();
+                _ = ScrollChatToBottomAsync(true);
+            }
+        }
     }
 
     private void HandleWorkspaceChanged()
@@ -790,6 +968,24 @@
         var prompt = _userInput.Trim();
         _userInput = string.Empty;
 
+        var ws = WorkspaceState.ActiveWorkspace;
+        if (!Session.ActiveConversationId.HasValue)
+        {
+            var newConv = await TaskRepository.StartIdeationConversationAsync(
+                ws.Id,
+                title: TruncateString(prompt, 50));
+            Session.ActiveConversationId = newConv.Id;
+            Session.ActiveConversationTitle = newConv.Title;
+            _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(ws.Id);
+        }
+
+        // Persist User turn
+        await TaskRepository.AddConversationTurnAsync(
+            Session.ActiveConversationId.Value,
+            StageTurnRole.User,
+            content: prompt,
+            cancellationToken: _cts?.Token ?? CancellationToken.None);
+
         // Build history from existing completed turns, retaining text & action summaries
         var history = Session.Messages
             .Select(m => (m.Role, m.GetEffectiveHistoryContent()))
@@ -808,9 +1004,11 @@
 
         await ScrollChatToBottomAsync();
 
+        var discoveredProposalsThisTurn = new List<IdeationProposal>();
+
         try
         {
-            var ws = WorkspaceState.ActiveWorkspace;
+            ws = WorkspaceState.ActiveWorkspace;
             var baseProfile = ws?.AgentProfiles?.FirstOrDefault(p =>
                 string.Equals(p.Id, "ideation", StringComparison.OrdinalIgnoreCase) ||
                 p.Name.Contains("ideation", StringComparison.OrdinalIgnoreCase))
@@ -956,6 +1154,7 @@
                         break;
 
                     case IdeationStreamUpdateKind.ProposalDiscovered when update.Proposal != null:
+                        discoveredProposalsThisTurn.Add(update.Proposal);
                         var newVm = IdeationProposalViewModel.FromProposal(update.Proposal, _workspaceTasks);
                         if (!Session.Proposals.Any(p => string.Equals(p.Title, newVm.Title, StringComparison.OrdinalIgnoreCase)))
                         {
@@ -973,6 +1172,11 @@
                         {
                             foreach (var p in update.FinalResult.ProposedTasks)
                             {
+                                if (!discoveredProposalsThisTurn.Any(d => string.Equals(d.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    discoveredProposalsThisTurn.Add(p);
+                                }
+
                                 if (!Session.Proposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
                                 {
                                     Session.Proposals.Add(IdeationProposalViewModel.FromProposal(p, _workspaceTasks));
@@ -1014,6 +1218,40 @@
                     DateTime.UtcNow,
                     toolsForMessage,
                     partsForMessage));
+
+                if (Session.ActiveConversationId.HasValue)
+                {
+                    if (Session.CurrentToolCalls.Count > 0)
+                    {
+                        foreach (var tc in Session.CurrentToolCalls)
+                        {
+                            await TaskRepository.AddConversationTurnAsync(
+                                Session.ActiveConversationId.Value,
+                                StageTurnRole.ToolResult,
+                                content: tc.Result,
+                                toolName: tc.ToolName,
+                                toolArguments: tc.Arguments,
+                                toolResult: tc.Result,
+                                durationMs: tc.DurationMs,
+                                isError: tc.IsError,
+                                cancellationToken: CancellationToken.None);
+                        }
+                    }
+
+                    string? metadataJson = null;
+                    if (discoveredProposalsThisTurn.Count > 0)
+                    {
+                        metadataJson = System.Text.Json.JsonSerializer.Serialize(discoveredProposalsThisTurn);
+                    }
+
+                    await TaskRepository.AddConversationTurnAsync(
+                        Session.ActiveConversationId.Value,
+                        StageTurnRole.Assistant,
+                        content: Session.CurrentMessageBuffer,
+                        thinkingTrace: string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
+                        metadataJson: metadataJson,
+                        cancellationToken: CancellationToken.None);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -1050,6 +1288,16 @@
                     DateTime.UtcNow,
                     toolsForMessage,
                     partsForMessage));
+
+                if (Session.ActiveConversationId.HasValue)
+                {
+                    await TaskRepository.AddConversationTurnAsync(
+                        Session.ActiveConversationId.Value,
+                        StageTurnRole.Assistant,
+                        content: Session.CurrentMessageBuffer + "\n\n*(Generation stopped by user)*",
+                        thinkingTrace: string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
+                        cancellationToken: CancellationToken.None);
+                }
             }
         }
         catch (Exception ex)
@@ -1083,12 +1331,40 @@
         return Task.CompletedTask;
     }
 
-    private void ResetSession()
+    private async Task ResetSession()
     {
         _cts?.Cancel();
-        Session.Reset();
+        var ws = WorkspaceState.ActiveWorkspace;
+        if (ws != null)
+        {
+            if (Session.ActiveConversationId.HasValue)
+            {
+                await TaskRepository.CompleteConversationAsync(
+                    Session.ActiveConversationId.Value,
+                    StageExecutionStatus.Completed,
+                    summary: "Session archived by user via Clear Chat.");
+            }
+
+            var newConv = await TaskRepository.StartIdeationConversationAsync(
+                ws.Id,
+                title: $"Discovery Chat #{DateTime.UtcNow:MMdd-HHmm}");
+
+            Session.Reset();
+            Session.BoundWorkspaceId = ws.Id;
+            Session.ActiveConversationId = newConv.Id;
+            Session.ActiveConversationTitle = newConv.Title;
+
+            _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(ws.Id);
+            ToastService.Show("New Session Started", "Previous session archived and fresh chat initialized.", ToastLevel.Info);
+        }
+        else
+        {
+            Session.Reset();
+        }
+
         _userInput = string.Empty;
         _ = ScrollChatToBottomAsync(true);
+        StateHasChanged();
     }
 
     private async Task AddProposalToBacklogAsync(IdeationProposalViewModel proposal)
@@ -1098,9 +1374,24 @@
 
         try
         {
+            int? workflowId = workspace.DefaultWorkflowId;
+            if (!workflowId.HasValue || workflowId.Value <= 0)
+            {
+                try
+                {
+                    var defaultWorkflow = await WorkflowRepository.GetDefaultWorkflowWithStagesAsync();
+                    workflowId = defaultWorkflow?.Id;
+                }
+                catch
+                {
+                    // Default fallback
+                }
+            }
+
             var newTask = new ForgeTask
             {
                 WorkspaceId = workspace.Id,
+                WorkflowId = workflowId,
                 Title = proposal.Title.Trim(),
                 Description = proposal.Description.Trim(),
                 Status = TaskOverallStatus.Suggested,

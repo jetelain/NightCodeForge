@@ -177,6 +177,8 @@ public class IdeationSessionState
     public string CurrentMessageBuffer { get; set; } = string.Empty;
     public string? CustomSystemPrompt { get; set; }
     public int? BoundWorkspaceId { get; set; }
+    public int? ActiveConversationId { get; set; }
+    public string? ActiveConversationTitle { get; set; }
     public string? LatestTranscriptPath { get; set; }
     public string? LatestFullTranscriptMarkdown { get; set; }
     public IdeationQuestion? PendingQuestion { get; set; }
@@ -229,6 +231,8 @@ public class IdeationSessionState
         CurrentMessageBuffer = string.Empty;
         LatestTranscriptPath = null;
         LatestFullTranscriptMarkdown = null;
+        ActiveConversationId = null;
+        ActiveConversationTitle = null;
         SelectedRoutingTarget = OllamaRoutingTarget.Auto;
         SelectedModelOverride = null;
         IsGenerating = false;

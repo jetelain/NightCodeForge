@@ -203,4 +203,47 @@ public class CoreCoverageTests : IDisposable
         Assert.False(result.IsSuccess);
         Assert.Equal(TaskOverallStatus.Failed, task.Status);
     }
+
+    [Fact]
+    public async Task InMemoryTaskRepository_IdeationConversations_Lifecycle_WorksCorrectly()
+    {
+        var repo = new InMemoryTaskRepository();
+
+        // 1. No active conversation
+        var none = await repo.GetActiveIdeationConversationAsync(100);
+        Assert.Null(none);
+
+        // 2. Start conversation
+        var conv = await repo.StartIdeationConversationAsync(100, "Discovery 1", "deepseek-v3", "ideation");
+        Assert.NotNull(conv);
+        Assert.Null(conv.TaskId);
+        Assert.Equal(100, conv.WorkspaceId);
+        Assert.Equal(ConversationType.Ideation, conv.ConversationType);
+        Assert.Equal(StageExecutionStatus.Running, conv.Status);
+
+        // 3. Add turns
+        var uTurn = await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Can we add auth?");
+        Assert.Equal(0, uTurn.TurnIndex);
+
+        var aTurn = await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.Assistant, content: "Sure", thinkingTrace: "Thinking...");
+        Assert.Equal(1, aTurn.TurnIndex);
+
+        // 4. Get active
+        var active = await repo.GetActiveIdeationConversationAsync(100);
+        Assert.NotNull(active);
+        Assert.Equal(conv.Id, active.Id);
+        Assert.Equal(2, active.Turns.Count);
+        Assert.Equal(0, active.Turns.ElementAt(0).TurnIndex);
+        Assert.Equal(1, active.Turns.ElementAt(1).TurnIndex);
+
+        // 5. Complete conversation
+        await repo.CompleteConversationAsync(conv.Id, StageExecutionStatus.Completed);
+        var activeAfterComplete = await repo.GetActiveIdeationConversationAsync(100);
+        Assert.Null(activeAfterComplete);
+
+        // 6. Still visible in list
+        var list = await repo.GetIdeationConversationsAsync(100);
+        Assert.Single(list);
+        Assert.Equal(conv.Id, list[0].Id);
+    }
 }

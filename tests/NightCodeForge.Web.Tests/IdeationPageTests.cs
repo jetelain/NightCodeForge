@@ -18,11 +18,13 @@ public class IdeationPageTests : BunitContext
     private readonly MockIdeationService _ideationService;
     private readonly ToastService _toastService;
     private readonly IdeationSessionState _sessionState;
+    private readonly InMemoryWorkflowRepository _workflowRepository;
 
     public IdeationPageTests()
     {
         _workspaceState = new WorkspaceStateService();
         _taskRepository = new InMemoryTaskRepository();
+        _workflowRepository = new InMemoryWorkflowRepository();
         _markdownSync = new MockTaskMarkdownSyncService();
         _ideationService = new MockIdeationService();
         _toastService = new ToastService();
@@ -30,6 +32,7 @@ public class IdeationPageTests : BunitContext
 
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
+        Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
         Services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
         Services.AddSingleton<IIdeationService>(_ideationService);
         Services.AddSingleton(_toastService);
@@ -321,6 +324,186 @@ public class IdeationPageTests : BunitContext
 
         Assert.Equal(OllamaRoutingTarget.Local, _sessionState.SelectedRoutingTarget);
         cut.WaitForAssertion(() => Assert.Contains("🖥️ Host GPU", cut.Markup));
+    }
+
+    [Fact]
+    public async Task SendMessage_PersistsConversationAndTurnsWithProposalsAndThinkingTrace()
+    {
+        var ws = new Workspace { Id = 42, Name = "PersistenceWorkspace", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 42;
+
+        var proposal = new IdeationProposal("Add telemetry", "Enable opentelemetry exporter", 1);
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.ThinkingDelta, TextDelta: "Thinking about metrics..."),
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Telemetry proposal formulated."),
+            new(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: proposal),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Finished", new[] { proposal }))
+        };
+
+        var cut = Render<Ideation>();
+
+        var textarea = cut.Find("textarea.chat-textarea");
+        textarea.Input("How should we measure performance?");
+
+        var sendBtn = cut.Find("button.send-btn");
+        await cut.InvokeAsync(() => sendBtn.Click());
+
+        cut.WaitForAssertion(() => Assert.Equal(2, _sessionState.Messages.Count));
+
+        // Verify conversation record in repository
+        var conversations = await _taskRepository.GetIdeationConversationsAsync(42);
+        Assert.Single(conversations);
+        var conv = conversations[0];
+        Assert.Null(conv.TaskId);
+        Assert.Equal(42, conv.WorkspaceId);
+        Assert.Equal(ConversationType.Ideation, conv.ConversationType);
+        Assert.Equal(StageExecutionStatus.Running, conv.Status);
+
+        // Verify conversation with turns
+        var convWithTurns = await _taskRepository.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(convWithTurns);
+        Assert.Equal(2, convWithTurns.Turns.Count);
+
+        var userTurn = convWithTurns.Turns.First(t => t.Role == StageTurnRole.User);
+        Assert.Equal("How should we measure performance?", userTurn.Content);
+        Assert.Equal(0, userTurn.TurnIndex);
+
+        var assistantTurn = convWithTurns.Turns.First(t => t.Role == StageTurnRole.Assistant);
+        Assert.Equal("Telemetry proposal formulated.", assistantTurn.Content);
+        Assert.Equal("Thinking about metrics...", assistantTurn.ThinkingTrace);
+        Assert.NotNull(assistantTurn.MetadataJson);
+        Assert.Contains("Add telemetry", assistantTurn.MetadataJson);
+    }
+
+    [Fact]
+    public async Task ClearChat_CompletesCurrentConversation_AndStartsFreshConversation()
+    {
+        var ws = new Workspace { Id = 43, Name = "ClearWorkspace", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 43;
+
+        var cut = Render<Ideation>();
+
+        // Send a first message
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Initial reply."),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Initial reply.", Array.Empty<IdeationProposal>()))
+        };
+        var textarea = cut.Find("textarea.chat-textarea");
+        textarea.Input("Hello");
+        var sendBtn = cut.Find("button.send-btn");
+        await cut.InvokeAsync(() => sendBtn.Click());
+
+        cut.WaitForAssertion(() => Assert.Equal(2, _sessionState.Messages.Count));
+
+        var initialConvId = _sessionState.ActiveConversationId;
+        Assert.NotNull(initialConvId);
+
+        // Click Clear Chat button
+        var clearBtn = cut.Find("button.reset-session-btn");
+        await cut.InvokeAsync(() => clearBtn.Click());
+
+        // Messages should be cleared in current session
+        Assert.Empty(_sessionState.Messages);
+
+        // New active conversation ID should be different
+        Assert.NotNull(_sessionState.ActiveConversationId);
+        Assert.NotEqual(initialConvId, _sessionState.ActiveConversationId);
+
+        // Previous conversation should be marked Completed in DB
+        var prevConv = await _taskRepository.GetConversationWithTurnsAsync(initialConvId.Value);
+        Assert.NotNull(prevConv);
+        Assert.Equal(StageExecutionStatus.Completed, prevConv.Status);
+
+        // New conversation should be Running
+        var newConv = await _taskRepository.GetConversationWithTurnsAsync(_sessionState.ActiveConversationId.Value);
+        Assert.NotNull(newConv);
+        Assert.Equal(StageExecutionStatus.Running, newConv.Status);
+    }
+
+    [Fact]
+    public async Task SessionDropdown_AllowsSwitchingBetweenSessions_RestoresTurnsAndProposals()
+    {
+        var ws = new Workspace { Id = 44, Name = "SwitchSessionWorkspace", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+
+        // Create an archived previous conversation with turns and proposal in metadata
+        var prevConv = await _taskRepository.StartIdeationConversationAsync(44, "Architecture Discovery - Auth");
+        await _taskRepository.AddConversationTurnAsync(prevConv.Id, StageTurnRole.User, content: "How do we handle JWT?");
+        var proposalJson = System.Text.Json.JsonSerializer.Serialize(new[]
+        {
+            new IdeationProposal("Implement JWT Auth", "Use symmetric key for tokens", 2)
+        });
+        await _taskRepository.AddConversationTurnAsync(
+            prevConv.Id,
+            StageTurnRole.Assistant,
+            content: "JWT is recommended.",
+            thinkingTrace: "Evaluating OAuth vs JWT...",
+            metadataJson: proposalJson);
+        await _taskRepository.CompleteConversationAsync(prevConv.Id, StageExecutionStatus.Completed);
+
+        // Active conversation
+        var activeConv = await _taskRepository.StartIdeationConversationAsync(44, "Current Discovery Session");
+
+        var cut = Render<Ideation>();
+
+        // Verify session select dropdown is rendered
+        cut.WaitForAssertion(() =>
+        {
+            var select = cut.Find("select.session-select");
+            Assert.NotNull(select);
+        });
+
+        // Switch to the previous conversation
+        var sessionSelect = cut.Find("select.session-select");
+        await cut.InvokeAsync(() => sessionSelect.Change(prevConv.Id.ToString()));
+
+        // Assert turns were restored
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal(2, _sessionState.Messages.Count);
+            Assert.Equal("How do we handle JWT?", _sessionState.Messages[0].Content);
+            Assert.Equal("JWT is recommended.", _sessionState.Messages[1].Content);
+            Assert.Equal("Evaluating OAuth vs JWT...", _sessionState.Messages[1].ThinkingTrace);
+            Assert.Single(_sessionState.Proposals);
+            Assert.Equal("Implement JWT Auth", _sessionState.Proposals[0].Title);
+        });
+    }
+
+    [Fact]
+    public async Task AddProposalToBacklog_LinksStandardWorkflowDefinition()
+    {
+        var ws = new Workspace { Id = 45, Name = "WorkflowLinkingWorkspace", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 45;
+
+        // Create a default workflow in workflow repository
+        var defaultWf = await _workflowRepository.CreateWorkflowAsync(new WorkflowDefinition
+        {
+            Name = "Standard Agentic Pipeline",
+            Code = "std-agentic",
+            IsDefault = true
+        });
+
+        var proposal = new IdeationProposalViewModel
+        {
+            Title = "Implement Healthchecks",
+            Description = "Add ASP.NET Core healthchecks endpoint",
+            Priority = 1
+        };
+        _sessionState.Proposals.Add(proposal);
+
+        var cut = Render<Ideation>();
+
+        var addBtn = cut.Find("button.add-backlog-btn");
+        await cut.InvokeAsync(() => addBtn.Click());
+
+        var tasks = await _taskRepository.GetByWorkspaceIdAsync(45);
+        Assert.Single(tasks);
+        Assert.Equal(defaultWf.Id, tasks[0].WorkflowId);
     }
 }
 

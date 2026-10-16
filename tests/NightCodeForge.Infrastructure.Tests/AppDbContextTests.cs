@@ -563,4 +563,78 @@ public class AppDbContextTests : IDisposable
         Assert.Equal(1, totalWorkflows);
         Assert.Equal(6, totalStages);
     }
+
+    [Fact]
+    public async Task EfCoreTaskRepository_IdeationConversationLifecycle_AndTurnsPersistence_WorksCorrectly()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var ws = new Workspace { Name = "Ideation Workspace", RepositoryPath = "/path/ideation", DefaultBaseBranch = "main" };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        var taskRepo = new EfCoreTaskRepository(context);
+
+        // 1. Initially no ideation conversation
+        var initialActive = await taskRepo.GetActiveIdeationConversationAsync(ws.Id);
+        Assert.Null(initialActive);
+
+        // 2. Start ideation conversation
+        var conv = await taskRepo.StartIdeationConversationAsync(ws.Id, "Architecture Brainstorming", "deepseek-r1", "ideation");
+        Assert.NotNull(conv);
+        Assert.True(conv.Id > 0);
+        Assert.Null(conv.TaskId);
+        Assert.Equal(ws.Id, conv.WorkspaceId);
+        Assert.Equal(ConversationType.Ideation, conv.ConversationType);
+        Assert.Equal(StageExecutionStatus.Running, conv.Status);
+        Assert.Equal("Architecture Brainstorming", conv.Title);
+
+        // 3. Add turns (User, ToolResult, Assistant with thinking trace and proposal JSON)
+        var turn0 = await taskRepo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Can we decompose monolithic services?");
+        Assert.Equal(0, turn0.TurnIndex);
+
+        var turn1 = await taskRepo.AddConversationTurnAsync(
+            conv.Id,
+            StageTurnRole.ToolResult,
+            content: "Directory listing completed",
+            toolName: "list_dir",
+            toolArguments: "{\"path\":\"src\"}",
+            toolResult: "src/Services, src/Shared",
+            durationMs: 42,
+            isError: false);
+        Assert.Equal(1, turn1.TurnIndex);
+
+        var proposalsJson = "[{\"Title\":\"Extract Billing Service\",\"Description\":\"Move billing to microservice\",\"Priority\":1,\"DependsOnTitles\":[]}]";
+        var turn2 = await taskRepo.AddConversationTurnAsync(
+            conv.Id,
+            StageTurnRole.Assistant,
+            content: "Here is the decomposition plan.",
+            thinkingTrace: "Deep analysis of microservices boundaries...",
+            metadataJson: proposalsJson);
+        Assert.Equal(2, turn2.TurnIndex);
+
+        // 4. Retrieve active ideation conversation
+        var active = await taskRepo.GetActiveIdeationConversationAsync(ws.Id);
+        Assert.NotNull(active);
+        Assert.Equal(conv.Id, active.Id);
+        Assert.Equal(3, active.Turns.Count);
+        Assert.Equal(0, active.Turns.ElementAt(0).TurnIndex);
+        Assert.Equal(1, active.Turns.ElementAt(1).TurnIndex);
+        Assert.Equal(2, active.Turns.ElementAt(2).TurnIndex);
+        Assert.Equal("Deep analysis of microservices boundaries...", active.Turns.ElementAt(2).ThinkingTrace);
+        Assert.Equal(proposalsJson, active.Turns.ElementAt(2).MetadataJson);
+
+        // 5. Complete conversation
+        await taskRepo.CompleteConversationAsync(conv.Id, StageExecutionStatus.Completed, summary: "Completed successfully.");
+
+        // 6. Active conversation should now be null
+        var completedActive = await taskRepo.GetActiveIdeationConversationAsync(ws.Id);
+        Assert.Null(completedActive);
+
+        // 7. GetIdeationConversationsAsync still returns it in history
+        var allConversations = await taskRepo.GetIdeationConversationsAsync(ws.Id);
+        Assert.Single(allConversations);
+        Assert.Equal(StageExecutionStatus.Completed, allConversations[0].Status);
+    }
 }

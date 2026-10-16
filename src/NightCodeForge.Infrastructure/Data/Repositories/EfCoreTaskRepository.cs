@@ -284,4 +284,52 @@ public class EfCoreTaskRepository : ITaskRepository
             .Include(c => c.Turns.OrderBy(t => t.TurnIndex))
             .FirstOrDefaultAsync(c => c.Id == conversationId, cancellationToken);
     }
+
+    public Task<Conversation> StartIdeationConversationAsync(
+        int workspaceId,
+        string? title = null,
+        string? modelName = null,
+        string? agentProfileId = null,
+        CancellationToken cancellationToken = default)
+    {
+        return StartConversationAsync(
+            taskId: null,
+            stageId: "ideation",
+            stageKind: WorkflowStageKind.Agentic,
+            attemptIndex: 1,
+            agentProfileId: agentProfileId,
+            harnessId: HarnessType.Crucible,
+            modelName: modelName,
+            workspaceId: workspaceId,
+            conversationType: ConversationType.Ideation,
+            title: string.IsNullOrWhiteSpace(title) ? "Ideation Session" : title,
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Conversation>> GetIdeationConversationsAsync(
+        int workspaceId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.Conversations
+            .AsNoTracking()
+            .Where(c => c.WorkspaceId == workspaceId && c.ConversationType == ConversationType.Ideation)
+            .OrderByDescending(c => c.StartedAt)
+            .ThenByDescending(c => c.Id)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<Conversation?> GetActiveIdeationConversationAsync(
+        int workspaceId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.Conversations
+            .AsNoTracking()
+            .Include(c => c.Turns.OrderBy(t => t.TurnIndex))
+            .Where(c => c.WorkspaceId == workspaceId
+                     && c.ConversationType == ConversationType.Ideation
+                     && c.Status == StageExecutionStatus.Running)
+            .OrderByDescending(c => c.StartedAt)
+            .ThenByDescending(c => c.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
 }

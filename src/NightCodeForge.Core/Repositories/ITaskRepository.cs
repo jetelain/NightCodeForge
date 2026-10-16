@@ -61,6 +61,21 @@ public interface ITaskRepository
         int conversationId,
         CancellationToken cancellationToken = default);
 
+    Task<Conversation> StartIdeationConversationAsync(
+        int workspaceId,
+        string? title = null,
+        string? modelName = null,
+        string? agentProfileId = null,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<Conversation>> GetIdeationConversationsAsync(
+        int workspaceId,
+        CancellationToken cancellationToken = default);
+
+    Task<Conversation?> GetActiveIdeationConversationAsync(
+        int workspaceId,
+        CancellationToken cancellationToken = default);
+
     // Backward-compatibility aliases
     Task<Conversation> StartStageConversationAsync(
         int taskId,
@@ -455,6 +470,66 @@ public class InMemoryTaskRepository : ITaskRepository
                 conversation.Turns = conversation.Turns.OrderBy(t => t.TurnIndex).ToList();
                 return Task.FromResult<Conversation?>(conversation);
             }
+            return Task.FromResult<Conversation?>(null);
+        }
+    }
+
+    public Task<Conversation> StartIdeationConversationAsync(
+        int workspaceId,
+        string? title = null,
+        string? modelName = null,
+        string? agentProfileId = null,
+        CancellationToken cancellationToken = default)
+    {
+        return StartConversationAsync(
+            taskId: null,
+            stageId: "ideation",
+            stageKind: WorkflowStageKind.Agentic,
+            attemptIndex: 1,
+            agentProfileId: agentProfileId,
+            harnessId: HarnessType.Crucible,
+            modelName: modelName,
+            workspaceId: workspaceId,
+            conversationType: ConversationType.Ideation,
+            title: string.IsNullOrWhiteSpace(title) ? "Ideation Session" : title,
+            cancellationToken: cancellationToken);
+    }
+
+    public Task<IReadOnlyList<Conversation>> GetIdeationConversationsAsync(
+        int workspaceId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var list = _conversations.Values
+                .Where(c => c.WorkspaceId == workspaceId && c.ConversationType == ConversationType.Ideation)
+                .OrderByDescending(c => c.StartedAt)
+                .ThenByDescending(c => c.Id)
+                .ToList();
+            return Task.FromResult<IReadOnlyList<Conversation>>(list);
+        }
+    }
+
+    public Task<Conversation?> GetActiveIdeationConversationAsync(
+        int workspaceId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var conv = _conversations.Values
+                .Where(c => c.WorkspaceId == workspaceId
+                         && c.ConversationType == ConversationType.Ideation
+                         && c.Status == StageExecutionStatus.Running)
+                .OrderByDescending(c => c.StartedAt)
+                .ThenByDescending(c => c.Id)
+                .FirstOrDefault();
+
+            if (conv != null)
+            {
+                conv.Turns = conv.Turns.OrderBy(t => t.TurnIndex).ToList();
+                return Task.FromResult<Conversation?>(conv);
+            }
+
             return Task.FromResult<Conversation?>(null);
         }
     }
