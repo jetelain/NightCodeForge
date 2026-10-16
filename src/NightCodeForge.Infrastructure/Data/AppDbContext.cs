@@ -368,4 +368,98 @@ public class AppDbContext : DbContext
             await SaveChangesAsync(cancellationToken);
         }
     }
+
+    /// <summary>
+    /// Seeds the standard default workflow ("standard-3-agent") and its 6 stages if not already present in the database.
+    /// Preserves existing workflows and stages without duplicating them.
+    /// </summary>
+    public async Task<WorkflowDefinition> EnsureDefaultWorkflowsAsync(CancellationToken cancellationToken = default)
+    {
+        var standardWorkflow = await WorkflowDefinitions
+            .Include(w => w.Stages)
+            .FirstOrDefaultAsync(w => w.Code == "standard-3-agent", cancellationToken);
+
+        if (standardWorkflow == null)
+        {
+            standardWorkflow = new WorkflowDefinition
+            {
+                Name = "Standard 3-Agent Pipeline",
+                Code = "standard-3-agent",
+                Icon = "⚡",
+                Description = "Default autonomous pipeline: ForgeTask Review -> Pre-Impl Baseline -> Implementation -> Post-Impl Gates -> Code Review & Fix -> Post-Review Verification.",
+                IsDefault = true,
+                WorkspaceId = null,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                Stages = new List<StageDefinition>
+                {
+                    new StageDefinition
+                    {
+                        StageId = "task-review",
+                        DisplayName = "ForgeTask Review",
+                        Icon = "🔍",
+                        SequenceOrder = 1,
+                        Kind = WorkflowStageKind.Agentic,
+                        CsharpImplementationType = "agentic-review",
+                        ConfigurationJson = """{"AgentProfileId": null, "RequiredMode": 1, "MaxRetries": 3, "TimeoutMinutes": 30}"""
+                    },
+                    new StageDefinition
+                    {
+                        StageId = "deterministic-pre-impl",
+                        DisplayName = "Pre-Implementation Baseline",
+                        Icon = "⚙️",
+                        SequenceOrder = 2,
+                        Kind = WorkflowStageKind.Deterministic,
+                        CsharpImplementationType = "deterministic-composite",
+                        ConfigurationJson = """{"Action": "CompositeBaseline", "FailOnError": false, "TimeoutSeconds": 600, "ExtraParameters": {"Stages": "build,test"}}"""
+                    },
+                    new StageDefinition
+                    {
+                        StageId = "implementation",
+                        DisplayName = "Implementation",
+                        Icon = "💻",
+                        SequenceOrder = 3,
+                        Kind = WorkflowStageKind.Agentic,
+                        CsharpImplementationType = "agentic-impl",
+                        ConfigurationJson = """{"AgentProfileId": null, "RequiredMode": 1, "MaxRetries": 3, "TimeoutMinutes": 60}"""
+                    },
+                    new StageDefinition
+                    {
+                        StageId = "deterministic-post-impl",
+                        DisplayName = "Post-Implementation Gates",
+                        Icon = "🧪",
+                        SequenceOrder = 4,
+                        Kind = WorkflowStageKind.Deterministic,
+                        CsharpImplementationType = "deterministic-composite",
+                        ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "implementation", "FailOnError": true, "TimeoutSeconds": 900, "ExtraParameters": {"Stages": "build,test,coverage,sast"}}"""
+                    },
+                    new StageDefinition
+                    {
+                        StageId = "code-review-fix",
+                        DisplayName = "Code Review & Fix",
+                        Icon = "🧐",
+                        SequenceOrder = 5,
+                        Kind = WorkflowStageKind.Agentic,
+                        CsharpImplementationType = "agentic-review-fix",
+                        ConfigurationJson = """{"AgentProfileId": null, "RequiredMode": 2, "LoopBackStageId": "implementation", "MaxRetries": 3, "TimeoutMinutes": 30}"""
+                    },
+                    new StageDefinition
+                    {
+                        StageId = "deterministic-post-review",
+                        DisplayName = "Post-Review Verification",
+                        Icon = "🛡️",
+                        SequenceOrder = 6,
+                        Kind = WorkflowStageKind.Deterministic,
+                        CsharpImplementationType = "deterministic-composite",
+                        ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "implementation", "FailOnError": true, "TimeoutSeconds": 600, "ExtraParameters": {"Stages": "build,test"}}"""
+                    }
+                }
+            };
+
+            WorkflowDefinitions.Add(standardWorkflow);
+            await SaveChangesAsync(cancellationToken);
+        }
+
+        return standardWorkflow;
+    }
 }

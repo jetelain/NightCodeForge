@@ -49,6 +49,7 @@ using (var scope = app.Services.CreateScope())
 
     var defaultModel = builder.Configuration["LlmProvider:ModelId"] ?? "Qwen3.8-27B:latest";
     await dbContext.EnsureDefaultGlobalAgentProfilesAsync(defaultModel);
+    await dbContext.EnsureDefaultWorkflowsAsync();
 
     var globalOptSettings = scope.ServiceProvider.GetRequiredService<NightCodeForge.Core.Interfaces.IGlobalOptimizationSettingsService>();
     await globalOptSettings.LoadFlagsAsync();

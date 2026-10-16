@@ -470,4 +470,91 @@ public class AppDbContextTests : IDisposable
         Assert.Single(loaded.Turns);
         Assert.Equal("Let's plan a task.", loaded.Turns.First().Content);
     }
+
+    [Fact]
+    public async Task EnsureDefaultWorkflowsAsync_SeedsStandard3AgentWorkflowAndStages_WhenEmpty()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var workflow = await context.EnsureDefaultWorkflowsAsync();
+
+        Assert.NotNull(workflow);
+        Assert.Equal("Standard 3-Agent Pipeline", workflow.Name);
+        Assert.Equal("standard-3-agent", workflow.Code);
+        Assert.Equal("⚡", workflow.Icon);
+        Assert.True(workflow.IsDefault);
+        Assert.Null(workflow.WorkspaceId);
+        Assert.Equal(6, workflow.Stages.Count);
+
+        var stages = workflow.Stages.OrderBy(s => s.SequenceOrder).ToList();
+        
+        Assert.Equal("task-review", stages[0].StageId);
+        Assert.Equal("ForgeTask Review", stages[0].DisplayName);
+        Assert.Equal("🔍", stages[0].Icon);
+        Assert.Equal(WorkflowStageKind.Agentic, stages[0].Kind);
+        Assert.Equal("agentic-review", stages[0].CsharpImplementationType);
+        Assert.Contains("\"RequiredMode\": 1", stages[0].ConfigurationJson);
+
+        Assert.Equal("deterministic-pre-impl", stages[1].StageId);
+        Assert.Equal("Pre-Implementation Baseline", stages[1].DisplayName);
+        Assert.Equal("⚙️", stages[1].Icon);
+        Assert.Equal(WorkflowStageKind.Deterministic, stages[1].Kind);
+        Assert.Equal("deterministic-composite", stages[1].CsharpImplementationType);
+        Assert.Contains("\"Action\": \"CompositeBaseline\"", stages[1].ConfigurationJson);
+
+        Assert.Equal("implementation", stages[2].StageId);
+        Assert.Equal("Implementation", stages[2].DisplayName);
+        Assert.Equal("💻", stages[2].Icon);
+        Assert.Equal(WorkflowStageKind.Agentic, stages[2].Kind);
+        Assert.Equal("agentic-impl", stages[2].CsharpImplementationType);
+        Assert.Contains("\"RequiredMode\": 1", stages[2].ConfigurationJson);
+
+        Assert.Equal("deterministic-post-impl", stages[3].StageId);
+        Assert.Equal("Post-Implementation Gates", stages[3].DisplayName);
+        Assert.Equal("🧪", stages[3].Icon);
+        Assert.Equal(WorkflowStageKind.Deterministic, stages[3].Kind);
+        Assert.Equal("deterministic-composite", stages[3].CsharpImplementationType);
+        Assert.Contains("\"Action\": \"CompositeVerification\"", stages[3].ConfigurationJson);
+
+        Assert.Equal("code-review-fix", stages[4].StageId);
+        Assert.Equal("Code Review & Fix", stages[4].DisplayName);
+        Assert.Equal("🧐", stages[4].Icon);
+        Assert.Equal(WorkflowStageKind.Agentic, stages[4].Kind);
+        Assert.Equal("agentic-review-fix", stages[4].CsharpImplementationType);
+        Assert.Contains("\"RequiredMode\": 2", stages[4].ConfigurationJson);
+
+        Assert.Equal("deterministic-post-review", stages[5].StageId);
+        Assert.Equal("Post-Review Verification", stages[5].DisplayName);
+        Assert.Equal("🛡️", stages[5].Icon);
+        Assert.Equal(WorkflowStageKind.Deterministic, stages[5].Kind);
+        Assert.Equal("deterministic-composite", stages[5].CsharpImplementationType);
+        Assert.Contains("\"Action\": \"CompositeVerification\"", stages[5].ConfigurationJson);
+    }
+
+    [Fact]
+    public async Task EnsureDefaultWorkflowsAsync_IsIdempotent_AndPreservesExistingWorkflow()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var firstResult = await context.EnsureDefaultWorkflowsAsync();
+        Assert.NotNull(firstResult);
+
+        // Modify description and save
+        firstResult.Description = "Custom description";
+        await context.SaveChangesAsync();
+
+        // Call again
+        var secondResult = await context.EnsureDefaultWorkflowsAsync();
+        Assert.NotNull(secondResult);
+        Assert.Equal(firstResult.Id, secondResult.Id);
+        Assert.Equal("Custom description", secondResult.Description);
+
+        // Verify total count in database
+        var totalWorkflows = await context.WorkflowDefinitions.CountAsync();
+        var totalStages = await context.StageDefinitions.CountAsync();
+        Assert.Equal(1, totalWorkflows);
+        Assert.Equal(6, totalStages);
+    }
 }
