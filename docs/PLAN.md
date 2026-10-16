@@ -21,7 +21,10 @@ NightCodeForge/
 │       ├── 04_HARNESSES_TOOLS_AND_LOCAL_OPTIMIZATIONS.md
 │       ├── 04B_EXECUTION_ENVIRONMENT_AND_WORKFLOW_ALIGNMENT.md
 │       ├── 05_BLAZOR_WEB_UI_AND_TELEMETRY.md
-│       └── 06_END_TO_END_TESTING_AND_HARDENING.md
+│       ├── 06_END_TO_END_TESTING_AND_HARDENING.md
+│       ├── 07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md
+│       ├── 08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md
+│       └── 09_EXTEND_FEATURES.md
 ├── src/
 │   ├── NightCodeForge.Core/
 │   │   ├── Domain/              # Entities: ForgeTask, TaskDependency, Question, StageCheckpoint, ExecutionLog
@@ -101,6 +104,9 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 | **Phase 4B** *(Intermediate)* | [docs/plan/04B_EXECUTION_ENVIRONMENT_AND_WORKFLOW_ALIGNMENT.md](plan/04B_EXECUTION_ENVIRONMENT_AND_WORKFLOW_ALIGNMENT.md) | **Cross-Platform & Lifecycle Realignment:** Unix-only agent enforcement, Windows WSL2 mandatory requirement, working clones at `~/.nightcodeforge/wks/{id}`, Windows Crucible UNC path access (`\\wsl.localhost\...`), bare mode bash in WSL2, container mode `/workspace` tool call remapping, on-the-fly slim container images, 3-channel task intake (`Suggested`), manual promotion (`Open` / `Rejected`) with `Priority` & `MergeMode`, and main workflow status progression (`Reviewed` $\rightarrow$ `Implemented` $\rightarrow$ `Ready` $\rightarrow$ `Closed`). |
 | **Phase 5** | [docs/plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md](plan/05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | Blazor Interactive Server UI, obsidian/indigo dark theme, workspace provisioning & onboarding wizard, SignalR telemetry hub, ideation chat, visual DAG backlog with Suggested/Open promotion actions, question inbox, review room with diffs and manual merge triggers, and A/B testing comparator. |
 | **Phase 6** | [docs/plan/06_END_TO_END_TESTING_AND_HARDENING.md](plan/06_END_TO_END_TESTING_AND_HARDENING.md) | End-to-end workflow simulation, chaos & sudden reboot resilience, multi-workspace VRAM protection validation, and empirical A/B benchmark validation. |
+| **Phase 7** | [docs/plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md](plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md) | Playwright automated browser test suite driving workspace creation, task ideation, promotion, execution, deterministic gates, and diff review. |
+| **Phase 8** | [docs/plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md](plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md) | Database-persisted `WorkflowDefinition` & `StageDefinition`, dynamic C# stage dispatcher, default 6-stage seeding, and permanent ideation chat persistence in SQLite. |
+| **Phase 9** | [docs/plan/09_EXTEND_FEATURES.md](plan/09_EXTEND_FEATURES.md) | Extensible capabilities, Model Context Protocol (MCP) HTTP/SSE and ContainerSandbox stdio client integration, and ecosystem expansion. |
 
 ---
 
@@ -411,3 +417,38 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
      * Multi-workspace VRAM protection (`WorkerCount = 1`) and workspace concurrency locks (`IWorkspaceLockProvider`).
   3. Documentation updates, WSL2 setup guide, and quickstart instructions.
 * **Deliverables:** Verified production-ready orchestrator.
+
+---
+
+### Phase 7: End-to-End Acceptance Test Plan (Playwright)
+> 📖 **Detailed Implementation Guide:** [docs/plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md](plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md)
+* **Objective:** Establish a 100% automated browser-driven Playwright acceptance test suite validating the complete autonomous software engineering lifecycle against a real, isolated synthetic repository.
+* **Deliverables:** Fully automated Playwright E2E acceptance tests driving workspace provisioning, ideation chat, backlog promotion, 6-stage autonomous execution, deterministic gates, and host repository verification.
+
+---
+
+### Phase 8: Database-Driven Extensible Workflows & Unified Conversation Persistence
+> 📖 **Detailed Implementation Guide:** [docs/plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md](plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md)  
+> 📂 **Step Specifications:** [docs/plan/phase-8/](plan/phase-8/)
+* **Objective:** Make workflows and stages extensible database entities, link each task to a workflow, seed the default standard 6-stage pipeline, dispatch to registered C# implementations with typed configuration payloads, and generalize `StageConversation` to persist interactive Ideation chats permanently in SQLite.
+* **Tasks:**
+  1. **Domain & Schema (Step 8.1):** Create `WorkflowDefinition`, `StageDefinition`, `AgenticStageConfig`, `DeterministicStageConfig`, and update `ForgeTask`, `Workspace`, and `StageConversation`.
+  2. **Database Seeding (Step 8.2):** Implement `EnsureDefaultWorkflowsAsync()` to seed the standard 6-stage workflow and stage icons on clean database initialization.
+  3. **Stage Registry & Factory (Step 8.3):** Build `IWorkflowStageRegistry` and `IWorkflowStageFactory` to instantiate C# stage handlers dynamically from JSON configs.
+  4. **Orchestrator Pipeline Integration (Step 8.4):** Implement dynamic database-driven pipeline provider and update `TaskOrchestrator` for dynamic stage resolution and loopbacks.
+  5. **Ideation Chat Persistence (Step 8.5):** Generalize `StageConversation` for workspace-level ideation chats, persisting messages, thinking traces, and tool calls.
+  6. **Dynamic UI & Workflow Management (Step 8.6):** Update `PipelineStepper.razor`, `TaskExecutionInspector.razor`, add workflow selection in task creation, and provide a Workflows tab in Settings.
+  7. **Comprehensive Hardening & Tests (Step 8.7):** Implement unit, repository, orchestrator, and web component tests across all layers.
+* **Deliverables:** Fully extensible database-backed workflow engine and persistent ideation chat system.
+
+---
+
+### Phase 9: Extend Features & Integrations
+> 📖 **Detailed Implementation Guide:** [docs/plan/09_EXTEND_FEATURES.md](plan/09_EXTEND_FEATURES.md)  
+> 📂 **Step Specifications:** [docs/plan/phase-9/](plan/phase-9/)
+* **Objective:** Expand NightCodeForge beyond core lifecycle orchestration with modular extensions, external integrations, and advanced protocols.
+* **Tasks:**
+  1. **MCP Integration (Step 9.1):** First-class Model Context Protocol (MCP) discovery and execution via official Microsoft Agent Framework packages (`ModelContextProtocol`), supporting streamable HTTP/SSE remote servers (Phase 1) and isolated stdio servers running inside `ContainerSandbox` via `docker exec -i` (Phase 2).
+  2. **Future Extended Features:** Modular additions, external integrations, and specialized tooling to be specified and incorporated incrementally.
+* **Deliverables:** Operational MCP client integration and extensibility framework for future capabilities.
+

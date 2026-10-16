@@ -1,7 +1,7 @@
-# ⚡ Step 5.14: Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio
+# ⚡ Step 9.1: Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio
 
-> **Phase 5 Implementation Step**  
-> *Parent Plan:* [Phase 5 Master Plan](../05_BLAZOR_WEB_UI_AND_TELEMETRY.md) | *Preceding Step:* [Step 5.13: Task Execution Inspector & Stage Conversations](STEP_5_13_TASK_INSPECTOR_AND_STAGE_CONVERSATIONS.md)  
+> **Phase 9 Implementation Step**  
+> *Parent Plan:* [Phase 9 Master Plan](../09_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Agents/Mcp`, `src/NightCodeForge.Agents/Crucible`, `tests/NightCodeForge.Agents.Tests` | *Status:* Planned
 
 ---
@@ -279,5 +279,5 @@ var aiTools = BuildAIFunctionList(
    - Disposing `IMcpSession` terminates the container child processes cleanly.
 
 3. **Regression Safety:**
-   - All 766 existing tests continue to pass with zero regressions.
+   - All existing tests continue to pass with zero regressions.
    - Checkpoints with MCP tool calls round-trip cleanly through `SerializeSession` / `DeserializeSession`.
