@@ -18,19 +18,19 @@
                     <span class="step-index">#@stage.Order</span>
                 </div>
                 <div class="step-icon-circle">
-                    @if (stage.Status == "Running")
+                    @if (stage.Status == StageExecutionStatus.Running)
                     {
                         <div class="spinner-pulse"></div>
                     }
-                    else if (stage.Status == "Completed" || stage.Status == "Passed")
+                    else if (stage.Status == StageExecutionStatus.Completed)
                     {
                         <span>✓</span>
                     }
-                    else if (stage.Status == "Failed")
+                    else if (stage.Status == StageExecutionStatus.Failed)
                     {
                         <span>✕</span>
                     }
-                    else if (stage.Status == "WaitingForHuman")
+                    else if (stage.Status == StageExecutionStatus.WaitingForHuman)
                     {
                         <span>✋</span>
                     }
@@ -57,7 +57,7 @@
 @code {
     [Parameter] public int? TaskId { get; set; }
     [Parameter] public string? CurrentStageId { get; set; }
-    [Parameter] public string? CurrentStageStatus { get; set; }
+    [Parameter] public StageExecutionStatus? CurrentStageStatus { get; set; }
     [Parameter] public TaskOverallStatus? OverallStatus { get; set; }
     [Parameter] public IEnumerable<StageConversation>? Conversations { get; set; }
     [Parameter] public EventCallback<string> OnStageSelected { get; set; }
@@ -68,7 +68,7 @@
         public string Id { get; set; } = "";
         public string Name { get; set; } = "";
         public bool IsAgentic { get; set; }
-        public string Status { get; set; } = "Pending";
+        public StageExecutionStatus Status { get; set; } = StageExecutionStatus.Pending;
         public string StatusText { get; set; } = "Pending";
         public string? MetricsSummary { get; set; }
     }
@@ -77,13 +77,13 @@
 
     private static List<StageDefinition> CreateDefaultStages() => new()
     {
-        new StageDefinition { Order = 1, Id = "task-review", Name = "ForgeTask Review", IsAgentic = true, Status = "Pending", StatusText = "Awaiting review" },
-        new StageDefinition { Order = 2, Id = "deterministic-pre-impl", Name = "Pre-Impl Baseline", IsAgentic = false, Status = "Pending", StatusText = "Baseline build & tests" },
-        new StageDefinition { Order = 3, Id = "implementation", Name = "Implementation", IsAgentic = true, Status = "Pending", StatusText = "Code modification" },
-        new StageDefinition { Order = 4, Id = "deterministic-post-impl", Name = "Post-Impl Gates", IsAgentic = false, Status = "Pending", StatusText = "Ratchets & coverage" },
-        new StageDefinition { Order = 5, Id = "code-review-fix", Name = "Code Review", IsAgentic = true, Status = "Pending", StatusText = "Gap analysis & fixes" },
-        new StageDefinition { Order = 6, Id = "deterministic-post-review", Name = "Post-Review Verification", IsAgentic = false, Status = "Pending", StatusText = "Deterministic validation" },
-        new StageDefinition { Order = 7, Id = "merge", Name = "Merge Resolution", IsAgentic = false, Status = "Pending", StatusText = "Squash & merge gate" }
+        new StageDefinition { Order = 1, Id = "task-review", Name = "ForgeTask Review", IsAgentic = true, StatusText = "Awaiting review" },
+        new StageDefinition { Order = 2, Id = "deterministic-pre-impl", Name = "Pre-Impl Baseline", IsAgentic = false, StatusText = "Baseline build & tests" },
+        new StageDefinition { Order = 3, Id = "implementation", Name = "Implementation", IsAgentic = true, StatusText = "Code modification" },
+        new StageDefinition { Order = 4, Id = "deterministic-post-impl", Name = "Post-Impl Gates", IsAgentic = false, StatusText = "Ratchets & coverage" },
+        new StageDefinition { Order = 5, Id = "code-review-fix", Name = "Code Review", IsAgentic = true, StatusText = "Gap analysis & fixes" },
+        new StageDefinition { Order = 6, Id = "deterministic-post-review", Name = "Post-Review Verification", IsAgentic = false, StatusText = "Deterministic validation" },
+        new StageDefinition { Order = 7, Id = "merge", Name = "Merge Resolution", IsAgentic = false, StatusText = "Squash & merge gate" }
     };
 
     private int? _lastTaskId;
@@ -99,7 +99,7 @@
             {
                 foreach (var st in Stages)
                 {
-                    st.Status = "Completed";
+                    st.Status = StageExecutionStatus.Completed;
                     st.StatusText = "Completed";
                 }
                 return;
@@ -108,42 +108,25 @@
             {
                 foreach (var st in Stages)
                 {
-                    if (st.Order < 7)
-                    {
-                        st.Status = "Completed";
-                        st.StatusText = "Completed";
-                    }
-                    else
-                    {
-                        st.Status = "Passed";
-                        st.StatusText = "Ready to Merge";
-                    }
+                    st.Status = StageExecutionStatus.Completed;
+                    st.StatusText = st.Order < 7 ? "Completed" : "Ready to Merge";
                 }
                 return;
             }
 
             if (Conversations != null && Conversations.Any())
             {
-                foreach (var conv in Conversations.OrderBy(c => c.StartedAt))
+                foreach (var conv in Conversations.OrderByDescending(c => c.StartedAt))
                 {
                     var order = ResolveStageOrder(conv.StageId);
                     var st = Stages.FirstOrDefault(s => s.Order == order);
                     if (st != null)
                     {
-                        if (conv.Status == StageExecutionStatus.Completed)
+                        if (conv.Status is StageExecutionStatus.Completed or StageExecutionStatus.Failed
+                            or StageExecutionStatus.Running or StageExecutionStatus.WaitingForHuman)
                         {
-                            st.Status = "Completed";
-                            st.StatusText = "Completed";
-                        }
-                        else if (conv.Status == StageExecutionStatus.Failed)
-                        {
-                            st.Status = "Failed";
-                            st.StatusText = "Failed";
-                        }
-                        else if (conv.Status == StageExecutionStatus.Running)
-                        {
-                            st.Status = "Running";
-                            st.StatusText = "In Progress";
+                            st.Status = conv.Status;
+                            st.StatusText = GetDefaultStatusText(conv.Status);
                         }
                         if (!string.IsNullOrWhiteSpace(conv.Summary))
                         {
@@ -155,14 +138,14 @@
 
             if (OverallStatus == TaskOverallStatus.Failed)
             {
-                var failedStage = Stages.FirstOrDefault(s => s.Status == "Failed");
+                var failedStage = Stages.FirstOrDefault(s => s.Status == StageExecutionStatus.Failed);
                 if (failedStage == null && !string.IsNullOrEmpty(CurrentStageId))
                 {
                     var order = ResolveStageOrder(CurrentStageId);
                     var target = Stages.FirstOrDefault(s => s.Order == order);
                     if (target != null)
                     {
-                        target.Status = "Failed";
+                        target.Status = StageExecutionStatus.Failed;
                         target.StatusText = "Failed";
                     }
                 }
@@ -171,7 +154,7 @@
 
         if (!string.IsNullOrEmpty(CurrentStageId) && OverallStatus != TaskOverallStatus.Closed && OverallStatus != TaskOverallStatus.Ready && OverallStatus != TaskOverallStatus.Failed)
         {
-            ApplyStageTransition(CurrentStageId, CurrentStageStatus ?? "Running");
+            ApplyStageTransition(CurrentStageId, CurrentStageStatus ?? StageExecutionStatus.Running);
         }
     }
 
@@ -183,7 +166,19 @@
         }
     }
 
+    /// <summary>
+    /// Applies a stage transition received as a raw string (e.g. from SignalR).
+    /// Unknown status values are treated as <see cref="StageExecutionStatus.Pending"/>.
+    /// </summary>
     public void ApplyStageTransition(string stageId, string status)
+    {
+        var parsed = Enum.TryParse<StageExecutionStatus>(status, ignoreCase: true, out var value)
+            ? value
+            : StageExecutionStatus.Pending;
+        ApplyStageTransition(stageId, parsed);
+    }
+
+    public void ApplyStageTransition(string stageId, StageExecutionStatus status)
     {
         var order = ResolveStageOrder(stageId);
         if (order == 0) return;
@@ -193,28 +188,35 @@
             var st = Stages[i];
             if (st.Order < order)
             {
-                if (st.Status != "Failed")
+                if (st.Status != StageExecutionStatus.Failed)
                 {
-                    st.Status = "Completed";
+                    st.Status = StageExecutionStatus.Completed;
                     st.StatusText = "Completed";
                 }
             }
             else if (st.Order == order)
             {
                 st.Status = status;
-                st.StatusText = status == "Running" ? "In Progress" : status;
+                st.StatusText = GetDefaultStatusText(status);
             }
             else
             {
-                if (st.Status != "Completed")
+                if (st.Status != StageExecutionStatus.Completed)
                 {
-                    st.Status = "Pending";
+                    st.Status = StageExecutionStatus.Pending;
                     st.StatusText = "Pending";
                 }
             }
         }
         StateHasChanged();
     }
+
+    private static string GetDefaultStatusText(StageExecutionStatus status) => status switch
+    {
+        StageExecutionStatus.Running => "In Progress",
+        StageExecutionStatus.WaitingForHuman => "Waiting for Human",
+        _ => status.ToString()
+    };
 
     public void ApplyGateResult(string gateName, bool passed, string metricsSummary)
     {
@@ -225,7 +227,7 @@
         var stage = Stages.FirstOrDefault(s => s.Order == order);
         if (stage != null)
         {
-            stage.Status = passed ? "Completed" : "Failed";
+            stage.Status = passed ? StageExecutionStatus.Completed : StageExecutionStatus.Failed;
             stage.StatusText = passed ? "Passed" : "Failed";
             stage.MetricsSummary = metricsSummary;
         }
@@ -256,17 +258,20 @@
 
     private string GetStepClass(StageDefinition stage)
     {
-        if (stage.Status == "Running") return "step-active";
-        if (stage.Status == "Completed" || stage.Status == "Passed") return "step-completed";
-        if (stage.Status == "Failed") return "step-failed";
-        if (stage.Status == "WaitingForHuman") return "step-waiting";
-        return "step-pending";
+        return stage.Status switch
+        {
+            StageExecutionStatus.Running => "step-active",
+            StageExecutionStatus.Completed => "step-completed",
+            StageExecutionStatus.Failed => "step-failed",
+            StageExecutionStatus.WaitingForHuman => "step-waiting",
+            _ => "step-pending"
+        };
     }
 
     private bool IsConnectorActive(StageDefinition stage)
     {
         var next = Stages.FirstOrDefault(s => s.Order == stage.Order + 1);
-        return stage.Status == "Completed" || stage.Status == "Passed" || (next != null && next.Status == "Running");
+        return stage.Status == StageExecutionStatus.Completed || (next != null && next.Status == StageExecutionStatus.Running);
     }
 }
 

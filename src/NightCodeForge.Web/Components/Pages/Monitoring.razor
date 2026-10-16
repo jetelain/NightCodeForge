@@ -174,7 +174,7 @@
             var activeId = WorkerState.Current.ActiveTaskId.Value;
             if (!string.IsNullOrEmpty(WorkerState.Current.StageId))
             {
-                _stepperRef?.ApplyStageTransition(WorkerState.Current.StageId, "Running");
+                _stepperRef?.ApplyStageTransition(WorkerState.Current.StageId, NightCodeForge.Core.Domain.StageExecutionStatus.Running);
             }
 
             try

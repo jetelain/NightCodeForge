@@ -1,4 +1,5 @@
 using Bunit;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Web.Components.Monitoring;
 using Xunit;
 
@@ -48,7 +49,7 @@ public class PipelineStepperTests : BunitContext
     {
         var cut = Render<PipelineStepper>(p => p
             .Add(c => c.CurrentStageId, "ImplementationStage")
-            .Add(c => c.CurrentStageStatus, "Running"));
+            .Add(c => c.CurrentStageStatus, StageExecutionStatus.Running));
 
         var steps = cut.FindAll(".step-item");
         var stage3 = steps[2];
@@ -91,7 +92,7 @@ public class PipelineStepperTests : BunitContext
 
         cut.InvokeAsync(() =>
         {
-            cut.Instance.ApplyStageTransition("MergeGate", "WaitingForHuman");
+            cut.Instance.ApplyStageTransition("MergeGate", StageExecutionStatus.WaitingForHuman);
         });
 
         var steps = cut.FindAll(".step-item");
@@ -106,7 +107,7 @@ public class PipelineStepperTests : BunitContext
     {
         var cut = Render<PipelineStepper>(p => p
             .Add(c => c.CurrentStageId, "task-review")
-            .Add(c => c.CurrentStageStatus, "Running"));
+            .Add(c => c.CurrentStageStatus, StageExecutionStatus.Running));
 
         var steps = cut.FindAll(".step-item");
         var stage1 = steps[0];
