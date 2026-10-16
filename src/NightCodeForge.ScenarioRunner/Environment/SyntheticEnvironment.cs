@@ -314,5 +314,7 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
         }
 
         public IWorkflowPipeline GetPipeline(ForgeTask task) => CustomPipeline ?? _defaultPipelineFactory(task);
+        public Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default)
+            => Task.FromResult(CustomPipeline ?? _defaultPipelineFactory(task));
     }
 }

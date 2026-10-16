@@ -17,6 +17,7 @@ public class CompositeDeterministicStage : IWorkflowStage
     public string DisplayName { get; }
     public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;
     public DeterministicStageConfig Config { get; }
+    public string? LoopBackStageId => Config.LoopBackStageId;
 
     private readonly IServiceProvider _serviceProvider;
     private readonly IWorkflowStageRegistry _registry;

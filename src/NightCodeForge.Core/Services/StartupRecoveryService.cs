@@ -94,7 +94,7 @@ public class StartupRecoveryService : IStartupRecoveryService
             var activeTasks = await _taskRepository.GetByStatusAsync(status, cancellationToken);
             foreach (var task in activeTasks.Where(i => !i.IsWaitingForHuman))
             {
-                var pipeline = _pipelineProvider.GetPipeline(task);
+                var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
                 var stage = (!string.IsNullOrWhiteSpace(task.CurrentStageId)
                     ? pipeline.GetStage(task.CurrentStageId)
                     : null) ?? pipeline.Stages.FirstOrDefault();

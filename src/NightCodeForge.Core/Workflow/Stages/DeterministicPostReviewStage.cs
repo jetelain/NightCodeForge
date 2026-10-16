@@ -19,6 +19,7 @@ public class DeterministicPostReviewStage : IWorkflowStage
     public string StageId => DefaultStageId;
     public string DisplayName => "Deterministic Post-Review Verification Gate";
     public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;
+    string? IWorkflowStage.LoopBackStageId => LoopBackStageId;
 
     public DeterministicPostReviewStage(
         DeterministicBuildStage? buildStage = null,

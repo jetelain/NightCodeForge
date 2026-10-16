@@ -45,6 +45,7 @@ public class TaskOrchestratorPromptRenderingTests
     {
         private readonly IWorkflowPipeline _pipeline;
         public SingleStagePipelineProvider(IWorkflowPipeline pipeline) => _pipeline = pipeline;
+        public Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default) => Task.FromResult(_pipeline);
         public IWorkflowPipeline GetPipeline(ForgeTask task) => _pipeline;
     }
 

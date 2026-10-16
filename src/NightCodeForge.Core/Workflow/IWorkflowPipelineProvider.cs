@@ -8,11 +8,12 @@ namespace NightCodeForge.Core.Workflow;
 /// </summary>
 public interface IWorkflowPipelineProvider
 {
-    IWorkflowPipeline GetPipeline(ForgeTask task);
+    Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default);
+    IWorkflowPipeline GetPipeline(ForgeTask task) => GetPipelineAsync(task).GetAwaiter().GetResult();
 }
 
 /// <summary>
-/// Default pipeline provider returning the standard 3-agent pipeline.
+/// Pipeline provider returning an in-memory configured pipeline (used in tests and fallback scenarios).
 /// </summary>
 public class DefaultWorkflowPipelineProvider : IWorkflowPipelineProvider
 {
@@ -29,6 +30,9 @@ public class DefaultWorkflowPipelineProvider : IWorkflowPipelineProvider
             executionEnv: executionEnv,
             preloadService: preloadService);
     }
+
+    public Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default)
+        => Task.FromResult(_pipeline);
 
     public IWorkflowPipeline GetPipeline(ForgeTask task) => _pipeline;
 }

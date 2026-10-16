@@ -71,6 +71,7 @@ public class CodeReviewAndFixStage : IWorkflowStage
     public string DisplayName => "Code Review & Fix";
     public WorkflowStageKind Kind => WorkflowStageKind.Agentic;
     public AgentMode RequiredMode => AgentMode.Review;
+    public string? LoopBackStageId { get; set; } = "implementation";
     public string StageDirective { get; set; } = 
         "You are a Principal Code Reviewer and Quality Gatekeeper.\n" +
         "1. Inspect the full git diff against the base branch using 'bash' (e.g. git diff, git status) and 'read'. Compare against the specification in docs/tasks/ and the implementation claims.\n" +

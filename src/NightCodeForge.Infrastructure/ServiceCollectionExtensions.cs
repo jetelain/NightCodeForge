@@ -33,6 +33,7 @@ public static class ServiceCollectionExtensions
         // 2. Repositories & Stores
         services.TryAddScoped<ITaskRepository, EfCoreTaskRepository>();
         services.TryAddScoped<IWorkspaceRepository, EfCoreWorkspaceRepository>();
+        services.TryAddScoped<IWorkflowRepository, EfCoreWorkflowRepository>();
         services.TryAddScoped<ITaskDependencyStore, EfCoreTaskDependencyStore>();
         services.TryAddSingleton<IGlobalOptimizationSettingsService, GlobalOptimizationSettingsService>();
         services.TryAddSingleton<IWebSearchSettingsService, WebSearchSettingsService>();
@@ -48,7 +49,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IPromptTemplateRenderer, ScribanPromptTemplateRenderer>();
         services.TryAddSingleton<IWorkflowStageRegistry, WorkflowStageRegistry>();
         services.TryAddScoped<IWorkflowStageFactory, WorkflowStageFactory>();
-        services.TryAddScoped<IWorkflowPipelineProvider, DefaultWorkflowPipelineProvider>();
+        services.TryAddScoped<IWorkflowPipelineProvider, DatabaseWorkflowPipelineProvider>();
         services.TryAddScoped<ITaskOrchestrator, TaskOrchestrator>();
         services.TryAddScoped<IStartupRecoveryService, StartupRecoveryService>();
 

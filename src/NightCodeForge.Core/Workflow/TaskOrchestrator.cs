@@ -176,7 +176,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         // 4. Resolve Stage & Pipeline
-        var pipeline = _pipelineProvider.GetPipeline(task);
+        var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
         IWorkflowStage? stage;
 
         if (string.IsNullOrWhiteSpace(task.CurrentStageId))
@@ -677,14 +677,15 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         // Loopback / Retry Routing (e.g. deterministic build, test, or lint quality gate failed and routed back to implementation)
-        if (!string.IsNullOrWhiteSpace(result.TargetRoutingStageId))
+        var targetLoopBackId = result.TargetRoutingStageId ?? stage.LoopBackStageId;
+        if (!string.IsNullOrWhiteSpace(targetLoopBackId))
         {
             var retries = pipelineContext.IncrementRetry(stage.StageId);
             var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>("Workflow.MaxRetries") ?? 3;
             if (retries <= effectiveMaxRetries)
             {
                 _logger.LogWarning("Stage '{StageId}' failed, routing backward to '{TargetStage}' (Retry {Retry}/{Max}): {Reason}",
-                    stage.StageId, result.TargetRoutingStageId, retries, effectiveMaxRetries, result.ErrorMessage);
+                    stage.StageId, targetLoopBackId, retries, effectiveMaxRetries, result.ErrorMessage);
 
                 if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
                 {
@@ -693,7 +694,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     pipelineContext.DataBag.Set("diagnostics.compiler_errors", errors);
                 }
 
-                task.CurrentStageId = result.TargetRoutingStageId;
+                task.CurrentStageId = targetLoopBackId;
                 pipelineContext.SyncDataBagToTask();
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
                 if (_dependencyStore != null)
@@ -706,7 +707,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 {
                     TaskId = task.Id,
                     Level = LogLevel.Warning,
-                    Message = $"Quality gate '{stage.StageId}' failed: {result.ErrorMessage}. Looping back to '{result.TargetRoutingStageId}' (attempt {retries}/{effectiveMaxRetries}).",
+                    Message = $"Quality gate '{stage.StageId}' failed: {result.ErrorMessage}. Looping back to '{targetLoopBackId}' (attempt {retries}/{effectiveMaxRetries}).",
                     Timestamp = DateTime.UtcNow
                 }, cancellationToken);
 
@@ -786,9 +787,16 @@ public class TaskOrchestrator : ITaskOrchestrator
             throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
         }
 
-        // Re-route task back to Implementation stage (Stage 3)
+        var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
+        var currentStage = !string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null;
+
+        var targetStageId = currentStage?.LoopBackStageId
+            ?? pipeline.Stages.LastOrDefault(s => !string.IsNullOrWhiteSpace(s.LoopBackStageId))?.LoopBackStageId
+            ?? "implementation";
+
+        // Re-route task back to dynamic target stage
         task.Status = TaskOverallStatus.Reviewed;
-        task.CurrentStageId = ImplementationStage.DefaultStageId;
+        task.CurrentStageId = targetStageId;
 
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
         bag.Set("ReviewerFeedback", revisionNotes);
@@ -804,7 +812,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             TaskId = task.Id,
             Level = LogLevel.Information,
-            Message = $"Reviewer requested changes for task #{task.Id}: {revisionNotes}",
+            Message = $"Reviewer requested changes for task #{task.Id} (routing back to '{targetStageId}'): {revisionNotes}",
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
 
@@ -1035,9 +1043,13 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             if (!string.IsNullOrWhiteSpace(runResult.TargetRouting))
             {
+                var loopTarget = (!string.IsNullOrWhiteSpace(stage.LoopBackStageId) && string.Equals(runResult.TargetRouting, "implementation", StringComparison.OrdinalIgnoreCase))
+                    ? stage.LoopBackStageId
+                    : (runResult.TargetRouting ?? stage.LoopBackStageId);
+
                 return StageExecutionResult.Failure(
                     runResult.Summary ?? "Code reviewer requested changes.",
-                    loopBackStageId: runResult.TargetRouting,
+                    loopBackStageId: loopTarget,
                     record: record);
             }
 

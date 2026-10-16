@@ -15,6 +15,7 @@ public class DeterministicPostImplementationStage : IWorkflowStage
     public string StageId => DefaultStageId;
     public string DisplayName => "Deterministic Post-Implementation Ratchet Gate";
     public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;
+    string? IWorkflowStage.LoopBackStageId => LoopBackStageId;
 
     private readonly DeterministicCoverageGate _coverageGate;
     private readonly DeterministicWarningRatchetStage _warningRatchet;

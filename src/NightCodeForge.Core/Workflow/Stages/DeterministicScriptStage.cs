@@ -17,6 +17,7 @@ public class DeterministicScriptStage : IWorkflowStage
     public string DisplayName { get; }
     public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;
     public DeterministicStageConfig Config { get; }
+    public string? LoopBackStageId => Config.LoopBackStageId;
 
     private readonly IExecutionEnvironment? _executionEnv;
     private readonly IExecutionEnvironmentProvider? _envProvider;
