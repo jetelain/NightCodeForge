@@ -264,7 +264,10 @@ public partial class LenientToolDispatcher
                 return dict;
             }
         }
-        catch { }
+        catch (JsonException)
+        {
+            // Invalid JSON arguments format; return empty dictionary
+        }
 
         return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
     }
@@ -623,7 +626,10 @@ public partial class LenientToolDispatcher
                         obj = arr.Select(ConvertJsonNode).ToList();
                     }
                 }
-                catch { }
+                catch (JsonException)
+                {
+                    // Malformed JSON array string; ignore and continue
+                }
             }
 
             if (obj is IEnumerable<object?> list)

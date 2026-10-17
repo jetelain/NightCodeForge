@@ -117,7 +117,10 @@ public class SystemProcessRunner : IProcessRunner
                 {
                     process.Kill(entireProcessTree: true);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to kill timed-out process '{FileName}'", spec.FileName);
+                }
 
                 return new ProcessExecutionResult(124, string.Empty, $"Process timed out after {spec.TimeoutSeconds}s.");
             }
@@ -181,7 +184,10 @@ public class SystemProcessRunner : IProcessRunner
                     await session.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
                     session.StandardInput.Close();
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to write StandardInput to process '{FileName}'", spec.FileName);
+                }
             }
 
             await foreach (var chunk in session.ReadAllAsync(cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
@@ -421,7 +427,14 @@ public class SystemProcessRunner : IProcessRunner
                     _process.Kill(entireProcessTree: true);
                 }
             }
-            catch { }
+            catch (InvalidOperationException)
+            {
+                // Process already terminated
+            }
+            catch (Exception)
+            {
+                // Best-effort process kill during session disposal
+            }
         }
 
         public void Dispose()
@@ -429,7 +442,7 @@ public class SystemProcessRunner : IProcessRunner
             if (_isDisposed) return;
             _isDisposed = true;
 
-            try { _cts.Cancel(); } catch { }
+            try { _cts.Cancel(); } catch (ObjectDisposedException) { }
             Kill();
             _cts.Dispose();
             _process.Dispose();

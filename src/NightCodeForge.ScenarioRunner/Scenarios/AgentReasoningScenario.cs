@@ -133,7 +133,7 @@ public class AgentReasoningScenario : IScenario
 
             // Cancel streaming watcher and wait for it
             streamCts.Cancel();
-            try { await streamTask; } catch { }
+            try { await streamTask; } catch (Exception) { /* Stream task completion on scenario finish */ }
 
             sw.Stop();
 
@@ -162,7 +162,10 @@ public class AgentReasoningScenario : IScenario
             {
                 await gitManager.RemoveWorktreeAsync(context.Environment.Workspace, task.Id, context.CancellationToken);
             }
-            catch { }
+            catch (Exception)
+            {
+                // Best-effort test worktree cleanup
+            }
         }
     }
 }

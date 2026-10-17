@@ -84,7 +84,7 @@ public class TaskOrchestratorPromptRenderingTests
             DefaultBaseBranch = "main",
             AgentProfiles = new List<AgentProfile>
             {
-                new AgentProfile { Id = "default", HarnessId = "crucible", ModelName = "test-model" }
+                new AgentProfile { Id = "custom-agentic", HarnessId = "crucible", ModelName = "test-model" }
             }
         };
         await workspaceRepo.CreateAsync(workspace);
@@ -176,7 +176,7 @@ public class TaskOrchestratorPromptRenderingTests
             DefaultBaseBranch = "main",
             AgentProfiles = new List<AgentProfile>
             {
-                new AgentProfile { Id = "default", HarnessId = "crucible", ModelName = "test-model" }
+                new AgentProfile { Id = "task-review", HarnessId = "crucible", ModelName = "test-model" }
             }
         };
         await workspaceRepo.CreateAsync(workspace);

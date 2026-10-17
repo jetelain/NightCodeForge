@@ -2,6 +2,7 @@
 @inject WorkspaceStateService WorkspaceState
 @inject WorkerStateService WorkerState
 @inject NavigationManager Navigation
+@inject ILogger<TopNavBar> Logger
 @implements IDisposable
 
 <header class="top-navbar">
@@ -110,8 +111,9 @@
                 WorkspaceState.SetActiveWorkspace(_workspaces[0]);
             }
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.LogError(ex, "Failed to load workspaces in TopNavBar");
             _workspaces = Array.Empty<Workspace>();
         }
     }

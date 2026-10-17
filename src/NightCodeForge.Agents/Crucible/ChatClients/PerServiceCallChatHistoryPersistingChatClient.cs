@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 
 namespace NightCodeForge.Agents.Crucible.ChatClients;
 
@@ -9,12 +10,15 @@ namespace NightCodeForge.Agents.Crucible.ChatClients;
 public class PerServiceCallChatHistoryPersistingChatClient : DelegatingChatClient
 {
     private readonly Func<IReadOnlyList<ChatMessage>, Task> _onPersistAsync;
+    private readonly ILogger? _logger;
 
     public PerServiceCallChatHistoryPersistingChatClient(
         IChatClient innerClient,
-        Func<IReadOnlyList<ChatMessage>, Task> onPersistAsync) : base(innerClient)
+        Func<IReadOnlyList<ChatMessage>, Task> onPersistAsync,
+        ILogger? logger = null) : base(innerClient)
     {
         _onPersistAsync = onPersistAsync ?? throw new ArgumentNullException(nameof(onPersistAsync));
+        _logger = logger;
     }
 
     public override async Task<ChatResponse> GetResponseAsync(
@@ -36,9 +40,9 @@ public class PerServiceCallChatHistoryPersistingChatClient : DelegatingChatClien
         {
             await _onPersistAsync(updated);
         }
-        catch
+        catch (Exception ex)
         {
-            // Do not fail the inference call if background persistence encounters transient error
+            _logger?.LogWarning(ex, "Failed to persist chat history after service response; continuing inference.");
         }
 
         return response;
@@ -59,6 +63,9 @@ public class PerServiceCallChatHistoryPersistingChatClient : DelegatingChatClien
         {
             await _onPersistAsync(messages);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to persist chat history after streaming response; continuing inference.");
+        }
     }
 }

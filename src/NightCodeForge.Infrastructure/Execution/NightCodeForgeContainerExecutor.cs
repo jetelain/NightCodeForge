@@ -669,7 +669,14 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         {
             if (!string.IsNullOrEmpty(tempDir) && Directory.Exists(tempDir))
             {
-                try { Directory.Delete(tempDir, recursive: true); } catch { }
+                try
+                {
+                    Directory.Delete(tempDir, recursive: true);
+                }
+                catch (Exception deleteEx)
+                {
+                    logger.LogWarning(deleteEx, "Failed to clean up temporary container build directory '{TempDir}'", tempDir);
+                }
             }
         }
     }
@@ -1296,7 +1303,10 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 _shellProcess.Kill(entireProcessTree: true);
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Best-effort shell process termination during executor disposal finished with notice");
+        }
 
         _shellSession?.Dispose();
         _shellSession = null;

@@ -91,6 +91,32 @@ public class CodeReviewLoopbackAndPromptOverrideTests
         }
     }
 
+    [Fact]
+    public void WorkspacePromptResolver_UnreadablePromptOverride_ThrowsInvalidOperationException()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "prompt-unreadable-test-" + Guid.NewGuid().ToString("N"));
+        var promptsDir = Path.Combine(tempDir, ".nightcodeforge", "prompts");
+        Directory.CreateDirectory(promptsDir);
+
+        var promptFile = Path.Combine(promptsDir, $"{StandardStageIds.CodeReviewAndFix}.md");
+        File.WriteAllText(promptFile, "Custom prompt that will be locked");
+
+        try
+        {
+            // Lock the file exclusively so File.ReadAllText fails
+            using var lockStream = new FileStream(promptFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                WorkspacePromptResolver.ResolveStageDirective(tempDir, StandardStageIds.CodeReviewAndFix, "Default Directive"));
+
+            Assert.Contains(promptFile, ex.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
     private class MockChatClient : IChatClient
     {
         private readonly Func<IEnumerable<ChatMessage>, ChatOptions?, IAsyncEnumerable<ChatResponseUpdate>> _streamHandler;

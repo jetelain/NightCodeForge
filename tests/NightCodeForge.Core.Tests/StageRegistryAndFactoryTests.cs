@@ -14,7 +14,17 @@ public class StageRegistryAndFactoryTests
     {
         private readonly Dictionary<Type, object> _services = new();
         public void AddService<T>(T service) where T : notnull => _services[typeof(T)] = service;
-        public object? GetService(Type serviceType) => _services.TryGetValue(serviceType, out var s) ? s : null;
+        public object? GetService(Type serviceType)
+        {
+            if (_services.TryGetValue(serviceType, out var s)) return s;
+            if (serviceType.IsGenericType && serviceType.GetGenericTypeDefinition() == typeof(Microsoft.Extensions.Logging.ILogger<>))
+            {
+                var loggerType = typeof(Microsoft.Extensions.Logging.Abstractions.NullLogger<>).MakeGenericType(serviceType.GetGenericArguments()[0]);
+                var instanceProp = loggerType.GetProperty("Instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                return instanceProp?.GetValue(null);
+            }
+            return null;
+        }
     }
 
     private class FakeExecutionEnvironment : IExecutionEnvironment
@@ -42,6 +52,7 @@ public class StageRegistryAndFactoryTests
         _serviceProvider.AddService<IExecutionEnvironment>(fakeEnv);
         _serviceProvider.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv));
         _serviceProvider.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
+        _serviceProvider.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
         _registry = new WorkflowStageRegistry();
         _factory = new WorkflowStageFactory(_registry, _serviceProvider);
     }

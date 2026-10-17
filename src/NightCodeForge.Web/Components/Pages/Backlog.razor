@@ -12,6 +12,7 @@
 @inject ITaskDependencyStore DependencyStore
 @inject OrchestratorHubClientConnection HubConnection
 @inject ToastService ToastService
+@inject ILogger<Backlog> Logger
 @implements IDisposable
 
 <PageTitle>Backlog &amp; DAG - NightCodeForge</PageTitle>
@@ -228,7 +229,7 @@
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Hub connection notice: {ex.Message}");
+            Logger.LogWarning(ex, "Hub connection notice: {Message}", ex.Message);
         }
 
         await LoadDataAsync();

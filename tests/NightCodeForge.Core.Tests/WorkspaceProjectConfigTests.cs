@@ -64,4 +64,31 @@ public class WorkspaceProjectConfigTests
         Assert.Equal(300, config.BuildTimeoutSeconds);
         Assert.Equal(450, config.TestTimeoutSeconds);
     }
+
+    [Fact]
+    public async Task ResolveConfig_InvalidJsonSyntax_SetsParseWarningAndDataBagKey()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-badconfig-test-" + Guid.NewGuid().ToString("N"));
+        var configDir = Path.Combine(tempDir, ".nightcodeforge");
+        Directory.CreateDirectory(configDir);
+
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(configDir, "config.json"), "{ invalid: json content broken ]");
+
+            var bag = new PipelineDataBag();
+            var config = CodeStackPresets.ResolveConfig(tempDir, bag);
+
+            // Assert: Did not crash, but recorded an explicit warning rather than silently discarding
+            Assert.NotNull(config.ParseWarning);
+            Assert.Contains("Failed to read or parse workspace configuration", config.ParseWarning);
+            Assert.True(bag.TryGet<string>("config.parse_warning", out var bagWarning));
+            Assert.NotNull(bagWarning);
+            Assert.Contains("config.json", bagWarning);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
 }

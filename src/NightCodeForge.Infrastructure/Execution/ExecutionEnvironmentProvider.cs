@@ -270,7 +270,10 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                 if (File.Exists(full)) return true;
             }
         }
-        catch { }
+        catch (Exception)
+        {
+            // Expected when environment variables or PATH entries contain invalid characters or restricted permissions
+        }
 
         return false;
     }

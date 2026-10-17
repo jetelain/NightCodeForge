@@ -297,7 +297,10 @@ public class GitMirrorSyncService : IGitMirrorSyncService
                 {
                     Directory.Delete(checkPath, true);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to clean incomplete mirror directory '{CheckPath}'", checkPath);
+                }
             }
         }
 

@@ -276,9 +276,20 @@ public class StartupRecoveryService : IStartupRecoveryService
                         {
                             gitDir = targetGitDir;
                         }
+                        else
+                        {
+                            _logger.LogWarning("Resolved gitdir directory '{TargetGitDir}' from '{GitDirFile}' does not exist.", targetGitDir, gitDir);
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning("File '{GitDirFile}' did not contain a valid 'gitdir:' pointer.", gitDir);
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to read or parse gitdir reference from '{GitDirFile}' in workspace #{WorkspaceId}", gitDir, workspaceId);
+                }
             }
 
             if (!Directory.Exists(gitDir))

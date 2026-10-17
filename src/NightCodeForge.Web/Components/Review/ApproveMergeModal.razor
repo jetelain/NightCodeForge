@@ -77,6 +77,14 @@
             ToastService.Show("Task Merged", $"ForgeTask #{TaskId} approved and merged to {BaseBranch}.", ToastLevel.Success);
             await OnApproved.InvokeAsync();
         }
+        catch (NightCodeForge.Core.Exceptions.BaseBranchNotFoundException ex)
+        {
+            ToastService.Show("Base Branch Missing", $"Target base branch '{ex.BaseBranch}' does not exist: {ex.Message}", ToastLevel.Error);
+        }
+        catch (NightCodeForge.Core.Exceptions.FeatureBranchNotFoundException ex)
+        {
+            ToastService.Show("Feature Branch Missing", $"Feature branch '{ex.FeatureBranch}' does not exist: {ex.Message}", ToastLevel.Error);
+        }
         catch (Exception ex)
         {
             ToastService.Show("Merge Error", $"Failed to complete merge: {ex.Message}", ToastLevel.Error);

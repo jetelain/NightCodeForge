@@ -161,7 +161,10 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
                     });
                     p?.WaitForExit(5000);
                 }
-                catch { }
+                catch (Exception)
+                {
+                    // Best-effort WSL directory cleanup before initialization
+                }
 
                 var defaultMirrorDir = pathResolver.GetAgentWorkingClonePath(Workspace.Id);
                 var initialized = await mirrorSync.InitializeMirrorAsync(Workspace, defaultMirrorDir, cancellationToken);
@@ -254,7 +257,10 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
                     });
                     p?.WaitForExit(5000);
                 }
-                catch { }
+                catch (Exception)
+                {
+                    // Best-effort WSL directory cleanup during teardown
+                }
             }
         }
 
@@ -271,7 +277,10 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
                 var runner = new NightCodeForge.Core.Execution.SystemProcessRunner();
                 runner.Run(rmExe, rmArgs, timeoutSeconds: 10);
             }
-            catch { }
+            catch (Exception)
+            {
+                // Best-effort Docker container cleanup during teardown
+            }
         }
     }
 
@@ -287,12 +296,18 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
                 {
                     File.SetAttributes(file, FileAttributes.Normal);
                 }
-                catch { }
+                catch (Exception)
+                {
+                    // Best-effort file attribute reset
+                }
             }
 
             Directory.Delete(path, true);
         }
-        catch { }
+        catch (Exception)
+        {
+            // Best-effort test directory removal
+        }
     }
 
     private class SingleMockChatClientFactory : IOllamaChatClientFactory

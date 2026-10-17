@@ -110,7 +110,10 @@ public class AcpAgentHarness : IAgentHarness
                         process.Kill(entireProcessTree: true);
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to terminate custom factory process during validation");
+                }
                 process.Dispose();
             }
         }
@@ -237,7 +240,7 @@ public class AcpAgentHarness : IAgentHarness
         try
         {
             // 1. Handshake & Protocol Negotiation (Negotiates v2, falls back to v1)
-            int negotiatedVersion = await NegotiateProtocolAsync(stdin, stdout, cancellationToken);
+            int negotiatedVersion = await NegotiateProtocolAsync(stdin, stdout, cancellationToken, _logger);
             _logger.LogInformation("Successfully negotiated ACP protocol version {Version}", negotiatedVersion);
 
             // 2. Initialize or Resume Session
@@ -590,7 +593,10 @@ public class AcpAgentHarness : IAgentHarness
                 var cancelReq = JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "session/cancel" });
                 await stdin.WriteLineAsync(cancelReq.AsMemory());
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to send session/cancel to ACP process on cancellation");
+            }
             throw;
         }
         catch (Exception ex)
@@ -737,7 +743,7 @@ public class AcpAgentHarness : IAgentHarness
         }
     }
 
-    public static async Task<int> NegotiateProtocolAsync(StreamWriter stdin, StreamReader stdout, CancellationToken cancellationToken)
+    public static async Task<int> NegotiateProtocolAsync(StreamWriter stdin, StreamReader stdout, CancellationToken cancellationToken, ILogger? logger = null)
     {
         // Offer ACP v2 first
         var initV2 = JsonSerializer.Serialize(new
@@ -768,7 +774,10 @@ public class AcpAgentHarness : IAgentHarness
                     return version;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Failed to parse ACP protocol version negotiation response: '{ResponseLine}'. Defaulting to protocol v1.", responseLine);
+            }
         }
 
         // Default negotiated to v1

@@ -134,7 +134,10 @@ public class StartupCrashRecoveryScenario : IScenario
             {
                 await gitManager.RemoveWorktreeAsync(context.Environment.Workspace, crashedTask.Id, context.CancellationToken);
             }
-            catch { }
+            catch (Exception)
+            {
+                // Best-effort test worktree cleanup
+            }
         }
 
         sw.Stop();

@@ -127,7 +127,10 @@ public class GitSyncService : IGitSyncService
                     targetRemote = "origin";
                 }
             }
-            catch { }
+            catch (GitCommandException ex)
+            {
+                _logger.LogDebug(ex, "Failed to query git remotes in '{InspectPath}'", inspectPath);
+            }
 
             if (!string.IsNullOrEmpty(targetRemote))
             {
@@ -145,7 +148,10 @@ public class GitSyncService : IGitSyncService
                         hostOriginPath = resolvedRemote;
                     }
                 }
-                catch { }
+                catch (GitCommandException ex)
+                {
+                    _logger.LogDebug(ex, "Failed to resolve remote url for '{TargetRemote}' in '{InspectPath}'", targetRemote, inspectPath);
+                }
 
                 // Check if the remote tracking branch actually exists before rev-list
                 var remoteBranchRef = $"{targetRemote}/{baseBranch}";
@@ -161,7 +167,10 @@ public class GitSyncService : IGitSyncService
                         .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                         .Any(b => b.Trim().Equals(remoteBranchRef, StringComparison.OrdinalIgnoreCase));
                 }
-                catch { }
+                catch (GitCommandException ex)
+                {
+                    _logger.LogDebug(ex, "Failed to check if remote branch '{RemoteBranchRef}' exists in '{InspectPath}'", remoteBranchRef, inspectPath);
+                }
 
                 if (branchExists)
                 {
@@ -178,7 +187,10 @@ public class GitSyncService : IGitSyncService
                             commitsAhead = ahead;
                         }
                     }
-                    catch { }
+                    catch (GitCommandException ex)
+                    {
+                        _logger.LogDebug(ex, "Failed to query commits ahead of '{RemoteBranchRef}' in '{InspectPath}'", remoteBranchRef, inspectPath);
+                    }
 
                     // Check divergence: commits behind remote tracking branch
                     try
@@ -193,7 +205,10 @@ public class GitSyncService : IGitSyncService
                             commitsBehind = behind;
                         }
                     }
-                    catch { }
+                    catch (GitCommandException ex)
+                    {
+                        _logger.LogDebug(ex, "Failed to query commits behind '{RemoteBranchRef}' in '{InspectPath}'", remoteBranchRef, inspectPath);
+                    }
                 }
             }
         }

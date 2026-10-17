@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 
@@ -27,6 +28,7 @@ public partial class DeterministicTestStage : IWorkflowStage
     private static partial Regex TestFailureLineRegex();
 
     private readonly IExecutionEnvironmentProvider _envProvider;
+    private readonly ILogger<DeterministicTestStage>? _logger;
     private readonly string _testCommand;
 
     public string StageId { get; }
@@ -34,9 +36,15 @@ public partial class DeterministicTestStage : IWorkflowStage
     public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;
     public string LoopBackStageId { get; set; } = FallbackLoopBackStageId;
 
-    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
+    public DeterministicTestStage(
+        IExecutionEnvironmentProvider envProvider,
+        ILogger<DeterministicTestStage> logger)
+        : this(envProvider, logger, "dotnet test --no-build", DefaultStageId, "Deterministic Unit Test Gate")
+    {
+    }
+
     public DeterministicTestStage(IExecutionEnvironmentProvider envProvider)
-        : this(envProvider, "dotnet test --no-build", DefaultStageId, "Deterministic Unit Test Gate")
+        : this(envProvider, null, "dotnet test --no-build", DefaultStageId, "Deterministic Unit Test Gate")
     {
     }
 
@@ -45,8 +53,19 @@ public partial class DeterministicTestStage : IWorkflowStage
         string testCommand,
         string stageId,
         string displayName)
+        : this(envProvider, null, testCommand, stageId, displayName)
+    {
+    }
+
+    public DeterministicTestStage(
+        IExecutionEnvironmentProvider envProvider,
+        ILogger<DeterministicTestStage>? logger,
+        string testCommand,
+        string stageId,
+        string displayName)
     {
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
+        _logger = logger;
         _testCommand = !string.IsNullOrWhiteSpace(testCommand) ? testCommand : "dotnet test --no-build";
         StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : DefaultStageId;
         DisplayName = !string.IsNullOrWhiteSpace(displayName) ? displayName : "Deterministic Unit Test Gate";
@@ -136,7 +155,7 @@ public partial class DeterministicTestStage : IWorkflowStage
                     foreach (var covFile in coverageFiles)
                     {
                         var xml = await File.ReadAllTextAsync(covFile, cancellationToken);
-                        var rate = ParseCoberturaLineRate(xml);
+                        var rate = ParseCoberturaLineRate(xml, _logger);
                         if (rate.HasValue)
                         {
                             bag.Set(PipelineDataBagKeys.CoverageCurrentLineRate, rate.Value);
@@ -148,7 +167,10 @@ public partial class DeterministicTestStage : IWorkflowStage
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to scan or parse code coverage in '{WorkDir}'", workDir);
+                }
             }
 
             if (!res.Success || failedTests > 0)
@@ -178,7 +200,7 @@ public partial class DeterministicTestStage : IWorkflowStage
         return StageExecutionResult.Success();
     }
 
-    public static double? ParseCoberturaLineRate(string xmlContent)
+    public static double? ParseCoberturaLineRate(string xmlContent, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(xmlContent)) return null;
 
@@ -204,7 +226,10 @@ public partial class DeterministicTestStage : IWorkflowStage
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Failed to parse Cobertura coverage XML content");
+        }
 
         return null;
     }

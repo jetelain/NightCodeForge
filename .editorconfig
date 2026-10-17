@@ -1,0 +1,19 @@
+# Top-most EditorConfig file for NightCodeForge
+root = true
+
+[*.cs]
+# Anti-silent failure rules (Step 9.10)
+# CS0168: Variable is declared but never used
+dotnet_diagnostic.CS0168.severity = warning
+
+# CA1031: Do not catch general exception types
+# Marked as suggestion to guide developer attention away from bare general catches
+dotnet_diagnostic.CA1031.severity = suggestion
+
+# Code style and hygiene
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true

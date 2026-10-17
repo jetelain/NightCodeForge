@@ -62,6 +62,9 @@ public class FakeGitWorkspaceManager : IGitWorkspaceManager
     }
 
     public Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default)
+        => SquashAndMergeAsync(workspace, taskId, baseBranch, commitMessage, false, cancellationToken);
+
+    public Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, bool allowCreateBaseBranch, CancellationToken cancellationToken = default)
     {
         SquashMerges.Add((taskId, baseBranch, commitMessage));
         return Task.FromResult($"squash-sha-{taskId:D4}");

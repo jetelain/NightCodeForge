@@ -96,7 +96,10 @@ public class PiRpcAgentHarness : IAgentHarness
                         process.Kill(entireProcessTree: true);
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to terminate custom factory process during validation");
+                }
                 process.Dispose();
             }
         }
@@ -430,7 +433,10 @@ public class PiRpcAgentHarness : IAgentHarness
                 var abortCmd = JsonSerializer.Serialize(new { id = $"abort-{Guid.NewGuid():N}", type = "abort" });
                 await stdin.WriteLineAsync(abortCmd.AsMemory());
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to send abort command to PiRpc process on cancellation");
+            }
 
             throw;
         }

@@ -466,7 +466,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             });
     }
 
-    private static IReadOnlyList<string> GetCandidateDirectories(string? workspacePath)
+    private IReadOnlyList<string> GetCandidateDirectories(string? workspacePath)
     {
         var dirs = new List<string>();
 
@@ -491,7 +491,10 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                 dirs.Add(Path.Combine(parent, "docs", "transcripts"));
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to resolve solution root docs/transcripts from CWD '{Cwd}'", cwd);
+        }
 
         return dirs.Distinct().ToList();
     }

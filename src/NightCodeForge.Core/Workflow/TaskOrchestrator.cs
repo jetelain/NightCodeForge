@@ -241,8 +241,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             profile = workspace.AgentProfiles?.FirstOrDefault(p =>
                 string.Equals(p.Id, stage.StageId, StringComparison.OrdinalIgnoreCase) ||
-                (p.StageDirectives != null && p.StageDirectives.ContainsKey(stage.StageId)))
-                ?? workspace.AgentProfiles?.FirstOrDefault();
+                (p.StageDirectives != null && p.StageDirectives.ContainsKey(stage.StageId)));
         }
 
         if (stage.Kind == WorkflowStageKind.Agentic && !HasCustomHandler(stage))

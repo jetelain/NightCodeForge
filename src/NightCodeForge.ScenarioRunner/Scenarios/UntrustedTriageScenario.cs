@@ -92,7 +92,7 @@ public class UntrustedTriageScenario : IScenario
             context.CancellationToken);
 
         streamCts.Cancel();
-        try { await streamTask; } catch { }
+        try { await streamTask; } catch (Exception) { /* Stream task completion on scenario finish */ }
 
         if (createdTasks == null || createdTasks.Count == 0)
         {

@@ -635,7 +635,10 @@ public partial class CanonicalTools
                     using var innerDoc = JsonDocument.Parse(str);
                     list.AddRange(ParseJsonElementTasks(innerDoc.RootElement));
                 }
-                catch { }
+                catch (JsonException)
+                {
+                    // String starting with '[' was not valid JSON; fallback to other parsing heuristics
+                }
             }
         }
         return list;

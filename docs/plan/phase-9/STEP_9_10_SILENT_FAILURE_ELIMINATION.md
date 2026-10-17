@@ -1,6 +1,6 @@
 # 🔇 Step 9.10: Silent Failure Elimination & Git Merge Safety
 
-> *Parent:* [Phase 9](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md) | *Source:* pre-Phase-10 foundation audit | *Status:* Planned
+> *Parent:* [Phase 9](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md) | *Source:* pre-Phase-10 foundation audit | *Status:* Complete
 
 ## 1. Problem
 
@@ -47,9 +47,9 @@ The audit found ~115 bare `catch { }` blocks across `src/`. Many are legitimate 
 
 ## 4. Definition of Done
 
-- [ ] No bare `catch { }` remains without an inline justification and a log call.
-- [ ] `SquashAndMergeAsync` has no swallowed failure on the happy path.
-- [ ] New exception types are mapped to UI-visible messages.
-- [ ] Git commit messages are not corrupted with escaped backslashes.
-- [ ] Missing agent profiles in `TaskOrchestrator` fail fast with `AgentProfileNotFoundException`.
-- [ ] `dotnet test` passes (unit, integration and E2E).
+- [x] No bare `catch { }` remains without an inline justification and a log call.
+- [x] `SquashAndMergeAsync` has no swallowed failure on the happy path.
+- [x] New exception types are mapped to UI-visible messages.
+- [x] Git commit messages are not corrupted with escaped backslashes.
+- [x] Missing agent profiles in `TaskOrchestrator` fail fast with `AgentProfileNotFoundException`.
+- [x] `dotnet test` passes (unit, integration and E2E).

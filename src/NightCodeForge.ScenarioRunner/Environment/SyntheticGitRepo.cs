@@ -169,7 +169,10 @@ Contains Calculator arithmetic service and project configuration.
             }
             File.WriteAllText(targetFile, content, Encoding.UTF8);
         }
-        catch { }
+        catch (IOException)
+        {
+            // Best-effort test file write
+        }
     }
 
     /// <summary>
@@ -220,7 +223,10 @@ public class Calculator
                 var mirrorFile = Path.Combine(target, "Calculator.cs");
                 File.WriteAllText(mirrorFile, content, Encoding.UTF8);
             }
-            catch { }
+            catch (IOException)
+            {
+                // Best-effort test file write
+            }
         }
         else
         {
@@ -269,7 +275,10 @@ public class Calculator
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SyntheticGitRepo] Failed to read gitdir pointer at '{gitDir}': {ex.Message}");
+            }
         }
 
         var lockPath = Path.Combine(gitDir, "index.lock");

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Core.Domain;
@@ -25,6 +26,7 @@ public class WorkspaceProjectConfig
     public string? CoverageCommand { get; set; }
     public int? BuildTimeoutSeconds { get; set; }
     public int? TestTimeoutSeconds { get; set; }
+    public string? ParseWarning { get; set; }
 }
 
 public static class CodeStackPresets
@@ -75,7 +77,7 @@ public static class CodeStackPresets
     /// Resolves active build, test, and SAST commands considering PipelineDataBag overrides,
     /// workspace configuration files (.nightcodeforge/config.json, nightcodeforge.json), and defaults.
     /// </summary>
-    public static WorkspaceProjectConfig ResolveConfig(string? workspacePath, PipelineDataBag? dataBag = null)
+    public static WorkspaceProjectConfig ResolveConfig(string? workspacePath, PipelineDataBag? dataBag = null, ILogger? logger = null)
     {
         var config = new WorkspaceProjectConfig();
 
@@ -105,9 +107,12 @@ public static class CodeStackPresets
                             break;
                         }
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        // Ignore invalid JSON file
+                        var warningMsg = $"Failed to read or parse workspace configuration '{path}': {ex.Message}";
+                        config.ParseWarning = warningMsg;
+                        logger?.LogWarning(ex, "Failed to read or parse workspace configuration '{Path}'", path);
+                        dataBag?.Set("config.parse_warning", warningMsg);
                     }
                 }
             }

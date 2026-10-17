@@ -284,7 +284,7 @@ public class OrchestratorHarnessTests
             {
                 new()
                 {
-                    Id = "read-only-prof",
+                    Id = "implementation",
                     Name = "Audit Agent",
                     Mode = AgentMode.ReadOnly,
                     HarnessId = "crucible"
@@ -824,6 +824,75 @@ public class OrchestratorHarnessTests
         Assert.Equal(20, ex.WorkspaceId);
 
         var updatedTask = await taskRepo.GetByIdAsync(200);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Failed, updatedTask.Status);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenStageAgentProfileMismatch_DoesNotFallbackToArbitraryProfile_ThrowsAgentProfileNotFoundException()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var depStore = new InMemoryTaskDependencyStore();
+        var depEngine = new DependencyResolutionEngine(depStore);
+        var lockProvider = new WorkspaceLockProvider();
+        var gitManager = new FakeGitWorkspaceManager();
+        var jobQueue = new FakeTaskJobQueue();
+
+        // Workspace has an agent profile, but its ID does NOT match the stage's required profile ("implementation")
+        var workspace = new Workspace
+        {
+            Id = 21,
+            Name = "Unmatched Profile Workspace",
+            RepositoryPath = "C:/test/repo",
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>
+            {
+                new AgentProfile
+                {
+                    Id = "unrelated_profile",
+                    Name = "Unrelated Agent",
+                    HarnessId = StandardHarnessIds.Crucible,
+                    ModelName = "test-model"
+                }
+            }
+        };
+        await workspaceRepo.CreateAsync(workspace);
+
+        var task = await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 201,
+            WorkspaceId = 21,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "implementation",
+            BaseBranch = "main"
+        });
+        depStore.AddTask(201, 21, TaskOverallStatus.Open);
+
+        var fakeHarness = new FakeAgentHarness();
+        var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
+
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
+
+        var ex = await Assert.ThrowsAsync<AgentProfileNotFoundException>(() => orchestrator.ProcessTaskAsync(task.Id));
+        Assert.Equal("implementation", ex.ProfileId);
+        Assert.Equal(21, ex.WorkspaceId);
+
+        var updatedTask = await taskRepo.GetByIdAsync(201);
         Assert.NotNull(updatedTask);
         Assert.Equal(TaskOverallStatus.Failed, updatedTask.Status);
     }

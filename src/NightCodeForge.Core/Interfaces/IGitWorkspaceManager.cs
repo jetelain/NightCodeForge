@@ -44,6 +44,7 @@ public interface IGitWorkspaceManager
     /// Returns the 40-character commit SHA of the squashed commit.
     /// </summary>
     Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default);
+    Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, bool allowCreateBaseBranch, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Ensures that an isolated Git worktree exists for the given task (task-{id}) checked out on feature/task-{id}.

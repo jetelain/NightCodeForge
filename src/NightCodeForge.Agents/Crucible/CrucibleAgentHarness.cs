@@ -272,7 +272,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         List<ChatMessage> chatHistory;
         if (!string.IsNullOrEmpty(context.SerializedStateJson))
         {
-            chatHistory = DeserializeSession(context.SerializedStateJson);
+            chatHistory = DeserializeSession(context.SerializedStateJson, _logger);
             // Legacy checkpoints stored the system prompt as the first message; strip it while preserving system notices
             chatHistory.RemoveAll(m => m.Role == ChatRole.System && (m.Text == null || !m.Text.Contains("[System Notice", StringComparison.OrdinalIgnoreCase)));
         }
@@ -408,7 +408,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     }
                 }
                 latestSerializedState = SerializeSession(chatHistory);
-            });
+            },
+            _logger);
 
         var compactedClient = new ThinkingTraceCompactionChatClient(persistingClient, context.OptimizationFlags);
         var activeClient = new LenientToolCallChatClient(compactedClient);
@@ -1201,7 +1202,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
     }
 
-    public static List<ChatMessage> DeserializeSession(string json)
+    public static List<ChatMessage> DeserializeSession(string json, ILogger? logger = null)
     {
         var result = new List<ChatMessage>();
         if (string.IsNullOrWhiteSpace(json)) return result;
@@ -1257,7 +1258,10 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 result.Add(new ChatMessage(role, contents));
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Failed to deserialize agent session JSON");
+        }
 
         return result;
     }

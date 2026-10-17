@@ -135,7 +135,10 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
                 var content = await File.ReadAllTextAsync(gitattributesPath, cancellationToken);
                 hasLfGitAttributes = content.Contains("eol=lf", StringComparison.OrdinalIgnoreCase);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read .gitattributes at '{GitattributesPath}'", gitattributesPath);
+            }
         }
 
         var editorConfigPath = Path.Combine(trimmedPath, ".editorconfig");
@@ -149,7 +152,10 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
                 hasLfEditorConfig = content.Contains("end_of_line = lf", StringComparison.OrdinalIgnoreCase) ||
                                     content.Contains("end_of_line=lf", StringComparison.OrdinalIgnoreCase);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read .editorconfig at '{EditorConfigPath}'", editorConfigPath);
+            }
         }
 
         string? coreAutoCrlf = null;
@@ -161,7 +167,10 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
                 coreAutoCrlf = configResult.StandardOutput.Trim();
             }
         }
-        catch { }
+        catch (GitCommandException ex)
+        {
+            _logger.LogDebug(ex, "Failed to query core.autocrlf in '{TrimmedPath}'", trimmedPath);
+        }
 
         string? lineEndingRecommendation = null;
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))

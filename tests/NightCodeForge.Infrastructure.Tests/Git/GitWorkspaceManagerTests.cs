@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
@@ -195,6 +196,59 @@ public class GitWorkspaceManagerTests : IDisposable
 
         // Ephemeral worktree has been removed
         Assert.False(Directory.Exists(wtPath));
+    }
+
+    [Fact]
+    public async Task SquashAndMergeAsync_WithDirtyCanonicalClone_CleansAndMergesSuccessfully()
+    {
+        // Arrange: create branch with WIP commit in worktree
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 107, "main");
+        _repo.CreateFile("feature_clean.txt", "Clean content", wtPath);
+        await _manager.CreateWipCheckpointAsync(_workspace, 107, "Stage1", "WIP on feature");
+
+        // Make canonical repository dirty (modified tracked file and untracked file)
+        File.WriteAllText(Path.Combine(_repo.RepositoryPath, "README.md"), "Corrupted canonical README");
+        _repo.CreateFile("canonical_trash.tmp", "Dirty trash", _repo.RepositoryPath);
+
+        // Act: Squash merge with commit message containing double quotes
+        var messageWithQuotes = "feat: added \"awesome\" capability to task #107";
+        var squashSha = await _manager.SquashAndMergeAsync(_workspace, 107, "main", messageWithQuotes);
+
+        // Assert: Squash succeeded, dirty changes removed, and quotes are NOT escaped with backslashes
+        Assert.False(string.IsNullOrWhiteSpace(squashSha));
+        Assert.Equal(40, squashSha.Length);
+        Assert.False(File.Exists(Path.Combine(_repo.RepositoryPath, "canonical_trash.tmp")));
+
+        var log = await _runner.ExecuteAsync(_repo.RepositoryPath, ["log", "-1", "--pretty=%B"]);
+        Assert.Contains(messageWithQuotes, log.StandardOutput);
+        Assert.DoesNotContain("\\\"", log.StandardOutput);
+    }
+
+    [Fact]
+    public async Task SquashAndMergeAsync_WithMissingBaseBranch_ThrowsBaseBranchNotFoundException()
+    {
+        // Arrange
+        await _manager.EnsureWorktreeAsync(_workspace, 108, "main");
+        _repo.CreateFile("feature_base.txt", "Some work", _manager.GetWorktreePath(_workspace, 108));
+        await _manager.CreateWipCheckpointAsync(_workspace, 108, "Stage1", "WIP");
+
+        // Act & Assert: Target missing base branch without allowCreateBaseBranch
+        var ex = await Assert.ThrowsAsync<BaseBranchNotFoundException>(() =>
+            _manager.SquashAndMergeAsync(_workspace, 108, "nonexistent-base-branch", "Commit message"));
+
+        Assert.Equal("nonexistent-base-branch", ex.BranchName);
+        Assert.Contains("nonexistent-base-branch", ex.Message);
+    }
+
+    [Fact]
+    public async Task SquashAndMergeAsync_WithMissingFeatureBranch_ThrowsFeatureBranchNotFoundException()
+    {
+        // Act & Assert: Attempting to squash merge a nonexistent task (no local or remote branch)
+        var ex = await Assert.ThrowsAsync<FeatureBranchNotFoundException>(() =>
+            _manager.SquashAndMergeAsync(_workspace, 999, "main", "Commit message"));
+
+        Assert.Equal("feature/task-999", ex.BranchName);
+        Assert.Contains("feature/task-999", ex.Message);
     }
 
     [Fact]

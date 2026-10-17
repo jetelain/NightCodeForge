@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Infrastructure.Git;
@@ -101,7 +102,10 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         {
             await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "prune"], cancellationToken: cancellationToken);
         }
-        catch { }
+        catch (GitCommandException ex)
+        {
+            _logger.LogDebug(ex, "Best-effort worktree prune in '{CanonicalPath}' failed", canonicalPath);
+        }
 
         await EnsureWorktreeExcludedAsync(canonicalPath, cancellationToken);
 
@@ -109,7 +113,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         var branchListResult = await _gitCliRunner.ExecuteAsync(canonicalPath, ["branch", "--list", branchName], cancellationToken: cancellationToken);
         var branchExists = branchListResult.StandardOutput
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(b => b.TrimStart('*', ' ').Equals(branchName, StringComparison.OrdinalIgnoreCase));
+            .Any(b => b.TrimStart('*', '+', ' ', '\t').Equals(branchName, StringComparison.OrdinalIgnoreCase));
 
         // Create worktree
         if (branchExists)
@@ -126,7 +130,11 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         {
             await _gitCliRunner.ExecuteAsync(canonicalPath, ["config", "--unset", "extensions.relativeworktrees"], cancellationToken: cancellationToken);
         }
-        catch { }
+        catch (GitCommandException ex)
+        {
+            // Expected when extensions.relativeworktrees was not configured
+            _logger.LogDebug(ex, "Unsetting extensions.relativeworktrees in '{CanonicalPath}' ignored (not configured)", canonicalPath);
+        }
 
         // Make the .git pointer relative so it resolves seamlessly across host, WSL, and Docker containers
         try
@@ -198,7 +206,10 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                 DeleteDirectorySafe(worktreePath);
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete worktree directory '{WorktreePath}'", worktreePath);
+        }
     }
 
     /// <inheritdoc />
@@ -327,7 +338,10 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                 var fallbackResult = await _gitCliRunner.ExecuteAsync(workspace.RepositoryPath, diffArgs, cancellationToken: cancellationToken);
                 rawDiff = fallbackResult.StandardOutput;
             }
-            catch { }
+            catch (GitCommandException ex)
+            {
+                _logger.LogDebug(ex, "Fallback diff generation against host repository '{RepoPath}' failed", workspace.RepositoryPath);
+            }
         }
 
         return rawDiff;
@@ -432,11 +446,21 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     }
 
     /// <inheritdoc />
+    public Task<string> SquashAndMergeAsync(
+        Workspace workspace,
+        int taskId,
+        string baseBranch,
+        string commitMessage,
+        CancellationToken cancellationToken = default)
+        => SquashAndMergeAsync(workspace, taskId, baseBranch, commitMessage, allowCreateBaseBranch: false, cancellationToken: cancellationToken);
+
+    /// <inheritdoc />
     public async Task<string> SquashAndMergeAsync(
         Workspace workspace,
         int taskId,
         string baseBranch,
         string commitMessage,
+        bool allowCreateBaseBranch,
         CancellationToken cancellationToken = default)
     {
         var canonicalPath = GetCanonicalWorkingPath(workspace);
@@ -447,14 +471,19 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             branchName, baseBranch, canonicalPath);
 
         // 1. Checkout target base branch in canonical clone (ensuring clean state first)
-        try { await _gitCliRunner.ExecuteAsync(canonicalPath, ["reset", "--hard", "HEAD"], cancellationToken: cancellationToken); } catch { }
-        try { await _gitCliRunner.ExecuteAsync(canonicalPath, ["clean", "-fd"], cancellationToken: cancellationToken); } catch { }
+        await _gitCliRunner.ExecuteAsync(canonicalPath, ["reset", "--hard", "HEAD"], cancellationToken: cancellationToken);
+        await _gitCliRunner.ExecuteAsync(canonicalPath, ["clean", "-fd"], cancellationToken: cancellationToken);
         try
         {
             await _gitCliRunner.ExecuteAsync(canonicalPath, ["checkout", baseBranch], cancellationToken: cancellationToken);
         }
-        catch (GitCommandException)
+        catch (GitCommandException ex)
         {
+            if (!allowCreateBaseBranch)
+            {
+                throw new BaseBranchNotFoundException(baseBranch, canonicalPath, ex);
+            }
+
             await _gitCliRunner.ExecuteAsync(canonicalPath, ["checkout", "-B", baseBranch], cancellationToken: cancellationToken);
         }
 
@@ -462,26 +491,42 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         var branchCheck = await _gitCliRunner.ExecuteAsync(canonicalPath, ["branch", "--list", branchName], cancellationToken: cancellationToken);
         var hasBranch = branchCheck.StandardOutput
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(b => b.TrimStart('*', ' ').Equals(branchName, StringComparison.OrdinalIgnoreCase));
+            .Any(b => b.TrimStart('*', '+', ' ', '\t').Equals(branchName, StringComparison.OrdinalIgnoreCase));
 
         if (!hasBranch)
         {
+            var fetched = false;
             try
             {
                 await _gitCliRunner.ExecuteAsync(canonicalPath, ["fetch", "host-origin", $"{branchName}:{branchName}"], cancellationToken: cancellationToken);
+                fetched = true;
             }
-            catch
+            catch (GitCommandException ex)
+            {
+                _logger.LogDebug(ex, "Failed to fetch '{BranchName}' from host-origin in '{CanonicalPath}'. Trying origin...", branchName, canonicalPath);
+            }
+
+            if (!fetched)
             {
                 try
                 {
                     await _gitCliRunner.ExecuteAsync(canonicalPath, ["fetch", "origin", $"{branchName}:{branchName}"], cancellationToken: cancellationToken);
+                    fetched = true;
                 }
-                catch { }
+                catch (GitCommandException ex)
+                {
+                    _logger.LogDebug(ex, "Failed to fetch '{BranchName}' from origin in '{CanonicalPath}'.", branchName, canonicalPath);
+                }
+            }
+
+            if (!fetched)
+            {
+                throw new FeatureBranchNotFoundException(branchName, canonicalPath);
             }
         }
 
         // 2. Perform squash merge
-        try { await _gitCliRunner.ExecuteAsync(canonicalPath, ["clean", "-fd"], cancellationToken: cancellationToken); } catch { }
+        await _gitCliRunner.ExecuteAsync(canonicalPath, ["clean", "-fd"], cancellationToken: cancellationToken);
         await _gitCliRunner.ExecuteAsync(canonicalPath, ["merge", "--squash", branchName], cancellationToken: cancellationToken);
 
         // 3. Commit squashed changeset
@@ -580,7 +625,6 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         }
 
         return message
-            .Replace("\"", "\\\"")
             .Replace("\r\n", " ")
             .Replace('\n', ' ')
             .Trim();
@@ -669,12 +713,18 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                     {
                         File.SetAttributes(file, FileAttributes.Normal);
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Failed to clear attributes on file '{File}'", file);
+                    }
                 }
 
                 Directory.Delete(hostPath, true);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to delete directory '{HostPath}'", hostPath);
+            }
         }
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (path.StartsWith('/') || path.StartsWith('~')))
@@ -692,7 +742,10 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                 });
                 p?.WaitForExit(3000);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to remove directory in WSL at '{Path}'", path);
+            }
         }
     }
 }

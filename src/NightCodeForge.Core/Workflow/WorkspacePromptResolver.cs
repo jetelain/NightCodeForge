@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace NightCodeForge.Core.Workflow;
 
 /// <summary>
@@ -8,7 +10,7 @@ public static class WorkspacePromptResolver
     /// <summary>
     /// Discovers stage-specific directive overrides from .nightcodeforge/prompts/{stageId}.md or .nightcodeforge/{stageId}.md.
     /// </summary>
-    public static string ResolveStageDirective(string? workspacePath, string stageId, string defaultDirective)
+    public static string ResolveStageDirective(string? workspacePath, string stageId, string defaultDirective, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(workspacePath) || !Directory.Exists(workspacePath))
         {
@@ -35,7 +37,11 @@ public static class WorkspacePromptResolver
                         return content;
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "Failed to read stage prompt override file '{Path}'", path);
+                    throw new InvalidOperationException($"Failed to read prompt override file '{path}'.", ex);
+                }
             }
         }
 
@@ -45,7 +51,7 @@ public static class WorkspacePromptResolver
     /// <summary>
     /// Discovers system prompt / persona overrides from .nightcodeforge/prompts/system.md or .nightcodeforge/system.md.
     /// </summary>
-    public static string? ResolveSystemPrompt(string? workspacePath, string? defaultPrompt = null)
+    public static string? ResolveSystemPrompt(string? workspacePath, string? defaultPrompt = null, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(workspacePath) || !Directory.Exists(workspacePath))
         {
@@ -70,7 +76,11 @@ public static class WorkspacePromptResolver
                         return content;
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "Failed to read system prompt override file '{Path}'", path);
+                    throw new InvalidOperationException($"Failed to read prompt override file '{path}'.", ex);
+                }
             }
         }
 
@@ -80,7 +90,7 @@ public static class WorkspacePromptResolver
     /// <summary>
     /// Discovers initial bootstrap prompt template overrides from .nightcodeforge/prompts/{stageId}.bootstrap.md.
     /// </summary>
-    public static string? ResolveBootstrapPromptOverride(string? workspacePath, string stageId)
+    public static string? ResolveBootstrapPromptOverride(string? workspacePath, string stageId, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(workspacePath) || !Directory.Exists(workspacePath))
         {
@@ -106,7 +116,11 @@ public static class WorkspacePromptResolver
                         return content;
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "Failed to read bootstrap prompt override file '{Path}'", path);
+                    throw new InvalidOperationException($"Failed to read prompt override file '{path}'.", ex);
+                }
             }
         }
 
