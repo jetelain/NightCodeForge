@@ -1,4 +1,4 @@
-# 🛡️   
+# 🛡️ Phase 9: Codebase Remediation & Robustness
 
 > **Architectural Specification & Implementation Roadmap**  
 > *Parent Plan:* [docs/PLAN.md](../PLAN.md) | *Source Policy:* [AGENTS.md](../../AGENTS.md)  
@@ -42,6 +42,12 @@ During initial rapid development, various lenient patterns, fallback strategies,
 | **9.7** | [📦 Step 9.7: DataBag Orphan Remediation & Quality Gate Handoff Integrity](phase-9/STEP_9_7_DATABAG_ORPHANS_AND_QUALITY_GATE_INTEGRITY.md) | Remediate orphan DataBag keys. Fix lost test diagnostics (`FailedTests`), empty warning ratchets (`WarningsNew`), deterministic execution tool logging (`StageCommand`, `StageOutput`), test metrics in Web UI (`TestsCurrentPassed`), and prune dead phantom keys. | Planned |
 | **9.8** | [🧩 Step 9.8: AgentSessionContext Property Promotion & Harness Decoupling](phase-9/STEP_9_8_AGENT_SESSION_CONTEXT_PROMOTION_AND_HARNESS_DECOUPLING.md) | Promote cross-cutting DataBag keys (`TaskMarkdownPath`, `ReviewDiff`, `ApprovedPlan`, `ReviewerFeedback`, `PriorDiagnostics`) to strongly-typed properties on `AgentSessionContext`. Wire git diff into Code Review prompts. Decouple `IAgentHarness` implementations from `PipelineDataBag`. | Planned |
 | **9.9** | [🔄 Step 9.9: Resilient Crash Recovery, Database Conversation Rehydration & State Persistence](phase-9/STEP_9_9_RESILIENT_CRASH_RECOVERY_AND_STATE_PERSISTENCE.md) | Upgrade `StartupRecoveryService` to resume interrupted agentic sessions from SQLite `Conversation` & `ConversationTurn` records with recovery notice; cleanly re-run deterministic steps with purged metrics; persist `PipelineDataBag` and mutable `AgentSessionContext` properties across turns in SQLite. | Planned |
+| **9.10** | [🔇 Step 9.10: Silent Failure Elimination & Git Merge Safety](phase-9/STEP_9_10_SILENT_FAILURE_ELIMINATION.md) | Audit ~115 bare `catch { }` blocks. Fix `SquashAndMergeAsync` (swallowed reset/clean/fetch, silent `checkout -B` base branch creation). Stop silent prompt-override fallback. Add analyzer rule. | Planned |
+| **9.11** | [🎯 Step 9.11: Quality Gate Correctness & Metric Fidelity](phase-9/STEP_9_11_QUALITY_GATE_CORRECTNESS.md) | Baselines only from green runs, fail on zero tests, Coverlet code coverage multi-project aggregation and format support (Cobertura, OpenCover, JSON, console), stale coverage elimination, `FirstOrDefault()` profile fallback, fire-and-forget model preload, unbounded `StageOutput` persistence. | Planned |
+| **9.12** | [⏱️ Step 9.12: Async Lifecycle, Cancellation & Residual Policy Violations](phase-9/STEP_9_12_ASYNC_LIFECYCLE_AND_POLICY_RESIDUE.md) | Remove `async void` handlers, tracked fire-and-forget, `CancellationToken.None` misuse, `Process.Start` in Core, optional `_pathResolver?.`, shell-escaping injection risks, stage-ID path validation. | Planned |
+| **9.13** | [💉 Step 9.13: Infrastructure Constructor DI & Options Remediation](phase-9/STEP_9_13_INFRASTRUCTURE_CONSTRUCTOR_DI_AND_OPTIONS_REMEDIATION.md) | Eliminate residual optional constructor parameters (`= null`, `= default`) and fallback instantiations (`?? new ...`) across `NightCodeForge.Infrastructure` and `NightCodeForge.Agents`. Configure DI options. | Planned |
+| **9.14** | [🔒 Step 9.14: Workspace Lock Hierarchy & Cancellation Coordination](phase-9/STEP_9_14_WORKSPACE_LOCK_HIERARCHY_AND_CANCELLATION_COORDINATION.md) | Coordinate workspace-level exclusive locking with concurrent task executions. Propagate active cancellation tokens to executing orchestrator instances. Purge worktree/WSL git locks. | Planned |
+| **9.15** | [🖥️ Step 9.15: Web UI State Synchronization & Circuit Resilience](phase-9/STEP_9_15_WEB_UI_STATE_SYNCHRONIZATION_AND_CIRCUIT_RESILIENCE.md) | Synchronize `Settings.razor` and `Review.razor` with `WorkspaceState.OnWorkspaceChanged`. Remediate Task Execution Inspector live telemetry desynchronization on stage start/complete, SignalR auto-reconnect group retention, repository `AsNoTracking`, and supervise background timers. | Planned |
 
 ---
 
@@ -97,6 +103,30 @@ flowchart TD
         S9["Rehydrate Agentic Sessions from DB Turns<br/>Clean Deterministic Re-Run with Purged Metrics<br/>Turn-Level PipelineDataBag & State Persistence"]
     end
 
+    subgraph Step10 ["Step 9.10: Silent Failure Elimination"]
+        S10["Typed, Logged Catches<br/>Safe SquashAndMerge<br/>Hard Error on Unreadable Prompt Overrides"]
+    end
+
+    subgraph Step11 ["Step 9.11: Quality Gate Correctness"]
+        S11["Baselines from Green Runs Only<br/>Coverlet Multi-Project Code Coverage<br/>Fresh Coverage Only<br/>Zero-Tests Fails & Preload Tracking"]
+    end
+
+    subgraph Step12 ["Step 9.12: Async Lifecycle & Security"]
+        S12["No async void<br/>Proper Cancellation<br/>Shell-Escaping Safety<br/>Required Path Resolver"]
+    end
+
+    subgraph Step13 ["Step 9.13: Infrastructure DI & Options"]
+        S13["Zero Optional Service Parameters<br/>Zero Constructor Fallbacks<br/>ExecutionEnvironmentProviderOptions in DI<br/>Clean TaskMarkdownSyncService DI"]
+    end
+
+    subgraph Step14 ["Step 9.14: Lock Hierarchy & Cancellation"]
+        S14["Hierarchical Workspace/Task Locks<br/>Active Task Cancellation Manager<br/>Robust Git Lock Purging"]
+    end
+
+    subgraph Step15 ["Step 9.15: Web UI Sync & Circuit Resilience"]
+        S15["Settings & Review Workspace Reactivity<br/>Task Execution Inspector Live Telemetry<br/>Circuit Resilience & Supervised Timers"]
+    end
+
     C3 --> Step1
     C2 --> Step2
     C4 --> Step3
@@ -106,6 +136,12 @@ flowchart TD
     C7 --> Step7
     C8 --> Step8
     C9 --> Step9
+    Step9 --> Step10
+    Step10 --> Step11
+    Step11 --> Step12
+    Step12 --> Step13
+    Step13 --> Step14
+    Step14 --> Step15
 ```
 
 ---
@@ -158,3 +194,45 @@ flowchart TD
   - [ ] Deterministic recovery purges all stale metric keys from `PipelineDataBag` and supersedes interrupted conversation records.
   - [ ] `PipelineDataBag` and mutable `AgentSessionContext` properties are committed to `task.PipelineDataJson` across execution turns.
   - [ ] Complete test suite passes: `dotnet test` (all unit, integration, and E2E tests passing).
+- [ ] **Step 9.10: Silent Failure Elimination & Git Merge Safety**
+  - [ ] No bare `catch { }` without justification and logging; analyzer rule added.
+  - [ ] `SquashAndMergeAsync` fails hard on reset/clean/missing base or feature branch.
+  - [ ] Unreadable prompt overrides raise explicit errors.
+- [ ] **Step 9.11: Quality Gate Correctness & Metric Fidelity**
+  - [ ] Baselines recorded only from successful, non-empty runs.
+  - [ ] Zero tests discovered fails the gate; stale coverage files ignored.
+  - [ ] Coverlet code coverage fully supported across Cobertura, OpenCover, JSON, and stdout console tables.
+  - [ ] Multi-test-project solutions aggregate coverage lines across all projects rather than picking the first file.
+  - [ ] Coverage gate fails if coverage is required but unmeasured (no silent bypass).
+  - [ ] SAST stage executes real analyzers instead of synthetic echo commands.
+  - [ ] No `FirstOrDefault()` profile fallback; preload tracked; persisted `StageOutput` capped.
+- [ ] **Step 9.12: Async Lifecycle, Cancellation & Residual Policy Violations**
+  - [ ] No `async void` handlers or unobserved fire-and-forget tasks.
+  - [ ] Shell escaping safe and tested; stage IDs validated before path use.
+  - [ ] `StartupRecoveryService` uses injected runners and a required path resolver.
+  - [ ] Full test suite passes, including E2E.
+- [ ] **Step 9.13: Infrastructure Constructor DI & Options Remediation**
+  - [ ] Zero optional parameters (`= null`, `= default`) in service constructors across `NightCodeForge.Infrastructure` and `NightCodeForge.Agents`.
+  - [ ] Zero fallback initializations (`?? new ...`, `?? NullLogger...`) in service constructors.
+  - [ ] `ExecutionEnvironmentProviderOptions` and `ContainerExecutorOptions` configured in DI.
+  - [ ] `TaskMarkdownSyncService` has zero fallback shims.
+- [ ] **Step 9.14: Workspace Lock Hierarchy & Cancellation Coordination**
+  - [ ] Exclusive workspace locks block task locks; task locks block workspace locks.
+  - [ ] Concurrent tasks on the same workspace execute simultaneously without deadlocking.
+  - [ ] Cancelling a job in `DevQueueService` immediately cancels running `TaskOrchestrator` execution.
+  - [ ] Cancelled tasks do not overwrite status on stage termination.
+  - [ ] Git lock purging correctly resolves worktrees and WSL mirrors.
+- [ ] **Step 9.15: Web UI State Synchronization & Circuit Resilience**
+  - [ ] Navigating to `/inspector` or `/tasks/{id}` automatically starts `HubClient` and joins the task SignalR group.
+  - [ ] Switching tasks in the inspector cleanly leaves the previous task group and joins the new task group.
+  - [ ] SignalR auto-reconnection automatically rejoins all active task groups on the server.
+  - [ ] `EfCoreTaskRepository.GetByIdAsync` uses `.AsNoTracking()`, guaranteeing fresh state is read from the SQLite database on each refresh.
+  - [ ] `TaskOrchestrator` broadcasts `StageCompleted` for deterministic stages and workflow stage handoffs.
+  - [ ] Pipeline stepper, turns, and terminal logs in `TaskExecutionInspector.razor` update immediately in real-time when a stage starts or completes without manual browser reload.
+  - [ ] `TaskInspector.razor` dropdown status and active running task button update dynamically on stage transitions.
+  - [ ] Switching active workspace immediately updates `Settings.razor` and `Review.razor`.
+  - [ ] `Settings.razor` and `Review.razor` implement `IDisposable` with zero event handler leaks.
+  - [ ] `DevQueue.razor` periodic refresh loop survives transient exceptions with structured logging.
+  - [ ] No magic `"main"` literals remain in `TriageService`.
+  - [ ] Complete test suite passes: `dotnet test` (all unit, integration, and E2E tests passing).
+

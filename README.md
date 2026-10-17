@@ -1,6 +1,6 @@
 # 🌙 NightCode**Forge**
 
-> **Asynchronous AI Orchestrator & Dev-Queue for Local Large Language Models**
+> Let your GPU code for you overnight
 
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -12,7 +12,11 @@
 
 ## 🎯 Project Overview & Goals
 
-**NightCodeForge** is an asynchronous developer queue and multi-agent orchestrator built specifically for software engineering workflows powered by **local LLMs**.
+🌙 NightCode **Forge** is an asynchronous developer queue and multi-agent orchestrator built specifically for software engineering workflows by combining **deterministic** steps and **local LLM-powered** agents.
+
+⚡NightCode **Crucible** is a minimalist agent harness optimized for local LLMs.
+
+Create your backlog and review tasks with agent assistance, and let implementation and automatic review flow overnight.
 
 ### The Problem: Single-GPU Contention & Idle Blocks
 When running models locally (via Ollama, vLLM, llama-server, or local agent runtimes like Pi and OpenCode), hardware is strictly bounded by **available GPU VRAM**. On consumer or single-workstation setups, running multiple concurrent coding agents quickly results in severe VRAM thrashing, context truncation, or Out-Of-Memory (OOM) crashes. **Inference must run sequentially.**
