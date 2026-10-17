@@ -116,3 +116,17 @@ Enforce hard errors whenever an entity that is expected to exist in the database
   * Assert that `DatabaseWorkflowPipelineProvider.GetPipelineAsync` throws `WorkflowNotFoundException` when given a non-existent `WorkflowId`.
   * Assert that `TaskOrchestrator.ProcessTaskAsync` fails fast when no valid profile is configured in the database.
 * Execute `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+
+---
+
+## 5. Implementation Status
+
+- [x] **Status:** COMPLETED
+- [x] Created `WorkflowNotFoundException` and `AgentProfileNotFoundException` in `NightCodeForge.Core.Exceptions`.
+- [x] Removed synthetic default fallbacks in `DatabaseWorkflowPipelineProvider` (throws `WorkflowNotFoundException` on missing IDs or unseeded default workflows).
+- [x] Removed synthetic profile fallbacks in `TaskOrchestrator` (throws `AgentProfileNotFoundException` and fails fast on missing agent profile).
+- [x] Injected `IWorkspaceRepository` and removed fallback default profile generation in `IdeationService` and `Ideation.razor`.
+- [x] Removed synthetic profile construction in `TriageService` (throws `AgentProfileNotFoundException` if profile missing from database).
+- [x] Updated repository implementations (`InMemoryWorkflowRepository` and `EfCoreWorkflowRepository`) to return null when default workflow is missing, delegating hard error throwing to pipeline resolution.
+- [x] All 897 tests passing (100%), including non-E2E tests (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`) and end-to-end acceptance suites (`dotnet test`).
+

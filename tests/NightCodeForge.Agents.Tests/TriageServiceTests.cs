@@ -1,9 +1,11 @@
 using NightCodeForge.Agents.Triage;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
+using NightCodeForge.Core.Workflow.Stages;
 
 namespace NightCodeForge.Agents.Tests;
 
@@ -33,7 +35,20 @@ public class TriageServiceTests : IDisposable
             Id = 5,
             Name = "Triage Test Workspace",
             RepositoryPath = _tempDir,
-            DefaultBaseBranch = "main"
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>
+            {
+                new()
+                {
+                    Id = TriageStage.DefaultStageId,
+                    Name = "Untrusted Intake Triage Agent",
+                    HarnessId = "crucible",
+                    ModelName = "test-model",
+                    Mode = AgentMode.ReadOnly,
+                    SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
+                    PermittedTools = DefaultAgentTools.ReadOnly
+                }
+            }
         };
         _workspaceRepo.CreateAsync(_workspace).GetAwaiter().GetResult();
     }
@@ -165,6 +180,35 @@ public class TriageServiceTests : IDisposable
         Assert.Empty(result);
         var allTasks = await _taskRepo.GetByWorkspaceIdAsync(_workspace.Id);
         Assert.Empty(allTasks);
+    }
+
+    [Fact]
+    public async Task TriageExternalReportAsync_ThrowsAgentProfileNotFoundException_WhenNoTriageProfileConfigured()
+    {
+        var emptyWorkspace = new Workspace
+        {
+            Id = 6,
+            Name = "Empty Workspace",
+            RepositoryPath = _tempDir,
+            DefaultBaseBranch = "main"
+        };
+        await _workspaceRepo.CreateAsync(emptyWorkspace);
+
+        var triageService = new TriageService(
+            _taskRepo,
+            _workspaceRepo,
+            _harnessRegistry,
+            _markdownSyncService);
+
+        var request = new TriageReportRequest(
+            Title: "Crash when input file is empty",
+            Description: "Parser throws NullReferenceException on empty files.",
+            BaseBranch: "main");
+
+        var ex = await Assert.ThrowsAsync<AgentProfileNotFoundException>(() =>
+            triageService.TriageExternalReportAsync(emptyWorkspace, request));
+        Assert.Equal(TriageStage.DefaultStageId, ex.ProfileId);
+        Assert.Equal(6, ex.WorkspaceId);
     }
 
     private class FakeAgentHarness : IAgentHarness

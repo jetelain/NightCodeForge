@@ -119,6 +119,7 @@ public class TaskReviewDiskReadBackTests : IDisposable
         await taskRepo.CreateAsync(task);
 
         var workspaceRepo = new InMemoryWorkspaceRepository();
+        workspaceRepo.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
         await workspaceRepo.CreateAsync(workspace);
 
         var depStore = new InMemoryTaskDependencyStore();

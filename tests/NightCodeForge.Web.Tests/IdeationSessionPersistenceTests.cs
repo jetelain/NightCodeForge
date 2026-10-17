@@ -40,9 +40,13 @@ public class IdeationSessionPersistenceTests : BunitContext
         };
         _workspaceState.SetActiveWorkspace(_workspace);
 
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        workspaceRepo.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
+
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
+        Services.AddSingleton<IWorkspaceRepository>(workspaceRepo);
         Services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
         Services.AddSingleton<IIdeationService>(_ideationService);
         Services.AddSingleton(_toastService);

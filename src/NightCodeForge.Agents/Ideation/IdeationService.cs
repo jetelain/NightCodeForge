@@ -15,7 +15,9 @@ using NightCodeForge.Agents.Streaming;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 
@@ -50,6 +52,7 @@ public partial class IdeationService : IIdeationService
     private readonly ILogger<IdeationService> _logger;
     private readonly LlmProviderOptions? _llmOptions;
     private readonly SkillsService _skillsService;
+    private readonly IWorkspaceRepository? _workspaceRepository;
 
     public IdeationService(
         IWorkspacePathResolver pathResolver,
@@ -64,7 +67,8 @@ public partial class IdeationService : IIdeationService
         IGlobalOptimizationSettingsService? globalOptimizationSettings = null,
         ILogger<IdeationService>? logger = null,
         Microsoft.Extensions.Options.IOptions<LlmProviderOptions>? llmOptions = null,
-        SkillsService? skillsService = null)
+        SkillsService? skillsService = null,
+        IWorkspaceRepository? workspaceRepository = null)
     {
         ArgumentNullException.ThrowIfNull(pathResolver);
         if (defaultChatClient == null && chatClientFactory == null)
@@ -85,18 +89,20 @@ public partial class IdeationService : IIdeationService
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<IdeationService>.Instance;
         _llmOptions = llmOptions?.Value;
         _skillsService = skillsService ?? new SkillsService();
+        _workspaceRepository = workspaceRepository;
     }
 
     public IdeationService(
         IChatClient defaultChatClient,
-        IWorkspacePathResolver pathResolver)
-        : this(pathResolver, defaultChatClient: defaultChatClient)
+        IWorkspacePathResolver pathResolver,
+        IWorkspaceRepository? workspaceRepository = null)
+        : this(pathResolver, defaultChatClient: defaultChatClient, workspaceRepository: workspaceRepository)
     {
     }
 
     /// <summary>
     /// Resolves the effective AgentProfile for ideation, prioritizing explicit profile,
-    /// then workspace profile named/id 'ideation', or falling back to CreateDefaultIdeationProfile.
+    /// then workspace profile named/id 'ideation', or throws AgentProfileNotFoundException if missing.
     /// </summary>
     public static AgentProfile ResolveIdeationProfile(Workspace? workspace, AgentProfile? explicitProfile = null)
     {
@@ -106,7 +112,12 @@ public partial class IdeationService : IIdeationService
             string.Equals(p.Id, "ideation", StringComparison.OrdinalIgnoreCase) ||
             p.Name.Contains("ideation", StringComparison.OrdinalIgnoreCase));
 
-        return profileFromWorkspace ?? AgentProfile.CreateDefaultIdeationProfile(workspace?.Id);
+        if (profileFromWorkspace != null)
+        {
+            return profileFromWorkspace;
+        }
+
+        throw new AgentProfileNotFoundException("ideation", workspace?.Id);
     }
 
     public Task<IdeationResult> ConverseAsync(
@@ -163,7 +174,18 @@ public partial class IdeationService : IIdeationService
         string? customSystemPrompt = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var profile = ResolveIdeationProfile(workspace, agentProfile);
+        var profile = agentProfile;
+        if (profile == null)
+        {
+            if (_workspaceRepository != null)
+            {
+                profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, "ideation", cancellationToken);
+            }
+            if (profile == null)
+            {
+                profile = ResolveIdeationProfile(workspace, agentProfile);
+            }
+        }
         var optFlags = profile.OptimizationFlags ?? _globalOptimizationSettings?.GetFlags() ?? new LocalOptimizationFlags();
 
         // Resolve client dynamically for the agent profile

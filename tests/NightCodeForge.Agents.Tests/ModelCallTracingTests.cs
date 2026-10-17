@@ -219,6 +219,7 @@ public class ModelCallTracingTests
                 defaultChatClient: new EchoClient(),
                 transcriptService: new SessionTranscriptService(Path.Combine(repo, "t")));
             var workspace = new Workspace { Id = 5, RepositoryPath = repo };
+            workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(5));
 
             IdeationResult? result = null;
             await foreach (var update in service.ConverseStreamingAsync(workspace, "Hello"))

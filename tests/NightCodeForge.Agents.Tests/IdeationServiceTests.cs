@@ -1,12 +1,24 @@
 using Microsoft.Extensions.AI;
 using NightCodeForge.Agents.Ideation;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Agents.Tests;
 
 public class IdeationServiceTests
 {
+    private static Workspace CreateWorkspace(int id = 1, string name = "Test WS", string? path = null)
+    {
+        var ws = new Workspace
+        {
+            Id = id,
+            Name = name,
+            RepositoryPath = path ?? Directory.GetCurrentDirectory()
+        };
+        ws.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(id));
+        return ws;
+    }
     private class FakeChatClient : IChatClient
     {
         public string ResponseToReturn { get; set; } = string.Empty;
@@ -53,7 +65,7 @@ Let me know what you think!";
         var fakeClient = new FakeChatClient { ResponseToReturn = jsonResponse };
         var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
 
-        var workspace = new Workspace { Id = 1, Name = "Test WS", RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(1, "Test WS");
         var result = await service.ConverseAsync(workspace, "How should we optimize prompt token usage?");
 
         Assert.NotNull(result);
@@ -140,16 +152,12 @@ Let me know what you think!";
     }
 
     [Fact]
-    public void ResolveIdeationProfile_FallsBackToDefault_WhenNoProfileConfigured()
+    public void ResolveIdeationProfile_ThrowsAgentProfileNotFoundException_WhenNoProfileConfigured()
     {
         var workspace = new Workspace { Id = 4, RepositoryPath = Directory.GetCurrentDirectory() };
-        var profile = IdeationService.ResolveIdeationProfile(workspace);
-
-        Assert.NotNull(profile);
-        Assert.Equal("ideation", profile.Id);
-        Assert.Equal(AgentMode.ReadOnly, profile.Mode);
-        Assert.Contains("read", profile.PermittedTools!);
-        Assert.Contains("propose_tasks", profile.PermittedTools!);
+        var ex = Assert.Throws<AgentProfileNotFoundException>(() => IdeationService.ResolveIdeationProfile(workspace));
+        Assert.Equal("ideation", ex.ProfileId);
+        Assert.Equal(4, ex.WorkspaceId);
     }
 
     [Fact]
@@ -167,7 +175,7 @@ Let me know what you think!";
         var client = new MockUpdateStreamingChatClient(updates);
         var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, activityStreamer: streamer);
 
-        var workspace = new Workspace { Id = 10, RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(10);
 
         var streamUpdates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
         await foreach (var update in service.ConverseStreamingAsync(workspace, "Plan with native reasoning"))
@@ -197,7 +205,7 @@ Let me know what you think!";
         };
 
         var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: fakeClient, activityStreamer: streamer);
-        var workspace = new Workspace { Id = 11, RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(11);
 
         var result = await service.ConverseAsync(workspace, "Suggest a fallback task");
 
@@ -227,7 +235,7 @@ Let me know what you think!";
         });
 
         var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, activityStreamer: streamer);
-        var workspace = new Workspace { Id = 12, RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(12);
 
         var result = await service.ConverseAsync(workspace, "Create backlog tasks");
 
@@ -391,7 +399,7 @@ Let me know what you think!";
         var pathResolver = new FakePathResolver();
         var service = new IdeationService(fakeClient, pathResolver: pathResolver);
 
-        var workspace = new Workspace { Id = 42, Name = "Test WS", RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(42, "Test WS");
         var result = await service.ConverseAsync(workspace, "Explore the architecture");
 
         Assert.NotNull(result);
@@ -415,7 +423,7 @@ Let me know what you think!";
         });
 
         var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, activityStreamer: streamer);
-        var workspace = new Workspace { Id = 50, RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(50);
 
         var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
         await foreach (var update in service.ConverseStreamingAsync(workspace, "Suggest tasks"))
@@ -458,7 +466,7 @@ Let me know what you think!";
         });
 
         var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, logger: logger);
-        var workspace = new Workspace { Id = 51, RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(51);
 
         var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
         await foreach (var update in service.ConverseStreamingAsync(workspace, "Run invalid tool"))
@@ -542,7 +550,7 @@ Let me know what you think!";
                 defaultChatClient: client,
                 transcriptService: transcriptService);
 
-            var workspace = new Workspace { Id = 77, RepositoryPath = Directory.GetCurrentDirectory() };
+            var workspace = CreateWorkspace(77);
             var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
 
             await foreach (var update in service.ConverseStreamingAsync(workspace, "Plan new feature"))
@@ -640,6 +648,7 @@ Let me know what you think!";
             ExecutionMode = ExecutionMode.ContainerSandbox,
             RepositoryPath = Directory.GetCurrentDirectory()
         };
+        workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(42));
 
         var updates = new List<IdeationStreamUpdate>();
         await foreach (var update in service.ConverseStreamingAsync(workspace, "Hello"))
@@ -675,7 +684,7 @@ Let me know what you think!";
         });
 
         var service = new IdeationService(client, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
-        var workspace = new Workspace { Id = 10, RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(10);
 
         var streamUpdates = new List<IdeationStreamUpdate>();
         await foreach (var update in service.ConverseStreamingAsync(workspace, "Plan feature implementation"))
@@ -729,7 +738,7 @@ Let me know what you think!";
         });
 
         var service = new IdeationService(client, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
-        var workspace = new Workspace { Id = 11, RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(11);
 
         var result = await service.ConverseAsync(workspace, "Suggest a task");
 
@@ -757,7 +766,7 @@ Let me know what you think!";
         });
 
         var service = new IdeationService(client, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
-        var workspace = new Workspace { Id = 12, RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(12);
 
         var result = await service.ConverseAsync(workspace, "Build pipeline");
 
@@ -777,7 +786,7 @@ Let me know what you think!";
         };
 
         var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
-        var workspace = new Workspace { Id = 13, RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(13);
 
         await service.ConverseAsync(workspace, "Help me plan");
 
@@ -804,7 +813,7 @@ Let me know what you think!";
         };
 
         var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
-        var workspace = new Workspace { Id = 14, RepositoryPath = Directory.GetCurrentDirectory() };
+        var workspace = CreateWorkspace(14);
 
         await service.ConverseAsync(workspace, "Plan new features");
 

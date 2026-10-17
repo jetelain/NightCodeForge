@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
@@ -63,21 +64,11 @@ public class TriageService : ITriageService
             request.Title, workspace.Id, baseBranch);
 
         // 1. Resolve triage agent profile with RestrictedReadOnly sandbox tier and ReadOnly agent mode
-        var profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, TriageStage.DefaultStageId, cancellationToken);
+        var profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, StandardStageIds.Triage, cancellationToken);
 
         if (profile == null)
         {
-            profile = new AgentProfile
-            {
-                Id = TriageStage.DefaultStageId,
-                WorkspaceId = null,
-                Name = "Untrusted Intake Triage Agent",
-                HarnessId = StandardHarnessIds.Crucible,
-                ModelName = workspace.AgentProfiles?.FirstOrDefault()?.ModelName ?? "default",
-                Mode = AgentMode.ReadOnly,
-                SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
-                PermittedTools = DefaultAgentTools.ReadOnly
-            };
+            throw new AgentProfileNotFoundException(StandardStageIds.Triage, workspace.Id);
         }
 
         // 2. Set up synthetic triage task and pipeline context
@@ -88,7 +79,7 @@ public class TriageService : ITriageService
             Description = request.Description,
             BaseBranch = baseBranch,
             FeatureBranch = baseBranch,
-            CurrentStageId = TriageStage.DefaultStageId,
+            CurrentStageId = StandardStageIds.Triage,
             Status = TaskOverallStatus.Suggested,
             Priority = 1,
             MergeMode = MergeMode.ManualReviewRequired,
@@ -116,7 +107,7 @@ public class TriageService : ITriageService
             ForgeTask = triageTask,
             Workspace = workspace,
             Profile = profile,
-            StageId = TriageStage.DefaultStageId,
+            StageId = StandardStageIds.Triage,
             StageDirective = stageDirective,
             RequiredMode = AgentMode.ReadOnly,
             WorkspacePath = workspacePath,

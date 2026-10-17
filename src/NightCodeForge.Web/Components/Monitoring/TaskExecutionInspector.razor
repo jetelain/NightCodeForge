@@ -396,13 +396,16 @@
             _task = await TaskRepository.GetByIdAsync(TaskId);
             if (_task != null)
             {
-                if (_task.Workflow == null && _task.WorkflowId.HasValue)
-                {
-                    _task.Workflow = await WorkflowRepository.GetByIdWithStagesAsync(_task.WorkflowId.Value);
-                }
                 if (_task.Workflow == null)
                 {
-                    _task.Workflow = await WorkflowRepository.GetDefaultWorkflowWithStagesAsync();
+                    if (_task.WorkflowId.HasValue)
+                    {
+                        _task.Workflow = await WorkflowRepository.GetByIdWithStagesAsync(_task.WorkflowId.Value);
+                    }
+                    else
+                    {
+                        _task.Workflow = await WorkflowRepository.GetDefaultWorkflowWithStagesAsync();
+                    }
                 }
 
                 _workflowStages = _task.Workflow?.Stages?.OrderBy(s => s.SequenceOrder).ToList();

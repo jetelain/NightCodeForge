@@ -50,6 +50,10 @@ public class IdeationTranscriptAndSkillsTests
 
     private static async Task<IdeationResult> RunAsync(IdeationService service, Workspace workspace, string prompt)
     {
+        if (!workspace.AgentProfiles.Any(p => p.Id == "ideation"))
+        {
+            workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(workspace.Id));
+        }
         IdeationResult? result = null;
         await foreach (var update in service.ConverseStreamingAsync(workspace, prompt))
         {
@@ -171,6 +175,7 @@ description: Guidelines for unit testing with xUnit
             new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
             defaultChatClient: client);
         var workspace = new Workspace { Id = 4, RepositoryPath = Directory.GetCurrentDirectory() };
+        workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(4));
 
         var kinds = new List<IdeationStreamUpdateKind>();
         await foreach (var update in service.ConverseStreamingAsync(workspace, "Hi"))

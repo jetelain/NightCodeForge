@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
 
@@ -155,12 +156,23 @@ public class WorkflowRepositoryAndPipelineProviderTests
     }
 
     [Fact]
-    public async Task DatabaseWorkflowPipelineProvider_NoWorkflowAvailable_ThrowsInvalidOperationException()
+    public async Task DatabaseWorkflowPipelineProvider_NonExistentWorkflowId_ThrowsWorkflowNotFoundException()
+    {
+        var repo = new InMemoryWorkflowRepository(); // empty
+        var provider = new DatabaseWorkflowPipelineProvider(repo, _stageFactory);
+
+        var task = new ForgeTask { Id = 1, WorkflowId = 999 };
+        var ex = await Assert.ThrowsAsync<WorkflowNotFoundException>(() => provider.GetPipelineAsync(task));
+        Assert.Equal(999, ex.WorkflowId);
+    }
+
+    [Fact]
+    public async Task DatabaseWorkflowPipelineProvider_NoWorkflowAvailable_ThrowsWorkflowNotFoundException()
     {
         var repo = new InMemoryWorkflowRepository(); // empty
         var provider = new DatabaseWorkflowPipelineProvider(repo, _stageFactory);
 
         var task = new ForgeTask { Id = 99 };
-        await Assert.ThrowsAsync<InvalidOperationException>(() => provider.GetPipelineAsync(task));
+        await Assert.ThrowsAsync<WorkflowNotFoundException>(() => provider.GetPipelineAsync(task));
     }
 }

@@ -29,6 +29,18 @@ public class TaskOrchestratorDynamicWorkflowTests
     {
         _taskRepo = new InMemoryTaskRepository();
         _workspaceRepo = new InMemoryWorkspaceRepository();
+        var profiles = AgentProfile.CreateStandardGlobalProfiles("test-model").ToList();
+        profiles.AddRange(new[]
+        {
+            new AgentProfile { Id = "spec", Name = "Spec Agent", HarnessId = StandardHarnessIds.Crucible, ModelName = "test-model", Mode = AgentMode.Full },
+            new AgentProfile { Id = "dev", Name = "Dev Agent", HarnessId = StandardHarnessIds.Crucible, ModelName = "test-model", Mode = AgentMode.Full },
+            new AgentProfile { Id = "audit", Name = "Audit Agent", HarnessId = StandardHarnessIds.Crucible, ModelName = "test-model", Mode = AgentMode.Review },
+            new AgentProfile { Id = "init-stage", Name = "Init Agent", HarnessId = StandardHarnessIds.Crucible, ModelName = "test-model", Mode = AgentMode.Full },
+            new AgentProfile { Id = "deterministic-pre-impl", Name = "Pre-Impl Agent", HarnessId = StandardHarnessIds.Crucible, ModelName = "test-model", Mode = AgentMode.Full },
+            new AgentProfile { Id = "deterministic-post-impl", Name = "Post-Impl Agent", HarnessId = StandardHarnessIds.Crucible, ModelName = "test-model", Mode = AgentMode.Full },
+            new AgentProfile { Id = "deterministic-post-review", Name = "Post-Review Agent", HarnessId = StandardHarnessIds.Crucible, ModelName = "test-model", Mode = AgentMode.Full },
+        });
+        _workspaceRepo.SeedGlobalProfiles(profiles);
         _depStore = new InMemoryTaskDependencyStore();
         _depEngine = new DependencyResolutionEngine(_depStore);
         _lockProvider = new WorkspaceLockProvider();

@@ -38,7 +38,7 @@ public class EfCoreWorkflowRepository : IWorkflowRepository
 
         if (def == null)
         {
-            throw new InvalidOperationException("Default workflow does not exist in database.");
+            return null;
         }
 
         return def;

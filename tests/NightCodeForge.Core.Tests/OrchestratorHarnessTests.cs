@@ -1,6 +1,7 @@
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
@@ -116,7 +117,18 @@ public class OrchestratorHarnessTests
             Name = "NCF Test Workspace",
             RepositoryPath = "C:/test/repo",
             Ext4MirrorPath = "/mnt/wsl/mirror",
-            DefaultBaseBranch = "main"
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>
+            {
+                new()
+                {
+                    Id = "task-review",
+                    Name = "Task Review Agent",
+                    HarnessId = "crucible",
+                    ModelName = "test-model",
+                    Mode = AgentMode.Full
+                }
+            }
         };
         await workspaceRepo.CreateAsync(workspace);
 
@@ -316,7 +328,18 @@ public class OrchestratorHarnessTests
             Id = 10,
             Name = "Zero Memory Test",
             RepositoryPath = "C:/test/repo",
-            DefaultBaseBranch = "main"
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>
+            {
+                new()
+                {
+                    Id = "implementation",
+                    Name = "Implementation Agent",
+                    HarnessId = "crucible",
+                    ModelName = "test-model",
+                    Mode = AgentMode.Full
+                }
+            }
         };
         await workspaceRepo.CreateAsync(workspace);
 
@@ -375,7 +398,18 @@ public class OrchestratorHarnessTests
             Id = 11,
             Name = "Resumption Test",
             RepositoryPath = "C:/test/repo",
-            DefaultBaseBranch = "main"
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>
+            {
+                new()
+                {
+                    Id = "implementation",
+                    Name = "Implementation Agent",
+                    HarnessId = "crucible",
+                    ModelName = "test-model",
+                    Mode = AgentMode.Full
+                }
+            }
         };
         await workspaceRepo.CreateAsync(workspace);
 
@@ -435,7 +469,18 @@ public class OrchestratorHarnessTests
             Id = 12,
             Name = "Wip Commit Test",
             RepositoryPath = "C:/test/repo",
-            DefaultBaseBranch = "main"
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>
+            {
+                new()
+                {
+                    Id = "implementation",
+                    Name = "Implementation Agent",
+                    HarnessId = "crucible",
+                    ModelName = "test-model",
+                    Mode = AgentMode.Full
+                }
+            }
         };
         await workspaceRepo.CreateAsync(workspace);
 
@@ -494,7 +539,18 @@ public class OrchestratorHarnessTests
             Name = "Mirror Init Test",
             RepositoryPath = "C:/test/repo",
             Ext4MirrorPath = null, // Not yet initialized
-            DefaultBaseBranch = "main"
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>
+            {
+                new()
+                {
+                    Id = "implementation",
+                    Name = "Implementation Agent",
+                    HarnessId = "crucible",
+                    ModelName = "test-model",
+                    Mode = AgentMode.Full
+                }
+            }
         };
         await workspaceRepo.CreateAsync(workspace);
 
@@ -638,5 +694,56 @@ public class OrchestratorHarnessTests
         Assert.NotNull(attr);
         Assert.Equal(0, attr.Attempts);
         Assert.Equal(Hangfire.AttemptsExceededAction.Fail, attr.OnAttemptsExceeded);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenNoAgentProfileConfigured_ThrowsAgentProfileNotFoundExceptionAndFailsFast()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var depStore = new InMemoryTaskDependencyStore();
+        var depEngine = new DependencyResolutionEngine(depStore);
+        var lockProvider = new WorkspaceLockProvider();
+        var gitManager = new FakeGitWorkspaceManager();
+        var jobQueue = new FakeTaskJobQueue();
+
+        var workspace = new Workspace
+        {
+            Id = 20,
+            Name = "Missing Profile Workspace",
+            RepositoryPath = "C:/test/repo",
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>()
+        };
+        await workspaceRepo.CreateAsync(workspace);
+
+        var task = await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 200,
+            WorkspaceId = 20,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "implementation",
+            BaseBranch = "main"
+        });
+        depStore.AddTask(200, 20, TaskOverallStatus.Open);
+
+        var fakeHarness = new FakeAgentHarness();
+        var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
+
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
+
+        var orchestrator = new TaskOrchestrator(
+            taskRepo, workspaceRepo, depEngine, lockProvider,
+            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
+            harnessRegistry: harnessRegistry);
+
+        var ex = await Assert.ThrowsAsync<AgentProfileNotFoundException>(() => orchestrator.ProcessTaskAsync(task.Id));
+        Assert.Equal("implementation", ex.ProfileId);
+        Assert.Equal(20, ex.WorkspaceId);
+
+        var updatedTask = await taskRepo.GetByIdAsync(200);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Failed, updatedTask.Status);
     }
 }

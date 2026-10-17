@@ -19,12 +19,15 @@ public class IdeationPageTests : BunitContext
     private readonly ToastService _toastService;
     private readonly IdeationSessionState _sessionState;
     private readonly InMemoryWorkflowRepository _workflowRepository;
+    private readonly InMemoryWorkspaceRepository _workspaceRepository;
 
     public IdeationPageTests()
     {
         _workspaceState = new WorkspaceStateService();
         _taskRepository = new InMemoryTaskRepository();
         _workflowRepository = new InMemoryWorkflowRepository();
+        _workspaceRepository = new InMemoryWorkspaceRepository();
+        _workspaceRepository.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
         _markdownSync = new MockTaskMarkdownSyncService();
         _ideationService = new MockIdeationService();
         _toastService = new ToastService();
@@ -33,6 +36,7 @@ public class IdeationPageTests : BunitContext
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
+        Services.AddSingleton<IWorkspaceRepository>(_workspaceRepository);
         Services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
         Services.AddSingleton<IIdeationService>(_ideationService);
         Services.AddSingleton(_toastService);

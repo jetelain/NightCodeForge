@@ -1,4 +1,5 @@
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Repositories;
 
 namespace NightCodeForge.Core.Workflow;
@@ -26,16 +27,19 @@ public class DatabaseWorkflowPipelineProvider : IWorkflowPipelineProvider
         if (task.WorkflowId.HasValue && task.WorkflowId.Value > 0)
         {
             workflow = await _workflowRepo.GetByIdWithStagesAsync(task.WorkflowId.Value, cancellationToken);
+            if (workflow == null)
+            {
+                throw new WorkflowNotFoundException(task.WorkflowId.Value);
+            }
         }
-
-        if (workflow == null)
+        else
         {
             workflow = await _workflowRepo.GetDefaultWorkflowWithStagesAsync(cancellationToken);
         }
 
         if (workflow == null || workflow.Stages.Count == 0)
         {
-            throw new InvalidOperationException($"No workflow pipeline available for task #{task.Id}.");
+            throw new WorkflowNotFoundException("Default workflow is not seeded or contains no stages.");
         }
 
         if (!task.WorkflowId.HasValue || task.WorkflowId.Value <= 0)

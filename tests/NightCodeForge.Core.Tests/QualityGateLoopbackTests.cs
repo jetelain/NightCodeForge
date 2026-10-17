@@ -221,6 +221,7 @@ public class QualityGateLoopbackTests
         var taskRepo = new InMemoryTaskRepository();
         await taskRepo.CreateAsync(task);
         var workspaceRepo = new InMemoryWorkspaceRepository();
+        workspaceRepo.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
         await workspaceRepo.CreateAsync(workspace);
         var depStore = new InMemoryTaskDependencyStore();
         depStore.AddTask(12, 1, TaskOverallStatus.Open);
@@ -348,6 +349,7 @@ public class QualityGateLoopbackTests
         var taskRepo = new InMemoryTaskRepository();
         await taskRepo.CreateAsync(task);
         var workspaceRepo = new InMemoryWorkspaceRepository();
+        workspaceRepo.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
         await workspaceRepo.CreateAsync(workspace);
         var depStore = new InMemoryTaskDependencyStore();
         depStore.AddTask(99, 1, TaskOverallStatus.Implemented);

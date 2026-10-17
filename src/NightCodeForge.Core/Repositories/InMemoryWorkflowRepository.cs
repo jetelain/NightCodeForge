@@ -52,7 +52,7 @@ public class InMemoryWorkflowRepository : IWorkflowRepository
 
         if (def == null)
         {
-            throw new InvalidOperationException("Default workflow does not exist in database.");
+            return Task.FromResult<WorkflowDefinition?>(null);
         }
 
         return Task.FromResult<WorkflowDefinition?>(CloneWorkflow(def));

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow.Stages;
@@ -256,6 +257,30 @@ public class TaskOrchestrator : ITaskOrchestrator
                 ?? workspace.AgentProfiles?.FirstOrDefault();
         }
 
+        if (stage.Kind == WorkflowStageKind.Agentic && !HasCustomHandler(stage))
+        {
+            if (profile == null)
+            {
+                var notFoundEx = new AgentProfileNotFoundException(stage.StageId, workspace.Id);
+                _logger.LogError(notFoundEx, "Agent profile not found for stage '{StageId}' in workspace #{WorkspaceId}", stage.StageId, workspace.Id);
+                task.Status = TaskOverallStatus.Failed;
+                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                if (_dependencyStore != null)
+                {
+                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
+                }
+                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                {
+                    TaskId = task.Id,
+                    Level = LogLevel.Error,
+                    Message = notFoundEx.Message,
+                    Timestamp = DateTime.UtcNow
+                }, cancellationToken);
+
+                throw notFoundEx;
+            }
+        }
+
         if (task.IsWaitingForHuman)
         {
             task.IsWaitingForHuman = false;
@@ -309,24 +334,24 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             if (stage.Kind == WorkflowStageKind.Agentic && _harnessRegistry != null && !HasCustomHandler(stage))
             {
-                var harnessId = profile?.HarnessId ?? StandardHarnessIds.Crucible;
+                var harnessId = profile!.HarnessId;
                 if (_harnessRegistry.TryGetHarness(harnessId, out var harness) && harness != null)
                 {
                     var lastCheckpoint = task.Checkpoints?.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
                     var lastHumanAnswer = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswer);
 
-                    var defaultDirective = (profile?.StageDirectives != null && profile.StageDirectives.TryGetValue(stage.StageId, out var customDirective) && !string.IsNullOrWhiteSpace(customDirective))
+                    var defaultDirective = (profile.StageDirectives != null && profile.StageDirectives.TryGetValue(stage.StageId, out var customDirective) && !string.IsNullOrWhiteSpace(customDirective))
                         ? customDirective
                         : stage.StageDirective;
 
                     var stageDirective = WorkspacePromptResolver.ResolveStageDirective(taskWorkingPath, stage.StageId, defaultDirective);
 
-                    bool isModeMismatch = profile != null && profile.Mode == AgentMode.ReadOnly &&
+                    bool isModeMismatch = profile.Mode == AgentMode.ReadOnly &&
                         (stage.RequiredMode == AgentMode.Full || stage.RequiredMode == AgentMode.Review);
 
                     if (isModeMismatch)
                     {
-                        var errorMsg = $"Stage '{stage.StageId}' requires AgentMode.{stage.RequiredMode} capabilities, but profile '{profile?.Id}' is configured as AgentMode.ReadOnly.";
+                        var errorMsg = $"Stage '{stage.StageId}' requires AgentMode.{stage.RequiredMode} capabilities, but profile '{profile.Id}' is configured as AgentMode.ReadOnly.";
                         _logger.LogError(errorMsg);
                         result = StageExecutionResult.Failure(errorMsg);
                     }
@@ -340,7 +365,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                         {
                             ForgeTask = task,
                             Workspace = workspace,
-                            Profile = profile ?? new AgentProfile { Id = "default", HarnessId = harnessId, ModelName = string.Empty },
+                            Profile = profile,
                             StageId = stage.StageId,
                             StageDirective = stageDirective,
                             RequiredMode = stage.RequiredMode,
@@ -348,7 +373,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             SerializedStateJson = resumeMemory,
                             PendingHumanAnswer = lastHumanAnswer,
                             BootstrapPrompt = stage.BuildBootstrapPrompt(task, pipelineContext, stageDirective),
-                            OptimizationFlags = profile?.OptimizationFlags ?? new LocalOptimizationFlags(),
+                            OptimizationFlags = profile.OptimizationFlags ?? new LocalOptimizationFlags(),
                             PipelineContext = pipelineContext
                         };
 
