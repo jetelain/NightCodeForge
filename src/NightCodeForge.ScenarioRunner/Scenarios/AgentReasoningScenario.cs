@@ -36,7 +36,7 @@ public class AgentReasoningScenario : IScenario
                 Title = "Inspect Calculator Codebase",
                 Description = "Inspect Calculator.cs and README.md. Analyze the available arithmetic methods and recommend next steps.",
                 Status = TaskOverallStatus.Open,
-                CurrentStageId = "task-review",
+                CurrentStageId = StandardStageIds.TaskReview,
                 BaseBranch = "main",
                 FeatureBranch = "feature/task-inspect",
                 Priority = 1,
@@ -60,12 +60,12 @@ public class AgentReasoningScenario : IScenario
             context.CancellationToken);
         ConsoleFormatting.PrintInfo($"Worktree provisioned at '{worktreePath}'");
 
-        var profile = context.Environment.Workspace.AgentProfiles?.FirstOrDefault(p => p.Id == "task-review")
+        var profile = context.Environment.Workspace.AgentProfiles?.FirstOrDefault(p => p.Id == StandardStageIds.TaskReview)
             ?? new AgentProfile
             {
-                Id = "task-review",
+                Id = StandardStageIds.TaskReview,
                 Name = "Reviewer",
-                HarnessId = "crucible",
+                HarnessId = StandardHarnessIds.Crucible,
                 ModelName = context.Options.ModelId,
                 Mode = AgentMode.Full
             };
@@ -75,7 +75,7 @@ public class AgentReasoningScenario : IScenario
             ForgeTask = task,
             Workspace = context.Environment.Workspace,
             Profile = profile,
-            StageId = "task-review",
+            StageId = StandardStageIds.TaskReview,
             StageDirective = "Inspect Calculator.cs and README.md in the repository. Answer what methods are present and recommend 2 additional arithmetic operations.",
             RequiredMode = AgentMode.Full,
             WorkspacePath = worktreePath,

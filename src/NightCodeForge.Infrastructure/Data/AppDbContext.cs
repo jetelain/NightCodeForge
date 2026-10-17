@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Infrastructure.Data;
 
@@ -396,12 +397,12 @@ public class AppDbContext : DbContext
                 {
                     new StageDefinition
                     {
-                        StageId = "task-review",
+                        StageId = StandardStageIds.TaskReview,
                         DisplayName = "ForgeTask Review",
                         Icon = "🔍",
                         SequenceOrder = 1,
                         Kind = WorkflowStageKind.Agentic,
-                        CsharpImplementationType = "agentic",
+                        CsharpImplementationType = StageImplementationTypes.Agentic,
                         ConfigurationJson = """
                         {
                           "AgentProfileId": null,
@@ -415,22 +416,22 @@ public class AppDbContext : DbContext
                     },
                     new StageDefinition
                     {
-                        StageId = "deterministic-pre-impl",
+                        StageId = StandardStageIds.PreImplementationBaseline,
                         DisplayName = "Pre-Implementation Baseline",
                         Icon = "⚙️",
                         SequenceOrder = 2,
                         Kind = WorkflowStageKind.Deterministic,
-                        CsharpImplementationType = "deterministic-composite",
+                        CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
                         ConfigurationJson = """{"Action": "CompositeBaseline", "FailOnError": false, "TimeoutSeconds": 600, "ExtraParameters": {"Stages": "build,test"}}"""
                     },
                     new StageDefinition
                     {
-                        StageId = "implementation",
+                        StageId = StandardStageIds.Implementation,
                         DisplayName = "Implementation",
                         Icon = "💻",
                         SequenceOrder = 3,
                         Kind = WorkflowStageKind.Agentic,
-                        CsharpImplementationType = "agentic",
+                        CsharpImplementationType = StageImplementationTypes.Agentic,
                         ConfigurationJson = """
                         {
                           "AgentProfileId": null,
@@ -444,43 +445,45 @@ public class AppDbContext : DbContext
                     },
                     new StageDefinition
                     {
-                        StageId = "deterministic-post-impl",
+                        StageId = StandardStageIds.PostImplementationGates,
                         DisplayName = "Post-Implementation Gates",
                         Icon = "🧪",
                         SequenceOrder = 4,
                         Kind = WorkflowStageKind.Deterministic,
-                        CsharpImplementationType = "deterministic-composite",
-                        ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "implementation", "FailOnError": true, "TimeoutSeconds": 900, "ExtraParameters": {"Stages": "build,test,coverage,sast"}}"""
+                        CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
+                        ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "{LOOPBACK}", "FailOnError": true, "TimeoutSeconds": 900, "ExtraParameters": {"Stages": "build,test,coverage,sast"}}"""
+                            .Replace("{LOOPBACK}", StandardStageIds.Implementation)
                     },
                     new StageDefinition
                     {
-                        StageId = "code-review-fix",
+                        StageId = StandardStageIds.CodeReviewAndFix,
                         DisplayName = "Code Review & Fix",
                         Icon = "🧐",
                         SequenceOrder = 5,
                         Kind = WorkflowStageKind.Agentic,
-                        CsharpImplementationType = "agentic",
+                        CsharpImplementationType = StageImplementationTypes.Agentic,
                         ConfigurationJson = """
                         {
                           "AgentProfileId": null,
                           "RequiredMode": 2,
-                          "LoopBackStageId": "implementation",
+                          "LoopBackStageId": "{LOOPBACK}",
                           "MaxRetries": 3,
                           "TimeoutMinutes": 30,
                           "StageDirective": "You are a Principal Code Reviewer and Quality Gatekeeper.\n1. Inspect the full git diff against the base branch using 'bash' (e.g. git diff, git status) and 'read'. Compare against the specification in docs/tasks/ and the implementation claims.\n2. TIER 1 - MINOR POLISH: If the implementation is fundamentally sound and only requires minor edge-case fixes, code style cleanup, variable renames, or documentation additions, apply precision fixes directly using 'edit' and verify with 'bash' (build and test).\n3. TIER 2 - REJECTION GATE: Rejection is strictly reserved for major tasks or missing features. If core acceptance criteria are unfulfilled, if nothing has been implemented, if tests fundamentally fail requiring architectural redesign, or if entire modules are missing, REJECT the implementation immediately:\n   - If 'request_changes' tool is available, invoke 'request_changes(feedback, reason)' immediately.\n   - Otherwise, conclude your final response with:\n     <request_changes>\n     [Detailed explanation of missing features, broken requirements, and instructions for rework]\n     </request_changes>\n   Do not attempt to write entire missing feature modules in the review stage.",
                           "PromptTemplate": "Execute stage '{{ stage.display_name }}' for task #{{ task.id }}: {{ task.title }}\n{{ task.description }}\n{{- if context.task_markdown_path }}\n\n[ForgeTask Specification Document]:\n{{ context.task_markdown_path }}\n{{- end }}\n{{- if context.approved_plan }}\n\n[Approved Implementation Plan]:\n{{ context.approved_plan }}\n{{- end }}\n{{- if context.implementation_summary }}\n\n[Implementation Agent Completion Summary]:\n{{ context.implementation_summary }}\n(Note: Treat these reported achievements as claims to verify against the git diff and test results. Do not assume claims are true without checking the code.)\n{{- end }}"
                         }
-                        """
+                        """.Replace("{LOOPBACK}", StandardStageIds.Implementation)
                     },
                     new StageDefinition
                     {
-                        StageId = "deterministic-post-review",
+                        StageId = StandardStageIds.PostReviewVerification,
                         DisplayName = "Post-Review Verification",
                         Icon = "🛡️",
                         SequenceOrder = 6,
                         Kind = WorkflowStageKind.Deterministic,
-                        CsharpImplementationType = "deterministic-composite",
-                        ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "implementation", "FailOnError": true, "TimeoutSeconds": 600, "ExtraParameters": {"Stages": "build,test"}}"""
+                        CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
+                        ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "{LOOPBACK}", "FailOnError": true, "TimeoutSeconds": 600, "ExtraParameters": {"Stages": "build,test"}}"""
+                            .Replace("{LOOPBACK}", StandardStageIds.Implementation)
                     }
                 }
             };

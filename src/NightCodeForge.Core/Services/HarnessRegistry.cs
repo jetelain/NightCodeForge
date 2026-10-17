@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Core.Services;
@@ -39,21 +40,7 @@ public class HarnessRegistry : IHarnessRegistry
 
     public bool TryGetHarness(string harnessId, out IAgentHarness? harness)
     {
-        if (_harnesses.TryGetValue(harnessId, out harness))
-        {
-            return true;
-        }
-
-        if (string.Equals(harnessId, "pi", StringComparison.OrdinalIgnoreCase) && _harnesses.TryGetValue("pi-rpc", out harness))
-        {
-            return true;
-        }
-        if (string.Equals(harnessId, "pi-rpc", StringComparison.OrdinalIgnoreCase) && _harnesses.TryGetValue("pi", out harness))
-        {
-            return true;
-        }
-
-        return false;
+        return _harnesses.TryGetValue(harnessId, out harness);
     }
 
     public IEnumerable<IAgentHarness> GetAllHarnesses()

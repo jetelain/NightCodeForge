@@ -10,8 +10,8 @@ namespace NightCodeForge.Core.Workflow.Stages;
 /// </summary>
 public partial class DeterministicBuildStage : IWorkflowStage
 {
-    public const string DefaultStageId = "deterministic-build";
-    public const string FallbackLoopBackStageId = "implementation";
+    public const string DefaultStageId = StageImplementationTypes.DeterministicBuild;
+    public const string FallbackLoopBackStageId = StandardStageIds.Implementation;
 
     [GeneratedRegex(@"(?:warning\s+([A-Za-z0-9_-]+):\s*(.+?)\s*\[|\((\d+),(\d+)\):\s*warning\s*([A-Za-z0-9_-]+):)")]
     private static partial Regex WarningRegex();
@@ -106,8 +106,8 @@ public partial class DeterministicBuildStage : IWorkflowStage
 
         if (effectiveEnv != null)
         {
-            var timeout = context.Workspace?.BuildTimeoutSeconds ?? config.BuildTimeoutSeconds ?? 120;
-            bag.Set("build.timeout_seconds", timeout);
+            var timeout = context.Workspace?.BuildTimeoutSeconds ?? config.BuildTimeoutSeconds ?? WorkflowDefaults.DefaultBuildTimeoutSeconds;
+            bag.Set(PipelineDataBagKeys.BuildTimeoutSeconds, timeout);
 
             var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: timeout, cancellationToken: cancellationToken);
 
@@ -118,37 +118,37 @@ public partial class DeterministicBuildStage : IWorkflowStage
             // Count warnings
             var warnings = WarningRegex().Matches(fullOutput);
             var warningCount = warnings.Count;
-            bag.Set("warnings.current.total", warningCount);
+            bag.Set(PipelineDataBagKeys.WarningsCurrentTotal, warningCount);
 
-            if (!bag.TryGet<int>("warnings.baseline.total", out _))
+            if (!bag.TryGet<int>(PipelineDataBagKeys.WarningsBaselineTotal, out _))
             {
-                bag.Set("warnings.baseline.total", warningCount);
+                bag.Set(PipelineDataBagKeys.WarningsBaselineTotal, warningCount);
             }
 
             if (!res.Success)
             {
-                bool isTimeout = res.ExitCode == 124 ||
+                bool isTimeout = res.ExitCode == WorkflowDefaults.ProcessTimeoutExitCode ||
                                  res.Truncated && (res.StandardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
                                                    res.StandardOutput.Contains("timed out", StringComparison.OrdinalIgnoreCase));
 
                 if (isTimeout)
                 {
                     var timeoutMsg = $"Deterministic build timed out after {timeout} seconds. Build failed to terminate within the configured limit.";
-                    bag.Set("diagnostics.compiler_errors", new List<string> { timeoutMsg });
-                    bag.Set("build.failure.reason", timeoutMsg);
-                    var target = bag.Get<string>("Stage.LoopBackId") ?? LoopBackStageId;
+                    bag.Set(PipelineDataBagKeys.CompilerErrors, new List<string> { timeoutMsg });
+                    bag.Set(PipelineDataBagKeys.BuildFailureReason, timeoutMsg);
+                    var target = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
                     return StageExecutionResult.Failure(timeoutMsg, target);
                 }
 
                 var errors = ErrorRegex().Matches(fullOutput);
                 var errorList = errors.Select(m => m.Value.Trim()).Take(10).ToList();
-                bag.Set("diagnostics.compiler_errors", errorList);
+                bag.Set(PipelineDataBagKeys.CompilerErrors, errorList);
 
                 var errorMsg = errorList.Count > 0
                     ? $"Deterministic build failed with exit code {res.ExitCode}. {errorList.Count} compiler error(s) detected."
                     : $"Deterministic build failed with exit code {res.ExitCode}. Output: {fullOutput.Trim()}";
-                bag.Set("build.failure.reason", errorMsg);
-                var targetStage = bag.Get<string>("Stage.LoopBackId") ?? LoopBackStageId;
+                bag.Set(PipelineDataBagKeys.BuildFailureReason, errorMsg);
+                var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
                 return StageExecutionResult.Failure(errorMsg, targetStage);
             }
         }

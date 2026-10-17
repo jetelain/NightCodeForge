@@ -41,7 +41,7 @@ public class EndToEndWorkflowScenario : IScenario
                 Title = "Implement Multiply Operation in Calculator",
                 Description = "Add a Multiply(int a, int b) method to Calculator with full XML documentation.",
                 Status = TaskOverallStatus.Open,
-                CurrentStageId = "task-review",
+                CurrentStageId = StandardStageIds.TaskReview,
                 BaseBranch = "main",
                 Priority = 1,
                 MergeMode = MergeMode.Automatic
@@ -55,16 +55,16 @@ public class EndToEndWorkflowScenario : IScenario
         }
 
         // Step 2: Configure custom stage handlers for deterministic end-to-end progression
-        var reviewStage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full })
+        var reviewStage = new GenericAgenticStage(StandardStageIds.TaskReview, "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full })
         {
             Handler = (pipelineCtx, ct) =>
             {
-                pipelineCtx.DataBag.Set("Stage1.ApprovedPlan", "Technical Plan: Add Multiply(int a, int b) returning a * b to Calculator.cs.");
+                pipelineCtx.DataBag.Set(PipelineDataBagKeys.ApprovedPlan, "Technical Plan: Add Multiply(int a, int b) returning a * b to Calculator.cs.");
                 return Task.FromResult(StageExecutionResult.Success());
             }
         };
 
-        var implStage = new GenericAgenticStage("implementation", "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full })
+        var implStage = new GenericAgenticStage(StandardStageIds.Implementation, "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full })
         {
             Handler = (pipelineCtx, ct) =>
             {
@@ -74,7 +74,7 @@ public class EndToEndWorkflowScenario : IScenario
             }
         };
 
-        var reviewFixStage = new GenericAgenticStage("code-review-fix", "Code Review & Fix", new AgenticStageConfig { RequiredMode = AgentMode.Review, LoopBackStageId = "implementation" })
+        var reviewFixStage = new GenericAgenticStage(StandardStageIds.CodeReviewAndFix, "Code Review & Fix", new AgenticStageConfig { RequiredMode = AgentMode.Review, LoopBackStageId = StandardStageIds.Implementation })
         {
             Handler = (pipelineCtx, ct) =>
             {

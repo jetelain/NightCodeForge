@@ -264,7 +264,7 @@ public class TaskOrchestratorDynamicWorkflowTests
         Assert.Contains(task.Id, _jobQueue.UrgentQueue);
 
         var bag = PipelineDataBag.FromJson(reloaded.PipelineDataJson);
-        Assert.Equal("Unit tests are missing for edge cases.", bag.Get<string>("ReviewerFeedback"));
+        Assert.Equal("Unit tests are missing for edge cases.", bag.Get<string>(PipelineDataBagKeys.ReviewerFeedback));
     }
 
     [Fact]

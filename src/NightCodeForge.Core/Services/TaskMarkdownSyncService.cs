@@ -362,7 +362,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 IsWaitingForHuman = frontmatter.WaitingForHuman,
                 BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? "main" : frontmatter.BaseBranch,
                 Status = TaskOverallStatus.Suggested,
-                CurrentStageId = "task-review",
+                CurrentStageId = StandardStageIds.TaskReview,
                 CreatedAt = frontmatter.CreatedAt ?? DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };

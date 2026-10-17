@@ -381,15 +381,15 @@ public partial class CanonicalTools
         {
             if (command.Contains("test", StringComparison.OrdinalIgnoreCase))
             {
-                effectiveTimeout = _testTimeoutSeconds ?? 120;
+                effectiveTimeout = _testTimeoutSeconds ?? WorkflowDefaults.DefaultTestTimeoutSeconds;
             }
             else if (command.Contains("build", StringComparison.OrdinalIgnoreCase))
             {
-                effectiveTimeout = _buildTimeoutSeconds ?? 120;
+                effectiveTimeout = _buildTimeoutSeconds ?? WorkflowDefaults.DefaultBuildTimeoutSeconds;
             }
             else
             {
-                effectiveTimeout = 60;
+                effectiveTimeout = WorkflowDefaults.DefaultCommandTimeoutSeconds;
             }
         }
 
@@ -403,7 +403,7 @@ public partial class CanonicalTools
             catch (TimeoutException)
             {
                 _logger?.LogWarning("CanonicalTools.bash: Command timed out after {Timeout}s: '{Command}' in '{WorkDir}'", effectiveTimeout, command, workDir);
-                return $"Exit Code: 124\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
+                return $"Exit Code: {WorkflowDefaults.ProcessTimeoutExitCode}\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
             }
             catch (Exception ex)
             {
@@ -417,20 +417,20 @@ public partial class CanonicalTools
                 output = res.StandardOutput + "\n[STDERR]\n" + res.StandardError;
             }
 
-            bool isTimeout = res.ExitCode == 124 ||
+            bool isTimeout = res.ExitCode == WorkflowDefaults.ProcessTimeoutExitCode ||
                              res.Truncated && (res.StandardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
                                                res.StandardOutput.Contains("timed out", StringComparison.OrdinalIgnoreCase));
 
             if (isTimeout)
             {
-                _logger?.LogWarning("CanonicalTools.bash: Command timed out (detected exit code 124 or buffer): '{Command}'", command);
-                return $"Exit Code: 124\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
+                _logger?.LogWarning("CanonicalTools.bash: Command timed out (detected exit code {ExitCode} or buffer): '{Command}'", WorkflowDefaults.ProcessTimeoutExitCode, command);
+                return $"Exit Code: {WorkflowDefaults.ProcessTimeoutExitCode}\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
             }
 
             if (res.ExitCode != 0)
             {
                 _logger?.LogWarning("CanonicalTools.bash: Command returned exit code {ExitCode}: '{Command}'. Output summary: {Output}",
-                    res.ExitCode, command, output.Length > 300 ? output[..300] + "..." : output);
+                    res.ExitCode, command, output.Length > WorkflowDefaults.DefaultOutputSummaryTruncationLength ? output[..WorkflowDefaults.DefaultOutputSummaryTruncationLength] + "..." : output);
             }
 
             if (command.Contains("build", StringComparison.OrdinalIgnoreCase) || command.Contains("test", StringComparison.OrdinalIgnoreCase))

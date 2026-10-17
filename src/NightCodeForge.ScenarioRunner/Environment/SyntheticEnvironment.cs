@@ -180,37 +180,37 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
                     Id = "default",
                     WorkspaceId = Workspace.Id,
                     Name = "Default Full Agent",
-                    HarnessId = "crucible",
+                    HarnessId = StandardHarnessIds.Crucible,
                     ModelName = Options.ModelId,
                     Mode = AgentMode.Full,
                     OptimizationFlags = new LocalOptimizationFlags()
                 },
                 new()
                 {
-                    Id = "task-review",
+                    Id = StandardStageIds.TaskReview,
                     WorkspaceId = Workspace.Id,
                     Name = "ForgeTask Review Agent",
-                    HarnessId = "crucible",
+                    HarnessId = StandardHarnessIds.Crucible,
                     ModelName = Options.ModelId,
                     Mode = AgentMode.Full,
                     OptimizationFlags = new LocalOptimizationFlags()
                 },
                 new()
                 {
-                    Id = "implementation",
+                    Id = StandardStageIds.Implementation,
                     WorkspaceId = Workspace.Id,
                     Name = "Implementation Agent",
-                    HarnessId = "crucible",
+                    HarnessId = StandardHarnessIds.Crucible,
                     ModelName = Options.ModelId,
                     Mode = AgentMode.Full,
                     OptimizationFlags = new LocalOptimizationFlags()
                 },
                 new()
                 {
-                    Id = "code-review-fix",
+                    Id = StandardStageIds.CodeReviewAndFix,
                     WorkspaceId = Workspace.Id,
                     Name = "Code Review Agent",
-                    HarnessId = "crucible",
+                    HarnessId = StandardHarnessIds.Crucible,
                     ModelName = Options.ModelId,
                     Mode = AgentMode.Full,
                     OptimizationFlags = new LocalOptimizationFlags()

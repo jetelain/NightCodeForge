@@ -10,7 +10,7 @@ public class RequestChangesException : Exception
     public string? Reason { get; }
     public string TargetStageId { get; }
 
-    public RequestChangesException(string feedback, string? reason = null, string targetStageId = "implementation")
+    public RequestChangesException(string feedback, string? reason = null, string targetStageId = Domain.StandardStageIds.Implementation)
         : base(feedback)
     {
         Feedback = feedback;

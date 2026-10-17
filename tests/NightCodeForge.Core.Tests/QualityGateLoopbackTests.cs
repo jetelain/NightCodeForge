@@ -12,7 +12,7 @@ public class QualityGateLoopbackTests
 {
     private class FakeAgentHarness : IAgentHarness
     {
-        public string HarnessId { get; set; } = "crucible";
+        public string HarnessId { get; set; } = StandardHarnessIds.Crucible;
         public List<AgentSessionContext> ExecutedSessions { get; } = new();
         public AgentRunResult ResultToReturn { get; set; } = AgentRunResult.Completed(
             new AgentRunMetrics(50, 100, 50, 150),
@@ -107,11 +107,11 @@ public class QualityGateLoopbackTests
         Assert.Equal(10, jobQueue.UrgentQueue[0]);
 
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
-        var stageRetries = bag.Get<Dictionary<string, int>>("Workflow.StageRetries");
+        var stageRetries = bag.Get<Dictionary<string, int>>(PipelineDataBagKeys.StageRetries);
         Assert.NotNull(stageRetries);
         Assert.Equal(1, stageRetries["quality-gate"]);
 
-        var diagnostics = bag.Get<List<string>>("diagnostics.compiler_errors");
+        var diagnostics = bag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
         Assert.NotNull(diagnostics);
         Assert.Single(diagnostics);
         Assert.Contains("Unit tests failed", diagnostics[0]);
@@ -132,8 +132,8 @@ public class QualityGateLoopbackTests
         };
 
         var initialBag = new PipelineDataBag();
-        initialBag.Set("Workflow.MaxRetries", 2);
-        initialBag.Set("Workflow.StageRetries", new Dictionary<string, int> { ["quality-gate"] = 2 });
+        initialBag.Set(PipelineDataBagKeys.MaxRetries, 2);
+        initialBag.Set(PipelineDataBagKeys.StageRetries, new Dictionary<string, int> { ["quality-gate"] = 2 });
         task.PipelineDataJson = initialBag.ToJson();
 
         var workspace = new Workspace
@@ -207,7 +207,7 @@ public class QualityGateLoopbackTests
         });
 
         var bag = new PipelineDataBag();
-        bag.Set("Stage1.ApprovedPlan", "1. Create models\n2. Add repository\n3. Add tests");
+        bag.Set(PipelineDataBagKeys.ApprovedPlan, "1. Create models\n2. Add repository\n3. Add tests");
         task.PipelineDataJson = bag.ToJson();
 
         var workspace = new Workspace
@@ -361,14 +361,14 @@ public class QualityGateLoopbackTests
             ResultToReturn = AgentRunResult.Completed(
                 new AgentRunMetrics(100),
                 summary: "Reviewer requested changes: AuthService incomplete",
-                targetRouting: "implementation")
+                targetRouting: StandardStageIds.Implementation)
         };
         var harnessRegistry = new FakeHarnessRegistry(fakeHarness);
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
         {
-            new TestWorkflowStage("implementation", WorkflowStageKind.Agentic),
-            new TestWorkflowStage("code-review-fix", WorkflowStageKind.Agentic, AgentMode.Review)
+            new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic),
+            new TestWorkflowStage(StandardStageIds.CodeReviewAndFix, WorkflowStageKind.Agentic, AgentMode.Review)
         });
 
         var orchestrator = new TaskOrchestrator(
@@ -386,13 +386,13 @@ public class QualityGateLoopbackTests
         await orchestrator.ProcessTaskAsync(task.Id);
 
         // Assert
-        Assert.Equal("implementation", task.CurrentStageId);
+        Assert.Equal(StandardStageIds.Implementation, task.CurrentStageId);
         Assert.Single(jobQueue.UrgentQueue);
         Assert.Equal(99, jobQueue.UrgentQueue[0]);
 
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
-        var stageRetries = bag.Get<Dictionary<string, int>>("Workflow.StageRetries");
+        var stageRetries = bag.Get<Dictionary<string, int>>(PipelineDataBagKeys.StageRetries);
         Assert.NotNull(stageRetries);
-        Assert.Equal(1, stageRetries["code-review-fix"]);
+        Assert.Equal(1, stageRetries[StandardStageIds.CodeReviewAndFix]);
     }
 }

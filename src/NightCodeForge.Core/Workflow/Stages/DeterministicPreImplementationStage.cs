@@ -9,7 +9,7 @@ namespace NightCodeForge.Core.Workflow.Stages;
 /// </summary>
 public class DeterministicPreImplementationStage : IWorkflowStage
 {
-    public const string DefaultStageId = "deterministic-pre-impl";
+    public const string DefaultStageId = StandardStageIds.PreImplementationBaseline;
     public string StageId => DefaultStageId;
     public string DisplayName => "Deterministic Pre-Implementation Baseline";
     public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;

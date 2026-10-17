@@ -155,7 +155,7 @@
 
                 if (active != null)
                 {
-                    WorkerState.HandleWorkerStatus("Running", active.Id, active.CurrentStageId ?? "task-review", "Local GPU", active.Title, active.FeatureBranch);
+                    WorkerState.HandleWorkerStatus("Running", active.Id, active.CurrentStageId ?? StandardStageIds.TaskReview, "Local GPU", active.Title, active.FeatureBranch);
                 }
             }
             catch (Exception ex)

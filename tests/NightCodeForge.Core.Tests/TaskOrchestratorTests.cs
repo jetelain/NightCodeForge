@@ -326,7 +326,7 @@ public class TaskOrchestratorTests
         {
             Handler = (ctx, ct) =>
             {
-                ctx.DataBag.Set("PendingProposals", new List<TaskProposal>
+                ctx.DataBag.Set(PipelineDataBagKeys.PendingProposals, new List<TaskProposal>
                 {
                     new TaskProposal("Fix Memory Leak", "Found memory leak in parser", "bug")
                 });

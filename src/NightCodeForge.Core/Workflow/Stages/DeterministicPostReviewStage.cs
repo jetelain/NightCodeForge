@@ -10,8 +10,8 @@ namespace NightCodeForge.Core.Workflow.Stages;
 /// </summary>
 public class DeterministicPostReviewStage : IWorkflowStage
 {
-    public const string DefaultStageId = "deterministic-post-review";
-    public const string LoopBackStageId = "code-review-fix";
+    public const string DefaultStageId = StandardStageIds.PostReviewVerification;
+    public const string LoopBackStageId = StandardStageIds.CodeReviewAndFix;
 
     private readonly DeterministicBuildStage _buildStage;
     private readonly DeterministicTestStage _testStage;

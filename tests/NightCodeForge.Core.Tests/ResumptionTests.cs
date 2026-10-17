@@ -79,7 +79,7 @@ public class ResumptionTests
         Assert.Equal(TaskOverallStatus.Open, updatedTask.Status);
 
         var bag = PipelineDataBag.FromJson(updatedTask.PipelineDataJson);
-        Assert.Equal("Port 8080", bag.Get<string>("LastHumanAnswer"));
+        Assert.Equal("Port 8080", bag.Get<string>(PipelineDataBagKeys.LastHumanAnswer));
 
         // Enqueued to llm-urgent
         Assert.Contains(100, _jobQueue.UrgentQueue);
@@ -155,7 +155,7 @@ public class ResumptionTests
         string? consumedAnswer = null;
         var stage = TestWorkflowPipelines.CreateImplementationStage((ctx, ct) =>
         {
-            consumedAnswer = ctx.DataBag.Get<string>("LastHumanAnswer");
+            consumedAnswer = ctx.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswer);
             return Task.FromResult(StageExecutionResult.Success());
         });
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
@@ -185,7 +185,7 @@ public class ResumptionTests
             Id = 102,
             WorkspaceId = 1,
             Status = TaskOverallStatus.Ready,
-            CurrentStageId = "code-review-fix"
+            CurrentStageId = StandardStageIds.CodeReviewAndFix
         });
         _depStore.AddTask(102, 1, TaskOverallStatus.Ready);
 
@@ -198,10 +198,10 @@ public class ResumptionTests
         var updated = await _taskRepo.GetByIdAsync(102);
         Assert.NotNull(updated);
         Assert.Equal(TaskOverallStatus.Reviewed, updated.Status);
-        Assert.Equal("implementation", updated.CurrentStageId);
+        Assert.Equal(StandardStageIds.Implementation, updated.CurrentStageId);
 
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);
-        Assert.Equal("Please add XML documentation to all public interfaces and fix indentation.", bag.Get<string>("ReviewerFeedback"));
+        Assert.Equal("Please add XML documentation to all public interfaces and fix indentation.", bag.Get<string>(PipelineDataBagKeys.ReviewerFeedback));
 
         // Enqueued to llm-urgent
         Assert.Contains(102, _jobQueue.UrgentQueue);

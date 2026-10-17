@@ -60,8 +60,8 @@ public class DeterministicStageTests
         var result = await stage.ExecuteAsync(context);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal(2, context.DataBag.Get<int>("warnings.current.total"));
-        Assert.Equal(2, context.DataBag.Get<int>("warnings.baseline.total"));
+        Assert.Equal(2, context.DataBag.Get<int>(PipelineDataBagKeys.WarningsCurrentTotal));
+        Assert.Equal(2, context.DataBag.Get<int>(PipelineDataBagKeys.WarningsBaselineTotal));
         Assert.Equal("dotnet build", fakeEnv.LastCommand);
     }
 
@@ -80,9 +80,9 @@ public class DeterministicStageTests
         var result = await stage.ExecuteAsync(context);
 
         Assert.False(result.IsSuccess);
-        Assert.Equal("implementation", result.TargetRoutingStageId);
+        Assert.Equal(StandardStageIds.Implementation, result.TargetRoutingStageId);
         Assert.Contains("Deterministic build failed", result.ErrorMessage);
-        Assert.True(context.DataBag.TryGet<List<string>>("diagnostics.compiler_errors", out var errors));
+        Assert.True(context.DataBag.TryGet<List<string>>(PipelineDataBagKeys.CompilerErrors, out var errors));
         Assert.NotEmpty(errors!);
     }
 
@@ -139,10 +139,10 @@ public class DeterministicStageTests
         var result = await stage.ExecuteAsync(context);
 
         Assert.False(result.IsSuccess);
-        Assert.Equal(11, context.DataBag.Get<int>("tests.current.total"));
-        Assert.Equal(1, context.DataBag.Get<int>("tests.current.failed"));
-        Assert.Equal("implementation", result.TargetRoutingStageId);
-        Assert.True(context.DataBag.TryGet<List<string>>("diagnostics.failed_tests", out var failedList));
+        Assert.Equal(11, context.DataBag.Get<int>(PipelineDataBagKeys.TestsCurrentTotal));
+        Assert.Equal(1, context.DataBag.Get<int>(PipelineDataBagKeys.TestsCurrentFailed));
+        Assert.Equal(StandardStageIds.Implementation, result.TargetRoutingStageId);
+        Assert.True(context.DataBag.TryGet<List<string>>(PipelineDataBagKeys.FailedTests, out var failedList));
         Assert.NotEmpty(failedList!);
     }
 
@@ -164,7 +164,7 @@ public class DeterministicStageTests
         fakeEnv.NextResult = new CommandResult(1, string.Empty, "Security vulnerability detected.", TimeSpan.FromMilliseconds(50));
         var failRes = await stage.ExecuteAsync(context);
         Assert.False(failRes.IsSuccess);
-        Assert.Equal("implementation", failRes.TargetRoutingStageId);
+        Assert.Equal(StandardStageIds.Implementation, failRes.TargetRoutingStageId);
     }
 
     [Fact]
@@ -273,11 +273,11 @@ public class DeterministicStageTests
         var result = await stage.ExecuteAsync(context);
 
         Assert.False(result.IsSuccess);
-        Assert.Equal("implementation", result.TargetRoutingStageId);
+        Assert.Equal(StandardStageIds.Implementation, result.TargetRoutingStageId);
         Assert.Contains("timed out after 30 seconds", result.ErrorMessage);
         Assert.Equal(30, fakeEnv.LastTimeoutSeconds);
-        Assert.Equal(30, context.DataBag.Get<int>("build.timeout_seconds"));
-        Assert.True(context.DataBag.TryGet<List<string>>("diagnostics.compiler_errors", out var errors));
+        Assert.Equal(30, context.DataBag.Get<int>(PipelineDataBagKeys.BuildTimeoutSeconds));
+        Assert.True(context.DataBag.TryGet<List<string>>(PipelineDataBagKeys.CompilerErrors, out var errors));
         Assert.Contains("timed out after 30 seconds", errors![0]);
     }
 
@@ -297,7 +297,7 @@ public class DeterministicStageTests
 
         Assert.True(result.IsSuccess);
         Assert.Equal(45, fakeEnv.LastTimeoutSeconds);
-        Assert.Equal(45, context.DataBag.Get<int>("build.timeout_seconds"));
+        Assert.Equal(45, context.DataBag.Get<int>(PipelineDataBagKeys.BuildTimeoutSeconds));
     }
 
     [Fact]
@@ -315,12 +315,12 @@ public class DeterministicStageTests
         var result = await stage.ExecuteAsync(context);
 
         Assert.False(result.IsSuccess);
-        Assert.Equal("implementation", result.TargetRoutingStageId);
+        Assert.Equal(StandardStageIds.Implementation, result.TargetRoutingStageId);
         Assert.Contains("timed out after 60 seconds", result.ErrorMessage);
         Assert.Contains("resource", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(60, fakeEnv.LastTimeoutSeconds);
-        Assert.Equal(60, context.DataBag.Get<int>("test.timeout_seconds"));
-        Assert.True(context.DataBag.TryGet<List<string>>("diagnostics.failed_tests", out var failedTests));
+        Assert.Equal(60, context.DataBag.Get<int>(PipelineDataBagKeys.TestTimeoutSeconds));
+        Assert.True(context.DataBag.TryGet<List<string>>(PipelineDataBagKeys.FailedTests, out var failedTests));
         Assert.Contains("timed out after 60 seconds", failedTests![0]);
     }
 
@@ -340,7 +340,7 @@ public class DeterministicStageTests
 
         Assert.True(result.IsSuccess);
         Assert.Equal(90, fakeEnv.LastTimeoutSeconds);
-        Assert.Equal(90, context.DataBag.Get<int>("test.timeout_seconds"));
+        Assert.Equal(90, context.DataBag.Get<int>(PipelineDataBagKeys.TestTimeoutSeconds));
     }
 
     [Fact]
@@ -378,7 +378,7 @@ public class DeterministicStageTests
 
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
-        var profile = new AgentProfile { Id = "implementation", Name = "qwen-coder", ModelName = "qwen2.5-coder:14b" };
+        var profile = new AgentProfile { Id = StandardStageIds.Implementation, Name = "qwen-coder", ModelName = "qwen2.5-coder:14b" };
         workspace.AgentProfiles.Add(profile);
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage, TestWorkflowPipelines.CreateImplementationStage() });

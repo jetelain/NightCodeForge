@@ -43,7 +43,7 @@ public class HumanInterruptionScenario : IScenario
                 Title = "Add Modulo Operation to Calculator",
                 Description = "Implement Modulo(int a, int b) in Calculator. Ambiguity exists around zero division behavior.",
                 Status = TaskOverallStatus.Open,
-                CurrentStageId = "task-review",
+                CurrentStageId = StandardStageIds.TaskReview,
                 BaseBranch = "main",
                 FeatureBranch = "feature/task-modulo",
                 Priority = 1,
@@ -55,11 +55,11 @@ public class HumanInterruptionScenario : IScenario
         }
 
         // Step 2: Configure custom stage handler that triggers human interruption on turn 1
-        var reviewStage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full })
+        var reviewStage = new GenericAgenticStage(StandardStageIds.TaskReview, "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full })
         {
             Handler = (pipelineContext, ct) =>
             {
-                var lastAnswer = pipelineContext.DataBag.Get<string>("LastHumanAnswer");
+                var lastAnswer = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswer);
                 if (string.IsNullOrWhiteSpace(lastAnswer))
                 {
                     // Turn 1: Interrupt with question
@@ -67,7 +67,7 @@ public class HumanInterruptionScenario : IScenario
                 }
 
                 // Turn 2 (Resumed): Incorporate answer and succeed
-                pipelineContext.DataBag.Set("Stage1.ApprovedPlan", $"Modulo approved with zero division behavior: {lastAnswer}");
+                pipelineContext.DataBag.Set(PipelineDataBagKeys.ApprovedPlan, $"Modulo approved with zero division behavior: {lastAnswer}");
                 return Task.FromResult(StageExecutionResult.Success());
             }
         };
@@ -75,7 +75,7 @@ public class HumanInterruptionScenario : IScenario
         var customPipeline = new WorkflowPipeline(new IWorkflowStage[]
         {
             reviewStage,
-            new GenericAgenticStage("implementation", "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full })
+            new GenericAgenticStage(StandardStageIds.Implementation, "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full })
         });
 
         context.Environment.SetCustomPipeline(customPipeline);

@@ -88,8 +88,8 @@
 </div>
 
 @code {
-    private List<string> _availableProfiles = new() { "implementation", "ideation", "task-review", "code-review-fix", "triage" };
-    private string _selectedProfileA = "implementation";
+    private List<string> _availableProfiles = new() { StandardStageIds.Implementation, "ideation", StandardStageIds.TaskReview, StandardStageIds.CodeReviewAndFix, StandardStageIds.Triage };
+    private string _selectedProfileA = StandardStageIds.Implementation;
     private string _selectedProfileB = "ideation";
     private List<StageExecutionRecord> _records = new();
 

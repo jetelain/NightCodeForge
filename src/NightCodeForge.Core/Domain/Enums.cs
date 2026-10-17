@@ -131,13 +131,3 @@ public enum ConversationType
     Ideation = 1,    // Interactive discovery & task formulation chat (workspace-level)
     AdHoc = 2        // Standalone developer consultation
 }
-
-/// <summary>
-/// Known harness identifiers.
-/// </summary>
-public static class HarnessType
-{
-    public const string Crucible = "crucible";
-    public const string PiRpc = "pi-rpc";
-    public const string Acp = "acp";
-}

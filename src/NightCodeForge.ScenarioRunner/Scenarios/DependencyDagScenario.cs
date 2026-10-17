@@ -46,7 +46,7 @@ public class DependencyDagScenario : IScenario
                 Title = "Core Calculation Service",
                 Description = "Implement the foundation math calculation service.",
                 Status = TaskOverallStatus.Open,
-                CurrentStageId = "task-review",
+                CurrentStageId = StandardStageIds.TaskReview,
                 BaseBranch = "main",
                 Priority = 1,
                 MergeMode = MergeMode.ManualReviewRequired
@@ -58,7 +58,7 @@ public class DependencyDagScenario : IScenario
                 Title = "Math HTTP API Endpoint",
                 Description = "Expose Calculation Service methods via REST controller.",
                 Status = TaskOverallStatus.Open,
-                CurrentStageId = "task-review",
+                CurrentStageId = StandardStageIds.TaskReview,
                 BaseBranch = "main",
                 Priority = 2,
                 MergeMode = MergeMode.ManualReviewRequired

@@ -57,7 +57,7 @@ public class DomainEntitiesTests
             Id = "prof-1",
             WorkspaceId = 1,
             Name = "Auditor",
-            HarnessId = HarnessType.Acp,
+            HarnessId = StandardHarnessIds.Acp,
             ModelName = "deepseek-r1:32b",
             ThinkingEffort = ThinkingEffort.CustomBudget,
             ThinkingTokenBudget = 8192,
@@ -69,7 +69,7 @@ public class DomainEntitiesTests
         Assert.Equal("prof-1", profile.Id);
         Assert.Equal(1, profile.WorkspaceId);
         Assert.Equal("Auditor", profile.Name);
-        Assert.Equal(HarnessType.Acp, profile.HarnessId);
+        Assert.Equal(StandardHarnessIds.Acp, profile.HarnessId);
         Assert.Equal("deepseek-r1:32b", profile.ModelName);
         Assert.Equal(ThinkingEffort.CustomBudget, profile.ThinkingEffort);
         Assert.Equal(8192, profile.ThinkingTokenBudget);

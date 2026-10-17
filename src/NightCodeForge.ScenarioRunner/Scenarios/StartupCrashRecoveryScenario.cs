@@ -38,7 +38,7 @@ public class StartupCrashRecoveryScenario : IScenario
                 Title = "Orphaned In-Flight Task",
                 Description = "Task interrupted midway through inference by simulated host reboot.",
                 Status = TaskOverallStatus.Implemented,
-                CurrentStageId = "implementation",
+                CurrentStageId = StandardStageIds.Implementation,
                 BaseBranch = "main",
                 FeatureBranch = "feature/task-crashed",
                 Priority = 1,

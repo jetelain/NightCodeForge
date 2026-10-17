@@ -287,7 +287,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             {
                 var syncedFile = await _markdownSyncService.SyncTaskToDiskAsync(task, targetSyncPath, cancellationToken: cancellationToken);
                 var relPath = Path.GetRelativePath(targetSyncPath, syncedFile).Replace('\\', '/');
-                pipelineContext.DataBag.Set("TaskMarkdownPath", relPath);
+                pipelineContext.DataBag.Set(PipelineDataBagKeys.TaskMarkdownPath, relPath);
 
                 if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
                     Directory.Exists(workspace.RepositoryPath) &&
@@ -309,11 +309,11 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             if (stage.Kind == WorkflowStageKind.Agentic && _harnessRegistry != null && !HasCustomHandler(stage))
             {
-                var harnessId = profile?.HarnessId ?? "crucible";
+                var harnessId = profile?.HarnessId ?? StandardHarnessIds.Crucible;
                 if (_harnessRegistry.TryGetHarness(harnessId, out var harness) && harness != null)
                 {
                     var lastCheckpoint = task.Checkpoints?.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
-                    var lastHumanAnswer = pipelineContext.DataBag.Get<string>("LastHumanAnswer");
+                    var lastHumanAnswer = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswer);
 
                     var defaultDirective = (profile?.StageDirectives != null && profile.StageDirectives.TryGetValue(stage.StageId, out var customDirective) && !string.IsNullOrWhiteSpace(customDirective))
                         ? customDirective
@@ -356,15 +356,15 @@ public class TaskOrchestrator : ITaskOrchestrator
 
                         if (!string.IsNullOrEmpty(runResult.UpdatedState))
                         {
-                            pipelineContext.DataBag.Set("SerializedMemory", runResult.UpdatedState);
+                            pipelineContext.DataBag.Set(PipelineDataBagKeys.SerializedMemory, runResult.UpdatedState);
                         }
 
                         if (!string.IsNullOrEmpty(runResult.Summary))
                         {
-                            pipelineContext.DataBag.Set($"StageSummary_{stage.StageId}", runResult.Summary);
-                            if (string.Equals(stage.StageId, "task-review", StringComparison.OrdinalIgnoreCase))
+                            pipelineContext.DataBag.Set(PipelineDataBagKeys.StageSummary(stage.StageId), runResult.Summary);
+                            if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase))
                             {
-                                pipelineContext.DataBag.Set("Stage1.ApprovedPlan", runResult.Summary);
+                                pipelineContext.DataBag.Set(PipelineDataBagKeys.ApprovedPlan, runResult.Summary);
                             }
                         }
 
@@ -436,10 +436,10 @@ public class TaskOrchestrator : ITaskOrchestrator
                     cancellationToken: cancellationToken);
 
                 // Turn 2: Tool execution
-                var cmd = pipelineContext.DataBag.Get<string>($"{stage.StageId}.command") 
-                    ?? pipelineContext.DataBag.Get<string>("build.command") 
+                var cmd = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId)) 
+                    ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.BuildCommand) 
                     ?? "dotnet build";
-                var output = pipelineContext.DataBag.Get<string>($"{stage.StageId}.output") 
+                var output = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId)) 
                     ?? (result.IsSuccess ? "Verification completed successfully with exit code 0." : result.ErrorMessage ?? "Deterministic step failed");
                 await _taskRepository.AddConversationTurnAsync(
                     deterministicConv.Id,
@@ -475,7 +475,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         // Auto-persist any backlog proposals emitted by triage or discovery agents (propose_tasks)
-        var pendingProposals = pipelineContext.DataBag.Get<List<TaskProposal>>("PendingProposals");
+        var pendingProposals = pipelineContext.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals);
         if (pendingProposals != null && pendingProposals.Count > 0)
         {
             foreach (var p in pendingProposals)
@@ -496,7 +496,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 _logger.LogInformation("Triage/Discovery created suggested task #{NewTaskId}: {Title}", suggestedTask.Id, suggestedTask.Title);
                 await SyncMarkdownTaskSafeAsync(workspace, suggestedTask, cancellationToken);
             }
-            pipelineContext.DataBag.Remove("PendingProposals");
+            pipelineContext.DataBag.Remove(PipelineDataBagKeys.PendingProposals);
         }
 
         // Read back any disk modifications to the task specification document
@@ -539,7 +539,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 TaskId = task.Id,
                 StageId = stage.StageId,
                 GitCommitHash = commitHash,
-                SerializedMemory = pipelineContext.DataBag.Get<string>("SerializedMemory") ?? string.Empty,
+                SerializedMemory = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.SerializedMemory) ?? string.Empty,
                 CreatedAt = DateTime.UtcNow
             };
             await _taskRepository.AddCheckpointAsync(checkpoint, cancellationToken);
@@ -601,15 +601,15 @@ public class TaskOrchestrator : ITaskOrchestrator
             await _taskRepository.AddCheckpointAsync(checkpoint, cancellationToken);
 
             // Status stamps per stage
-            if (string.Equals(stage.StageId, "task-review", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase))
             {
                 task.Status = TaskOverallStatus.Reviewed;
             }
-            else if (string.Equals(stage.StageId, "implementation", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(stage.StageId, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
             {
                 task.Status = TaskOverallStatus.Implemented;
             }
-            else if (string.Equals(stage.StageId, "deterministic-post-review", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(stage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
             {
                 task.Status = TaskOverallStatus.Ready;
             }
@@ -648,7 +648,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     _logger.LogWarning(ex, "Failed generating review diff for task #{TaskId}", task.Id);
                 }
 
-                pipelineContext.DataBag.Set("ReviewDiff", diff);
+                pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiff, diff);
                 pipelineContext.SyncDataBagToTask();
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
                 if (_dependencyStore != null)
@@ -681,7 +681,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         if (!string.IsNullOrWhiteSpace(targetLoopBackId))
         {
             var retries = pipelineContext.IncrementRetry(stage.StageId);
-            var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>("Workflow.MaxRetries") ?? 3;
+            var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
             if (retries <= effectiveMaxRetries)
             {
                 _logger.LogWarning("Stage '{StageId}' failed, routing backward to '{TargetStage}' (Retry {Retry}/{Max}): {Reason}",
@@ -689,9 +689,9 @@ public class TaskOrchestrator : ITaskOrchestrator
 
                 if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
                 {
-                    var errors = pipelineContext.DataBag.Get<List<string>>("diagnostics.compiler_errors") ?? new List<string>();
+                    var errors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors) ?? new List<string>();
                     errors.Add($"[{stage.StageId} attempt {retries}] {result.ErrorMessage}");
-                    pipelineContext.DataBag.Set("diagnostics.compiler_errors", errors);
+                    pipelineContext.DataBag.Set(PipelineDataBagKeys.CompilerErrors, errors);
                 }
 
                 task.CurrentStageId = targetLoopBackId;
@@ -756,8 +756,8 @@ public class TaskOrchestrator : ITaskOrchestrator
         task.IsWaitingForHuman = false;
 
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
-        bag.Set("LastHumanAnswer", answer);
-        bag.Set($"QuestionAnswer_{question.Id}", answer);
+        bag.Set(PipelineDataBagKeys.LastHumanAnswer, answer);
+        bag.Set(PipelineDataBagKeys.QuestionAnswer(question.Id), answer);
         task.PipelineDataJson = bag.ToJson();
 
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
@@ -792,14 +792,14 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         var targetStageId = currentStage?.LoopBackStageId
             ?? pipeline.Stages.LastOrDefault(s => !string.IsNullOrWhiteSpace(s.LoopBackStageId))?.LoopBackStageId
-            ?? "implementation";
+            ?? StandardStageIds.Implementation;
 
         // Re-route task back to dynamic target stage
         task.Status = TaskOverallStatus.Reviewed;
         task.CurrentStageId = targetStageId;
 
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
-        bag.Set("ReviewerFeedback", revisionNotes);
+        bag.Set(PipelineDataBagKeys.ReviewerFeedback, revisionNotes);
         task.PipelineDataJson = bag.ToJson();
 
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
@@ -1043,7 +1043,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             if (!string.IsNullOrWhiteSpace(runResult.TargetRouting))
             {
-                var loopTarget = (!string.IsNullOrWhiteSpace(stage.LoopBackStageId) && string.Equals(runResult.TargetRouting, "implementation", StringComparison.OrdinalIgnoreCase))
+                var loopTarget = (!string.IsNullOrWhiteSpace(stage.LoopBackStageId) && string.Equals(runResult.TargetRouting, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
                     ? stage.LoopBackStageId
                     : (runResult.TargetRouting ?? stage.LoopBackStageId);
 
@@ -1074,7 +1074,7 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         try
         {
-            var relPath = pipelineContext.DataBag.Get<string>("TaskMarkdownPath");
+            var relPath = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
             string? targetFile = null;
 
             if (!string.IsNullOrWhiteSpace(relPath))
@@ -1157,13 +1157,13 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
 
             // If this is the task-review stage, prioritize the disk description as the approved technical plan
-            if (string.Equals(stage.StageId, "task-review", StringComparison.OrdinalIgnoreCase) &&
+            if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase) &&
                 !string.IsNullOrWhiteSpace(task.Description))
             {
-                pipelineContext.DataBag.Set("Stage1.ApprovedPlan", task.Description);
-                if (pipelineContext.DataBag.Get<string>("StageSummary_task-review") == null)
+                pipelineContext.DataBag.Set(PipelineDataBagKeys.ApprovedPlan, task.Description);
+                if (pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview)) == null)
                 {
-                    pipelineContext.DataBag.Set("StageSummary_task-review", task.Description);
+                    pipelineContext.DataBag.Set(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview), task.Description);
                 }
             }
 

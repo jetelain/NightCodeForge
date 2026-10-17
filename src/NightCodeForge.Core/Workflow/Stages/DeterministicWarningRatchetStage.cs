@@ -7,8 +7,8 @@ namespace NightCodeForge.Core.Workflow.Stages;
 /// </summary>
 public class DeterministicWarningRatchetStage : IWorkflowStage
 {
-    public const string DefaultStageId = "warning-ratchet";
-    public const string FallbackLoopBackStageId = "implementation";
+    public const string DefaultStageId = StageImplementationTypes.DeterministicRatchet;
+    public const string FallbackLoopBackStageId = StandardStageIds.Implementation;
 
     public string StageId { get; }
     public string DisplayName { get; }
@@ -25,17 +25,17 @@ public class DeterministicWarningRatchetStage : IWorkflowStage
     {
         var bag = context.DataBag;
 
-        if (bag.TryGet<int>("warnings.baseline.total", out var baselineWarnings) &&
-            bag.TryGet<int>("warnings.current.total", out var currentWarnings))
+        if (bag.TryGet<int>(PipelineDataBagKeys.WarningsBaselineTotal, out var baselineWarnings) &&
+            bag.TryGet<int>(PipelineDataBagKeys.WarningsCurrentTotal, out var currentWarnings))
         {
             if (currentWarnings > baselineWarnings)
             {
                 var delta = currentWarnings - baselineWarnings;
-                var newWarnings = bag.Get<List<string>>("warnings.new") ?? new List<string>();
+                var newWarnings = bag.Get<List<string>>(PipelineDataBagKeys.WarningsNew) ?? new List<string>();
                 var details = newWarnings.Count > 0 ? string.Join("; ", newWarnings) : $"{delta} new warning(s) found.";
                 var error = $"Warning ratchet violation: warning count increased from {baselineWarnings} to {currentWarnings} (Delta: +{delta}). Details: {details}";
-                bag.Set("ratchet.failure.reason", error);
-                var targetStage = bag.Get<string>("Stage.LoopBackId") ?? LoopBackStageId;
+                bag.Set(PipelineDataBagKeys.RatchetFailureReason, error);
+                var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
                 return Task.FromResult(StageExecutionResult.Failure(error, targetStage));
             }
         }

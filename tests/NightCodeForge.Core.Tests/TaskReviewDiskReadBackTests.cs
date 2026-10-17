@@ -34,7 +34,7 @@ public class TaskReviewDiskReadBackTests : IDisposable
 
     private class TestHarness : IAgentHarness
     {
-        public string HarnessId => "crucible";
+        public string HarnessId => StandardHarnessIds.Crucible;
         public string? CapturedBootstrapPrompt { get; private set; }
         public string? CapturedStageDirective { get; private set; }
 
@@ -43,7 +43,7 @@ public class TaskReviewDiskReadBackTests : IDisposable
             CapturedBootstrapPrompt = context.BootstrapPrompt;
             CapturedStageDirective = context.StageDirective;
 
-            var taskMarkdownRelPath = context.PipelineContext?.DataBag.Get<string>("TaskMarkdownPath");
+            var taskMarkdownRelPath = context.PipelineContext?.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
             if (!string.IsNullOrWhiteSpace(taskMarkdownRelPath) && !string.IsNullOrWhiteSpace(context.PipelineContext?.WorkingDirectory))
             {
                 var fullPath = Path.Combine(context.PipelineContext.WorkingDirectory, taskMarkdownRelPath);
@@ -168,20 +168,20 @@ public class TaskReviewDiskReadBackTests : IDisposable
         var updatedInDb = await taskRepo.GetByIdAsync(42);
         Assert.NotNull(updatedInDb);
         Assert.Equal(TaskOverallStatus.Reviewed, updatedInDb.Status);
-        Assert.Equal("implementation", updatedInDb.CurrentStageId);
+        Assert.Equal(StandardStageIds.Implementation, updatedInDb.CurrentStageId);
         Assert.Contains("RedisDistributedCache", updatedInDb.Description);
         Assert.Contains("## 🏛️ Architecture & Implementation Plan", updatedInDb.Description);
         Assert.Contains("## 🧪 Acceptance Criteria", updatedInDb.Description);
 
         // Assert 3: Stage1.ApprovedPlan in DataBag was populated with the enriched specification from disk
         var bag = PipelineDataBag.FromJson(updatedInDb.PipelineDataJson);
-        var approvedPlan = bag.Get<string>("Stage1.ApprovedPlan");
+        var approvedPlan = bag.Get<string>(PipelineDataBagKeys.ApprovedPlan);
         Assert.NotNull(approvedPlan);
         Assert.Contains("RedisDistributedCache", approvedPlan);
         Assert.Contains("## 🏛️ Architecture & Implementation Plan", approvedPlan);
 
         // Assert 4: Git checkpoint commit was created capturing the completed stage
-        Assert.Contains(gitManager.WipCheckpoints, c => c.StageName == "task-review");
+        Assert.Contains(gitManager.WipCheckpoints, c => c.StageName == StandardStageIds.TaskReview);
 
         // Assert 5: The changes were mirrored to host repository path
         var mirroredFiles = Directory.GetFiles(_tempWorkspaceDir, "*.md", SearchOption.AllDirectories);

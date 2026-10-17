@@ -10,8 +10,8 @@ namespace NightCodeForge.Core.Workflow.Stages;
 /// </summary>
 public partial class DeterministicTestStage : IWorkflowStage
 {
-    public const string DefaultStageId = "deterministic-test";
-    public const string FallbackLoopBackStageId = "implementation";
+    public const string DefaultStageId = StageImplementationTypes.DeterministicTest;
+    public const string FallbackLoopBackStageId = StandardStageIds.Implementation;
 
     [GeneratedRegex(@"(?:Total:[ \t]*(\d+)|total[ \t]*:[ \t]*(\d+)|(\d+)[ \t]+total)", RegexOptions.IgnoreCase)]
     private static partial Regex TotalTestsRegex();
@@ -67,8 +67,8 @@ public partial class DeterministicTestStage : IWorkflowStage
 
         if (effectiveEnv != null)
         {
-            var timeout = context.Workspace?.TestTimeoutSeconds ?? config.TestTimeoutSeconds ?? 120;
-            bag.Set("test.timeout_seconds", timeout);
+            var timeout = context.Workspace?.TestTimeoutSeconds ?? config.TestTimeoutSeconds ?? WorkflowDefaults.DefaultTestTimeoutSeconds;
+            bag.Set(PipelineDataBagKeys.TestTimeoutSeconds, timeout);
 
             var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: timeout, cancellationToken: cancellationToken);
 
@@ -108,12 +108,12 @@ public partial class DeterministicTestStage : IWorkflowStage
                 totalTests = passedTests + failedTests;
             }
 
-            bag.Set("tests.current.total", totalTests);
-            bag.Set("tests.current.failed", failedTests);
+            bag.Set(PipelineDataBagKeys.TestsCurrentTotal, totalTests);
+            bag.Set(PipelineDataBagKeys.TestsCurrentFailed, failedTests);
 
-            if (!bag.TryGet<int>("tests.baseline.total", out _))
+            if (!bag.TryGet<int>(PipelineDataBagKeys.TestsBaselineTotal, out _))
             {
-                bag.Set("tests.baseline.total", totalTests);
+                bag.Set(PipelineDataBagKeys.TestsBaselineTotal, totalTests);
             }
 
             // Parse code coverage (Cobertura / Coverlet XML)
@@ -128,10 +128,10 @@ public partial class DeterministicTestStage : IWorkflowStage
                         var rate = ParseCoberturaLineRate(xml);
                         if (rate.HasValue)
                         {
-                            bag.Set("coverage.current.line_rate", rate.Value);
-                            if (!bag.TryGet<double>("coverage.baseline.line_rate", out _))
+                            bag.Set(PipelineDataBagKeys.CoverageCurrentLineRate, rate.Value);
+                            if (!bag.TryGet<double>(PipelineDataBagKeys.CoverageBaselineLineRate, out _))
                             {
-                                bag.Set("coverage.baseline.line_rate", rate.Value);
+                                bag.Set(PipelineDataBagKeys.CoverageBaselineLineRate, rate.Value);
                             }
                             break;
                         }
@@ -142,25 +142,25 @@ public partial class DeterministicTestStage : IWorkflowStage
 
             if (!res.Success || failedTests > 0)
             {
-                bool isTimeout = res.ExitCode == 124 ||
+                bool isTimeout = res.ExitCode == WorkflowDefaults.ProcessTimeoutExitCode ||
                                  res.Truncated && (res.StandardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
                                                    res.StandardOutput.Contains("timed out", StringComparison.OrdinalIgnoreCase));
 
                 if (isTimeout)
                 {
                     var timeoutMsg = $"Deterministic test execution timed out after {timeout} seconds. Tests failed to complete within the configured limit to avoid locking resources. Check recent edits for infinite loops, deadlocks, blocking network calls, or hanging tests.";
-                    bag.Set("diagnostics.failed_tests", new List<string> { timeoutMsg });
-                    bag.Set("test.failure.reason", timeoutMsg);
-                    var target = bag.Get<string>("Stage.LoopBackId") ?? LoopBackStageId;
+                    bag.Set(PipelineDataBagKeys.FailedTests, new List<string> { timeoutMsg });
+                    bag.Set(PipelineDataBagKeys.TestFailureReason, timeoutMsg);
+                    var target = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
                     return StageExecutionResult.Failure(timeoutMsg, target);
                 }
 
                 var failedLines = TestFailureLineRegex().Matches(fullOutput).Select(m => m.Value.Trim()).Take(10).ToList();
-                bag.Set("diagnostics.failed_tests", failedLines);
+                bag.Set(PipelineDataBagKeys.FailedTests, failedLines);
 
                 var errorMsg = $"Deterministic tests failed: {failedTests} failed test(s) out of {totalTests}.";
-                bag.Set("test.failure.reason", errorMsg);
-                var targetStage = bag.Get<string>("Stage.LoopBackId") ?? LoopBackStageId;
+                bag.Set(PipelineDataBagKeys.TestFailureReason, errorMsg);
+                var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
                 return StageExecutionResult.Failure(errorMsg, targetStage);
             }
         }

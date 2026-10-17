@@ -72,7 +72,7 @@ public class TriageService : ITriageService
                 Id = TriageStage.DefaultStageId,
                 WorkspaceId = null,
                 Name = "Untrusted Intake Triage Agent",
-                HarnessId = "crucible",
+                HarnessId = StandardHarnessIds.Crucible,
                 ModelName = workspace.AgentProfiles?.FirstOrDefault()?.ModelName ?? "default",
                 Mode = AgentMode.ReadOnly,
                 SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
@@ -130,7 +130,7 @@ public class TriageService : ITriageService
         _logger.LogInformation("Triage agent finished with status {Status}: {Summary}", runResult.Status, runResult.Summary);
 
         // 4. Extract proposed backlog items and persist as Suggested tasks
-        var pendingProposals = pipelineContext.DataBag.Get<List<TaskProposal>>("PendingProposals") ?? new List<TaskProposal>();
+        var pendingProposals = pipelineContext.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals) ?? new List<TaskProposal>();
         var createdTasks = new List<ForgeTask>();
 
         if (pendingProposals.Count > 0)
@@ -146,7 +146,7 @@ public class TriageService : ITriageService
                     MergeMode = MergeMode.ManualReviewRequired,
                     BaseBranch = baseBranch,
                     Priority = 1,
-                    CurrentStageId = "task-review",
+                    CurrentStageId = StandardStageIds.TaskReview,
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
                 };

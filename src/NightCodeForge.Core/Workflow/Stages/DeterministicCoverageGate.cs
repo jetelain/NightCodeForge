@@ -9,8 +9,8 @@ namespace NightCodeForge.Core.Workflow.Stages;
 /// </summary>
 public class DeterministicCoverageGate : IWorkflowStage
 {
-    public const string DefaultStageId = "coverage-gate";
-    public const string FallbackLoopBackStageId = "implementation";
+    public const string DefaultStageId = StageImplementationTypes.DeterministicCoverage;
+    public const string FallbackLoopBackStageId = StandardStageIds.Implementation;
 
     private readonly IExecutionEnvironment? _executionEnv;
     private readonly IExecutionEnvironmentProvider? _envProvider;
@@ -40,7 +40,7 @@ public class DeterministicCoverageGate : IWorkflowStage
         var bag = context.DataBag;
 
         // If tests have not been executed yet in this pipeline run, execute them now
-        if (!bag.TryGet<int>("tests.current.total", out _) && (_executionEnv != null || _envProvider != null))
+        if (!bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentTotal, out _) && (_executionEnv != null || _envProvider != null))
         {
             var testStage = new DeterministicTestStage(
                 _executionEnv,
@@ -57,28 +57,28 @@ public class DeterministicCoverageGate : IWorkflowStage
         }
 
         // 1. Anti-cheating check: Test count preservation
-        if (bag.TryGet<int>("tests.baseline.total", out var baselineTests) &&
-            bag.TryGet<int>("tests.current.total", out var currentTests))
+        if (bag.TryGet<int>(PipelineDataBagKeys.TestsBaselineTotal, out var baselineTests) &&
+            bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentTotal, out var currentTests))
         {
             if (currentTests < baselineTests)
             {
                 var error = $"Anti-cheating violation: total test count decreased from {baselineTests} to {currentTests}. Tests must not be deleted or disabled.";
-                bag.Set("gate.failure.reason", error);
-                var targetStage = bag.Get<string>("Stage.LoopBackId") ?? LoopBackStageId;
+                bag.Set(PipelineDataBagKeys.GateFailureReason, error);
+                var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
                 return StageExecutionResult.Failure(error, targetStage);
             }
         }
 
         // 2. Code coverage regression check
-        if (bag.TryGet<double>("coverage.baseline.line_rate", out var baselineLineRate) &&
-            bag.TryGet<double>("coverage.current.line_rate", out var currentLineRate))
+        if (bag.TryGet<double>(PipelineDataBagKeys.CoverageBaselineLineRate, out var baselineLineRate) &&
+            bag.TryGet<double>(PipelineDataBagKeys.CoverageCurrentLineRate, out var currentLineRate))
         {
             if (currentLineRate < baselineLineRate)
             {
                 var delta = currentLineRate - baselineLineRate;
                 var error = $"Coverage regression detected: line coverage decreased from {baselineLineRate:P2} to {currentLineRate:P2} (Delta: {delta:P2}). Quality gate requires Delta >= 0.0%.";
-                bag.Set("gate.failure.reason", error);
-                var targetStage = bag.Get<string>("Stage.LoopBackId") ?? LoopBackStageId;
+                bag.Set(PipelineDataBagKeys.GateFailureReason, error);
+                var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
                 return StageExecutionResult.Failure(error, targetStage);
             }
         }

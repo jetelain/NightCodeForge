@@ -43,7 +43,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly ILogger<CrucibleAgentHarness> _logger;
     private readonly LlmProviderOptions? _llmOptions;
 
-    public string HarnessId => "crucible";
+    public string HarnessId => StandardHarnessIds.Crucible;
 
     public CrucibleAgentHarness(
         IWorkspacePathResolver pathResolver,
@@ -245,7 +245,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var stageDirective = !string.IsNullOrWhiteSpace(context.StageDirective)
             ? context.StageDirective
             : WorkspacePromptResolver.ResolveStageDirective(workspacePath, context.StageId, GetStageDirective(harnessConfig, context.StageId));
-        var taskDocPath = context.PipelineContext?.DataBag.Get<string>("TaskMarkdownPath");
+        var taskDocPath = context.PipelineContext?.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
         var taskScope = BuildTaskScope(context.ForgeTask, taskDocPath);
         var workspaceSystemPrompt = WorkspacePromptResolver.ResolveSystemPrompt(workspacePath);
         var customPersona = !string.IsNullOrWhiteSpace(workspaceSystemPrompt)
@@ -467,7 +467,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
             if (context.PipelineContext != null)
             {
-                context.PipelineContext.DataBag.Set("ReviewerFeedback", reqChange.Feedback);
+                context.PipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewerFeedback, reqChange.Feedback);
             }
 
             var summary = $"Reviewer requested changes: {reqChange.Feedback}";
@@ -729,19 +729,19 @@ public partial class CrucibleAgentHarness : IAgentHarness
             if (match.Success)
             {
                 var feedback = match.Groups[1].Value.Trim();
-                targetRouting = "implementation";
+                targetRouting = StandardStageIds.Implementation;
                 if (context.PipelineContext != null)
                 {
-                    context.PipelineContext.DataBag.Set("ReviewerFeedback", feedback);
+                    context.PipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewerFeedback, feedback);
                 }
             }
         }
 
         if (canonicalTools.PendingProposals.Count > 0 && context.PipelineContext != null)
         {
-            var existingProposals = context.PipelineContext.DataBag.Get<List<TaskProposal>>("PendingProposals") ?? new List<TaskProposal>();
+            var existingProposals = context.PipelineContext.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals) ?? new List<TaskProposal>();
             existingProposals.AddRange(canonicalTools.PendingProposals);
-            context.PipelineContext.DataBag.Set("PendingProposals", existingProposals);
+            context.PipelineContext.DataBag.Set(PipelineDataBagKeys.PendingProposals, existingProposals);
         }
 
         await SaveAsync(AgentRunStatus.Completed, lastAssistantMessage ?? "Stage completed successfully.", cancellationToken);
@@ -1034,13 +1034,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         return stageId.ToLowerInvariant() switch
         {
-            "triage" or "stage-0" =>
+            StandardStageIds.Triage or "stage-0" =>
                 "Analyze the reported task against the repository base branch. Determine affected files and acceptance criteria. Call propose_tasks to recommend structured backlog items. You have read-only access and cannot modify code or access external networks.",
-            "task-review" or "stage-1" =>
+            StandardStageIds.TaskReview or "stage-1" =>
                 "You are a Staff Software Architect & Requirements Investigator. Thoroughly investigate requirements and inspect the codebase using 'read' and 'bash'. MANDATORY FILE EDIT: Edit the task specification document on disk in docs/tasks/ using 'edit' or 'write' with your approved architecture, technical plan, and acceptance criteria. Your disk changes will be read back upon stage completion to update the task specification. Proactively uncover ambiguities: invoke 'ask' immediately if needed. Do not guess. Do not write production code.",
-            "implementation" or "stage-2" =>
+            StandardStageIds.Implementation or "stage-2" =>
                 "You are a Senior Software Engineer & TDD Practitioner. Implement clean, robust code according to the task specification in docs/tasks/ and the approved plan. Keep blast radius minimal. Run builds and tests incrementally with bash. Fix all compiler errors and test failures. If breaking blockers arise, call 'ask'.",
-            "code-review-fix" or "stage-3" =>
+            StandardStageIds.CodeReviewAndFix or "stage-3" =>
                 "You are a Principal Code Reviewer and Quality Gatekeeper. Review the git diff against the base branch. Compare against the specification in docs/tasks/ and the implementation claims. Apply precision polish directly using 'edit'. Rejection is strictly reserved for major tasks or missing features: invoke 'request_changes' or conclude with <request_changes>[feedback]</request_changes>.",
             _ => "Execute assigned engineering tasks diligently using canonical tools."
         };

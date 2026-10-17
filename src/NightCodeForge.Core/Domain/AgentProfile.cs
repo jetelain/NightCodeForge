@@ -38,7 +38,7 @@ public class AgentProfile
     public string Id { get; set; } = string.Empty;
     public int? WorkspaceId { get; set; }
     public string Name { get; set; } = string.Empty;
-    public string HarnessId { get; set; } = HarnessType.Crucible;
+    public string HarnessId { get; set; } = StandardHarnessIds.Crucible;
     public string ModelName { get; set; } = string.Empty;
     public ThinkingEffort ThinkingEffort { get; set; } = ThinkingEffort.None;
     public int? ThinkingTokenBudget { get; set; }
@@ -68,7 +68,7 @@ public class AgentProfile
         Id = "ideation",
         WorkspaceId = workspaceId,
         Name = "Ideation & Codebase Discovery Agent",
-        HarnessId = HarnessType.Crucible,
+        HarnessId = StandardHarnessIds.Crucible,
         ModelName = defaultModelName,
         Mode = AgentMode.ReadOnly,
         PermittedTools = DefaultAgentTools.ReadOnly,
@@ -91,10 +91,10 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
     {
         new()
         {
-            Id = "triage",
+            Id = StandardStageIds.Triage,
             WorkspaceId = null,
             Name = "Stage 0 Untrusted Intake Triage Agent",
-            HarnessId = HarnessType.Crucible,
+            HarnessId = StandardHarnessIds.Crucible,
             ModelName = defaultModelName,
             Mode = AgentMode.ReadOnly,
             SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
@@ -108,10 +108,10 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
         CreateDefaultIdeationProfile(null, defaultModelName),
         new()
         {
-            Id = "task-review",
+            Id = StandardStageIds.TaskReview,
             WorkspaceId = null,
             Name = "ForgeTask Review Agent",
-            HarnessId = HarnessType.Crucible,
+            HarnessId = StandardHarnessIds.Crucible,
             ModelName = defaultModelName,
             Mode = AgentMode.Full,
             SecurityTier = SandboxSecurityTier.Standard,
@@ -124,10 +124,10 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
         },
         new()
         {
-            Id = "implementation",
+            Id = StandardStageIds.Implementation,
             WorkspaceId = null,
             Name = "Implementation Agent",
-            HarnessId = HarnessType.Crucible,
+            HarnessId = StandardHarnessIds.Crucible,
             ModelName = defaultModelName,
             Mode = AgentMode.Full,
             SecurityTier = SandboxSecurityTier.Standard,
@@ -140,10 +140,10 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
         },
         new()
         {
-            Id = "code-review-fix",
+            Id = StandardStageIds.CodeReviewAndFix,
             WorkspaceId = null,
             Name = "Code Review & Targeted Fix Agent",
-            HarnessId = HarnessType.Crucible,
+            HarnessId = StandardHarnessIds.Crucible,
             ModelName = defaultModelName,
             Mode = AgentMode.Review,
             SecurityTier = SandboxSecurityTier.Standard,

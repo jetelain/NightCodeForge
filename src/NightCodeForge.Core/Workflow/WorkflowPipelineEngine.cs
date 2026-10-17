@@ -16,7 +16,7 @@ public interface IWorkflowPipelineEngine
 /// </summary>
 public class WorkflowPipelineEngine : IWorkflowPipelineEngine
 {
-    public int MaxRetries { get; set; } = 3;
+    public int MaxRetries { get; set; } = WorkflowDefaults.DefaultMaxStageRetries;
 
     public async Task<StageExecutionResult> ExecuteStepAsync(
         IWorkflowPipeline pipeline,
@@ -72,15 +72,15 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
             context.ResetRetries();
 
             // Status stamps per stage
-            if (string.Equals(stage.StageId, "task-review", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase))
             {
                 context.ForgeTask.Status = TaskOverallStatus.Reviewed;
             }
-            else if (string.Equals(stage.StageId, "implementation", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(stage.StageId, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
             {
                 context.ForgeTask.Status = TaskOverallStatus.Implemented;
             }
-            else if (string.Equals(stage.StageId, "deterministic-post-review", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(stage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
             {
                 context.ForgeTask.Status = TaskOverallStatus.Ready;
             }
@@ -113,7 +113,7 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
 
         // Failure handling & loop circuit breaker
         var retries = context.IncrementRetry(stage.StageId);
-        var effectiveMaxRetries = context.DataBag.Get<int?>("Workflow.MaxRetries") ?? MaxRetries;
+        var effectiveMaxRetries = context.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? MaxRetries;
         if (retries > effectiveMaxRetries)
         {
             context.ForgeTask.Status = TaskOverallStatus.Failed;

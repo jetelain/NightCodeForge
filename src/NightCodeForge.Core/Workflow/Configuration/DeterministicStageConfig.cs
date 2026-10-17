@@ -19,7 +19,7 @@ public class DeterministicStageConfig
     /// <summary>
     /// Target stage to loop back to on failure (e.g. "implementation").
     /// </summary>
-    public string LoopBackStageId { get; set; } = "implementation";
+    public string LoopBackStageId { get; set; } = Domain.StandardStageIds.Implementation;
 
     /// <summary>
     /// Whether a non-zero exit code or gate failure blocks pipeline progression.

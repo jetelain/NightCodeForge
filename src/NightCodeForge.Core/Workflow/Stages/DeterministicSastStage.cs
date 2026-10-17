@@ -9,8 +9,8 @@ namespace NightCodeForge.Core.Workflow.Stages;
 /// </summary>
 public class DeterministicSastStage : IWorkflowStage
 {
-    public const string DefaultStageId = "deterministic-sast";
-    public const string FallbackLoopBackStageId = "implementation";
+    public const string DefaultStageId = StageImplementationTypes.DeterministicSast;
+    public const string FallbackLoopBackStageId = StandardStageIds.Implementation;
 
     private readonly IExecutionEnvironment? _executionEnv;
     private readonly IExecutionEnvironmentProvider? _envProvider;
@@ -58,8 +58,8 @@ public class DeterministicSastStage : IWorkflowStage
             if (!res.Success)
             {
                 var errorMsg = $"SAST analyzer failed with exit code {res.ExitCode}: {res.StandardError}";
-                bag.Set("sast.failure.reason", errorMsg);
-                var targetStage = bag.Get<string>("Stage.LoopBackId") ?? LoopBackStageId;
+                bag.Set(PipelineDataBagKeys.SastFailureReason, errorMsg);
+                var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
                 return StageExecutionResult.Failure(errorMsg, targetStage);
             }
         }

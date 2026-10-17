@@ -23,7 +23,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             var ex = Assert.Throws<RequestChangesException>(() => tools.RequestChanges("Feature incomplete", "Missing tests"));
             Assert.Equal("Feature incomplete", ex.Feedback);
             Assert.Equal("Missing tests", ex.Reason);
-            Assert.Equal("implementation", ex.TargetStageId);
+            Assert.Equal(StandardStageIds.Implementation, ex.TargetStageId);
         }
         finally
         {
@@ -67,17 +67,17 @@ public class CodeReviewLoopbackAndPromptOverrideTests
 
         try
         {
-            File.WriteAllText(Path.Combine(promptsDir, "code-review-fix.md"), "Custom Review Directive for Team");
+            File.WriteAllText(Path.Combine(promptsDir, $"{StandardStageIds.CodeReviewAndFix}.md"), "Custom Review Directive for Team");
             File.WriteAllText(Path.Combine(promptsDir, "system.md"), "Custom System Persona for Team");
-            File.WriteAllText(Path.Combine(promptsDir, "implementation.bootstrap.md"), "Custom Bootstrap Prompt for Impl");
+            File.WriteAllText(Path.Combine(promptsDir, $"{StandardStageIds.Implementation}.bootstrap.md"), "Custom Bootstrap Prompt for Impl");
 
-            var directive = WorkspacePromptResolver.ResolveStageDirective(tempDir, "code-review-fix", "Default Directive");
+            var directive = WorkspacePromptResolver.ResolveStageDirective(tempDir, StandardStageIds.CodeReviewAndFix, "Default Directive");
             Assert.Equal("Custom Review Directive for Team", directive);
 
             var systemPrompt = WorkspacePromptResolver.ResolveSystemPrompt(tempDir, "Default System");
             Assert.Equal("Custom System Persona for Team", systemPrompt);
 
-            var bootstrap = WorkspacePromptResolver.ResolveBootstrapPromptOverride(tempDir, "implementation");
+            var bootstrap = WorkspacePromptResolver.ResolveBootstrapPromptOverride(tempDir, StandardStageIds.Implementation);
             Assert.Equal("Custom Bootstrap Prompt for Impl", bootstrap);
 
             // Fallbacks when file doesn't exist
@@ -163,9 +163,9 @@ public class CodeReviewLoopbackAndPromptOverrideTests
 
             var result = await harness.RunStageAsync(context);
 
-            Assert.Equal("implementation", result.TargetRouting);
+            Assert.Equal(StandardStageIds.Implementation, result.TargetRouting);
             Assert.Contains("Missing unit tests", result.Summary);
-            Assert.Equal("Missing unit tests for edge cases", bag.Get<string>("ReviewerFeedback"));
+            Assert.Equal("Missing unit tests for edge cases", bag.Get<string>(PipelineDataBagKeys.ReviewerFeedback));
         }
         finally
         {
@@ -205,7 +205,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
                 ForgeTask = task,
                 Workspace = new Workspace { Id = 1, RepositoryPath = tempDir },
                 Profile = new AgentProfile { Id = "reviewer", Mode = AgentMode.Review },
-                StageId = "code-review-fix",
+                StageId = StandardStageIds.CodeReviewAndFix,
                 RequiredMode = AgentMode.Review,
                 WorkspacePath = tempDir,
                 PipelineContext = pipelineContext
@@ -213,8 +213,8 @@ public class CodeReviewLoopbackAndPromptOverrideTests
 
             var result = await harness.RunStageAsync(context);
 
-            Assert.Equal("implementation", result.TargetRouting);
-            Assert.Equal("The whole AuthService is missing.", bag.Get<string>("ReviewerFeedback"));
+            Assert.Equal(StandardStageIds.Implementation, result.TargetRouting);
+            Assert.Equal("The whole AuthService is missing.", bag.Get<string>(PipelineDataBagKeys.ReviewerFeedback));
         }
         finally
         {
@@ -228,12 +228,12 @@ public class CodeReviewLoopbackAndPromptOverrideTests
         var config = new AgenticStageConfig
         {
             RequiredMode = AgentMode.Review,
-            LoopBackStageId = "implementation",
+            LoopBackStageId = StandardStageIds.Implementation,
             StageDirective = "You are a Principal Code Reviewer and Quality Gatekeeper.\nrequest_changes"
         };
-        var stage = new GenericAgenticStage("code-review-fix", "Code Review & Fix", config);
+        var stage = new GenericAgenticStage(StandardStageIds.CodeReviewAndFix, "Code Review & Fix", config);
         Assert.Equal(AgentMode.Review, stage.RequiredMode);
-        Assert.Equal("implementation", stage.LoopBackStageId);
+        Assert.Equal(StandardStageIds.Implementation, stage.LoopBackStageId);
         Assert.Contains("Principal Code Reviewer", stage.StageDirective);
         Assert.Contains("request_changes", stage.StageDirective);
     }
@@ -284,7 +284,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
                 ForgeTask = task,
                 Workspace = new Workspace { Id = 1, RepositoryPath = tempDir },
                 Profile = new AgentProfile { Id = "coder", Mode = AgentMode.Full },
-                StageId = "implementation",
+                StageId = StandardStageIds.Implementation,
                 RequiredMode = AgentMode.Full,
                 WorkspacePath = tempDir,
                 PipelineContext = pipelineContext
@@ -330,7 +330,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
 
             var task = new ForgeTask { Id = 4, Title = "Doc Path ForgeTask", Description = "Testing doc path" };
             var bag = new PipelineDataBag();
-            bag.Set("TaskMarkdownPath", "docs/tasks/2026-10-14-doc-path-task.md");
+            bag.Set(PipelineDataBagKeys.TaskMarkdownPath, "docs/tasks/2026-10-14-doc-path-task.md");
             var pipelineContext = new PipelineContext(task, new Workspace { Id = 1 })
             {
                 DataBag = bag
@@ -341,7 +341,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
                 ForgeTask = task,
                 Workspace = new Workspace { Id = 1, RepositoryPath = tempDir },
                 Profile = new AgentProfile { Id = "coder", Mode = AgentMode.Full },
-                StageId = "implementation",
+                StageId = StandardStageIds.Implementation,
                 RequiredMode = AgentMode.Full,
                 WorkspacePath = tempDir,
                 PipelineContext = pipelineContext
@@ -364,7 +364,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
     public void StageDirectives_ReflectTaskDocumentEditing_AndTwoTierReviewPolicy()
     {
         var reviewStage = new GenericAgenticStage(
-            "task-review",
+            StandardStageIds.TaskReview,
             "ForgeTask Review",
             new AgenticStageConfig
             {
@@ -375,7 +375,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
         Assert.Contains("Do not write or modify production code", reviewStage.StageDirective);
 
         var implStage = new GenericAgenticStage(
-            "implementation",
+            StandardStageIds.Implementation,
             "Implementation",
             new AgenticStageConfig
             {
@@ -385,12 +385,12 @@ public class CodeReviewLoopbackAndPromptOverrideTests
         Assert.Contains("docs/tasks/", implStage.StageDirective);
 
         var codeReviewStage = new GenericAgenticStage(
-            "code-review-fix",
+            StandardStageIds.CodeReviewAndFix,
             "Code Review & Fix",
             new AgenticStageConfig
             {
                 RequiredMode = AgentMode.Review,
-                LoopBackStageId = "implementation",
+                LoopBackStageId = StandardStageIds.Implementation,
                 StageDirective = "2. TIER 1 - MINOR POLISH: ... 3. TIER 2 - REJECTION GATE: Rejection is strictly reserved for major tasks or missing features..."
             });
         Assert.Contains("TIER 1 - MINOR POLISH", codeReviewStage.StageDirective);

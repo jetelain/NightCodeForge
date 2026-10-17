@@ -111,13 +111,13 @@ public class StartupRecoveryService : IStartupRecoveryService
                         ? notice
                         : $"{memory}\n{notice}";
 
-                    bag.Set("SerializedMemory", restoredMemory);
+                    bag.Set(PipelineDataBagKeys.SerializedMemory, restoredMemory);
                     _logger.LogWarning("Rehydrated agentic session memory for orphaned task #{TaskId}.", task.Id);
                 }
                 else
                 {
                     // Deterministic Stage: Reset metrics and retries to execute freshly
-                    bag.Remove("DeterministicMetrics");
+                    bag.Remove(PipelineDataBagKeys.DeterministicMetrics);
                     _logger.LogWarning("Reset metrics for deterministic stage on orphaned task #{TaskId}.", task.Id);
                 }
 

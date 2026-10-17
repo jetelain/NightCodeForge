@@ -37,7 +37,7 @@ public class AgenticStageConfig
     /// <summary>
     /// Maximum retry attempts before marking the stage as Failed.
     /// </summary>
-    public int MaxRetries { get; set; } = 3;
+    public int MaxRetries { get; set; } = WorkflowDefaults.DefaultMaxStageRetries;
 
     /// <summary>
     /// Optional execution timeout in minutes.

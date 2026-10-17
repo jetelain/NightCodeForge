@@ -76,7 +76,7 @@ public class DeterministicQualityGatesScenario : IScenario
             return ScenarioResult.Fail(sw.Elapsed, "Violation: DeterministicBuildStage should have failed on syntax error.");
         }
 
-        if (!string.Equals(failResult.TargetRoutingStageId, "implementation", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(failResult.TargetRoutingStageId, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
         {
             return ScenarioResult.Fail(sw.Elapsed, $"Expected loopback to 'implementation', found '{failResult.TargetRoutingStageId}'.");
         }
@@ -96,7 +96,7 @@ public class DeterministicQualityGatesScenario : IScenario
 
         if (!passResult.IsSuccess)
         {
-            var diag = pipelineContext.DataBag.Get<List<string>>("diagnostics.compiler_errors");
+            var diag = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
             var diagStr = diag != null ? string.Join("; ", diag) : "none";
             return ScenarioResult.Fail(sw.Elapsed, $"DeterministicBuildStage failed after fix: {passResult.ErrorMessage} (Details: {diagStr})");
         }

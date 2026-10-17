@@ -9,8 +9,8 @@ namespace NightCodeForge.Core.Workflow.Stages;
 /// </summary>
 public class DeterministicPostImplementationStage : IWorkflowStage
 {
-    public const string DefaultStageId = "deterministic-post-impl";
-    public const string LoopBackStageId = "implementation";
+    public const string DefaultStageId = StandardStageIds.PostImplementationGates;
+    public const string LoopBackStageId = StandardStageIds.Implementation;
 
     public string StageId => DefaultStageId;
     public string DisplayName => "Deterministic Post-Implementation Ratchet Gate";

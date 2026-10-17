@@ -7,7 +7,7 @@ namespace NightCodeForge.Core.Workflow.Stages;
 /// </summary>
 public class TriageStage : IWorkflowStage
 {
-    public const string DefaultStageId = "triage";
+    public const string DefaultStageId = StandardStageIds.Triage;
     public string StageId => DefaultStageId;
     public string DisplayName => "Untrusted Intake Triage";
     public WorkflowStageKind Kind => WorkflowStageKind.Agentic;

@@ -57,7 +57,7 @@ public class AppDbContextTests : IDisposable
         {
             Id = "test-agent",
             Name = "Test Agent",
-            HarnessId = HarnessType.Crucible,
+            HarnessId = StandardHarnessIds.Crucible,
             ModelName = "qwen2.5-coder:32b",
             ThinkingEffort = ThinkingEffort.Medium,
             OptimizationFlags = new LocalOptimizationFlags

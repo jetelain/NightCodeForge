@@ -45,7 +45,7 @@ public class AcpAgentHarness : IAgentHarness
     private readonly IProcessRunner _processRunner;
     private readonly ILogger<AcpAgentHarness> _logger;
 
-    public string HarnessId => "acp";
+    public string HarnessId => StandardHarnessIds.Acp;
 
     public AcpAgentHarness(
         AcpHarnessOptions? options = null,
@@ -559,10 +559,10 @@ public class AcpAgentHarness : IAgentHarness
             if (match.Success)
             {
                 var feedback = match.Groups[1].Value.Trim();
-                targetRouting = "implementation";
+                targetRouting = StandardStageIds.Implementation;
                 if (context.PipelineContext != null)
                 {
-                    context.PipelineContext.DataBag.Set("ReviewerFeedback", feedback);
+                    context.PipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewerFeedback, feedback);
                 }
             }
 

@@ -457,7 +457,7 @@ public class InMemoryTaskRepository : ITaskRepository
             stageKind: WorkflowStageKind.Agentic,
             attemptIndex: 1,
             agentProfileId: agentProfileId,
-            harnessId: HarnessType.Crucible,
+            harnessId: StandardHarnessIds.Crucible,
             modelName: modelName,
             workspaceId: workspaceId,
             conversationType: ConversationType.Ideation,

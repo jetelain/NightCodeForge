@@ -21,8 +21,8 @@ public class PipelineContext
         ForgeTask = task ?? throw new ArgumentNullException(nameof(task));
         Workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
         DataBag = dataBag ?? PipelineDataBag.FromJson(task.PipelineDataJson);
-        RetryCount = DataBag.Get<int?>("Workflow.RetryCount") ?? 0;
-        var savedRetries = DataBag.Get<Dictionary<string, int>>("Workflow.StageRetries");
+        RetryCount = DataBag.Get<int?>(PipelineDataBagKeys.RetryCount) ?? 0;
+        var savedRetries = DataBag.Get<Dictionary<string, int>>(PipelineDataBagKeys.StageRetries);
         if (savedRetries != null)
         {
             foreach (var kvp in savedRetries)
@@ -34,8 +34,8 @@ public class PipelineContext
 
     public void SyncDataBagToTask()
     {
-        DataBag.Set("Workflow.RetryCount", RetryCount);
-        DataBag.Set("Workflow.StageRetries", new Dictionary<string, int>(StageRetries));
+        DataBag.Set(PipelineDataBagKeys.RetryCount, RetryCount);
+        DataBag.Set(PipelineDataBagKeys.StageRetries, new Dictionary<string, int>(StageRetries));
         ForgeTask.PipelineDataJson = DataBag.ToJson();
     }
 
@@ -47,8 +47,8 @@ public class PipelineContext
             StageRetries[stageId] = 0;
         }
         var next = ++StageRetries[stageId];
-        DataBag.Set("Workflow.RetryCount", RetryCount);
-        DataBag.Set("Workflow.StageRetries", new Dictionary<string, int>(StageRetries));
+        DataBag.Set(PipelineDataBagKeys.RetryCount, RetryCount);
+        DataBag.Set(PipelineDataBagKeys.StageRetries, new Dictionary<string, int>(StageRetries));
         return next;
     }
 
@@ -56,7 +56,7 @@ public class PipelineContext
     {
         RetryCount = 0;
         StageRetries.Clear();
-        DataBag.Set("Workflow.RetryCount", 0);
-        DataBag.Set("Workflow.StageRetries", new Dictionary<string, int>());
+        DataBag.Set(PipelineDataBagKeys.RetryCount, 0);
+        DataBag.Set(PipelineDataBagKeys.StageRetries, new Dictionary<string, int>());
     }
 }

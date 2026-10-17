@@ -24,11 +24,11 @@ public static class DefaultBootstrapPromptBuilder
                 ? stageDirective
                 : stage.StageDirective;
 
-            var reviewerFeedback = context.DataBag.Get<string>("ReviewerFeedback");
-            var approvedPlan = context.DataBag.Get<string>("Stage1.ApprovedPlan") ?? context.DataBag.Get<string>("StageSummary_task-review");
-            var taskPath = context.DataBag.Get<string>("TaskMarkdownPath");
-            var implSummary = context.DataBag.Get<string>("StageSummary_implementation");
-            var compilerErrors = context.DataBag.Get<List<string>>("diagnostics.compiler_errors");
+            var reviewerFeedback = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewerFeedback);
+            var approvedPlan = context.DataBag.Get<string>(PipelineDataBagKeys.ApprovedPlan) ?? context.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview));
+            var taskPath = context.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
+            var implSummary = context.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.Implementation));
+            var compilerErrors = context.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
             var answeredQuestions = task.Questions?
                 .Where(q => q.Status == QuestionStatus.Answered && !string.IsNullOrWhiteSpace(q.Answer))
                 .Select(q => new { prompt = q.Prompt, answer = q.Answer })
@@ -64,22 +64,22 @@ public static class DefaultBootstrapPromptBuilder
 
     private static string BuildLegacyFormat(string stageId, ForgeTask task, PipelineContext context, string? stageDirective)
     {
-        var reviewerFeedback = context.DataBag.Get<string>("ReviewerFeedback");
+        var reviewerFeedback = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewerFeedback);
         var feedbackSection = !string.IsNullOrWhiteSpace(reviewerFeedback)
             ? $"\n\n[Reviewer Requested Changes / Feedback]:\n{reviewerFeedback}\n"
             : string.Empty;
 
-        var compilerErrors = context.DataBag.Get<List<string>>("diagnostics.compiler_errors");
+        var compilerErrors = context.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
         var diagnosticSection = compilerErrors != null && compilerErrors.Count > 0
             ? $"\n\n[Prior Diagnostic Failures to Remediate]:\n{string.Join("\n", compilerErrors)}\n"
             : string.Empty;
 
-        var taskPath = context.DataBag.Get<string>("TaskMarkdownPath");
+        var taskPath = context.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
         var taskPathSection = !string.IsNullOrWhiteSpace(taskPath)
             ? $"\n\n[ForgeTask Specification Document]:\n{taskPath}\n"
             : string.Empty;
 
-        var implSummary = context.DataBag.Get<string>("StageSummary_implementation");
+        var implSummary = context.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.Implementation));
         var implHandoffSection = !string.IsNullOrWhiteSpace(implSummary)
             ? $"\n\n[Implementation Agent Completion Summary]:\n{TruncateText(implSummary, 1500)}\n"
             : string.Empty;
@@ -90,7 +90,7 @@ public static class DefaultBootstrapPromptBuilder
             return $"{bootstrapOverride}{taskPathSection}{implHandoffSection}{feedbackSection}{diagnosticSection}".Trim();
         }
 
-        var approvedPlan = context.DataBag.Get<string>("Stage1.ApprovedPlan") ?? context.DataBag.Get<string>("StageSummary_task-review");
+        var approvedPlan = context.DataBag.Get<string>(PipelineDataBagKeys.ApprovedPlan) ?? context.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview));
         var planSection = !string.IsNullOrWhiteSpace(approvedPlan)
             ? $"\n\n[Approved Implementation Plan]:\n{approvedPlan}\n"
             : string.Empty;

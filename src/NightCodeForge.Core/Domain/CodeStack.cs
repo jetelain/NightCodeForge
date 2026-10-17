@@ -124,22 +124,22 @@ public static class CodeStackPresets
         // 3. Pipeline DataBag dynamic overrides
         if (dataBag != null)
         {
-            if (dataBag.TryGet<string>("BuildCommand", out var bCmd) && !string.IsNullOrWhiteSpace(bCmd))
+            if ((dataBag.TryGet<string>(PipelineDataBagKeys.BuildCommand, out var bCmd) || dataBag.TryGet<string>("BuildCommand", out bCmd)) && !string.IsNullOrWhiteSpace(bCmd))
                 config.BuildCommand = bCmd;
-            if (dataBag.TryGet<string>("TestCommand", out var tCmd) && !string.IsNullOrWhiteSpace(tCmd))
+            if ((dataBag.TryGet<string>(PipelineDataBagKeys.TestCommand, out var tCmd) || dataBag.TryGet<string>("TestCommand", out tCmd)) && !string.IsNullOrWhiteSpace(tCmd))
                 config.TestCommand = tCmd;
-            if (dataBag.TryGet<string>("SastCommand", out var sCmd) && !string.IsNullOrWhiteSpace(sCmd))
+            if ((dataBag.TryGet<string>(PipelineDataBagKeys.SastCommand, out var sCmd) || dataBag.TryGet<string>("SastCommand", out sCmd)) && !string.IsNullOrWhiteSpace(sCmd))
                 config.SastCommand = sCmd;
-            if (dataBag.TryGet<string>("CoverageCommand", out var cCmd) && !string.IsNullOrWhiteSpace(cCmd))
+            if ((dataBag.TryGet<string>(PipelineDataBagKeys.CoverageCommand, out var cCmd) || dataBag.TryGet<string>("CoverageCommand", out cCmd)) && !string.IsNullOrWhiteSpace(cCmd))
                 config.CoverageCommand = cCmd;
-            if (dataBag.TryGet<int>("BuildTimeoutSeconds", out var bSec) && bSec > 0)
+            if ((dataBag.TryGet<int>(PipelineDataBagKeys.BuildTimeoutSeconds, out var bSec) || dataBag.TryGet<int>("BuildTimeoutSeconds", out bSec)) && bSec > 0)
                 config.BuildTimeoutSeconds = bSec;
-            if (dataBag.TryGet<int>("TestTimeoutSeconds", out var tSec) && tSec > 0)
+            if ((dataBag.TryGet<int>(PipelineDataBagKeys.TestTimeoutSeconds, out var tSec) || dataBag.TryGet<int>("TestTimeoutSeconds", out tSec)) && tSec > 0)
                 config.TestTimeoutSeconds = tSec;
         }
 
-        config.BuildTimeoutSeconds ??= 120;
-        config.TestTimeoutSeconds ??= 120;
+        config.BuildTimeoutSeconds ??= WorkflowDefaults.DefaultBuildTimeoutSeconds;
+        config.TestTimeoutSeconds ??= WorkflowDefaults.DefaultTestTimeoutSeconds;
 
         return config;
     }

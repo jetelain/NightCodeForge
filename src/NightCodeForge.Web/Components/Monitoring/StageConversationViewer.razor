@@ -240,12 +240,12 @@
     {
         return stageId switch
         {
-            "task-review" => "1. ForgeTask Review",
-            "deterministic-pre-check" or "deterministic-pre-impl" => "2. Pre-Check Gate",
-            "implementation" => "3. Implementation",
-            "deterministic-post-check" or "deterministic-post-impl" => "4. Post-Check Gate",
-            "pr-review" or "code-review-fix" => "5. Pull Request Review",
-            "deterministic-post-review" => "6. Post-Review Verification",
+            StandardStageIds.TaskReview => "1. ForgeTask Review",
+            "deterministic-pre-check" or StandardStageIds.PreImplementationBaseline => "2. Pre-Check Gate",
+            StandardStageIds.Implementation => "3. Implementation",
+            "deterministic-post-check" or StandardStageIds.PostImplementationGates => "4. Post-Check Gate",
+            "pr-review" or StandardStageIds.CodeReviewAndFix => "5. Pull Request Review",
+            StandardStageIds.PostReviewVerification => "6. Post-Review Verification",
             "merge" => "7. Squash & Merge",
             _ => stageId
         };

@@ -54,7 +54,7 @@ public class TriageServiceTests : IDisposable
         _fakeHarness.OnRunStage = ctx =>
         {
             capturedContext = ctx;
-            ctx.PipelineContext?.DataBag.Set("PendingProposals", new List<TaskProposal>
+            ctx.PipelineContext?.DataBag.Set(PipelineDataBagKeys.PendingProposals, new List<TaskProposal>
             {
                 new("Fix null reference in Parser", "Check for null tokens before accessing properties", "bug")
             });
@@ -102,7 +102,7 @@ public class TriageServiceTests : IDisposable
         // Arrange
         _fakeHarness.OnRunStage = ctx =>
         {
-            ctx.PipelineContext?.DataBag.Set("PendingProposals", new List<TaskProposal>
+            ctx.PipelineContext?.DataBag.Set(PipelineDataBagKeys.PendingProposals, new List<TaskProposal>
             {
                 new("Add timeout support to HTTP client", "Allow configuring connection and response timeout", "feature")
             });

@@ -45,7 +45,7 @@ public class WorkflowStageRegistry : IWorkflowStageRegistry
     private void RegisterDefaults()
     {
         // 1. Unified data-driven agentic stage type
-        RegisterHandler("agentic", (sp, def) =>
+        RegisterHandler(StageImplementationTypes.Agentic, (sp, def) =>
         {
             var config = !string.IsNullOrWhiteSpace(def.ConfigurationJson)
                 ? JsonSerializer.Deserialize<AgenticStageConfig>(def.ConfigurationJson, JsonOptions) ?? new AgenticStageConfig()
@@ -55,12 +55,12 @@ public class WorkflowStageRegistry : IWorkflowStageRegistry
         });
 
         // 2. Deterministic discrete quality gate stages
-        RegisterHandler("deterministic-build", (sp, def) => ActivatorUtilities.CreateInstance<DeterministicBuildStage>(sp));
-        RegisterHandler("deterministic-test", (sp, def) => ActivatorUtilities.CreateInstance<DeterministicTestStage>(sp));
-        RegisterHandler("deterministic-coverage", (sp, def) => ActivatorUtilities.CreateInstance<DeterministicCoverageGate>(sp));
-        RegisterHandler("deterministic-sast", (sp, def) => ActivatorUtilities.CreateInstance<DeterministicSastStage>(sp));
-        RegisterHandler("deterministic-ratchet", (sp, def) => ActivatorUtilities.CreateInstance<DeterministicWarningRatchetStage>(sp));
-        RegisterHandler("deterministic-composite", (sp, def) => new CompositeDeterministicStage(def, sp, this));
-        RegisterHandler("deterministic-script", (sp, def) => new DeterministicScriptStage(def, sp));
+        RegisterHandler(StageImplementationTypes.DeterministicBuild, (sp, def) => ActivatorUtilities.CreateInstance<DeterministicBuildStage>(sp));
+        RegisterHandler(StageImplementationTypes.DeterministicTest, (sp, def) => ActivatorUtilities.CreateInstance<DeterministicTestStage>(sp));
+        RegisterHandler(StageImplementationTypes.DeterministicCoverage, (sp, def) => ActivatorUtilities.CreateInstance<DeterministicCoverageGate>(sp));
+        RegisterHandler(StageImplementationTypes.DeterministicSast, (sp, def) => ActivatorUtilities.CreateInstance<DeterministicSastStage>(sp));
+        RegisterHandler(StageImplementationTypes.DeterministicRatchet, (sp, def) => ActivatorUtilities.CreateInstance<DeterministicWarningRatchetStage>(sp));
+        RegisterHandler(StageImplementationTypes.DeterministicComposite, (sp, def) => new CompositeDeterministicStage(def, sp, this));
+        RegisterHandler(StageImplementationTypes.DeterministicScript, (sp, def) => new DeterministicScriptStage(def, sp));
     }
 }
