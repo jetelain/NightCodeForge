@@ -112,7 +112,9 @@ public class TriageService : ITriageService
         _logger.LogInformation("Triage agent finished with status {Status}: {Summary}", runResult.Status, runResult.Summary);
 
         // 4. Extract proposed backlog items and persist as Suggested tasks
-        var pendingProposals = pipelineContext.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals) ?? new List<TaskProposal>();
+        var pendingProposals = (runResult.Proposals != null && runResult.Proposals.Count > 0)
+            ? runResult.Proposals.ToList()
+            : pipelineContext.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals) ?? new List<TaskProposal>();
         var createdTasks = new List<ForgeTask>();
 
         if (pendingProposals.Count > 0)

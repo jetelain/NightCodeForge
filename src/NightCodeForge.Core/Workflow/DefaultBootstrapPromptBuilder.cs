@@ -28,6 +28,7 @@ public static class DefaultBootstrapPromptBuilder
             : stage.StageDirective;
 
         var reviewerFeedback = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewerFeedback);
+        var reviewDiff = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiff);
         var approvedPlan = context.DataBag.Get<string>(PipelineDataBagKeys.ApprovedPlan) ?? context.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview));
         var taskPath = context.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
         var implSummary = context.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.Implementation));
@@ -50,6 +51,7 @@ public static class DefaultBootstrapPromptBuilder
                 task_markdown_path = string.IsNullOrWhiteSpace(taskPath) ? null : taskPath,
                 approved_plan = string.IsNullOrWhiteSpace(approvedPlan) ? null : approvedPlan,
                 reviewer_feedback = string.IsNullOrWhiteSpace(reviewerFeedback) ? null : reviewerFeedback,
+                review_diff = string.IsNullOrWhiteSpace(reviewDiff) ? null : reviewDiff,
                 implementation_summary = string.IsNullOrWhiteSpace(implSummary) ? null : implSummary,
                 compiler_errors = compilerErrors is { Count: > 0 } ? compilerErrors : null,
                 failed_tests = failedTests is { Count: > 0 } ? failedTests : null,
@@ -64,6 +66,11 @@ public static class DefaultBootstrapPromptBuilder
         if (!string.IsNullOrWhiteSpace(effectiveDirective) && !rendered.Contains(effectiveDirective))
         {
             rendered = $"{rendered}\n\n[Stage Directive]:\n{effectiveDirective}".Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(reviewDiff) && !rendered.Contains(reviewDiff))
+        {
+            rendered = $"{rendered}\n\n[Git Diff to Review]:\n{reviewDiff}".Trim();
         }
 
         return rendered;

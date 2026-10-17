@@ -166,7 +166,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
 
             Assert.Equal(StandardStageIds.Implementation, result.TargetRouting);
             Assert.Contains("Missing unit tests", result.Summary);
-            Assert.Equal("Missing unit tests for edge cases", bag.Get<string>(PipelineDataBagKeys.ReviewerFeedback));
+            Assert.Equal("Missing unit tests for edge cases", result.ReviewerFeedback);
         }
         finally
         {
@@ -215,7 +215,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             var result = await harness.RunStageAsync(context);
 
             Assert.Equal(StandardStageIds.Implementation, result.TargetRouting);
-            Assert.Equal("The whole AuthService is missing.", bag.Get<string>(PipelineDataBagKeys.ReviewerFeedback));
+            Assert.Equal("The whole AuthService is missing.", result.ReviewerFeedback);
         }
         finally
         {

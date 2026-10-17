@@ -31,7 +31,9 @@ public record AgentRunResult(
     string? Summary = null,
     string? Error = null,
     IReadOnlyDictionary<string, string>? DiagnosticArtifacts = null,
-    string? TargetRouting = null)
+    string? TargetRouting = null,
+    string? ReviewerFeedback = null,
+    IReadOnlyList<TaskProposal>? Proposals = null)
 {
     public static AgentRunResult Completed(
         AgentRunMetrics metrics,
@@ -39,8 +41,10 @@ public record AgentRunResult(
         string? updatedState = null,
         string? summary = null,
         IReadOnlyDictionary<string, string>? artifacts = null,
-        string? targetRouting = null) =>
-        new(AgentRunStatus.Completed, metrics, commitHash, updatedState, null, summary, null, artifacts, targetRouting);
+        string? targetRouting = null,
+        string? reviewerFeedback = null,
+        IReadOnlyList<TaskProposal>? proposals = null) =>
+        new(AgentRunStatus.Completed, metrics, commitHash, updatedState, null, summary, null, artifacts, targetRouting, reviewerFeedback, proposals);
 
     public static AgentRunResult WaitingForHuman(
         string pendingQuestion,

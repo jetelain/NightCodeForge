@@ -20,4 +20,11 @@ public class AgentSessionContext
     public string WorkspacePath { get; init; } = string.Empty;
     public string? PendingHumanAnswer { get; init; }
     public IReadOnlyList<string>? DiscoveredSymbols { get; init; }
+
+    // --- Promoted Typed Properties ---
+    public string? TaskMarkdownPath { get; init; }
+    public string? ReviewDiff { get; init; }
+    public string? ApprovedPlan { get; init; }
+    public string? ReviewerFeedback { get; init; }
+    public IReadOnlyList<string>? PriorDiagnostics { get; init; }
 }

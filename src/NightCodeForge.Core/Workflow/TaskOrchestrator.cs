@@ -354,6 +354,12 @@ public class TaskOrchestrator : ITaskOrchestrator
                             WorkspacePath = taskWorkingPath,
                             SerializedStateJson = resumeMemory,
                             PendingHumanAnswer = lastHumanAnswer,
+                            TaskMarkdownPath = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath),
+                            ReviewDiff = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiff),
+                            ApprovedPlan = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ApprovedPlan)
+                                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview)),
+                            ReviewerFeedback = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ReviewerFeedback),
+                            PriorDiagnostics = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors),
                             BootstrapPrompt = stage.BuildBootstrapPrompt(task, pipelineContext, stageDirective),
                             OptimizationFlags = profile.OptimizationFlags ?? new LocalOptimizationFlags(),
                             PipelineContext = pipelineContext
@@ -373,6 +379,18 @@ public class TaskOrchestrator : ITaskOrchestrator
                             {
                                 pipelineContext.DataBag.Set(PipelineDataBagKeys.ApprovedPlan, runResult.Summary);
                             }
+                        }
+
+                        if (!string.IsNullOrEmpty(runResult.ReviewerFeedback))
+                        {
+                            pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewerFeedback, runResult.ReviewerFeedback);
+                        }
+
+                        if (runResult.Proposals is { Count: > 0 })
+                        {
+                            var existingProposals = pipelineContext.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals) ?? new List<TaskProposal>();
+                            existingProposals.AddRange(runResult.Proposals);
+                            pipelineContext.DataBag.Set(PipelineDataBagKeys.PendingProposals, existingProposals);
                         }
 
                         result = MapAgentRunResultToStageResult(runResult, stage, profile, startedAt);
@@ -612,6 +630,15 @@ public class TaskOrchestrator : ITaskOrchestrator
             else if (string.Equals(stage.StageId, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
             {
                 task.Status = TaskOverallStatus.Implemented;
+                try
+                {
+                    var diff = await _gitWorkspaceManager.GenerateDiffAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+                    pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiff, diff);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed generating review diff after implementation for task #{TaskId}", task.Id);
+                }
             }
             else if (string.Equals(stage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
             {

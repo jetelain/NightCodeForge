@@ -146,11 +146,11 @@ flowchart TD
   - [x] `DeterministicTestStage` failure lines (`FailedTests`) are passed to the repairing agent via `CompilerErrors` on loopback.
   - [x] `TestsCurrentPassed` and `TestsCurrentDurationMs` recorded by `DeterministicTestStage`; `TaskReviewService` bug displaying incorrect passed tests resolved.
   - [x] Phantom keys `AllowLoopBack`, `MaxLoopBackAttempts`, `StrictCompilationGate`, `DeterministicMetrics` pruned.
-- [ ] **Step 9.8: AgentSessionContext Property Promotion & Harness Decoupling**
-  - [ ] `TaskMarkdownPath`, `ReviewDiff`, `ApprovedPlan`, `ReviewerFeedback`, and `PriorDiagnostics` promoted as strongly typed properties on `AgentSessionContext`.
-  - [ ] Critical Bug Fix: `ReviewDiff` wired into `AgentSessionContext` and `DefaultBootstrapPromptBuilder` for Code Review agents.
-  - [ ] `AgentRunResult` carries `ReviewerFeedback` and `Proposals`; `TaskOrchestrator` updates DataBag centrally.
-  - [ ] `CrucibleAgentHarness`, `PiRpcAgentHarness`, and `AcpAgentHarness` decoupled from `PipelineContext.DataBag`.
+- [x] **Step 9.8: AgentSessionContext Property Promotion & Harness Decoupling**
+  - [x] `TaskMarkdownPath`, `ReviewDiff`, `ApprovedPlan`, `ReviewerFeedback`, and `PriorDiagnostics` promoted as strongly typed properties on `AgentSessionContext`.
+  - [x] Critical Bug Fix: `ReviewDiff` wired into `AgentSessionContext` and `DefaultBootstrapPromptBuilder` for Code Review agents.
+  - [x] `AgentRunResult` carries `ReviewerFeedback` and `Proposals`; `TaskOrchestrator` updates DataBag centrally.
+  - [x] `CrucibleAgentHarness`, `PiRpcAgentHarness`, and `AcpAgentHarness` decoupled from `PipelineContext.DataBag`.
 - [ ] **Step 9.9: Resilient Crash Recovery, Database Conversation Rehydration & State Persistence**
   - [ ] `StartupRecoveryService` queries `ITaskRepository` for active `Conversation` and turns on agentic stages.
   - [ ] Agentic recovery reconstructs message history, appends a system notice turn, and rehydrates `SerializedStateJson` in `AgentSessionContext`.

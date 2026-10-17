@@ -231,8 +231,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var stageDirective = !string.IsNullOrWhiteSpace(context.StageDirective)
             ? context.StageDirective
             : WorkspacePromptResolver.ResolveStageDirective(workspacePath, context.StageId, GetStageDirective(harnessConfig, context.StageId));
-        var taskDocPath = context.PipelineContext?.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
-        var taskScope = BuildTaskScope(context.ForgeTask, taskDocPath);
+        var taskDocPath = context.TaskMarkdownPath ?? context.PipelineContext?.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
+        var reviewDiff = context.ReviewDiff ?? context.PipelineContext?.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiff);
+        var taskScope = BuildTaskScope(context.ForgeTask, taskDocPath, reviewDiff);
         var workspaceSystemPrompt = WorkspacePromptResolver.ResolveSystemPrompt(workspacePath);
         var customPersona = !string.IsNullOrWhiteSpace(workspaceSystemPrompt)
             ? workspaceSystemPrompt
@@ -449,21 +450,22 @@ public partial class CrucibleAgentHarness : IAgentHarness
             stopwatch.Stop();
             latestSerializedState = SerializeSession(chatHistory);
 
-            if (context.PipelineContext != null)
-            {
-                context.PipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewerFeedback, reqChange.Feedback);
-            }
-
             var summary = $"Reviewer requested changes: {reqChange.Feedback}";
             await SaveAsync(AgentRunStatus.Completed, summary, cancellationToken);
             await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, $"Changes requested: {reqChange.Feedback}", cancellationToken);
+
+            var proposals = canonicalTools.PendingProposals.Count > 0
+                ? (IReadOnlyList<TaskProposal>)canonicalTools.PendingProposals.ToList()
+                : null;
 
             return AgentRunResult.Completed(
                 CurrentMetrics(),
                 commitHash: null,
                 updatedState: latestSerializedState,
                 summary: summary,
-                targetRouting: reqChange.TargetStageId);
+                targetRouting: reqChange.TargetStageId,
+                reviewerFeedback: reqChange.Feedback,
+                proposals: proposals);
         }
 
         async Task<AgentRunResult> CompleteWithInterruptionAsync(HumanInterruptionException interruption)
@@ -706,27 +708,21 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         stopwatch.Stop();
         var lastAssistantMessage = chatHistory.LastOrDefault(m => m.Role == ChatRole.Assistant)?.Text;
+        string? reviewerFeedback = null;
 
         if (string.IsNullOrEmpty(targetRouting) && !string.IsNullOrEmpty(lastAssistantMessage))
         {
             var match = Regex.Match(lastAssistantMessage, @"<request_changes>(.*?)</request_changes>", RegexOptions.Singleline);
             if (match.Success)
             {
-                var feedback = match.Groups[1].Value.Trim();
+                reviewerFeedback = match.Groups[1].Value.Trim();
                 targetRouting = StandardStageIds.Implementation;
-                if (context.PipelineContext != null)
-                {
-                    context.PipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewerFeedback, feedback);
-                }
             }
         }
 
-        if (canonicalTools.PendingProposals.Count > 0 && context.PipelineContext != null)
-        {
-            var existingProposals = context.PipelineContext.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals) ?? new List<TaskProposal>();
-            existingProposals.AddRange(canonicalTools.PendingProposals);
-            context.PipelineContext.DataBag.Set(PipelineDataBagKeys.PendingProposals, existingProposals);
-        }
+        var proposals = canonicalTools.PendingProposals.Count > 0
+            ? (IReadOnlyList<TaskProposal>)canonicalTools.PendingProposals.ToList()
+            : null;
 
         await SaveAsync(AgentRunStatus.Completed, lastAssistantMessage ?? "Stage completed successfully.", cancellationToken);
 
@@ -737,7 +733,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
             commitHash: null,
             updatedState: latestSerializedState,
             summary: lastAssistantMessage ?? "Stage completed successfully.",
-            targetRouting: targetRouting);
+            targetRouting: targetRouting,
+            reviewerFeedback: reviewerFeedback,
+            proposals: proposals);
     }
 
     private async Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken ct, Dictionary<string, object?>? metadata = null)
@@ -761,7 +759,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     /// Builds the &lt;task&gt; scope block of the prompt, neutralising characters that would break out of the
     /// attribute values or close the block early.
     /// </summary>
-    public static string BuildTaskScope(ForgeTask task, string? taskDocPath)
+    public static string BuildTaskScope(ForgeTask task, string? taskDocPath, string? reviewDiff = null)
     {
         ArgumentNullException.ThrowIfNull(task);
 
@@ -772,7 +770,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var description = (task.Description ?? string.Empty)
             .Replace("</task>", "&lt;/task&gt;", StringComparison.OrdinalIgnoreCase);
 
-        return $"<task id=\"{task.Id}\" title=\"{EscapeAttribute(task.Title ?? string.Empty)}\"{docAttr}>\n{description}\n</task>";
+        var diffBlock = !string.IsNullOrWhiteSpace(reviewDiff)
+            ? $"\n<review_diff>\n{reviewDiff.Replace("</review_diff>", "&lt;/review_diff&gt;", StringComparison.OrdinalIgnoreCase)}\n</review_diff>"
+            : string.Empty;
+
+        return $"<task id=\"{task.Id}\" title=\"{EscapeAttribute(task.Title ?? string.Empty)}\"{docAttr}>\n{description}{diffBlock}\n</task>";
     }
 
     /// <summary>Runs persistence work sequentially, in submission order, logging (never throwing) failures.</summary>

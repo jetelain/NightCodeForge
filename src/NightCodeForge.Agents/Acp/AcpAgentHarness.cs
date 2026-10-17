@@ -553,15 +553,12 @@ public class AcpAgentHarness : IAgentHarness
             var finalSummary = lastAgentSummary ?? "ACP agent completed successfully.";
 
             string? targetRouting = null;
+            string? reviewerFeedback = null;
             var match = Regex.Match(finalSummary, @"<request_changes>(.*?)</request_changes>", RegexOptions.Singleline);
             if (match.Success)
             {
-                var feedback = match.Groups[1].Value.Trim();
+                reviewerFeedback = match.Groups[1].Value.Trim();
                 targetRouting = StandardStageIds.Implementation;
-                if (context.PipelineContext != null)
-                {
-                    context.PipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewerFeedback, feedback);
-                }
             }
 
             await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, finalSummary, cancellationToken);
@@ -572,7 +569,8 @@ public class AcpAgentHarness : IAgentHarness
                 new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
                 updatedState: activeSessionId,
                 summary: finalSummary,
-                targetRouting: targetRouting);
+                targetRouting: targetRouting,
+                reviewerFeedback: reviewerFeedback);
         }
         catch (OperationCanceledException)
         {
