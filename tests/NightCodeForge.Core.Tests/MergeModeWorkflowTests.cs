@@ -2,6 +2,7 @@ using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Tests.Fixtures;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Core.Tests;
@@ -16,6 +17,19 @@ public class MergeModeWorkflowTests
     private readonly FakeGitWorkspaceManager _gitManager;
     private readonly FakeTaskJobQueue _jobQueue;
     private readonly Workspace _workspace;
+
+    private TaskOrchestrator CreateOrchestrator(IWorkflowPipelineProvider? pipelineProvider = null) =>
+        new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            PipelineProvider = pipelineProvider ?? new DefaultWorkflowPipelineProvider(),
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore
+        }.Build();
 
     public MergeModeWorkflowTests()
     {
@@ -71,9 +85,7 @@ public class MergeModeWorkflowTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { finalStage });
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
 
         // Act: Process final stage
         await orchestrator.ProcessTaskAsync(501);
@@ -127,9 +139,7 @@ public class MergeModeWorkflowTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { finalStage });
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
 
         // Act: Process final stage
         await orchestrator.ProcessTaskAsync(601);
@@ -184,9 +194,7 @@ public class MergeModeWorkflowTests
         _depStore.AddTask(702, 1, TaskOverallStatus.Suggested);
         _depStore.AddDependency(1, 702, 701);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         // Act: Maintainer promotes Suggested -> Open
         await orchestrator.PromoteSuggestedTaskAsync(
@@ -227,9 +235,7 @@ public class MergeModeWorkflowTests
         _depStore.AddTask(802, 1, TaskOverallStatus.Suggested);
         _depStore.AddDependency(1, 802, 801);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         // Act: Maintainer promotes Suggested -> Open
         await orchestrator.PromoteSuggestedTaskAsync(
@@ -258,9 +264,7 @@ public class MergeModeWorkflowTests
         });
         _depStore.AddTask(901, 1, TaskOverallStatus.Suggested);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         // Act: Maintainer rejects task
         await orchestrator.PromoteSuggestedTaskAsync(

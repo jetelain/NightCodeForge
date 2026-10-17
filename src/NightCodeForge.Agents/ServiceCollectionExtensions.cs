@@ -47,6 +47,8 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<NightCodeForge.Core.Workflow.ITriageService, NightCodeForge.Agents.Triage.TriageService>();
 
         // 5. Agent Harnesses
+        services.AddOptions<Acp.AcpHarnessOptions>();
+        services.AddOptions<PiRpc.PiRpcHarnessOptions>();
         services.TryAddScoped<CrucibleAgentHarness>();
         services.TryAddScoped<PiRpcAgentHarness>();
         services.TryAddScoped<AcpAgentHarness>();

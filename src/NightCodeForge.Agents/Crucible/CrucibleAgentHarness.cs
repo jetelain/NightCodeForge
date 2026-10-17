@@ -24,78 +24,63 @@ namespace NightCodeForge.Agents.Crucible;
 
 public partial class CrucibleAgentHarness : IAgentHarness
 {
-    private readonly IChatClient? _baseChatClient;
-    private readonly IOllamaChatClientFactory? _chatClientFactory;
-    private readonly IExecutionEnvironment? _executionEnv;
-    private readonly IExecutionEnvironmentProvider? _envProvider;
-    private readonly IMcpClientManager? _mcpManager;
+    private readonly IOllamaChatClientFactory _chatClientFactory;
+    private readonly IExecutionEnvironmentProvider _envProvider;
+    private readonly IMcpClientManager _mcpManager;
     private readonly IEditorConfigService _editorConfigService;
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly IWebSearchService _webSearchService;
     private readonly IWorkspaceSymbolService _symbolService;
     private readonly SkillsService _skillsService;
     private readonly AgentsMdService _agentsMdService;
-    private readonly IAgentActivityStreamer? _activityStreamer;
-    private readonly SessionTranscriptService? _transcriptService;
-    private readonly NightCodeForge.Core.Repositories.ITaskRepository? _taskRepository;
+    private readonly IAgentActivityStreamer _activityStreamer;
+    private readonly SessionTranscriptService _transcriptService;
+    private readonly NightCodeForge.Core.Repositories.ITaskRepository _taskRepository;
     private readonly IWorkspacePathResolver _pathResolver;
-    private readonly IGlobalOptimizationSettingsService? _globalOptimizationSettings;
+    private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
     private readonly ILogger<CrucibleAgentHarness> _logger;
-    private readonly LlmProviderOptions? _llmOptions;
+    private readonly ILogger<CanonicalTools> _canonicalToolsLogger;
+    private readonly LlmProviderOptions _llmOptions;
 
     public string HarnessId => StandardHarnessIds.Crucible;
 
     public CrucibleAgentHarness(
         IWorkspacePathResolver pathResolver,
-        IChatClient? baseChatClient = null,
-        IOllamaChatClientFactory? chatClientFactory = null,
-        IExecutionEnvironment? executionEnv = null,
-        IExecutionEnvironmentProvider? envProvider = null,
-        IMcpClientManager? mcpManager = null,
-        IEditorConfigService? editorConfigService = null,
-        IEditorConfigFileApplier? editorConfigFileApplier = null,
-        IWebSearchService? webSearchService = null,
-        IWorkspaceSymbolService? symbolService = null,
-        SkillsService? skillsService = null,
-        AgentsMdService? agentsMdService = null,
-        IAgentActivityStreamer? activityStreamer = null,
-        SessionTranscriptService? transcriptService = null,
-        IGlobalOptimizationSettingsService? globalOptimizationSettings = null,
-        ILogger<CrucibleAgentHarness>? logger = null,
-        Microsoft.Extensions.Options.IOptions<LlmProviderOptions>? llmOptions = null,
-        NightCodeForge.Core.Repositories.ITaskRepository? taskRepository = null)
+        IOllamaChatClientFactory chatClientFactory,
+        IExecutionEnvironmentProvider envProvider,
+        IMcpClientManager mcpManager,
+        IEditorConfigService editorConfigService,
+        IEditorConfigFileApplier editorConfigFileApplier,
+        IWebSearchService webSearchService,
+        IWorkspaceSymbolService symbolService,
+        SkillsService skillsService,
+        AgentsMdService agentsMdService,
+        IAgentActivityStreamer activityStreamer,
+        SessionTranscriptService transcriptService,
+        IGlobalOptimizationSettingsService globalOptimizationSettings,
+        NightCodeForge.Core.Repositories.ITaskRepository taskRepository,
+        Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
+        ILogger<CrucibleAgentHarness> logger,
+        ILogger<CanonicalTools> canonicalToolsLogger)
     {
-        ArgumentNullException.ThrowIfNull(pathResolver);
-        if (baseChatClient == null && chatClientFactory == null)
-        {
-            throw new ArgumentNullException(nameof(baseChatClient), "Either baseChatClient or chatClientFactory must be provided.");
-        }
-
-        _baseChatClient = baseChatClient;
-        _chatClientFactory = chatClientFactory;
-        _executionEnv = executionEnv;
-        _envProvider = envProvider;
-        _mcpManager = mcpManager;
-        _editorConfigService = editorConfigService ?? new EditorConfigService();
-        _editorConfigFileApplier = editorConfigFileApplier ?? new EditorConfigFileApplier();
-        _webSearchService = webSearchService ?? new MockWebSearchService();
-        _symbolService = symbolService ?? new RoslynSymbolIndexProvider();
-        _skillsService = skillsService ?? new SkillsService();
-        _agentsMdService = agentsMdService ?? new AgentsMdService();
-        _activityStreamer = activityStreamer;
-        _transcriptService = transcriptService;
-        _taskRepository = taskRepository;
-        _pathResolver = pathResolver;
-        _globalOptimizationSettings = globalOptimizationSettings;
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CrucibleAgentHarness>.Instance;
-        _llmOptions = llmOptions?.Value;
-    }
-
-    public CrucibleAgentHarness(
-        IChatClient baseChatClient,
-        IWorkspacePathResolver pathResolver)
-        : this(pathResolver, baseChatClient: baseChatClient)
-    {
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
+        _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
+        _mcpManager = mcpManager ?? throw new ArgumentNullException(nameof(mcpManager));
+        _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
+        _editorConfigFileApplier = editorConfigFileApplier ?? throw new ArgumentNullException(nameof(editorConfigFileApplier));
+        _webSearchService = webSearchService ?? throw new ArgumentNullException(nameof(webSearchService));
+        _symbolService = symbolService ?? throw new ArgumentNullException(nameof(symbolService));
+        _skillsService = skillsService ?? throw new ArgumentNullException(nameof(skillsService));
+        _agentsMdService = agentsMdService ?? throw new ArgumentNullException(nameof(agentsMdService));
+        _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
+        _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
+        _globalOptimizationSettings = globalOptimizationSettings ?? throw new ArgumentNullException(nameof(globalOptimizationSettings));
+        _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
+        ArgumentNullException.ThrowIfNull(llmOptions);
+        _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _canonicalToolsLogger = canonicalToolsLogger ?? throw new ArgumentNullException(nameof(canonicalToolsLogger));
     }
 
     public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
@@ -147,13 +132,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
         // 1. Parse database-driven HarnessConfigurationJson if provided
         var harnessConfig = ParseHarnessConfig(context.Profile.HarnessConfigurationJson);
 
-        var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier, context.ForgeTask.Id)
-            : _executionEnv;
+        var workspace = context.Workspace ?? throw new InvalidOperationException("Workspace is required for agent stage execution.");
+        var effectiveEnv = _envProvider.GetEnvironment(workspace, context.Profile.SecurityTier, context.ForgeTask.Id)
+            ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
 
         var projectConfig = CodeStackPresets.ResolveConfig(workspacePath, null);
-        var buildTimeout = context.Workspace?.BuildTimeoutSeconds ?? projectConfig.BuildTimeoutSeconds;
-        var testTimeout = context.Workspace?.TestTimeoutSeconds ?? projectConfig.TestTimeoutSeconds;
+        var buildTimeout = workspace.BuildTimeoutSeconds ?? projectConfig.BuildTimeoutSeconds;
+        var testTimeout = workspace.TestTimeoutSeconds ?? projectConfig.TestTimeoutSeconds;
 
         // 2. Initialize Tools & Lenient Dispatcher
         var canonicalTools = new CanonicalTools(
@@ -163,9 +148,10 @@ public partial class CrucibleAgentHarness : IAgentHarness
             _editorConfigService,
             _editorConfigFileApplier,
             _webSearchService,
+            _canonicalToolsLogger,
             buildTimeoutSeconds: buildTimeout,
             testTimeoutSeconds: testTimeout,
-            workspaceId: context.Workspace?.Id,
+            workspaceId: workspace.Id,
             taskId: context.ForgeTask.Id > 0 ? context.ForgeTask.Id : (int?)null,
             isReadOnly: context.Profile.Mode == AgentMode.ReadOnly || context.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly);
 
@@ -191,9 +177,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
 
         // Register external MCP tools if configured
-        if (_mcpManager != null)
+        var mcpServers = await _mcpManager.GetConfiguredServersAsync(workspacePath, cancellationToken);
+        if (mcpServers != null)
         {
-            var mcpServers = await _mcpManager.GetConfiguredServersAsync(workspacePath, cancellationToken);
             foreach (var (serverName, def) in mcpServers)
             {
                 var toolDef = new ToolDefinition
@@ -304,9 +290,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
 
         // 9. Resolve effective ChatClient for the profile and assemble middlewares
-        var baseClient = _chatClientFactory != null
-            ? _chatClientFactory.CreateClient(context.Profile)
-            : (_baseChatClient ?? throw new InvalidOperationException("No IChatClient or IOllamaChatClientFactory configured for CrucibleAgentHarness."));
+        var baseClient = _chatClientFactory.CreateClient(context.Profile);
 
         var effectiveModel = !string.IsNullOrWhiteSpace(context.Profile.ModelName)
             ? context.Profile.ModelName

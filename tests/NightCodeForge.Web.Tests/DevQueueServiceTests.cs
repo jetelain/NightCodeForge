@@ -1,7 +1,9 @@
 using Hangfire;
 using Hangfire.Common;
+using Hangfire.MemoryStorage;
 using Hangfire.States;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
@@ -22,6 +24,7 @@ public class DevQueueServiceTests : IDisposable
     private readonly InMemoryWorkspaceRepository _workspaceRepo;
     private readonly TestDevQueueMarkdownSyncService _markdownSync;
     private readonly ServiceProvider _serviceProvider;
+    private readonly JobStorage _jobStorage = new MemoryStorage();
     private readonly string _tempDir;
 
     public DevQueueServiceTests()
@@ -43,6 +46,14 @@ public class DevQueueServiceTests : IDisposable
         Directory.CreateDirectory(_tempDir);
     }
 
+    private DevQueueService CreateService() => new(
+        _lockProvider,
+        _jobClient,
+        _jobQueue,
+        _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+        _jobStorage,
+        NullLogger<DevQueueService>.Instance);
+
     [Fact]
     public async Task GetSnapshotAsync_ReturnsActiveLocks_WhenNoJobStorage()
     {
@@ -53,12 +64,7 @@ public class DevQueueServiceTests : IDisposable
             AcquiredAt: DateTime.UtcNow.AddMinutes(-5),
             DurationHeld: TimeSpan.FromMinutes(5)));
 
-        var service = new DevQueueService(
-            _lockProvider,
-            _jobClient,
-            _jobQueue,
-            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-            jobStorage: null);
+        var service = CreateService();
 
         var snapshot = await service.GetSnapshotAsync();
 
@@ -73,12 +79,7 @@ public class DevQueueServiceTests : IDisposable
     [Fact]
     public async Task PromoteToUrgentAsync_WithJobId_ChangesJobState()
     {
-        var service = new DevQueueService(
-            _lockProvider,
-            _jobClient,
-            _jobQueue,
-            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-            jobStorage: null);
+        var service = CreateService();
 
         var result = await service.PromoteToUrgentAsync("job-123", 42);
 
@@ -90,12 +91,7 @@ public class DevQueueServiceTests : IDisposable
     [Fact]
     public async Task PromoteToUrgentAsync_WithoutJobId_EnqueuesToUrgentQueue()
     {
-        var service = new DevQueueService(
-            _lockProvider,
-            _jobClient,
-            _jobQueue,
-            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-            jobStorage: null);
+        var service = CreateService();
 
         var result = await service.PromoteToUrgentAsync("", 99);
 
@@ -115,12 +111,7 @@ public class DevQueueServiceTests : IDisposable
         };
         await _taskRepo.CreateAsync(task);
 
-        var service = new DevQueueService(
-            _lockProvider,
-            _jobClient,
-            _jobQueue,
-            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-            jobStorage: null);
+        var service = CreateService();
 
         var result = await service.CancelJobAsync("job-55", 55);
 
@@ -152,12 +143,7 @@ public class DevQueueServiceTests : IDisposable
         };
         await _taskRepo.CreateAsync(task);
 
-        var service = new DevQueueService(
-            _lockProvider,
-            _jobClient,
-            _jobQueue,
-            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-            jobStorage: null);
+        var service = CreateService();
 
         var result = await service.CancelJobAsync("job-88", 88);
 
@@ -171,12 +157,7 @@ public class DevQueueServiceTests : IDisposable
     [Fact]
     public async Task RequeueJobAsync_RequeuesJob()
     {
-        var service = new DevQueueService(
-            _lockProvider,
-            _jobClient,
-            _jobQueue,
-            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-            jobStorage: null);
+        var service = CreateService();
 
         var result = await service.RequeueJobAsync("job-fail-1", 77);
 
@@ -200,12 +181,7 @@ public class DevQueueServiceTests : IDisposable
         };
         await _workspaceRepo.CreateAsync(workspace);
 
-        var service = new DevQueueService(
-            _lockProvider,
-            _jobClient,
-            _jobQueue,
-            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-            jobStorage: null);
+        var service = CreateService();
 
         var result = await service.EmergencyReleaseLockAsync(10);
 
@@ -229,12 +205,7 @@ public class DevQueueServiceTests : IDisposable
         };
         await _taskRepo.CreateAsync(task);
 
-        var service = new DevQueueService(
-            _lockProvider,
-            _jobClient,
-            _jobQueue,
-            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-            jobStorage: null);
+        var service = CreateService();
 
         var result = await service.RescheduleTaskAsync(301, restartPipeline: true);
 
@@ -262,12 +233,7 @@ public class DevQueueServiceTests : IDisposable
         };
         await _taskRepo.CreateAsync(task);
 
-        var service = new DevQueueService(
-            _lockProvider,
-            _jobClient,
-            _jobQueue,
-            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
-            jobStorage: null);
+        var service = CreateService();
 
         var result = await service.RescheduleTaskAsync(302, restartPipeline: false);
 

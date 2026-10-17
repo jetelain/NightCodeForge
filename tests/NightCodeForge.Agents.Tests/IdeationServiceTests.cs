@@ -1,13 +1,36 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Agents.Ideation;
+using NightCodeForge.Agents.Inference;
+using NightCodeForge.Agents.Tests.Fixtures;
+using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Streaming;
 
 namespace NightCodeForge.Agents.Tests;
 
 public class IdeationServiceTests
 {
+    private IdeationService CreateService(
+        IChatClient? client = null,
+        IOllamaChatClientFactory? chatClientFactory = null,
+        IWorkspacePathResolver? pathResolver = null,
+        IAgentActivityStreamer? activityStreamer = null,
+        SessionTranscriptService? transcriptService = null,
+        ILogger<IdeationService>? logger = null) =>
+        new TestIdeationServiceBuilder
+        {
+            BaseChatClient = client,
+            ChatClientFactory = chatClientFactory,
+            PathResolver = pathResolver ?? new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+            ActivityStreamer = activityStreamer ?? new InMemoryAgentActivityStreamer(),
+            TranscriptService = transcriptService ?? new SessionTranscriptService(),
+            Logger = logger ?? NullLogger<IdeationService>.Instance
+        }.Build();
+
     private static Workspace CreateWorkspace(int id = 1, string name = "Test WS", string? path = null)
     {
         var ws = new Workspace
@@ -63,7 +86,7 @@ public class IdeationServiceTests
 Let me know what you think!";
 
         var fakeClient = new FakeChatClient { ResponseToReturn = jsonResponse };
-        var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var service = CreateService(fakeClient);
 
         var workspace = CreateWorkspace(1, "Test WS");
         var result = await service.ConverseAsync(workspace, "How should we optimize prompt token usage?");
@@ -93,7 +116,7 @@ Let me know what you think!";
             ResponseToReturn = "Discovery complete."
         };
 
-        var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var service = CreateService(fakeClient);
 
         var workspace = new Workspace
         {
@@ -133,7 +156,7 @@ Let me know what you think!";
             return fakeClient;
         });
 
-        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), chatClientFactory: mockFactory);
+        var service = CreateService(chatClientFactory: mockFactory);
 
         var customProfile = new AgentProfile
         {
@@ -173,7 +196,7 @@ Let me know what you think!";
 
         var streamer = new CapturingActivityStreamer();
         var client = new MockUpdateStreamingChatClient(updates);
-        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, activityStreamer: streamer);
+        var service = CreateService(client, activityStreamer: streamer);
 
         var workspace = CreateWorkspace(10);
 
@@ -204,7 +227,7 @@ Let me know what you think!";
             ResponseToReturn = "Finished proposals:\n```json\n[{\"title\": \"Fallback Task\", \"description\": \"Test desc\"}]\n```"
         };
 
-        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: fakeClient, activityStreamer: streamer);
+        var service = CreateService(fakeClient, activityStreamer: streamer);
         var workspace = CreateWorkspace(11);
 
         var result = await service.ConverseAsync(workspace, "Suggest a fallback task");
@@ -234,7 +257,7 @@ Let me know what you think!";
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, "Proposals are submitted and finalized."));
         });
 
-        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, activityStreamer: streamer);
+        var service = CreateService(client, activityStreamer: streamer);
         var workspace = CreateWorkspace(12);
 
         var result = await service.ConverseAsync(workspace, "Create backlog tasks");
@@ -397,7 +420,7 @@ Let me know what you think!";
     {
         var fakeClient = new FakeChatClient { ResponseToReturn = "Exploration complete." };
         var pathResolver = new FakePathResolver();
-        var service = new IdeationService(fakeClient, pathResolver: pathResolver);
+        var service = CreateService(fakeClient, pathResolver: pathResolver);
 
         var workspace = CreateWorkspace(42, "Test WS");
         var result = await service.ConverseAsync(workspace, "Explore the architecture");
@@ -422,7 +445,7 @@ Let me know what you think!";
             return "Task proposal has been registered.";
         });
 
-        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, activityStreamer: streamer);
+        var service = CreateService(client, activityStreamer: streamer);
         var workspace = CreateWorkspace(50);
 
         var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
@@ -465,7 +488,7 @@ Let me know what you think!";
             return "Continuing after tool failure.";
         });
 
-        var service = new IdeationService(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), defaultChatClient: client, logger: logger);
+        var service = CreateService(client, logger: logger);
         var workspace = CreateWorkspace(51);
 
         var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
@@ -545,10 +568,7 @@ Let me know what you think!";
         {
             var transcriptService = new NightCodeForge.Agents.Transcripts.SessionTranscriptService(tempTranscriptsDir);
             var client = new MultiTurnStreamingChatClient(_ => "Here is the recommendation.");
-            var service = new IdeationService(
-                new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
-                defaultChatClient: client,
-                transcriptService: transcriptService);
+            var service = CreateService(client, transcriptService: transcriptService);
 
             var workspace = CreateWorkspace(77);
             var updates = new List<NightCodeForge.Core.Interfaces.IdeationStreamUpdate>();
@@ -640,7 +660,7 @@ Let me know what you think!";
             ResponseToReturn = "I am ready."
         };
 
-        var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var service = CreateService(fakeClient);
         var workspace = new Workspace
         {
             Id = 42,
@@ -683,7 +703,7 @@ Let me know what you think!";
             return "I have proposed 3 sequential tasks for your review.";
         });
 
-        var service = new IdeationService(client, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var service = CreateService(client);
         var workspace = CreateWorkspace(10);
 
         var streamUpdates = new List<IdeationStreamUpdate>();
@@ -737,7 +757,7 @@ Let me know what you think!";
             return "Task registered.";
         });
 
-        var service = new IdeationService(client, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var service = CreateService(client);
         var workspace = CreateWorkspace(11);
 
         var result = await service.ConverseAsync(workspace, "Suggest a task");
@@ -765,7 +785,7 @@ Let me know what you think!";
             return "Sequential tasks parsed.";
         });
 
-        var service = new IdeationService(client, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var service = CreateService(client);
         var workspace = CreateWorkspace(12);
 
         var result = await service.ConverseAsync(workspace, "Build pipeline");
@@ -785,7 +805,7 @@ Let me know what you think!";
             ResponseToReturn = "Ready."
         };
 
-        var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var service = CreateService(fakeClient);
         var workspace = CreateWorkspace(13);
 
         await service.ConverseAsync(workspace, "Help me plan");
@@ -812,7 +832,7 @@ Let me know what you think!";
             ResponseToReturn = "Ready."
         };
 
-        var service = new IdeationService(fakeClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var service = CreateService(fakeClient);
         var workspace = CreateWorkspace(14);
 
         await service.ConverseAsync(workspace, "Plan new features");

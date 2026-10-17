@@ -19,8 +19,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
     [GeneratedRegex(@"(?:error\s+([A-Za-z0-9_-]+):\s*(.+?)\s*\[|\((\d+),(\d+)\):\s*error\s*([A-Za-z0-9_-]+):)")]
     private static partial Regex ErrorRegex();
 
-    private readonly IExecutionEnvironment? _executionEnv;
-    private readonly IExecutionEnvironmentProvider? _envProvider;
+    private readonly IExecutionEnvironmentProvider _envProvider;
     private readonly IOllamaModelPreloadService? _preloadService;
     private readonly string _buildCommand;
 
@@ -29,30 +28,45 @@ public partial class DeterministicBuildStage : IWorkflowStage
     public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;
     public string LoopBackStageId { get; set; } = FallbackLoopBackStageId;
 
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public DeterministicBuildStage(
-        IExecutionEnvironment? executionEnv = null,
-        IOllamaModelPreloadService? preloadService = null,
-        string? buildCommand = null,
-        string stageId = DefaultStageId,
-        string displayName = "Deterministic Build & Compilation Gate",
-        IExecutionEnvironmentProvider? envProvider = null)
+        IExecutionEnvironmentProvider envProvider,
+        IOllamaModelPreloadService preloadService)
+        : this(envProvider, preloadService, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
     {
-        _executionEnv = executionEnv;
-        _envProvider = envProvider;
+    }
+
+    public DeterministicBuildStage(
+        IExecutionEnvironmentProvider envProvider)
+        : this(envProvider, null, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
+    {
+    }
+
+    public DeterministicBuildStage(
+        IExecutionEnvironmentProvider envProvider,
+        IOllamaModelPreloadService? preloadService,
+        string buildCommand,
+        string stageId,
+        string displayName)
+    {
+        _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _preloadService = preloadService;
-        _buildCommand = buildCommand ?? "dotnet build";
-        StageId = stageId;
-        DisplayName = displayName;
+        _buildCommand = !string.IsNullOrWhiteSpace(buildCommand) ? buildCommand : "dotnet build";
+        StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : DefaultStageId;
+        DisplayName = !string.IsNullOrWhiteSpace(displayName) ? displayName : "Deterministic Build & Compilation Gate";
     }
 
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(context);
+        var workspace = context.Workspace ?? throw new InvalidOperationException("Workspace is required to resolve execution environment.");
+
         var bag = context.DataBag;
-        var repoPath = context.Workspace.RepositoryPath;
+        var repoPath = workspace.RepositoryPath;
         var workDir = !string.IsNullOrWhiteSpace(context.WorkingDirectory)
             ? context.WorkingDirectory
-            : (!string.IsNullOrWhiteSpace(context.Workspace.Ext4MirrorPath)
-                ? context.Workspace.Ext4MirrorPath
+            : (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
+                ? workspace.Ext4MirrorPath
                 : repoPath);
 
         var config = CodeStackPresets.ResolveConfig(repoPath, bag);
@@ -100,57 +114,53 @@ public partial class DeterministicBuildStage : IWorkflowStage
             }
         }
 
-        var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id)
-            : _executionEnv;
+        var effectiveEnv = _envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id)
+            ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
 
-        if (effectiveEnv != null)
+        var timeout = workspace.BuildTimeoutSeconds ?? config.BuildTimeoutSeconds ?? WorkflowDefaults.DefaultBuildTimeoutSeconds;
+        bag.Set(PipelineDataBagKeys.BuildTimeoutSeconds, timeout);
+
+        var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: timeout, cancellationToken: cancellationToken);
+
+        var fullOutput = string.IsNullOrWhiteSpace(res.StandardError)
+            ? res.StandardOutput
+            : $"{res.StandardOutput}\n{res.StandardError}";
+
+        // Count warnings
+        var warnings = WarningRegex().Matches(fullOutput);
+        var warningCount = warnings.Count;
+        bag.Set(PipelineDataBagKeys.WarningsCurrentTotal, warningCount);
+
+        if (!bag.TryGet<int>(PipelineDataBagKeys.WarningsBaselineTotal, out _))
         {
-            var timeout = context.Workspace?.BuildTimeoutSeconds ?? config.BuildTimeoutSeconds ?? WorkflowDefaults.DefaultBuildTimeoutSeconds;
-            bag.Set(PipelineDataBagKeys.BuildTimeoutSeconds, timeout);
+            bag.Set(PipelineDataBagKeys.WarningsBaselineTotal, warningCount);
+        }
 
-            var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: timeout, cancellationToken: cancellationToken);
+        if (!res.Success)
+        {
+            bool isTimeout = res.ExitCode == WorkflowDefaults.ProcessTimeoutExitCode ||
+                             res.Truncated && (res.StandardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+                                               res.StandardOutput.Contains("timed out", StringComparison.OrdinalIgnoreCase));
 
-            var fullOutput = string.IsNullOrWhiteSpace(res.StandardError)
-                ? res.StandardOutput
-                : $"{res.StandardOutput}\n{res.StandardError}";
-
-            // Count warnings
-            var warnings = WarningRegex().Matches(fullOutput);
-            var warningCount = warnings.Count;
-            bag.Set(PipelineDataBagKeys.WarningsCurrentTotal, warningCount);
-
-            if (!bag.TryGet<int>(PipelineDataBagKeys.WarningsBaselineTotal, out _))
+            if (isTimeout)
             {
-                bag.Set(PipelineDataBagKeys.WarningsBaselineTotal, warningCount);
+                var timeoutMsg = $"Deterministic build timed out after {timeout} seconds. Build failed to terminate within the configured limit.";
+                bag.Set(PipelineDataBagKeys.CompilerErrors, new List<string> { timeoutMsg });
+                bag.Set(PipelineDataBagKeys.BuildFailureReason, timeoutMsg);
+                var target = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
+                return StageExecutionResult.Failure(timeoutMsg, target);
             }
 
-            if (!res.Success)
-            {
-                bool isTimeout = res.ExitCode == WorkflowDefaults.ProcessTimeoutExitCode ||
-                                 res.Truncated && (res.StandardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
-                                                   res.StandardOutput.Contains("timed out", StringComparison.OrdinalIgnoreCase));
+            var errors = ErrorRegex().Matches(fullOutput);
+            var errorList = errors.Select(m => m.Value.Trim()).Take(10).ToList();
+            bag.Set(PipelineDataBagKeys.CompilerErrors, errorList);
 
-                if (isTimeout)
-                {
-                    var timeoutMsg = $"Deterministic build timed out after {timeout} seconds. Build failed to terminate within the configured limit.";
-                    bag.Set(PipelineDataBagKeys.CompilerErrors, new List<string> { timeoutMsg });
-                    bag.Set(PipelineDataBagKeys.BuildFailureReason, timeoutMsg);
-                    var target = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
-                    return StageExecutionResult.Failure(timeoutMsg, target);
-                }
-
-                var errors = ErrorRegex().Matches(fullOutput);
-                var errorList = errors.Select(m => m.Value.Trim()).Take(10).ToList();
-                bag.Set(PipelineDataBagKeys.CompilerErrors, errorList);
-
-                var errorMsg = errorList.Count > 0
-                    ? $"Deterministic build failed with exit code {res.ExitCode}. {errorList.Count} compiler error(s) detected."
-                    : $"Deterministic build failed with exit code {res.ExitCode}. Output: {fullOutput.Trim()}";
-                bag.Set(PipelineDataBagKeys.BuildFailureReason, errorMsg);
-                var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
-                return StageExecutionResult.Failure(errorMsg, targetStage);
-            }
+            var errorMsg = errorList.Count > 0
+                ? $"Deterministic build failed with exit code {res.ExitCode}. {errorList.Count} compiler error(s) detected."
+                : $"Deterministic build failed with exit code {res.ExitCode}. Output: {fullOutput.Trim()}";
+            bag.Set(PipelineDataBagKeys.BuildFailureReason, errorMsg);
+            var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
+            return StageExecutionResult.Failure(errorMsg, targetStage);
         }
 
         return StageExecutionResult.Success();

@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
@@ -25,7 +27,10 @@ public class GitSyncServiceTests
             _gitCliRunner,
             _gitWorkspaceManager,
             _mirrorSyncService,
-            _taskRepository);
+            _taskRepository,
+            new Mock<IWorkspacePathResolver>().Object,
+            new Mock<IWslMetadataService>().Object,
+            NullLogger<GitSyncService>.Instance);
     }
 
     [Fact]

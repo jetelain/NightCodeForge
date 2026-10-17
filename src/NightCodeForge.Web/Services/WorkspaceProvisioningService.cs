@@ -34,7 +34,7 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         IGitCliRunner gitCliRunner,
         ITaskMarkdownSyncService markdownSyncService,
         IConfiguration configuration,
-        ILogger<WorkspaceProvisioningService>? logger = null)
+        ILogger<WorkspaceProvisioningService> logger)
     {
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _gitMirrorSyncService = gitMirrorSyncService ?? throw new ArgumentNullException(nameof(gitMirrorSyncService));
@@ -43,7 +43,7 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
-        _logger = logger ?? NullLogger<WorkspaceProvisioningService>.Instance;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     /// <inheritdoc />

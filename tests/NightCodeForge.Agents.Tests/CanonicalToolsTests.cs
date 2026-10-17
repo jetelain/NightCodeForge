@@ -1,3 +1,4 @@
+using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Tools;
 
 namespace NightCodeForge.Agents.Tests;
@@ -16,7 +17,7 @@ public class CanonicalToolsTests
             var content = string.Join("\n", Enumerable.Range(1, 20).Select(i => $"Line {i}"));
             await File.WriteAllTextAsync(filePath, content);
 
-            var tools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
             var result = await tools.ReadAsync("file.txt", offset: 5, limit: 3);
 
             Assert.Contains("Line 5", result);
@@ -53,7 +54,7 @@ public class Service
 }";
             await File.WriteAllTextAsync(filePath, code);
 
-            var tools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
             var edits = new List<EditChunk>
             {
                 new("using System;", "using System;\nusing System.Threading.Tasks;"),
@@ -86,7 +87,7 @@ public class Service
             var code = "namespace MyNamespace\n{\n    public class Foo\n    {\n        public void Bar()\n        {\n            int a = 10;\n        }\n    }\n}";
             await File.WriteAllTextAsync(filePath, code);
 
-            var tools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
             // LLM sends edit with only 2 spaces indent
             var edits = new List<EditChunk>
             {
@@ -131,12 +132,14 @@ public class Service
     public async Task BashAsync_DefaultsTestCommandToConfiguredTimeout()
     {
         var env = new FakeEnv();
-        var tools = new CanonicalTools(
-            workspaceRoot: AppContext.BaseDirectory,
-            pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
-            executionEnv: env,
-            testTimeoutSeconds: 75,
-            buildTimeoutSeconds: 45);
+        var tools = new TestCanonicalToolsBuilder
+        {
+            WorkspaceRoot = AppContext.BaseDirectory,
+            PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+            ExecutionEnv = env,
+            TestTimeoutSeconds = 75,
+            BuildTimeoutSeconds = 45
+        }.Build();
 
         await tools.BashAsync("dotnet test");
 
@@ -151,11 +154,13 @@ public class Service
         {
             NextResult = new NightCodeForge.Core.Interfaces.CommandResult(124, string.Empty, "Timed out", TimeSpan.FromSeconds(30))
         };
-        var tools = new CanonicalTools(
-            workspaceRoot: AppContext.BaseDirectory,
-            pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
-            executionEnv: env,
-            testTimeoutSeconds: 30);
+        var tools = new TestCanonicalToolsBuilder
+        {
+            WorkspaceRoot = AppContext.BaseDirectory,
+            PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+            ExecutionEnv = env,
+            TestTimeoutSeconds = 30
+        }.Build();
 
         var output = await tools.BashAsync("npm test");
 
@@ -168,10 +173,10 @@ public class Service
     public async Task BashAsync_DefaultsGeneralCommandTo60SecondsTimeout()
     {
         var env = new FakeEnv();
-        var tools = new CanonicalTools(
-            workspaceRoot: AppContext.BaseDirectory,
-            pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
-            executionEnv: env);
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
+            executionEnv: env,
+            pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
 
         await tools.BashAsync("git status");
 
@@ -196,10 +201,10 @@ public class Service
     [Fact]
     public async Task BashAsync_HandlesTimeoutExceptionCleanly()
     {
-        var tools = new CanonicalTools(
-            workspaceRoot: AppContext.BaseDirectory,
-            pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
-            executionEnv: new TimeoutThrowingEnv());
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
+            executionEnv: new TimeoutThrowingEnv(),
+            pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
 
         var output = await tools.BashAsync("rg -n 'foo' -r .");
 
@@ -234,8 +239,8 @@ public class Service
         try
         {
             var fakeResolver = new FakePathResolver(tempDir);
-            var tools = new CanonicalTools(
-                workspaceRoot: @"C:\host\repo",
+            var tools = TestCanonicalToolsBuilder.Create(
+                @"C:\host\repo",
                 pathResolver: fakeResolver,
                 workspaceId: 42);
 
@@ -251,7 +256,7 @@ public class Service
     [Fact]
     public void ProposeTasks_AddsToPendingProposals_ReturnsFormattedJson()
     {
-        var tools = new CanonicalTools(AppContext.BaseDirectory, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var tools = TestCanonicalToolsBuilder.Create(AppContext.BaseDirectory, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
         var proposals = new List<NightCodeForge.Core.Domain.TaskProposal>
         {
             new("Fix memory leak", "Disposed streams properly", "bug"),
@@ -276,7 +281,7 @@ public class Service
         Directory.CreateDirectory(cloneDir);
         Directory.CreateDirectory(taskDir);
 
-        var cloneTools = new CanonicalTools(cloneDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var cloneTools = TestCanonicalToolsBuilder.Create(cloneDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
 
         // 1. /workspace/clone/Calculator.cs resolves to cloneDir/Calculator.cs
         var res1 = cloneTools.ResolveFullPath("/workspace/clone/Calculator.cs");
@@ -299,7 +304,7 @@ public class Service
         Assert.Equal(Path.GetFullPath(Path.Combine(cloneDir, "Calculator.cs")), res4b);
 
         // 5. Worktree-scoped tools
-        var taskTools = new CanonicalTools(taskDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), taskId: 42);
+        var taskTools = TestCanonicalToolsBuilder.Create(taskDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), taskId: 42);
         var res5 = taskTools.ResolveFullPath("/workspace/task-42/Calculator.cs");
         Assert.Equal(Path.GetFullPath(Path.Combine(taskDir, "Calculator.cs")), res5);
 
@@ -318,7 +323,7 @@ public class Service
 
         try
         {
-            var tools = new CanonicalTools(tempRepo, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var tools = TestCanonicalToolsBuilder.Create(tempRepo, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
 
             var p1 = tools.ResolveFullPath("/clone/Calculator.cs");
             Assert.Equal(Path.GetFullPath(Path.Combine(tempRepo, "Calculator.cs")), p1);

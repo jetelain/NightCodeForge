@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Dispatcher;
+using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
@@ -15,6 +16,18 @@ namespace NightCodeForge.Agents.Tests;
 public class CrucibleAgentHarnessReviewFixesTests : IDisposable
 {
     private readonly string _tempDir = Path.Combine(Path.GetTempPath(), "crucible-review-" + Guid.NewGuid().ToString("N"));
+
+    private CrucibleAgentHarness CreateHarness(
+        IChatClient client,
+        IAgentActivityStreamer? streamer = null,
+        ITaskRepository? repo = null) =>
+        new TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = client,
+            PathResolver = new WorkspacePathResolver(),
+            ActivityStreamer = streamer ?? new InMemoryAgentActivityStreamer(),
+            TaskRepository = repo ?? new InMemoryTaskRepository()
+        }.Build();
 
     public CrucibleAgentHarnessReviewFixesTests() => Directory.CreateDirectory(_tempDir);
 
@@ -53,7 +66,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
     [Fact]
     public async Task BuildAIFunctionList_DispatcherTool_ReceivesModelArgumentsWithoutWrapper()
     {
-        var tools = new CanonicalTools(_tempDir, new WorkspacePathResolver());
+        var tools = TestCanonicalToolsBuilder.Create(_tempDir, pathResolver: new WorkspacePathResolver());
         var dispatcher = new LenientToolDispatcher(tools);
         dispatcher.RegisterTool(new ToolDefinition("my_tool", "Echo", (args, ct) =>
             Task.FromResult(string.Join(",", args.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}")))));
@@ -82,7 +95,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
                 : [new ChatResponseUpdate { Contents = [new TextContent("done")] }];
             return updates;
         });
-        var harness = new CrucibleAgentHarness(client, new WorkspacePathResolver());
+        var harness = CreateHarness(client);
 
         var context = NewContext(profile: new AgentProfile { Id = "p", Mode = AgentMode.Full, HarnessConfigurationJson = config });
         var result = await harness.RunStageAsync(context);
@@ -108,7 +121,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
         });
 
         var streamer = new RecordingStreamer();
-        var harness = new CrucibleAgentHarness(new WorkspacePathResolver(), baseChatClient: client, activityStreamer: streamer);
+        var harness = CreateHarness(client, streamer: streamer);
 
         var context = NewContext(profile: new AgentProfile { Id = "p", Mode = AgentMode.Full, HarnessConfigurationJson = config });
         var result = await harness.RunStageAsync(context);
@@ -133,7 +146,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
             seen ??= messages.ToList();
             return Task.FromResult<IReadOnlyList<ChatResponseUpdate>>([new ChatResponseUpdate { Contents = [new TextContent("ok")] }]);
         });
-        var harness = new CrucibleAgentHarness(client, new WorkspacePathResolver());
+        var harness = CreateHarness(client);
 
         var context = NewContext(state: "{ this is not json", bootstrap: "BOOTSTRAP-PROMPT");
 
@@ -153,7 +166,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
             seen ??= messages.ToList();
             return Task.FromResult<IReadOnlyList<ChatResponseUpdate>>([new ChatResponseUpdate { Contents = [new TextContent("ok")] }]);
         });
-        var harness = new CrucibleAgentHarness(client, new WorkspacePathResolver());
+        var harness = CreateHarness(client);
 
         var context = NewContext(
             state: CrucibleAgentHarness.SerializeSession([new ChatMessage(ChatRole.System, "legacy system prompt")]),
@@ -184,7 +197,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
                     new UsageContent(new UsageDetails { InputTokenCount = 20, OutputTokenCount = 7 })] }];
             return Task.FromResult(updates);
         });
-        var harness = new CrucibleAgentHarness(client, new WorkspacePathResolver());
+        var harness = CreateHarness(client);
 
         var result = await harness.RunStageAsync(NewContext());
 
@@ -203,7 +216,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
             streamHandler: (messages, options, ct) => ThrowingStream(),
             responseHandler: (messages, options, ct) =>
                 Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "final answer"))));
-        var harness = new CrucibleAgentHarness(client, new WorkspacePathResolver());
+        var harness = CreateHarness(client);
 
         var result = await harness.RunStageAsync(NewContext());
 
@@ -225,10 +238,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
     {
         var client = new ScriptedChatClient((messages, options, ct) =>
             Task.FromResult<IReadOnlyList<ChatResponseUpdate>>([new ChatResponseUpdate { Contents = [new TextContent("all good")] }]));
-        var harness = new CrucibleAgentHarness(
-            new WorkspacePathResolver(),
-            baseChatClient: client,
-            activityStreamer: new ThrowingStreamer());
+        var harness = CreateHarness(client, streamer: new ThrowingStreamer());
 
         var result = await harness.RunStageAsync(NewContext());
 
@@ -242,7 +252,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
         var client = new ScriptedChatClient((messages, options, ct) =>
             Task.FromResult<IReadOnlyList<ChatResponseUpdate>>([new ChatResponseUpdate { Contents = [new TextContent("unique-delta")] }]));
         var streamer = new RecordingStreamer();
-        var harness = new CrucibleAgentHarness(new WorkspacePathResolver(), baseChatClient: client, activityStreamer: streamer);
+        var harness = CreateHarness(client, streamer: streamer);
 
         await harness.RunStageAsync(NewContext());
         await Task.Delay(100); // the tracing client broadcasts deltas without awaiting them
@@ -261,10 +271,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
             Task.FromResult<IReadOnlyList<ChatResponseUpdate>>([
                 new ChatResponseUpdate { Contents = [new TextReasoningContent("thinking hard")] },
                 new ChatResponseUpdate { Contents = [new TextContent("answer")] }]));
-        var harness = new CrucibleAgentHarness(
-            new WorkspacePathResolver(),
-            baseChatClient: client,
-            taskRepository: repo.Proxy);
+        var harness = CreateHarness(client, repo: repo.Proxy);
 
         var context = NewContext(bootstrap: "start");
         var result = await harness.RunStageAsync(context);
@@ -290,7 +297,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
     {
         var repo = new InMemoryTaskRepository();
         var client = new ScriptedChatClient(streamHandler: (messages, options, ct) => HangingStream(ct));
-        var harness = new CrucibleAgentHarness(new WorkspacePathResolver(), baseChatClient: client, taskRepository: repo);
+        var harness = CreateHarness(client, repo: repo);
 
         var context = NewContext();
         using var cts = new CancellationTokenSource();

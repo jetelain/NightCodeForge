@@ -17,9 +17,15 @@ public class DefaultWorkflowPipelineProvider : IWorkflowPipelineProvider
 {
     private readonly IWorkflowPipeline _pipeline;
 
-    public DefaultWorkflowPipelineProvider(IWorkflowPipeline? pipeline = null)
+    public DefaultWorkflowPipelineProvider()
+        : this(new WorkflowPipeline(Array.Empty<IWorkflowStage>()))
     {
-        _pipeline = pipeline ?? new WorkflowPipeline(Array.Empty<IWorkflowStage>());
+    }
+
+    public DefaultWorkflowPipelineProvider(IWorkflowPipeline pipeline)
+    {
+        ArgumentNullException.ThrowIfNull(pipeline);
+        _pipeline = pipeline;
     }
 
     public Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default)

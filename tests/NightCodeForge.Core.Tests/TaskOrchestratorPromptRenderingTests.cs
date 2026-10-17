@@ -3,6 +3,7 @@ using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Tests.Fixtures;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
@@ -130,16 +131,18 @@ public class TaskOrchestratorPromptRenderingTests
         var pipeline = new SingleStagePipeline(genericStage);
         var pipelineProvider = new SingleStagePipelineProvider(pipeline);
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo,
-            workspaceRepo,
-            depEngine,
-            lockProvider,
-            gitManager,
-            pipelineProvider,
-            jobQueue,
-            depStore,
-            harnessRegistry: harnessRegistry);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = pipelineProvider,
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -194,16 +197,18 @@ public class TaskOrchestratorPromptRenderingTests
         var pipeline = new SingleStagePipeline(legacyStage);
         var pipelineProvider = new SingleStagePipelineProvider(pipeline);
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo,
-            workspaceRepo,
-            depEngine,
-            lockProvider,
-            gitManager,
-            pipelineProvider,
-            jobQueue,
-            depStore,
-            harnessRegistry: harnessRegistry);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = pipelineProvider,
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
 
         await orchestrator.ProcessTaskAsync(task.Id);
 

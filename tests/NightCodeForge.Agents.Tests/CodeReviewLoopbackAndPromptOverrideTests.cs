@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Dispatcher;
+using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Workflow;
@@ -19,7 +20,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
         Directory.CreateDirectory(tempDir);
         try
         {
-            var tools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
             var ex = Assert.Throws<RequestChangesException>(() => tools.RequestChanges("Feature incomplete", "Missing tests"));
             Assert.Equal("Feature incomplete", ex.Feedback);
             Assert.Equal("Missing tests", ex.Reason);
@@ -38,7 +39,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
         Directory.CreateDirectory(tempDir);
         try
         {
-            var tools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
             var dispatcher = new LenientToolDispatcher(tools);
 
             // Test canonical name
@@ -141,7 +142,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             }
 
             var mockClient = new MockChatClient(StreamGen);
-            var harness = new CrucibleAgentHarness(mockClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver() }.Build();
 
             var task = new ForgeTask { Id = 1, Title = "Test ForgeTask", Description = "Test" };
             var bag = new PipelineDataBag();
@@ -191,7 +192,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             }
 
             var mockClient = new MockChatClient(StreamGen);
-            var harness = new CrucibleAgentHarness(mockClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver() }.Build();
 
             var task = new ForgeTask { Id = 2, Title = "Test ForgeTask 2", Description = "Test" };
             var bag = new PipelineDataBag();
@@ -274,7 +275,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             }
 
             var mockClient = new MockChatClient(StreamGen);
-            var harness = new CrucibleAgentHarness(mockClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver() }.Build();
 
             var task = new ForgeTask { Id = 3, Title = "Test ForgeTask 3", Description = "Test" };
             var pipelineContext = new PipelineContext(task, new Workspace { Id = 1 });
@@ -326,7 +327,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             }
 
             var mockClient = new MockChatClient(StreamGen);
-            var harness = new CrucibleAgentHarness(mockClient, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver() }.Build();
 
             var task = new ForgeTask { Id = 4, Title = "Doc Path ForgeTask", Description = "Testing doc path" };
             var bag = new PipelineDataBag();

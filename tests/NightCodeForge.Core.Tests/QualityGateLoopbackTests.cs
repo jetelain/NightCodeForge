@@ -4,6 +4,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
+using NightCodeForge.Core.Tests.Fixtures;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Core.Tests;
@@ -86,16 +87,18 @@ public class QualityGateLoopbackTests
             }
         });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo,
-            workspaceRepo,
-            depEngine,
-            lockProvider,
-            gitManager,
-            new DefaultWorkflowPipelineProvider(pipeline),
-            jobQueue,
-            depStore,
-            harnessRegistry: harnessRegistry);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
 
         // Act
         await orchestrator.ProcessTaskAsync(task.Id);
@@ -165,15 +168,17 @@ public class QualityGateLoopbackTests
             }
         });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo,
-            workspaceRepo,
-            depEngine,
-            lockProvider,
-            gitManager,
-            new DefaultWorkflowPipelineProvider(pipeline),
-            jobQueue,
-            depStore);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore
+        }.Build();
 
         // Act
         await orchestrator.ProcessTaskAsync(task.Id);
@@ -238,16 +243,18 @@ public class QualityGateLoopbackTests
             new TestWorkflowStage("implementation", WorkflowStageKind.Agentic)
         });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo,
-            workspaceRepo,
-            depEngine,
-            lockProvider,
-            gitManager,
-            new DefaultWorkflowPipelineProvider(pipeline),
-            jobQueue,
-            depStore,
-            harnessRegistry: harnessRegistry);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
 
         // Act
         await orchestrator.ProcessTaskAsync(task.Id);
@@ -304,15 +311,17 @@ public class QualityGateLoopbackTests
             new TestWorkflowStage("stage2", WorkflowStageKind.Deterministic)
         });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo,
-            workspaceRepo,
-            depEngine,
-            lockProvider,
-            gitManager,
-            new DefaultWorkflowPipelineProvider(pipeline),
-            jobQueue,
-            depStore);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore
+        }.Build();
 
         // Act
         await orchestrator.ProcessTaskAsync(task.Id);
@@ -373,16 +382,18 @@ public class QualityGateLoopbackTests
             new TestWorkflowStage(StandardStageIds.CodeReviewAndFix, WorkflowStageKind.Agentic, AgentMode.Review)
         });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo,
-            workspaceRepo,
-            depEngine,
-            lockProvider,
-            gitManager,
-            new DefaultWorkflowPipelineProvider(pipeline),
-            jobQueue,
-            depStore,
-            harnessRegistry: harnessRegistry);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
 
         // Act
         await orchestrator.ProcessTaskAsync(task.Id);

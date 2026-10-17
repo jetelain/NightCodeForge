@@ -50,51 +50,28 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
     private readonly IProcessRunner _processRunner;
     private readonly ILogger<NightCodeForgeContainerExecutor> _containerLogger;
     private readonly ExecutionEnvironmentProviderOptions _options;
-    private readonly IWorkspacePathResolver? _pathResolver;
-    private readonly IHostSdkDiscoveryService? _sdkDiscoveryService;
-    private readonly IGitWorkspaceManager? _gitWorkspaceManager;
+    private readonly IWorkspacePathResolver _pathResolver;
+    private readonly IHostSdkDiscoveryService _sdkDiscoveryService;
+    private readonly IGitWorkspaceManager _gitWorkspaceManager;
     private readonly ConcurrentDictionary<(int WorkspaceId, SandboxSecurityTier SecurityTier, int? TaskId), IExecutionEnvironment> _cachedEnvironments = new();
 
     [ActivatorUtilitiesConstructor]
     public ExecutionEnvironmentProvider(
-        BareHostExecutionEnvironment? bareHost = null,
-        IProcessRunner? processRunner = null,
-        ILogger<NightCodeForgeContainerExecutor>? containerLogger = null,
-        IOptions<ExecutionEnvironmentProviderOptions>? options = null,
-        IWorkspacePathResolver? pathResolver = null,
-        IHostSdkDiscoveryService? sdkDiscoveryService = null,
-        IGitWorkspaceManager? gitWorkspaceManager = null)
-        : this(options?.Value, bareHost, processRunner, containerLogger, pathResolver, sdkDiscoveryService, gitWorkspaceManager)
-    {
-    }
-
-    public ExecutionEnvironmentProvider(
-        ExecutionEnvironmentProviderOptions? options,
         BareHostExecutionEnvironment bareHost,
-        ILogger<NightCodeForgeContainerExecutor>? containerLogger = null,
-        IWorkspacePathResolver? pathResolver = null,
-        IHostSdkDiscoveryService? sdkDiscoveryService = null,
-        IGitWorkspaceManager? gitWorkspaceManager = null)
-        : this(options, bareHost, null, containerLogger, pathResolver, sdkDiscoveryService, gitWorkspaceManager)
+        IProcessRunner processRunner,
+        IOptions<ExecutionEnvironmentProviderOptions> options,
+        IWorkspacePathResolver pathResolver,
+        IHostSdkDiscoveryService sdkDiscoveryService,
+        IGitWorkspaceManager gitWorkspaceManager,
+        ILogger<NightCodeForgeContainerExecutor> containerLogger)
     {
-    }
-
-    public ExecutionEnvironmentProvider(
-        ExecutionEnvironmentProviderOptions? options,
-        BareHostExecutionEnvironment? bareHost = null,
-        IProcessRunner? processRunner = null,
-        ILogger<NightCodeForgeContainerExecutor>? containerLogger = null,
-        IWorkspacePathResolver? pathResolver = null,
-        IHostSdkDiscoveryService? sdkDiscoveryService = null,
-        IGitWorkspaceManager? gitWorkspaceManager = null)
-    {
-        _processRunner = processRunner ?? new SystemProcessRunner();
-        _bareHost = bareHost ?? new BareHostExecutionEnvironment(processRunner: _processRunner, pathResolver: pathResolver);
-        _containerLogger = containerLogger ?? NullLogger<NightCodeForgeContainerExecutor>.Instance;
-        _options = options ?? new ExecutionEnvironmentProviderOptions();
-        _pathResolver = pathResolver;
-        _sdkDiscoveryService = sdkDiscoveryService;
-        _gitWorkspaceManager = gitWorkspaceManager;
+        _bareHost = bareHost ?? throw new ArgumentNullException(nameof(bareHost));
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _options = (options ?? throw new ArgumentNullException(nameof(options))).Value ?? new ExecutionEnvironmentProviderOptions();
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _sdkDiscoveryService = sdkDiscoveryService ?? throw new ArgumentNullException(nameof(sdkDiscoveryService));
+        _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
+        _containerLogger = containerLogger ?? throw new ArgumentNullException(nameof(containerLogger));
     }
 
     public IExecutionEnvironment GetEnvironment(
@@ -153,9 +130,9 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                     ? workspace.Ext4MirrorPath
                     : (!string.IsNullOrWhiteSpace(workspace.RepositoryPath)
                         ? workspace.RepositoryPath
-                        : _pathResolver?.GetAgentWorkspaceRootPath(workspace.Id));
+                        : _pathResolver.GetAgentWorkspaceRootPath(workspace.Id));
 
-                if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && _pathResolver != null && workspace.Id > 0)
+                if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && workspace.Id > 0)
                 {
                     var resolvedClone = _pathResolver.ResolveCruciblePath(workspace.Id, string.Empty);
                     if (Directory.Exists(resolvedClone))
@@ -211,9 +188,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                     : (!string.IsNullOrEmpty(canonicalClonePath) ? "/workspace/clone" : "/workspace");
 
                 var targetDistro = workspace.WslDistribution ?? _options.DefaultWslDistribution;
-                var sdkMountPaths = _sdkDiscoveryService != null
-                    ? _sdkDiscoveryService.DiscoverSdkMountPaths(useWsl ? targetDistro : null)
-                    : ContainerExecutorOptions.DefaultSdkMountPaths;
+                var sdkMountPaths = _sdkDiscoveryService.DiscoverSdkMountPaths(useWsl ? targetDistro : null);
 
                 var options = new ContainerExecutorOptions
                 {
@@ -227,13 +202,13 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                     DefaultWorkingDirectory = defaultWorkingDir,
                     MountPackageCaches = true,
                     MountHostSdks = true,
-                    SdkMountPaths = sdkMountPaths.ToList(),
+                    SdkMountPaths = sdkMountPaths?.ToList() ?? new List<string>(),
                     AutoStartContainer = true,
                     IsRestrictedReadOnly = securityTier == SandboxSecurityTier.RestrictedReadOnly,
                     UseWsl = useWsl,
                     WslDistribution = targetDistro,
                     WslExecutable = _options.WslExecutable,
-                    WslUserName = _pathResolver?.GetWslUserName(),
+                    WslUserName = _pathResolver.GetWslUserName(),
                     ExpandTildeInMounts = true,
                     ProtectCloneWorkingTree = true
                 };
@@ -246,26 +221,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
 
     private string ResolveWorktreePath(Workspace workspace, int taskId, string? parentDir = null)
     {
-        if (_gitWorkspaceManager != null)
-        {
-            return _gitWorkspaceManager.GetWorktreePath(workspace, taskId);
-        }
-
-        if (_pathResolver != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
-        {
-            return _pathResolver.GetAgentWorktreePath(workspace.Id, taskId);
-        }
-
-        if (!string.IsNullOrWhiteSpace(parentDir))
-        {
-            return parentDir.Contains('/') && !parentDir.Contains('\\')
-                ? $"{parentDir.TrimEnd('/')}/task-{taskId}"
-                : Path.Combine(parentDir, $"task-{taskId}");
-        }
-
-        return _pathResolver != null
-            ? _pathResolver.GetAgentWorktreePath(workspace.Id, taskId)
-            : $"task-{taskId}";
+        return _gitWorkspaceManager.GetWorktreePath(workspace, taskId);
     }
 
     private static bool ShouldAutoUseWslForContainers(Workspace workspace)

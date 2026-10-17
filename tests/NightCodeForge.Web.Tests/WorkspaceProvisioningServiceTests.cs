@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
@@ -45,7 +46,8 @@ public class WorkspaceProvisioningServiceTests : IDisposable
             _wslMetadataService,
             _gitCliRunner,
             _markdownSyncService,
-            _configuration);
+            _configuration,
+            NullLogger<WorkspaceProvisioningService>.Instance);
     }
 
     public void Dispose()

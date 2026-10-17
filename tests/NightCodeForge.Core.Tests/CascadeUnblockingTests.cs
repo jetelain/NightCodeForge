@@ -2,6 +2,7 @@ using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Tests.Fixtures;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Core.Tests;
@@ -58,9 +59,16 @@ public class CascadeUnblockingTests
         _depStore.AddDependency(1, 203, 201);
         _depStore.AddDependency(1, 203, 204);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore
+        }.Build();
 
         await orchestrator.CompleteTaskAndCascadeAsync(201, "feat(auth): Add JWT bearer token validation (#201)");
 

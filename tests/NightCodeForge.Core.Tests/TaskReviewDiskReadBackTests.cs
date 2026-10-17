@@ -4,6 +4,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
+using NightCodeForge.Core.Tests.Fixtures;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Stages;
 
@@ -139,17 +140,19 @@ public class TaskReviewDiskReadBackTests : IDisposable
             TestWorkflowPipelines.CreateImplementationStage()
         });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo,
-            workspaceRepo,
-            depEngine,
-            lockProvider,
-            gitManager,
-            new DefaultWorkflowPipelineProvider(pipeline),
-            jobQueue,
-            depStore,
-            harnessRegistry: harnessRegistry,
-            markdownSyncService: syncService);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry,
+            MarkdownSyncService = syncService
+        }.Build();
 
         // Act: Process task-review stage
         await orchestrator.ProcessTaskAsync(task.Id);

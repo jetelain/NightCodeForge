@@ -4,6 +4,7 @@ using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Tests.Fixtures;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
@@ -24,6 +25,19 @@ public class TaskOrchestratorDynamicWorkflowTests
     private readonly WorkflowStageFactory _stageFactory;
     private readonly DatabaseWorkflowPipelineProvider _pipelineProvider;
     private readonly Workspace _workspace;
+
+    private TaskOrchestrator CreateOrchestrator() =>
+        new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            PipelineProvider = _pipelineProvider,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore
+        }.Build();
 
     public TaskOrchestratorDynamicWorkflowTests()
     {
@@ -58,7 +72,10 @@ public class TaskOrchestratorDynamicWorkflowTests
 
         var sp = new TestServiceProvider();
         sp.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
-        sp.AddService<IExecutionEnvironment>(new DynamicFakeExecutionEnvironment());
+        var fakeEnv = new DynamicFakeExecutionEnvironment();
+        sp.AddService<IExecutionEnvironment>(fakeEnv);
+        sp.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv));
+        sp.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
 
         _registry = new WorkflowStageRegistry();
         _stageFactory = new WorkflowStageFactory(_registry, sp);
@@ -139,9 +156,7 @@ public class TaskOrchestratorDynamicWorkflowTests
         });
         _depStore.AddTask(10, _workspace.Id, TaskOverallStatus.Open);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, _pipelineProvider, _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         // Step 1: Execute stage 1 (spec)
         await orchestrator.ProcessTaskAsync(task.Id);
@@ -197,9 +212,7 @@ public class TaskOrchestratorDynamicWorkflowTests
         });
         _depStore.AddTask(20, _workspace.Id, TaskOverallStatus.Open);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, _pipelineProvider, _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         var expectedSequence = new[]
         {
@@ -261,9 +274,7 @@ public class TaskOrchestratorDynamicWorkflowTests
         });
         _depStore.AddTask(30, _workspace.Id, TaskOverallStatus.Ready);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, _pipelineProvider, _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         // Maintainer rejects code review
         await orchestrator.RequestChangesAsync(task.Id, "Unit tests are missing for edge cases.");
@@ -319,9 +330,7 @@ public class TaskOrchestratorDynamicWorkflowTests
         });
         _depStore.AddTask(40, _workspace.Id, TaskOverallStatus.Open);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, _pipelineProvider, _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -357,9 +366,7 @@ public class TaskOrchestratorDynamicWorkflowTests
         });
         _depStore.AddTask(50, _workspace.Id, TaskOverallStatus.Open);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, _pipelineProvider, _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -419,9 +426,7 @@ public class TaskOrchestratorDynamicWorkflowTests
         });
         _depStore.AddTask(60, _workspace.Id, TaskOverallStatus.Open);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, _pipelineProvider, _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         // Stage 1: task-review completes -> advances to deterministic-build
         await orchestrator.ProcessTaskAsync(task.Id);
@@ -483,9 +488,7 @@ public class TaskOrchestratorDynamicWorkflowTests
         });
         _depStore.AddTask(70, _workspace.Id, TaskOverallStatus.Open);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, _pipelineProvider, _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         // Process stage 4 -> fails and routes back to stage-3 with urgent enqueue
         await orchestrator.ProcessTaskAsync(task.Id);

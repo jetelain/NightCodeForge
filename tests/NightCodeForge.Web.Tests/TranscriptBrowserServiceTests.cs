@@ -1,6 +1,10 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Moq;
+using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Data;
@@ -38,6 +42,15 @@ public class TranscriptBrowserServiceTests : IDisposable
         services.AddSingleton<IGlobalOptimizationSettingsService>(_fakeGlobalOptService);
 
         _serviceProvider = services.BuildServiceProvider();
+    }
+
+    private TranscriptBrowserService CreateService()
+    {
+        var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
+        var chatClientFactory = new Mock<IOllamaChatClientFactory>().Object;
+        var options = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
+        var logger = NullLogger<TranscriptBrowserService>.Instance;
+        return new TranscriptBrowserService(_fakeGlobalOptService, scopeFactory, chatClientFactory, options, logger);
     }
 
     public void Dispose()
@@ -212,8 +225,7 @@ Done refactoring.
     [Fact]
     public async Task RunDiagnosticsAsync_WhenRunawayLoopDetected_SuggestsLoopCircuitBreaker()
     {
-        var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var service = new TranscriptBrowserService(_fakeGlobalOptService, scopeFactory);
+        var service = CreateService();
 
         var summary = new TranscriptSummary(
             FileName: "loop.md",
@@ -247,8 +259,7 @@ Done refactoring.
     [Fact]
     public async Task RunDiagnosticsAsync_WhenCompilerErrorsPresent_SuggestsDeterministicSymbolMap()
     {
-        var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var service = new TranscriptBrowserService(_fakeGlobalOptService, scopeFactory);
+        var service = CreateService();
 
         var summary = new TranscriptSummary(
             FileName: "compile.md",
@@ -277,7 +288,7 @@ Done refactoring.
     public async Task ApplyRemediationAsync_TogglesFlagInGlobalSettingsAndAgentProfiles()
     {
         var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var service = new TranscriptBrowserService(_fakeGlobalOptService, scopeFactory);
+        var service = CreateService();
 
         _fakeGlobalOptService.Flags.LoopCircuitBreaker = false;
 
@@ -319,8 +330,7 @@ Done refactoring.
             await File.WriteAllTextAsync(file1, "---\ntask_id: 1\nstage_id: init\nstatus: Completed\n---\n# Transcript 1");
             await File.WriteAllTextAsync(file2, "---\ntask_id: 2\nstage_id: build\nstatus: Failed\n---\n# Transcript 2");
 
-            var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-            var service = new TranscriptBrowserService(_fakeGlobalOptService, scopeFactory);
+            var service = CreateService();
 
             var list = await service.GetTranscriptsAsync(tempDir);
 

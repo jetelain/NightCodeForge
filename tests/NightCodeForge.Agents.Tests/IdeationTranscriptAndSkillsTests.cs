@@ -85,9 +85,11 @@ public class IdeationTranscriptAndSkillsTests
     public async Task ConverseStreamingAsync_SendsSystemPromptOnce_ThroughInstructionsOnly()
     {
         var client = new ScriptedStreamingClient(Text("Ready."));
-        var service = new IdeationService(
-            new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
-            defaultChatClient: client);
+        var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
+        {
+            PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+            BaseChatClient = client
+        }.Build();
         var workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory() };
 
         await RunAsync(service, workspace, "Hello");
@@ -115,10 +117,12 @@ description: Guidelines for unit testing with xUnit
 ");
 
             var client = new ScriptedStreamingClient(Text("Ready."));
-            var service = new IdeationService(
-                new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
-                defaultChatClient: client,
-                transcriptService: new SessionTranscriptService(transcripts));
+            var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
+            {
+                PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+                BaseChatClient = client,
+                TranscriptService = new SessionTranscriptService(transcripts)
+            }.Build();
             var workspace = new Workspace { Id = 2, RepositoryPath = repo };
 
             var result = await RunAsync(service, workspace, "Hello");
@@ -146,10 +150,12 @@ description: Guidelines for unit testing with xUnit
             var client = new ScriptedStreamingClient(
                 Reasoning("Let me "), Reasoning("think "), Reasoning("about it."),
                 Text("The answer "), Text("is "), Text("42."));
-            var service = new IdeationService(
-                new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
-                defaultChatClient: client,
-                transcriptService: new SessionTranscriptService(transcripts));
+            var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
+            {
+                PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+                BaseChatClient = client,
+                TranscriptService = new SessionTranscriptService(transcripts)
+            }.Build();
             var workspace = new Workspace { Id = 3, RepositoryPath = transcripts };
 
             var result = await RunAsync(service, workspace, "Question");
@@ -171,9 +177,11 @@ description: Guidelines for unit testing with xUnit
     public async Task ConverseStreamingAsync_TreatsPlainTextThinkTagsAsAssistantOutput_StructuredReasoningOnly()
     {
         var client = new ScriptedStreamingClient(Text("<think>not reasoning</think>Answer"));
-        var service = new IdeationService(
-            new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
-            defaultChatClient: client);
+        var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
+        {
+            PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+            BaseChatClient = client
+        }.Build();
         var workspace = new Workspace { Id = 4, RepositoryPath = Directory.GetCurrentDirectory() };
         workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(4));
 

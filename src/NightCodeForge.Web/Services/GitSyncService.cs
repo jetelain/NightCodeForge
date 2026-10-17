@@ -19,8 +19,8 @@ public class GitSyncService : IGitSyncService
     private readonly IGitCliRunner _gitCliRunner;
     private readonly IGitWorkspaceManager _gitWorkspaceManager;
     private readonly IGitMirrorSyncService _mirrorSyncService;
-    private readonly ITaskRepository? _taskRepository;
-    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly ITaskRepository _taskRepository;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly IWslMetadataService _wslMetadataService;
     private readonly ILogger<GitSyncService> _logger;
 
@@ -31,18 +31,18 @@ public class GitSyncService : IGitSyncService
         IGitCliRunner gitCliRunner,
         IGitWorkspaceManager gitWorkspaceManager,
         IGitMirrorSyncService mirrorSyncService,
-        ITaskRepository? taskRepository = null,
-        IWorkspacePathResolver? pathResolver = null,
-        IWslMetadataService? wslMetadataService = null,
-        ILogger<GitSyncService>? logger = null)
+        ITaskRepository taskRepository,
+        IWorkspacePathResolver pathResolver,
+        IWslMetadataService wslMetadataService,
+        ILogger<GitSyncService> logger)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
         _mirrorSyncService = mirrorSyncService ?? throw new ArgumentNullException(nameof(mirrorSyncService));
-        _taskRepository = taskRepository;
-        _pathResolver = pathResolver;
-        _wslMetadataService = wslMetadataService ?? new Infrastructure.Execution.WslMetadataService(new Core.Execution.SystemProcessRunner());
-        _logger = logger ?? NullLogger<GitSyncService>.Instance;
+        _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _wslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     private bool IsDirectoryAccessible(string? path)
@@ -269,12 +269,10 @@ public class GitSyncService : IGitSyncService
         }
 
         // Fetch task states from repository to mark active/idle accurately
-        if (_taskRepository != null)
+        try
         {
-            try
-            {
-                var tasks = await _taskRepository.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
-                var taskDict = tasks.ToDictionary(t => t.Id);
+            var tasks = await _taskRepository.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
+            var taskDict = tasks.ToDictionary(t => t.Id);
 
                 for (var i = 0; i < snapshots.Count; i++)
                 {
@@ -294,7 +292,6 @@ public class GitSyncService : IGitSyncService
             {
                 _logger.LogDebug(ex, "Could not correlate worktrees with task repository status");
             }
-        }
 
         return snapshots;
     }
@@ -345,13 +342,11 @@ public class GitSyncService : IGitSyncService
         }
 
         // Clean up inactive/done task worktrees
-        if (_taskRepository != null)
+        try
         {
-            try
-            {
-                var worktrees = await GetWorktreesAsync(workspace, cancellationToken);
-                var tasks = await _taskRepository.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
-                var taskDict = tasks.ToDictionary(t => t.Id);
+            var worktrees = await GetWorktreesAsync(workspace, cancellationToken);
+            var tasks = await _taskRepository.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
+            var taskDict = tasks.ToDictionary(t => t.Id);
 
                 foreach (var wt in worktrees)
                 {
@@ -372,7 +367,6 @@ public class GitSyncService : IGitSyncService
             {
                 _logger.LogWarning(ex, "Failed to prune inactive task worktrees");
             }
-        }
     }
 
     /// <inheritdoc />

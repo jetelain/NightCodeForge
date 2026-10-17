@@ -26,6 +26,18 @@ public class StartupRecoveryTests : IDisposable
         _jobQueue = new FakeTaskJobQueue();
     }
 
+    private StartupRecoveryService CreateRecoveryService(IWorkflowPipelineProvider? pipelineProvider = null)
+    {
+        return new StartupRecoveryService(
+            _workspaceRepo,
+            _taskRepo,
+            _gitCliRunner,
+            pipelineProvider ?? new DefaultWorkflowPipelineProvider(),
+            _jobQueue,
+            new Moq.Mock<IWorkspacePathResolver>().Object,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<StartupRecoveryService>.Instance);
+    }
+
     public void Dispose()
     {
         try
@@ -64,9 +76,7 @@ public class StartupRecoveryTests : IDisposable
             RepositoryPath = _tempDir
         });
 
-        var recovery = new StartupRecoveryService(
-            _workspaceRepo, _taskRepo, _gitCliRunner,
-            new DefaultWorkflowPipelineProvider(), _jobQueue);
+        var recovery = CreateRecoveryService();
 
         await recovery.ReconcileWorkspacesAsync();
 
@@ -96,9 +106,7 @@ public class StartupRecoveryTests : IDisposable
             return new GitCommandResult(0, string.Empty, string.Empty, TimeSpan.Zero);
         };
 
-        var recovery = new StartupRecoveryService(
-            _workspaceRepo, _taskRepo, _gitCliRunner,
-            new DefaultWorkflowPipelineProvider(), _jobQueue);
+        var recovery = CreateRecoveryService();
 
         await recovery.ReconcileWorkspacesAsync();
 
@@ -130,9 +138,7 @@ public class StartupRecoveryTests : IDisposable
         var stage = TestWorkflowPipelines.CreateReviewStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var recovery = new StartupRecoveryService(
-            _workspaceRepo, _taskRepo, _gitCliRunner,
-            new DefaultWorkflowPipelineProvider(pipeline), _jobQueue);
+        var recovery = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline));
 
         await recovery.ReconcileWorkspacesAsync();
 
@@ -164,12 +170,10 @@ public class StartupRecoveryTests : IDisposable
             PipelineDataJson = bag.ToJson()
         });
 
-        var stage = new DeterministicCoverageGate();
+        var stage = new DeterministicCoverageGate(new Moq.Mock<IExecutionEnvironmentProvider>().Object);
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var recovery = new StartupRecoveryService(
-            _workspaceRepo, _taskRepo, _gitCliRunner,
-            new DefaultWorkflowPipelineProvider(pipeline), _jobQueue);
+        var recovery = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline));
 
         await recovery.ReconcileWorkspacesAsync();
 
@@ -186,9 +190,7 @@ public class StartupRecoveryTests : IDisposable
     [Fact]
     public async Task ReconcileWorkspacesAsync_PerformsWslCheck_DoesNotThrow()
     {
-        var recovery = new StartupRecoveryService(
-            _workspaceRepo, _taskRepo, _gitCliRunner,
-            new DefaultWorkflowPipelineProvider(), _jobQueue);
+        var recovery = CreateRecoveryService();
 
         var exception = await Record.ExceptionAsync(() => recovery.ReconcileWorkspacesAsync());
         Assert.Null(exception);

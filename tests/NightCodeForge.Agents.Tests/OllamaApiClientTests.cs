@@ -102,8 +102,11 @@ public class OllamaApiClientTests
             capturedModelId = opts?.ModelId;
         });
 
-        var mockFactory = new TestOllamaChatClientFactory(mockChatClient);
-        var harness = new Crucible.CrucibleAgentHarness(new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), chatClientFactory: mockFactory);
+        var harness = new Fixtures.TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = mockChatClient,
+            PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver()
+        }.Build();
 
         var profile = new Core.Domain.AgentProfile
         {
@@ -116,7 +119,8 @@ public class OllamaApiClientTests
         {
             Profile = profile,
             StageId = "stage-2",
-            ForgeTask = new Core.Domain.ForgeTask { Id = 1, Title = "Test ForgeTask", Description = "Implement feature" }
+            ForgeTask = new Core.Domain.ForgeTask { Id = 1, Title = "Test ForgeTask", Description = "Implement feature" },
+            Workspace = new Core.Domain.Workspace { Id = 1, RepositoryPath = "C:\\test" }
         };
 
         var result = await harness.RunStageAsync(sessionContext);

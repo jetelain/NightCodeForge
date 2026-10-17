@@ -33,46 +33,44 @@ public class AcpHarnessOptions
 public class AcpAgentHarness : IAgentHarness
 {
     private readonly AcpHarnessOptions _options;
-    private readonly IExecutionEnvironment? _executionEnv;
-    private readonly IExecutionEnvironmentProvider? _envProvider;
-    private readonly IMcpClientManager? _mcpManager;
+    private readonly IExecutionEnvironmentProvider _envProvider;
+    private readonly IMcpClientManager _mcpManager;
     private readonly IEditorConfigService _editorConfigService;
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly AgentsMdService _agentsMdService;
-    private readonly IAgentActivityStreamer? _activityStreamer;
-    private readonly SessionTranscriptService? _transcriptService;
-    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IAgentActivityStreamer _activityStreamer;
+    private readonly SessionTranscriptService _transcriptService;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly IProcessRunner _processRunner;
     private readonly ILogger<AcpAgentHarness> _logger;
 
     public string HarnessId => StandardHarnessIds.Acp;
 
     public AcpAgentHarness(
-        AcpHarnessOptions? options = null,
-        IExecutionEnvironment? executionEnv = null,
-        IExecutionEnvironmentProvider? envProvider = null,
-        IMcpClientManager? mcpManager = null,
-        IEditorConfigService? editorConfigService = null,
-        IEditorConfigFileApplier? editorConfigFileApplier = null,
-        AgentsMdService? agentsMdService = null,
-        IAgentActivityStreamer? activityStreamer = null,
-        SessionTranscriptService? transcriptService = null,
-        IWorkspacePathResolver? pathResolver = null,
-        IProcessRunner? processRunner = null,
-        ILogger<AcpAgentHarness>? logger = null)
+        Microsoft.Extensions.Options.IOptions<AcpHarnessOptions> options,
+        IExecutionEnvironmentProvider envProvider,
+        IMcpClientManager mcpManager,
+        IEditorConfigService editorConfigService,
+        IEditorConfigFileApplier editorConfigFileApplier,
+        AgentsMdService agentsMdService,
+        IAgentActivityStreamer activityStreamer,
+        SessionTranscriptService transcriptService,
+        IWorkspacePathResolver pathResolver,
+        IProcessRunner processRunner,
+        ILogger<AcpAgentHarness> logger)
     {
-        _options = options ?? new AcpHarnessOptions();
-        _executionEnv = executionEnv;
-        _envProvider = envProvider;
-        _mcpManager = mcpManager;
-        _editorConfigService = editorConfigService ?? new EditorConfigService();
-        _editorConfigFileApplier = editorConfigFileApplier ?? new EditorConfigFileApplier();
-        _agentsMdService = agentsMdService ?? new AgentsMdService();
-        _activityStreamer = activityStreamer;
-        _transcriptService = transcriptService;
-        _pathResolver = pathResolver;
-        _processRunner = processRunner ?? new SystemProcessRunner();
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<AcpAgentHarness>.Instance;
+        ArgumentNullException.ThrowIfNull(options);
+        _options = options.Value ?? throw new ArgumentNullException(nameof(options));
+        _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
+        _mcpManager = mcpManager ?? throw new ArgumentNullException(nameof(mcpManager));
+        _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
+        _editorConfigFileApplier = editorConfigFileApplier ?? throw new ArgumentNullException(nameof(editorConfigFileApplier));
+        _agentsMdService = agentsMdService ?? throw new ArgumentNullException(nameof(agentsMdService));
+        _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
+        _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
@@ -232,9 +230,9 @@ public class AcpAgentHarness : IAgentHarness
             }
         }
 
-        var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace, context.Profile.SecurityTier, context.ForgeTask.Id)
-            : _executionEnv;
+        var workspace = context.Workspace ?? throw new InvalidOperationException("Workspace is required for ACP harness execution.");
+        var effectiveEnv = _envProvider.GetEnvironment(workspace, context.Profile.SecurityTier, context.ForgeTask.Id)
+            ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
 
         try
         {

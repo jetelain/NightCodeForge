@@ -18,7 +18,7 @@ public partial class TaskReviewService : ITaskReviewService
 {
     private readonly ITaskRepository _taskRepository;
     private readonly IWorkspaceRepository _workspaceRepository;
-    private readonly IGitWorkspaceManager? _gitWorkspaceManager;
+    private readonly IGitWorkspaceManager _gitWorkspaceManager;
     private readonly ILogger<TaskReviewService> _logger;
 
     [GeneratedRegex(@"^diff --git a/(?<oldPath>.+?) b/(?<newPath>.+?)\r?$", RegexOptions.Multiline)]
@@ -27,13 +27,13 @@ public partial class TaskReviewService : ITaskReviewService
     public TaskReviewService(
         ITaskRepository taskRepository,
         IWorkspaceRepository workspaceRepository,
-        ILogger<TaskReviewService> logger,
-        IGitWorkspaceManager? gitWorkspaceManager = null)
+        IGitWorkspaceManager gitWorkspaceManager,
+        ILogger<TaskReviewService> logger)
     {
-        _taskRepository = taskRepository;
-        _workspaceRepository = workspaceRepository;
-        _logger = logger;
-        _gitWorkspaceManager = gitWorkspaceManager;
+        _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
+        _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
+        _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<TaskReviewSnapshot?> GetSnapshotAsync(int taskId, CancellationToken cancellationToken = default)
@@ -163,47 +163,44 @@ public partial class TaskReviewService : ITaskReviewService
             return customFiles;
         }
 
-        if (_gitWorkspaceManager != null)
+        try
         {
-            try
+            var workspace = await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken);
+            if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
             {
-                var workspace = await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken);
-                if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+                string rawDiff = string.Empty;
+
+                // 1. If task is finished/merged and has a recorded SquashCommitSha, retrieve commit patch diff
+                if (task.Status == TaskOverallStatus.Closed && !string.IsNullOrWhiteSpace(task.SquashCommitSha))
                 {
-                    string rawDiff = string.Empty;
+                    rawDiff = await _gitWorkspaceManager.GetCommitDiffAsync(workspace, task.SquashCommitSha, cancellationToken);
+                }
 
-                    // 1. If task is finished/merged and has a recorded SquashCommitSha, retrieve commit patch diff
-                    if (task.Status == TaskOverallStatus.Closed && !string.IsNullOrWhiteSpace(task.SquashCommitSha))
-                    {
-                        rawDiff = await _gitWorkspaceManager.GetCommitDiffAsync(workspace, task.SquashCommitSha, cancellationToken);
-                    }
+                // 2. If active (not Closed), retrieve live diff directly from the worktree
+                if (string.IsNullOrWhiteSpace(rawDiff) && task.Status != TaskOverallStatus.Closed)
+                {
+                    rawDiff = await _gitWorkspaceManager.GenerateLiveDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
+                }
 
-                    // 2. If active (not Closed), retrieve live diff directly from the worktree
-                    if (string.IsNullOrWhiteSpace(rawDiff) && task.Status != TaskOverallStatus.Closed)
-                    {
-                        rawDiff = await _gitWorkspaceManager.GenerateLiveDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
-                    }
+                // 3. Fallback to branch diff
+                if (string.IsNullOrWhiteSpace(rawDiff))
+                {
+                    rawDiff = await _gitWorkspaceManager.GenerateDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
+                }
 
-                    // 3. Fallback to branch diff
-                    if (string.IsNullOrWhiteSpace(rawDiff))
+                if (!string.IsNullOrWhiteSpace(rawDiff))
+                {
+                    var parsed = ParseGitDiff(rawDiff);
+                    if (parsed.Count > 0)
                     {
-                        rawDiff = await _gitWorkspaceManager.GenerateDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(rawDiff))
-                    {
-                        var parsed = ParseGitDiff(rawDiff);
-                        if (parsed.Count > 0)
-                        {
-                            return parsed;
-                        }
+                        return parsed;
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to retrieve git diff for task #{TaskId}", task.Id);
-            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to retrieve git diff for task #{TaskId}", task.Id);
         }
 
         return Array.Empty<FileDiffSummary>();

@@ -19,7 +19,22 @@ public class MockWebSearchService : IWebSearchService
     public string ProviderName => "Mock";
     public bool IsConfigured => _isConfigured;
 
-    public MockWebSearchService(Func<string, int, Task<WebSearchResponse>>? searchHandler = null, bool isConfigured = true)
+    public MockWebSearchService()
+        : this(null, true)
+    {
+    }
+
+    public MockWebSearchService(bool isConfigured)
+        : this(null, isConfigured)
+    {
+    }
+
+    public MockWebSearchService(Func<string, int, Task<WebSearchResponse>> searchHandler)
+        : this(searchHandler, true)
+    {
+    }
+
+    public MockWebSearchService(Func<string, int, Task<WebSearchResponse>>? searchHandler, bool isConfigured)
     {
         _searchHandler = searchHandler;
         _isConfigured = isConfigured;

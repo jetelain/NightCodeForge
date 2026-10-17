@@ -38,6 +38,21 @@ public class TaskOrchestratorTests
         _workspaceRepo.CreateAsync(_workspace).GetAwaiter().GetResult();
     }
 
+    private TaskOrchestrator CreateOrchestrator(IWorkflowPipelineProvider? pipelineProvider = null)
+    {
+        return new Fixtures.TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            PipelineProvider = pipelineProvider ?? new DefaultWorkflowPipelineProvider()
+        }.Build();
+    }
+
     [Fact]
     public async Task ProcessTaskAsync_WhenPrerequisitesNotReady_RemainsOpenAndDoesNotEnqueue()
     {
@@ -49,9 +64,7 @@ public class TaskOrchestratorTests
         _depStore.AddTask(2, 1, TaskOverallStatus.Open);
         _depStore.AddDependency(1, 2, 1);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         await orchestrator.ProcessTaskAsync(target.Id);
 
@@ -77,9 +90,7 @@ public class TaskOrchestratorTests
             (ctx, ct) => Task.FromResult(StageExecutionResult.Success()));
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { reviewStage });
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -102,9 +113,7 @@ public class TaskOrchestratorTests
         var stage2 = new TestWorkflowStage("stage-2") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2 });
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -132,9 +141,7 @@ public class TaskOrchestratorTests
 
         _gitManager.GeneratedDiff = "diff --git a/Program.cs b/Program.cs\n+Console.WriteLine(\"Done\");";
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -174,9 +181,7 @@ public class TaskOrchestratorTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
 
         // Process should return cleanly without throwing (freeing the GPU worker!)
         await orchestrator.ProcessTaskAsync(task.Id);
@@ -222,9 +227,7 @@ public class TaskOrchestratorTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
 
         // Clean completion of job - no exception thrown to Hangfire
         await orchestrator.ProcessTaskAsync(task.Id);
@@ -254,9 +257,7 @@ public class TaskOrchestratorTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -295,9 +296,7 @@ public class TaskOrchestratorTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -335,9 +334,7 @@ public class TaskOrchestratorTests
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
 
         await orchestrator.ProcessTaskAsync(task.Id);
 

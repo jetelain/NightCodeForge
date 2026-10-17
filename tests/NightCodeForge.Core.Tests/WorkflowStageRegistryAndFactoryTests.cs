@@ -40,6 +40,10 @@ public class WorkflowStageRegistryAndFactoryTests
     public WorkflowStageRegistryAndFactoryTests()
     {
         _serviceProvider = new TestServiceProvider();
+        var fakeEnv = new FakeExecutionEnvironment();
+        _serviceProvider.AddService<IExecutionEnvironment>(fakeEnv);
+        _serviceProvider.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv));
+        _serviceProvider.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         _registry = new WorkflowStageRegistry();
         _factory = new WorkflowStageFactory(_registry, _serviceProvider);
     }
@@ -203,10 +207,13 @@ public class WorkflowStageRegistryAndFactoryTests
     public async Task CompositeDeterministicStage_WhenSubStageFailsAndFailOnErrorIsTrue_ReturnsFailure()
     {
         var sp = new TestServiceProvider();
-        sp.AddService<IExecutionEnvironment>(new FakeExecutionEnvironment
+        var fakeEnv1 = new FakeExecutionEnvironment
         {
             Result = new CommandResult(1, string.Empty, "error CS1002: ; expected [proj.csproj]", TimeSpan.FromMilliseconds(10))
-        });
+        };
+        sp.AddService<IExecutionEnvironment>(fakeEnv1);
+        sp.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv1));
+        sp.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
 
         var config = new DeterministicStageConfig
         {
@@ -239,10 +246,13 @@ public class WorkflowStageRegistryAndFactoryTests
     public async Task CompositeDeterministicStage_WhenFailOnErrorIsFalse_ReturnsSuccessEvenIfSubStageFails()
     {
         var sp = new TestServiceProvider();
-        sp.AddService<IExecutionEnvironment>(new FakeExecutionEnvironment
+        var fakeEnv2 = new FakeExecutionEnvironment
         {
             Result = new CommandResult(1, string.Empty, "error CS1002: ; expected [proj.csproj]", TimeSpan.FromMilliseconds(10))
-        });
+        };
+        sp.AddService<IExecutionEnvironment>(fakeEnv2);
+        sp.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv2));
+        sp.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
 
         var config = new DeterministicStageConfig
         {

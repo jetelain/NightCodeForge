@@ -35,7 +35,7 @@ public class PiRpcAgentHarnessTests
     public async Task RunSessionStreamAsync_StreamsReasoningAndTools_AndCompletes()
     {
         var streamer = new TestActivityStreamer();
-        var harness = new PiRpcAgentHarness(activityStreamer: streamer);
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestPiRpcHarnessBuilder { ActivityStreamer = streamer }.Build();
 
         var context = new AgentSessionContext
         {
@@ -84,7 +84,7 @@ public class PiRpcAgentHarnessTests
     public async Task RunSessionStreamAsync_WhenExtensionUiRequest_BroadcastsInterruptedAndReturnsWaitingForHuman()
     {
         var streamer = new TestActivityStreamer();
-        var harness = new PiRpcAgentHarness(activityStreamer: streamer);
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestPiRpcHarnessBuilder { ActivityStreamer = streamer }.Build();
 
         var context = new AgentSessionContext
         {
@@ -117,7 +117,7 @@ public class PiRpcAgentHarnessTests
     [Fact]
     public async Task RunSessionStreamAsync_IncludesPendingHumanAnswer_WhenResuming()
     {
-        var harness = new PiRpcAgentHarness();
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestPiRpcHarnessBuilder().Build();
 
         var context = new AgentSessionContext
         {
@@ -151,7 +151,7 @@ public class PiRpcAgentHarnessTests
         try
         {
             var pathResolver = new TestWorkspacePathResolver(tempDir);
-            var harness = new PiRpcAgentHarness(pathResolver: pathResolver);
+            var harness = new NightCodeForge.Agents.Tests.Fixtures.TestPiRpcHarnessBuilder { PathResolver = pathResolver }.Build();
 
             var context = new AgentSessionContext
             {

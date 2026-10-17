@@ -1,4 +1,8 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Infrastructure.Execution;
 using NightCodeForge.Infrastructure.Git;
 
 namespace NightCodeForge.Infrastructure.Tests.Git;
@@ -11,7 +15,11 @@ public class GitCliRunnerTests : IDisposable
     public GitCliRunnerTests()
     {
         _repo = new TestGitRepository();
-        _runner = new GitCliRunner();
+        _runner = new GitCliRunner(
+            new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance),
+            new WorkspacePathResolver(),
+            new Mock<IWslMetadataService>().Object,
+            NullLogger<GitCliRunner>.Instance);
     }
 
     [Fact]
@@ -107,7 +115,11 @@ public class GitCliRunnerTests : IDisposable
             return new ProcessExecutionResult(0, "mock-output\n", string.Empty);
         });
 
-        var gitRunner = new GitCliRunner(mockRunner);
+        var gitRunner = new GitCliRunner(
+            mockRunner,
+            new WorkspacePathResolver(),
+            new Mock<IWslMetadataService>().Object,
+            NullLogger<GitCliRunner>.Instance);
 
         // Act
         var result = await gitRunner.ExecuteAsync(_repo.RepositoryPath, ["status", "--porcelain"]);

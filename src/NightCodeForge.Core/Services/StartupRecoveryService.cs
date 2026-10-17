@@ -19,7 +19,7 @@ public class StartupRecoveryService : IStartupRecoveryService
     private readonly IGitCliRunner _gitCliRunner;
     private readonly IWorkflowPipelineProvider _pipelineProvider;
     private readonly ITaskJobQueue _jobQueue;
-    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly ILogger<StartupRecoveryService> _logger;
 
     public StartupRecoveryService(
@@ -28,16 +28,16 @@ public class StartupRecoveryService : IStartupRecoveryService
         IGitCliRunner gitCliRunner,
         IWorkflowPipelineProvider pipelineProvider,
         ITaskJobQueue jobQueue,
-        IWorkspacePathResolver? pathResolver = null,
-        ILogger<StartupRecoveryService>? logger = null)
+        IWorkspacePathResolver pathResolver,
+        ILogger<StartupRecoveryService> logger)
     {
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _pipelineProvider = pipelineProvider ?? throw new ArgumentNullException(nameof(pipelineProvider));
         _jobQueue = jobQueue ?? throw new ArgumentNullException(nameof(jobQueue));
-        _pathResolver = pathResolver;
-        _logger = logger ?? NullLogger<StartupRecoveryService>.Instance;
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task ReconcileWorkspacesAsync(CancellationToken cancellationToken = default)

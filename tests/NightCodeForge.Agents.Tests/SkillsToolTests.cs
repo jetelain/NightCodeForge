@@ -1,6 +1,7 @@
 using Microsoft.Agents.AI;
 using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Skills;
+using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Tools;
 
 namespace NightCodeForge.Agents.Tests;
@@ -122,7 +123,7 @@ Check logs first.
 
         try
         {
-            var canonicalTools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var canonicalTools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
             var tools = CanonicalAIFunctionFactory.CreateTools(canonicalTools);
 
             var loadSkillTool = tools.FirstOrDefault(t => t.Name == "load_skill");
@@ -152,7 +153,7 @@ Check logs first.
 
         try
         {
-            var canonicalTools = new CanonicalTools(tempDir, new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var canonicalTools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
             var editTool = CanonicalAIFunctionFactory.CreateTools(canonicalTools).Single(t => t.Name == "edit");
 
             // The schema must expose the multi-edit array alongside the single-edit shortcut.

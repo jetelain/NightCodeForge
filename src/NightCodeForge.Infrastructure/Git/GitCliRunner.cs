@@ -16,29 +16,21 @@ namespace NightCodeForge.Infrastructure.Git;
 public class GitCliRunner : IGitCliRunner
 {
     private readonly IProcessRunner _processRunner;
-    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly IWslMetadataService _wslMetadataService;
     private readonly ILogger<GitCliRunner> _logger;
 
     [ActivatorUtilitiesConstructor]
     public GitCliRunner(
         IProcessRunner processRunner,
-        IWorkspacePathResolver? pathResolver = null,
-        IWslMetadataService? wslMetadataService = null,
-        ILogger<GitCliRunner>? logger = null)
+        IWorkspacePathResolver pathResolver,
+        IWslMetadataService wslMetadataService,
+        ILogger<GitCliRunner> logger)
     {
-        _processRunner = processRunner ?? new SystemProcessRunner();
-        _pathResolver = pathResolver;
-        _wslMetadataService = wslMetadataService ?? new Execution.WslMetadataService(_processRunner);
-        _logger = logger ?? NullLogger<GitCliRunner>.Instance;
-    }
-
-    public GitCliRunner(
-        IWorkspacePathResolver? pathResolver = null,
-        IWslMetadataService? wslMetadataService = null,
-        ILogger<GitCliRunner>? logger = null)
-        : this(new SystemProcessRunner(), pathResolver, wslMetadataService, logger)
-    {
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _wslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     /// <inheritdoc />

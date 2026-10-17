@@ -28,7 +28,7 @@ public partial class CanonicalTools
     private static partial Regex NewlineRegex();
 
     private readonly string _workspaceRoot;
-    private readonly IExecutionEnvironment? _executionEnv;
+    private readonly IExecutionEnvironment _executionEnv;
     private readonly IEditorConfigService _editorConfigService;
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly IWebSearchService _webSearchService;
@@ -39,39 +39,50 @@ public partial class CanonicalTools
     private readonly int? _buildTimeoutSeconds;
     private readonly int? _testTimeoutSeconds;
     private readonly bool _isReadOnly;
-    private readonly ILogger<CanonicalTools>? _logger;
+    private readonly ILogger<CanonicalTools> _logger;
 
     public CanonicalTools(
         string workspaceRoot,
         IWorkspacePathResolver pathResolver,
-        IExecutionEnvironment? executionEnv = null,
-        IEditorConfigService? editorConfigService = null,
-        IEditorConfigFileApplier? editorConfigFileApplier = null,
-        IWebSearchService? webSearchService = null,
-        int? buildTimeoutSeconds = null,
-        int? testTimeoutSeconds = null,
-        int? workspaceId = null,
-        int? taskId = null,
-        bool isReadOnly = false,
-        ILogger<CanonicalTools>? logger = null)
+        IExecutionEnvironment executionEnv,
+        IEditorConfigService editorConfigService,
+        IEditorConfigFileApplier editorConfigFileApplier,
+        IWebSearchService webSearchService,
+        ILogger<CanonicalTools> logger)
+        : this(workspaceRoot, pathResolver, executionEnv, editorConfigService, editorConfigFileApplier, webSearchService, logger, null, null, null, null, false)
+    {
+    }
+
+    public CanonicalTools(
+        string workspaceRoot,
+        IWorkspacePathResolver pathResolver,
+        IExecutionEnvironment executionEnv,
+        IEditorConfigService editorConfigService,
+        IEditorConfigFileApplier editorConfigFileApplier,
+        IWebSearchService webSearchService,
+        ILogger<CanonicalTools> logger,
+        int? buildTimeoutSeconds,
+        int? testTimeoutSeconds,
+        int? workspaceId,
+        int? taskId,
+        bool isReadOnly)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
-        ArgumentNullException.ThrowIfNull(pathResolver);
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _executionEnv = executionEnv ?? throw new ArgumentNullException(nameof(executionEnv));
+        _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
+        _editorConfigFileApplier = editorConfigFileApplier ?? throw new ArgumentNullException(nameof(editorConfigFileApplier));
+        _webSearchService = webSearchService ?? throw new ArgumentNullException(nameof(webSearchService));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         _workspaceRoot = (workspaceRoot.StartsWith('/') || workspaceRoot.StartsWith('~') || workspaceRoot.StartsWith(@"\\") || workspaceRoot.StartsWith("//"))
             ? workspaceRoot
             : Path.GetFullPath(workspaceRoot);
-        _pathResolver = pathResolver;
-        _executionEnv = executionEnv;
-        _editorConfigService = editorConfigService ?? new EditorConfigService();
-        _editorConfigFileApplier = editorConfigFileApplier ?? new EditorConfigFileApplier();
-        _webSearchService = webSearchService ?? new MockWebSearchService();
         _buildTimeoutSeconds = buildTimeoutSeconds;
         _testTimeoutSeconds = testTimeoutSeconds;
         _workspaceId = workspaceId;
         _taskId = (taskId.HasValue && taskId.Value > 0) ? taskId.Value : null;
         _isReadOnly = isReadOnly;
-        _logger = logger;
     }
 
     public IWebSearchService WebSearchService => _webSearchService;

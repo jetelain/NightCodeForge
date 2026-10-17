@@ -59,7 +59,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWslMetadataService, Execution.WslMetadataService>();
         services.TryAddSingleton<IHostSdkDiscoveryService, Execution.HostSdkDiscoveryService>();
         services.TryAddSingleton<IWorkspacePathResolver, Execution.WorkspacePathResolver>();
-        services.TryAddSingleton<IExecutionEnvironment, Execution.BareHostExecutionEnvironment>();
+        services.TryAddSingleton<Execution.BareHostExecutionEnvironment>();
+        services.TryAddSingleton<IExecutionEnvironment>(sp => sp.GetRequiredService<Execution.BareHostExecutionEnvironment>());
         services.TryAddTransient<Execution.WslExecutionEnvironment>();
         services.TryAddScoped<IExecutionEnvironmentProvider, Execution.ExecutionEnvironmentProvider>();
 

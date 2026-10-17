@@ -13,6 +13,7 @@ using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Streaming;
 using NightCodeForge.Agents.Tools;
+using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
@@ -39,65 +40,55 @@ public partial class IdeationService : IIdeationService
     [GeneratedRegex(@"```(?:json)?\s*\[\s*\{.*?\}\s*\]\s*```", RegexOptions.Singleline)]
     private static partial Regex TaskJsonArrayRegex();
 
-    private readonly IChatClient? _defaultChatClient;
-    private readonly IOllamaChatClientFactory? _chatClientFactory;
-    private readonly IExecutionEnvironmentProvider? _envProvider;
-    private readonly IExecutionEnvironment? _executionEnv;
+    private readonly IOllamaChatClientFactory _chatClientFactory;
+    private readonly IExecutionEnvironmentProvider _envProvider;
     private readonly IWebSearchService _webSearchService;
+    private readonly IEditorConfigService _editorConfigService;
+    private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly AgentsMdService _agentsMdService;
-    private readonly IAgentActivityStreamer? _activityStreamer;
+    private readonly IAgentActivityStreamer _activityStreamer;
     private readonly IWorkspacePathResolver _pathResolver;
-    private readonly SessionTranscriptService? _transcriptService;
-    private readonly IGlobalOptimizationSettingsService? _globalOptimizationSettings;
+    private readonly SessionTranscriptService _transcriptService;
+    private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
     private readonly ILogger<IdeationService> _logger;
-    private readonly LlmProviderOptions? _llmOptions;
+    private readonly ILogger<CanonicalTools> _canonicalToolsLogger;
+    private readonly LlmProviderOptions _llmOptions;
     private readonly SkillsService _skillsService;
-    private readonly IWorkspaceRepository? _workspaceRepository;
+    private readonly IWorkspaceRepository _workspaceRepository;
 
     public IdeationService(
         IWorkspacePathResolver pathResolver,
-        IChatClient? defaultChatClient = null,
-        IOllamaChatClientFactory? chatClientFactory = null,
-        IExecutionEnvironmentProvider? envProvider = null,
-        IExecutionEnvironment? executionEnv = null,
-        IWebSearchService? webSearchService = null,
-        AgentsMdService? agentsMdService = null,
-        IAgentActivityStreamer? activityStreamer = null,
-        SessionTranscriptService? transcriptService = null,
-        IGlobalOptimizationSettingsService? globalOptimizationSettings = null,
-        ILogger<IdeationService>? logger = null,
-        Microsoft.Extensions.Options.IOptions<LlmProviderOptions>? llmOptions = null,
-        SkillsService? skillsService = null,
-        IWorkspaceRepository? workspaceRepository = null)
+        IOllamaChatClientFactory chatClientFactory,
+        IExecutionEnvironmentProvider envProvider,
+        IWebSearchService webSearchService,
+        IEditorConfigService editorConfigService,
+        IEditorConfigFileApplier editorConfigFileApplier,
+        AgentsMdService agentsMdService,
+        IAgentActivityStreamer activityStreamer,
+        SessionTranscriptService transcriptService,
+        IGlobalOptimizationSettingsService globalOptimizationSettings,
+        SkillsService skillsService,
+        IWorkspaceRepository workspaceRepository,
+        Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
+        ILogger<IdeationService> logger,
+        ILogger<CanonicalTools> canonicalToolsLogger)
     {
-        ArgumentNullException.ThrowIfNull(pathResolver);
-        if (defaultChatClient == null && chatClientFactory == null)
-        {
-            throw new ArgumentNullException(nameof(defaultChatClient), "Either defaultChatClient or chatClientFactory must be provided.");
-        }
-
-        _pathResolver = pathResolver;
-        _defaultChatClient = defaultChatClient;
-        _chatClientFactory = chatClientFactory;
-        _envProvider = envProvider;
-        _executionEnv = executionEnv;
-        _webSearchService = webSearchService ?? new MockWebSearchService();
-        _agentsMdService = agentsMdService ?? new AgentsMdService();
-        _activityStreamer = activityStreamer;
-        _transcriptService = transcriptService;
-        _globalOptimizationSettings = globalOptimizationSettings;
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<IdeationService>.Instance;
-        _llmOptions = llmOptions?.Value;
-        _skillsService = skillsService ?? new SkillsService();
-        _workspaceRepository = workspaceRepository;
-    }
-
-    public IdeationService(
-        IChatClient defaultChatClient,
-        IWorkspacePathResolver pathResolver,
-        IWorkspaceRepository? workspaceRepository = null)
-        : this(pathResolver, defaultChatClient: defaultChatClient, workspaceRepository: workspaceRepository)
-    {
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
+        _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
+        _webSearchService = webSearchService ?? throw new ArgumentNullException(nameof(webSearchService));
+        _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
+        _editorConfigFileApplier = editorConfigFileApplier ?? throw new ArgumentNullException(nameof(editorConfigFileApplier));
+        _agentsMdService = agentsMdService ?? throw new ArgumentNullException(nameof(agentsMdService));
+        _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
+        _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
+        _globalOptimizationSettings = globalOptimizationSettings ?? throw new ArgumentNullException(nameof(globalOptimizationSettings));
+        _skillsService = skillsService ?? throw new ArgumentNullException(nameof(skillsService));
+        _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
+        ArgumentNullException.ThrowIfNull(llmOptions);
+        _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _canonicalToolsLogger = canonicalToolsLogger ?? throw new ArgumentNullException(nameof(canonicalToolsLogger));
     }
 
     /// <summary>
@@ -189,9 +180,7 @@ public partial class IdeationService : IIdeationService
         var optFlags = profile.OptimizationFlags ?? _globalOptimizationSettings?.GetFlags() ?? new LocalOptimizationFlags();
 
         // Resolve client dynamically for the agent profile
-        var rawClient = _chatClientFactory != null
-            ? _chatClientFactory.CreateClient(profile)
-            : (_defaultChatClient ?? throw new InvalidOperationException("No IChatClient or IOllamaChatClientFactory configured."));
+        var rawClient = _chatClientFactory.CreateClient(profile);
         var client = new ThinkingTraceCompactionChatClient(rawClient, optFlags);
 
         var sessionId = $"ideation-{workspace.Id}-{Guid.NewGuid():N}";
@@ -349,21 +338,22 @@ When proposing implementation tasks to the developer, adhere to the following ru
 
         var transcriptBuffer = new TranscriptStreamBuffer(transcriptEntries);
 
-        var effectiveEnv = (workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(workspace, profile.SecurityTier)
-            : _executionEnv;
-
-        var buildTimeout = workspace?.BuildTimeoutSeconds ?? projectConfig.BuildTimeoutSeconds;
-        var testTimeout = workspace?.TestTimeoutSeconds ?? projectConfig.TestTimeoutSeconds;
+        var effectiveEnv = _envProvider.GetEnvironment(workspace, profile.SecurityTier)
+            ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
 
         var canonicalTools = new CanonicalTools(
             repoPath,
             _pathResolver,
             effectiveEnv,
-            webSearchService: _webSearchService,
-            buildTimeoutSeconds: buildTimeout,
-            testTimeoutSeconds: testTimeout,
-            workspaceId: workspace?.Id);
+            _editorConfigService,
+            _editorConfigFileApplier,
+            _webSearchService,
+            _canonicalToolsLogger,
+            buildTimeoutSeconds: null,
+            testTimeoutSeconds: null,
+            workspaceId: workspace.Id,
+            taskId: null,
+            isReadOnly: profile.Mode == AgentMode.ReadOnly || profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly);
 
         var sessionProposals = new List<IdeationProposal>();
 

@@ -1,3 +1,4 @@
+using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Infrastructure.Execution;
@@ -10,8 +11,8 @@ public class CanonicalAIFunctionFactoryTests
     public void CreateTools_DoesNotAdvertiseWebSearch_WhenWebSearchIsNotConfigured()
     {
         var unconfiguredSearch = new MockWebSearchService(isConfigured: false);
-        var tools = new CanonicalTools(
-            workspaceRoot: AppContext.BaseDirectory,
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
             pathResolver: new WorkspacePathResolver(),
             webSearchService: unconfiguredSearch);
 
@@ -31,8 +32,8 @@ public class CanonicalAIFunctionFactoryTests
     public void CreateTools_AdvertisesWebSearch_WhenWebSearchIsConfigured()
     {
         var configuredSearch = new MockWebSearchService(isConfigured: true);
-        var tools = new CanonicalTools(
-            workspaceRoot: AppContext.BaseDirectory,
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
             pathResolver: new WorkspacePathResolver(),
             webSearchService: configuredSearch);
 
@@ -50,8 +51,8 @@ public class CanonicalAIFunctionFactoryTests
     public async Task CanonicalTools_WebSearchAsync_ReturnsDisabledMessage_WhenUnconfigured()
     {
         var unconfiguredSearch = new MockWebSearchService(isConfigured: false);
-        var tools = new CanonicalTools(
-            workspaceRoot: AppContext.BaseDirectory,
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
             pathResolver: new WorkspacePathResolver(),
             webSearchService: unconfiguredSearch);
 
@@ -70,8 +71,8 @@ public class CanonicalAIFunctionFactoryTests
             })),
             isConfigured: true);
 
-        var tools = new CanonicalTools(
-            workspaceRoot: AppContext.BaseDirectory,
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
             pathResolver: new WorkspacePathResolver(),
             webSearchService: configuredSearch);
 

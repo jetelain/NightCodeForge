@@ -35,7 +35,12 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     {
     }
 
-    public TaskMarkdownSyncService(ITaskRepository taskRepository, IDependencyResolutionEngine? dependencyEngine = null)
+    public TaskMarkdownSyncService(ITaskRepository taskRepository)
+        : this(taskRepository, null, null)
+    {
+    }
+
+    public TaskMarkdownSyncService(ITaskRepository taskRepository, IDependencyResolutionEngine dependencyEngine)
         : this(taskRepository, dependencyEngine, null)
     {
     }

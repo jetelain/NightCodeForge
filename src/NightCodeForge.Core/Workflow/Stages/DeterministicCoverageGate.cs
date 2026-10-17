@@ -12,8 +12,7 @@ public class DeterministicCoverageGate : IWorkflowStage
     public const string DefaultStageId = StageImplementationTypes.DeterministicCoverage;
     public const string FallbackLoopBackStageId = StandardStageIds.Implementation;
 
-    private readonly IExecutionEnvironment? _executionEnv;
-    private readonly IExecutionEnvironmentProvider? _envProvider;
+    private readonly IExecutionEnvironmentProvider _envProvider;
     private readonly string? _testCommand;
 
     public string StageId { get; }
@@ -21,33 +20,37 @@ public class DeterministicCoverageGate : IWorkflowStage
     public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;
     public string LoopBackStageId { get; set; } = FallbackLoopBackStageId;
 
-    public DeterministicCoverageGate(
-        string stageId = DefaultStageId,
-        string displayName = "Deterministic Test & Coverage Gate",
-        IExecutionEnvironment? executionEnv = null,
-        IExecutionEnvironmentProvider? envProvider = null,
-        string? testCommand = null)
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
+    public DeterministicCoverageGate(IExecutionEnvironmentProvider envProvider)
+        : this(envProvider, DefaultStageId, "Deterministic Test & Coverage Gate", null)
     {
-        StageId = stageId;
-        DisplayName = displayName;
-        _executionEnv = executionEnv;
-        _envProvider = envProvider;
+    }
+
+    public DeterministicCoverageGate(
+        IExecutionEnvironmentProvider envProvider,
+        string stageId,
+        string displayName,
+        string? testCommand)
+    {
+        _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
+        StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : DefaultStageId;
+        DisplayName = !string.IsNullOrWhiteSpace(displayName) ? displayName : "Deterministic Test & Coverage Gate";
         _testCommand = testCommand;
     }
 
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(context);
         var bag = context.DataBag;
 
         // If tests have not been executed yet in this pipeline run, execute them now
-        if (!bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentTotal, out _) && (_executionEnv != null || _envProvider != null))
+        if (!bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentTotal, out _))
         {
             var testStage = new DeterministicTestStage(
-                _executionEnv,
-                _testCommand,
+                _envProvider,
+                _testCommand ?? "dotnet test --no-build",
                 stageId: StageId,
-                displayName: DisplayName,
-                envProvider: _envProvider);
+                displayName: DisplayName);
 
             var testResult = await testStage.ExecuteAsync(context, cancellationToken);
             if (!testResult.IsSuccess)

@@ -1,12 +1,18 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
+using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
 using NightCodeForge.Infrastructure.Data;
 using NightCodeForge.Infrastructure.Data.Repositories;
+using NightCodeForge.Infrastructure.Execution;
 using NightCodeForge.Infrastructure.Git;
 using NightCodeForge.Infrastructure.Tests.Git;
 
@@ -19,10 +25,27 @@ public class StartupRecoveryIntegrationTests : IDisposable
     private readonly SqliteConnection _connection;
     private readonly AppDbContext _context;
 
+    private StartupRecoveryService CreateRecoveryService(
+        IWorkspaceRepository workspaceRepo,
+        ITaskRepository taskRepo,
+        ITaskJobQueue jobQueue) =>
+        new(
+            workspaceRepo,
+            taskRepo,
+            _runner,
+            CreatePipelineProvider(),
+            jobQueue,
+            new WorkspacePathResolver(),
+            NullLogger<StartupRecoveryService>.Instance);
+
     public StartupRecoveryIntegrationTests()
     {
         _repo = new TestGitRepository("main");
-        _runner = new GitCliRunner();
+        _runner = new GitCliRunner(
+            new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance),
+            new WorkspacePathResolver(),
+            new Mock<IWslMetadataService>().Object,
+            NullLogger<GitCliRunner>.Instance);
 
         // Initial base commit
         _repo.CreateFile("README.md", "# Test Repository\nInitial commit.");
@@ -81,12 +104,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
         var taskRepo = new EfCoreTaskRepository(_context);
         var jobQueue = new FakeTestJobQueue();
 
-        var recoveryService = new StartupRecoveryService(
-            workspaceRepo,
-            taskRepo,
-            _runner,
-            CreatePipelineProvider(),
-            jobQueue);
+        var recoveryService = CreateRecoveryService(workspaceRepo, taskRepo, jobQueue);
 
         // Run recovery
         await recoveryService.ReconcileWorkspacesAsync();
@@ -148,12 +166,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
         var taskRepo = new EfCoreTaskRepository(_context);
         var jobQueue = new FakeTestJobQueue();
 
-        var recoveryService = new StartupRecoveryService(
-            workspaceRepo,
-            taskRepo,
-            _runner,
-            CreatePipelineProvider(),
-            jobQueue);
+        var recoveryService = CreateRecoveryService(workspaceRepo, taskRepo, jobQueue);
 
         // Run recovery - previously threw:
         // System.InvalidOperationException: The instance of entity type 'Workspace' cannot be tracked because another instance with the same key value for {'Id'} is already being tracked.

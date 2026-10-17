@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
+using NightCodeForge.Infrastructure.Tests.Fixtures;
 using Xunit;
 
 namespace NightCodeForge.Infrastructure.Tests.Execution;
@@ -122,7 +123,7 @@ public class ExecutionEnvironmentTests
     public void ExecutionEnvironmentProvider_ContainerMode_InjectsResolvedWorkspaceAndCacheMounts()
     {
         var pathResolver = new FakePathResolver();
-        var provider = new ExecutionEnvironmentProvider(pathResolver: pathResolver);
+        var provider = new TestExecutionEnvironmentProviderBuilder { PathResolver = pathResolver }.Build();
 
         var workspace = new Workspace
         {
@@ -271,10 +272,11 @@ public class ExecutionEnvironmentTests
         });
 
         var env = new BareHostExecutionEnvironment(
-            processRunner: fakeRunner,
-            tier: ExecutionTier.BareHost,
-            distribution: "Ubuntu",
-            pathResolver: new FakePathResolver());
+            fakeRunner,
+            ExecutionTier.BareHost,
+            null,
+            "Ubuntu",
+            new FakePathResolver());
 
         var result = await env.ExecuteAsync("echo 'hello'");
 
@@ -292,8 +294,8 @@ public class ExecutionEnvironmentTests
         });
 
         var env = new BareHostExecutionEnvironment(
-            processRunner: fakeRunner,
-            tier: ExecutionTier.BareHost);
+            fakeRunner,
+            new FakePathResolver());
 
         await Assert.ThrowsAsync<TimeoutException>(async () =>
         {

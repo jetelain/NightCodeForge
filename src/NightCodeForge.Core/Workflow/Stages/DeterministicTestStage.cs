@@ -25,8 +25,7 @@ public partial class DeterministicTestStage : IWorkflowStage
     [GeneratedRegex(@"(?:Failed\s+([A-Za-z0-9_.]+)|\[FAIL\]\s+(.+)|FAIL:\s+(.+))")]
     private static partial Regex TestFailureLineRegex();
 
-    private readonly IExecutionEnvironment? _executionEnv;
-    private readonly IExecutionEnvironmentProvider? _envProvider;
+    private readonly IExecutionEnvironmentProvider _envProvider;
     private readonly string _testCommand;
 
     public string StageId { get; }
@@ -34,43 +33,47 @@ public partial class DeterministicTestStage : IWorkflowStage
     public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;
     public string LoopBackStageId { get; set; } = FallbackLoopBackStageId;
 
-    public DeterministicTestStage(
-        IExecutionEnvironment? executionEnv = null,
-        string? testCommand = null,
-        string stageId = DefaultStageId,
-        string displayName = "Deterministic Unit Test Gate",
-        IExecutionEnvironmentProvider? envProvider = null)
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
+    public DeterministicTestStage(IExecutionEnvironmentProvider envProvider)
+        : this(envProvider, "dotnet test --no-build", DefaultStageId, "Deterministic Unit Test Gate")
     {
-        _executionEnv = executionEnv;
-        _envProvider = envProvider;
-        _testCommand = testCommand ?? "dotnet test --no-build";
-        StageId = stageId;
-        DisplayName = displayName;
+    }
+
+    public DeterministicTestStage(
+        IExecutionEnvironmentProvider envProvider,
+        string testCommand,
+        string stageId,
+        string displayName)
+    {
+        _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
+        _testCommand = !string.IsNullOrWhiteSpace(testCommand) ? testCommand : "dotnet test --no-build";
+        StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : DefaultStageId;
+        DisplayName = !string.IsNullOrWhiteSpace(displayName) ? displayName : "Deterministic Unit Test Gate";
     }
 
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(context);
+        var workspace = context.Workspace ?? throw new InvalidOperationException("Workspace is required to resolve execution environment.");
+
         var bag = context.DataBag;
-        var repoPath = context.Workspace.RepositoryPath;
+        var repoPath = workspace.RepositoryPath;
         var workDir = !string.IsNullOrWhiteSpace(context.WorkingDirectory)
             ? context.WorkingDirectory
-            : (!string.IsNullOrWhiteSpace(context.Workspace.Ext4MirrorPath)
-                ? context.Workspace.Ext4MirrorPath
+            : (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
+                ? workspace.Ext4MirrorPath
                 : repoPath);
 
         var config = CodeStackPresets.ResolveConfig(repoPath, bag);
         var command = config.TestCommand ?? _testCommand;
 
-        var effectiveEnv = (context.Workspace != null && _envProvider != null)
-            ? _envProvider.GetEnvironment(context.Workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id)
-            : _executionEnv;
+        var effectiveEnv = _envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id)
+            ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
 
-        if (effectiveEnv != null)
-        {
-            var timeout = context.Workspace?.TestTimeoutSeconds ?? config.TestTimeoutSeconds ?? WorkflowDefaults.DefaultTestTimeoutSeconds;
-            bag.Set(PipelineDataBagKeys.TestTimeoutSeconds, timeout);
+        var timeout = workspace.TestTimeoutSeconds ?? config.TestTimeoutSeconds ?? WorkflowDefaults.DefaultTestTimeoutSeconds;
+        bag.Set(PipelineDataBagKeys.TestTimeoutSeconds, timeout);
 
-            var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: timeout, cancellationToken: cancellationToken);
+        var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: timeout, cancellationToken: cancellationToken);
 
             var fullOutput = string.IsNullOrWhiteSpace(res.StandardError)
                 ? res.StandardOutput
@@ -163,7 +166,6 @@ public partial class DeterministicTestStage : IWorkflowStage
                 var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
                 return StageExecutionResult.Failure(errorMsg, targetStage);
             }
-        }
 
         return StageExecutionResult.Success();
     }

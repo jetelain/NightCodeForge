@@ -24,12 +24,12 @@ public class TaskOrchestrator : ITaskOrchestrator
     private readonly IGitWorkspaceManager _gitWorkspaceManager;
     private readonly IWorkflowPipelineProvider _pipelineProvider;
     private readonly ITaskJobQueue _jobQueue;
-    private readonly ITaskDependencyStore? _dependencyStore;
-    private readonly IHarnessRegistry? _harnessRegistry;
-    private readonly IGitMirrorSyncService? _gitMirrorSyncService;
-    private readonly Services.ITaskMarkdownSyncService? _markdownSyncService;
-    private readonly IWorkspacePathResolver? _pathResolver;
-    private readonly Streaming.IAgentActivityStreamer? _streamer;
+    private readonly ITaskDependencyStore _dependencyStore;
+    private readonly IHarnessRegistry _harnessRegistry;
+    private readonly IGitMirrorSyncService _gitMirrorSyncService;
+    private readonly Services.ITaskMarkdownSyncService _markdownSyncService;
+    private readonly IWorkspacePathResolver _pathResolver;
+    private readonly Streaming.IAgentActivityStreamer _streamer;
     private readonly ILogger<TaskOrchestrator> _logger;
 
     public TaskOrchestrator(
@@ -40,13 +40,13 @@ public class TaskOrchestrator : ITaskOrchestrator
         IGitWorkspaceManager gitWorkspaceManager,
         IWorkflowPipelineProvider pipelineProvider,
         ITaskJobQueue jobQueue,
-        ITaskDependencyStore? dependencyStore = null,
-        IHarnessRegistry? harnessRegistry = null,
-        IGitMirrorSyncService? gitMirrorSyncService = null,
-        Services.ITaskMarkdownSyncService? markdownSyncService = null,
-        IWorkspacePathResolver? pathResolver = null,
-        Streaming.IAgentActivityStreamer? streamer = null,
-        ILogger<TaskOrchestrator>? logger = null)
+        ITaskDependencyStore dependencyStore,
+        IHarnessRegistry harnessRegistry,
+        IGitMirrorSyncService gitMirrorSyncService,
+        Services.ITaskMarkdownSyncService markdownSyncService,
+        IWorkspacePathResolver pathResolver,
+        Streaming.IAgentActivityStreamer streamer,
+        ILogger<TaskOrchestrator> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
@@ -55,13 +55,13 @@ public class TaskOrchestrator : ITaskOrchestrator
         _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
         _pipelineProvider = pipelineProvider ?? throw new ArgumentNullException(nameof(pipelineProvider));
         _jobQueue = jobQueue ?? throw new ArgumentNullException(nameof(jobQueue));
-        _dependencyStore = dependencyStore;
-        _harnessRegistry = harnessRegistry;
-        _gitMirrorSyncService = gitMirrorSyncService;
-        _markdownSyncService = markdownSyncService;
-        _pathResolver = pathResolver;
-        _streamer = streamer;
-        _logger = logger ?? NullLogger<TaskOrchestrator>.Instance;
+        _dependencyStore = dependencyStore ?? throw new ArgumentNullException(nameof(dependencyStore));
+        _harnessRegistry = harnessRegistry ?? throw new ArgumentNullException(nameof(harnessRegistry));
+        _gitMirrorSyncService = gitMirrorSyncService ?? throw new ArgumentNullException(nameof(gitMirrorSyncService));
+        _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _streamer = streamer ?? throw new ArgumentNullException(nameof(streamer));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     [Hangfire.AutomaticRetry(Attempts = 0, OnAttemptsExceeded = Hangfire.AttemptsExceededAction.Fail)]
@@ -99,10 +99,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             _logger.LogError(err);
             task.Status = TaskOverallStatus.Failed;
             await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-            if (_dependencyStore != null)
-            {
-                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
-            }
+            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {
                 TaskId = task.Id,
@@ -121,9 +118,9 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         try
         {
-            if (_gitMirrorSyncService != null && workspace.ExecutionMode != ExecutionMode.BareHost)
+            if (workspace.ExecutionMode != ExecutionMode.BareHost)
             {
-                if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && _pathResolver != null)
+                if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
                 {
                     try
                     {
@@ -162,10 +159,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             _logger.LogError(ex, "Failed checking out feature branch for task #{TaskId}", taskId);
             task.Status = TaskOverallStatus.Failed;
             await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-            if (_dependencyStore != null)
-            {
-                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
-            }
+            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {
                 TaskId = task.Id,
@@ -199,10 +193,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             _logger.LogError(err);
             task.Status = TaskOverallStatus.Failed;
             await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-            if (_dependencyStore != null)
-            {
-                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
-            }
+            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {
                 TaskId = task.Id,
@@ -216,23 +207,20 @@ public class TaskOrchestrator : ITaskOrchestrator
         // Persist current stage immediately so UI / Kanban / DAG shows task is actively executing
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
 
-        if (_streamer != null)
+        try
         {
-            try
-            {
-                await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
-                    Guid.NewGuid().ToString("N"),
-                    task.Id,
-                    stage.StageId,
-                    Streaming.AgentActivityKind.StageStarted,
-                    $"Starting stage '{stage.StageId}'",
-                    DateTime.UtcNow,
-                    new Dictionary<string, object?> { ["StageKind"] = stage.Kind.ToString() }), cancellationToken);
-            }
-            catch (Exception sex)
-            {
-                _logger.LogDebug(sex, "Failed broadcasting stage started event for task #{TaskId}", task.Id);
-            }
+            await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                Guid.NewGuid().ToString("N"),
+                task.Id,
+                stage.StageId,
+                Streaming.AgentActivityKind.StageStarted,
+                $"Starting stage '{stage.StageId}'",
+                DateTime.UtcNow,
+                new Dictionary<string, object?> { ["StageKind"] = stage.Kind.ToString() }), cancellationToken);
+        }
+        catch (Exception sex)
+        {
+            _logger.LogDebug(sex, "Failed broadcasting stage started event for task #{TaskId}", task.Id);
         }
 
         // Resolve Agent Profile matching interrupted profile or current stage, or fallback to first
@@ -265,10 +253,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 _logger.LogError(notFoundEx, "Agent profile not found for stage '{StageId}' in workspace #{WorkspaceId}", stage.StageId, workspace.Id);
                 task.Status = TaskOverallStatus.Failed;
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-                if (_dependencyStore != null)
-                {
-                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
-                }
+                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
                 await _taskRepository.AddExecutionLogAsync(new ExecutionLog
                 {
                     TaskId = task.Id,
@@ -284,10 +269,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         if (task.IsWaitingForHuman)
         {
             task.IsWaitingForHuman = false;
-            if (_dependencyStore != null)
-            {
-                await _dependencyStore.SetWaitingForHumanAsync(task.Id, false, cancellationToken);
-            }
+            await _dependencyStore.SetWaitingForHumanAsync(task.Id, false, cancellationToken);
         }
         if (!string.IsNullOrWhiteSpace(task.InterruptedStageId))
         {
@@ -306,7 +288,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             ? taskWorkingPath
             : workspace.RepositoryPath;
 
-        if (_markdownSyncService != null && !string.IsNullOrWhiteSpace(targetSyncPath) && Directory.Exists(targetSyncPath))
+        if (!string.IsNullOrWhiteSpace(targetSyncPath) && Directory.Exists(targetSyncPath))
         {
             try
             {
@@ -332,7 +314,7 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         try
         {
-            if (stage.Kind == WorkflowStageKind.Agentic && _harnessRegistry != null && !HasCustomHandler(stage))
+            if (stage.Kind == WorkflowStageKind.Agentic && !HasCustomHandler(stage))
             {
                 var harnessId = profile!.HarnessId;
                 if (_harnessRegistry.TryGetHarness(harnessId, out var harness) && harness != null)
@@ -576,11 +558,8 @@ public class TaskOrchestrator : ITaskOrchestrator
 
             pipelineContext.SyncDataBagToTask();
             await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-            if (_dependencyStore != null)
-            {
-                await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
-                await _dependencyStore.SetWaitingForHumanAsync(task.Id, true, cancellationToken);
-            }
+            await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
+            await _dependencyStore.SetWaitingForHumanAsync(task.Id, true, cancellationToken);
             await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
 
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
@@ -649,10 +628,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 task.CurrentStageId = nextStage.StageId;
                 pipelineContext.SyncDataBagToTask();
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-                if (_dependencyStore != null)
-                {
-                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
-                }
+                await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
                 await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
 
                 // Enqueue next stage to standard inference queue
@@ -676,10 +652,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiff, diff);
                 pipelineContext.SyncDataBagToTask();
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-                if (_dependencyStore != null)
-                {
-                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Ready, cancellationToken);
-                }
+                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Ready, cancellationToken);
 
                 if (task.MergeMode == MergeMode.Automatic)
                 {
@@ -722,10 +695,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 task.CurrentStageId = targetLoopBackId;
                 pipelineContext.SyncDataBagToTask();
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-                if (_dependencyStore != null)
-                {
-                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
-                }
+                await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
                 await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
 
                 await _taskRepository.AddExecutionLogAsync(new ExecutionLog
@@ -745,10 +715,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         task.Status = TaskOverallStatus.Failed;
         pipelineContext.SyncDataBagToTask();
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-        if (_dependencyStore != null)
-        {
-            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
-        }
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
         await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
         {
@@ -786,11 +753,8 @@ public class TaskOrchestrator : ITaskOrchestrator
         task.PipelineDataJson = bag.ToJson();
 
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-        if (_dependencyStore != null)
-        {
-            await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
-            await _dependencyStore.SetWaitingForHumanAsync(task.Id, false, cancellationToken);
-        }
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
+        await _dependencyStore.SetWaitingForHumanAsync(task.Id, false, cancellationToken);
 
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
         {
@@ -828,10 +792,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         task.PipelineDataJson = bag.ToJson();
 
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-        if (_dependencyStore != null)
-        {
-            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Reviewed, cancellationToken);
-        }
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Reviewed, cancellationToken);
 
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
         {
@@ -866,10 +827,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             task.UpdatedAt = DateTime.UtcNow;
 
             await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-            if (_dependencyStore != null)
-            {
-                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
-            }
+            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
 
             var isReady = await _dependencyEngine.IsReadyForExecutionAsync(task.Id, cancellationToken);
             if (isReady)
@@ -883,10 +841,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             task.UpdatedAt = DateTime.UtcNow;
 
             await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-            if (_dependencyStore != null)
-            {
-                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Rejected, cancellationToken);
-            }
+            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Rejected, cancellationToken);
         }
         else
         {
@@ -963,28 +918,22 @@ public class TaskOrchestrator : ITaskOrchestrator
         task.Status = TaskOverallStatus.Closed;
         task.CurrentStageId = string.Empty;
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-        if (_dependencyStore != null)
-        {
-            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Closed, cancellationToken);
-        }
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Closed, cancellationToken);
 
-        if (_streamer != null)
+        try
         {
-            try
-            {
-                await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
-                    Guid.NewGuid().ToString("N"),
-                    task.Id,
-                    StandardStageIds.Merge,
-                    Streaming.AgentActivityKind.StageCompleted,
-                    $"ForgeTask #{task.Id} completed and squash-merged.",
-                    DateTime.UtcNow,
-                    new Dictionary<string, object?> { ["StageKind"] = "Deterministic" }), cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Failed to publish merge completion event for task #{TaskId}", task.Id);
-            }
+            await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                Guid.NewGuid().ToString("N"),
+                task.Id,
+                StandardStageIds.Merge,
+                Streaming.AgentActivityKind.StageCompleted,
+                $"ForgeTask #{task.Id} completed and squash-merged.",
+                DateTime.UtcNow,
+                new Dictionary<string, object?> { ["StageKind"] = "Deterministic" }), cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to publish merge completion event for task #{TaskId}", task.Id);
         }
 
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
@@ -1005,7 +954,7 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         await SyncMarkdownTaskSafeAsync(workspace, task, cancellationToken);
 
-        if (_markdownSyncService != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+        if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath))
         {
             try
             {
@@ -1227,7 +1176,7 @@ public class TaskOrchestrator : ITaskOrchestrator
 
     private async Task SyncMarkdownTaskSafeAsync(Workspace workspace, ForgeTask task, CancellationToken cancellationToken)
     {
-        if (_markdownSyncService != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+        if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath))
         {
             try
             {
@@ -1244,7 +1193,7 @@ public class TaskOrchestrator : ITaskOrchestrator
     {
         await SyncMarkdownTaskSafeAsync(workspace, task, cancellationToken);
 
-        if (_gitMirrorSyncService != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
             try
             {

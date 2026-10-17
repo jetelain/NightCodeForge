@@ -16,9 +16,14 @@ public class SystemProcessRunner : IProcessRunner
 {
     private readonly ILogger _logger;
 
-    public SystemProcessRunner(ILogger? logger = null)
+    public SystemProcessRunner()
+        : this(NullLogger<SystemProcessRunner>.Instance)
     {
-        _logger = logger ?? NullLogger<SystemProcessRunner>.Instance;
+    }
+
+    public SystemProcessRunner(ILogger logger)
+    {
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
 

@@ -1,4 +1,5 @@
 using NightCodeForge.Agents.Dispatcher;
+using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Tools;
 
 namespace NightCodeForge.Agents.Tests;
@@ -9,7 +10,7 @@ public class LenientToolDispatcherTests
 
     public LenientToolDispatcherTests()
     {
-        var canonical = new CanonicalTools(Path.GetTempPath(), new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var canonical = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
         _dispatcher = new LenientToolDispatcher(canonical);
     }
 

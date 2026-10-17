@@ -1,6 +1,8 @@
 namespace NightCodeForge.Core.Tests;
 
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
@@ -70,16 +72,25 @@ public static class TestWorkflowPipelines
         GenericAgenticStage? implStage = null,
         IWorkflowStage? postImplStage = null,
         GenericAgenticStage? fixStage = null,
-        IWorkflowStage? postReviewStage = null)
+        IWorkflowStage? postReviewStage = null,
+        IExecutionEnvironmentProvider? envProvider = null)
     {
+        var env = envProvider ?? new SingleExecutionEnvironmentProvider(new FakeExecutionEnv());
         return new WorkflowPipeline(new IWorkflowStage[]
         {
             reviewStage ?? CreateReviewStage(),
-            preImplStage ?? new DeterministicBuildStage(stageId: StandardStageIds.PreImplementationBaseline, displayName: "Pre-Implementation Baseline"),
+            preImplStage ?? new DeterministicBuildStage(env, null, "dotnet build", StandardStageIds.PreImplementationBaseline, "Pre-Implementation Baseline"),
             implStage ?? CreateImplementationStage(),
             postImplStage ?? new DeterministicWarningRatchetStage(),
             fixStage ?? CreateCodeReviewStage(),
-            postReviewStage ?? new DeterministicTestStage(stageId: StandardStageIds.PostReviewVerification, displayName: "Post-Review Verification")
+            postReviewStage ?? new DeterministicTestStage(env, "dotnet test", StandardStageIds.PostReviewVerification, "Post-Review Verification")
         });
+    }
+
+    private class FakeExecutionEnv : IExecutionEnvironment
+    {
+        public ExecutionTier Tier => ExecutionTier.BareHost;
+        public Task<CommandResult> ExecuteAsync(string command, string? workingDirectory = null, int? timeoutSeconds = null, IReadOnlyDictionary<string, string>? environmentVariables = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CommandResult(0, "Build succeeded.\nPassed: 1, Total: 1", string.Empty, TimeSpan.FromMilliseconds(5)));
     }
 }

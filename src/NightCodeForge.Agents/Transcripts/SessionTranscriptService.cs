@@ -40,9 +40,15 @@ public class SessionTranscriptService
 
     private readonly string _transcriptsDirectory;
 
-    public SessionTranscriptService(string? transcriptsDirectory = null)
+    public SessionTranscriptService()
+        : this(Path.Combine(Directory.GetCurrentDirectory(), "docs", "transcripts"))
     {
-        _transcriptsDirectory = transcriptsDirectory ?? Path.Combine(Directory.GetCurrentDirectory(), "docs", "transcripts");
+    }
+
+    public SessionTranscriptService(string transcriptsDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(transcriptsDirectory);
+        _transcriptsDirectory = transcriptsDirectory;
     }
 
     public async Task<string> SaveTranscriptAsync(

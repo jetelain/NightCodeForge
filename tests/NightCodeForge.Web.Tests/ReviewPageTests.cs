@@ -1,7 +1,9 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Components.Pages;
@@ -24,7 +26,11 @@ public class ReviewPageTests : BunitContext
     {
         _taskRepository = new InMemoryTaskRepository();
         _workspaceRepository = new InMemoryWorkspaceRepository();
-        _reviewService = new TaskReviewService(_taskRepository, _workspaceRepository, NullLogger<TaskReviewService>.Instance);
+        _reviewService = new TaskReviewService(
+            _taskRepository,
+            _workspaceRepository,
+            new Mock<IGitWorkspaceManager>().Object,
+            NullLogger<TaskReviewService>.Instance);
         _orchestrator = new MockTaskOrchestrator();
         _commentState = new ReviewCommentStateService();
         _toastService = new ToastService();

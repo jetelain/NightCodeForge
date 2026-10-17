@@ -132,14 +132,14 @@ flowchart TD
   - [x] A/B Testing tab button and switch case removed from `Settings.razor`.
   - [x] Navigation titles in `NavMenu.razor`, `TopNavBar.razor`, and `Home.razor` updated to "Settings".
   - [x] Dead `AppDbContext? dbContext` constructor parameter and field removed from `WorkspaceProvisioningService`.
-- [ ] **Step 9.5: Standard Workflow Domain Extraction & Canonical Stage Identifiers**
-  - [ ] Standard 3-agent pipeline extracted from `AppDbContext` to `StandardWorkflowDefinitions.CreateStandard3AgentWorkflow()` in `NightCodeForge.Core.Domain`.
-  - [ ] `StandardStageIds.Merge` and `StandardStageIds.Ideation` defined and referenced across Core, Infrastructure, Agents, and Web.
-  - [ ] `InMemoryWorkflowRepository` and test scenarios updated to use `StandardWorkflowDefinitions`.
-- [ ] **Step 9.6: Required Constructor DI & Fail Fast**
-  - [ ] All service constructors require dependencies explicitly with zero `= null` parameter defaults.
-  - [ ] Deterministic quality gates (`DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicCoverageGate`, `DeterministicSastStage`) require `IExecutionEnvironmentProvider` and fail fast if environment is unavailable (zero silent success).
-  - [ ] Reusable test fixtures / `TestOrchestratorBuilder` implemented across test suites.
+- [x] **Step 9.5: Standard Workflow Domain Extraction & Canonical Stage Identifiers**
+  - [x] Standard 3-agent pipeline extracted from `AppDbContext` to `StandardWorkflowDefinitions.CreateStandard3AgentWorkflow()` in `NightCodeForge.Core.Domain`.
+  - [x] `StandardStageIds.Merge` and `StandardStageIds.Ideation` defined and referenced across Core, Infrastructure, Agents, and Web.
+  - [x] `InMemoryWorkflowRepository` and test scenarios updated to use `StandardWorkflowDefinitions`.
+- [x] **Step 9.6: Required Constructor DI & Fail Fast**
+  - [x] All service constructors require dependencies explicitly with zero `= null` parameter defaults.
+  - [x] Deterministic quality gates (`DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicCoverageGate`, `DeterministicSastStage`) require `IExecutionEnvironmentProvider` and fail fast if environment is unavailable (zero silent success).
+  - [x] Reusable test fixtures / `TestOrchestratorBuilder` implemented across test suites.
 - [ ] **Step 9.7: DataBag Orphan Remediation & Quality Gate Handoff Integrity**
   - [ ] `DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicSastStage`, and `DeterministicCoverageGate` record `StageCommand` and `StageOutput`.
   - [ ] `DeterministicBuildStage` parses and stores `WarningsNew` lines; `DeterministicWarningRatchetStage` emits detailed new warnings.

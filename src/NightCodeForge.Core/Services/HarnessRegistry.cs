@@ -11,14 +11,17 @@ public class HarnessRegistry : IHarnessRegistry
 {
     private readonly ConcurrentDictionary<string, IAgentHarness> _harnesses = new(StringComparer.OrdinalIgnoreCase);
 
-    public HarnessRegistry(IEnumerable<IAgentHarness>? initialHarnesses = null)
+    public HarnessRegistry()
+        : this(Array.Empty<IAgentHarness>())
     {
-        if (initialHarnesses != null)
+    }
+
+    public HarnessRegistry(IEnumerable<IAgentHarness> initialHarnesses)
+    {
+        ArgumentNullException.ThrowIfNull(initialHarnesses);
+        foreach (var harness in initialHarnesses)
         {
-            foreach (var harness in initialHarnesses)
-            {
-                RegisterHarness(harness);
-            }
+            RegisterHarness(harness);
         }
     }
 

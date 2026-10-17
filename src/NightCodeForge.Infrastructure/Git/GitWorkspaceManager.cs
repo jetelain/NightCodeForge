@@ -12,20 +12,20 @@ namespace NightCodeForge.Infrastructure.Git;
 public class GitWorkspaceManager : IGitWorkspaceManager
 {
     private readonly IGitCliRunner _gitCliRunner;
-    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly IWslMetadataService _wslMetadataService;
     private readonly ILogger<GitWorkspaceManager> _logger;
 
     public GitWorkspaceManager(
         IGitCliRunner gitCliRunner,
-        IWorkspacePathResolver? pathResolver = null,
-        IWslMetadataService? wslMetadataService = null,
-        ILogger<GitWorkspaceManager>? logger = null)
+        IWorkspacePathResolver pathResolver,
+        IWslMetadataService wslMetadataService,
+        ILogger<GitWorkspaceManager> logger)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
-        _pathResolver = pathResolver;
-        _wslMetadataService = wslMetadataService ?? new Execution.WslMetadataService(new NightCodeForge.Core.Execution.SystemProcessRunner());
-        _logger = logger ?? NullLogger<GitWorkspaceManager>.Instance;
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _wslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     /// <inheritdoc />
@@ -208,15 +208,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
-            if (_pathResolver != null)
-            {
-                return _pathResolver.GetAgentWorktreePath(workspace.Id, taskId);
-            }
-            var mirrorTrimmed = workspace.Ext4MirrorPath.TrimEnd('/', '\\');
-            var parentDir = Path.GetDirectoryName(mirrorTrimmed);
-            return !string.IsNullOrEmpty(parentDir)
-                ? Path.Combine(parentDir, $"task-{taskId}").Replace('\\', '/')
-                : $"{mirrorTrimmed}/task-{taskId}";
+            return _pathResolver.GetAgentWorktreePath(workspace.Id, taskId);
         }
 
         var canonical = GetCanonicalWorkingPath(workspace);
@@ -689,7 +681,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         {
             try
             {
-                var distro = _pathResolver?.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
+                var distro = _pathResolver.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
                 var cleanPath = path.Replace("\"", "\\\"");
                 using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {

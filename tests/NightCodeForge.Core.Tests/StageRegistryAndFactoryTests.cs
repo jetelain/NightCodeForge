@@ -38,7 +38,10 @@ public class StageRegistryAndFactoryTests
     public StageRegistryAndFactoryTests()
     {
         _serviceProvider = new TestServiceProvider();
-        _serviceProvider.AddService<IExecutionEnvironment>(new FakeExecutionEnvironment());
+        var fakeEnv = new FakeExecutionEnvironment();
+        _serviceProvider.AddService<IExecutionEnvironment>(fakeEnv);
+        _serviceProvider.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv));
+        _serviceProvider.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         _registry = new WorkflowStageRegistry();
         _factory = new WorkflowStageFactory(_registry, _serviceProvider);
     }

@@ -15,33 +15,31 @@ public class BareHostExecutionEnvironment : IExecutionEnvironment
     private readonly ExecutionTier _tier;
     private readonly string? _defaultWorkingDirectory;
     private readonly string? _distribution;
-    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly IProcessRunner _processRunner;
 
     public ExecutionTier Tier => _tier;
 
     [ActivatorUtilitiesConstructor]
     public BareHostExecutionEnvironment(
-        IProcessRunner? processRunner = null,
-        ExecutionTier tier = ExecutionTier.BareHost,
-        string? defaultWorkingDirectory = null,
-        string? distribution = null,
-        IWorkspacePathResolver? pathResolver = null)
+        IProcessRunner processRunner,
+        IWorkspacePathResolver pathResolver)
+        : this(processRunner, ExecutionTier.BareHost, null, null, pathResolver)
     {
-        _processRunner = processRunner ?? new SystemProcessRunner();
-        _tier = tier;
-        _defaultWorkingDirectory = defaultWorkingDirectory;
-        _distribution = distribution;
-        _pathResolver = pathResolver;
     }
 
     public BareHostExecutionEnvironment(
+        IProcessRunner processRunner,
         ExecutionTier tier,
-        string? defaultWorkingDirectory = null,
-        string? distribution = null,
-        IWorkspacePathResolver? pathResolver = null)
-        : this(new SystemProcessRunner(), tier, defaultWorkingDirectory, distribution, pathResolver)
+        string? defaultWorkingDirectory,
+        string? distribution,
+        IWorkspacePathResolver pathResolver)
     {
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _tier = tier;
+        _defaultWorkingDirectory = defaultWorkingDirectory;
+        _distribution = distribution;
     }
 
     public async Task<NightCodeForge.Core.Interfaces.CommandResult> ExecuteAsync(

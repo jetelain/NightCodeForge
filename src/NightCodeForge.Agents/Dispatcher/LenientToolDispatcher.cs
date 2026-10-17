@@ -30,7 +30,17 @@ public partial class LenientToolDispatcher
 
     public IReadOnlyCollection<ToolDefinition> RegisteredTools => _tools.Values.ToList();
 
-    public LenientToolDispatcher(CanonicalTools? canonicalTools = null, ILogger<LenientToolDispatcher>? logger = null)
+    public LenientToolDispatcher()
+        : this(null, null)
+    {
+    }
+
+    public LenientToolDispatcher(CanonicalTools canonicalTools)
+        : this(canonicalTools, null)
+    {
+    }
+
+    public LenientToolDispatcher(CanonicalTools? canonicalTools, ILogger<LenientToolDispatcher>? logger)
     {
         _logger = logger;
         if (canonicalTools != null)

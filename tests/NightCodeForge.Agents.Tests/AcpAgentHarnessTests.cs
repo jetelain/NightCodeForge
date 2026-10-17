@@ -43,13 +43,14 @@ public class AcpAgentHarnessTests
     public async Task RunSessionStreamAsync_StreamsThoughtMessageAndTools_AndCompletes()
     {
         var streamer = new TestActivityStreamer();
-        var harness = new AcpAgentHarness(activityStreamer: streamer);
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder { ActivityStreamer = streamer }.Build();
 
         var context = new AgentSessionContext
         {
             ForgeTask = new ForgeTask { Id = 20, Title = "ACP Test", Description = "Implement feature" },
             StageId = "stage-2",
-            Profile = new AgentProfile { Name = "AcpAgent" }
+            Profile = new AgentProfile { Name = "AcpAgent" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = "C:\\test" }
         };
 
         // Simulated ACP agent responses
@@ -96,13 +97,17 @@ public class AcpAgentHarnessTests
     public async Task RunSessionStreamAsync_HandlesTerminalExecution()
     {
         var execEnv = new TestExecutionEnvironment();
-        var harness = new AcpAgentHarness(executionEnv: execEnv);
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder
+        {
+            EnvProvider = new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(execEnv)
+        }.Build();
 
         var context = new AgentSessionContext
         {
             ForgeTask = new ForgeTask { Id = 21, Title = "Terminal Test", Description = "Run command" },
             StageId = "stage-2",
-            Profile = new AgentProfile { Name = "AcpAgent" }
+            Profile = new AgentProfile { Name = "AcpAgent" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = "C:\\test" }
         };
 
         var acpOutput = new StringBuilder();
@@ -130,13 +135,14 @@ public class AcpAgentHarnessTests
     public async Task RunSessionStreamAsync_WhenRequestPermission_BroadcastsInterruptedAndReturnsWaitingForHuman()
     {
         var streamer = new TestActivityStreamer();
-        var harness = new AcpAgentHarness(activityStreamer: streamer);
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder { ActivityStreamer = streamer }.Build();
 
         var context = new AgentSessionContext
         {
             ForgeTask = new ForgeTask { Id = 22, Title = "Perm Test", Description = "Need permission" },
             StageId = "stage-1",
-            Profile = new AgentProfile { Name = "AcpAgent" }
+            Profile = new AgentProfile { Name = "AcpAgent" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = "C:\\test" }
         };
 
         var acpOutput = new StringBuilder();
@@ -164,13 +170,14 @@ public class AcpAgentHarnessTests
     [Fact]
     public async Task RunSessionStreamAsync_ResumesWithSessionResume_WhenV2Negotiated()
     {
-        var harness = new AcpAgentHarness();
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder().Build();
 
         var context = new AgentSessionContext
         {
             ForgeTask = new ForgeTask { Id = 23, Title = "Resume Test", Description = "Resume" },
             StageId = "stage-2",
             Profile = new AgentProfile { Name = "AcpAgent" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = "C:\\test" },
             SerializedStateJson = "saved-session-99",
             PendingHumanAnswer = "User clicked Yes"
         };
@@ -205,7 +212,7 @@ public class AcpAgentHarnessTests
             await File.WriteAllTextAsync(testFilePath, "Hello from ACP File");
 
             var pathResolver = new TestWorkspacePathResolver(tempDir);
-            var harness = new AcpAgentHarness(pathResolver: pathResolver);
+            var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder { PathResolver = pathResolver }.Build();
 
             var context = new AgentSessionContext
             {

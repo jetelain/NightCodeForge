@@ -78,11 +78,13 @@ public class TriageServiceTests : IDisposable
                 summary: "Triage completed, proposed 1 task.");
         };
 
-        var triageService = new TriageService(
-            _taskRepo,
-            _workspaceRepo,
-            _harnessRegistry,
-            _markdownSyncService);
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = _markdownSyncService
+        }.Build();
 
         var request = new TriageReportRequest(
             Title: "Crash when input file is empty",
@@ -126,11 +128,13 @@ public class TriageServiceTests : IDisposable
                 summary: "Proposed feature task.");
         };
 
-        var triageService = new TriageService(
-            _taskRepo,
-            _workspaceRepo,
-            _harnessRegistry,
-            _markdownSyncService);
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = _markdownSyncService
+        }.Build();
 
         var request = new TriageReportRequest(
             Title: "Configurable HTTP Timeout",
@@ -163,11 +167,13 @@ public class TriageServiceTests : IDisposable
                 summary: "Report analyzed: already resolved in current codebase.");
         };
 
-        var triageService = new TriageService(
-            _taskRepo,
-            _workspaceRepo,
-            _harnessRegistry,
-            _markdownSyncService);
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = _markdownSyncService
+        }.Build();
 
         var request = new TriageReportRequest(
             Title: "Invalid report",
@@ -194,11 +200,13 @@ public class TriageServiceTests : IDisposable
         };
         await _workspaceRepo.CreateAsync(emptyWorkspace);
 
-        var triageService = new TriageService(
-            _taskRepo,
-            _workspaceRepo,
-            _harnessRegistry,
-            _markdownSyncService);
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = _markdownSyncService
+        }.Build();
 
         var request = new TriageReportRequest(
             Title: "Crash when input file is empty",

@@ -5,6 +5,7 @@ using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
+using NightCodeForge.Core.Tests.Fixtures;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Stages;
 
@@ -151,12 +152,20 @@ public class OrchestratorHarnessTests
         var stage1 = TestWorkflowPipelines.CreateReviewStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1 });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo, workspaceRepo, depEngine, lockProvider,
-            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
-            harnessRegistry: harnessRegistry,
-            gitMirrorSyncService: mirrorSync,
-            markdownSyncService: mdSync);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry,
+            GitMirrorSyncService = mirrorSync,
+            MarkdownSyncService = mdSync
+        }.Build();
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -231,10 +240,18 @@ public class OrchestratorHarnessTests
         var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo, workspaceRepo, depEngine, lockProvider,
-            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
-            harnessRegistry: harnessRegistry);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -293,10 +310,18 @@ public class OrchestratorHarnessTests
         var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo, workspaceRepo, depEngine, lockProvider,
-            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
-            harnessRegistry: harnessRegistry);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -368,10 +393,18 @@ public class OrchestratorHarnessTests
         var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo, workspaceRepo, depEngine, lockProvider,
-            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
-            harnessRegistry: harnessRegistry);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -439,10 +472,18 @@ public class OrchestratorHarnessTests
         var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo, workspaceRepo, depEngine, lockProvider,
-            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
-            harnessRegistry: harnessRegistry);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -500,10 +541,18 @@ public class OrchestratorHarnessTests
         var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo, workspaceRepo, depEngine, lockProvider,
-            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
-            harnessRegistry: harnessRegistry);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -570,12 +619,20 @@ public class OrchestratorHarnessTests
         var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo, workspaceRepo, depEngine, lockProvider,
-            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
-            harnessRegistry: harnessRegistry,
-            gitMirrorSyncService: mirrorService,
-            pathResolver: pathResolver);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry,
+            GitMirrorSyncService = mirrorService,
+            PathResolver = pathResolver
+        }.Build();
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
@@ -618,10 +675,18 @@ public class OrchestratorHarnessTests
 
         var pipeline = new WorkflowPipeline(Array.Empty<IWorkflowStage>());
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo, workspaceRepo, depEngine, lockProvider,
-            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
-            markdownSyncService: markdownSync);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            MarkdownSyncService = markdownSync
+        }.Build();
 
         await orchestrator.CompleteTaskAndCascadeAsync(104, "Final squash commit");
 
@@ -667,10 +732,18 @@ public class OrchestratorHarnessTests
 
         var pipeline = new WorkflowPipeline(Array.Empty<IWorkflowStage>());
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo, workspaceRepo, depEngine, lockProvider,
-            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
-            gitMirrorSyncService: mirrorService);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            GitMirrorSyncService = mirrorService
+        }.Build();
 
         await orchestrator.CompleteTaskAndCascadeAsync(105, "Squash and merge to main");
 
@@ -733,10 +806,18 @@ public class OrchestratorHarnessTests
         var stage = TestWorkflowPipelines.CreateImplementationStage();
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo, workspaceRepo, depEngine, lockProvider,
-            gitManager, new DefaultWorkflowPipelineProvider(pipeline), jobQueue, depStore,
-            harnessRegistry: harnessRegistry);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore,
+            HarnessRegistry = harnessRegistry
+        }.Build();
 
         var ex = await Assert.ThrowsAsync<AgentProfileNotFoundException>(() => orchestrator.ProcessTaskAsync(task.Id));
         Assert.Equal("implementation", ex.ProfileId);

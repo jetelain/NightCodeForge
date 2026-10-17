@@ -11,9 +11,9 @@ public class LoggingGitAlertNotifier : IGitAlertNotifier
 {
     private readonly ILogger<LoggingGitAlertNotifier> _logger;
 
-    public LoggingGitAlertNotifier(ILogger<LoggingGitAlertNotifier>? logger = null)
+    public LoggingGitAlertNotifier(ILogger<LoggingGitAlertNotifier> logger)
     {
-        _logger = logger ?? NullLogger<LoggingGitAlertNotifier>.Instance;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public Task NotifyAlertAsync(string title, string message, CancellationToken cancellationToken = default)

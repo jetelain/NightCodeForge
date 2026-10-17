@@ -7,13 +7,15 @@ namespace NightCodeForge.Core.Tests;
 
 public class DeterministicStageTests
 {
-    private class FakeExecutionEnvironment : IExecutionEnvironment
+    private class FakeExecutionEnvironment : IExecutionEnvironment, IExecutionEnvironmentProvider
     {
         public ExecutionTier Tier => ExecutionTier.BareHost;
         public CommandResult NextResult { get; set; } = new CommandResult(0, "Build succeeded.", string.Empty, TimeSpan.FromMilliseconds(10));
         public string? LastCommand { get; private set; }
         public string? LastWorkingDir { get; private set; }
         public int? LastTimeoutSeconds { get; private set; }
+
+        public IExecutionEnvironment GetEnvironment(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard, int? taskId = null) => this;
 
         public Task<CommandResult> ExecuteAsync(
             string command,
@@ -243,7 +245,7 @@ public class DeterministicStageTests
             NextResult = new CommandResult(0, "Passed: 10\nFailed: 0\nTotal: 10\nPassed!", string.Empty, TimeSpan.FromMilliseconds(50))
         };
 
-        var gate = new DeterministicCoverageGate(executionEnv: fakeEnv);
+        var gate = new DeterministicCoverageGate(envProvider: fakeEnv);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
         var context = new PipelineContext(task, workspace);

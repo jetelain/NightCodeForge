@@ -1,7 +1,8 @@
-using System.Diagnostics;
+using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
+using NightCodeForge.Infrastructure.Tests.Fixtures;
 using Xunit;
 
 namespace NightCodeForge.Infrastructure.Tests;
@@ -130,7 +131,7 @@ public class WslDockerExecutionTests
     [Fact]
     public void ExecutionEnvironmentProvider_ConfiguresWslForContainers_WhenExplicitlySetOnWorkspace()
     {
-        var provider = new ExecutionEnvironmentProvider();
+        var provider = new TestExecutionEnvironmentProviderBuilder().Build();
         var workspace = new Workspace
         {
             Id = 101,
@@ -153,7 +154,7 @@ public class WslDockerExecutionTests
             UseWslForContainers = true,
             DefaultWslDistribution = "Debian"
         };
-        var provider = new ExecutionEnvironmentProvider(options: providerOptions);
+        var provider = new TestExecutionEnvironmentProviderBuilder { Options = Microsoft.Extensions.Options.Options.Create(providerOptions) }.Build();
 
         var workspace = new Workspace
         {
@@ -170,7 +171,7 @@ public class WslDockerExecutionTests
     [Fact]
     public void ExecutionEnvironmentProvider_WslDirect_AppliesWorkspaceWslDistribution()
     {
-        var provider = new ExecutionEnvironmentProvider();
+        var provider = new TestExecutionEnvironmentProviderBuilder().Build();
         var workspace = new Workspace
         {
             Id = 103,
@@ -190,7 +191,7 @@ public class WslDockerExecutionTests
         Environment.SetEnvironmentVariable("NCF_USE_WSL_DOCKER", "true");
         try
         {
-            var provider = new ExecutionEnvironmentProvider();
+            var provider = new TestExecutionEnvironmentProviderBuilder().Build();
             var workspace = new Workspace
             {
                 Id = 104,
@@ -211,7 +212,7 @@ public class WslDockerExecutionTests
     [Fact]
     public void ExecutionEnvironmentProvider_AutoDetectsWsl_WhenExt4MirrorPathSet()
     {
-        var provider = new ExecutionEnvironmentProvider();
+        var provider = new TestExecutionEnvironmentProviderBuilder().Build();
         var workspace = new Workspace
         {
             Id = 105,

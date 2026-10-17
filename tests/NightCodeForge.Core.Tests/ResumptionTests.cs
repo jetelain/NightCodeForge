@@ -2,6 +2,7 @@ using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Tests.Fixtures;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Stages;
 
@@ -17,6 +18,19 @@ public class ResumptionTests
     private readonly FakeGitWorkspaceManager _gitManager;
     private readonly FakeTaskJobQueue _jobQueue;
     private readonly Workspace _workspace;
+
+    private TaskOrchestrator CreateOrchestrator(IWorkflowPipelineProvider? pipelineProvider = null) =>
+        new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            PipelineProvider = pipelineProvider ?? new DefaultWorkflowPipelineProvider(),
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore
+        }.Build();
 
     public ResumptionTests()
     {
@@ -61,9 +75,7 @@ public class ResumptionTests
         _depStore.AddTask(100, 1, TaskOverallStatus.Open);
         _depStore.SetWaitingForHuman(100, true);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         await orchestrator.SubmitHumanAnswerAsync(1, "Port 8080");
 
@@ -109,9 +121,7 @@ public class ResumptionTests
         _depStore.AddTask(105, 1, TaskOverallStatus.Implemented);
         _depStore.SetWaitingForHuman(105, true);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         await orchestrator.SubmitHumanAnswerAsync(5, "Yes, verify mock calls strictly.");
 
@@ -160,9 +170,7 @@ public class ResumptionTests
         });
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(pipeline), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
 
         // Human answers
         await orchestrator.SubmitHumanAnswerAsync(2, "ASP.NET Core");
@@ -189,9 +197,7 @@ public class ResumptionTests
         });
         _depStore.AddTask(102, 1, TaskOverallStatus.Ready);
 
-        var orchestrator = new TaskOrchestrator(
-            _taskRepo, _workspaceRepo, _depEngine, _lockProvider,
-            _gitManager, new DefaultWorkflowPipelineProvider(), _jobQueue, _depStore);
+        var orchestrator = CreateOrchestrator();
 
         await orchestrator.RequestChangesAsync(102, "Please add XML documentation to all public interfaces and fix indentation.");
 

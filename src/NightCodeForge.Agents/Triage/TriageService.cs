@@ -19,33 +19,24 @@ public class TriageService : ITriageService
     private readonly ITaskRepository _taskRepository;
     private readonly IWorkspaceRepository _workspaceRepository;
     private readonly IHarnessRegistry _harnessRegistry;
-    private readonly ITaskMarkdownSyncService? _markdownSyncService;
-    private readonly IExecutionEnvironmentProvider? _envProvider;
-    private readonly IExecutionEnvironment? _executionEnv;
-    private readonly IWorkspacePathResolver? _pathResolver;
-    private readonly IGlobalOptimizationSettingsService? _globalOptimizationSettings;
+    private readonly ITaskMarkdownSyncService _markdownSyncService;
+    private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
     private readonly ILogger<TriageService> _logger;
 
     public TriageService(
         ITaskRepository taskRepository,
         IWorkspaceRepository workspaceRepository,
         IHarnessRegistry harnessRegistry,
-        ITaskMarkdownSyncService? markdownSyncService = null,
-        IExecutionEnvironmentProvider? envProvider = null,
-        IExecutionEnvironment? executionEnv = null,
-        IWorkspacePathResolver? pathResolver = null,
-        IGlobalOptimizationSettingsService? globalOptimizationSettings = null,
-        ILogger<TriageService>? logger = null)
+        ITaskMarkdownSyncService markdownSyncService,
+        IGlobalOptimizationSettingsService globalOptimizationSettings,
+        ILogger<TriageService> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _harnessRegistry = harnessRegistry ?? throw new ArgumentNullException(nameof(harnessRegistry));
-        _markdownSyncService = markdownSyncService;
-        _envProvider = envProvider;
-        _executionEnv = executionEnv;
-        _pathResolver = pathResolver;
-        _globalOptimizationSettings = globalOptimizationSettings;
-        _logger = logger ?? NullLogger<TriageService>.Instance;
+        _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
+        _globalOptimizationSettings = globalOptimizationSettings ?? throw new ArgumentNullException(nameof(globalOptimizationSettings));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<IReadOnlyList<ForgeTask>> TriageExternalReportAsync(
@@ -147,7 +138,7 @@ public class TriageService : ITriageService
                 _logger.LogInformation("Triage generated suggested task #{NewTaskId}: '{Title}'", created.Id, created.Title);
 
                 // Mirror new suggested task to docs/tasks/
-                if (_markdownSyncService != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
+                if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
                 {
                     try
                     {

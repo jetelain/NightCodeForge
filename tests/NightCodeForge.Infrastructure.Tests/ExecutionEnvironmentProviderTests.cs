@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
+using NightCodeForge.Infrastructure.Tests.Fixtures;
 
 namespace NightCodeForge.Infrastructure.Tests;
 
@@ -66,7 +67,7 @@ public class ExecutionEnvironmentProviderTests
     [Fact]
     public void GetEnvironment_ContainerSandbox_CachesDistinctInstancesBySecurityTier()
     {
-        var envProvider = new ExecutionEnvironmentProvider();
+        var envProvider = new TestExecutionEnvironmentProviderBuilder().Build();
         var workspace = new Workspace
         {
             Id = 42,
@@ -86,7 +87,7 @@ public class ExecutionEnvironmentProviderTests
     public void GetEnvironment_ContainerSandbox_UsesHostSdkDiscoveryServiceWhenAvailable()
     {
         var mockDiscovery = new FakeHostSdkDiscoveryService(new[] { "/opt/discovered-dotnet", "/opt/discovered-java" });
-        var envProvider = new ExecutionEnvironmentProvider(sdkDiscoveryService: mockDiscovery);
+        var envProvider = new TestExecutionEnvironmentProviderBuilder { SdkDiscoveryService = mockDiscovery }.Build();
         var workspace = new Workspace
         {
             Id = 99,
@@ -104,7 +105,7 @@ public class ExecutionEnvironmentProviderTests
     [Fact]
     public void GetEnvironment_ContainerSandbox_WithTaskId_ConfiguresIsolatedWorktreeAndSeparateContainers()
     {
-        var envProvider = new ExecutionEnvironmentProvider();
+        var envProvider = new TestExecutionEnvironmentProviderBuilder().Build();
         var workspace = new Workspace
         {
             Id = 55,

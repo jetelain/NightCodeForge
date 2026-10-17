@@ -75,7 +75,8 @@ deleted file mode 100644
     {
         var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
-        var service = new TaskReviewService(taskRepo, workspaceRepo, NullLogger<TaskReviewService>.Instance);
+        var gitManager = new TestGitWorkspaceManager();
+        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
 
         var bag = new PipelineDataBag();
         bag.Set("coverage.baseline.line_rate", 0.80);
@@ -147,7 +148,7 @@ new file mode 100644
 +}"
         };
 
-        var service = new TaskReviewService(taskRepo, workspaceRepo, NullLogger<TaskReviewService>.Instance, gitManager);
+        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
 
         var workspace = new Workspace
         {
@@ -196,7 +197,7 @@ new file mode 100644
 +}"
         };
 
-        var service = new TaskReviewService(taskRepo, workspaceRepo, NullLogger<TaskReviewService>.Instance, gitManager);
+        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
 
         var workspace = new Workspace
         {
@@ -253,7 +254,7 @@ new file mode 100644
         {
             CommitDiffResult = "diff --git a/src/Calculator.cs b/src/Calculator.cs\n--- a/src/Calculator.cs\n+++ b/src/Calculator.cs\n@@ -1,1 +1,2 @@\n+public int Multiply(int a, int b) => a * b;\n"
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, NullLogger<TaskReviewService>.Instance, gitManager);
+        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
 
         var workspace = new Workspace
         {

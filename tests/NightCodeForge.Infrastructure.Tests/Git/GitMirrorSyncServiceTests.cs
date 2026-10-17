@@ -1,5 +1,9 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Infrastructure.Execution;
 using NightCodeForge.Infrastructure.Git;
 
 namespace NightCodeForge.Infrastructure.Tests.Git;
@@ -20,9 +24,18 @@ public class GitMirrorSyncServiceTests : IDisposable
         _hostRepo.CommitAll("Initial commit on host");
 
         _mirrorDir = Path.Combine(Path.GetTempPath(), "ncf_mirror_" + Guid.NewGuid().ToString("N"));
-        _runner = new GitCliRunner();
+        _runner = new GitCliRunner(
+            new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance),
+            new WorkspacePathResolver(),
+            new Mock<IWslMetadataService>().Object,
+            NullLogger<GitCliRunner>.Instance);
         _alertNotifier = new TestAlertNotifier();
-        _syncService = new GitMirrorSyncService(_runner, _alertNotifier);
+        _syncService = new GitMirrorSyncService(
+            _runner,
+            _alertNotifier,
+            new WorkspacePathResolver(),
+            new Mock<IWslMetadataService>().Object,
+            NullLogger<GitMirrorSyncService>.Instance);
 
         _workspace = new Workspace
         {

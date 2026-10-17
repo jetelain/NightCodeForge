@@ -13,23 +13,23 @@ namespace NightCodeForge.Infrastructure.Git;
 public class GitMirrorSyncService : IGitMirrorSyncService
 {
     private readonly IGitCliRunner _gitCliRunner;
-    private readonly IGitAlertNotifier? _alertNotifier;
-    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IGitAlertNotifier _alertNotifier;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly IWslMetadataService _wslMetadataService;
     private readonly ILogger<GitMirrorSyncService> _logger;
 
     public GitMirrorSyncService(
         IGitCliRunner gitCliRunner,
-        IGitAlertNotifier? alertNotifier = null,
-        IWorkspacePathResolver? pathResolver = null,
-        IWslMetadataService? wslMetadataService = null,
-        ILogger<GitMirrorSyncService>? logger = null)
+        IGitAlertNotifier alertNotifier,
+        IWorkspacePathResolver pathResolver,
+        IWslMetadataService wslMetadataService,
+        ILogger<GitMirrorSyncService> logger)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
-        _alertNotifier = alertNotifier;
-        _pathResolver = pathResolver;
-        _wslMetadataService = wslMetadataService ?? new Execution.WslMetadataService(new NightCodeForge.Core.Execution.SystemProcessRunner());
-        _logger = logger ?? NullLogger<GitMirrorSyncService>.Instance;
+        _alertNotifier = alertNotifier ?? throw new ArgumentNullException(nameof(alertNotifier));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _wslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     /// <inheritdoc />
@@ -242,7 +242,7 @@ public class GitMirrorSyncService : IGitMirrorSyncService
 
         var targetMirrorDir = !string.IsNullOrWhiteSpace(mirrorDirectory)
             ? mirrorDirectory
-            : (_pathResolver?.GetAgentWorkingClonePath(workspace.Id) ?? mirrorDirectory);
+            : _pathResolver.GetAgentWorkingClonePath(workspace.Id);
 
         ArgumentException.ThrowIfNullOrWhiteSpace(targetMirrorDir);
 
@@ -256,7 +256,7 @@ public class GitMirrorSyncService : IGitMirrorSyncService
 
         var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
         var isTargetWsl = isWindows && (targetMirrorDir.StartsWith('/') || targetMirrorDir.StartsWith('~'));
-        var remoteUrl = isTargetWsl && _pathResolver != null
+        var remoteUrl = isTargetWsl
             ? _pathResolver.GetHostRemoteUrl(workspace.RepositoryPath)
             : workspace.RepositoryPath;
 
@@ -478,10 +478,7 @@ public class GitMirrorSyncService : IGitMirrorSyncService
                 _logger.LogInformation("Fallback push succeeded: '{BranchName}' pushed to 'refs/heads/{FallbackBranch}' on host",
                     branchName, fallbackBranch);
 
-                if (_alertNotifier != null)
-                {
-                    await _alertNotifier.NotifyAlertAsync("Host Working Tree Dirty", warningMessage, cancellationToken);
-                }
+                await _alertNotifier.NotifyAlertAsync("Host Working Tree Dirty", warningMessage, cancellationToken);
 
                 return new GitSyncResult(
                     Success: true,
@@ -546,10 +543,7 @@ public class GitMirrorSyncService : IGitMirrorSyncService
                 _logger.LogInformation("Fallback push succeeded: '{BaseBranch}' pushed to 'refs/heads/{FallbackBranch}' on host",
                     baseBranch, fallbackBranch);
 
-                if (_alertNotifier != null)
-                {
-                    await _alertNotifier.NotifyAlertAsync("Host Working Tree Dirty on Merge", warningMessage, cancellationToken);
-                }
+                await _alertNotifier.NotifyAlertAsync("Host Working Tree Dirty on Merge", warningMessage, cancellationToken);
 
                 return new GitSyncResult(
                     Success: true,

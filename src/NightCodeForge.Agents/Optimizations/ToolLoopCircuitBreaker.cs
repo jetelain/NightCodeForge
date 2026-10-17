@@ -18,9 +18,14 @@ public class ToolLoopCircuitBreaker
     private string? _lastWorkingTreeSignature;
     private int _consecutiveIdenticalCount = 0;
 
-    public ToolLoopCircuitBreaker(LocalOptimizationFlags? flags = null)
+    public ToolLoopCircuitBreaker()
+        : this(new LocalOptimizationFlags())
     {
-        _flags = flags ?? new LocalOptimizationFlags();
+    }
+
+    public ToolLoopCircuitBreaker(LocalOptimizationFlags flags)
+    {
+        _flags = flags ?? throw new ArgumentNullException(nameof(flags));
     }
 
     /// <summary>

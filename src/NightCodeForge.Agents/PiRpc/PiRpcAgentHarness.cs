@@ -27,34 +27,36 @@ public class PiRpcHarnessOptions
 public class PiRpcAgentHarness : IAgentHarness
 {
     private readonly PiRpcHarnessOptions _options;
-    private readonly Microsoft.Extensions.Options.IOptions<Inference.LlmProviderOptions>? _llmOptions;
+    private readonly Inference.LlmProviderOptions _llmOptions;
     private readonly Context.AgentsMdService _agentsMdService;
-    private readonly IAgentActivityStreamer? _activityStreamer;
-    private readonly SessionTranscriptService? _transcriptService;
-    private readonly IWorkspacePathResolver? _pathResolver;
+    private readonly IAgentActivityStreamer _activityStreamer;
+    private readonly SessionTranscriptService _transcriptService;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly IProcessRunner _processRunner;
     private readonly ILogger<PiRpcAgentHarness> _logger;
 
     public string HarnessId => StandardHarnessIds.PiRpc;
 
     public PiRpcAgentHarness(
-        PiRpcHarnessOptions? options = null,
-        Microsoft.Extensions.Options.IOptions<Inference.LlmProviderOptions>? llmOptions = null,
-        Context.AgentsMdService? agentsMdService = null,
-        IAgentActivityStreamer? activityStreamer = null,
-        SessionTranscriptService? transcriptService = null,
-        IWorkspacePathResolver? pathResolver = null,
-        IProcessRunner? processRunner = null,
-        ILogger<PiRpcAgentHarness>? logger = null)
+        Microsoft.Extensions.Options.IOptions<PiRpcHarnessOptions> options,
+        Microsoft.Extensions.Options.IOptions<Inference.LlmProviderOptions> llmOptions,
+        Context.AgentsMdService agentsMdService,
+        IAgentActivityStreamer activityStreamer,
+        SessionTranscriptService transcriptService,
+        IWorkspacePathResolver pathResolver,
+        IProcessRunner processRunner,
+        ILogger<PiRpcAgentHarness> logger)
     {
-        _options = options ?? new PiRpcHarnessOptions();
-        _llmOptions = llmOptions;
-        _agentsMdService = agentsMdService ?? new Context.AgentsMdService();
-        _activityStreamer = activityStreamer;
-        _transcriptService = transcriptService;
-        _pathResolver = pathResolver;
-        _processRunner = processRunner ?? new SystemProcessRunner();
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<PiRpcAgentHarness>.Instance;
+        ArgumentNullException.ThrowIfNull(options);
+        _options = options.Value ?? throw new ArgumentNullException(nameof(options));
+        ArgumentNullException.ThrowIfNull(llmOptions);
+        _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
+        _agentsMdService = agentsMdService ?? throw new ArgumentNullException(nameof(agentsMdService));
+        _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
+        _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
@@ -131,7 +133,7 @@ public class PiRpcAgentHarness : IAgentHarness
         var workingDir = !string.IsNullOrEmpty(context.WorkspacePath) ? context.WorkspacePath : Directory.GetCurrentDirectory();
         if (OperatingSystem.IsWindows() && (workingDir.StartsWith('/') || workingDir.StartsWith('~')))
         {
-            if (_pathResolver != null && context.Workspace != null)
+            if (context.Workspace != null)
             {
                 workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.ForgeTask.Id);
             }
@@ -203,7 +205,7 @@ public class PiRpcAgentHarness : IAgentHarness
         var localWorkspaceRoot = workspacePath;
         if (OperatingSystem.IsWindows() && (localWorkspaceRoot.StartsWith('/') || localWorkspaceRoot.StartsWith('~')))
         {
-            if (_pathResolver != null && context.Workspace != null)
+            if (context.Workspace != null)
             {
                 localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.ForgeTask.Id);
             }
@@ -218,7 +220,7 @@ public class PiRpcAgentHarness : IAgentHarness
             // 1. Configure Model if specified or fallback to default from appsettings
             var effectiveModel = !string.IsNullOrWhiteSpace(context.Profile.ModelName)
                 ? context.Profile.ModelName
-                : _llmOptions?.Value?.ModelId;
+                : _llmOptions.ModelId;
 
             if (!string.IsNullOrWhiteSpace(effectiveModel))
             {

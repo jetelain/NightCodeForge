@@ -24,7 +24,7 @@ public class DevQueueService : IDevQueueService
     private readonly IBackgroundJobClient _backgroundJobClient;
     private readonly ITaskJobQueue _taskJobQueue;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly JobStorage? _jobStorage;
+    private readonly JobStorage _jobStorage;
     private readonly ILogger<DevQueueService> _logger;
 
     public DevQueueService(
@@ -32,15 +32,15 @@ public class DevQueueService : IDevQueueService
         IBackgroundJobClient backgroundJobClient,
         ITaskJobQueue taskJobQueue,
         IServiceScopeFactory scopeFactory,
-        JobStorage? jobStorage = null,
-        ILogger<DevQueueService>? logger = null)
+        JobStorage jobStorage,
+        ILogger<DevQueueService> logger)
     {
         _lockProvider = lockProvider ?? throw new ArgumentNullException(nameof(lockProvider));
         _backgroundJobClient = backgroundJobClient ?? throw new ArgumentNullException(nameof(backgroundJobClient));
         _taskJobQueue = taskJobQueue ?? throw new ArgumentNullException(nameof(taskJobQueue));
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
-        _jobStorage = jobStorage;
-        _logger = logger ?? NullLogger<DevQueueService>.Instance;
+        _jobStorage = jobStorage ?? throw new ArgumentNullException(nameof(jobStorage));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<DevQueueSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
@@ -53,24 +53,9 @@ public class DevQueueService : IDevQueueService
         var processingJobs = new List<QueuedJobItem>();
         var failedJobs = new List<QueuedJobItem>();
 
-        JobStorage? storage = _jobStorage;
-        if (storage == null)
+        try
         {
-            try
-            {
-                storage = JobStorage.Current;
-            }
-            catch
-            {
-                // JobStorage.Current not initialized yet
-            }
-        }
-
-        if (storage != null)
-        {
-            try
-            {
-                var monitoring = storage.GetMonitoringApi();
+            var monitoring = _jobStorage.GetMonitoringApi();
 
                 var rawUrgent = monitoring.EnqueuedJobs(HangfireQueues.LlmUrgent, 0, 100);
                 var rawInference = monitoring.EnqueuedJobs(HangfireQueues.LlmInference, 0, 100);
@@ -92,11 +77,10 @@ public class DevQueueService : IDevQueueService
                 utilityJobs.AddRange(MapEnqueued(rawDefault, HangfireQueues.Default, "Queued", taskLookup));
                 processingJobs.AddRange(MapProcessing(rawProcessing, taskLookup));
                 failedJobs.AddRange(MapFailed(rawFailed, taskLookup));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to query Hangfire monitoring API");
-            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query Hangfire monitoring API");
         }
 
         return new DevQueueSnapshot(

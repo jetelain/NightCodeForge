@@ -1,4 +1,9 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
+using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Infrastructure.Execution;
 using NightCodeForge.Infrastructure.Git;
 
 namespace NightCodeForge.Infrastructure.Tests.Git;
@@ -13,8 +18,16 @@ public class NoiseFilteredDiffTests : IDisposable
     public NoiseFilteredDiffTests()
     {
         _repo = new TestGitRepository("main");
-        _runner = new GitCliRunner();
-        _manager = new GitWorkspaceManager(_runner);
+        _runner = new GitCliRunner(
+            new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance),
+            new WorkspacePathResolver(),
+            new Mock<IWslMetadataService>().Object,
+            NullLogger<GitCliRunner>.Instance);
+        _manager = new GitWorkspaceManager(
+            _runner,
+            new WorkspacePathResolver(),
+            new Mock<IWslMetadataService>().Object,
+            NullLogger<GitWorkspaceManager>.Instance);
 
         // Base branch setup
         _repo.CreateFile("README.md", "# Base Project");

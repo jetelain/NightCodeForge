@@ -22,9 +22,9 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
 {
     private readonly IGlobalOptimizationSettingsService _globalOptService;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IOllamaChatClientFactory? _chatClientFactory;
-    private readonly IOptions<LlmProviderOptions>? _providerOptions;
-    private readonly ILogger<TranscriptBrowserService>? _logger;
+    private readonly IOllamaChatClientFactory _chatClientFactory;
+    private readonly IOptions<LlmProviderOptions> _providerOptions;
+    private readonly ILogger<TranscriptBrowserService> _logger;
 
     [GeneratedRegex(@"^---\r?\n(?<frontmatter>[\s\S]*?)\r?\n---\r?\n?", RegexOptions.Multiline)]
     private static partial Regex FrontmatterRegex();
@@ -47,15 +47,15 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
     public TranscriptBrowserService(
         IGlobalOptimizationSettingsService globalOptService,
         IServiceScopeFactory scopeFactory,
-        IOllamaChatClientFactory? chatClientFactory = null,
-        IOptions<LlmProviderOptions>? providerOptions = null,
-        ILogger<TranscriptBrowserService>? logger = null)
+        IOllamaChatClientFactory chatClientFactory,
+        IOptions<LlmProviderOptions> providerOptions,
+        ILogger<TranscriptBrowserService> logger)
     {
         _globalOptService = globalOptService ?? throw new ArgumentNullException(nameof(globalOptService));
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
-        _chatClientFactory = chatClientFactory;
-        _providerOptions = providerOptions;
-        _logger = logger;
+        _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
+        _providerOptions = providerOptions ?? throw new ArgumentNullException(nameof(providerOptions));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<IReadOnlyList<TranscriptSummary>> GetTranscriptsAsync(string? workspacePath = null, CancellationToken cancellationToken = default)
@@ -125,33 +125,30 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
     {
         ArgumentNullException.ThrowIfNull(detail);
 
-        // 1. Attempt live LLM diagnosis if ChatClientFactory is present
-        if (_chatClientFactory != null && _providerOptions != null)
+        // 1. Attempt live LLM diagnosis
+        try
         {
-            try
+            var target = string.Equals(mode, "Cloud", StringComparison.OrdinalIgnoreCase)
+                ? OllamaRoutingTarget.Cloud
+                : OllamaRoutingTarget.Auto; // Dynamic routing across on-premise targets (Host GPU or LAN Server)
+
+            var client = OllamaChatClientFactory.CreateOllama(
+                _providerOptions.Value,
+                modelId: null,
+                logger: null,
+                routingTarget: target);
+
+            var diagService = new TranscriptDiagnosticService(client);
+            var diagnosis = await diagService.DiagnoseTranscriptAsync(detail.RawMarkdown, cancellationToken: cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(diagnosis.DiagnosisSummary) && diagnosis.DiagnosisSummary != "Transcript is empty.")
             {
-                var target = string.Equals(mode, "Cloud", StringComparison.OrdinalIgnoreCase)
-                    ? OllamaRoutingTarget.Cloud
-                    : OllamaRoutingTarget.Auto; // Dynamic routing across on-premise targets (Host GPU or LAN Server)
-
-                var client = OllamaChatClientFactory.CreateOllama(
-                    _providerOptions.Value,
-                    modelId: null,
-                    logger: null,
-                    routingTarget: target);
-
-                var diagService = new TranscriptDiagnosticService(client);
-                var diagnosis = await diagService.DiagnoseTranscriptAsync(detail.RawMarkdown, cancellationToken: cancellationToken);
-
-                if (!string.IsNullOrWhiteSpace(diagnosis.DiagnosisSummary) && diagnosis.DiagnosisSummary != "Transcript is empty.")
-                {
-                    return ConvertDiagnosisToReport(diagnosis, detail);
-                }
+                return ConvertDiagnosisToReport(diagnosis, detail);
             }
-            catch (Exception ex)
-            {
-                _logger?.LogInformation(ex, "Live LLM diagnostic run failed or timed out. Falling back to heuristic analysis.");
-            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogInformation(ex, "Live LLM diagnostic run failed or timed out. Falling back to heuristic analysis.");
         }
 
         // 2. Intelligent Heuristic Diagnostic Engine fallback

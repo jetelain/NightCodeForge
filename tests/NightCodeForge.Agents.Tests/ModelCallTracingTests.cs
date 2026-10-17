@@ -214,10 +214,12 @@ public class ModelCallTracingTests
         Directory.CreateDirectory(repo);
         try
         {
-            var service = new IdeationService(
-                new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
-                defaultChatClient: new EchoClient(),
-                transcriptService: new SessionTranscriptService(Path.Combine(repo, "t")));
+            var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
+            {
+                PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+                BaseChatClient = new EchoClient(),
+                TranscriptService = new SessionTranscriptService(Path.Combine(repo, "t"))
+            }.Build();
             var workspace = new Workspace { Id = 5, RepositoryPath = repo };
             workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(5));
 

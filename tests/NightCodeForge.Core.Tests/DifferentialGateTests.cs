@@ -1,4 +1,5 @@
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Stages;
 
@@ -9,7 +10,7 @@ public class DifferentialGateTests
     [Fact]
     public async Task CoverageGate_Fails_WhenCoverageDrops()
     {
-        var gate = new DeterministicCoverageGate();
+        var gate = new DeterministicCoverageGate(new Moq.Mock<IExecutionEnvironmentProvider>().Object);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1, CurrentStageId = "coverage-gate" };
         var workspace = new Workspace { Id = 1, Name = "WS" };
         var context = new PipelineContext(task, workspace);
@@ -30,7 +31,7 @@ public class DifferentialGateTests
     [Fact]
     public async Task CoverageGate_FailsImmediately_WhenTestCountDecreases_AntiCheating()
     {
-        var gate = new DeterministicCoverageGate();
+        var gate = new DeterministicCoverageGate(new Moq.Mock<IExecutionEnvironmentProvider>().Object);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1, CurrentStageId = "coverage-gate" };
         var workspace = new Workspace { Id = 1, Name = "WS" };
         var context = new PipelineContext(task, workspace);
@@ -51,7 +52,7 @@ public class DifferentialGateTests
     [Fact]
     public async Task CoverageGate_Passes_WhenCoverageMaintainedOrIncreased()
     {
-        var gate = new DeterministicCoverageGate();
+        var gate = new DeterministicCoverageGate(new Moq.Mock<IExecutionEnvironmentProvider>().Object);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1, CurrentStageId = "coverage-gate" };
         var workspace = new Workspace { Id = 1, Name = "WS" };
         var context = new PipelineContext(task, workspace);
