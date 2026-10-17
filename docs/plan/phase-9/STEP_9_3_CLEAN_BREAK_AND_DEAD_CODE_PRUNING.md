@@ -50,18 +50,29 @@ Apply the Clean Break policy: since NightCodeForge is in active early developmen
 * **Remediation:**
   * Remove `GetPipeline` from `IWorkflowPipelineProvider`.
 
-### 2.5 Clean Up Legacy Stage Aliases in UI
+### 2.5 Clean Up Legacy Stage Aliases & Drive Dynamic Labels in UI
 * **Target Files:**
   * `src/NightCodeForge.Web/Components/Monitoring/StageRunSelector.razor`
   * `src/NightCodeForge.Web/Components/Monitoring/StageConversationViewer.razor`
+  * `src/NightCodeForge.Web/Components/Monitoring/WorkerStatusCard.razor`
+  * `src/NightCodeForge.Web/Components/Monitoring/TaskExecutionInspector.razor`
+  * `tests/NightCodeForge.Web.Tests/TaskExecutionInspectorComponentTests.cs`
 * **Context:**
-  Switch expressions contain obsolete aliases like `"pr-review" or "code-review-fix"` and `"deterministic-pre-check" or "deterministic-pre-impl"`.
+  `StageRunSelector.razor` and `StageConversationViewer.razor` currently duplicate a hardcoded `FormatStageName(string stageId)` switch statement mapping stage IDs to hardcoded numbered labels (`"1. ForgeTask Review"`, `"2. Pre-Check Gate"`, `"4. Post-Check Gate"`, `"5. Pull Request Review"`, `"7. Squash & Merge"`) and obsolete aliases (`"deterministic-pre-check"`, `"deterministic-post-check"`, `"pr-review"`).
+  This prevents database-driven extensible workflows and stages (introduced in Phase 8) from rendering their actual database `DisplayName` and sequence order.
+  Additionally, `WorkerStatusCard.razor` uses brittle substring heuristics (`Contains("preimpl") || Contains("gate") || Contains("merge")`) to guess whether a stage is GPU/Agentic or CPU/Deterministic.
 * **Remediation:**
-  * Retain only canonical stage IDs matching `StandardStageIds`.
+  * Add parameter `[Parameter] public IReadOnlyList<StageDefinition>? WorkflowStages { get; set; }` to `StageRunSelector.razor` and `StageConversationViewer.razor`.
+  * Pass `WorkflowStages="@_workflowStages"` from `TaskExecutionInspector.razor` to both child components.
+  * In `FormatStageName`, look up the matching `StageDefinition` in `WorkflowStages` and format dynamic labels as `$"{(stage.SequenceOrder > 0 ? $"{stage.SequenceOrder}. " : "")}{stage.DisplayName}"`.
+  * If the stage is not found in `WorkflowStages` (or during isolated unit testing), fall back gracefully to canonical display names or raw `stageId` without obsolete hardcoded aliases or hardcoded numbers.
+  * In `WorkerStatusCard.razor`, replace fragile substring heuristics with explicit `WorkflowStageKind` checking.
+  * Update `TaskExecutionInspectorComponentTests.cs` to pass `WorkflowStages` and assert database-driven labels.
 
 ---
 
 ## 3. Verification & Testing
 
 * Execute `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+* Verify dynamic stage labels render properly in bUnit component tests.
 * Ensure solution builds with 0 warnings or errors.

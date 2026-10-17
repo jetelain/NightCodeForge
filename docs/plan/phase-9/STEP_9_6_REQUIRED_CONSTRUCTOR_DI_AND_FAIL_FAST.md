@@ -1,4 +1,4 @@
-# 💉 Step 9.4: Required Constructor DI & Fail-Fast Architecture
+# 💉 Step 9.6: Required Constructor DI & Fail-Fast Architecture
 
 > **Phase 9 Implementation Step**  
 > *Parent Plan:* [Phase 9 Master Plan](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md)  
@@ -9,13 +9,13 @@
 
 ## 1. Objective
 
-Enforce strict dependency injection across all service constructors. Eliminate optional parameters (`= null`, `= default`), silent fallback object instantiations (`?? new FallbackService()`), and fallback loggers (`?? NullLogger...`). Make all dependencies required, add `ArgumentNullException.ThrowIfNull(...)`, and introduce a centralized `TestOrchestratorBuilder` fixture helper so unit tests remain clean and maintainable.
+Enforce strict dependency injection across all service constructors. Eliminate optional parameters (`= null`, `= default`), silent fallback object instantiations (`?? new FallbackService()`), and fallback loggers (`?? NullLogger...`). Make all dependencies required, add `ArgumentNullException.ThrowIfNull(...)`, fix the silent-success bug in deterministic quality gates when execution environments are missing, and introduce a centralized `TestOrchestratorBuilder` fixture helper so unit tests remain clean and maintainable.
 
 ---
 
 ## 2. Technical Scope & Specifications
 
-### 2.1 Core Services Refactoring
+### 2.1 Core Services & Quality Gates Refactoring
 1. **`TaskOrchestrator` (`NightCodeForge.Core.Workflow`):**
    * Make all 14 parameters required:
      * `ITaskRepository`
@@ -36,7 +36,12 @@ Enforce strict dependency injection across all service constructors. Eliminate o
    * Add `ArgumentNullException.ThrowIfNull` for all parameters.
    * Remove silent `if (_harnessRegistry != null)` null-guards.
 
-2. **`StartupRecoveryService` & `TaskMarkdownSyncService` (`NightCodeForge.Core.Services`):**
+2. **Deterministic Quality Gates (`DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicCoverageGate`, `DeterministicSastStage`):**
+   * Currently, these gates accept optional `IExecutionEnvironment?` and `IExecutionEnvironmentProvider?` parameters. If both are null, `effectiveEnv` is null and the stages silently return `StageExecutionResult.Success()`, allowing unexecutable gates to falsely pass!
+   * Require `IExecutionEnvironmentProvider` explicitly in stage constructors.
+   * Eliminate the silent fallback: if `effectiveEnv` cannot be resolved for a workspace, throw `InvalidOperationException` or return a hard `StageExecutionResult.Failure` rather than a synthetic success.
+
+3. **`StartupRecoveryService` & `TaskMarkdownSyncService` (`NightCodeForge.Core.Services`):**
    * Require all dependencies explicitly.
 
 ### 2.2 Agent Harnesses & Services Refactoring
