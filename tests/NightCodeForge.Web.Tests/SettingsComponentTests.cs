@@ -111,6 +111,22 @@ public class SettingsComponentTests : BunitContext, IDisposable
     }
 
     [Fact]
+    public void SettingsPage_GlobalScope_RendersSixGlobalTabs_ExcludesABTesting()
+    {
+        var cut = Render<Settings>();
+
+        var globalTabs = cut.FindAll(".settings-tabs button");
+        Assert.Equal(6, globalTabs.Count);
+        Assert.Contains(globalTabs, b => b.TextContent.Contains("Local LLM Optimizations"));
+        Assert.Contains(globalTabs, b => b.TextContent.Contains("Agent Profiles"));
+        Assert.Contains(globalTabs, b => b.TextContent.Contains("Workflows & Stages"));
+        Assert.Contains(globalTabs, b => b.TextContent.Contains("Host SDK Inspector"));
+        Assert.Contains(globalTabs, b => b.TextContent.Contains("OllamaRouter Gateway"));
+        Assert.Contains(globalTabs, b => b.TextContent.Contains("Cloud & Web Search"));
+        Assert.DoesNotContain(globalTabs, b => b.TextContent.Contains("A/B Testing"));
+    }
+
+    [Fact]
     public void AgentProfilesTab_GlobalScope_RendersStandardProfilesAndGenerousTurns()
     {
         var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));

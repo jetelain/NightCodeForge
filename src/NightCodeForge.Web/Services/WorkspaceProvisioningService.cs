@@ -6,7 +6,6 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
-using NightCodeForge.Infrastructure.Data;
 using NightCodeForge.Web.Models;
 
 namespace NightCodeForge.Web.Services;
@@ -26,7 +25,6 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
     private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<WorkspaceProvisioningService> _logger;
-    private readonly AppDbContext? _dbContext;
 
     public WorkspaceProvisioningService(
         IWorkspaceRepository workspaceRepository,
@@ -36,8 +34,7 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         IGitCliRunner gitCliRunner,
         ITaskMarkdownSyncService markdownSyncService,
         IConfiguration configuration,
-        ILogger<WorkspaceProvisioningService>? logger = null,
-        AppDbContext? dbContext = null)
+        ILogger<WorkspaceProvisioningService>? logger = null)
     {
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _gitMirrorSyncService = gitMirrorSyncService ?? throw new ArgumentNullException(nameof(gitMirrorSyncService));
@@ -47,7 +44,6 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? NullLogger<WorkspaceProvisioningService>.Instance;
-        _dbContext = dbContext;
     }
 
     /// <inheritdoc />
@@ -315,11 +311,6 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         {
             var defaultModel = _configuration["LlmProvider:ModelId"] ?? "Qwen3.8-27B:latest";
 
-            if (_dbContext != null)
-            {
-                await _dbContext.EnsureDefaultGlobalAgentProfilesAsync(defaultModel, cancellationToken);
-            }
-
             if (model.UseDedicatedAgentProfiles)
             {
                 var dedicatedModel = !string.IsNullOrWhiteSpace(model.DedicatedModelName)
@@ -344,16 +335,8 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
                     StageDirectives = new Dictionary<string, string> { [p.Id] = "Dedicated workspace override" }
                 }).ToList();
 
-                if (_dbContext != null)
-                {
-                    _dbContext.AgentProfiles.AddRange(dedicatedProfiles);
-                    await _dbContext.SaveChangesAsync(cancellationToken);
-                }
-                else
-                {
-                    workspace.AgentProfiles = dedicatedProfiles;
-                    await _workspaceRepository.UpdateAsync(workspace, cancellationToken);
-                }
+                workspace.AgentProfiles = dedicatedProfiles;
+                await _workspaceRepository.UpdateAsync(workspace, cancellationToken);
             }
         }
         catch (Exception ex)
