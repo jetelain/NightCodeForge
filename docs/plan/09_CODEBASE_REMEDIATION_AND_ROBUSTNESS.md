@@ -41,7 +41,7 @@ During initial rapid development, various lenient patterns, fallback strategies,
 | **9.6** | [💉 Step 9.6: Required Constructor DI & Fail-Fast Architecture](phase-9/STEP_9_6_REQUIRED_CONSTRUCTOR_DI_AND_FAIL_FAST.md) | Eliminate `= null` and fallback instances from service constructors across Core, Infrastructure, Agents, and Web. Fix silent-success bug in deterministic quality gates on missing environment. Introduce `TestOrchestratorBuilder` for clean unit tests. | Planned |
 | **9.7** | [📦 Step 9.7: DataBag Orphan Remediation & Quality Gate Handoff Integrity](phase-9/STEP_9_7_DATABAG_ORPHANS_AND_QUALITY_GATE_INTEGRITY.md) | Remediate orphan DataBag keys. Fix lost test diagnostics (`FailedTests`), empty warning ratchets (`WarningsNew`), deterministic execution tool logging (`StageCommand`, `StageOutput`), test metrics in Web UI (`TestsCurrentPassed`), and prune dead phantom keys. | Planned |
 | **9.8** | [🧩 Step 9.8: AgentSessionContext Property Promotion & Harness Decoupling](phase-9/STEP_9_8_AGENT_SESSION_CONTEXT_PROMOTION_AND_HARNESS_DECOUPLING.md) | Promote cross-cutting DataBag keys (`TaskMarkdownPath`, `ReviewDiff`, `ApprovedPlan`, `ReviewerFeedback`, `PriorDiagnostics`) to strongly-typed properties on `AgentSessionContext`. Wire git diff into Code Review prompts. Decouple `IAgentHarness` implementations from `PipelineDataBag`. | Planned |
-| **9.9** | [🔄 Step 9.9: Resilient Crash Recovery, Database Conversation Rehydration & State Persistence](phase-9/STEP_9_9_RESILIENT_CRASH_RECOVERY_AND_STATE_PERSISTENCE.md) | Upgrade `StartupRecoveryService` to resume interrupted agentic sessions from SQLite `Conversation` & `ConversationTurn` records with recovery notice; cleanly re-run deterministic steps with purged metrics; persist `PipelineDataBag` and mutable `AgentSessionContext` properties across turns in SQLite. | Planned |
+| **9.9** | [🔄 Step 9.9: Resilient Crash Recovery, Database Conversation Rehydration & State Persistence](phase-9/STEP_9_9_RESILIENT_CRASH_RECOVERY_AND_STATE_PERSISTENCE.md) | Upgrade `StartupRecoveryService` to resume interrupted agentic sessions from SQLite `Conversation` & `ConversationTurn` records with recovery notice; cleanly re-run deterministic steps with purged metrics; persist `PipelineDataBag` and mutable `AgentSessionContext` properties across turns in SQLite. | Complete |
 | **9.10** | [🔇 Step 9.10: Silent Failure Elimination & Git Merge Safety](phase-9/STEP_9_10_SILENT_FAILURE_ELIMINATION.md) | Audit ~115 bare `catch { }` blocks. Fix `SquashAndMergeAsync` (swallowed reset/clean/fetch, silent `checkout -B` base branch creation). Stop silent prompt-override fallback. Add analyzer rule. | Planned |
 | **9.11** | [🎯 Step 9.11: Quality Gate Correctness & Metric Fidelity](phase-9/STEP_9_11_QUALITY_GATE_CORRECTNESS.md) | Baselines only from green runs, fail on zero tests, Coverlet code coverage multi-project aggregation and format support (Cobertura, OpenCover, JSON, console), stale coverage elimination, `FirstOrDefault()` profile fallback, fire-and-forget model preload, unbounded `StageOutput` persistence. | Planned |
 | **9.12** | [⏱️ Step 9.12: Async Lifecycle, Cancellation & Residual Policy Violations](phase-9/STEP_9_12_ASYNC_LIFECYCLE_AND_POLICY_RESIDUE.md) | Remove `async void` handlers, tracked fire-and-forget, `CancellationToken.None` misuse, `Process.Start` in Core, optional `_pathResolver?.`, shell-escaping injection risks, stage-ID path validation. | Planned |
@@ -187,13 +187,13 @@ flowchart TD
   - [x] Critical Bug Fix: `ReviewDiff` wired into `AgentSessionContext` and `DefaultBootstrapPromptBuilder` for Code Review agents.
   - [x] `AgentRunResult` carries `ReviewerFeedback` and `Proposals`; `TaskOrchestrator` updates DataBag centrally.
   - [x] `CrucibleAgentHarness`, `PiRpcAgentHarness`, and `AcpAgentHarness` decoupled from `PipelineContext.DataBag`.
-- [ ] **Step 9.9: Resilient Crash Recovery, Database Conversation Rehydration & State Persistence**
-  - [ ] `StartupRecoveryService` queries `ITaskRepository` for active `Conversation` and turns on agentic stages.
-  - [ ] Agentic recovery reconstructs message history, appends a system notice turn, and rehydrates `SerializedStateJson` in `AgentSessionContext`.
-  - [ ] Agent harnesses (`Crucible`, `PiRpc`, `Acp`) resume from rehydrated conversation history without restarting from turn 0.
-  - [ ] Deterministic recovery purges all stale metric keys from `PipelineDataBag` and supersedes interrupted conversation records.
-  - [ ] `PipelineDataBag` and mutable `AgentSessionContext` properties are committed to `task.PipelineDataJson` across execution turns.
-  - [ ] Complete test suite passes: `dotnet test` (all unit, integration, and E2E tests passing).
+- [x] **Step 9.9: Resilient Crash Recovery, Database Conversation Rehydration & State Persistence**
+  - [x] `StartupRecoveryService` queries `ITaskRepository` for active `Conversation` and turns on agentic stages.
+  - [x] Agentic recovery reconstructs message history, appends a system notice turn, and rehydrates `SerializedStateJson` in `AgentSessionContext`.
+  - [x] Agent harnesses (`Crucible`, `PiRpc`, `Acp`) resume from rehydrated conversation history without restarting from turn 0.
+  - [x] Deterministic recovery purges all stale metric keys from `PipelineDataBag` and supersedes interrupted conversation records.
+  - [x] `PipelineDataBag` and mutable `AgentSessionContext` properties are committed to `task.PipelineDataJson` across execution turns.
+  - [x] Complete test suite passes: `dotnet test` (all unit, integration, and E2E tests passing).
 - [ ] **Step 9.10: Silent Failure Elimination & Git Merge Safety**
   - [ ] No bare `catch { }` without justification and logging; analyzer rule added.
   - [ ] `SquashAndMergeAsync` fails hard on reset/clean/missing base or feature branch.

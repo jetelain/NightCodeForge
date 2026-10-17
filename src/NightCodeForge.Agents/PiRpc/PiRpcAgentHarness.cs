@@ -256,6 +256,15 @@ public class PiRpcAgentHarness : IAgentHarness
             var envInfo = $"<environment>\n- Current Working Directory (PWD): {agentWorkingDir}\n- Perform all edits, builds, and tests within this directory; the canonical clone on 'main' is read-only.\n</environment>";
             basePromptText = $"{basePromptText}\n\n{envInfo}";
 
+            if (ConversationHistorySerializer.IsSerializedHistory(context.SerializedStateJson))
+            {
+                var historySummary = ConversationHistorySerializer.FormatForPrompt(context.SerializedStateJson);
+                if (!string.IsNullOrWhiteSpace(historySummary))
+                {
+                    basePromptText = $"{basePromptText}\n\n[Resumed Conversation History]:\n{historySummary}\n\nPlease resume execution from the previous conversation turn.";
+                }
+            }
+
             var promptText = !string.IsNullOrWhiteSpace(context.PendingHumanAnswer)
                 ? $"[Human Answer]: {context.PendingHumanAnswer}\n\n{basePromptText}"
                 : basePromptText;

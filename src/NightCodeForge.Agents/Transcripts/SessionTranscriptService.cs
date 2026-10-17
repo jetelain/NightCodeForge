@@ -10,7 +10,8 @@ public record TranscriptEntry(
     string Content,
     string? ToolName = null,
     string? ToolArguments = null,
-    string? ToolResult = null);
+    string? ToolResult = null,
+    string? CallId = null);
 
 public record TranscriptMetadata(
     int TaskId,

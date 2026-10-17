@@ -157,6 +157,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         var dispatcher = new LenientToolDispatcher(canonicalTools);
 
+        // Rehydrate any pending proposals previously recorded in DataBag
+        var existingProposals = context.PipelineContext?.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals);
+        if (existingProposals is { Count: > 0 })
+        {
+            canonicalTools.PendingProposals.AddRange(existingProposals);
+        }
+
         // Register any custom tools defined in the database configuration
         if (harnessConfig.CustomTools.Count > 0)
         {
@@ -266,8 +273,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         if (!string.IsNullOrEmpty(context.SerializedStateJson))
         {
             chatHistory = DeserializeSession(context.SerializedStateJson);
-            // Legacy checkpoints stored the system prompt as the first message; it is rebuilt each run.
-            chatHistory.RemoveAll(m => m.Role == ChatRole.System);
+            // Legacy checkpoints stored the system prompt as the first message; strip it while preserving system notices
+            chatHistory.RemoveAll(m => m.Role == ChatRole.System && (m.Text == null || !m.Text.Contains("[System Notice", StringComparison.OrdinalIgnoreCase)));
         }
         else
         {
@@ -277,11 +284,19 @@ public partial class CrucibleAgentHarness : IAgentHarness
             };
         }
 
-        // A checkpoint that cannot be restored (corrupt JSON) or only contained system messages would leave the
-        // agent with no input at all: start over from the bootstrap prompt instead.
-        if (chatHistory.Count == 0)
+        // A checkpoint that cannot be restored (corrupt JSON) or only contained system notices would leave the
+        // agent with no prompt at all: ensure the bootstrap prompt is present.
+        if (chatHistory.Count == 0 || chatHistory.All(m => m.Role == ChatRole.System || (m.Text != null && m.Text.Contains("[System Notice", StringComparison.OrdinalIgnoreCase))))
         {
-            chatHistory.Add(new ChatMessage(ChatRole.User, !string.IsNullOrWhiteSpace(context.BootstrapPrompt) ? context.BootstrapPrompt : "Please inspect the requirements and begin execution."));
+            var initialPrompt = !string.IsNullOrWhiteSpace(context.BootstrapPrompt) ? context.BootstrapPrompt : "Please inspect the requirements and begin execution.";
+            if (chatHistory.Count == 0)
+            {
+                chatHistory.Add(new ChatMessage(ChatRole.User, initialPrompt));
+            }
+            else
+            {
+                chatHistory.Insert(0, new ChatMessage(ChatRole.User, initialPrompt));
+            }
         }
 
         // 8. Preemptive Resumption: Inject user answer if resuming from 'ask'
@@ -325,6 +340,10 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
                         var repository = _taskRepository;
                         var conversationId = conversation.Id;
+                        var metadataJson = !string.IsNullOrEmpty(entry.CallId)
+                            ? JsonSerializer.Serialize(new { CallId = entry.CallId })
+                            : null;
+
                         turnWriter.Enqueue(
                             () => repository.AddConversationTurnAsync(
                                 conversationId,
@@ -335,6 +354,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                                 toolArguments: entry.ToolArguments,
                                 toolResult: entry.ToolResult,
                                 isError: string.Equals(entry.Role, "TOOL_ERROR", StringComparison.OrdinalIgnoreCase),
+                                metadataJson: metadataJson,
                                 cancellationToken: CancellationToken.None),
                             $"Failed to record turn for conversation #{conversationId}");
                     }
@@ -535,6 +555,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
                             var repository = _taskRepository;
                             var conversationId = conversation.Id;
                             var resultIsError = resultStr.StartsWith("Error", StringComparison.OrdinalIgnoreCase);
+                            var metadataObj = new
+                            {
+                                CallId = frc.CallId,
+                                ToolName = resultToolName,
+                                OptimizationFlags = context.OptimizationFlags,
+                                PendingProposalsCount = canonicalTools.PendingProposals.Count
+                            };
+                            var metadataJson = JsonSerializer.Serialize(metadataObj);
+
                             turnWriter.Enqueue(
                                 () => repository.AddConversationTurnAsync(
                                     conversationId,
@@ -542,9 +571,37 @@ public partial class CrucibleAgentHarness : IAgentHarness
                                     toolName: resultToolName,
                                     toolResult: resultStr,
                                     isError: resultIsError,
+                                    metadataJson: metadataJson,
                                     cancellationToken: CancellationToken.None),
                                 $"Failed to record tool result turn for conversation #{conversationId}");
                         }
+
+                        // Sync in-flight DataBag state and task persistence across tool execution milestones
+                        if (context.PipelineContext?.DataBag != null)
+                        {
+                            // Always mirror the proposals (an emptied list must overwrite a stale persisted one).
+                            context.PipelineContext.DataBag.Set(PipelineDataBagKeys.PendingProposals, canonicalTools.PendingProposals.ToList());
+                            if (context.OptimizationFlags != null)
+                            {
+                                context.PipelineContext.DataBag.Set(PipelineDataBagKeys.OptimizationFlags, context.OptimizationFlags);
+                            }
+                            if (context.DiscoveredSymbols != null)
+                            {
+                                context.PipelineContext.DataBag.Set(PipelineDataBagKeys.DiscoveredSymbols, context.DiscoveredSymbols);
+                            }
+                            // The conversation history itself is NOT mirrored here: it is already persisted turn by turn
+                            // in ConversationTurns and rebuilt from there by StartupRecoveryService.
+
+                            context.ForgeTask.PipelineDataJson = context.PipelineContext.DataBag.ToJson();
+                            if (_taskRepository != null)
+                            {
+                                var currentTask = context.ForgeTask;
+                                turnWriter.Enqueue(
+                                    () => _taskRepository.UpdateAsync(currentTask, cancellationToken: CancellationToken.None),
+                                    $"Failed to sync pipeline data bag for task #{currentTask.Id}");
+                            }
+                        }
+
                         await BroadcastAsync(
                             sessionId,
                             context.ForgeTask.Id,
@@ -598,7 +655,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.MessageDelta, update.Text, cancellationToken);
                 }
 
-                if (streaming && context.OptimizationFlags.LoopCircuitBreaker && circuitBreaker.DetectStreamingRepetition(accumulatedText.ToString()))
+                if (streaming && context.OptimizationFlags?.LoopCircuitBreaker == true && circuitBreaker.DetectStreamingRepetition(accumulatedText.ToString()))
                 {
                     _logger.LogWarning("Circuit breaker detected repeating n-gram monologue in streaming output. Aborting turn.");
                     return true;

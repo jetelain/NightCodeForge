@@ -339,9 +339,16 @@ public class TaskOrchestrator : ITaskOrchestrator
                     }
                     else
                     {
-                        var resumeMemory = (lastCheckpoint != null && string.Equals(lastCheckpoint.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase))
-                            ? lastCheckpoint.SerializedMemory
-                            : null;
+                        var resumeMemory = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.RecoveredSerializedMemory);
+                        if (!string.IsNullOrEmpty(resumeMemory))
+                        {
+                            // Consume once: a failed/cancelled run must not replay stale recovered history later.
+                            pipelineContext.DataBag.Remove(PipelineDataBagKeys.RecoveredSerializedMemory);
+                        }
+                        else if (lastCheckpoint != null && string.Equals(lastCheckpoint.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            resumeMemory = lastCheckpoint.SerializedMemory;
+                        }
 
                         var agentContext = new AgentSessionContext
                         {
@@ -361,7 +368,9 @@ public class TaskOrchestrator : ITaskOrchestrator
                             ReviewerFeedback = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ReviewerFeedback),
                             PriorDiagnostics = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors),
                             BootstrapPrompt = stage.BuildBootstrapPrompt(task, pipelineContext, stageDirective),
-                            OptimizationFlags = profile.OptimizationFlags ?? new LocalOptimizationFlags(),
+                            OptimizationFlags = pipelineContext.DataBag.Get<LocalOptimizationFlags>(PipelineDataBagKeys.OptimizationFlags)
+                                ?? profile.OptimizationFlags ?? new LocalOptimizationFlags(),
+                            DiscoveredSymbols = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.DiscoveredSymbols),
                             PipelineContext = pipelineContext
                         };
 
@@ -621,6 +630,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 CreatedAt = DateTime.UtcNow
             };
             await _taskRepository.AddCheckpointAsync(checkpoint, cancellationToken);
+            pipelineContext.DataBag.Remove(PipelineDataBagKeys.SerializedMemory);
 
             // Status stamps per stage
             if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase))

@@ -115,14 +115,17 @@ public class StartupRecoveryTests : IDisposable
     }
 
     [Fact]
-    public async Task ReconcileWorkspacesAsync_ReconcilesOrphanedRunningAgenticStage_RehydratesMemoryAndEnqueuesUrgent()
+    public async Task ReconcileWorkspacesAsync_AgenticStageWithoutRunningConversation_DropsRecoveredMemoryAndEnqueuesUrgent()
     {
+        var staleBag = new PipelineDataBag();
+        staleBag.Set(PipelineDataBagKeys.RecoveredSerializedMemory, "stale");
         var task = await _taskRepo.CreateAsync(new ForgeTask
         {
             Id = 301,
             WorkspaceId = 1,
             Status = TaskOverallStatus.Open,
             CurrentStageId = "task-review",
+            PipelineDataJson = staleBag.ToJson(),
             Checkpoints = new List<StageCheckpoint>
             {
                 new()
@@ -147,10 +150,7 @@ public class StartupRecoveryTests : IDisposable
         Assert.Equal(TaskOverallStatus.Open, updated.Status);
 
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);
-        var memory = bag.Get<string>("SerializedMemory");
-        Assert.NotNull(memory);
-        Assert.Contains("Prior conversation history...", memory);
-        Assert.Contains("[System Notice: Host restarted unexpectedly; workspace restored]", memory);
+        Assert.False(bag.ContainsKey(PipelineDataBagKeys.RecoveredSerializedMemory));
 
         Assert.Contains(301, _jobQueue.UrgentQueue);
     }

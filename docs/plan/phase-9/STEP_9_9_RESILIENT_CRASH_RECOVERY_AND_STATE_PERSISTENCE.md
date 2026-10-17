@@ -3,7 +3,7 @@
 > **Phase 9 Implementation Step**  
 > *Parent Plan:* [Phase 9 Master Plan](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Complete | *Target Framework:* .NET 10 (C# 13)
 
 ---
 
@@ -96,13 +96,22 @@ flowchart TD
          content: "[System Notice: Host restarted unexpectedly; workspace restored; resuming from previous conversation turn]",
          cancellationToken: cancellationToken);
      ```
-   * Reconstruct the serialized state JSON:
+   * Reconstruct the serialized history. Turns are replayed via `ConversationHistorySerializer`:
+     * Tool calls are correlated with their results by `CallId` (stored in `ConversationTurn.MetadataJson`, recorded from `FunctionCallContent.CallId` / `FunctionResultContent.CallId`).
+     * A tool call with no persisted result (crash between the two) is closed with a synthetic `InterruptedToolResult` so the history stays valid for the model.
+     * The recovery notice is replayed with the `user` role: Qwen/Gemma chat templates reject or reorder system messages that are not first.
+     * Malformed JSON is a hard error (`JsonException`), never an empty history.
      ```csharp
-     var reconstructedHistory = ConversationHistorySerializer.Serialize(activeConv.Turns);
-     bag.Set(PipelineDataBagKeys.SerializedMemory, reconstructedHistory);
+     var reconstructedHistory = ConversationHistorySerializer.Serialize(allTurns);
+     bag.Set(PipelineDataBagKeys.RecoveredSerializedMemory, reconstructedHistory);
      ```
+   * The harness resumes in a **new** `Conversation` (a new attempt record), so the interrupted conversation is completed as `Failed` ("Session resumed in a new conversation") to avoid leaving it `Running` and being re-picked by the next recovery.
+   * If no `Running` conversation exists for the stage, nothing is rehydrated (no synthetic notice, no checkpoint string concatenation): `RecoveredSerializedMemory` is dropped and the orchestrator falls back to the last stage checkpoint, if any.
 3. **Seamless Resumption in Agent Harness:**
-   When [`TaskOrchestrator`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) executes the task, [`AgentSessionContext.SerializedStateJson`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/AgentSessionContext.cs#L19) is populated with `reconstructedHistory`. The harness ([`CrucibleAgentHarness`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs), [`PiRpcAgentHarness`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/PiRpc/PiRpcAgentHarness.cs), [`AcpAgentHarness`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Acp/AcpAgentHarness.cs)) restores all turns into its LLM context and continues generation seamlessly.
+   [`TaskOrchestrator`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) reads `RecoveredSerializedMemory` **once** (removing it from the bag so a later failed/cancelled run cannot replay it), falling back to the checkpoint memory, and populates [`AgentSessionContext.SerializedStateJson`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/AgentSessionContext.cs#L19).
+   * `CrucibleAgentHarness` deserializes it into its `ChatMessage` history.
+   * `PiRpcAgentHarness` and `AcpAgentHarness` have no native history import: when `ConversationHistorySerializer.IsSerializedHistory(...)` is true they flatten it with `FormatForPrompt` into the prompt (an ACP value that is not a history is still an opaque session id and goes through `session/resume`).
+   * **Known limitations:** the recovered history is not re-recorded as turns of the new conversation, so a second crash before the stage completes rebuilds only from the new conversation's turns. The flattened prompt for Pi/Acp is not size-capped.
 
 ### 3.2 Deterministic Stage Clean Re-Run
 1. **Purge Stale Metrics from DataBag:**
@@ -144,23 +153,24 @@ flowchart TD
    Leave `task.CurrentStageId = stage.StageId` and enqueue to `_jobQueue.EnqueueUrgent(task.Id)`. When the worker executes the stage, it runs cleanly with no stale outputs or contaminated metrics.
 
 ### 3.3 Mid-Session State & DataBag Persistence
-1. **Periodic & Turn-Level DataBag Sync:**
-   In [`TaskOrchestrator.cs`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) and [`CrucibleAgentHarness.cs`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs):
-   * Whenever tools modify mutable session properties (e.g. `DiscoveredSymbols`, `OptimizationFlags`, or `PendingProposals`), update `pipelineContext.DataBag`.
-   * Commit `task.PipelineDataJson = bag.ToJson()` to the database via `_taskRepository.UpdateAsync(...)` on significant milestones (e.g. every tool execution turn or proposal addition) so that uncommitted state is never trapped exclusively in memory.
-2. **ConversationTurn Context Snapshots:**
-   Store snapshot metadata in `ConversationTurn.MetadataJson` (e.g. tool execution duration, symbol discovery delta, and current optimization flags) so that recovery can reconstruct both conversation turns and context state.
+1. **Turn-Level DataBag Sync:**
+   In [`CrucibleAgentHarness.cs`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs), after every tool result:
+   * `PendingProposals` (always, so an emptied list overwrites a stale one), `OptimizationFlags` and `DiscoveredSymbols` (new keys in `PipelineDataBagKeys`) are mirrored into `pipelineContext.DataBag`, and `task.PipelineDataJson` is committed through the ordered turn writer.
+   * The conversation history itself is deliberately **not** mirrored into the bag: it is already persisted turn by turn and rebuilt by recovery (avoids rewriting the full history into `PipelineDataJson` on every turn).
+   * `TaskOrchestrator` seeds `AgentSessionContext.OptimizationFlags` / `DiscoveredSymbols` from these keys on resume.
+2. **Tool-Result Metadata:**
+   Each `ToolResult` turn stores `{ CallId, ToolName, OptimizationFlags, PendingProposalsCount }` in `ConversationTurn.MetadataJson`. `CallId` is required for recovery; the rest is diagnostic. (Tool duration and discovery deltas from the original draft were not implemented.)
 
 ---
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] `StartupRecoveryService` queries `ITaskRepository` for active `Conversation` and turns on agentic stages.
-- [ ] Agentic recovery reconstructs message history, appends a system notice turn, and rehydrates `SerializedStateJson` in `AgentSessionContext`.
-- [ ] Agent harnesses (`Crucible`, `PiRpc`, `Acp`) resume from rehydrated conversation history without restarting from turn 0.
-- [ ] Deterministic recovery purges all stale metric keys from `PipelineDataBag` and supersedes interrupted conversation records.
-- [ ] `PipelineDataBag` and mutable `AgentSessionContext` properties are committed to `task.PipelineDataJson` across execution turns.
-- [ ] Comprehensive recovery tests:
+- [x] `StartupRecoveryService` queries `ITaskRepository` for active `Conversation` and turns on agentic stages.
+- [x] Agentic recovery reconstructs message history, appends a system notice turn, and rehydrates `SerializedStateJson` in `AgentSessionContext`.
+- [x] Agent harnesses (`Crucible`, `PiRpc`, `Acp`) resume from rehydrated conversation history without restarting from turn 0.
+- [x] Deterministic recovery purges all stale metric keys from `PipelineDataBag` and supersedes interrupted conversation records.
+- [x] `PipelineDataBag` and mutable `AgentSessionContext` properties are committed to `task.PipelineDataJson` across execution turns.
+- [x] Comprehensive recovery tests:
   - Agentic mid-session crash simulation: verifies all turns are rehydrated and session resumes.
   - Deterministic crash simulation: verifies metrics are purged and stage executes cleanly from scratch.
   - Full test suite passes: `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

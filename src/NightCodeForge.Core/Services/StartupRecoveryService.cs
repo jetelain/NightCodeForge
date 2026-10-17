@@ -22,6 +22,11 @@ public class StartupRecoveryService : IStartupRecoveryService
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly ILogger<StartupRecoveryService> _logger;
 
+    private const string RecoveryNoticeContent = "[System Notice: Host restarted unexpectedly; workspace restored; resuming from previous conversation turn]";
+    private const string InterruptedAgenticConversationSummary = "Process terminated unexpectedly mid-execution. Session resumed in a new conversation.";
+    private const string InterruptedDeterministicConversationSummary = "Process terminated unexpectedly mid-execution. Stage reset for clean re-run.";
+    private const string SupersededRunningConversationSummary = "Process terminated unexpectedly mid-execution. Superseded by startup recovery.";
+
     public StartupRecoveryService(
         IWorkspaceRepository workspaceRepository,
         ITaskRepository taskRepository,
@@ -103,34 +108,124 @@ public class StartupRecoveryService : IStartupRecoveryService
 
                 if (stage != null && stage.Kind == WorkflowStageKind.Agentic)
                 {
-                    // Agentic Stage: Rehydrate memory with recovery notice
-                    var lastCheckpoint = task.Checkpoints?.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
-                    var memory = lastCheckpoint?.SerializedMemory ?? string.Empty;
-                    var notice = "[System Notice: Host restarted unexpectedly; workspace restored]";
-                    var restoredMemory = string.IsNullOrWhiteSpace(memory)
-                        ? notice
-                        : $"{memory}\n{notice}";
+                    // Agentic Stage: Rehydrate memory from active database conversation turns
+                    var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+                    var activeConv = convs
+                        .Where(c => c.StageId == stage.StageId && c.Status == StageExecutionStatus.Running)
+                        .OrderByDescending(c => c.AttemptIndex)
+                        .ThenByDescending(c => c.StartedAt)
+                        .FirstOrDefault();
 
-                    bag.Set(PipelineDataBagKeys.SerializedMemory, restoredMemory);
-                    _logger.LogWarning("Rehydrated agentic session memory for orphaned task #{TaskId}.", task.Id);
+                    // Supersede any older running conversations left dangling by previous crashes
+                    foreach (var other in convs.Where(c => c.Status == StageExecutionStatus.Running && (activeConv == null || c.Id != activeConv.Id)))
+                    {
+                        await _taskRepository.CompleteConversationAsync(
+                            other.Id,
+                            StageExecutionStatus.Failed,
+                            summary: SupersededRunningConversationSummary,
+                            cancellationToken: cancellationToken);
+                    }
+
+                    if (activeConv != null)
+                    {
+                        var convWithTurns = await _taskRepository.GetConversationWithTurnsAsync(activeConv.Id, cancellationToken)
+                            ?? throw new InvalidOperationException($"Conversation #{activeConv.Id} of task #{task.Id} disappeared during startup recovery.");
+
+                        if (convWithTurns.Turns.Count > 0)
+                        {
+                            var noticeTurn = await _taskRepository.AddConversationTurnAsync(
+                                activeConv.Id,
+                                StageTurnRole.System,
+                                content: RecoveryNoticeContent,
+                                cancellationToken: cancellationToken);
+
+                            var allTurns = convWithTurns.Turns
+                                .Where(t => t.Id != noticeTurn.Id)
+                                .Append(noticeTurn)
+                                .OrderBy(t => t.TurnIndex)
+                                .ToList();
+
+                            var reconstructedHistory = ConversationHistorySerializer.Serialize(allTurns);
+                            bag.Set(PipelineDataBagKeys.RecoveredSerializedMemory, reconstructedHistory);
+
+                            // The harness resumes in a brand new conversation: close the interrupted one so it is
+                            // not left "Running" forever nor picked up again by the next recovery.
+                            await _taskRepository.CompleteConversationAsync(
+                                activeConv.Id,
+                                StageExecutionStatus.Failed,
+                                summary: InterruptedAgenticConversationSummary,
+                                cancellationToken: cancellationToken);
+
+                            _logger.LogWarning("Rehydrated agentic session memory from {Count} turns for orphaned task #{TaskId}.", allTurns.Count, task.Id);
+                        }
+                        else
+                        {
+                            // Interrupted before first turn was recorded; close conversation and resume cleanly from scratch/checkpoint
+                            await _taskRepository.CompleteConversationAsync(
+                                activeConv.Id,
+                                StageExecutionStatus.Failed,
+                                summary: InterruptedAgenticConversationSummary,
+                                cancellationToken: cancellationToken);
+
+                            bag.Remove(PipelineDataBagKeys.RecoveredSerializedMemory);
+                            _logger.LogWarning("Running conversation #{ConvId} for task #{TaskId} had 0 turns; resuming cleanly from last checkpoint or bootstrap prompt.", activeConv.Id, task.Id);
+                        }
+                    }
+                    else
+                    {
+                        // No interrupted conversation was persisted: nothing to rehydrate. Any stale in-flight memory is
+                        // dropped so the orchestrator resumes from the last stage checkpoint (or from scratch).
+                        bag.Remove(PipelineDataBagKeys.RecoveredSerializedMemory);
+                        _logger.LogWarning("No running conversation found for orphaned agentic task #{TaskId} at stage '{StageId}'; resuming from last checkpoint.", task.Id, stage.StageId);
+                    }
                 }
                 else
                 {
-                    // Deterministic Stage: Reset metrics and retries to execute freshly
-                    bag.Remove(PipelineDataBagKeys.TestsCurrentTotal);
-                    bag.Remove(PipelineDataBagKeys.TestsCurrentPassed);
-                    bag.Remove(PipelineDataBagKeys.TestsCurrentFailed);
-                    bag.Remove(PipelineDataBagKeys.TestsCurrentDurationMs);
-                    bag.Remove(PipelineDataBagKeys.CoverageCurrentLineRate);
-                    bag.Remove(PipelineDataBagKeys.WarningsCurrentTotal);
-                    bag.Remove(PipelineDataBagKeys.WarningsNew);
-                    bag.Remove(PipelineDataBagKeys.FailedTests);
-                    bag.Remove(PipelineDataBagKeys.BuildFailureReason);
-                    bag.Remove(PipelineDataBagKeys.TestFailureReason);
-                    bag.Remove(PipelineDataBagKeys.CoverageFailureReason);
-                    bag.Remove(PipelineDataBagKeys.SastFailureReason);
-                    bag.Remove(PipelineDataBagKeys.RatchetFailureReason);
+                    // Deterministic Stage: Reset all partial metrics and stage command/output keys
+                    var deterministicKeys = new[]
+                    {
+                        PipelineDataBagKeys.TestsCurrentTotal,
+                        PipelineDataBagKeys.TestsCurrentPassed,
+                        PipelineDataBagKeys.TestsCurrentFailed,
+                        PipelineDataBagKeys.TestsCurrentDurationMs,
+                        PipelineDataBagKeys.CoverageCurrentLineRate,
+                        PipelineDataBagKeys.WarningsCurrentTotal,
+                        PipelineDataBagKeys.WarningsNew,
+                        PipelineDataBagKeys.FailedTests,
+                        PipelineDataBagKeys.BuildFailureReason,
+                        PipelineDataBagKeys.TestFailureReason,
+                        PipelineDataBagKeys.CoverageFailureReason,
+                        PipelineDataBagKeys.SastFailureReason,
+                        PipelineDataBagKeys.RatchetFailureReason,
+                        stage != null ? PipelineDataBagKeys.StageCommand(stage.StageId) : null,
+                        stage != null ? PipelineDataBagKeys.StageOutput(stage.StageId) : null
+                    };
+
+                    foreach (var key in deterministicKeys)
+                    {
+                        if (!string.IsNullOrEmpty(key))
+                        {
+                            bag.Remove(key);
+                        }
+                    }
+
+                    // Supersede incomplete conversation runs if any exist
+                    var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+                    foreach (var runningConv in convs.Where(c => c.Status == StageExecutionStatus.Running))
+                    {
+                        await _taskRepository.CompleteConversationAsync(
+                            runningConv.Id,
+                            StageExecutionStatus.Failed,
+                            summary: InterruptedDeterministicConversationSummary,
+                            cancellationToken: cancellationToken);
+                    }
+
                     _logger.LogWarning("Reset metrics for deterministic stage on orphaned task #{TaskId}.", task.Id);
+                }
+
+                if (stage != null && string.IsNullOrWhiteSpace(task.CurrentStageId))
+                {
+                    task.CurrentStageId = stage.StageId;
                 }
 
                 task.PipelineDataJson = bag.ToJson();

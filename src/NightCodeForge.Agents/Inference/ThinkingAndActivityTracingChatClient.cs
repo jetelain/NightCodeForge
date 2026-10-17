@@ -350,7 +350,7 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
                     else if (content is FunctionCallContent fc)
                     {
                         var args = fc.Arguments != null ? JsonSerializer.Serialize(fc.Arguments) : "{}";
-                        AddEntry(new TranscriptEntry(DateTime.UtcNow, "TOOL", string.Empty, fc.Name, args));
+                        AddEntry(new TranscriptEntry(DateTime.UtcNow, "TOOL", string.Empty, fc.Name, args, CallId: fc.CallId));
                     }
                 }
             }
@@ -374,7 +374,7 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
             foreach (var fc in functionCalls)
             {
                 var args = fc.Arguments != null ? JsonSerializer.Serialize(fc.Arguments) : "{}";
-                AddEntry(new TranscriptEntry(DateTime.UtcNow, "TOOL", string.Empty, fc.Name, args));
+                AddEntry(new TranscriptEntry(DateTime.UtcNow, "TOOL", string.Empty, fc.Name, args, CallId: fc.CallId));
             }
         }
 

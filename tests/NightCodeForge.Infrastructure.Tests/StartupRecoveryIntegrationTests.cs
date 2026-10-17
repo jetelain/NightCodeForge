@@ -176,7 +176,75 @@ public class StartupRecoveryIntegrationTests : IDisposable
         // Verify rehydrated memory
         var updatedTask = await taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(updatedTask);
-        Assert.Contains("[System Notice: Host restarted unexpectedly; workspace restored]", updatedTask.PipelineDataJson);
+        Assert.DoesNotContain("Host restarted unexpectedly", updatedTask.PipelineDataJson ?? string.Empty);
+        Assert.Contains(task.Id, jobQueue.UrgentQueue);
+    }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_WithActiveConversationAndTurns_RehydratesMemoryFromSqlite()
+    {
+        var workspace = new Workspace
+        {
+            Name = "Active Turn Workspace",
+            RepositoryPath = _repo.RepositoryPath,
+            DefaultBaseBranch = "main"
+        };
+        _context.Workspaces.Add(workspace);
+        await _context.SaveChangesAsync();
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Task with Active Turns",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "task-review"
+        };
+        _context.Tasks.Add(task);
+        await _context.SaveChangesAsync();
+
+        var taskRepoInitial = new EfCoreTaskRepository(_context);
+        var conv = await taskRepoInitial.StartConversationAsync(
+            task.Id,
+            "task-review",
+            WorkflowStageKind.Agentic,
+            attemptIndex: 1,
+            title: "Task Review Session");
+
+        await taskRepoInitial.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Implement feature Z");
+        await taskRepoInitial.AddConversationTurnAsync(conv.Id, StageTurnRole.Thinking, content: "Analyzing codebase architecture", thinkingTrace: "Analyzing codebase architecture");
+
+        // Simulate reboot: clear EF Core change tracker
+        _context.ChangeTracker.Clear();
+
+        var workspaceRepo = new EfCoreWorkspaceRepository(_context);
+        var taskRepo = new EfCoreTaskRepository(_context);
+        var jobQueue = new FakeTestJobQueue();
+        var recoveryService = CreateRecoveryService(workspaceRepo, taskRepo, jobQueue);
+
+        await recoveryService.ReconcileWorkspacesAsync();
+
+        // Verify task state in SQLite
+        var updatedTask = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+
+        var bag = PipelineDataBag.FromJson(updatedTask.PipelineDataJson);
+        var memoryJson = bag.Get<string>(PipelineDataBagKeys.RecoveredSerializedMemory);
+        Assert.NotNull(memoryJson);
+
+        var items = ConversationHistorySerializer.Deserialize(memoryJson);
+        Assert.Equal(3, items.Count); // User prompt, Thinking, System notice replayed as user
+        Assert.Equal("user", items[0].Role);
+        Assert.Equal("Implement feature Z", items[0].Text);
+        Assert.Equal("assistant", items[1].Role);
+        Assert.Equal("user", items[2].Role);
+        Assert.Contains("Host restarted unexpectedly", items[2].Text);
+
+        // Verify interrupted conversation was marked Failed in SQLite
+        var convs = await taskRepo.GetConversationsAsync(task.Id);
+        var recoveredConv = convs.FirstOrDefault(c => c.Id == conv.Id);
+        Assert.NotNull(recoveredConv);
+        Assert.Equal(StageExecutionStatus.Failed, recoveredConv.Status);
+
         Assert.Contains(task.Id, jobQueue.UrgentQueue);
     }
 

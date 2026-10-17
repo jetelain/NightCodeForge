@@ -242,7 +242,9 @@ public class AcpAgentHarness : IAgentHarness
 
             // 2. Initialize or Resume Session
             string activeSessionId = sessionId;
-            if (!string.IsNullOrEmpty(context.SerializedStateJson))
+            bool isReconstructedHistory = ConversationHistorySerializer.IsSerializedHistory(context.SerializedStateJson);
+
+            if (!string.IsNullOrEmpty(context.SerializedStateJson) && !isReconstructedHistory)
             {
                 var resumeMethod = negotiatedVersion >= 2 ? "session/resume" : "session/load";
                 var resumeReq = JsonSerializer.Serialize(new
@@ -283,6 +285,15 @@ public class AcpAgentHarness : IAgentHarness
                 : (!string.IsNullOrWhiteSpace(context.StageDirective)
                     ? $"[Stage Directive]: {context.StageDirective}\n\n{context.ForgeTask.Title}\n{context.ForgeTask.Description}"
                     : context.ForgeTask.Description);
+
+            if (isReconstructedHistory)
+            {
+                var historySummary = ConversationHistorySerializer.FormatForPrompt(context.SerializedStateJson!);
+                if (!string.IsNullOrWhiteSpace(historySummary))
+                {
+                    basePromptText = $"{basePromptText}\n\n[Resumed Conversation History]:\n{historySummary}\n\nPlease resume execution from the previous conversation turn.";
+                }
+            }
 
             if (!string.IsNullOrWhiteSpace(guidelines))
             {

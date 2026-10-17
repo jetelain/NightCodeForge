@@ -42,6 +42,10 @@ public static class PipelineDataBagKeys
     public const string WarningsDelta = "warnings.delta";
     public const string WarningsNew = "warnings.new";
     public const string ReviewFiles = "ReviewFiles";
+    public const string DiscoveredSymbols = "DiscoveredSymbols";
+    public const string OptimizationFlags = "OptimizationFlags";
+    /// <summary>Conversation history rebuilt from database turns by startup recovery; consumed once by the orchestrator.</summary>
+    public const string RecoveredSerializedMemory = "RecoveredSerializedMemory";
 
     public static string StageSummary(string stageId) => $"StageSummary_{stageId}";
     public static string StageCommand(string stageId) => $"{stageId}.command";
