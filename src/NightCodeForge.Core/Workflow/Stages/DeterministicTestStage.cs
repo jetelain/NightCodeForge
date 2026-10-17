@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -73,46 +74,53 @@ public partial class DeterministicTestStage : IWorkflowStage
         var timeout = workspace.TestTimeoutSeconds ?? config.TestTimeoutSeconds ?? WorkflowDefaults.DefaultTestTimeoutSeconds;
         bag.Set(PipelineDataBagKeys.TestTimeoutSeconds, timeout);
 
+        var stopwatch = Stopwatch.StartNew();
         var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: timeout, cancellationToken: cancellationToken);
+        stopwatch.Stop();
 
-            var fullOutput = string.IsNullOrWhiteSpace(res.StandardError)
-                ? res.StandardOutput
-                : $"{res.StandardOutput}\n{res.StandardError}";
+        var fullOutput = string.IsNullOrWhiteSpace(res.StandardError)
+            ? res.StandardOutput
+            : $"{res.StandardOutput}\n{res.StandardError}";
 
-            // Parse total tests
-            int totalTests = 0;
-            var totalMatch = TotalTestsRegex().Match(fullOutput);
-            if (totalMatch.Success)
-            {
-                var val = totalMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
-                int.TryParse(val, out totalTests);
-            }
+        bag.Set(PipelineDataBagKeys.StageCommand(StageId), command);
+        bag.Set(PipelineDataBagKeys.StageOutput(StageId), fullOutput);
 
-            // Parse failed tests
-            int failedTests = 0;
-            var failedMatch = FailedTestsRegex().Match(fullOutput);
-            if (failedMatch.Success)
-            {
-                var val = failedMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
-                int.TryParse(val, out failedTests);
-            }
+        // Parse total tests
+        int totalTests = 0;
+        var totalMatch = TotalTestsRegex().Match(fullOutput);
+        if (totalMatch.Success)
+        {
+            var val = totalMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
+            int.TryParse(val, out totalTests);
+        }
 
-            // Parse passed tests
-            int passedTests = 0;
-            var passedMatch = PassedTestsRegex().Match(fullOutput);
-            if (passedMatch.Success)
-            {
-                var val = passedMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
-                int.TryParse(val, out passedTests);
-            }
+        // Parse failed tests
+        int failedTests = 0;
+        var failedMatch = FailedTestsRegex().Match(fullOutput);
+        if (failedMatch.Success)
+        {
+            var val = failedMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
+            int.TryParse(val, out failedTests);
+        }
 
-            if (totalTests == 0 && (passedTests > 0 || failedTests > 0))
-            {
-                totalTests = passedTests + failedTests;
-            }
+        // Parse passed tests
+        int passedTests = 0;
+        var passedMatch = PassedTestsRegex().Match(fullOutput);
+        if (passedMatch.Success)
+        {
+            var val = passedMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
+            int.TryParse(val, out passedTests);
+        }
 
-            bag.Set(PipelineDataBagKeys.TestsCurrentTotal, totalTests);
-            bag.Set(PipelineDataBagKeys.TestsCurrentFailed, failedTests);
+        if (totalTests == 0 && (passedTests > 0 || failedTests > 0))
+        {
+            totalTests = passedTests + failedTests;
+        }
+
+        bag.Set(PipelineDataBagKeys.TestsCurrentTotal, totalTests);
+        bag.Set(PipelineDataBagKeys.TestsCurrentPassed, passedTests);
+        bag.Set(PipelineDataBagKeys.TestsCurrentFailed, failedTests);
+        bag.Set(PipelineDataBagKeys.TestsCurrentDurationMs, (int)stopwatch.ElapsedMilliseconds);
 
             if (!bag.TryGet<int>(PipelineDataBagKeys.TestsBaselineTotal, out _))
             {

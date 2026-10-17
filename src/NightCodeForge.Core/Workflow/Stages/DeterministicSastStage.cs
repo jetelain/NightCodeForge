@@ -58,6 +58,13 @@ public class DeterministicSastStage : IWorkflowStage
             ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
 
         var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: 180, cancellationToken: cancellationToken);
+        var fullOutput = string.IsNullOrWhiteSpace(res.StandardError)
+            ? res.StandardOutput
+            : $"{res.StandardOutput}\n{res.StandardError}";
+
+        bag.Set(PipelineDataBagKeys.StageCommand(StageId), command);
+        bag.Set(PipelineDataBagKeys.StageOutput(StageId), fullOutput);
+
         if (!res.Success)
         {
             var errorMsg = $"SAST analyzer failed with exit code {res.ExitCode}: {res.StandardError}";

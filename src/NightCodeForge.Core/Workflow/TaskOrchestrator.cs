@@ -685,12 +685,22 @@ public class TaskOrchestrator : ITaskOrchestrator
                 _logger.LogWarning("Stage '{StageId}' failed, routing backward to '{TargetStage}' (Retry {Retry}/{Max}): {Reason}",
                     stage.StageId, targetLoopBackId, retries, effectiveMaxRetries, result.ErrorMessage);
 
+                var errors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors) ?? new List<string>();
+                var failedTests = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
+                if (failedTests is { Count: > 0 })
+                {
+                    errors.AddRange(failedTests.Select(ft => $"[{stage.StageId} test failure] {ft}"));
+                }
+                var newWarnings = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.WarningsNew);
+                if (newWarnings is { Count: > 0 } && (string.Equals(stage.StageId, StageImplementationTypes.DeterministicRatchet, StringComparison.OrdinalIgnoreCase) || stage.StageId.Contains("ratchet", StringComparison.OrdinalIgnoreCase)))
+                {
+                    errors.AddRange(newWarnings.Select(w => $"[warning ratchet] {w}"));
+                }
                 if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
                 {
-                    var errors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors) ?? new List<string>();
                     errors.Add($"[{stage.StageId} attempt {retries}] {result.ErrorMessage}");
-                    pipelineContext.DataBag.Set(PipelineDataBagKeys.CompilerErrors, errors);
                 }
+                pipelineContext.DataBag.Set(PipelineDataBagKeys.CompilerErrors, errors);
 
                 task.CurrentStageId = targetLoopBackId;
                 pipelineContext.SyncDataBagToTask();
@@ -749,7 +759,6 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
         bag.Set(PipelineDataBagKeys.LastHumanAnswer, answer);
-        bag.Set(PipelineDataBagKeys.QuestionAnswer(question.Id), answer);
         task.PipelineDataJson = bag.ToJson();
 
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);

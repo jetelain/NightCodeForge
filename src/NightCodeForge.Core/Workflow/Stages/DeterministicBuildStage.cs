@@ -126,10 +126,16 @@ public partial class DeterministicBuildStage : IWorkflowStage
             ? res.StandardOutput
             : $"{res.StandardOutput}\n{res.StandardError}";
 
+        bag.Set(PipelineDataBagKeys.StageCommand(StageId), command);
+        bag.Set(PipelineDataBagKeys.StageOutput(StageId), fullOutput);
+
         // Count warnings
         var warnings = WarningRegex().Matches(fullOutput);
         var warningCount = warnings.Count;
         bag.Set(PipelineDataBagKeys.WarningsCurrentTotal, warningCount);
+
+        var warningLines = warnings.Select(w => w.Value.Trim()).Distinct().Take(20).ToList();
+        bag.Set(PipelineDataBagKeys.WarningsNew, warningLines);
 
         if (!bag.TryGet<int>(PipelineDataBagKeys.WarningsBaselineTotal, out _))
         {

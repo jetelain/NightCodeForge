@@ -91,7 +91,7 @@ public partial class TaskReviewService : ITaskReviewService
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
 
         double currentCov = 0.0;
-        if (bag.TryGet<double>("coverage.current.line_rate", out var cRate))
+        if (bag.TryGet<double>(PipelineDataBagKeys.CoverageCurrentLineRate, out var cRate))
         {
             currentCov = cRate <= 1.0 ? cRate * 100.0 : cRate;
         }
@@ -101,7 +101,7 @@ public partial class TaskReviewService : ITaskReviewService
         }
 
         double baseCov = currentCov;
-        if (bag.TryGet<double>("coverage.baseline.line_rate", out var bRate))
+        if (bag.TryGet<double>(PipelineDataBagKeys.CoverageBaselineLineRate, out var bRate))
         {
             baseCov = bRate <= 1.0 ? bRate * 100.0 : bRate;
         }
@@ -111,24 +111,24 @@ public partial class TaskReviewService : ITaskReviewService
         }
 
         double covDelta = currentCov - baseCov;
-        if (bag.TryGet<double>("coverage.delta", out var explicitCovDelta))
+        if (bag.TryGet<double>(PipelineDataBagKeys.CoverageDelta, out var explicitCovDelta))
         {
             covDelta = explicitCovDelta <= 1.0 && explicitCovDelta >= -1.0 ? explicitCovDelta * 100.0 : explicitCovDelta;
         }
 
-        int currentWarns = bag.TryGet<int>("warnings.current.total", out var cw) ? cw :
+        int currentWarns = bag.TryGet<int>(PipelineDataBagKeys.WarningsCurrentTotal, out var cw) ? cw :
             (bag.TryGet<int>("warnings.current.count", out cw) ? cw : 0);
-        int baseWarns = bag.TryGet<int>("warnings.baseline.total", out var bw) ? bw :
+        int baseWarns = bag.TryGet<int>(PipelineDataBagKeys.WarningsBaselineTotal, out var bw) ? bw :
             (bag.TryGet<int>("warnings.baseline.count", out bw) ? bw : currentWarns);
-        int warnDelta = bag.TryGet<int>("warnings.delta", out var wd) ? wd : (currentWarns - baseWarns);
+        int warnDelta = bag.TryGet<int>(PipelineDataBagKeys.WarningsDelta, out var wd) ? wd : (currentWarns - baseWarns);
 
-        int totalTests = bag.TryGet<int>("tests.current.total", out var tt) ? tt :
+        int totalTests = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentTotal, out var tt) ? tt :
             (bag.TryGet<int>("tests.total", out tt) ? tt : 0);
-        int passedTests = bag.TryGet<int>("tests.current.passed", out var pt) ? pt :
-            (bag.TryGet<int>("tests.passed", out pt) ? pt : totalTests);
-        int failedTests = bag.TryGet<int>("tests.current.failed", out var ft) ? ft :
+        int failedTests = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentFailed, out var ft) ? ft :
             (bag.TryGet<int>("tests.failed", out ft) ? ft : 0);
-        int durationMs = bag.TryGet<int>("tests.current.duration_ms", out var dm) ? dm :
+        int passedTests = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentPassed, out var pt) ? pt :
+            (bag.TryGet<int>("tests.passed", out pt) ? pt : Math.Max(0, totalTests - failedTests));
+        int durationMs = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentDurationMs, out var dm) ? dm :
             (bag.TryGet<int>("tests.duration_ms", out dm) ? dm : 0);
 
         return new QualityGateMetrics(
@@ -158,7 +158,7 @@ public partial class TaskReviewService : ITaskReviewService
         CancellationToken cancellationToken)
     {
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
-        if (bag.TryGet<List<FileDiffSummary>>("ReviewFiles", out var customFiles) && customFiles != null && customFiles.Count > 0)
+        if (bag.TryGet<List<FileDiffSummary>>(PipelineDataBagKeys.ReviewFiles, out var customFiles) && customFiles != null && customFiles.Count > 0)
         {
             return customFiles;
         }

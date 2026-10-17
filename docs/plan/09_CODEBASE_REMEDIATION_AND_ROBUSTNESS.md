@@ -140,12 +140,12 @@ flowchart TD
   - [x] All service constructors require dependencies explicitly with zero `= null` parameter defaults.
   - [x] Deterministic quality gates (`DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicCoverageGate`, `DeterministicSastStage`) require `IExecutionEnvironmentProvider` and fail fast if environment is unavailable (zero silent success).
   - [x] Reusable test fixtures / `TestOrchestratorBuilder` implemented across test suites.
-- [ ] **Step 9.7: DataBag Orphan Remediation & Quality Gate Handoff Integrity**
-  - [ ] `DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicSastStage`, and `DeterministicCoverageGate` record `StageCommand` and `StageOutput`.
-  - [ ] `DeterministicBuildStage` parses and stores `WarningsNew` lines; `DeterministicWarningRatchetStage` emits detailed new warnings.
-  - [ ] `DeterministicTestStage` failure lines (`FailedTests`) are passed to the repairing agent via `CompilerErrors` on loopback.
-  - [ ] `TestsCurrentPassed` and `TestsCurrentDurationMs` recorded by `DeterministicTestStage`; `TaskReviewService` bug displaying incorrect passed tests resolved.
-  - [ ] Phantom keys `AllowLoopBack`, `MaxLoopBackAttempts`, `StrictCompilationGate`, `DeterministicMetrics` pruned.
+- [x] **Step 9.7: DataBag Orphan Remediation & Quality Gate Handoff Integrity**
+  - [x] `DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicSastStage`, and `DeterministicCoverageGate` record `StageCommand` and `StageOutput`.
+  - [x] `DeterministicBuildStage` parses and stores `WarningsNew` lines; `DeterministicWarningRatchetStage` emits detailed new warnings.
+  - [x] `DeterministicTestStage` failure lines (`FailedTests`) are passed to the repairing agent via `CompilerErrors` on loopback.
+  - [x] `TestsCurrentPassed` and `TestsCurrentDurationMs` recorded by `DeterministicTestStage`; `TaskReviewService` bug displaying incorrect passed tests resolved.
+  - [x] Phantom keys `AllowLoopBack`, `MaxLoopBackAttempts`, `StrictCompilationGate`, `DeterministicMetrics` pruned.
 - [ ] **Step 9.8: AgentSessionContext Property Promotion & Harness Decoupling**
   - [ ] `TaskMarkdownPath`, `ReviewDiff`, `ApprovedPlan`, `ReviewerFeedback`, and `PriorDiagnostics` promoted as strongly typed properties on `AgentSessionContext`.
   - [ ] Critical Bug Fix: `ReviewDiff` wired into `AgentSessionContext` and `DefaultBootstrapPromptBuilder` for Code Review agents.

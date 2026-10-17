@@ -408,4 +408,75 @@ public class QualityGateLoopbackTests
         Assert.NotNull(stageRetries);
         Assert.Equal(1, stageRetries[StandardStageIds.CodeReviewAndFix]);
     }
+
+    [Fact]
+    public async Task Orchestrator_Loopback_EnrichesCompilerErrorsWithFailedTestsAndWarningsNew()
+    {
+        // Arrange
+        var task = new ForgeTask
+        {
+            Id = 12,
+            WorkspaceId = 1,
+            Title = "Feature Z",
+            Description = "Implement feature Z",
+            CurrentStageId = "deterministic-test",
+            Status = TaskOverallStatus.Open
+        };
+
+        var initialBag = new PipelineDataBag();
+        initialBag.Set(PipelineDataBagKeys.FailedTests, new List<string> { "TestClass.TestMethod failed with NullReferenceException" });
+        task.PipelineDataJson = initialBag.ToJson();
+
+        var workspace = new Workspace
+        {
+            Id = 1,
+            Name = "TestRepo",
+            RepositoryPath = Path.GetTempPath(),
+            ExecutionMode = ExecutionMode.BareHost
+        };
+
+        var taskRepo = new InMemoryTaskRepository();
+        await taskRepo.CreateAsync(task);
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        await workspaceRepo.CreateAsync(workspace);
+        var depStore = new InMemoryTaskDependencyStore();
+        depStore.AddTask(12, 1, TaskOverallStatus.Open);
+        var depEngine = new DependencyResolutionEngine(depStore);
+        var lockProvider = new WorkspaceLockProvider();
+        var jobQueue = new FakeTaskJobQueue();
+        var gitManager = new FakeGitWorkspaceManager();
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[]
+        {
+            new TestWorkflowStage("implementation", WorkflowStageKind.Agentic),
+            new TestWorkflowStage("deterministic-test", WorkflowStageKind.Deterministic)
+            {
+                Handler = (ctx, ct) => Task.FromResult(
+                    StageExecutionResult.Failure("Deterministic tests failed: 1 failed test(s)", loopBackStageId: "implementation"))
+            }
+        });
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore
+        }.Build();
+
+        // Act
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        // Assert
+        Assert.Equal("implementation", task.CurrentStageId);
+        var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
+        var errors = bag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
+        Assert.NotNull(errors);
+        Assert.Contains(errors, e => e.Contains("[deterministic-test test failure] TestClass.TestMethod failed with NullReferenceException"));
+        Assert.Contains(errors, e => e.Contains("[deterministic-test attempt 1] Deterministic tests failed: 1 failed test(s)"));
+    }
 }

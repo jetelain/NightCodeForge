@@ -79,20 +79,20 @@ deleted file mode 100644
         var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
 
         var bag = new PipelineDataBag();
-        bag.Set("coverage.baseline.line_rate", 0.80);
-        bag.Set("coverage.current.line_rate", 0.855);
-        bag.Set("warnings.baseline.total", 5);
-        bag.Set("warnings.current.total", 3);
-        bag.Set("tests.current.total", 42);
-        bag.Set("tests.current.passed", 42);
-        bag.Set("tests.current.failed", 0);
-        bag.Set("tests.current.duration_ms", 1250);
+        bag.Set(PipelineDataBagKeys.CoverageBaselineLineRate, 0.80);
+        bag.Set(PipelineDataBagKeys.CoverageCurrentLineRate, 0.855);
+        bag.Set(PipelineDataBagKeys.WarningsBaselineTotal, 5);
+        bag.Set(PipelineDataBagKeys.WarningsCurrentTotal, 3);
+        bag.Set(PipelineDataBagKeys.TestsCurrentTotal, 42);
+        bag.Set(PipelineDataBagKeys.TestsCurrentPassed, 42);
+        bag.Set(PipelineDataBagKeys.TestsCurrentFailed, 0);
+        bag.Set(PipelineDataBagKeys.TestsCurrentDurationMs, 1250);
 
         var sampleFiles = new List<FileDiffSummary>
         {
             new("src/Calculator.cs", FileChangeType.Modified, 10, 2, "old code", "new code")
         };
-        bag.Set("ReviewFiles", sampleFiles);
+        bag.Set(PipelineDataBagKeys.ReviewFiles, sampleFiles);
 
         var task = new ForgeTask
         {
@@ -129,6 +129,37 @@ deleted file mode 100644
 
         Assert.Single(snapshot.Files);
         Assert.Equal("src/Calculator.cs", snapshot.Files[0].Path);
+    }
+
+    [Fact]
+    public async Task GetSnapshotAsync_WhenPassedTestsMissing_CalculatesPassedAsTotalMinusFailed()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var gitManager = new TestGitWorkspaceManager();
+        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.TestsCurrentTotal, 10);
+        bag.Set(PipelineDataBagKeys.TestsCurrentFailed, 2);
+        // Notice: TestsCurrentPassed is intentionally not set
+
+        var task = new ForgeTask
+        {
+            Id = 102,
+            Title = "Fallback Calculator",
+            Status = TaskOverallStatus.Ready,
+            MergeMode = MergeMode.ManualReviewRequired,
+            PipelineDataJson = bag.ToJson()
+        };
+        await taskRepo.CreateAsync(task);
+
+        var snapshot = await service.GetSnapshotAsync(102);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal(10, snapshot.GateMetrics.TotalTests);
+        Assert.Equal(2, snapshot.GateMetrics.FailedTests);
+        Assert.Equal(8, snapshot.GateMetrics.PassedTests);
     }
 
     [Fact]

@@ -243,4 +243,23 @@ public class TaskOrchestratorPromptRenderingTests
 
         Assert.Throws<InvalidOperationException>(() => stage.BuildBootstrapPrompt(task, context));
     }
+
+    [Fact]
+    public void BuildBootstrapPrompt_RendersFailedTestsAndFailureReason_WhenAvailable()
+    {
+        var config = new AgenticStageConfig
+        {
+            PromptTemplate = "Reason: {{ context.failure_reason }} | Tests: {{~ for ft in context.failed_tests ~}} {{ ft }} {{~ end ~}}"
+        };
+        var stage = new GenericAgenticStage("fix-stage", "Fixer", config);
+        var task = new ForgeTask { Id = 9, Title = "Fix Task" };
+        var context = new PipelineContext(task, new Workspace());
+        context.DataBag.Set(PipelineDataBagKeys.TestFailureReason, "1 test failed");
+        context.DataBag.Set(PipelineDataBagKeys.FailedTests, new List<string> { "TestLogin.Fails" });
+
+        var prompt = stage.BuildBootstrapPrompt(task, context);
+
+        Assert.Contains("Reason: 1 test failed", prompt);
+        Assert.Contains("TestLogin.Fails", prompt);
+    }
 }

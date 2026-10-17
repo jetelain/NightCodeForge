@@ -66,7 +66,7 @@ public class DeterministicCoverageGate : IWorkflowStage
             if (currentTests < baselineTests)
             {
                 var error = $"Anti-cheating violation: total test count decreased from {baselineTests} to {currentTests}. Tests must not be deleted or disabled.";
-                bag.Set(PipelineDataBagKeys.GateFailureReason, error);
+                bag.Set(PipelineDataBagKeys.CoverageFailureReason, error);
                 var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
                 return StageExecutionResult.Failure(error, targetStage);
             }
@@ -80,7 +80,7 @@ public class DeterministicCoverageGate : IWorkflowStage
             {
                 var delta = currentLineRate - baselineLineRate;
                 var error = $"Coverage regression detected: line coverage decreased from {baselineLineRate:P2} to {currentLineRate:P2} (Delta: {delta:P2}). Quality gate requires Delta >= 0.0%.";
-                bag.Set(PipelineDataBagKeys.GateFailureReason, error);
+                bag.Set(PipelineDataBagKeys.CoverageFailureReason, error);
                 var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
                 return StageExecutionResult.Failure(error, targetStage);
             }

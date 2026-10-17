@@ -73,6 +73,13 @@ public class DeterministicScriptStage : IWorkflowStage
 
         var timeout = Config.TimeoutSeconds > 0 ? Config.TimeoutSeconds : 300;
         var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: timeout, cancellationToken: cancellationToken);
+        var fullOutput = string.IsNullOrWhiteSpace(res.StandardError)
+            ? res.StandardOutput
+            : $"{res.StandardOutput}\n{res.StandardError}";
+
+        context.DataBag.Set(PipelineDataBagKeys.StageCommand(StageId), command);
+        context.DataBag.Set(PipelineDataBagKeys.StageOutput(StageId), fullOutput);
+
         if (!res.Success && Config.FailOnError)
         {
             var errorOutput = !string.IsNullOrWhiteSpace(res.StandardError)

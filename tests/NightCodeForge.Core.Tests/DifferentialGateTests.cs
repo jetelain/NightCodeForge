@@ -26,6 +26,7 @@ public class DifferentialGateTests
         Assert.False(result.IsSuccess);
         Assert.Equal(StandardStageIds.Implementation, result.TargetRoutingStageId);
         Assert.Contains("Coverage regression detected", result.ErrorMessage);
+        Assert.Equal(result.ErrorMessage, context.DataBag.Get<string>(PipelineDataBagKeys.CoverageFailureReason));
     }
 
     [Fact]
@@ -47,6 +48,7 @@ public class DifferentialGateTests
         Assert.False(result.IsSuccess);
         Assert.Contains("Anti-cheating violation", result.ErrorMessage);
         Assert.Equal(StandardStageIds.Implementation, result.TargetRoutingStageId);
+        Assert.Equal(result.ErrorMessage, context.DataBag.Get<string>(PipelineDataBagKeys.CoverageFailureReason));
     }
 
     [Fact]

@@ -57,20 +57,20 @@ public class ReviewPageTests : BunitContext
     public async Task ReviewRoom_LoadsTask_RendersHeaderAndGateMetrics()
     {
         var bag = new PipelineDataBag();
-        bag.Set("coverage.baseline.line_rate", 0.75);
-        bag.Set("coverage.current.line_rate", 0.82);
-        bag.Set("warnings.baseline.total", 4);
-        bag.Set("warnings.current.total", 2);
-        bag.Set("tests.current.total", 30);
-        bag.Set("tests.current.passed", 30);
-        bag.Set("tests.current.failed", 0);
-        bag.Set("tests.current.duration_ms", 850);
+        bag.Set(PipelineDataBagKeys.CoverageBaselineLineRate, 0.75);
+        bag.Set(PipelineDataBagKeys.CoverageCurrentLineRate, 0.82);
+        bag.Set(PipelineDataBagKeys.WarningsBaselineTotal, 4);
+        bag.Set(PipelineDataBagKeys.WarningsCurrentTotal, 2);
+        bag.Set(PipelineDataBagKeys.TestsCurrentTotal, 30);
+        bag.Set(PipelineDataBagKeys.TestsCurrentPassed, 30);
+        bag.Set(PipelineDataBagKeys.TestsCurrentFailed, 0);
+        bag.Set(PipelineDataBagKeys.TestsCurrentDurationMs, 850);
 
         var files = new List<FileDiffSummary>
         {
             new("src/Core/Parser.cs", FileChangeType.Modified, 5, 2, "old line", "new line")
         };
-        bag.Set("ReviewFiles", files);
+        bag.Set(PipelineDataBagKeys.ReviewFiles, files);
 
         var task = new ForgeTask
         {

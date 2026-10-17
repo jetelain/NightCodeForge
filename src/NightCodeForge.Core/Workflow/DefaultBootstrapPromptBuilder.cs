@@ -32,6 +32,9 @@ public static class DefaultBootstrapPromptBuilder
         var taskPath = context.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
         var implSummary = context.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.Implementation));
         var compilerErrors = context.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
+        var failedTests = context.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
+        var buildFailure = context.DataBag.Get<string>(PipelineDataBagKeys.BuildFailureReason);
+        var testFailure = context.DataBag.Get<string>(PipelineDataBagKeys.TestFailureReason);
         var answeredQuestions = task.Questions?
             .Where(q => q.Status == QuestionStatus.Answered && !string.IsNullOrWhiteSpace(q.Answer))
             .Select(q => new { prompt = q.Prompt, answer = q.Answer })
@@ -49,6 +52,10 @@ public static class DefaultBootstrapPromptBuilder
                 reviewer_feedback = string.IsNullOrWhiteSpace(reviewerFeedback) ? null : reviewerFeedback,
                 implementation_summary = string.IsNullOrWhiteSpace(implSummary) ? null : implSummary,
                 compiler_errors = compilerErrors is { Count: > 0 } ? compilerErrors : null,
+                failed_tests = failedTests is { Count: > 0 } ? failedTests : null,
+                failure_reason = testFailure ?? buildFailure,
+                build_failure_reason = string.IsNullOrWhiteSpace(buildFailure) ? null : buildFailure,
+                test_failure_reason = string.IsNullOrWhiteSpace(testFailure) ? null : testFailure,
                 answered_questions = answeredQuestions is { Count: > 0 } ? answeredQuestions : null
             }
         };

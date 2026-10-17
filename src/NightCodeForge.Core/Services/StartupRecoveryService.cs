@@ -117,7 +117,19 @@ public class StartupRecoveryService : IStartupRecoveryService
                 else
                 {
                     // Deterministic Stage: Reset metrics and retries to execute freshly
-                    bag.Remove(PipelineDataBagKeys.DeterministicMetrics);
+                    bag.Remove(PipelineDataBagKeys.TestsCurrentTotal);
+                    bag.Remove(PipelineDataBagKeys.TestsCurrentPassed);
+                    bag.Remove(PipelineDataBagKeys.TestsCurrentFailed);
+                    bag.Remove(PipelineDataBagKeys.TestsCurrentDurationMs);
+                    bag.Remove(PipelineDataBagKeys.CoverageCurrentLineRate);
+                    bag.Remove(PipelineDataBagKeys.WarningsCurrentTotal);
+                    bag.Remove(PipelineDataBagKeys.WarningsNew);
+                    bag.Remove(PipelineDataBagKeys.FailedTests);
+                    bag.Remove(PipelineDataBagKeys.BuildFailureReason);
+                    bag.Remove(PipelineDataBagKeys.TestFailureReason);
+                    bag.Remove(PipelineDataBagKeys.CoverageFailureReason);
+                    bag.Remove(PipelineDataBagKeys.SastFailureReason);
+                    bag.Remove(PipelineDataBagKeys.RatchetFailureReason);
                     _logger.LogWarning("Reset metrics for deterministic stage on orphaned task #{TaskId}.", task.Id);
                 }
 

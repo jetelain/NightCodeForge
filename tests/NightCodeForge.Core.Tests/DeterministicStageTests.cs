@@ -65,6 +65,11 @@ public class DeterministicStageTests
         Assert.Equal(2, context.DataBag.Get<int>(PipelineDataBagKeys.WarningsCurrentTotal));
         Assert.Equal(2, context.DataBag.Get<int>(PipelineDataBagKeys.WarningsBaselineTotal));
         Assert.Equal("dotnet build", fakeEnv.LastCommand);
+        Assert.Equal("dotnet build", context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId)));
+        Assert.Contains("warning CS0168", context.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId)));
+        var newWarnings = context.DataBag.Get<List<string>>(PipelineDataBagKeys.WarningsNew);
+        Assert.NotNull(newWarnings);
+        Assert.Equal(2, newWarnings.Count);
     }
 
     [Fact]
@@ -122,8 +127,12 @@ public class DeterministicStageTests
         var result = await stage.ExecuteAsync(context);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal(42, context.DataBag.Get<int>("tests.current.total"));
-        Assert.Equal(0, context.DataBag.Get<int>("tests.current.failed"));
+        Assert.Equal(42, context.DataBag.Get<int>(PipelineDataBagKeys.TestsCurrentTotal));
+        Assert.Equal(42, context.DataBag.Get<int>(PipelineDataBagKeys.TestsCurrentPassed));
+        Assert.Equal(0, context.DataBag.Get<int>(PipelineDataBagKeys.TestsCurrentFailed));
+        Assert.True(context.DataBag.Get<int>(PipelineDataBagKeys.TestsCurrentDurationMs) >= 0);
+        Assert.Equal("dotnet test --no-build", context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId)));
+        Assert.Contains("Passed: 42", context.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId)));
     }
 
     [Fact]
@@ -394,6 +403,49 @@ public class DeterministicStageTests
         Assert.True(result.IsSuccess);
         Assert.NotEmpty(preloadService.PreloadedModels);
         Assert.Contains(preloadService.PreloadedModels, m => m.ModelName == "qwen2.5-coder:14b");
+    }
+
+    [Fact]
+    public async Task DeterministicSastStage_RecordsStageCommandAndOutput()
+    {
+        var fakeEnv = new FakeExecutionEnvironment
+        {
+            NextResult = new CommandResult(0, "CodeQL SAST scan passed with 0 findings.", string.Empty, TimeSpan.FromSeconds(1))
+        };
+        var stage = new DeterministicSastStage(fakeEnv, "codeql analyze", DeterministicSastStage.DefaultStageId, "Deterministic SAST Gate");
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var context = new PipelineContext(task, workspace);
+        context.DataBag.Set(PipelineDataBagKeys.SastCommand, "codeql analyze");
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("codeql analyze", context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId)));
+        Assert.Contains("CodeQL SAST scan passed", context.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId)));
+    }
+
+    [Fact]
+    public async Task DeterministicScriptStage_RecordsStageCommandAndOutput()
+    {
+        var fakeEnv = new FakeExecutionEnvironment
+        {
+            NextResult = new CommandResult(0, "Script output success", string.Empty, TimeSpan.FromSeconds(1))
+        };
+        var config = new NightCodeForge.Core.Workflow.Configuration.DeterministicStageConfig
+        {
+            Command = "python run_checks.py"
+        };
+        var stage = new DeterministicScriptStage("custom-script", "Custom Script", config, fakeEnv);
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var context = new PipelineContext(task, workspace);
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("python run_checks.py", context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId)));
+        Assert.Contains("Script output success", context.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId)));
     }
 }
 

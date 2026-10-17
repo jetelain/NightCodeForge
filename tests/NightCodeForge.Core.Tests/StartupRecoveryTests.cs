@@ -159,7 +159,14 @@ public class StartupRecoveryTests : IDisposable
     public async Task ReconcileWorkspacesAsync_ReconcilesOrphanedRunningDeterministicStage_ResetsMetricsAndEnqueuesUrgent()
     {
         var bag = new PipelineDataBag();
-        bag.Set("DeterministicMetrics", "Partial metrics to discard");
+        bag.Set(PipelineDataBagKeys.TestsCurrentTotal, 50);
+        bag.Set(PipelineDataBagKeys.TestsCurrentPassed, 49);
+        bag.Set(PipelineDataBagKeys.TestsCurrentFailed, 1);
+        bag.Set(PipelineDataBagKeys.CoverageCurrentLineRate, 0.75);
+        bag.Set(PipelineDataBagKeys.WarningsCurrentTotal, 3);
+        bag.Set(PipelineDataBagKeys.WarningsNew, new List<string> { "warning CS0168" });
+        bag.Set(PipelineDataBagKeys.FailedTests, new List<string> { "TestA failed" });
+        bag.Set(PipelineDataBagKeys.TestFailureReason, "1 failed test");
 
         var task = await _taskRepo.CreateAsync(new ForgeTask
         {
@@ -182,7 +189,14 @@ public class StartupRecoveryTests : IDisposable
         Assert.Equal(TaskOverallStatus.Implemented, updated.Status);
 
         var updatedBag = PipelineDataBag.FromJson(updated.PipelineDataJson);
-        Assert.False(updatedBag.ContainsKey("DeterministicMetrics"));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.TestsCurrentTotal));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.TestsCurrentPassed));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.TestsCurrentFailed));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.CoverageCurrentLineRate));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.WarningsCurrentTotal));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.WarningsNew));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.FailedTests));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.TestFailureReason));
 
         Assert.Contains(302, _jobQueue.UrgentQueue);
     }
