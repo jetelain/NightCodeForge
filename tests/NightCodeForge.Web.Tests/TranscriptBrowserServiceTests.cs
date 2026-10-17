@@ -44,13 +44,12 @@ public class TranscriptBrowserServiceTests : IDisposable
         _serviceProvider = services.BuildServiceProvider();
     }
 
-    private TranscriptBrowserService CreateService()
+    private TranscriptBrowserService CreateService(IOllamaChatClientFactory? chatClientFactory = null)
     {
         var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var chatClientFactory = new Mock<IOllamaChatClientFactory>().Object;
-        var options = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
+        var factory = chatClientFactory ?? new Mock<IOllamaChatClientFactory>().Object;
         var logger = NullLogger<TranscriptBrowserService>.Instance;
-        return new TranscriptBrowserService(_fakeGlobalOptService, scopeFactory, chatClientFactory, options, logger);
+        return new TranscriptBrowserService(_fakeGlobalOptService, scopeFactory, factory, logger);
     }
 
     public void Dispose()
@@ -282,6 +281,44 @@ Done refactoring.
         Assert.NotNull(report);
         Assert.Contains("Compilation", report.FailureCategory);
         Assert.Contains(report.SuggestedActions, a => a.TargetKey == "DeterministicSymbolMap");
+    }
+
+    [Fact]
+    public async Task RunDiagnosticsAsync_WithLiveChatClient_ReturnsConvertedLlmReport()
+    {
+        var mockChatClient = new Mock<Microsoft.Extensions.AI.IChatClient>();
+        mockChatClient
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<Microsoft.Extensions.AI.ChatMessage>>(), It.IsAny<Microsoft.Extensions.AI.ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Microsoft.Extensions.AI.ChatResponse(new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant,
+                "Root cause category: InfiniteLoop\nDiagnosis: Model repeatedly tried reading missing file.\nSuggested action: Check file existence.")));
+
+        var mockFactory = new Mock<IOllamaChatClientFactory>();
+        mockFactory
+            .Setup(f => f.CreateClient(null, OllamaRoutingTarget.Cloud))
+            .Returns(mockChatClient.Object);
+
+        var service = CreateService(mockFactory.Object);
+
+        var summary = new TranscriptSummary(
+            FileName: "test.md",
+            FilePath: "test.md",
+            TaskId: 10,
+            StageId: "test-stage",
+            ModelName: "llama3",
+            Timestamp: DateTime.UtcNow,
+            PromptTokens: 200,
+            CompletionTokens: 100,
+            DurationMs: 5000,
+            Status: "Failed",
+            Optimizations: new LocalOptimizationFlags());
+
+        var detail = new ParsedTranscriptDetail(summary, "raw content", null, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<ParsedTranscriptTurn>());
+
+        var report = await service.RunDiagnosticsAsync(detail, "Cloud");
+
+        Assert.NotNull(report);
+        Assert.Equal("InfiniteLoop", report.FailureCategory);
+        mockFactory.Verify(f => f.CreateClient(null, OllamaRoutingTarget.Cloud), Times.Once);
     }
 
     [Fact]

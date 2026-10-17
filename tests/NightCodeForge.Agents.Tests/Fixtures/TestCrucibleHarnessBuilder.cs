@@ -84,6 +84,7 @@ public class TestCrucibleHarnessBuilder
         private readonly IChatClient _client;
         public TestSingleChatClientFactory(IChatClient client) => _client = client;
         public IChatClient CreateClient(string? modelId = null) => _client;
+        public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget) => _client;
         public IChatClient CreateClient(AgentProfile? profile) => _client;
     }
 }

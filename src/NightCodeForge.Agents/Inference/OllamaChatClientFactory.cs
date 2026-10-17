@@ -93,24 +93,19 @@ public class DefaultOllamaChatClientFactory : IOllamaChatClientFactory
         _loggerFactory = loggerFactory;
     }
 
-    public IChatClient CreateClient(string? modelId = null)
+    public IChatClient CreateClient(string? modelId = null) =>
+        CreateClient(modelId, OllamaRoutingTarget.Auto);
+
+    public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget)
     {
         var defaultOpts = _options.Value;
         var effectiveModel = !string.IsNullOrWhiteSpace(modelId) ? modelId : defaultOpts.ModelId;
-        var cacheKey = $"{effectiveModel}:{OllamaRoutingTarget.Auto}";
-
-        return _clientCache.GetOrAdd(cacheKey, _ =>
-            OllamaChatClientFactory.CreateOllama(defaultOpts, effectiveModel, _loggerFactory?.CreateLogger("OllamaApiClient"), OllamaRoutingTarget.Auto));
-    }
-
-    public IChatClient CreateClient(AgentProfile? profile)
-    {
-        var defaultOpts = _options.Value;
-        var effectiveModel = !string.IsNullOrWhiteSpace(profile?.ModelName) ? profile.ModelName : defaultOpts.ModelId;
-        var routingTarget = profile?.RoutingTarget ?? OllamaRoutingTarget.Auto;
         var cacheKey = $"{effectiveModel}:{routingTarget}";
 
         return _clientCache.GetOrAdd(cacheKey, _ =>
             OllamaChatClientFactory.CreateOllama(defaultOpts, effectiveModel, _loggerFactory?.CreateLogger("OllamaApiClient"), routingTarget));
     }
+
+    public IChatClient CreateClient(AgentProfile? profile) =>
+        CreateClient(profile?.ModelName, profile?.RoutingTarget ?? OllamaRoutingTarget.Auto);
 }

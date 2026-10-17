@@ -16,6 +16,12 @@ public interface IOllamaChatClientFactory
     IChatClient CreateClient(string? modelId = null);
 
     /// <summary>
+    /// Creates or resolves an IChatClient for the specified model identifier and routing target,
+    /// falling back to the default configured ModelId if null or empty.
+    /// </summary>
+    IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget);
+
+    /// <summary>
     /// Creates or resolves an IChatClient for the specified AgentProfile,
     /// using profile.ModelName if provided, or falling back to the default configured ModelId.
     /// </summary>

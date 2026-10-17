@@ -403,6 +403,7 @@ Let me know what you think!";
         private readonly Func<AgentProfile?, IChatClient> _createFunc;
         public MockChatClientFactory(Func<AgentProfile?, IChatClient> createFunc) => _createFunc = createFunc;
         public IChatClient CreateClient(string? modelId = null) => _createFunc(null);
+        public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget) => _createFunc(null);
         public IChatClient CreateClient(AgentProfile? profile) => _createFunc(profile);
     }
 

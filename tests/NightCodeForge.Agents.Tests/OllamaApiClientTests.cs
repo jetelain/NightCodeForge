@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using NightCodeForge.Agents.Inference;
+using NightCodeForge.Core.Domain;
 using OllamaSharp;
 
 namespace NightCodeForge.Agents.Tests;
@@ -93,6 +94,31 @@ public class OllamaApiClientTests
     }
 
     [Fact]
+    public void DefaultOllamaChatClientFactory_CreateClient_WithRoutingTarget_CachesAndResolves()
+    {
+        var options = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions
+        {
+            Endpoint = "http://localhost:11434",
+            ModelId = "default-coder:7b"
+        });
+
+        var factory = new DefaultOllamaChatClientFactory(options);
+
+        var clientCloud1 = factory.CreateClient("model-x", OllamaRoutingTarget.Cloud);
+        var clientCloud2 = factory.CreateClient("model-x", OllamaRoutingTarget.Cloud);
+        var clientLocal = factory.CreateClient("model-x", OllamaRoutingTarget.Local);
+
+        Assert.NotNull(clientCloud1);
+        Assert.Same(clientCloud1, clientCloud2);
+        Assert.NotSame(clientCloud1, clientLocal);
+
+        // Null model falls back to default model
+        var clientDefaultCloud = factory.CreateClient(null, OllamaRoutingTarget.Cloud);
+        Assert.NotNull(clientDefaultCloud);
+        Assert.NotSame(clientCloud1, clientDefaultCloud);
+    }
+
+    [Fact]
     public async Task CrucibleAgentHarness_UsesProfileModel_FromChatClientFactory()
     {
         string? capturedModelId = null;
@@ -134,6 +160,7 @@ public class OllamaApiClientTests
         private readonly IChatClient _client;
         public TestOllamaChatClientFactory(IChatClient client) => _client = client;
         public IChatClient CreateClient(string? modelId = null) => _client;
+        public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget) => _client;
         public IChatClient CreateClient(Core.Domain.AgentProfile? profile) => _client;
     }
 

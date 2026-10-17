@@ -23,7 +23,6 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
     private readonly IGlobalOptimizationSettingsService _globalOptService;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IOllamaChatClientFactory _chatClientFactory;
-    private readonly IOptions<LlmProviderOptions> _providerOptions;
     private readonly ILogger<TranscriptBrowserService> _logger;
 
     [GeneratedRegex(@"^---\r?\n(?<frontmatter>[\s\S]*?)\r?\n---\r?\n?", RegexOptions.Multiline)]
@@ -48,13 +47,11 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         IGlobalOptimizationSettingsService globalOptService,
         IServiceScopeFactory scopeFactory,
         IOllamaChatClientFactory chatClientFactory,
-        IOptions<LlmProviderOptions> providerOptions,
         ILogger<TranscriptBrowserService> logger)
     {
         _globalOptService = globalOptService ?? throw new ArgumentNullException(nameof(globalOptService));
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
-        _providerOptions = providerOptions ?? throw new ArgumentNullException(nameof(providerOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -125,25 +122,23 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
     {
         ArgumentNullException.ThrowIfNull(detail);
 
-        // 1. Attempt live LLM diagnosis
+        // 1. Attempt live LLM diagnosis if a client is available
         try
         {
             var target = string.Equals(mode, "Cloud", StringComparison.OrdinalIgnoreCase)
                 ? OllamaRoutingTarget.Cloud
                 : OllamaRoutingTarget.Auto; // Dynamic routing across on-premise targets (Host GPU or LAN Server)
 
-            var client = OllamaChatClientFactory.CreateOllama(
-                _providerOptions.Value,
-                modelId: null,
-                logger: null,
-                routingTarget: target);
-
-            var diagService = new TranscriptDiagnosticService(client);
-            var diagnosis = await diagService.DiagnoseTranscriptAsync(detail.RawMarkdown, cancellationToken: cancellationToken);
-
-            if (!string.IsNullOrWhiteSpace(diagnosis.DiagnosisSummary) && diagnosis.DiagnosisSummary != "Transcript is empty.")
+            var client = _chatClientFactory.CreateClient(null, target);
+            if (client != null)
             {
-                return ConvertDiagnosisToReport(diagnosis, detail);
+                var diagService = new TranscriptDiagnosticService(client);
+                var diagnosis = await diagService.DiagnoseTranscriptAsync(detail.RawMarkdown, cancellationToken: cancellationToken);
+
+                if (!string.IsNullOrWhiteSpace(diagnosis.DiagnosisSummary) && diagnosis.DiagnosisSummary != "Transcript is empty.")
+                {
+                    return ConvertDiagnosisToReport(diagnosis, detail);
+                }
             }
         }
         catch (Exception ex)
