@@ -41,7 +41,7 @@ public class GitSyncService : IGitSyncService
         _mirrorSyncService = mirrorSyncService ?? throw new ArgumentNullException(nameof(mirrorSyncService));
         _taskRepository = taskRepository;
         _pathResolver = pathResolver;
-        _wslMetadataService = wslMetadataService ?? new Infrastructure.Execution.WslMetadataService(new Infrastructure.Execution.SystemProcessRunner());
+        _wslMetadataService = wslMetadataService ?? new Infrastructure.Execution.WslMetadataService(new Core.Execution.SystemProcessRunner());
         _logger = logger ?? NullLogger<GitSyncService>.Instance;
     }
 

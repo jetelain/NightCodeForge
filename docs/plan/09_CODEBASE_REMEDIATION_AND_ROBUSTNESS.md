@@ -35,7 +35,7 @@ During initial rapid development, various lenient patterns, fallback strategies,
 | :--- | :--- | :--- | :--- |
 | **9.1** | [🏷️ Step 9.1: Constants, Enums & Literal Remediation](phase-9/STEP_9_1_CONSTANTS_ENUMS_AND_LITERAL_REMEDIATION.md) | Centralize `StandardStageIds`, `PipelineDataBagKeys`, `StandardHarnessIds`, `StageImplementationTypes`, and `WorkflowDefaults`. Refactor raw string/numeric literals throughout Core, Infrastructure, Agents, and Web. | Completed |
 | **9.2** | [🏛️ Step 9.2: Database Integrity & Hard Errors (Zero Synthetic Fallbacks)](phase-9/STEP_9_2_DATABASE_INTEGRITY_AND_HARD_ERRORS.md) | Enforce hard errors when database records are missing: remove default pipeline fallback in `DatabaseWorkflowPipelineProvider` when a specific ID is requested, eliminate on-the-fly synthetic `AgentProfile` creation in `TaskOrchestrator`, `IdeationService`, and `TriageService`. | Completed |
-| **9.3** | [✂️ Step 9.3: Clean Break & Dead Code Pruning](phase-9/STEP_9_3_CLEAN_BREAK_AND_DEAD_CODE_PRUNING.md) | Prune superseded legacy stages (`DeterministicPreImplementationStage`, `DeterministicPostImplementationStage`, `DeterministicPostReviewStage`), remove redundant `SystemProcessRunner` subclass, prune legacy string prompt formatters in `DefaultBootstrapPromptBuilder`, drop dead sync-over-async methods, and drive dynamic database labels in `StageRunSelector` and `StageConversationViewer`. | Planned |
+| **9.3** | [✂️ Step 9.3: Clean Break & Dead Code Pruning](phase-9/STEP_9_3_CLEAN_BREAK_AND_DEAD_CODE_PRUNING.md) | Prune superseded legacy stages (`DeterministicPreImplementationStage`, `DeterministicPostImplementationStage`, `DeterministicPostReviewStage`), remove redundant `SystemProcessRunner` subclass, prune legacy string prompt formatters in `DefaultBootstrapPromptBuilder`, drop dead sync-over-async methods, and drive dynamic database labels in `StageRunSelector` and `StageConversationViewer`. | Completed |
 | **9.4** | [🗑️ Step 9.4: Remove Non-Functional A/B Testing & Dead Navigation Relics](phase-9/STEP_9_4_REMOVE_AB_TESTING_FROM_SETTINGS.md) | Delete `ABTestingComparatorTab.razor`, remove A/B tab from `Settings.razor`, rebrand vestigial "Settings & A/B" navigation links across `NavMenu`, `TopNavBar`, and `Home`, and prune unused `_dbContext` parameter in `WorkspaceProvisioningService`. | Planned |
 | **9.5** | [🏛️ Step 9.5: Standard Workflow Domain Extraction & Canonical Stage Identifiers](phase-9/STEP_9_5_STANDARD_WORKFLOW_DOMAIN_EXTRACTION.md) | Move standard 3-agent pipeline definition from `EnsureDefaultWorkflowsAsync` in `AppDbContext.cs` to a dedicated `StandardWorkflowDefinitions` domain class. Add `StandardStageIds.Merge` and `StandardStageIds.Ideation` to eliminate remaining magic strings. | Planned |
 | **9.6** | [💉 Step 9.6: Required Constructor DI & Fail-Fast Architecture](phase-9/STEP_9_6_REQUIRED_CONSTRUCTOR_DI_AND_FAIL_FAST.md) | Eliminate `= null` and fallback instances from service constructors across Core, Infrastructure, Agents, and Web. Fix silent-success bug in deterministic quality gates on missing environment. Introduce `TestOrchestratorBuilder` for clean unit tests. | Planned |
@@ -120,13 +120,13 @@ flowchart TD
   - [x] `DatabaseWorkflowPipelineProvider` throws `KeyNotFoundException` / `WorkflowNotFoundException` if a specified `WorkflowId` does not exist.
   - [x] `TaskOrchestrator`, `IdeationService`, and `TriageService` throw hard exceptions if required `AgentProfile` records are missing.
   - [x] Targeted tests verify hard errors when database records are absent.
-- [ ] **Step 9.3: Clean Break & Dead Code Pruning**
-  - [ ] `DeterministicPreImplementationStage`, `DeterministicPostImplementationStage`, and `DeterministicPostReviewStage` removed.
-  - [ ] Redundant `NightCodeForge.Infrastructure.Execution.SystemProcessRunner` subclass removed.
-  - [ ] `BuildLegacyFormat` removed from `DefaultBootstrapPromptBuilder`.
-  - [ ] Sync `GetPipeline` removed from `IWorkflowPipelineProvider`.
-  - [ ] `StageRunSelector.razor` and `StageConversationViewer.razor` format stage names dynamically from database `WorkflowStages`.
-  - [ ] `WorkerStatusCard.razor` uses `WorkflowStageKind` instead of substring heuristics.
+- [x] **Step 9.3: Clean Break & Dead Code Pruning**
+  - [x] `DeterministicPreImplementationStage`, `DeterministicPostImplementationStage`, and `DeterministicPostReviewStage` removed.
+  - [x] Redundant `NightCodeForge.Infrastructure.Execution.SystemProcessRunner` subclass removed.
+  - [x] `BuildLegacyFormat` removed from `DefaultBootstrapPromptBuilder`.
+  - [x] Sync `GetPipeline` removed from `IWorkflowPipelineProvider`.
+  - [x] `StageRunSelector.razor` and `StageConversationViewer.razor` format stage names dynamically from database `WorkflowStages`.
+  - [x] `WorkerStatusCard.razor` uses `WorkflowStageKind` instead of substring heuristics.
 - [ ] **Step 9.4: Remove Non-Functional A/B Testing & Dead Navigation Relics**
   - [ ] `ABTestingComparatorTab.razor` deleted.
   - [ ] A/B Testing tab button and switch case removed from `Settings.razor`.

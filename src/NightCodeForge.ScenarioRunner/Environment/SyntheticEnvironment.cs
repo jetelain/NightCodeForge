@@ -268,7 +268,7 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
                     wslDistribution: null,
                     shellExecutable: "docker",
                     wslExecutable: "wsl.exe");
-                var runner = new Infrastructure.Execution.SystemProcessRunner();
+                var runner = new NightCodeForge.Core.Execution.SystemProcessRunner();
                 runner.Run(rmExe, rmArgs, timeoutSeconds: 10);
             }
             catch { }
@@ -313,14 +313,11 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
             _defaultPipelineFactory = defaultPipelineFactory;
         }
 
-        public IWorkflowPipeline GetPipeline(ForgeTask task)
-        {
-            if (CustomPipeline != null) return CustomPipeline;
-            if (_defaultPipelineFactory != null) return _defaultPipelineFactory(task);
-            return new WorkflowPipeline(Array.Empty<IWorkflowStage>());
-        }
-
         public Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default)
-            => Task.FromResult(GetPipeline(task));
+        {
+            if (CustomPipeline != null) return Task.FromResult(CustomPipeline);
+            if (_defaultPipelineFactory != null) return Task.FromResult(_defaultPipelineFactory(task));
+            return Task.FromResult<IWorkflowPipeline>(new WorkflowPipeline(Array.Empty<IWorkflowStage>()));
+        }
     }
 }

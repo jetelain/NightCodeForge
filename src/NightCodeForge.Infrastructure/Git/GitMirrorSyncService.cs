@@ -28,7 +28,7 @@ public class GitMirrorSyncService : IGitMirrorSyncService
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _alertNotifier = alertNotifier;
         _pathResolver = pathResolver;
-        _wslMetadataService = wslMetadataService ?? new Execution.WslMetadataService(new Execution.SystemProcessRunner());
+        _wslMetadataService = wslMetadataService ?? new Execution.WslMetadataService(new NightCodeForge.Core.Execution.SystemProcessRunner());
         _logger = logger ?? NullLogger<GitMirrorSyncService>.Instance;
     }
 

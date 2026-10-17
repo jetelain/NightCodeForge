@@ -142,13 +142,19 @@ public class TestWorkflowStage : IWorkflowStage
     public string DisplayName => StageId;
     public WorkflowStageKind Kind { get; set; } = WorkflowStageKind.Agentic;
     public AgentMode RequiredMode { get; set; } = AgentMode.Full;
+    public string? PromptTemplate { get; set; }
     public Func<PipelineContext, CancellationToken, Task<StageExecutionResult>>? Handler { get; set; }
 
-    public TestWorkflowStage(string stageId, WorkflowStageKind kind = WorkflowStageKind.Agentic, AgentMode mode = AgentMode.Full)
+    public TestWorkflowStage(
+        string stageId,
+        WorkflowStageKind kind = WorkflowStageKind.Agentic,
+        AgentMode mode = AgentMode.Full,
+        string? promptTemplate = null)
     {
         StageId = stageId;
         Kind = kind;
         RequiredMode = mode;
+        PromptTemplate = promptTemplate ?? "Execute stage '{{ stage.id }}' for task #{{ task.id }}: {{ task.title }}\n{{ task.description }}{{ if context.approved_plan }}\n\n[Approved Implementation Plan]:\n{{ context.approved_plan }}\n{{ end }}{{ if context.answered_questions }}\n\n[Human Clarifications & Answers]:\n{{ for qa in context.answered_questions }}Q: {{ qa.prompt }}\nA: {{ qa.answer }}\n{{ end }}{{ end }}";
     }
 
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)

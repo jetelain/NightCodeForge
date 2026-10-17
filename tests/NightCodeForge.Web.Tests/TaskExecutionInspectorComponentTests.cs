@@ -85,10 +85,12 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             StartedAt = DateTime.UtcNow.AddMinutes(-5)
         };
 
+        var workflow = TestWorkflowFixtures.CreateStandardWorkflow();
         Conversation? selected = null;
         var cut = Render<StageRunSelector>(p => p
             .Add(x => x.Conversations, new List<Conversation> { conv1, conv2, conv3 })
             .Add(x => x.SelectedConversation, conv1)
+            .Add(x => x.WorkflowStages, (IReadOnlyList<StageDefinition>)workflow.Stages!)
             .Add(x => x.OnConversationSelected, conv => selected = conv));
 
         Assert.Contains("1. ForgeTask Review", cut.Markup);
@@ -286,12 +288,34 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             StartedAt = DateTime.UtcNow.AddMinutes(-2)
         };
 
+        var workflow = TestWorkflowFixtures.CreateStandardWorkflow();
         var cut = Render<StageRunSelector>(p => p
+            .Add(x => x.Conversations, new List<Conversation> { c1, c2, c3 })
+            .Add(x => x.WorkflowStages, (IReadOnlyList<StageDefinition>)workflow.Stages!));
+
+        Assert.Contains("2. Pre-Impl Baseline", cut.Markup);
+        Assert.Contains("4. Post-Impl Gates", cut.Markup);
+        Assert.Contains("5. Code Review", cut.Markup);
+
+        var cutFallback = Render<StageRunSelector>(p => p
             .Add(x => x.Conversations, new List<Conversation> { c1, c2, c3 }));
 
-        Assert.Contains("2. Pre-Check Gate", cut.Markup);
-        Assert.Contains("4. Post-Check Gate", cut.Markup);
-        Assert.Contains("5. Pull Request Review", cut.Markup);
+        Assert.Contains("Pre-Implementation Baseline", cutFallback.Markup);
+        Assert.Contains("Post-Implementation Gates", cutFallback.Markup);
+        Assert.Contains("Code Review &amp; Fix", cutFallback.Markup);
+
+        var cUnknown = new Conversation
+        {
+            Id = 4,
+            TaskId = 10,
+            StageId = "custom-security-scan",
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow
+        };
+        var cutUnknown = Render<StageRunSelector>(p => p
+            .Add(x => x.Conversations, new List<Conversation> { cUnknown }));
+        Assert.Contains("custom-security-scan", cutUnknown.Markup);
     }
 
     [Fact]
@@ -337,11 +361,13 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             }
         };
 
+        var workflow = TestWorkflowFixtures.CreateStandardWorkflow();
         var cut = Render<StageConversationViewer>(p => p
             .Add(x => x.Conversation, conv)
+            .Add(x => x.WorkflowStages, (IReadOnlyList<StageDefinition>)workflow.Stages!)
             .Add(x => x.IsActiveStage, false));
 
-        Assert.Contains("5. Pull Request Review", cut.Markup);
+        Assert.Contains("5. Code Review", cut.Markup);
         Assert.Contains("Compacted thinking token log", cut.Markup);
         Assert.Contains("tokens", cut.Markup);
         Assert.Contains("350ms", cut.Markup);

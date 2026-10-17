@@ -55,7 +55,7 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IStartupRecoveryService, StartupRecoveryService>();
 
         // 6. Execution Environments, Process Runner & Path Resolution
-        services.TryAddSingleton<IProcessRunner, Execution.SystemProcessRunner>();
+        services.TryAddSingleton<IProcessRunner, NightCodeForge.Core.Execution.SystemProcessRunner>();
         services.TryAddSingleton<IWslMetadataService, Execution.WslMetadataService>();
         services.TryAddSingleton<IHostSdkDiscoveryService, Execution.HostSdkDiscoveryService>();
         services.TryAddSingleton<IWorkspacePathResolver, Execution.WorkspacePathResolver>();
@@ -78,9 +78,6 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicSastStage>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicCoverageGate>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicWarningRatchetStage>();
-        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPreImplementationStage>();
-        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPostImplementationStage>();
-        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicPostReviewStage>();
 
         // 10. Streaming & Activity Streamer
         services.TryAddSingleton<NightCodeForge.Core.Streaming.IAgentActivityStreamer, NightCodeForge.Core.Streaming.InMemoryAgentActivityStreamer>();

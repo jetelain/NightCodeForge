@@ -66,20 +66,20 @@ public static class TestWorkflowPipelines
 
     public static IWorkflowPipeline CreateStandardPipeline(
         GenericAgenticStage? reviewStage = null,
-        DeterministicPreImplementationStage? preImplStage = null,
+        IWorkflowStage? preImplStage = null,
         GenericAgenticStage? implStage = null,
-        DeterministicPostImplementationStage? postImplStage = null,
+        IWorkflowStage? postImplStage = null,
         GenericAgenticStage? fixStage = null,
-        DeterministicPostReviewStage? postReviewStage = null)
+        IWorkflowStage? postReviewStage = null)
     {
         return new WorkflowPipeline(new IWorkflowStage[]
         {
             reviewStage ?? CreateReviewStage(),
-            preImplStage ?? new DeterministicPreImplementationStage(),
+            preImplStage ?? new DeterministicBuildStage(stageId: StandardStageIds.PreImplementationBaseline, displayName: "Pre-Implementation Baseline"),
             implStage ?? CreateImplementationStage(),
-            postImplStage ?? new DeterministicPostImplementationStage(),
+            postImplStage ?? new DeterministicWarningRatchetStage(),
             fixStage ?? CreateCodeReviewStage(),
-            postReviewStage ?? new DeterministicPostReviewStage()
+            postReviewStage ?? new DeterministicTestStage(stageId: StandardStageIds.PostReviewVerification, displayName: "Post-Review Verification")
         });
     }
 }

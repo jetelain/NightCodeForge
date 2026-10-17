@@ -30,14 +30,15 @@ public class CoreCoverageTests : IDisposable
     }
 
     [Fact]
-    public void DefaultWorkflowPipelineProvider_ReturnsConfiguredPipeline()
+    public async Task DefaultWorkflowPipelineProvider_ReturnsConfiguredPipeline()
     {
         var stage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full });
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
         var provider = new DefaultWorkflowPipelineProvider(pipeline);
 
-        Assert.Same(pipeline, provider.GetPipeline(new ForgeTask()));
-        Assert.Single(provider.GetPipeline(new ForgeTask()).Stages);
+        var retrieved = await provider.GetPipelineAsync(new ForgeTask());
+        Assert.Same(pipeline, retrieved);
+        Assert.Single(retrieved.Stages);
     }
 
     [Fact]

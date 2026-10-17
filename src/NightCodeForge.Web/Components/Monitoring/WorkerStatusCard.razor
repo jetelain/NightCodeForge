@@ -178,13 +178,12 @@
     private bool IsGpuActive()
     {
         if (CurrentSnapshot.Status != WorkerExecutionStatus.Running) return false;
-        var kind = CurrentSnapshot.StageKind?.ToLowerInvariant() ?? "";
-        if (kind.Contains("deterministic")) return false;
-        if (kind.Contains("agentic")) return true;
+        if (Enum.TryParse<WorkflowStageKind>(CurrentSnapshot.StageKind, ignoreCase: true, out var kind))
+        {
+            return kind == WorkflowStageKind.Agentic;
+        }
 
-        var stageId = (CurrentSnapshot.StageId ?? "").ToLowerInvariant().Replace("-", "").Replace("_", "");
-        if (stageId.Contains("preimpl") || stageId.Contains("postimpl") || stageId.Contains("postreview") || stageId.Contains("gate") || stageId.Contains("merge")) return false;
-        return stageId.Contains("taskreview") || stageId.Contains("implement") || stageId.Contains("codereview");
+        return !CurrentSnapshot.HardwareTarget.Contains("CPU", StringComparison.OrdinalIgnoreCase);
     }
 
     private bool IsDeterministicActive()

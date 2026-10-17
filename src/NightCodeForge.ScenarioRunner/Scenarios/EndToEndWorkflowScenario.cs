@@ -84,26 +84,43 @@ public class EndToEndWorkflowScenario : IScenario
         };
 
         using var scopeServices = context.Environment.Services.CreateScope();
-        var envProvider = scopeServices.ServiceProvider.GetRequiredService<IExecutionEnvironmentProvider>();
-        var execEnv = scopeServices.ServiceProvider.GetRequiredService<IExecutionEnvironment>();
-        var preloadService = scopeServices.ServiceProvider.GetRequiredService<IOllamaModelPreloadService>();
+        var registry = scopeServices.ServiceProvider.GetRequiredService<IWorkflowStageRegistry>();
+
+        var preImplDef = new StageDefinition
+        {
+            StageId = StandardStageIds.PreImplementationBaseline,
+            DisplayName = "Pre-Implementation Baseline",
+            Kind = WorkflowStageKind.Deterministic,
+            CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
+            ConfigurationJson = "{\"Action\": \"CompositeBaseline\", \"FailOnError\": false, \"ExtraParameters\": {\"Stages\": \"build,test\"}}"
+        };
+
+        var postImplDef = new StageDefinition
+        {
+            StageId = StandardStageIds.PostImplementationGates,
+            DisplayName = "Post-Implementation Gates",
+            Kind = WorkflowStageKind.Deterministic,
+            CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
+            ConfigurationJson = "{\"Action\": \"CompositeVerification\", \"LoopBackStageId\": \"implementation\", \"FailOnError\": true, \"ExtraParameters\": {\"Stages\": \"build,test\"}}"
+        };
+
+        var postReviewDef = new StageDefinition
+        {
+            StageId = StandardStageIds.PostReviewVerification,
+            DisplayName = "Post-Review Verification",
+            Kind = WorkflowStageKind.Deterministic,
+            CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
+            ConfigurationJson = "{\"Action\": \"CompositeVerification\", \"LoopBackStageId\": \"code-review-fix\", \"FailOnError\": true, \"ExtraParameters\": {\"Stages\": \"build,test\"}}"
+        };
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
         {
             reviewStage,
-            new DeterministicPreImplementationStage(
-                envProvider: envProvider,
-                executionEnv: execEnv,
-                preloadService: preloadService),
+            new CompositeDeterministicStage(preImplDef, scopeServices.ServiceProvider, registry),
             implStage,
-            new DeterministicPostImplementationStage(
-                envProvider: envProvider,
-                executionEnv: execEnv),
+            new CompositeDeterministicStage(postImplDef, scopeServices.ServiceProvider, registry),
             reviewFixStage,
-            new DeterministicPostReviewStage(
-                envProvider: envProvider,
-                executionEnv: execEnv,
-                preloadService: preloadService)
+            new CompositeDeterministicStage(postReviewDef, scopeServices.ServiceProvider, registry)
         });
 
         context.Environment.SetCustomPipeline(pipeline);

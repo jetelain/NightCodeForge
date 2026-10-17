@@ -8,7 +8,6 @@ namespace NightCodeForge.Core.Workflow;
 public interface IWorkflowPipelineProvider
 {
     Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default);
-    IWorkflowPipeline GetPipeline(ForgeTask task) => GetPipelineAsync(task).GetAwaiter().GetResult();
 }
 
 /// <summary>
@@ -25,6 +24,4 @@ public class DefaultWorkflowPipelineProvider : IWorkflowPipelineProvider
 
     public Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default)
         => Task.FromResult(_pipeline);
-
-    public IWorkflowPipeline GetPipeline(ForgeTask task) => _pipeline;
 }

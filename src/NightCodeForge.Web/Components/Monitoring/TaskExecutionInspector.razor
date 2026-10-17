@@ -149,12 +149,14 @@
                 <div>
                     <StageRunSelector Conversations="@_conversations"
                                       SelectedConversation="@_selectedConversation"
+                                      WorkflowStages="@_workflowStages"
                                       OnConversationSelected="HandleConversationSelected" />
                 </div>
 
                 <!-- Right: Active / Selected Conversation Viewer -->
                 <div>
                     <StageConversationViewer Conversation="@_selectedConversation"
+                                             WorkflowStages="@_workflowStages"
                                              IsActiveStage="@IsStageActive(_selectedConversation?.StageId)"
                                              LiveStreamingThinking="@_liveStreamingThinking"
                                              LiveStreamingMessage="@_liveStreamingMessage" />

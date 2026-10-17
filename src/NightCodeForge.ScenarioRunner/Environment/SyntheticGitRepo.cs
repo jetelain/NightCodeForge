@@ -17,7 +17,7 @@ public sealed class SyntheticGitRepo
     public SyntheticGitRepo(string repositoryPath, IWslMetadataService? wslMetadataService = null)
     {
         RepositoryPath = repositoryPath ?? throw new ArgumentNullException(nameof(repositoryPath));
-        WslMetadataService = wslMetadataService ?? new NightCodeForge.Infrastructure.Execution.WslMetadataService(new NightCodeForge.Infrastructure.Execution.SystemProcessRunner());
+        WslMetadataService = wslMetadataService ?? new NightCodeForge.Infrastructure.Execution.WslMetadataService(new NightCodeForge.Core.Execution.SystemProcessRunner());
     }
 
     /// <summary>

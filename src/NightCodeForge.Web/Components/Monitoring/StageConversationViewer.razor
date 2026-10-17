@@ -204,6 +204,7 @@
     [Parameter] public bool IsActiveStage { get; set; }
     [Parameter] public string? LiveStreamingThinking { get; set; }
     [Parameter] public string? LiveStreamingMessage { get; set; }
+    [Parameter] public IReadOnlyList<StageDefinition>? WorkflowStages { get; set; }
 
     /// <summary>
     /// Pairs every tool result turn with the closest preceding tool call turn of the same tool that has no
@@ -236,17 +237,25 @@
         return (merged, hidden);
     }
 
-    private static string FormatStageName(string stageId)
+    private string FormatStageName(string stageId)
     {
+        if (WorkflowStages != null)
+        {
+            var match = WorkflowStages.FirstOrDefault(s => string.Equals(s.StageId, stageId, StringComparison.OrdinalIgnoreCase));
+            if (match != null)
+            {
+                return match.SequenceOrder > 0 ? $"{match.SequenceOrder}. {match.DisplayName}" : match.DisplayName;
+            }
+        }
+
         return stageId switch
         {
-            StandardStageIds.TaskReview => "1. ForgeTask Review",
-            "deterministic-pre-check" or StandardStageIds.PreImplementationBaseline => "2. Pre-Check Gate",
-            StandardStageIds.Implementation => "3. Implementation",
-            "deterministic-post-check" or StandardStageIds.PostImplementationGates => "4. Post-Check Gate",
-            "pr-review" or StandardStageIds.CodeReviewAndFix => "5. Pull Request Review",
-            StandardStageIds.PostReviewVerification => "6. Post-Review Verification",
-            "merge" => "7. Squash & Merge",
+            StandardStageIds.TaskReview => "ForgeTask Review",
+            StandardStageIds.PreImplementationBaseline => "Pre-Implementation Baseline",
+            StandardStageIds.Implementation => "Implementation",
+            StandardStageIds.PostImplementationGates => "Post-Implementation Gates",
+            StandardStageIds.CodeReviewAndFix => "Code Review & Fix",
+            StandardStageIds.PostReviewVerification => "Post-Review Verification",
             _ => stageId
         };
     }

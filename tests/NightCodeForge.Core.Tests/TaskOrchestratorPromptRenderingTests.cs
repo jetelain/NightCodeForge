@@ -46,7 +46,6 @@ public class TaskOrchestratorPromptRenderingTests
         private readonly IWorkflowPipeline _pipeline;
         public SingleStagePipelineProvider(IWorkflowPipeline pipeline) => _pipeline = pipeline;
         public Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default) => Task.FromResult(_pipeline);
-        public IWorkflowPipeline GetPipeline(ForgeTask task) => _pipeline;
     }
 
     private class SingleHarnessRegistry : IHarnessRegistry
@@ -154,7 +153,7 @@ public class TaskOrchestratorPromptRenderingTests
     }
 
     [Fact]
-    public async Task ProcessTaskAsync_WithoutPromptTemplate_FallsBackToLegacyFormatting()
+    public async Task ProcessTaskAsync_WithoutPromptTemplate_ThrowsInvalidOperationException()
     {
         var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
@@ -208,10 +207,10 @@ public class TaskOrchestratorPromptRenderingTests
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
-        Assert.Single(fakeHarness.ExecutedSessions);
-        var prompt = fakeHarness.ExecutedSessions[0].BootstrapPrompt;
-
-        Assert.StartsWith("Execute stage 'task-review' for task #202: Legacy Task\nLegacy description", prompt);
+        Assert.Empty(fakeHarness.ExecutedSessions);
+        var updatedTask = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Failed, updatedTask.Status);
     }
 
     [Fact]
@@ -231,14 +230,12 @@ public class TaskOrchestratorPromptRenderingTests
     }
 
     [Fact]
-    public void BuildBootstrapPrompt_DefaultStageDirectCall_RendersDefaultFormat()
+    public void BuildBootstrapPrompt_WithoutPromptTemplate_ThrowsInvalidOperationException()
     {
         IWorkflowStage stage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full });
         var task = new ForgeTask { Id = 8, Title = "Review Task", Description = "Review details" };
         var context = new PipelineContext(task, new Workspace());
 
-        var prompt = stage.BuildBootstrapPrompt(task, context);
-
-        Assert.StartsWith("Execute stage 'task-review' for task #8: Review Task\nReview details", prompt);
+        Assert.Throws<InvalidOperationException>(() => stage.BuildBootstrapPrompt(task, context));
     }
 }

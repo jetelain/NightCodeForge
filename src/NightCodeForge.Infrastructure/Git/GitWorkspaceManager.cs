@@ -24,7 +24,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _pathResolver = pathResolver;
-        _wslMetadataService = wslMetadataService ?? new Execution.WslMetadataService(new Execution.SystemProcessRunner());
+        _wslMetadataService = wslMetadataService ?? new Execution.WslMetadataService(new NightCodeForge.Core.Execution.SystemProcessRunner());
         _logger = logger ?? NullLogger<GitWorkspaceManager>.Instance;
     }
 
