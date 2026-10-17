@@ -42,7 +42,7 @@ public class DatabaseSeedingTests : IDisposable
         var seeded = await context.EnsureDefaultWorkflowsAsync();
 
         Assert.NotNull(seeded);
-        Assert.Equal("standard-3-agent", seeded.Code);
+        Assert.Equal(StandardWorkflowDefinitions.Standard3AgentCode, seeded.Code);
         Assert.Equal("Standard 3-Agent Pipeline", seeded.Name);
         Assert.True(seeded.IsDefault);
         Assert.Null(seeded.WorkspaceId);
@@ -51,12 +51,12 @@ public class DatabaseSeedingTests : IDisposable
         var orderedStages = seeded.Stages.OrderBy(s => s.SequenceOrder).ToList();
         var expectedStageIds = new[]
         {
-            "task-review",
-            "deterministic-pre-impl",
-            "implementation",
-            "deterministic-post-impl",
-            "code-review-fix",
-            "deterministic-post-review"
+            StandardStageIds.TaskReview,
+            StandardStageIds.PreImplementationBaseline,
+            StandardStageIds.Implementation,
+            StandardStageIds.PostImplementationGates,
+            StandardStageIds.CodeReviewAndFix,
+            StandardStageIds.PostReviewVerification
         };
 
         for (var i = 0; i < expectedStageIds.Length; i++)
@@ -145,7 +145,7 @@ public class DatabaseSeedingTests : IDisposable
         Assert.Equal(5, profiles.Count);
 
         var profileIds = profiles.Select(p => p.Id).OrderBy(id => id).ToList();
-        Assert.Equal(new[] { "code-review-fix", "ideation", "implementation", "task-review", "triage" }, profileIds);
+        Assert.Equal(new[] { StandardStageIds.CodeReviewAndFix, StandardStageIds.Ideation, StandardStageIds.Implementation, StandardStageIds.TaskReview, StandardStageIds.Triage }, profileIds);
 
         // Calling again preserves existing profiles and does not duplicate
         await context.EnsureDefaultGlobalAgentProfilesAsync("qwen2.5-coder:32b");

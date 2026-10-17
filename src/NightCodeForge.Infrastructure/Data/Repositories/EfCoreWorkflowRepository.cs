@@ -33,7 +33,7 @@ public class EfCoreWorkflowRepository : IWorkflowRepository
         {
             def = await _context.WorkflowDefinitions
                 .Include(w => w.Stages.OrderBy(s => s.SequenceOrder))
-                .FirstOrDefaultAsync(w => w.Code == "standard-3-agent", cancellationToken);
+                .FirstOrDefaultAsync(w => w.Code == StandardWorkflowDefinitions.Standard3AgentCode, cancellationToken);
         }
 
         if (def == null)

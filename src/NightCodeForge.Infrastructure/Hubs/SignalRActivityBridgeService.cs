@@ -121,7 +121,7 @@ public class SignalRActivityBridgeService : BackgroundService
                     await _hubContext.Clients.All
                         .ReceiveWorkerStatus("Running", evt.TaskId, evt.StageId, kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU");
                 }
-                else if (string.Equals(evt.StageId, "merge", StringComparison.OrdinalIgnoreCase) ||
+                else if (string.Equals(evt.StageId, StandardStageIds.Merge, StringComparison.OrdinalIgnoreCase) ||
                          string.Equals(evt.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
                 {
                     await _hubContext.Clients.All

@@ -300,7 +300,7 @@ public class EfCoreTaskRepository : ITaskRepository
     {
         return StartConversationAsync(
             taskId: null,
-            stageId: "ideation",
+            stageId: StandardStageIds.Ideation,
             stageKind: WorkflowStageKind.Agentic,
             attemptIndex: 1,
             agentProfileId: agentProfileId,

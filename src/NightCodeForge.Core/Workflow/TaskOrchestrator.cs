@@ -975,7 +975,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
                     Guid.NewGuid().ToString("N"),
                     task.Id,
-                    "merge",
+                    StandardStageIds.Merge,
                     Streaming.AgentActivityKind.StageCompleted,
                     $"ForgeTask #{task.Id} completed and squash-merged.",
                     DateTime.UtcNow,

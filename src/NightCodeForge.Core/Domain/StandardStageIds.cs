@@ -12,4 +12,6 @@ public static class StandardStageIds
     public const string CodeReviewAndFix = "code-review-fix";
     public const string PostReviewVerification = "deterministic-post-review";
     public const string Triage = "triage";
+    public const string Merge = "merge";
+    public const string Ideation = "ideation";
 }

@@ -1010,16 +1010,16 @@
         try
         {
             ws = WorkspaceState.ActiveWorkspace;
-            var baseProfile = ws != null ? await WorkspaceRepository.GetEffectiveAgentProfileAsync(ws.Id, "ideation") : null;
+            var baseProfile = ws != null ? await WorkspaceRepository.GetEffectiveAgentProfileAsync(ws.Id, StandardStageIds.Ideation) : null;
             if (baseProfile == null && ws != null)
             {
                 baseProfile = ws.AgentProfiles?.FirstOrDefault(p =>
-                    string.Equals(p.Id, "ideation", StringComparison.OrdinalIgnoreCase) ||
-                    p.Name.Contains("ideation", StringComparison.OrdinalIgnoreCase));
+                    string.Equals(p.Id, StandardStageIds.Ideation, StringComparison.OrdinalIgnoreCase) ||
+                    p.Name.Contains(StandardStageIds.Ideation, StringComparison.OrdinalIgnoreCase));
             }
             if (baseProfile == null)
             {
-                throw new AgentProfileNotFoundException("ideation", ws?.Id);
+                throw new AgentProfileNotFoundException(StandardStageIds.Ideation, ws?.Id);
             }
             AgentProfile? effectiveProfile = null;
             if (Session.SelectedRoutingTarget != OllamaRoutingTarget.Auto || !string.IsNullOrEmpty(Session.SelectedModelOverride))

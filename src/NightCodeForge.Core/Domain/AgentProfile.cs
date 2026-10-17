@@ -65,7 +65,7 @@ public class AgentProfile
     /// </summary>
     public static AgentProfile CreateDefaultIdeationProfile(int? workspaceId = null, string defaultModelName = "") => new()
     {
-        Id = "ideation",
+        Id = StandardStageIds.Ideation,
         WorkspaceId = workspaceId,
         Name = "Ideation & Codebase Discovery Agent",
         HarnessId = StandardHarnessIds.Crucible,

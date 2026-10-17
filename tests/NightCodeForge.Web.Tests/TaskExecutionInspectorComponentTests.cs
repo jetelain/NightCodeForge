@@ -293,9 +293,9 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             .Add(x => x.Conversations, new List<Conversation> { c1, c2, c3 })
             .Add(x => x.WorkflowStages, (IReadOnlyList<StageDefinition>)workflow.Stages!));
 
-        Assert.Contains("2. Pre-Impl Baseline", cut.Markup);
-        Assert.Contains("4. Post-Impl Gates", cut.Markup);
-        Assert.Contains("5. Code Review", cut.Markup);
+        Assert.Contains("2. Pre-Implementation Baseline", cut.Markup);
+        Assert.Contains("4. Post-Implementation Gates", cut.Markup);
+        Assert.Contains("5. Code Review &amp; Fix", cut.Markup);
 
         var cutFallback = Render<StageRunSelector>(p => p
             .Add(x => x.Conversations, new List<Conversation> { c1, c2, c3 }));

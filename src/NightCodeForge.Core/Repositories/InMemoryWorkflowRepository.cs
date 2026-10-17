@@ -47,7 +47,7 @@ public class InMemoryWorkflowRepository : IWorkflowRepository
     public Task<WorkflowDefinition?> GetDefaultWorkflowWithStagesAsync(CancellationToken cancellationToken = default)
     {
         var def = _workflows.Values.FirstOrDefault(w => w.IsDefault)
-            ?? _workflows.Values.FirstOrDefault(w => string.Equals(w.Code, "standard-3-agent", StringComparison.OrdinalIgnoreCase))
+            ?? _workflows.Values.FirstOrDefault(w => string.Equals(w.Code, StandardWorkflowDefinitions.Standard3AgentCode, StringComparison.OrdinalIgnoreCase))
             ?? _workflows.Values.FirstOrDefault();
 
         if (def == null)

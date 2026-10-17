@@ -9,13 +9,13 @@ public class PipelineStepperTests : BunitContext
 {
     private static List<StageDefinition> CreateTestStages() => new()
     {
-        new() { SequenceOrder = 1, StageId = "task-review", DisplayName = "ForgeTask Review", Kind = WorkflowStageKind.Agentic, Icon = "🔍" },
-        new() { SequenceOrder = 2, StageId = "deterministic-pre-impl", DisplayName = "Pre-Impl Baseline", Kind = WorkflowStageKind.Deterministic, Icon = "⚙️" },
-        new() { SequenceOrder = 3, StageId = "implementation", DisplayName = "Implementation", Kind = WorkflowStageKind.Agentic, Icon = "💻" },
-        new() { SequenceOrder = 4, StageId = "deterministic-post-impl", DisplayName = "Post-Impl Gates", Kind = WorkflowStageKind.Deterministic, Icon = "🧪" },
-        new() { SequenceOrder = 5, StageId = "code-review-fix", DisplayName = "Code Review", Kind = WorkflowStageKind.Agentic, Icon = "🧐" },
-        new() { SequenceOrder = 6, StageId = "deterministic-post-review", DisplayName = "Post-Review Verification", Kind = WorkflowStageKind.Deterministic, Icon = "🛡️" },
-        new() { SequenceOrder = 7, StageId = "merge", DisplayName = "Merge Resolution", Kind = WorkflowStageKind.Deterministic, Icon = "🔀" }
+        new() { SequenceOrder = 1, StageId = StandardStageIds.TaskReview, DisplayName = "ForgeTask Review", Kind = WorkflowStageKind.Agentic, Icon = "🔍" },
+        new() { SequenceOrder = 2, StageId = StandardStageIds.PreImplementationBaseline, DisplayName = "Pre-Impl Baseline", Kind = WorkflowStageKind.Deterministic, Icon = "⚙️" },
+        new() { SequenceOrder = 3, StageId = StandardStageIds.Implementation, DisplayName = "Implementation", Kind = WorkflowStageKind.Agentic, Icon = "💻" },
+        new() { SequenceOrder = 4, StageId = StandardStageIds.PostImplementationGates, DisplayName = "Post-Impl Gates", Kind = WorkflowStageKind.Deterministic, Icon = "🧪" },
+        new() { SequenceOrder = 5, StageId = StandardStageIds.CodeReviewAndFix, DisplayName = "Code Review", Kind = WorkflowStageKind.Agentic, Icon = "🧐" },
+        new() { SequenceOrder = 6, StageId = StandardStageIds.PostReviewVerification, DisplayName = "Post-Review Verification", Kind = WorkflowStageKind.Deterministic, Icon = "🛡️" },
+        new() { SequenceOrder = 7, StageId = StandardStageIds.Merge, DisplayName = "Merge Resolution", Kind = WorkflowStageKind.Deterministic, Icon = "🔀" }
     };
 
     [Fact]
@@ -112,7 +112,7 @@ public class PipelineStepperTests : BunitContext
 
         cut.InvokeAsync(() =>
         {
-            cut.Instance.ApplyStageTransition("merge", StageExecutionStatus.WaitingForHuman);
+            cut.Instance.ApplyStageTransition(StandardStageIds.Merge, StageExecutionStatus.WaitingForHuman);
         });
 
         var steps = cut.FindAll(".step-item");

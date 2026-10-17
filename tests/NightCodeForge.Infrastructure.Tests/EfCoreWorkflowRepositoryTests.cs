@@ -49,11 +49,11 @@ public class EfCoreWorkflowRepositoryTests : IDisposable
         var defaultWf = await repo.GetDefaultWorkflowWithStagesAsync();
 
         Assert.NotNull(defaultWf);
-        Assert.Equal("standard-3-agent", defaultWf.Code);
+        Assert.Equal(StandardWorkflowDefinitions.Standard3AgentCode, defaultWf.Code);
         Assert.True(defaultWf.IsDefault);
         Assert.Equal(6, defaultWf.Stages.Count);
-        Assert.Equal("task-review", defaultWf.Stages.First().StageId);
-        Assert.Equal("deterministic-post-review", defaultWf.Stages.Last().StageId);
+        Assert.Equal(StandardStageIds.TaskReview, defaultWf.Stages.First().StageId);
+        Assert.Equal(StandardStageIds.PostReviewVerification, defaultWf.Stages.Last().StageId);
     }
 
     [Fact]
@@ -121,13 +121,13 @@ public class EfCoreWorkflowRepositoryTests : IDisposable
         // Query for workspace 2 should include global (standard-3-agent) + ws2-dedicated
         var ws2Workflows = await repo.GetWorkflowsAsync(workspaceId: 2);
         Assert.Equal(2, ws2Workflows.Count);
-        Assert.Contains(ws2Workflows, w => w.Code == "standard-3-agent");
+        Assert.Contains(ws2Workflows, w => w.Code == StandardWorkflowDefinitions.Standard3AgentCode);
         Assert.Contains(ws2Workflows, w => w.Code == "ws2-dedicated");
 
         // Query for workspace 99 should return only global
         var ws99Workflows = await repo.GetWorkflowsAsync(workspaceId: 99);
         Assert.Single(ws99Workflows);
-        Assert.Equal("standard-3-agent", ws99Workflows[0].Code);
+        Assert.Equal(StandardWorkflowDefinitions.Standard3AgentCode, ws99Workflows[0].Code);
     }
 
     [Fact]

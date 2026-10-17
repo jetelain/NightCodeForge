@@ -14,7 +14,7 @@ public static class TestWorkflowPipelines
         Func<PipelineContext, CancellationToken, Task<StageExecutionResult>>? handler = null)
     {
         return new GenericAgenticStage(
-            "task-review",
+            StandardStageIds.TaskReview,
             "ForgeTask Review",
             new AgenticStageConfig
             {
@@ -31,12 +31,12 @@ public static class TestWorkflowPipelines
         Func<PipelineContext, CancellationToken, Task<StageExecutionResult>>? handler = null)
     {
         return new GenericAgenticStage(
-            "implementation",
+            StandardStageIds.Implementation,
             "Implementation",
             new AgenticStageConfig
             {
                 RequiredMode = AgentMode.Full,
-                AgentProfileId = "implementation",
+                AgentProfileId = StandardStageIds.Implementation,
                 StageDirective = "You are a Senior Software Engineer & TDD Practitioner.\n1. Implement clean, robust, and maintainable code adhering to the task specification document in docs/tasks/, the approved plan, human answers, and prior reviewer feedback.\n2. Keep the blast radius minimal: avoid unnecessary refactoring or file churn outside the approved scope.\n3. Apply precision edits with 'edit' (or 'write' for new files). Follow repository .editorconfig formatting standards.\n4. Continuously verify your changes: execute builds and tests incrementally using 'bash'. Fix all compiler errors and test failures.\n5. Write comprehensive unit tests covering all new logic and edge cases. If unexpected breaking blockers arise, invoke 'ask'.",
                 PromptTemplate = "Execute stage '{{ stage.display_name }}' for task #{{ task.id }}: {{ task.title }}\n{{ task.description }}\n{{- if context.task_markdown_path }}\n\n[ForgeTask Specification Document]:\n{{ context.task_markdown_path }} (You can read or update this document with read/edit tools.)\n{{- end }}\n{{- if context.approved_plan }}\n\n[Approved Implementation Plan]:\n{{ context.approved_plan }}\n{{- end }}\n{{- if context.reviewer_feedback }}\n\n[Reviewer Requested Changes / Feedback]:\n{{ context.reviewer_feedback }}\n{{- end }}\n{{- if context.compiler_errors }}\n\n[Prior Diagnostic Failures to Remediate]:\n{{ for err in context.compiler_errors }}\n{{ err }}\n{{ end }}\n{{- end }}\n{{- if context.answered_questions }}\n\n[Human Clarifications & Answers]:\n{{ for qa in context.answered_questions }}\nQ: {{ qa.prompt }}\nA: {{ qa.answer }}\n{{ end }}\n{{- end }}"
             })
@@ -47,10 +47,10 @@ public static class TestWorkflowPipelines
 
     public static GenericAgenticStage CreateCodeReviewStage(
         Func<PipelineContext, CancellationToken, Task<StageExecutionResult>>? handler = null,
-        string? loopBackStageId = "implementation")
+        string? loopBackStageId = StandardStageIds.Implementation)
     {
         return new GenericAgenticStage(
-            "code-review-fix",
+            StandardStageIds.CodeReviewAndFix,
             "Code Review & Fix",
             new AgenticStageConfig
             {

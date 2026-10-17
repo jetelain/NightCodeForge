@@ -101,7 +101,7 @@ public class EndToEndWorkflowScenario : IScenario
             DisplayName = "Post-Implementation Gates",
             Kind = WorkflowStageKind.Deterministic,
             CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
-            ConfigurationJson = "{\"Action\": \"CompositeVerification\", \"LoopBackStageId\": \"implementation\", \"FailOnError\": true, \"ExtraParameters\": {\"Stages\": \"build,test\"}}"
+            ConfigurationJson = $"{{\"Action\": \"CompositeVerification\", \"LoopBackStageId\": \"{StandardStageIds.Implementation}\", \"FailOnError\": true, \"ExtraParameters\": {{\"Stages\": \"build,test\"}}}}"
         };
 
         var postReviewDef = new StageDefinition
@@ -110,7 +110,7 @@ public class EndToEndWorkflowScenario : IScenario
             DisplayName = "Post-Review Verification",
             Kind = WorkflowStageKind.Deterministic,
             CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
-            ConfigurationJson = "{\"Action\": \"CompositeVerification\", \"LoopBackStageId\": \"code-review-fix\", \"FailOnError\": true, \"ExtraParameters\": {\"Stages\": \"build,test\"}}"
+            ConfigurationJson = $"{{\"Action\": \"CompositeVerification\", \"LoopBackStageId\": \"{StandardStageIds.CodeReviewAndFix}\", \"FailOnError\": true, \"ExtraParameters\": {{\"Stages\": \"build,test\"}}}}"
         };
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]

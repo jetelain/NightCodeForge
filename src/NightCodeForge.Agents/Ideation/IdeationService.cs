@@ -109,15 +109,15 @@ public partial class IdeationService : IIdeationService
         if (explicitProfile != null) return explicitProfile;
 
         var profileFromWorkspace = workspace?.AgentProfiles?.FirstOrDefault(p =>
-            string.Equals(p.Id, "ideation", StringComparison.OrdinalIgnoreCase) ||
-            p.Name.Contains("ideation", StringComparison.OrdinalIgnoreCase));
+            string.Equals(p.Id, StandardStageIds.Ideation, StringComparison.OrdinalIgnoreCase) ||
+            p.Name.Contains(StandardStageIds.Ideation, StringComparison.OrdinalIgnoreCase));
 
         if (profileFromWorkspace != null)
         {
             return profileFromWorkspace;
         }
 
-        throw new AgentProfileNotFoundException("ideation", workspace?.Id);
+        throw new AgentProfileNotFoundException(StandardStageIds.Ideation, workspace?.Id);
     }
 
     public Task<IdeationResult> ConverseAsync(
@@ -179,7 +179,7 @@ public partial class IdeationService : IIdeationService
         {
             if (_workspaceRepository != null)
             {
-                profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, "ideation", cancellationToken);
+                profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, StandardStageIds.Ideation, cancellationToken);
             }
             if (profile == null)
             {
@@ -202,7 +202,7 @@ public partial class IdeationService : IIdeationService
             ["model"] = profile.ModelName
         };
 
-        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.StageStarted, "Starting ideation discovery", cancellationToken, metadata);
+        await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.StageStarted, "Starting ideation discovery", cancellationToken, metadata);
 
         var repoPath = !string.IsNullOrEmpty(workspace.RepositoryPath) ? workspace.RepositoryPath : Directory.GetCurrentDirectory();
         var agentsRules = await _agentsMdService.IngestRulesAsync(repoPath, cancellationToken);
@@ -448,7 +448,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
                         waitCts.Cancel();
                         while (questionChannel.Reader.TryRead(out var pendingQuestion))
                         {
-                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolStarted, $"ask: {pendingQuestion.Prompt}", cancellationToken, metadata);
+                            await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolStarted, $"ask: {pendingQuestion.Prompt}", cancellationToken, metadata);
                             yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.QuestionAsked, Question: pendingQuestion);
                         }
                     }
@@ -469,7 +469,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
                     }
                     catch (Exception ex)
                     {
-                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
+                        await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
                         throw;
                     }
 
@@ -482,26 +482,26 @@ When proposing implementation tasks to the developer, adhere to the following ru
                         {
                             fullReasoningBuilder.Append(domainEvt.TextDelta);
                             transcriptBuffer.Append("THINKING", domainEvt.TextDelta);
-                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ThinkingDelta, domainEvt.TextDelta, cancellationToken, metadata);
+                            await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ThinkingDelta, domainEvt.TextDelta, cancellationToken, metadata);
                         }
                         else if (domainEvt.Kind == IdeationStreamUpdateKind.MessageDelta && !string.IsNullOrEmpty(domainEvt.TextDelta))
                         {
                             fullTextBuilder.Append(domainEvt.TextDelta);
                             transcriptBuffer.Append("ASSISTANT", domainEvt.TextDelta);
-                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.MessageDelta, domainEvt.TextDelta, cancellationToken, metadata);
+                            await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.MessageDelta, domainEvt.TextDelta, cancellationToken, metadata);
                         }
                         else if (domainEvt.Kind == IdeationStreamUpdateKind.ToolCallStarted && domainEvt.ToolCall != null)
                         {
                             allToolCalls.Add(domainEvt.ToolCall);
                             transcriptBuffer.Flush();
                             transcriptEntries.Add(new TranscriptEntry(DateTime.UtcNow, "TOOL", string.Empty, domainEvt.ToolCall.ToolName, domainEvt.ToolCall.Arguments));
-                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolStarted, $"{domainEvt.ToolCall.ToolName}: {domainEvt.ToolCall.Arguments}", cancellationToken, metadata);
+                            await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolStarted, $"{domainEvt.ToolCall.ToolName}: {domainEvt.ToolCall.Arguments}", cancellationToken, metadata);
                         }
                         else if (domainEvt.Kind == IdeationStreamUpdateKind.ToolCallCompleted && domainEvt.ToolCall != null)
                         {
                             transcriptEntries.Add(new TranscriptEntry(DateTime.UtcNow, domainEvt.ToolCall.IsError ? "TOOL_ERROR" : "TOOL_RESULT", domainEvt.ToolCall.Result ?? string.Empty, domainEvt.ToolCall.ToolName));
 
-                            await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, domainEvt.ToolCall.Result ?? string.Empty, cancellationToken, metadata);
+                            await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, domainEvt.ToolCall.Result ?? string.Empty, cancellationToken, metadata);
 
                             if (domainEvt.ToolCall.IsError)
                             {
@@ -517,7 +517,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
                                     var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles);
                                     sessionProposals.Add(ideationProp);
                                     yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
-                                    await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
+                                    await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
                                 }
                             }
                         }
@@ -547,7 +547,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
             }
             catch (Exception ex)
             {
-                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
+                await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
                 throw;
             }
 
@@ -559,26 +559,26 @@ When proposing implementation tasks to the developer, adhere to the following ru
                     {
                         fullReasoningBuilder.Append(domainEvt.TextDelta);
                         transcriptBuffer.Append("THINKING", domainEvt.TextDelta);
-                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ThinkingDelta, domainEvt.TextDelta, cancellationToken, metadata);
+                        await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ThinkingDelta, domainEvt.TextDelta, cancellationToken, metadata);
                     }
                     else if (domainEvt.Kind == IdeationStreamUpdateKind.MessageDelta && !string.IsNullOrEmpty(domainEvt.TextDelta))
                     {
                         fullTextBuilder.Append(domainEvt.TextDelta);
                         transcriptBuffer.Append("ASSISTANT", domainEvt.TextDelta);
-                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.MessageDelta, domainEvt.TextDelta, cancellationToken, metadata);
+                        await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.MessageDelta, domainEvt.TextDelta, cancellationToken, metadata);
                     }
                     else if (domainEvt.Kind == IdeationStreamUpdateKind.ToolCallStarted && domainEvt.ToolCall != null)
                     {
                         allToolCalls.Add(domainEvt.ToolCall);
                         transcriptBuffer.Flush();
                         transcriptEntries.Add(new TranscriptEntry(DateTime.UtcNow, "TOOL", string.Empty, domainEvt.ToolCall.ToolName, domainEvt.ToolCall.Arguments));
-                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolStarted, $"{domainEvt.ToolCall.ToolName}: {domainEvt.ToolCall.Arguments}", cancellationToken, metadata);
+                        await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolStarted, $"{domainEvt.ToolCall.ToolName}: {domainEvt.ToolCall.Arguments}", cancellationToken, metadata);
                     }
                     else if (domainEvt.Kind == IdeationStreamUpdateKind.ToolCallCompleted && domainEvt.ToolCall != null)
                     {
                         transcriptEntries.Add(new TranscriptEntry(DateTime.UtcNow, domainEvt.ToolCall.IsError ? "TOOL_ERROR" : "TOOL_RESULT", domainEvt.ToolCall.Result ?? string.Empty, domainEvt.ToolCall.ToolName));
 
-                        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, domainEvt.ToolCall.Result ?? string.Empty, cancellationToken, metadata);
+                        await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, domainEvt.ToolCall.Result ?? string.Empty, cancellationToken, metadata);
 
                         if (domainEvt.ToolCall.IsError)
                         {
@@ -594,7 +594,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
                                 var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles);
                                 sessionProposals.Add(ideationProp);
                                 yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
-                                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
+                                await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
                             }
                         }
                     }
@@ -610,13 +610,13 @@ When proposing implementation tasks to the developer, adhere to the following ru
             {
                 fullReasoningBuilder.Append(domainEvt.TextDelta);
                 transcriptBuffer.Append("THINKING", domainEvt.TextDelta);
-                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ThinkingDelta, domainEvt.TextDelta, cancellationToken, metadata);
+                await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ThinkingDelta, domainEvt.TextDelta, cancellationToken, metadata);
             }
             else if (domainEvt.Kind == IdeationStreamUpdateKind.MessageDelta && !string.IsNullOrEmpty(domainEvt.TextDelta))
             {
                 fullTextBuilder.Append(domainEvt.TextDelta);
                 transcriptBuffer.Append("ASSISTANT", domainEvt.TextDelta);
-                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.MessageDelta, domainEvt.TextDelta, cancellationToken, metadata);
+                await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.MessageDelta, domainEvt.TextDelta, cancellationToken, metadata);
             }
 
             yield return domainEvt;
@@ -640,7 +640,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
                 var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles);
                 sessionProposals.Add(ideationProp);
                 yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
-                await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
+                await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
             }
         }
 
@@ -656,7 +656,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
                 var targetDir = Path.Combine(repoPath, "docs", "transcripts");
                 var metadataRecord = new TranscriptMetadata(
                     TaskId: workspace?.Id ?? 0,
-                    StageId: "ideation",
+                    StageId: StandardStageIds.Ideation,
                     AgentProfile: profile.Id,
                     ModelName: profile.ModelName ?? "default",
                     DurationMs: sessionStopwatch.ElapsedMilliseconds,
@@ -695,7 +695,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
         }
 
         var finalResult = new IdeationResult(fullText, sessionProposals, allToolCalls, transcriptPath, fullTranscriptMarkdown);
-        await BroadcastAsync(sessionId, 0, "ideation", AgentActivityKind.StageCompleted, $"Ideation completed with {sessionProposals.Count} proposal(s).", cancellationToken, metadata);
+        await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.StageCompleted, $"Ideation completed with {sessionProposals.Count} proposal(s).", cancellationToken, metadata);
 
         yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.Completed, FinalResult: finalResult);
     }
