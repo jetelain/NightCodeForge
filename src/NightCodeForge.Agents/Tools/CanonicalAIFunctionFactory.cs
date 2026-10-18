@@ -22,14 +22,14 @@ public static class CanonicalAIFunctionFactory
                 ([Description("Workspace-relative path to read")] string path,
                  [Description("1-indexed start line offset")] int? offset = null,
                  [Description("Maximum lines to read")] int? limit = null,
-                 CancellationToken ct = default) => tools.ReadAsync(path, offset, limit, ct),
+                 CancellationToken ct = default) => SafeExecuteAsync(() => tools.ReadAsync(path, offset, limit, ct)),
                 "read",
                 "Reads a file with line numbers and optional line-based pagination."),
 
             AIFunctionFactory.Create(
                 ([Description("Workspace-relative path to write")] string path,
                  [Description("Full file content")] string content,
-                 CancellationToken ct = default) => tools.WriteAsync(path, content, ct),
+                 CancellationToken ct = default) => SafeExecuteAsync(() => tools.WriteAsync(path, content, ct)),
                 "write",
                 "Creates or overwrites a workspace file."),
 
@@ -38,7 +38,7 @@ public static class CanonicalAIFunctionFactory
                  [Description("One or more disjoint edits applied in order; each oldText must match the file exactly once")] IReadOnlyList<EditChunk>? edits = null,
                  [Description("Shortcut for a single edit: exact character sequence to be replaced")] string? old_text = null,
                  [Description("Shortcut for a single edit: replacement character sequence")] string? new_text = null,
-                 CancellationToken ct = default) =>
+                 CancellationToken ct = default) => SafeExecuteAsync(() =>
                 {
                     if (edits is { Count: > 0 })
                     {
@@ -51,7 +51,7 @@ public static class CanonicalAIFunctionFactory
                     }
 
                     return Task.FromResult("Error: provide 'edits' (array of { oldText, newText }) or both 'old_text' and 'new_text'.");
-                },
+                }),
                 "edit",
                 "Replaces exact text snippets in a workspace file. Use 'edits' for one or several disjoint replacements in a single call."),
 
@@ -59,36 +59,35 @@ public static class CanonicalAIFunctionFactory
                 ([Description("Shell command line to execute")] string command,
                  [Description("Timeout in seconds")] int? timeout = null,
                  [Description("Working directory relative to repo root")] string? working_directory = null,
-                 CancellationToken ct = default) => tools.BashAsync(command, timeout, working_directory, ct),
+                 CancellationToken ct = default) => SafeExecuteAsync(() => tools.BashAsync(command, timeout, working_directory, ct)),
                 "bash",
                 "Executes a bash or shell command within the workspace sandbox."),
 
             AIFunctionFactory.Create(
                 ([Description("Exact name of the skill to load from the <skills> catalog")] string skill_name,
-                 CancellationToken ct = default) => tools.LoadSkillAsync(skill_name, ct),
+                 CancellationToken ct = default) => SafeExecuteAsync(() => tools.LoadSkillAsync(skill_name, ct)),
                 "load_skill",
                 "Loads full instructions and reference documentation for a modular skill on demand."),
 
             AIFunctionFactory.Create(
-                ([Description("Question or clarification prompt to ask the user")] string prompt,
-                 [Description("Reason or context for asking")] string? rationale = null,
-                 [Description("Optional choice options for the user")] IReadOnlyList<string>? options = null,
-                 CancellationToken ct = default) => tools.AskAsync(prompt, rationale, options, ct),
+                ([Description("Consolidate ALL clarifying questions into this single list. Each question must include a prompt, with optional technical rationale and choice options.")]
+                 IReadOnlyList<QuestionItem>? questions,
+                 CancellationToken ct = default) => SafeExecuteAsync(() => tools.AskAsync(questions, ct)),
                 "ask",
-                "Asks clarifying questions to the user when blocked."),
+                "Asks clarifying questions to the human user when blocked. Consolidate all requirements, ambiguities, and architectural questions into a single batched call."),
 
             AIFunctionFactory.Create(
                 ([Description("List of structured backlog task proposals")] object? tasks = null,
                  [Description("Task title if single proposal")] string? title = null,
                  [Description("Task description with sub-tasks, testing plan, and open questions if single proposal")] string? description = null,
                  [Description("Task priority (1 Highest - 5 Lowest) if single proposal")] int? priority = null) =>
-                tools.ProposeTasks(tasks, title, description, priority),
+                SafeExecute(() => tools.ProposeTasks(tasks, title, description, priority)),
                 "propose_tasks",
                 "Proposes structured backlog items for triage and discovery. Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Include sub-tasks and open questions in the description."),
 
             AIFunctionFactory.Create(
                 ([Description("Detailed critique and rework feedback for the implementation agent")] string feedback,
-                 [Description("Summary reason for rejection")] string? reason = null) => tools.RequestChanges(feedback, reason),
+                 [Description("Summary reason for rejection")] string? reason = null) => SafeExecute(() => tools.RequestChanges(feedback, reason)),
                 "request_changes",
                 "Rejects implementation and sends task back to the implementation agent for rework.")
         };
@@ -98,7 +97,7 @@ public static class CanonicalAIFunctionFactory
             allTools.Add(AIFunctionFactory.Create(
                 ([Description("Search query string")] string query,
                  [Description("Maximum results to return (1-10)")] int? max_results = null,
-                 CancellationToken ct = default) => tools.WebSearchAsync(query, max_results, ct),
+                 CancellationToken ct = default) => SafeExecuteAsync(() => tools.WebSearchAsync(query, max_results, ct)),
                 "web_search",
                 "Searches technical web documentation for APIs, errors, or libraries."));
         }
@@ -111,5 +110,55 @@ public static class CanonicalAIFunctionFactory
         return allTools
             .Where(t => permittedTools.Contains(t.Name, StringComparer.OrdinalIgnoreCase))
             .ToList();
+    }
+
+    private static async Task<string> SafeExecuteAsync(Func<Task<string>> action)
+    {
+        try
+        {
+            return await action().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (NightCodeForge.Core.Workflow.HumanInterruptionException)
+        {
+            throw;
+        }
+        catch (NightCodeForge.Core.Workflow.RequestChangesException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var msg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
+            return $"Error: {msg}";
+        }
+    }
+
+    private static string SafeExecute(Func<string> action)
+    {
+        try
+        {
+            return action();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (NightCodeForge.Core.Workflow.HumanInterruptionException)
+        {
+            throw;
+        }
+        catch (NightCodeForge.Core.Workflow.RequestChangesException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var msg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
+            return $"Error: {msg}";
+        }
     }
 }

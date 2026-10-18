@@ -56,7 +56,7 @@ public class AgentSessionContextPromotionTests
         };
 
         Assert.Null(context.TaskMarkdownPath);
-        Assert.Null(context.ReviewDiff);
+        Assert.Null(context.ReviewDiffStat);
         Assert.Null(context.ApprovedPlan);
         Assert.Null(context.ReviewerFeedback);
         Assert.Null(context.PriorDiagnostics);
@@ -74,46 +74,46 @@ public class AgentSessionContextPromotionTests
             ForgeTask = task,
             Profile = profile,
             TaskMarkdownPath = "docs/tasks/task-1.md",
-            ReviewDiff = "diff --git a/foo b/foo",
+            ReviewDiffStat = "file.cs | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)",
             ApprovedPlan = "Step 1: Code",
             ReviewerFeedback = "Needs more tests",
             PriorDiagnostics = diagnostics
         };
 
         Assert.Equal("docs/tasks/task-1.md", context.TaskMarkdownPath);
-        Assert.Equal("diff --git a/foo b/foo", context.ReviewDiff);
+        Assert.Equal("file.cs | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)", context.ReviewDiffStat);
         Assert.Equal("Step 1: Code", context.ApprovedPlan);
         Assert.Equal("Needs more tests", context.ReviewerFeedback);
         Assert.Same(diagnostics, context.PriorDiagnostics);
     }
 
     [Fact]
-    public void DefaultBootstrapPromptBuilder_IncludesReviewDiff_WhenTemplateHasReviewDiff()
+    public void DefaultBootstrapPromptBuilder_IncludesReviewDiffStat_WhenTemplateHasReviewDiffStat()
     {
         var task = new ForgeTask { Id = 42, Title = "Review Feature", Description = "Implement feature" };
         var pipelineContext = new PipelineContext(task, new Workspace { Id = 1 });
-        pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiff, "diff --git a/file.cs b/file.cs\n+new line");
+        pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, "file.cs | 2 +-");
 
         var stage = new GenericAgenticStage(
             StandardStageIds.CodeReviewAndFix,
             "Code Review",
             new AgenticStageConfig
             {
-                PromptTemplate = "Reviewing task #{{ task.id }}\n{{- if context.review_diff }}\nDiff:\n{{ context.review_diff }}\n{{- end }}"
+                PromptTemplate = "Reviewing task #{{ task.id }}\n{{- if context.review_diff_stat }}\nDiff Stat:\n{{ context.review_diff_stat }}\n{{- end }}"
             },
             new ScribanPromptTemplateRenderer());
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 
-        Assert.Contains("Diff:\ndiff --git a/file.cs b/file.cs\n+new line", prompt);
+        Assert.Contains("Diff Stat:\nfile.cs | 2 +-", prompt);
     }
 
     [Fact]
-    public void DefaultBootstrapPromptBuilder_AppendsReviewDiff_WhenTemplateDoesNotContainIt()
+    public void DefaultBootstrapPromptBuilder_AppendsReviewDiffStat_WhenTemplateDoesNotContainIt()
     {
         var task = new ForgeTask { Id = 42, Title = "Review Feature", Description = "Implement feature" };
         var pipelineContext = new PipelineContext(task, new Workspace { Id = 1 });
-        pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiff, "diff --git a/file.cs b/file.cs\n+new line");
+        pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, "file.cs | 2 +-");
 
         var stage = new GenericAgenticStage(
             StandardStageIds.CodeReviewAndFix,
@@ -126,7 +126,9 @@ public class AgentSessionContextPromotionTests
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 
-        Assert.Contains("[Git Diff to Review]:\ndiff --git a/file.cs b/file.cs\n+new line", prompt);
+        Assert.Contains("[Git Diff Summary]:", prompt);
+        Assert.Contains("file.cs | 2 +-", prompt);
+        Assert.Contains("git diff main...feature/task-42 -- <file-path>", prompt);
     }
 
     [Fact]
@@ -163,7 +165,7 @@ public class AgentSessionContextPromotionTests
 
         var bag = new PipelineDataBag();
         bag.Set(PipelineDataBagKeys.TaskMarkdownPath, "docs/tasks/task-99.md");
-        bag.Set(PipelineDataBagKeys.ReviewDiff, "diff --git a/a b/b");
+        bag.Set(PipelineDataBagKeys.ReviewDiffStat, "diff-stat summary");
         bag.Set(PipelineDataBagKeys.ApprovedPlan, "Plan A");
         bag.Set(PipelineDataBagKeys.ReviewerFeedback, "Initial notes");
         bag.Set(PipelineDataBagKeys.CompilerErrors, new List<string> { "CS1002" });
@@ -204,7 +206,7 @@ public class AgentSessionContextPromotionTests
         var session = fakeHarness.ExecutedSessions[0];
 
         Assert.Equal("docs/tasks/task-99.md", session.TaskMarkdownPath);
-        Assert.Equal("diff --git a/a b/b", session.ReviewDiff);
+        Assert.Equal("diff-stat summary", session.ReviewDiffStat);
         Assert.Equal("Plan A", session.ApprovedPlan);
         Assert.Equal("Initial notes", session.ReviewerFeedback);
         Assert.NotNull(session.PriorDiagnostics);

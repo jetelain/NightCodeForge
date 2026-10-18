@@ -108,7 +108,7 @@ public class PipelineEngineTests
                     Prompt = "Which authentication strategy?",
                     Rationale = "OIDC vs Local DB"
                 };
-                return Task.FromResult(StageExecutionResult.QuestionRequired(q));
+                return Task.FromResult(StageExecutionResult.QuestionRequired(new[] { q }));
             });
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { reviewStage });

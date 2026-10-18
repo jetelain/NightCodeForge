@@ -206,6 +206,8 @@ public class AppDbContext : DbContext
             b.Property(q => q.QuestionType).HasConversion<int>();
             b.Property(q => q.Status).HasConversion<int>();
             b.Property(q => q.AgentProfileId).HasMaxLength(128);
+            b.Property(q => q.BatchId).HasMaxLength(64);
+            b.HasIndex(q => q.BatchId);
         });
 
         // 6. StageCheckpoint

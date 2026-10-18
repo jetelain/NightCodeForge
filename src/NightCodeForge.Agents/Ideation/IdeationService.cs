@@ -357,14 +357,42 @@ When proposing implementation tasks to the developer, adhere to the following ru
 
         var sessionProposals = new List<IdeationProposal>();
 
-        // In-turn ask: the tool awaits the user's answer while the stream surfaces the question to the UI.
+        // In-turn ask: the tool awaits the user's answers while the stream surfaces questions to the UI.
         var questionChannel = System.Threading.Channels.Channel.CreateUnbounded<IdeationQuestion>();
-        canonicalTools.AskHandler = async (prompt, rationale, options, ct) =>
+        canonicalTools.AskHandler = async (questions, ct) =>
         {
-            var question = new IdeationQuestion(prompt, rationale, options);
-            questionChannel.Writer.TryWrite(question);
-            using var registration = ct.Register(() => question.Cancel());
-            return await question.AnswerTask.ConfigureAwait(false);
+            var registrations = new List<CancellationTokenRegistration>();
+            try
+            {
+                var tasks = new List<Task<string>>();
+                var questionList = new List<IdeationQuestion>();
+                foreach (var q in questions)
+                {
+                    var question = new IdeationQuestion(q.Prompt, q.Rationale, q.Options);
+                    questionList.Add(question);
+                    registrations.Add(ct.Register(() => question.Cancel()));
+                    tasks.Add(question.AnswerTask);
+                    questionChannel.Writer.TryWrite(question);
+                }
+
+                var answers = await Task.WhenAll(tasks).ConfigureAwait(false);
+
+                var sb = new StringBuilder();
+                for (int i = 0; i < questionList.Count; i++)
+                {
+                    if (i > 0) sb.AppendLine();
+                    sb.AppendLine($"{i + 1}. Question: {questionList[i].Prompt}");
+                    sb.AppendLine($"   Answer: {answers[i]}");
+                }
+                return sb.ToString().TrimEnd();
+            }
+            finally
+            {
+                foreach (var reg in registrations)
+                {
+                    reg.Dispose();
+                }
+            }
         };
         HumanInterruptionException? interruption = null;
 
@@ -615,10 +643,11 @@ When proposing implementation tasks to the developer, adhere to the following ru
         // Safety net: an ask that escaped as an exception becomes visible chat text instead of a crash.
         if (interruption != null)
         {
-            var interruptionText = $"\n\n**I need your input before continuing:** {interruption.Question.Prompt}\n";
+            var prompts = string.Join("\n- ", interruption.Questions.Select(q => q.Prompt));
+            var interruptionText = $"\n\n**I need your input before continuing:**\n- {prompts}\n";
             fullTextBuilder.Append(interruptionText);
             transcriptBuffer.Append("ASSISTANT", interruptionText);
-            _logger.LogWarning("Ideation ask escaped the live handler; surfaced as chat text: {Prompt}", interruption.Question.Prompt);
+            _logger.LogWarning("Ideation ask escaped the live handler; surfaced as chat text: {Prompts}", prompts);
             yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.MessageDelta, TextDelta: interruptionText);
         }
 

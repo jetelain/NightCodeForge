@@ -35,6 +35,16 @@ public interface IGitWorkspaceManager
     Task<string> GenerateLiveDiffAsync(Workspace workspace, int taskId, string baseBranch = "main", CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Generates a noise-filtered git diff stat between baseBranch and feature/task-{id} with extended width and exclusions.
+    /// </summary>
+    Task<string> GenerateDiffStatAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Generates a live git diff stat of uncommitted and committed changes in the task's worktree against baseBranch.
+    /// </summary>
+    Task<string> GenerateLiveDiffStatAsync(Workspace workspace, int taskId, string baseBranch = "main", CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Retrieves the noise-filtered patch diff (-U2) of a specific commit SHA (e.g. squashed task commit).
     /// </summary>
     Task<string> GetCommitDiffAsync(Workspace workspace, string commitSha, CancellationToken cancellationToken = default);

@@ -802,4 +802,68 @@ public class AppDbContextTests : IDisposable
         Assert.Single(loaded.Conversations);
         Assert.Equal(StageExecutionStatus.Completed, loaded.Conversations.First().Status);
     }
+
+    [Fact]
+    public async Task EfCoreTaskRepository_UpdateAsync_PersistsNewQuestions_AndQueriesByStatus()
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using (var context = new AppDbContext(options))
+        {
+            await context.Database.EnsureCreatedAsync();
+
+            var ws = new Workspace { Name = "InboxWS", RepositoryPath = "/ws" };
+            context.Workspaces.Add(ws);
+            await context.SaveChangesAsync();
+
+            var repo = new EfCoreTaskRepository(context);
+            var task = await repo.CreateAsync(new ForgeTask
+            {
+                WorkspaceId = ws.Id,
+                Title = "Question Task",
+                Description = "Task Desc",
+                Status = TaskOverallStatus.Open
+            });
+
+            // Add pending question
+            task.Questions.Add(new Question
+            {
+                TaskId = task.Id,
+                StageId = "task-review",
+                Prompt = "Should we use PostgreSQL or SQLite?",
+                Rationale = "Database choice needed",
+                Status = QuestionStatus.Pending,
+                BatchId = "batch-123",
+                AskedAt = DateTime.UtcNow
+            });
+
+            await repo.UpdateAsync(task);
+
+            // Verify question is persisted and queryable by status
+            var pending = await repo.GetQuestionsByStatusAsync(QuestionStatus.Pending, ws.Id);
+            Assert.Single(pending);
+            Assert.True(pending[0].Id > 0);
+            Assert.Equal("Should we use PostgreSQL or SQLite?", pending[0].Prompt);
+            Assert.Equal("batch-123", pending[0].BatchId);
+
+            // Now answer question and update
+            pending[0].Status = QuestionStatus.Answered;
+            pending[0].Answer = "PostgreSQL";
+            pending[0].AnsweredAt = DateTime.UtcNow;
+
+            await repo.UpdateAsync(task);
+
+            var pendingAfter = await repo.GetQuestionsByStatusAsync(QuestionStatus.Pending, ws.Id);
+            Assert.Empty(pendingAfter);
+
+            var answered = await repo.GetQuestionsByStatusAsync(QuestionStatus.Answered, ws.Id);
+            Assert.Single(answered);
+            Assert.Equal("PostgreSQL", answered[0].Answer);
+        }
+    }
 }

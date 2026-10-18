@@ -65,7 +65,7 @@ public class HumanInterruptionScenario : IScenario
                 if (string.IsNullOrWhiteSpace(lastAnswer))
                 {
                     // Turn 1: Interrupt with question
-                    throw new HumanInterruptionException("Should Modulo(a, 0) throw DivideByZeroException or return 0?");
+                    throw new HumanInterruptionException(new[] { new QuestionItem("Should Modulo(a, 0) throw DivideByZeroException or return 0?") });
                 }
 
                 // Turn 2 (Resumed): Incorporate answer and succeed

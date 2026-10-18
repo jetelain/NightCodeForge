@@ -23,7 +23,7 @@ public class AgentSessionContext
 
     // --- Promoted Typed Properties ---
     public string? TaskMarkdownPath { get; init; }
-    public string? ReviewDiff { get; init; }
+    public string? ReviewDiffStat { get; init; }
     public string? ApprovedPlan { get; init; }
     public string? ReviewerFeedback { get; init; }
     public IReadOnlyList<string>? PriorDiagnostics { get; init; }

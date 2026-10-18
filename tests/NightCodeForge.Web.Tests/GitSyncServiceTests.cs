@@ -247,7 +247,9 @@ public class GitSyncServiceTests
         public Task CheckoutTaskBranchAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<string> CreateWipCheckpointAsync(Workspace workspace, int taskId, string stageName, string summary, CancellationToken cancellationToken = default) => Task.FromResult("abcdef1234567890abcdef1234567890abcdef12");
         public Task<string> GenerateDiffAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.FromResult("");
+        public Task<string> GenerateDiffStatAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.FromResult("");
         public Task<string> GenerateLiveDiffAsync(Workspace workspace, int taskId, string baseBranch = "main", CancellationToken cancellationToken = default) => Task.FromResult("");
+        public Task<string> GenerateLiveDiffStatAsync(Workspace workspace, int taskId, string baseBranch = "main", CancellationToken cancellationToken = default) => Task.FromResult("");
         public Task<string> GetCommitDiffAsync(Workspace workspace, string commitSha, CancellationToken cancellationToken = default) => Task.FromResult("");
         public Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default) => Task.FromResult("abcdef1234567890abcdef1234567890abcdef12");
         public Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, bool allowCreateBaseBranch, CancellationToken cancellationToken = default) => Task.FromResult("abcdef1234567890abcdef1234567890abcdef12");

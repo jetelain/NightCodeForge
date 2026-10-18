@@ -21,6 +21,12 @@ public interface ITaskOrchestrator
     Task SubmitHumanAnswerAsync(int questionId, string answer, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Submits a batch of answers for pending questions on a task.
+    /// When all questions in the interruption batch are answered, resumes the task exactly once on llm-urgent.
+    /// </summary>
+    Task SubmitAnswersAsync(int taskId, IReadOnlyDictionary<int, string> answers, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Re-routes a task in review back to the implementation stage with reviewer notes and enqueues to llm-urgent.
     /// </summary>
     Task RequestChangesAsync(int taskId, string revisionNotes, CancellationToken cancellationToken = default);

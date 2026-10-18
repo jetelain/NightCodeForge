@@ -51,6 +51,18 @@ public class FakeGitWorkspaceManager : IGitWorkspaceManager
         return Task.FromResult(GeneratedDiff);
     }
 
+    public string GeneratedDiffStat { get; set; } = "file.cs | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)";
+
+    public Task<string> GenerateDiffStatAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(GeneratedDiffStat);
+    }
+
+    public Task<string> GenerateLiveDiffStatAsync(Workspace workspace, int taskId, string baseBranch = "main", CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(GeneratedDiffStat);
+    }
+
     public Task<string> GenerateLiveDiffAsync(Workspace workspace, int taskId, string baseBranch = "main", CancellationToken cancellationToken = default)
     {
         return Task.FromResult(GeneratedDiff);

@@ -158,6 +158,8 @@ public class EfCoreTaskRepository : ITaskRepository
             }
         }
 
+        SyncQuestions(task);
+
         await _context.SaveChangesAsync(cancellationToken);
     }
 
@@ -231,7 +233,42 @@ public class EfCoreTaskRepository : ITaskRepository
         };
 
         _context.TaskHistories.Add(history);
+        SyncQuestions(task);
         await _context.SaveChangesAsync(cancellationToken);
+    }
+
+    private void SyncQuestions(ForgeTask task)
+    {
+        if (task.Questions == null || task.Questions.Count == 0) return;
+
+        foreach (var q in task.Questions)
+        {
+            if (q.Id <= 0)
+            {
+                if (q.TaskId <= 0)
+                {
+                    q.TaskId = task.Id;
+                }
+                var tracked = _context.Questions.Local.FirstOrDefault(x => ReferenceEquals(x, q));
+                if (tracked == null)
+                {
+                    _context.Questions.Add(q);
+                }
+            }
+            else
+            {
+                var existingQ = _context.Questions.Local.FirstOrDefault(x => x.Id == q.Id);
+                if (existingQ == null)
+                {
+                    _context.Questions.Attach(q);
+                    _context.Entry(q).State = EntityState.Modified;
+                }
+                else if (!ReferenceEquals(existingQ, q))
+                {
+                    _context.Entry(existingQ).CurrentValues.SetValues(q);
+                }
+            }
+        }
     }
 
     public async Task<IReadOnlyList<ForgeTaskHistory>> GetHistoryAsync(int taskId, CancellationToken cancellationToken = default)

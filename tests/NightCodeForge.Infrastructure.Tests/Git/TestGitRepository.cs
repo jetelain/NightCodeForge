@@ -35,17 +35,17 @@ public sealed class TestGitRepository : IDisposable
         return fullPath;
     }
 
-    public void CommitAll(string message)
+    public void CommitAll(string message, string? workingDirectory = null)
     {
-        RunGit("add -A");
-        RunGit($"commit -m \"{message}\" --no-verify");
+        RunGit("add -A", workingDirectory);
+        RunGit($"commit -m \"{message}\" --no-verify", workingDirectory);
     }
 
-    public void RunGit(string arguments)
+    public void RunGit(string arguments, string? workingDirectory = null)
     {
         var psi = new ProcessStartInfo("git", arguments)
         {
-            WorkingDirectory = RepositoryPath,
+            WorkingDirectory = workingDirectory ?? RepositoryPath,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -53,10 +53,18 @@ public sealed class TestGitRepository : IDisposable
         };
 
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start git process.");
-        process.WaitForExit(10000);
+        var outTask = process.StandardOutput.ReadToEndAsync();
+        var errTask = process.StandardError.ReadToEndAsync();
+
+        if (!process.WaitForExit(30000))
+        {
+            try { process.Kill(); } catch { }
+            throw new TimeoutException($"Git command 'git {arguments}' timed out.");
+        }
+
         if (process.ExitCode != 0)
         {
-            var err = process.StandardError.ReadToEnd();
+            var err = errTask.GetAwaiter().GetResult();
             throw new InvalidOperationException($"Git command 'git {arguments}' failed with exit code {process.ExitCode}: {err}");
         }
     }

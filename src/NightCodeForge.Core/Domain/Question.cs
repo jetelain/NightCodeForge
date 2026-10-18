@@ -17,6 +17,7 @@ public class Question
     public DateTime? AnsweredAt { get; set; }
     public QuestionStatus Status { get; set; } = QuestionStatus.Pending;
     public string? AgentProfileId { get; set; }
+    public string BatchId { get; set; } = string.Empty;
 
     public ForgeTask? ForgeTask { get; set; }
 }

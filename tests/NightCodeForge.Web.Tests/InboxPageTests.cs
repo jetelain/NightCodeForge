@@ -176,4 +176,81 @@ public class InboxPageTests : BunitContext
         Assert.NotNull(cut.Find("#inbox-empty-state"));
         Assert.Equal(0, _workerState.Current.PendingQuestionCount);
     }
+
+    [Fact]
+    public async Task BatchedQuestions_RenderGroupedCard_SubmitAllAnswersBatch()
+    {
+        var batchId = "batch-xyz-123";
+        var task = new ForgeTask
+        {
+            Id = 1,
+            Title = "Implement Microservices",
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 20,
+                    TaskId = 1,
+                    BatchId = batchId,
+                    Prompt = "Which service discovery to use?",
+                    OptionsJson = "[\"Consul\",\"Eureka\"]",
+                    QuestionType = QuestionType.SingleChoice,
+                    Status = QuestionStatus.Pending
+                },
+                new()
+                {
+                    Id = 21,
+                    TaskId = 1,
+                    BatchId = batchId,
+                    Prompt = "What should the health check interval be?",
+                    QuestionType = QuestionType.FreeText,
+                    Status = QuestionStatus.Pending
+                }
+            }
+        };
+
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<Inbox>();
+
+        // Grouped under 1 card for the batch
+        var cards = cut.FindAll(".question-card");
+        Assert.Single(cards);
+
+        // Header shows batched questions count badge
+        Assert.Contains("Batch (2 questions)", cut.Markup);
+        Assert.Contains("Q1", cut.Markup);
+        Assert.Contains("Q2", cut.Markup);
+        Assert.Contains("Which service discovery to use?", cut.Markup);
+        Assert.Contains("What should the health check interval be?", cut.Markup);
+
+        // Option buttons rendered for question 20
+        var optionBtns = cut.FindAll(".option-btn");
+        Assert.Equal(2, optionBtns.Count);
+        Assert.Contains("Consul", optionBtns[0].TextContent);
+        Assert.Contains("Eureka", optionBtns[1].TextContent);
+
+        // Click option button for Question 20
+        optionBtns[0].Click();
+
+        // Type answer for Question 21 using its specific input ID
+        var textarea21 = cut.Find("#clarification-input-21");
+        textarea21.Input("15 seconds");
+
+        // Submit all button
+        var submitAllBtn = cut.Find("#submit-all-btn-" + batchId);
+        Assert.False(submitAllBtn.HasAttribute("disabled"));
+        submitAllBtn.Click();
+
+        // Verify orchestrator received answers
+        Assert.NotNull(_orchestrator.LastSubmitAnswersCall);
+        Assert.Equal(1, _orchestrator.LastSubmitAnswersCall.Value.TaskId);
+        Assert.Equal("Consul", _orchestrator.LastSubmitAnswersCall.Value.Answers[20]);
+        Assert.Equal("15 seconds", _orchestrator.LastSubmitAnswersCall.Value.Answers[21]);
+
+        // Card is removed and empty state rendered
+        Assert.Empty(cut.FindAll(".question-card"));
+        Assert.NotNull(cut.Find("#inbox-empty-state"));
+        Assert.Equal(0, _workerState.Current.PendingQuestionCount);
+    }
 }

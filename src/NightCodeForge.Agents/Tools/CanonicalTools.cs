@@ -12,9 +12,9 @@ namespace NightCodeForge.Agents.Tools;
 public record EditChunk(string OldText, string NewText);
 
 /// <summary>
-/// Handler that presents a question to a live human and returns the answer without ending the agent turn.
+/// Handler that presents batched questions to a live human and returns the numbered answers without ending the agent turn.
 /// </summary>
-public delegate Task<string> AskHandler(string prompt, string? rationale, IReadOnlyList<string>? options, CancellationToken cancellationToken);
+public delegate Task<string> AskHandler(IReadOnlyList<QuestionItem> questions, CancellationToken cancellationToken);
 
 public partial class CanonicalTools
 {
@@ -23,6 +23,12 @@ public partial class CanonicalTools
     /// HumanInterruptionException so the orchestrator can checkpoint the workspace.
     /// </summary>
     public AskHandler? AskHandler { get; set; }
+
+    /// <summary>
+    /// Optional handler for the request_changes tool. When present, invoked before throwing
+    /// RequestChangesException so callers (such as agent harnesses) can intercept the rejection.
+    /// </summary>
+    public Action<string, string?>? RequestChangesHandler { get; set; }
 
     [GeneratedRegex(@"\r\n|\r|\n")]
     private static partial Regex NewlineRegex();
@@ -462,28 +468,33 @@ public partial class CanonicalTools
     }
 
     /// <summary>
-    /// ask: Asynchronous human interruption yielding HumanInterruptionException.
+    /// ask: Asynchronous human clarification tool accepting a batched list of structured questions.
+    /// Returns model-visible validation errors when inputs are invalid.
+    /// When an AskHandler is present (ideation), awaits answers and returns numbered Q&A pairs.
+    /// Otherwise, throws HumanInterruptionException carrying the full collection.
     /// </summary>
-    public string Ask(string prompt, string? rationale = null, IReadOnlyList<string>? options = null)
+    public async Task<string> AskAsync(IReadOnlyList<QuestionItem>? questions, CancellationToken cancellationToken = default)
     {
-        string? optionsJson = options != null && options.Count > 0 ? JsonSerializer.Serialize(options) : null;
-        var qType = options != null && options.Count > 0 ? QuestionType.SingleChoice : QuestionType.FreeText;
-        throw new HumanInterruptionException(prompt, qType, rationale, optionsJson);
-    }
-
-    /// <summary>
-    /// ask (async): awaits the live human answer when an AskHandler is configured, otherwise
-    /// falls back to throwing HumanInterruptionException.
-    /// </summary>
-    public async Task<string> AskAsync(string prompt, string? rationale = null, IReadOnlyList<string>? options = null, CancellationToken cancellationToken = default)
-    {
-        if (AskHandler == null)
+        if (questions == null || questions.Count == 0)
         {
-            return Ask(prompt, rationale, options);
+            return "Error: At least one question must be provided in 'questions'. Consolidate all clarifying questions into a list.";
         }
 
-        var answer = await AskHandler(prompt, rationale, options, cancellationToken).ConfigureAwait(false);
-        return $"User answered: {answer}";
+        for (int i = 0; i < questions.Count; i++)
+        {
+            var q = questions[i];
+            if (string.IsNullOrWhiteSpace(q.Prompt))
+            {
+                return $"Error: Question at index {i} has a blank or empty prompt.";
+            }
+        }
+
+        if (AskHandler == null)
+        {
+            throw new HumanInterruptionException(questions);
+        }
+
+        return await AskHandler(questions, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -713,6 +724,7 @@ public partial class CanonicalTools
     /// </summary>
     public string RequestChanges(string feedback, string? reason = null)
     {
+        RequestChangesHandler?.Invoke(feedback, reason);
         throw new RequestChangesException(feedback, reason);
     }
 

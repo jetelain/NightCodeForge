@@ -13,7 +13,7 @@ public class StageExecutionResult
     public string? ErrorMessage { get; init; }
     public bool NeedsClarification { get; init; }
     public bool IsCancelled { get; init; }
-    public Question? ClarificationQuestion { get; init; }
+    public IReadOnlyList<Question>? ClarificationQuestions { get; init; }
     public StageExecutionRecord? ExecutionRecord { get; init; }
 
     public static StageExecutionResult Success(string? nextStageId = null, StageExecutionRecord? record = null) =>
@@ -25,9 +25,21 @@ public class StageExecutionResult
     public static StageExecutionResult Cancelled(string? message = null, StageExecutionRecord? record = null) =>
         new() { IsSuccess = false, IsCancelled = true, ErrorMessage = message ?? "Execution was cancelled.", ExecutionRecord = record };
 
-    public static StageExecutionResult QuestionRequired(Question question, StageExecutionRecord? record = null) =>
-        new() { IsSuccess = false, NeedsClarification = true, ClarificationQuestion = question, ExecutionRecord = record };
+    public static StageExecutionResult QuestionRequired(IReadOnlyList<Question> questions, StageExecutionRecord? record = null)
+    {
+        if (questions == null || questions.Count == 0)
+        {
+            throw new ArgumentException("Clarification questions cannot be null or empty.", nameof(questions));
+        }
+        return new() { IsSuccess = false, NeedsClarification = true, ClarificationQuestions = questions, ExecutionRecord = record };
+    }
 
-    public static StageExecutionResult WaitingForHuman(Question? question = null, StageExecutionRecord? record = null) =>
-        new() { IsSuccess = true, NeedsClarification = true, ClarificationQuestion = question, ExecutionRecord = record };
+    public static StageExecutionResult WaitingForHuman(IReadOnlyList<Question> questions, StageExecutionRecord? record = null)
+    {
+        if (questions == null || questions.Count == 0)
+        {
+            throw new ArgumentException("Clarification questions cannot be null or empty.", nameof(questions));
+        }
+        return new() { IsSuccess = true, NeedsClarification = true, ClarificationQuestions = questions, ExecutionRecord = record };
+    }
 }

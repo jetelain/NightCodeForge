@@ -91,7 +91,10 @@ public class ResumptionTests
         Assert.Equal(TaskOverallStatus.Open, updatedTask.Status);
 
         var bag = PipelineDataBag.FromJson(updatedTask.PipelineDataJson);
-        Assert.Equal("Port 8080", bag.Get<string>(PipelineDataBagKeys.LastHumanAnswer));
+        var lastAnswer = bag.Get<string>(PipelineDataBagKeys.LastHumanAnswer);
+        Assert.NotNull(lastAnswer);
+        Assert.Contains("What port should the server listen on?", lastAnswer);
+        Assert.Contains("Port 8080", lastAnswer);
 
         // Enqueued to llm-urgent
         Assert.Contains(100, _jobQueue.UrgentQueue);
@@ -178,7 +181,8 @@ public class ResumptionTests
         // Orchestrator processes resumed task
         await orchestrator.ProcessTaskAsync(101);
 
-        Assert.Equal("ASP.NET Core", consumedAnswer);
+        Assert.NotNull(consumedAnswer);
+        Assert.Contains("ASP.NET Core", consumedAnswer);
         var updated = await _taskRepo.GetByIdAsync(101);
         Assert.NotNull(updated);
         // Stage completed (single stage pipeline reached end -> Ready)

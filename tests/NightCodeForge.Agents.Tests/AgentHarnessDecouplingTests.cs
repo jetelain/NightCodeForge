@@ -55,14 +55,13 @@ public class AgentHarnessDecouplingTests : IDisposable
     }
 
     [Fact]
-    public void CrucibleAgentHarness_BuildTaskScope_IncorporatesReviewDiff_WhenProvided()
+    public void CrucibleAgentHarness_BuildTaskScope_BuildsScopeWithoutReviewDiff()
     {
         var task = new ForgeTask { Id = 42, Title = "Feature X", Description = "Implement Feature X" };
-        var diff = "diff --git a/src/App.cs b/src/App.cs\n+Console.WriteLine(\"Hello\");";
 
-        var taskScope = CrucibleAgentHarness.BuildTaskScope(task, "docs/tasks/task-42.md", diff);
+        var taskScope = CrucibleAgentHarness.BuildTaskScope(task, "docs/tasks/task-42.md");
 
-        Assert.Contains("<review_diff>\ndiff --git a/src/App.cs b/src/App.cs\n+Console.WriteLine(\"Hello\");\n</review_diff>", taskScope);
+        Assert.DoesNotContain("<review_diff>", taskScope);
         Assert.Contains("path=\"docs/tasks/task-42.md\"", taskScope);
         Assert.Contains("title=\"Feature X\"", taskScope);
     }
@@ -97,7 +96,7 @@ public class AgentHarnessDecouplingTests : IDisposable
             StageId = StandardStageIds.CodeReviewAndFix,
             RequiredMode = AgentMode.Review,
             WorkspacePath = _tempDir,
-            ReviewDiff = "diff --git a/db.cs b/db.cs",
+            ReviewDiffStat = "src/db.cs | 2 +-",
             PipelineContext = null // Explicitly null to verify decoupling
         };
 
@@ -109,7 +108,7 @@ public class AgentHarnessDecouplingTests : IDisposable
     }
 
     [Fact]
-    public async Task CrucibleAgentHarness_WhenReviewDiffPresentInContext_InjectedIntoTaskScope()
+    public async Task CrucibleAgentHarness_WhenReviewDiffStatPresentInContext_DoesNotInjectRawDiffIntoTaskScope()
     {
         List<ChatMessage>? receivedMessages = null;
         async IAsyncEnumerable<ChatResponseUpdate> StreamGen(IEnumerable<ChatMessage> msgs, ChatOptions? opts)
@@ -144,7 +143,7 @@ public class AgentHarnessDecouplingTests : IDisposable
             StageId = StandardStageIds.CodeReviewAndFix,
             RequiredMode = AgentMode.Review,
             WorkspacePath = _tempDir,
-            ReviewDiff = "diff --git a/auth.cs b/auth.cs\n+public class Auth {}",
+            ReviewDiffStat = "src/auth.cs | 2 +-",
             PipelineContext = null
         };
 
@@ -153,8 +152,7 @@ public class AgentHarnessDecouplingTests : IDisposable
         Assert.NotNull(receivedMessages);
         var systemMsg = receivedMessages.FirstOrDefault(m => m.Role == ChatRole.System)?.Text;
         Assert.NotNull(systemMsg);
-        Assert.Contains("<review_diff>", systemMsg);
-        Assert.Contains("diff --git a/auth.cs b/auth.cs", systemMsg);
+        Assert.DoesNotContain("<review_diff>", systemMsg);
     }
 
     [Fact]

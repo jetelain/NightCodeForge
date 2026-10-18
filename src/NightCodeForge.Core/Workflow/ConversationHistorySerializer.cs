@@ -205,6 +205,151 @@ public static class ConversationHistorySerializer
     }
 
     /// <summary>
+    /// Completes any pending unanswered tool call (such as 'ask') in the serialized session memory
+    /// with the provided human answer as a tool result, followed by an instruction to proceed.
+    /// </summary>
+    public static string CompletePendingAskToolCall(string? json, string answer, string proceedInstruction = "Please proceed with your plan based on the clarified answers.")
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return json ?? string.Empty;
+        }
+
+        List<SerializedMessageItem> items;
+        try
+        {
+            items = Deserialize(json);
+        }
+        catch
+        {
+            return json;
+        }
+
+        if (items.Count == 0)
+        {
+            return json;
+        }
+
+        var pendingCallIds = new HashSet<string>();
+        var interruptedCallIds = new HashSet<string>();
+
+        foreach (var item in items)
+        {
+            if (item.FunctionCalls != null)
+            {
+                foreach (var fc in item.FunctionCalls)
+                {
+                    if (!string.IsNullOrEmpty(fc.CallId)) pendingCallIds.Add(fc.CallId);
+                }
+            }
+            if (item.Contents != null)
+            {
+                foreach (var c in item.Contents)
+                {
+                    if (c.Type == ContentTypeCall && !string.IsNullOrEmpty(c.CallId))
+                    {
+                        pendingCallIds.Add(c.CallId);
+                    }
+                    else if (c.Type == ContentTypeResult && !string.IsNullOrEmpty(c.CallId))
+                    {
+                        if (string.Equals(c.Result, InterruptedToolResult, StringComparison.Ordinal))
+                        {
+                            interruptedCallIds.Add(c.CallId);
+                        }
+                        else
+                        {
+                            pendingCallIds.Remove(c.CallId);
+                        }
+                    }
+                }
+            }
+            if (item.FunctionResults != null)
+            {
+                foreach (var fr in item.FunctionResults)
+                {
+                    if (!string.IsNullOrEmpty(fr.CallId))
+                    {
+                        if (string.Equals(fr.Result, InterruptedToolResult, StringComparison.Ordinal))
+                        {
+                            interruptedCallIds.Add(fr.CallId);
+                        }
+                        else
+                        {
+                            pendingCallIds.Remove(fr.CallId);
+                        }
+                    }
+                }
+            }
+        }
+
+        bool modified = false;
+
+        // If any tool calls were marked interrupted, update their results in-place
+        if (interruptedCallIds.Count > 0)
+        {
+            foreach (var item in items)
+            {
+                if (item.FunctionResults != null)
+                {
+                    for (int i = 0; i < item.FunctionResults.Count; i++)
+                    {
+                        var fr = item.FunctionResults[i];
+                        if (!string.IsNullOrEmpty(fr.CallId) && interruptedCallIds.Contains(fr.CallId))
+                        {
+                            item.FunctionResults[i] = new SerializedFunctionResult(fr.CallId, answer);
+                            modified = true;
+                        }
+                    }
+                }
+                if (item.Contents != null)
+                {
+                    for (int i = 0; i < item.Contents.Count; i++)
+                    {
+                        var c = item.Contents[i];
+                        if (c.Type == ContentTypeResult && !string.IsNullOrEmpty(c.CallId) && interruptedCallIds.Contains(c.CallId))
+                        {
+                            item.Contents[i] = new SerializedContent(ContentTypeResult, CallId: c.CallId, Result: answer);
+                            modified = true;
+                        }
+                    }
+                }
+            }
+
+            foreach (var cid in interruptedCallIds)
+            {
+                pendingCallIds.Remove(cid);
+            }
+        }
+
+        if (pendingCallIds.Count > 0)
+        {
+            foreach (var callId in pendingCallIds)
+            {
+                items.Add(new SerializedMessageItem(
+                    Role: RoleTool,
+                    FunctionResults: new List<SerializedFunctionResult> { new(callId, answer) },
+                    Contents: new List<SerializedContent> { new(ContentTypeResult, CallId: callId, Result: answer) }));
+            }
+            modified = true;
+        }
+
+        if (modified)
+        {
+            if (!string.IsNullOrWhiteSpace(proceedInstruction))
+            {
+                items.Add(new SerializedMessageItem(
+                    Role: RoleUser,
+                    Text: proceedInstruction,
+                    Contents: new List<SerializedContent> { new(ContentTypeText, Text: proceedInstruction) }));
+            }
+
+            return JsonSerializer.Serialize(items, JsonOptions);
+        }
+
+        return json;
+    }
+
+    /// <summary>
     /// Formats a serialized session into a textual prompt representation for harnesses without native MAF history support.
     /// </summary>
     public static string FormatForPrompt(string json)

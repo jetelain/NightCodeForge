@@ -105,10 +105,12 @@ public class PiRpcAgentHarnessTests
         var result = await harness.RunSessionStreamAsync(writer, reader, context, "sess-2", sw);
 
         Assert.Equal(AgentRunStatus.WaitingForHuman, result.Status);
-        Assert.NotNull(result.PendingQuestion);
-        Assert.Contains("Which database driver?", result.PendingQuestion);
-        Assert.Contains("Npgsql", result.PendingQuestion);
-        Assert.Contains("Microsoft.Data.Sqlite", result.PendingQuestion);
+        Assert.NotNull(result.PendingQuestions);
+        Assert.Single(result.PendingQuestions);
+        var q = result.PendingQuestions[0];
+        Assert.Contains("Which database driver?", q.Prompt);
+        Assert.Contains("Npgsql", q.OptionsJson ?? "");
+        Assert.Contains("Microsoft.Data.Sqlite", q.OptionsJson ?? "");
 
         // Verify streamed interruption
         Assert.Contains(streamer.Events, e => e.Kind == AgentActivityKind.Interrupted && e.Content.Contains("Which database driver?"));

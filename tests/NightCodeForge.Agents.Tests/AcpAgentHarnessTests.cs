@@ -159,10 +159,12 @@ public class AcpAgentHarnessTests
         var result = await harness.RunSessionStreamAsync(writer, reader, context, "sess-3", sw);
 
         Assert.Equal(AgentRunStatus.WaitingForHuman, result.Status);
-        Assert.NotNull(result.PendingQuestion);
-        Assert.Contains("Allow deleting old migrations?", result.PendingQuestion);
-        Assert.Contains("Yes", result.PendingQuestion);
-        Assert.Contains("No", result.PendingQuestion);
+        Assert.NotNull(result.PendingQuestions);
+        Assert.Single(result.PendingQuestions);
+        var q = result.PendingQuestions[0];
+        Assert.Contains("Allow deleting old migrations?", q.Prompt);
+        Assert.Contains("Yes", q.OptionsJson ?? "");
+        Assert.Contains("No", q.OptionsJson ?? "");
 
         Assert.Contains(streamer.Events, e => e.Kind == AgentActivityKind.Interrupted && e.Content.Contains("Allow deleting old migrations?"));
     }

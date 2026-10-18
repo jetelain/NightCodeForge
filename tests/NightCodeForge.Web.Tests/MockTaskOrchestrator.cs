@@ -7,6 +7,7 @@ public class MockTaskOrchestrator : ITaskOrchestrator
 {
     public (int TaskId, TaskOverallStatus TargetStatus, int Priority, MergeMode MergeMode)? LastPromotedCall { get; private set; }
     public (int QuestionId, string Answer)? LastSubmitHumanAnswerCall { get; private set; }
+    public (int TaskId, IReadOnlyDictionary<int, string> Answers)? LastSubmitAnswersCall { get; private set; }
     public (int TaskId, string RevisionNotes)? LastRequestChangesCall { get; private set; }
     public (int TaskId, string FinalCommitMessage)? LastCompleteTaskCall { get; private set; }
     public int? LastProcessedTaskId { get; private set; }
@@ -26,6 +27,17 @@ public class MockTaskOrchestrator : ITaskOrchestrator
     public Task SubmitHumanAnswerAsync(int questionId, string answer, CancellationToken cancellationToken = default)
     {
         LastSubmitHumanAnswerCall = (questionId, answer);
+        return Task.CompletedTask;
+    }
+
+    public Task SubmitAnswersAsync(int taskId, IReadOnlyDictionary<int, string> answers, CancellationToken cancellationToken = default)
+    {
+        LastSubmitAnswersCall = (taskId, answers);
+        if (answers.Count == 1)
+        {
+            var kvp = answers.First();
+            LastSubmitHumanAnswerCall = (kvp.Key, kvp.Value);
+        }
         return Task.CompletedTask;
     }
 

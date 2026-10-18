@@ -303,9 +303,11 @@ public class PiRpcAgentHarness : IAgentHarness
                             ? (string.IsNullOrWhiteSpace(msg) ? title : $"{title}\n{msg}")
                             : (msg ?? "Human input requested by Pi");
 
+                        string? optionsJson = null;
                         if (node?["options"] is JsonArray optsArray && optsArray.Count > 0)
                         {
                             prompt += "\nOptions:\n" + string.Join("\n", optsArray.Select(o => $"- {o}"));
+                            optionsJson = JsonSerializer.Serialize(optsArray.Select(o => o?.ToString()).Where(s => !string.IsNullOrEmpty(s)).ToList());
                         }
 
                         sw.Stop();
@@ -313,8 +315,18 @@ public class PiRpcAgentHarness : IAgentHarness
 
                         await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, lastAgentSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
 
+                        var question = new Question
+                        {
+                            TaskId = context.ForgeTask.Id,
+                            StageId = context.StageId,
+                            Prompt = prompt,
+                            OptionsJson = optionsJson,
+                            Status = QuestionStatus.Pending,
+                            AskedAt = DateTime.UtcNow
+                        };
+
                         return AgentRunResult.WaitingForHuman(
-                            prompt,
+                            new[] { question },
                             new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
                             updatedState: sessionId,
                             summary: "Pi daemon paused awaiting developer answer");

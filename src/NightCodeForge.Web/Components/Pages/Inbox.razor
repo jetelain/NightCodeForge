@@ -47,9 +47,12 @@
     else
     {
         <div class="question-grid" id="inbox-question-grid">
-            @foreach (var question in _pendingQuestions)
+            @foreach (var group in GroupedQuestions)
             {
-                <QuestionCard @key="question.Id" Question="question" OnAnswerSubmitted="HandleAnswerSubmitted" />
+                <QuestionCard @key="group.Key" 
+                              Questions="group.Questions" 
+                              OnAnswerSubmitted="HandleAnswerSubmitted" 
+                              OnBatchSubmitted="HandleBatchSubmitted" />
             }
         </div>
     }
@@ -60,6 +63,26 @@
     private bool _filterCurrentWorkspaceOnly;
     private bool _isLoading = true;
     private bool _disposed;
+
+    private record QuestionGroup(string Key, IReadOnlyList<Question> Questions);
+
+    private IEnumerable<QuestionGroup> GroupedQuestions
+    {
+        get
+        {
+            var groups = new List<QuestionGroup>();
+            var batches = _pendingQuestions
+                .GroupBy(q => !string.IsNullOrWhiteSpace(q.BatchId)
+                    ? $"task-{q.TaskId}-batch-{q.BatchId}"
+                    : $"task-{q.TaskId}-single-{q.Id}");
+
+            foreach (var g in batches)
+            {
+                groups.Add(new QuestionGroup(g.Key, g.OrderBy(q => q.Id).ToList()));
+            }
+            return groups;
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -113,6 +136,14 @@
     private async Task HandleAnswerSubmitted(int questionId)
     {
         _pendingQuestions.RemoveAll(q => q.Id == questionId);
+        WorkerState.UpdatePendingQuestions(_pendingQuestions.Count);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task HandleBatchSubmitted(IReadOnlyList<int> questionIds)
+    {
+        var idSet = new HashSet<int>(questionIds);
+        _pendingQuestions.RemoveAll(q => idSet.Contains(q.Id));
         WorkerState.UpdatePendingQuestions(_pendingQuestions.Count);
         await InvokeAsync(StateHasChanged);
     }

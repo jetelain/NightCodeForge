@@ -157,6 +157,23 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         var dispatcher = new LenientToolDispatcher(canonicalTools);
 
+        using var interruptionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        NightCodeForge.Core.Workflow.HumanInterruptionException? capturedInterruption = null;
+        canonicalTools.AskHandler = (questions, ct) =>
+        {
+            capturedInterruption = new NightCodeForge.Core.Workflow.HumanInterruptionException(questions);
+            interruptionCts.Cancel();
+            throw new OperationCanceledException(interruptionCts.Token);
+        };
+
+        NightCodeForge.Core.Workflow.RequestChangesException? capturedRequestChanges = null;
+        canonicalTools.RequestChangesHandler = (feedback, reason) =>
+        {
+            capturedRequestChanges = new NightCodeForge.Core.Workflow.RequestChangesException(feedback, reason);
+            interruptionCts.Cancel();
+            throw new OperationCanceledException(interruptionCts.Token);
+        };
+
         // Rehydrate any pending proposals previously recorded in DataBag
         var existingProposals = context.PipelineContext?.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals);
         if (existingProposals is { Count: > 0 })
@@ -239,8 +256,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             ? context.StageDirective
             : WorkspacePromptResolver.ResolveStageDirective(workspacePath, context.StageId, GetStageDirective(harnessConfig, context.StageId));
         var taskDocPath = context.TaskMarkdownPath ?? context.PipelineContext?.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
-        var reviewDiff = context.ReviewDiff ?? context.PipelineContext?.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiff);
-        var taskScope = BuildTaskScope(context.ForgeTask, taskDocPath, reviewDiff);
+        var taskScope = BuildTaskScope(context.ForgeTask, taskDocPath);
         var workspaceSystemPrompt = WorkspacePromptResolver.ResolveSystemPrompt(workspacePath);
         var customPersona = !string.IsNullOrWhiteSpace(workspaceSystemPrompt)
             ? workspaceSystemPrompt
@@ -299,10 +315,41 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
         }
 
-        // 8. Preemptive Resumption: Inject user answer if resuming from 'ask'
+        // 8. Preemptive Resumption: Complete pending 'ask' tool call with human answers as tool result
         if (!string.IsNullOrWhiteSpace(context.PendingHumanAnswer))
         {
-            chatHistory.Add(new ChatMessage(ChatRole.User, $"[Human Answer]: {context.PendingHumanAnswer}"));
+            var pendingCallIds = new HashSet<string>();
+            foreach (var msg in chatHistory)
+            {
+                foreach (var content in msg.Contents)
+                {
+                    if (content is FunctionCallContent fcc && !string.IsNullOrEmpty(fcc.CallId))
+                    {
+                        pendingCallIds.Add(fcc.CallId);
+                    }
+                    else if (content is FunctionResultContent frc && !string.IsNullOrEmpty(frc.CallId))
+                    {
+                        pendingCallIds.Remove(frc.CallId);
+                    }
+                }
+            }
+
+            if (pendingCallIds.Count > 0)
+            {
+                foreach (var pendingId in pendingCallIds)
+                {
+                    chatHistory.Add(new ChatMessage(ChatRole.Tool, new List<AIContent>
+                    {
+                        new FunctionResultContent(pendingId, context.PendingHumanAnswer)
+                    }));
+                }
+                chatHistory.Add(new ChatMessage(ChatRole.User, "Please proceed with your plan based on the clarified answers."));
+            }
+            else if (!chatHistory.Any(m => (m.Text != null && m.Text.Contains(context.PendingHumanAnswer, StringComparison.Ordinal))
+                     || m.Contents.OfType<FunctionResultContent>().Any(frc => frc.Result?.ToString()?.Contains(context.PendingHumanAnswer, StringComparison.Ordinal) == true)))
+            {
+                chatHistory.Add(new ChatMessage(ChatRole.User, $"[Human Clarification]:\n{context.PendingHumanAnswer}\n\nPlease proceed with your plan."));
+            }
         }
 
         // 9. Resolve effective ChatClient for the profile and assemble middlewares
@@ -492,13 +539,33 @@ public partial class CrucibleAgentHarness : IAgentHarness
         async Task<AgentRunResult> CompleteWithInterruptionAsync(HumanInterruptionException interruption)
         {
             stopwatch.Stop();
+
+            var answeredCallIds = new HashSet<string>(
+                chatHistory.SelectMany(m => m.Contents)
+                    .OfType<FunctionResultContent>()
+                    .Where(frc => !string.IsNullOrEmpty(frc.CallId))
+                    .Select(frc => frc.CallId!));
+
+            var hasPendingAsk = chatHistory.Any(m => m.Role == ChatRole.Assistant &&
+                m.Contents.OfType<FunctionCallContent>().Any(f => f.Name == "ask" && !answeredCallIds.Contains(f.CallId)));
+            if (!hasPendingAsk)
+            {
+                var callId = Guid.NewGuid().ToString("N");
+                var askArgs = new Dictionary<string, object?> { ["questions"] = interruption.Questions };
+                chatHistory.Add(new ChatMessage(ChatRole.Assistant, new List<AIContent>
+                {
+                    new FunctionCallContent(callId, "ask", askArgs)
+                }));
+            }
+
             latestSerializedState = SerializeSession(chatHistory);
 
-            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, interruption.Question.Prompt, cancellationToken);
-            await SaveAsync(AgentRunStatus.WaitingForHuman, interruption.Question.Prompt, cancellationToken);
+            var summaryPrompt = string.Join("; ", interruption.Questions.Select(q => q.Prompt));
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, summaryPrompt, cancellationToken);
+            await SaveAsync(AgentRunStatus.WaitingForHuman, summaryPrompt, cancellationToken);
 
             return AgentRunResult.WaitingForHuman(
-                interruption.Question.Prompt,
+                interruption.Questions,
                 CurrentMetrics(),
                 updatedState: latestSerializedState,
                 summary: "Crucible paused awaiting human clarification");
@@ -669,8 +736,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         // The agent receives a copy: the persisting middleware rewrites chatHistory in place on every model call.
         var historySnapshot = chatHistory.ToList();
-        var enumerator = agent.RunStreamingAsync(historySnapshot.ToList(), session, cancellationToken: cancellationToken)
-            .GetAsyncEnumerator(cancellationToken);
+        var enumerator = agent.RunStreamingAsync(historySnapshot.ToList(), session, cancellationToken: interruptionCts.Token)
+            .GetAsyncEnumerator(interruptionCts.Token);
         try
         {
             while (true)
@@ -695,6 +762,14 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 }
                 catch (OperationCanceledException)
                 {
+                    if (capturedInterruption != null)
+                    {
+                        return await CompleteWithInterruptionAsync(capturedInterruption);
+                    }
+                    if (capturedRequestChanges != null)
+                    {
+                        return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                    }
                     await AbortOnCancellationAsync();
                     throw;
                 }
@@ -718,6 +793,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
             await enumerator.DisposeAsync();
         }
 
+        if (capturedInterruption != null)
+        {
+            return await CompleteWithInterruptionAsync(capturedInterruption);
+        }
+        if (capturedRequestChanges != null)
+        {
+            return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+        }
+
         if (streamingFailed)
         {
             // Discard what a partially consumed stream produced so the non-streaming retry does not duplicate it.
@@ -728,7 +812,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
             try
             {
-                var response = await agent.RunAsync(historySnapshot.ToList(), session, cancellationToken: cancellationToken);
+                var response = await agent.RunAsync(historySnapshot.ToList(), session, cancellationToken: interruptionCts.Token);
                 foreach (var update in response.ToAgentResponseUpdates())
                 {
                     await ProcessUpdateAsync(update, streaming: false);
@@ -744,6 +828,14 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
             catch (OperationCanceledException)
             {
+                if (capturedInterruption != null)
+                {
+                    return await CompleteWithInterruptionAsync(capturedInterruption);
+                }
+                if (capturedRequestChanges != null)
+                {
+                    return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                }
                 await AbortOnCancellationAsync();
                 throw;
             }
@@ -751,6 +843,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
             {
                 _logger.LogError(ex, "Error during Crucible non-streaming LLM invocation");
                 return await FailAsync(ex.Message);
+            }
+
+            if (capturedInterruption != null)
+            {
+                return await CompleteWithInterruptionAsync(capturedInterruption);
+            }
+            if (capturedRequestChanges != null)
+            {
+                return await CompleteWithRequestChangesAsync(capturedRequestChanges);
             }
         }
 
@@ -817,8 +918,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     /// <summary>
     /// Builds the &lt;task&gt; scope block of the prompt, neutralising characters that would break out of the
     /// attribute values or close the block early.
-    /// </summary>
-    public static string BuildTaskScope(ForgeTask task, string? taskDocPath, string? reviewDiff = null)
+    public static string BuildTaskScope(ForgeTask task, string? taskDocPath)
     {
         ArgumentNullException.ThrowIfNull(task);
 
@@ -829,11 +929,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var description = (task.Description ?? string.Empty)
             .Replace("</task>", "&lt;/task&gt;", StringComparison.OrdinalIgnoreCase);
 
-        var diffBlock = !string.IsNullOrWhiteSpace(reviewDiff)
-            ? $"\n<review_diff>\n{reviewDiff.Replace("</review_diff>", "&lt;/review_diff&gt;", StringComparison.OrdinalIgnoreCase)}\n</review_diff>"
-            : string.Empty;
-
-        return $"<task id=\"{task.Id}\" title=\"{EscapeAttribute(task.Title ?? string.Empty)}\"{docAttr}>\n{description}{diffBlock}\n</task>";
+        return $"<task id=\"{task.Id}\" title=\"{EscapeAttribute(task.Title ?? string.Empty)}\"{docAttr}>\n{description}\n</task>";
     }
 
     /// <summary>Runs persistence work sequentially, in submission order, logging (never throwing) failures.</summary>
@@ -1083,7 +1179,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             StandardStageIds.Triage or "stage-0" =>
                 "Analyze the reported task against the repository base branch. Determine affected files and acceptance criteria. Call propose_tasks to recommend structured backlog items. You have read-only access and cannot modify code or access external networks.",
             StandardStageIds.TaskReview or "stage-1" =>
-                "You are a Staff Software Architect & Requirements Investigator. Thoroughly investigate requirements and inspect the codebase using 'read' and 'bash'. MANDATORY FILE EDIT: Edit the task specification document on disk in docs/tasks/ using 'edit' or 'write' with your approved architecture, technical plan, and acceptance criteria. Your disk changes will be read back upon stage completion to update the task specification. Proactively uncover ambiguities: invoke 'ask' immediately if needed. Do not guess. Do not write production code.",
+                "You are a Staff Software Architect & Requirements Investigator. 1. Thoroughly investigate the task requirements and inspect the codebase using 'read' and 'bash'. 2. MANDATORY FILE EDIT: Edit the task specification document on disk in docs/tasks/ using 'edit' or 'write' with your approved architecture, affected files, technical plan, and acceptance criteria. Your disk changes will be read back upon stage completion to update the task specification. 3. Gather all questions and ambiguities into a single 'ask' call using the question list, expecting all answers at once; follow-up asks are permitted only for newly discovered blockers. Do not guess. 4. Do not write production code.",
             StandardStageIds.Implementation or "stage-2" =>
                 "You are a Senior Software Engineer & TDD Practitioner. Implement clean, robust code according to the task specification in docs/tasks/ and the approved plan. Keep blast radius minimal. Run builds and tests incrementally with bash. Fix all compiler errors and test failures. If breaking blockers arise, call 'ask'.",
             StandardStageIds.CodeReviewAndFix or "stage-3" =>
@@ -1148,8 +1244,28 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         protected override async ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
         {
-            var argsJson = JsonSerializer.Serialize(arguments.ToDictionary(kv => kv.Key, kv => kv.Value));
-            return await dispatcher.DispatchAsync(name, argsJson, cancellationToken);
+            try
+            {
+                var argsJson = JsonSerializer.Serialize(arguments.ToDictionary(kv => kv.Key, kv => kv.Value));
+                return await dispatcher.DispatchAsync(name, argsJson, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (NightCodeForge.Core.Workflow.HumanInterruptionException)
+            {
+                throw;
+            }
+            catch (NightCodeForge.Core.Workflow.RequestChangesException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                var msg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
+                return $"Error: {msg}";
+            }
         }
     }
 

@@ -56,11 +56,16 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
         {
             context.ForgeTask.IsWaitingForHuman = true;
             context.ForgeTask.InterruptedStageId = stage.StageId;
-            if (result.ClarificationQuestion != null)
+            var batchId = Guid.NewGuid().ToString("N");
+            if (result.ClarificationQuestions != null)
             {
-                result.ClarificationQuestion.TaskId = context.ForgeTask.Id;
-                result.ClarificationQuestion.StageId = stage.StageId;
-                context.ForgeTask.Questions.Add(result.ClarificationQuestion);
+                foreach (var q in result.ClarificationQuestions)
+                {
+                    q.TaskId = context.ForgeTask.Id;
+                    q.StageId = stage.StageId;
+                    q.BatchId = batchId;
+                    context.ForgeTask.Questions.Add(q);
+                }
             }
             context.SyncDataBagToTask();
             return result;

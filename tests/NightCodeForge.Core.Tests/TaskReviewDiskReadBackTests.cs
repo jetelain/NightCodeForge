@@ -182,12 +182,11 @@ public class TaskReviewDiskReadBackTests : IDisposable
         Assert.Contains("## 🏛️ Architecture & Implementation Plan", updatedInDb.Description);
         Assert.Contains("## 🧪 Acceptance Criteria", updatedInDb.Description);
 
-        // Assert 3: Stage1.ApprovedPlan in DataBag was populated with the enriched specification from disk
+        // Assert 3: Stage1.ApprovedPlan in DataBag is populated with the stage summary (not overriding with task.Description)
         var bag = PipelineDataBag.FromJson(updatedInDb.PipelineDataJson);
         var approvedPlan = bag.Get<string>(PipelineDataBagKeys.ApprovedPlan);
         Assert.NotNull(approvedPlan);
-        Assert.Contains("RedisDistributedCache", approvedPlan);
-        Assert.Contains("## 🏛️ Architecture & Implementation Plan", approvedPlan);
+        Assert.Equal("ForgeTask review complete; updated specification on disk.", approvedPlan);
 
         // Assert 4: Git checkpoint commit was created capturing the completed stage
         Assert.Contains(gitManager.WipCheckpoints, c => c.StageName == StandardStageIds.TaskReview);

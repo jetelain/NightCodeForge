@@ -54,14 +54,40 @@ public class PerServiceCallChatHistoryPersistingChatClient : DelegatingChatClien
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var messages = chatMessages.ToList();
+        var assistantContents = new List<AIContent>();
+        var textBuilder = new System.Text.StringBuilder();
+
         await foreach (var update in base.GetStreamingResponseAsync(messages, options, cancellationToken))
         {
+            if (update.Contents != null)
+            {
+                foreach (var content in update.Contents)
+                {
+                    assistantContents.Add(content);
+                }
+            }
+            if (!string.IsNullOrEmpty(update.Text))
+            {
+                textBuilder.Append(update.Text);
+            }
+
             yield return update;
+        }
+
+        var updated = new List<ChatMessage>(messages);
+        if (assistantContents.Count > 0 || textBuilder.Length > 0)
+        {
+            if (textBuilder.Length > 0 && !assistantContents.OfType<TextContent>().Any())
+            {
+                assistantContents.Insert(0, new TextContent(textBuilder.ToString()));
+            }
+            var assistantMsg = new ChatMessage(ChatRole.Assistant, assistantContents);
+            updated.Add(assistantMsg);
         }
 
         try
         {
-            await _onPersistAsync(messages);
+            await _onPersistAsync(updated);
         }
         catch (Exception ex)
         {

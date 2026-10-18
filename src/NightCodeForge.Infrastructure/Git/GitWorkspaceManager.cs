@@ -304,18 +304,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             taskId, baseBranch, workingPath);
 
         // -U2 context window reduction and noisy artifact exclusions
-        string[] diffArgs = [
-            "diff",
-            $"{baseBranch}...{branchName}",
-            "-U2",
-            "--",
-            ".",
-            ":(exclude)package-lock.json",
-            ":(exclude)pnpm-lock.yaml",
-            ":(exclude)yarn.lock",
-            ":(exclude)*.Designer.cs",
-            ":(exclude)*.generated.cs"
-        ];
+        string[] diffArgs = BuildDiffArgs($"{baseBranch}...{branchName}", isStat: false);
 
         string rawDiff = string.Empty;
         try
@@ -363,18 +352,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         _logger.LogInformation("Generating live diff for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorkingPath}'",
             taskId, baseBranch, workingPath);
 
-        string[] diffArgs = [
-            "diff",
-            baseBranch,
-            "-U2",
-            "--",
-            ".",
-            ":(exclude)package-lock.json",
-            ":(exclude)pnpm-lock.yaml",
-            ":(exclude)yarn.lock",
-            ":(exclude)*.Designer.cs",
-            ":(exclude)*.generated.cs"
-        ];
+        string[] diffArgs = BuildDiffArgs(baseBranch, isStat: false);
 
         try
         {
@@ -389,6 +367,55 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     }
 
     /// <inheritdoc />
+    public async Task<string> GenerateDiffStatAsync(
+        Workspace workspace,
+        int taskId,
+        string baseBranch,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(workspace);
+        var workingPath = GetWorkingPath(workspace, taskId);
+        var branchName = $"feature/task-{taskId}";
+
+        _logger.LogInformation("Generating diff stat for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorkingPath}'",
+            taskId, baseBranch, workingPath);
+
+        string[] statArgs = BuildDiffArgs($"{baseBranch}...{branchName}", isStat: true);
+
+        var targetPath = Directory.Exists(workingPath)
+            ? workingPath
+            : (Directory.Exists(workspace.RepositoryPath) ? workspace.RepositoryPath : workingPath);
+
+        var result = await _gitCliRunner.ExecuteAsync(targetPath, statArgs, cancellationToken: cancellationToken);
+        return FormatStatOutput(result.StandardOutput);
+    }
+
+    /// <inheritdoc />
+    public async Task<string> GenerateLiveDiffStatAsync(
+        Workspace workspace,
+        int taskId,
+        string baseBranch = "main",
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(workspace);
+        var workingPath = GetWorkingPath(workspace, taskId);
+        if (!WorktreeDirectoryExists(workingPath) && !Directory.Exists(workingPath))
+        {
+            return await GenerateDiffStatAsync(workspace, taskId, baseBranch, cancellationToken);
+        }
+
+        _logger.LogInformation("Generating live diff stat for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorkingPath}'",
+            taskId, baseBranch, workingPath);
+
+        string[] statArgs = BuildDiffArgs(baseBranch, isStat: true);
+
+        var result = await _gitCliRunner.ExecuteAsync(workingPath, statArgs, cancellationToken: cancellationToken);
+        return FormatStatOutput(result.StandardOutput);
+    }
+
+    /// <inheritdoc />
     public async Task<string> GetCommitDiffAsync(
         Workspace workspace,
         string commitSha,
@@ -400,24 +427,13 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         _logger.LogInformation("Retrieving commit diff for SHA '{CommitSha}' in canonical repo '{CanonicalPath}'",
             commitSha, canonicalPath);
 
-        string[] diffArgs = [
-            "show",
-            "--format=",
-            "-U2",
-            commitSha,
-            "--",
-            ".",
-            ":(exclude)package-lock.json",
-            ":(exclude)pnpm-lock.yaml",
-            ":(exclude)yarn.lock",
-            ":(exclude)*.Designer.cs",
-            ":(exclude)*.generated.cs"
-        ];
+        var diffArgs = new List<string> { "show", "--format=", "-U2", commitSha, "--", "." };
+        diffArgs.AddRange(GitDiffConstants.ExclusionPathspecs);
 
         string rawDiff = string.Empty;
         try
         {
-            var result = await _gitCliRunner.ExecuteAsync(canonicalPath, diffArgs, cancellationToken: cancellationToken);
+            var result = await _gitCliRunner.ExecuteAsync(canonicalPath, diffArgs.ToArray(), cancellationToken: cancellationToken);
             rawDiff = result.StandardOutput;
         }
         catch (Exception ex)
@@ -756,4 +772,62 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             }
         }
     }
+
+    private static string[] BuildDiffArgs(string revisionRange, bool isStat = false)
+    {
+        var args = new List<string> { "diff", revisionRange };
+        if (isStat)
+        {
+            args.Add($"--stat={GitDiffConstants.DefaultStatWidth},{GitDiffConstants.DefaultStatNameWidth}");
+        }
+        else
+        {
+            args.Add("-U2");
+        }
+
+        args.Add("--");
+        args.Add(".");
+        args.AddRange(GitDiffConstants.ExclusionPathspecs);
+        return args.ToArray();
+    }
+
+    private static string FormatStatOutput(string rawOutput, int maxFiles = GitDiffConstants.DefaultMaxStatFiles)
+    {
+        if (string.IsNullOrWhiteSpace(rawOutput))
+        {
+            return GitDiffConstants.NoChanges;
+        }
+
+        var lines = rawOutput.Split('\n', StringSplitOptions.TrimEntries)
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .ToList();
+
+        if (lines.Count == 0)
+        {
+            return GitDiffConstants.NoChanges;
+        }
+
+        if (lines.Count == 1 && lines[0].Contains("0 files changed", StringComparison.OrdinalIgnoreCase))
+        {
+            return GitDiffConstants.NoChanges;
+        }
+
+        if (lines.Count <= 1)
+        {
+            return rawOutput.Trim();
+        }
+
+        var summaryLine = lines[^1];
+        var fileLines = lines.Take(lines.Count - 1).ToList();
+
+        if (fileLines.Count <= maxFiles)
+        {
+            return rawOutput.Trim();
+        }
+
+        var kept = fileLines.Take(maxFiles);
+        int remaining = fileLines.Count - maxFiles;
+        return string.Join("\n", kept.Append($" ... and {remaining} more files").Append(summaryLine)).Trim();
+    }
 }
+

@@ -28,22 +28,46 @@ public static class DefaultBootstrapPromptBuilder
             : stage.StageDirective;
 
         var reviewerFeedback = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewerFeedback);
-        var reviewDiff = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiff);
+        var reviewDiffStat = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiffStat);
         var approvedPlan = context.DataBag.Get<string>(PipelineDataBagKeys.ApprovedPlan) ?? context.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview));
+        if (!string.IsNullOrWhiteSpace(approvedPlan) &&
+            !string.IsNullOrWhiteSpace(task.Description) &&
+            string.Equals(approvedPlan.Trim(), task.Description.Trim(), StringComparison.Ordinal))
+        {
+            approvedPlan = null;
+        }
         var taskPath = context.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
         var implSummary = context.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.Implementation));
         var compilerErrors = context.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
         var failedTests = context.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
         var buildFailure = context.DataBag.Get<string>(PipelineDataBagKeys.BuildFailureReason);
         var testFailure = context.DataBag.Get<string>(PipelineDataBagKeys.TestFailureReason);
+        var latestAnsweredBatchId = task.Questions?
+            .Where(q => q.Status == QuestionStatus.Answered && !string.IsNullOrEmpty(q.BatchId))
+            .OrderByDescending(q => q.AnsweredAt)
+            .Select(q => q.BatchId)
+            .FirstOrDefault();
+
         var answeredQuestions = task.Questions?
-            .Where(q => q.Status == QuestionStatus.Answered && !string.IsNullOrWhiteSpace(q.Answer))
+            .Where(q => q.Status == QuestionStatus.Answered &&
+                        !string.IsNullOrWhiteSpace(q.Answer) &&
+                        (latestAnsweredBatchId == null || q.BatchId == latestAnsweredBatchId))
             .Select(q => new { prompt = q.Prompt, answer = q.Answer })
             .ToList();
 
+        var baseBranch = !string.IsNullOrWhiteSpace(task.BaseBranch) ? task.BaseBranch : "main";
+        var branchName = !string.IsNullOrWhiteSpace(task.FeatureBranch) ? task.FeatureBranch : $"feature/task-{task.Id}";
+
         var model = new
         {
-            task = new { id = task.Id, title = task.Title, description = task.Description },
+            task = new
+            {
+                id = task.Id,
+                title = task.Title,
+                description = task.Description,
+                base_branch = baseBranch,
+                feature_branch = branchName
+            },
             stage = new { id = stage.StageId, display_name = stage.DisplayName, directive = effectiveDirective },
             stage_directive = effectiveDirective,
             context = new
@@ -51,7 +75,7 @@ public static class DefaultBootstrapPromptBuilder
                 task_markdown_path = string.IsNullOrWhiteSpace(taskPath) ? null : taskPath,
                 approved_plan = string.IsNullOrWhiteSpace(approvedPlan) ? null : approvedPlan,
                 reviewer_feedback = string.IsNullOrWhiteSpace(reviewerFeedback) ? null : reviewerFeedback,
-                review_diff = string.IsNullOrWhiteSpace(reviewDiff) ? null : reviewDiff,
+                review_diff_stat = string.IsNullOrWhiteSpace(reviewDiffStat) ? null : reviewDiffStat,
                 implementation_summary = string.IsNullOrWhiteSpace(implSummary) ? null : implSummary,
                 compiler_errors = compilerErrors is { Count: > 0 } ? compilerErrors : null,
                 failed_tests = failedTests is { Count: > 0 } ? failedTests : null,
@@ -68,9 +92,9 @@ public static class DefaultBootstrapPromptBuilder
             rendered = $"{rendered}\n\n[Stage Directive]:\n{effectiveDirective}".Trim();
         }
 
-        if (!string.IsNullOrWhiteSpace(reviewDiff) && !rendered.Contains(reviewDiff))
+        if (!string.IsNullOrWhiteSpace(reviewDiffStat) && !rendered.Contains(reviewDiffStat))
         {
-            rendered = $"{rendered}\n\n[Git Diff to Review]:\n{reviewDiff}".Trim();
+            rendered = $"{rendered}\n\n[Git Diff Summary]:\n```diff\n{reviewDiffStat}\n```\nTo inspect the diff of a specific file against base branch '{baseBranch}', run:\ngit diff {baseBranch}...{branchName} -- <file-path>".Trim();
         }
 
         return rendered;

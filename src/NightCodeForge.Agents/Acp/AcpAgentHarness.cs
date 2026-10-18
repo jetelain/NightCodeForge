@@ -532,9 +532,11 @@ public class AcpAgentHarness : IAgentHarness
                             finalPrompt += $" ({rationale})";
                         }
 
+                        string? optionsJson = null;
                         if (node?["params"]?["options"] is JsonArray optsArr && optsArr.Count > 0)
                         {
                             finalPrompt += "\nOptions:\n" + string.Join("\n", optsArr.Select(o => $"- {o?["name"]?.ToString() ?? o?.ToString()}"));
+                            optionsJson = JsonSerializer.Serialize(optsArr.Select(o => o?["name"]?.ToString() ?? o?.ToString()).Where(s => !string.IsNullOrEmpty(s)).ToList());
                         }
 
                         sw.Stop();
@@ -542,8 +544,19 @@ public class AcpAgentHarness : IAgentHarness
 
                         await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, lastAgentSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
 
+                        var question = new Question
+                        {
+                            TaskId = context.ForgeTask.Id,
+                            StageId = context.StageId,
+                            Prompt = finalPrompt,
+                            Rationale = rationale ?? string.Empty,
+                            OptionsJson = optionsJson,
+                            Status = QuestionStatus.Pending,
+                            AskedAt = DateTime.UtcNow
+                        };
+
                         return AgentRunResult.WaitingForHuman(
-                            finalPrompt,
+                            new[] { question },
                             new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
                             updatedState: activeSessionId,
                             summary: "ACP agent paused awaiting developer permission");

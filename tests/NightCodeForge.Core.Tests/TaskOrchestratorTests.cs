@@ -152,7 +152,7 @@ public class TaskOrchestratorTests
         Assert.Equal(TaskOverallStatus.Ready, updated.Status);
 
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);
-        Assert.Equal(_gitManager.GeneratedDiff, bag.Get<string>("ReviewDiff"));
+        Assert.Equal(_gitManager.GeneratedDiffStat, bag.Get<string>(PipelineDataBagKeys.ReviewDiffStat));
     }
 
     [Fact]
@@ -178,7 +178,7 @@ public class TaskOrchestratorTests
             Handler = (ctx, ct) =>
             {
                 ctx.DataBag.Set("SerializedMemory", "MemorySnapshot123");
-                return Task.FromResult(StageExecutionResult.WaitingForHuman(question));
+                return Task.FromResult(StageExecutionResult.WaitingForHuman(new[] { question }));
             }
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
@@ -225,7 +225,7 @@ public class TaskOrchestratorTests
 
         var stage = new TestWorkflowStage("impl-stage")
         {
-            Handler = (ctx, ct) => throw new HumanInterruptionException("Should we support PostgreSQL or SQLite?")
+            Handler = (ctx, ct) => throw new HumanInterruptionException(new[] { new QuestionItem("Should we support PostgreSQL or SQLite?") })
         };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 

@@ -419,6 +419,22 @@ public class TaskOrchestrator : ITaskOrchestrator
                             resumeMemory = lastCheckpoint.SerializedMemory;
                         }
 
+                        var reviewDiffStat = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiffStat);
+                        if (string.IsNullOrWhiteSpace(reviewDiffStat) &&
+                            (string.Equals(stage.StageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(stage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            try
+                            {
+                                reviewDiffStat = await _gitWorkspaceManager.GenerateDiffStatAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+                                pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, reviewDiffStat);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Failed generating review diff stat during stage setup for {StageId} (task #{TaskId})", stage.StageId, task.Id);
+                            }
+                        }
+
                         var agentContext = new AgentSessionContext
                         {
                             ForgeTask = task,
@@ -431,7 +447,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             SerializedStateJson = resumeMemory,
                             PendingHumanAnswer = lastHumanAnswer,
                             TaskMarkdownPath = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath),
-                            ReviewDiff = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiff),
+                            ReviewDiffStat = reviewDiffStat,
                             ApprovedPlan = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ApprovedPlan)
                                 ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview)),
                             ReviewerFeedback = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ReviewerFeedback),
@@ -486,8 +502,9 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
         catch (HumanInterruptionException hex)
         {
-            _logger.LogInformation("Stage '{StageId}' triggered HumanInterruptionException: {Prompt}", stage.StageId, hex.Question.Prompt);
-            result = StageExecutionResult.WaitingForHuman(hex.Question);
+            var summaryPrompt = string.Join("; ", hex.Questions.Select(q => q.Prompt));
+            _logger.LogInformation("Stage '{StageId}' triggered HumanInterruptionException: {Prompt}", stage.StageId, summaryPrompt);
+            result = StageExecutionResult.WaitingForHuman(hex.Questions);
         }
         catch (OperationCanceledException ocex)
         {
@@ -733,15 +750,6 @@ public class TaskOrchestrator : ITaskOrchestrator
                 {
                     throw new WorkflowExecutionException($"Stage '{stage.StageId}' completed without producing a modified task specification document.");
                 }
-
-                if (!string.IsNullOrWhiteSpace(task.Description))
-                {
-                    pipelineContext.DataBag.Set(PipelineDataBagKeys.ApprovedPlan, task.Description);
-                    if (pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview)) == null)
-                    {
-                        pipelineContext.DataBag.Set(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview), task.Description);
-                    }
-                }
             }
         }
 
@@ -793,19 +801,24 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         if (result.NeedsClarification)
         {
-            // Case A: WaitingForHuman - clean job success, freeing single GPU worker
-            var question = result.ClarificationQuestion ?? new Question
+            if (result.ClarificationQuestions == null || result.ClarificationQuestions.Count == 0)
             {
-                Prompt = "Human input required to proceed.",
-                Status = QuestionStatus.Pending
-            };
-            question.TaskId = task.Id;
-            question.StageId = stage.StageId;
-            question.Status = QuestionStatus.Pending;
-            question.AgentProfileId = profile?.Id;
-            question.AskedAt = DateTime.UtcNow;
+                throw new InvalidOperationException($"Stage '{stage.StageId}' signaled clarification required but provided no questions.");
+            }
 
-            task.Questions.Add(question);
+            var batchId = Guid.NewGuid().ToString("N");
+            foreach (var question in result.ClarificationQuestions)
+            {
+                question.TaskId = task.Id;
+                question.StageId = stage.StageId;
+                question.Status = QuestionStatus.Pending;
+                question.AgentProfileId = profile?.Id;
+                question.AskedAt = DateTime.UtcNow;
+                question.BatchId = batchId;
+                task.Questions.Add(question);
+            }
+
+            var summaryPrompt = string.Join("; ", result.ClarificationQuestions.Select(q => q.Prompt));
 
             string commitHash = string.Empty;
             try
@@ -814,7 +827,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     workspace,
                     task.Id,
                     stage.StageId,
-                    $"WIP checkpoint before human clarification: {question.Prompt}",
+                    $"WIP checkpoint before human clarification ({result.ClarificationQuestions.Count} question(s)): {summaryPrompt}",
                     cancellationToken);
             }
             catch (Exception ex)
@@ -847,7 +860,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             {
                 TaskId = task.Id,
                 Level = LogLevel.Information,
-                Message = $"ForgeTask #{task.Id} paused waiting for human input to: {question.Prompt}",
+                Message = $"ForgeTask #{task.Id} paused waiting for human input ({result.ClarificationQuestions.Count} question(s), batch {batchId}): {summaryPrompt}",
                 Timestamp = DateTime.UtcNow
             }, cancellationToken);
 
@@ -939,12 +952,12 @@ public class TaskOrchestrator : ITaskOrchestrator
                 task.Status = TaskOverallStatus.Implemented;
                 try
                 {
-                    var diff = await _gitWorkspaceManager.GenerateDiffAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
-                    pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiff, diff);
+                    var diffStat = await _gitWorkspaceManager.GenerateDiffStatAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+                    pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, diffStat);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed generating review diff after implementation for task #{TaskId}", task.Id);
+                    _logger.LogWarning(ex, "Failed generating review diff stat after implementation for task #{TaskId}", task.Id);
                 }
             }
             else if (string.Equals(stage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
@@ -960,6 +973,21 @@ public class TaskOrchestrator : ITaskOrchestrator
             if (nextStage != null)
             {
                 task.CurrentStageId = nextStage.StageId;
+
+                if (string.Equals(nextStage.StageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(nextStage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var diffStat = await _gitWorkspaceManager.GenerateDiffStatAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+                        pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, diffStat);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed generating review diff stat on transition to {StageId} for task #{TaskId}", nextStage.StageId, task.Id);
+                    }
+                }
+
                 pipelineContext.SyncDataBagToTask();
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
@@ -970,20 +998,20 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
             else
             {
-                // Final stage reached: Transition to Ready and generate review diff
+                // Final stage reached: Transition to Ready and generate review diff stat
                 task.Status = TaskOverallStatus.Ready;
 
-                string diff = string.Empty;
+                string diffStat = string.Empty;
                 try
                 {
-                    diff = await _gitWorkspaceManager.GenerateDiffAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+                    diffStat = await _gitWorkspaceManager.GenerateDiffStatAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed generating review diff for task #{TaskId}", task.Id);
+                    _logger.LogWarning(ex, "Failed generating review diff stat for task #{TaskId}", task.Id);
                 }
 
-                pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiff, diff);
+                pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, diffStat);
                 pipelineContext.SyncDataBagToTask();
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Ready, cancellationToken);
@@ -1117,27 +1145,169 @@ public class TaskOrchestrator : ITaskOrchestrator
 
     public async Task SubmitHumanAnswerAsync(int questionId, string answer, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(answer))
+        {
+            throw new ArgumentException("Answer cannot be blank or empty.", nameof(answer));
+        }
+
         var question = await _taskRepository.GetQuestionByIdAsync(questionId, cancellationToken);
         if (question == null)
         {
             throw new KeyNotFoundException($"Question #{questionId} not found.");
         }
 
-        question.Answer = answer;
-        question.Status = QuestionStatus.Answered;
-        question.AnsweredAt = DateTime.UtcNow;
+        await SubmitAnswersAsync(question.TaskId, new Dictionary<int, string> { [questionId] = answer }, cancellationToken);
+    }
 
-        var task = question.ForgeTask ?? await _taskRepository.GetByIdAsync(question.TaskId, cancellationToken);
-        if (task == null)
+    public async Task SubmitAnswersAsync(int taskId, IReadOnlyDictionary<int, string> answers, CancellationToken cancellationToken = default)
+    {
+        if (answers == null || answers.Count == 0)
         {
-            throw new KeyNotFoundException($"Associated ForgeTask #{question.TaskId} not found.");
+            throw new ArgumentException("Answers collection cannot be null or empty.", nameof(answers));
         }
 
-        // Universal Interruption: answering never mutates task.Status!
+        foreach (var (qId, ans) in answers)
+        {
+            if (string.IsNullOrWhiteSpace(ans))
+            {
+                throw new ArgumentException($"Answer for question #{qId} cannot be blank or empty.", nameof(answers));
+            }
+        }
+
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
+        if (task == null)
+        {
+            throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+        }
+
+        using var lockReleaser = await _workspaceLockProvider.AcquireTaskLockAsync(task.WorkspaceId, task.Id, cancellationToken);
+
+        // Reload fresh task under lock
+        task = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+
+        var questionMap = task.Questions.ToDictionary(q => q.Id);
+        var updatedBatchIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (qId, ans) in answers)
+        {
+            if (!questionMap.TryGetValue(qId, out var question))
+            {
+                question = await _taskRepository.GetQuestionByIdAsync(qId, cancellationToken);
+                if (question == null)
+                {
+                    throw new KeyNotFoundException($"Question #{qId} not found.");
+                }
+                if (question.TaskId != taskId)
+                {
+                    throw new InvalidOperationException($"Question #{qId} belongs to task #{question.TaskId}, not task #{taskId}.");
+                }
+                task.Questions.Add(question);
+                questionMap[qId] = question;
+            }
+            else if (question.TaskId != taskId)
+            {
+                throw new InvalidOperationException($"Question #{qId} belongs to task #{question.TaskId}, not task #{taskId}.");
+            }
+
+            if (question.Status == QuestionStatus.Answered || !string.IsNullOrWhiteSpace(question.Answer))
+            {
+                throw new InvalidOperationException($"Question #{qId} has already been answered.");
+            }
+
+            question.Answer = ans.Trim();
+            question.Status = QuestionStatus.Answered;
+            question.AnsweredAt = DateTime.UtcNow;
+
+            if (!string.IsNullOrEmpty(question.BatchId))
+            {
+                updatedBatchIds.Add(question.BatchId);
+            }
+        }
+
+        if (updatedBatchIds.Count > 1)
+        {
+            throw new ArgumentException("Submitted questions span multiple clarification batches.", nameof(answers));
+        }
+
+        // Determine if all questions in the interruption batch are answered
+        string? activeBatchId = updatedBatchIds.FirstOrDefault();
+        bool hasPendingQuestionsInBatch = false;
+
+        if (!string.IsNullOrEmpty(activeBatchId))
+        {
+            hasPendingQuestionsInBatch = task.Questions.Any(q =>
+                string.Equals(q.BatchId, activeBatchId, StringComparison.OrdinalIgnoreCase) &&
+                q.Status == QuestionStatus.Pending);
+        }
+        else
+        {
+            hasPendingQuestionsInBatch = task.Questions.Any(q => q.Status == QuestionStatus.Pending);
+        }
+
+        if (hasPendingQuestionsInBatch)
+        {
+            // Partial submission: keep task waiting
+            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+            {
+                TaskId = task.Id,
+                Level = LogLevel.Information,
+                Message = $"Partial human answers submitted for task #{taskId} ({answers.Count} question(s) answered; awaiting remaining batch questions)",
+                Timestamp = DateTime.UtcNow
+            }, cancellationToken);
+            return;
+        }
+
+        // Atomic check-and-clear: resume exactly once
+        if (!task.IsWaitingForHuman)
+        {
+            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            return;
+        }
+
         task.IsWaitingForHuman = false;
 
+        // Format numbered question/answer pairs of the current batch
+        var batchQuestions = (!string.IsNullOrEmpty(activeBatchId)
+            ? task.Questions.Where(q => string.Equals(q.BatchId, activeBatchId, StringComparison.OrdinalIgnoreCase))
+            : task.Questions)
+            .Where(q => q.Status == QuestionStatus.Answered && !string.IsNullOrWhiteSpace(q.Answer))
+            .OrderBy(q => q.Id)
+            .ToList();
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < batchQuestions.Count; i++)
+        {
+            if (i > 0) sb.AppendLine();
+            sb.AppendLine($"{i + 1}. Question: {batchQuestions[i].Prompt}");
+            sb.AppendLine($"   Answer: {batchQuestions[i].Answer}");
+        }
+        var formattedQna = sb.ToString().TrimEnd();
+
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
-        bag.Set(PipelineDataBagKeys.LastHumanAnswer, answer);
+        bag.Set(PipelineDataBagKeys.LastHumanAnswer, formattedQna);
+
+        // Complete pending tool call in saved conversation memory
+        var currentMemory = bag.Get<string>(PipelineDataBagKeys.RecoveredSerializedMemory)
+            ?? bag.Get<string>(PipelineDataBagKeys.SerializedMemory);
+
+        if (string.IsNullOrEmpty(currentMemory))
+        {
+            var lastCheckpoint = task.Checkpoints.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
+            if (lastCheckpoint != null && !string.IsNullOrEmpty(lastCheckpoint.SerializedMemory))
+            {
+                currentMemory = lastCheckpoint.SerializedMemory;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(currentMemory))
+        {
+            var updatedMemory = ConversationHistorySerializer.CompletePendingAskToolCall(currentMemory, formattedQna);
+            bag.Set(PipelineDataBagKeys.RecoveredSerializedMemory, updatedMemory);
+            bag.Set(PipelineDataBagKeys.SerializedMemory, updatedMemory);
+        }
+
         task.PipelineDataJson = bag.ToJson();
 
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
@@ -1148,7 +1318,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             TaskId = task.Id,
             Level = LogLevel.Information,
-            Message = $"Human answer submitted for question #{questionId}: {answer}",
+            Message = $"Human answers submitted for task #{taskId} (batch {activeBatchId ?? "default"} completed); resumed and enqueued to llm-urgent",
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
 
@@ -1401,15 +1571,9 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         if (runResult.Status == AgentRunStatus.WaitingForHuman)
         {
-            var question = new Question
-            {
-                StageId = stage.StageId,
-                Prompt = runResult.PendingQuestion ?? "Human clarification required.",
-                Rationale = runResult.Summary ?? string.Empty,
-                QuestionType = QuestionType.FreeText,
-                Status = QuestionStatus.Pending
-            };
-            return StageExecutionResult.WaitingForHuman(question, record);
+            var questions = runResult.PendingQuestions
+                ?? throw new InvalidOperationException("AgentRunResult WaitingForHuman must contain PendingQuestions.");
+            return StageExecutionResult.WaitingForHuman(questions, record);
         }
 
         if (runResult.Status == AgentRunStatus.Completed)

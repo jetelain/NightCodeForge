@@ -793,7 +793,7 @@ priority: 3
 Agent formulated detailed architecture before asking human.
 ";
                 await File.WriteAllTextAsync(targetFile, modified, ct);
-                throw new HumanInterruptionException("Clarify question?");
+                throw new HumanInterruptionException(new[] { new QuestionItem("Clarify question?") });
             }
         };
 

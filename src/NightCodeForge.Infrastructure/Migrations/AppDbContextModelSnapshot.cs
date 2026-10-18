@@ -421,6 +421,11 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<DateTime>("AskedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("BatchId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("OptionsJson")
                         .HasColumnType("TEXT");
 
@@ -447,6 +452,8 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BatchId");
 
                     b.HasIndex("TaskId");
 

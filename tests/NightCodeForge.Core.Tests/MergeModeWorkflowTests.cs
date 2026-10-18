@@ -149,9 +149,9 @@ public class MergeModeWorkflowTests
         Assert.NotNull(updated601);
         Assert.Equal(TaskOverallStatus.Ready, updated601.Status);
 
-        // 2. Review diff saved
+        // 2. Review diff stat saved
         var bag = PipelineDataBag.FromJson(updated601.PipelineDataJson);
-        Assert.Equal(_gitManager.GeneratedDiff, bag.Get<string>("ReviewDiff"));
+        Assert.Equal(_gitManager.GeneratedDiffStat, bag.Get<string>(PipelineDataBagKeys.ReviewDiffStat));
 
         // 3. No git squash merge executed yet
         Assert.Empty(_gitManager.SquashMerges);

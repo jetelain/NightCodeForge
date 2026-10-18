@@ -28,7 +28,7 @@ public record AgentRunResult(
     AgentRunMetrics Metrics,
     string? CommitHash = null,
     string? UpdatedState = null,
-    string? PendingQuestion = null,
+    IReadOnlyList<Question>? PendingQuestions = null,
     string? Summary = null,
     string? Error = null,
     IReadOnlyDictionary<string, string>? DiagnosticArtifacts = null,
@@ -48,11 +48,18 @@ public record AgentRunResult(
         new(AgentRunStatus.Completed, metrics, commitHash, updatedState, null, summary, null, artifacts, targetRouting, reviewerFeedback, proposals);
 
     public static AgentRunResult WaitingForHuman(
-        string pendingQuestion,
+        IReadOnlyList<Question> pendingQuestions,
         AgentRunMetrics metrics,
         string? updatedState = null,
-        string? summary = null) =>
-        new(AgentRunStatus.WaitingForHuman, metrics, null, updatedState, pendingQuestion, summary, null, null);
+        string? summary = null)
+    {
+        if (pendingQuestions == null || pendingQuestions.Count == 0)
+        {
+            throw new ArgumentException("Pending questions collection cannot be null or empty.", nameof(pendingQuestions));
+        }
+
+        return new(AgentRunStatus.WaitingForHuman, metrics, null, updatedState, pendingQuestions, summary, null, null);
+    }
 
     public static AgentRunResult Failed(
         string error,

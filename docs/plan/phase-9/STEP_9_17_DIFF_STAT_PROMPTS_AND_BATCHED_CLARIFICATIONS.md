@@ -4,7 +4,7 @@
 > *Parent Plan:* [Phase 9 Master Plan](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Web.Tests`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations.
 
@@ -73,21 +73,21 @@ Update the directive in the standard workflow definitions, the test workflow pip
 
 ## 4. Implementation Checklist & Deliverables
 
-- [ ] **Git:** stat operation (interface + implementation), shared exclusion constant, cap/empty handling, live-tree variant if applicable.
-- [ ] **Prompt plumbing:** data bag key, session context property, orchestrator computation, single rendering point, per-file command hint, removal or justification of raw diff.
-- [ ] **`ask` tool:** question item model, factory registration, validation returned to model, handler flow with numbered pairs, ideation registration disposal.
-- [ ] **Clean break:** collection-based interruption exception, run result and stage result; delete scalar members and fallback questions.
-- [ ] **Resumption:** batch ID on `Question` (+ migration), batch submit operation with strict validation and atomic resume, tool-result completion in conversation history, last-human-answer population.
-- [ ] **UI:** `Inbox.razor` grouping and submit-all.
-- [ ] **Directives:** standard workflow, test pipelines, harness fallback.
-- [ ] **Tests**
-  - [ ] Stat generation (width, exclusions, cap, empty, failure).
-  - [ ] Prompt contains fenced stat, hint command, no raw diff, stat rendered once.
-  - [ ] `ask`: empty list and blank prompt produce a model-visible error; valid list produces an interruption with all questions.
-  - [ ] Interruption/run/stage results preserve all questions and reject empty collections.
-  - [ ] Ideation: batched questions, numbered answers, cancellation, no leaked registrations.
-  - [ ] Orchestrator: partial answers keep waiting; full answers resume exactly once; unknown/blank/duplicate answers throw; concurrent submit enqueues once.
-  - [ ] **Re-ask in the same stage:** only the latest batch is injected.
-  - [ ] Resume produces a history with the `ask` call answered by a tool result.
-  - [ ] Inbox bUnit: grouping and submit-all.
-- [ ] Run the full test suite including E2E, per AGENTS.md.
+- [x] **Git:** stat operation (interface + implementation), shared exclusion constant, cap/empty handling, live-tree variant if applicable.
+- [x] **Prompt plumbing:** data bag key, session context property, orchestrator computation, single rendering point, per-file command hint, removal or justification of raw diff.
+- [x] **`ask` tool:** question item model, factory registration, validation returned to model, handler flow with numbered pairs, ideation registration disposal.
+- [x] **Clean break:** collection-based interruption exception, run result and stage result; delete scalar members and fallback questions.
+- [x] **Resumption:** batch ID on `Question` (+ migration), batch submit operation with strict validation and atomic resume, tool-result completion in conversation history, last-human-answer population.
+- [x] **UI:** `Inbox.razor` grouping and submit-all.
+- [x] **Directives:** standard workflow, test pipelines, harness fallback.
+- [x] **Tests**
+  - [x] Stat generation (width, exclusions, cap, empty, failure).
+  - [x] Prompt contains fenced stat, hint command, no raw diff, stat rendered once.
+  - [x] `ask`: empty list and blank prompt produce a model-visible error; valid list produces an interruption with all questions.
+  - [x] Interruption/run/stage results preserve all questions and reject empty collections.
+  - [x] Ideation: batched questions, numbered answers, cancellation, no leaked registrations.
+  - [x] Orchestrator: partial answers keep waiting; full answers resume exactly once; unknown/blank/duplicate answers throw; concurrent submit enqueues once.
+  - [x] **Re-ask in the same stage:** only the latest batch is injected.
+  - [x] Resume produces a history with the `ask` call answered by a tool result.
+  - [x] Inbox bUnit: grouping and submit-all.
+- [x] Run the full test suite including E2E, per AGENTS.md.
