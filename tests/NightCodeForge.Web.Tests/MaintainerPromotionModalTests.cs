@@ -16,7 +16,7 @@ public class MaintainerPromotionModalTests : BunitContext
     public MaintainerPromotionModalTests()
     {
         _orchestrator = new MockTaskOrchestrator();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
 
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
         Services.AddSingleton(_toastService);

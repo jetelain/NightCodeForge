@@ -17,7 +17,7 @@ public class QuestionCardTests : BunitContext
     public QuestionCardTests()
     {
         _orchestrator = new MockTaskOrchestrator();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
         _workerState = new WorkerStateService();
 
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);

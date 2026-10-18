@@ -17,7 +17,7 @@ public class ChangeRequestModalTests : BunitContext
     {
         _orchestrator = new MockTaskOrchestrator();
         _commentState = new ReviewCommentStateService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
 
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
         Services.AddSingleton(_commentState);

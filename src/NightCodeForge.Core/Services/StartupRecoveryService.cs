@@ -20,6 +20,7 @@ public class StartupRecoveryService : IStartupRecoveryService
     private readonly IWorkflowPipelineProvider _pipelineProvider;
     private readonly ITaskJobQueue _jobQueue;
     private readonly IWorkspacePathResolver _pathResolver;
+    private readonly IProcessRunner _processRunner;
     private readonly ILogger<StartupRecoveryService> _logger;
 
     private const string RecoveryNoticeContent = "[System Notice: Host restarted unexpectedly; workspace restored; resuming from previous conversation turn]";
@@ -34,6 +35,7 @@ public class StartupRecoveryService : IStartupRecoveryService
         IWorkflowPipelineProvider pipelineProvider,
         ITaskJobQueue jobQueue,
         IWorkspacePathResolver pathResolver,
+        IProcessRunner processRunner,
         ILogger<StartupRecoveryService> logger)
     {
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
@@ -42,6 +44,7 @@ public class StartupRecoveryService : IStartupRecoveryService
         _pipelineProvider = pipelineProvider ?? throw new ArgumentNullException(nameof(pipelineProvider));
         _jobQueue = jobQueue ?? throw new ArgumentNullException(nameof(jobQueue));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -255,7 +258,7 @@ public class StartupRecoveryService : IStartupRecoveryService
             var effectivePath = repoPath;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (repoPath.StartsWith('/') || repoPath.StartsWith('~')))
             {
-                effectivePath = _pathResolver?.ResolveCruciblePath(workspaceId, string.Empty) ?? repoPath;
+                effectivePath = _pathResolver.ResolveCruciblePath(workspaceId, string.Empty);
             }
 
             var gitDir = Path.Combine(effectivePath, ".git");
@@ -365,7 +368,7 @@ public class StartupRecoveryService : IStartupRecoveryService
         }
 
         // 2. Also check any active task worktrees via path resolver if Ext4 mirror is active
-        if (_pathResolver != null && workspace.Id > 0 && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        if (workspace.Id > 0 && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
             try
             {
@@ -475,33 +478,26 @@ public class StartupRecoveryService : IStartupRecoveryService
                 return;
             }
 
-            var psi = new System.Diagnostics.ProcessStartInfo
+            var spec = new ProcessStartSpec
             {
                 FileName = wslPath,
-                Arguments = "--status",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
+                ArgumentList = new[] { "--status" },
+                TimeoutSeconds = 3
             };
 
-            using var process = System.Diagnostics.Process.Start(psi);
-            if (process != null)
+            var result = _processRunner.Run(spec);
+            if (result.ExitCode != 0)
             {
-                if (!process.WaitForExit(3000))
-                {
-                    process.Kill(entireProcessTree: true);
-                    _logger.LogWarning("⚠️ Windows WSL2 Requirement: 'wsl --status' timed out. Ensure WSL2 is responsive.");
-                }
-                else if (process.ExitCode != 0)
-                {
-                    _logger.LogWarning("⚠️ Windows WSL2 Requirement: 'wsl --status' exited with code {ExitCode}. If WSL2 is not installed, run 'wsl --install'.", process.ExitCode);
-                }
-                else
-                {
-                    _logger.LogInformation("Windows WSL2 environment verified and operational.");
-                }
+                _logger.LogWarning("⚠️ Windows WSL2 Requirement: 'wsl --status' exited with code {ExitCode}. If WSL2 is not installed, run 'wsl --install'.", result.ExitCode);
             }
+            else
+            {
+                _logger.LogInformation("Windows WSL2 environment verified and operational.");
+            }
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("⚠️ Windows WSL2 Requirement: 'wsl --status' timed out. Ensure WSL2 is responsive.");
         }
         catch (Exception ex)
         {

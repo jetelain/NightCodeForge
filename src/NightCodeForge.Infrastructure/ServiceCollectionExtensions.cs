@@ -55,6 +55,7 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IStartupRecoveryService, StartupRecoveryService>();
 
         // 6. Execution Environments, Process Runner & Path Resolution
+        services.TryAddSingleton<NightCodeForge.Core.Execution.IBackgroundTaskRunner, NightCodeForge.Core.Execution.BackgroundTaskRunner>();
         services.TryAddSingleton<IProcessRunner, NightCodeForge.Core.Execution.SystemProcessRunner>();
         services.TryAddSingleton<IWslMetadataService, Execution.WslMetadataService>();
         services.TryAddSingleton<IHostSdkDiscoveryService, Execution.HostSdkDiscoveryService>();

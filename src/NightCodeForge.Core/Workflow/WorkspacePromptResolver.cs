@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
 namespace NightCodeForge.Core.Workflow;
@@ -7,11 +8,28 @@ namespace NightCodeForge.Core.Workflow;
 /// </summary>
 public static class WorkspacePromptResolver
 {
+    private static readonly Regex StageIdValidator = new(@"^[a-z0-9_-]+$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Validates that a stage ID contains only safe alphanumeric characters, underscores, and hyphens to prevent path traversal attacks.
+    /// </summary>
+    /// <param name="stageId">The stage identifier to validate.</param>
+    public static void ValidateStageId(string stageId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stageId);
+        if (!StageIdValidator.IsMatch(stageId))
+        {
+            throw new ArgumentException($"Invalid stage ID '{stageId}'. Stage IDs must contain only alphanumeric characters, underscores, and hyphens.", nameof(stageId));
+        }
+    }
+
     /// <summary>
     /// Discovers stage-specific directive overrides from .nightcodeforge/prompts/{stageId}.md or .nightcodeforge/{stageId}.md.
     /// </summary>
     public static string ResolveStageDirective(string? workspacePath, string stageId, string defaultDirective, ILogger? logger = null)
     {
+        ValidateStageId(stageId);
+
         if (string.IsNullOrWhiteSpace(workspacePath) || !Directory.Exists(workspacePath))
         {
             return defaultDirective;
@@ -19,10 +37,8 @@ public static class WorkspacePromptResolver
 
         var candidatePaths = new[]
         {
-            Path.Combine(workspacePath, ".nightcodeforge", "prompts", $"{stageId}.md"),
-            Path.Combine(workspacePath, ".nightcodeforge", "prompts", $"{stageId.Replace("-", "_")}.md"),
-            Path.Combine(workspacePath, ".nightcodeforge", $"{stageId}.md"),
-            Path.Combine(workspacePath, ".nightcodeforge", $"{stageId.Replace("-", "_")}.md")
+            Path.Combine(workspacePath, NightCodeForgeDirectories.Root, NightCodeForgeDirectories.Prompts, $"{stageId}.md"),
+            Path.Combine(workspacePath, NightCodeForgeDirectories.Root, $"{stageId}.md")
         };
 
         foreach (var path in candidatePaths)
@@ -60,8 +76,8 @@ public static class WorkspacePromptResolver
 
         var candidatePaths = new[]
         {
-            Path.Combine(workspacePath, ".nightcodeforge", "prompts", "system.md"),
-            Path.Combine(workspacePath, ".nightcodeforge", "system.md")
+            Path.Combine(workspacePath, NightCodeForgeDirectories.Root, NightCodeForgeDirectories.Prompts, "system.md"),
+            Path.Combine(workspacePath, NightCodeForgeDirectories.Root, "system.md")
         };
 
         foreach (var path in candidatePaths)
@@ -92,6 +108,8 @@ public static class WorkspacePromptResolver
     /// </summary>
     public static string? ResolveBootstrapPromptOverride(string? workspacePath, string stageId, ILogger? logger = null)
     {
+        ValidateStageId(stageId);
+
         if (string.IsNullOrWhiteSpace(workspacePath) || !Directory.Exists(workspacePath))
         {
             return null;
@@ -99,9 +117,8 @@ public static class WorkspacePromptResolver
 
         var candidatePaths = new[]
         {
-            Path.Combine(workspacePath, ".nightcodeforge", "prompts", $"{stageId}.bootstrap.md"),
-            Path.Combine(workspacePath, ".nightcodeforge", "prompts", $"{stageId.Replace("-", "_")}.bootstrap.md"),
-            Path.Combine(workspacePath, ".nightcodeforge", $"{stageId}.bootstrap.md")
+            Path.Combine(workspacePath, NightCodeForgeDirectories.Root, NightCodeForgeDirectories.Prompts, $"{stageId}.bootstrap.md"),
+            Path.Combine(workspacePath, NightCodeForgeDirectories.Root, $"{stageId}.bootstrap.md")
         };
 
         foreach (var path in candidatePaths)

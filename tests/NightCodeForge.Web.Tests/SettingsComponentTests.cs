@@ -46,7 +46,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         }
 
         _workspaceState = new WorkspaceStateService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
         _optService = new MockGlobalOptimizationSettingsService();
         _catalogService = new MockModelCatalogService();
         _sdkService = new MockHostSdkDiscoveryService();

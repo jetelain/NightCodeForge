@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
@@ -60,9 +61,10 @@ public class WorkflowStageRegistry : IWorkflowStageRegistry
         {
             var env = sp.GetRequiredService<IExecutionEnvironmentProvider>();
             var preload = sp.GetService<IOllamaModelPreloadService>();
+            var runner = sp.GetRequiredService<IBackgroundTaskRunner>();
             var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<DeterministicBuildStage>>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance;
-            return new DeterministicBuildStage(env, preload, logger, "dotnet build", def.StageId, def.DisplayName);
+            return new DeterministicBuildStage(env, preload, runner, logger, "dotnet build", def.StageId, def.DisplayName);
         });
         RegisterHandler(StageImplementationTypes.DeterministicTest, (sp, def) =>
         {

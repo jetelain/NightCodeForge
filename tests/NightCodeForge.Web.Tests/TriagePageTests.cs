@@ -21,7 +21,7 @@ public class TriagePageTests : BunitContext
         _workspaceState = new WorkspaceStateService();
         _taskRepository = new InMemoryTaskRepository();
         _triageService = new MockTriageService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
 
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);

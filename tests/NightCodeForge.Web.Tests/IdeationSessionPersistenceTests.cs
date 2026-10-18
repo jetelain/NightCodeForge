@@ -28,7 +28,7 @@ public class IdeationSessionPersistenceTests : BunitContext
         _workflowRepository = new InMemoryWorkflowRepository();
         _markdownSync = new MockTaskMarkdownSyncService();
         _ideationService = new MockIdeationService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
         _sessionState = new IdeationSessionState();
 
         _workspace = new Workspace

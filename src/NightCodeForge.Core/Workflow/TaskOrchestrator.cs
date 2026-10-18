@@ -67,7 +67,9 @@ public class TaskOrchestrator : ITaskOrchestrator
     [Hangfire.AutomaticRetry(Attempts = 0, OnAttemptsExceeded = Hangfire.AttemptsExceededAction.Fail)]
     public async Task ProcessTaskAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
+        try
+        {
+            var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
         if (task == null)
         {
             _logger.LogError("ForgeTask #{TaskId} not found for processing.", taskId);
@@ -313,6 +315,8 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (stage.Kind == WorkflowStageKind.Agentic && !HasCustomHandler(stage))
             {
                 var harnessId = profile!.HarnessId;
@@ -419,6 +423,11 @@ public class TaskOrchestrator : ITaskOrchestrator
             _logger.LogInformation("Stage '{StageId}' triggered HumanInterruptionException: {Prompt}", stage.StageId, hex.Question.Prompt);
             result = StageExecutionResult.WaitingForHuman(hex.Question);
         }
+        catch (OperationCanceledException ocex)
+        {
+            _logger.LogInformation(ocex, "Stage '{StageId}' for task #{TaskId} was cancelled.", stage.StageId, taskId);
+            result = StageExecutionResult.Cancelled("Stage execution was cancelled.");
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Stage '{StageId}' failed with unhandled exception for task #{TaskId}", stage.StageId, taskId);
@@ -441,12 +450,23 @@ public class TaskOrchestrator : ITaskOrchestrator
         record.DurationMs = durationMs;
         record.Status = result.NeedsClarification
             ? StageExecutionStatus.Completed
-            : (result.IsSuccess ? StageExecutionStatus.Completed : StageExecutionStatus.Failed);
+            : (result.IsCancelled ? StageExecutionStatus.Cancelled : (result.IsSuccess ? StageExecutionStatus.Completed : StageExecutionStatus.Failed));
 
-        await _taskRepository.AddExecutionRecordAsync(record, cancellationToken);
+        using (var saveTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            var saveToken = result.IsCancelled ? saveTimeoutCts.Token : cancellationToken;
+            try
+            {
+                await _taskRepository.AddExecutionRecordAsync(record, saveToken);
+            }
+            catch (Exception rex)
+            {
+                _logger.LogWarning(rex, "Failed to record stage execution record for task #{TaskId}", task.Id);
+            }
+        }
 
         // Record Conversation for deterministic stages
-        if (stage.Kind == WorkflowStageKind.Deterministic)
+        if (stage.Kind == WorkflowStageKind.Deterministic && !result.IsCancelled)
         {
             try
             {
@@ -560,6 +580,46 @@ public class TaskOrchestrator : ITaskOrchestrator
         await ReadBackTaskMarkdownFromDiskAsync(stage, workspace, task, pipelineContext, targetSyncPath, cancellationToken);
 
         // 5. Result Evaluation
+        if (result.IsCancelled)
+        {
+            _logger.LogInformation("Processing of task #{TaskId} at stage '{StageId}' was cancelled.", task.Id, stage.StageId);
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var ct = timeoutCts.Token;
+
+            try
+            {
+                var convs = await _taskRepository.GetConversationsAsync(task.Id, ct);
+                var runningConv = convs.FirstOrDefault(c => c.Status == StageExecutionStatus.Running);
+                if (runningConv != null)
+                {
+                    await _taskRepository.CompleteConversationAsync(
+                        runningConv.Id,
+                        StageExecutionStatus.Cancelled,
+                        summary: "Execution was cancelled.",
+                        cancellationToken: ct);
+                }
+            }
+            catch (Exception cex)
+            {
+                _logger.LogWarning(cex, "Failed to mark active conversation as Cancelled for task #{TaskId}", task.Id);
+            }
+
+            pipelineContext.SyncDataBagToTask();
+            await _taskRepository.UpdateAsync(task, cancellationToken: ct);
+            await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, ct);
+
+            await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+            {
+                TaskId = task.Id,
+                Level = LogLevel.Information,
+                Message = $"Stage '{stage.StageId}' was cancelled.",
+                Timestamp = DateTime.UtcNow
+            }, ct);
+
+            return;
+        }
+
         if (result.NeedsClarification)
         {
             // Case A: WaitingForHuman - clean job success, freeing single GPU worker
@@ -794,6 +854,30 @@ public class TaskOrchestrator : ITaskOrchestrator
             Message = $"Stage '{stage.StageId}' failed: {result.ErrorMessage}",
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
+        }
+        catch (OperationCanceledException ocex)
+        {
+            _logger.LogInformation(ocex, "ForgeTask #{TaskId} processing was cancelled.", taskId);
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var ct = timeoutCts.Token;
+            try
+            {
+                var convs = await _taskRepository.GetConversationsAsync(taskId, ct);
+                var runningConv = convs.FirstOrDefault(c => c.Status == StageExecutionStatus.Running);
+                if (runningConv != null)
+                {
+                    await _taskRepository.CompleteConversationAsync(
+                        runningConv.Id,
+                        StageExecutionStatus.Cancelled,
+                        summary: "Execution was cancelled.",
+                        cancellationToken: ct);
+                }
+            }
+            catch (Exception cex)
+            {
+                _logger.LogWarning(cex, "Failed to mark active conversation as Cancelled for task #{TaskId}", taskId);
+            }
+        }
     }
 
     public async Task SubmitHumanAnswerAsync(int questionId, string answer, CancellationToken cancellationToken = default)
@@ -1066,8 +1150,19 @@ public class TaskOrchestrator : ITaskOrchestrator
             PromptTokens = (int)metrics.PromptTokens,
             CompletionTokens = (int)metrics.CompletionTokens,
             TotalTokens = (int)metrics.TotalTokens,
-            Status = runResult.Status == AgentRunStatus.Failed ? StageExecutionStatus.Failed : StageExecutionStatus.Completed
+            Status = runResult.Status switch
+            {
+                AgentRunStatus.Completed => StageExecutionStatus.Completed,
+                AgentRunStatus.WaitingForHuman => StageExecutionStatus.Completed,
+                AgentRunStatus.Cancelled => StageExecutionStatus.Cancelled,
+                _ => StageExecutionStatus.Failed
+            }
         };
+
+        if (runResult.Status == AgentRunStatus.Cancelled)
+        {
+            return StageExecutionResult.Cancelled(runResult.Error ?? "Agent execution cancelled.", record);
+        }
 
         if (runResult.Status == AgentRunStatus.WaitingForHuman)
         {

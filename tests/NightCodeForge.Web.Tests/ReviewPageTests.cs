@@ -33,7 +33,7 @@ public class ReviewPageTests : BunitContext
             NullLogger<TaskReviewService>.Instance);
         _orchestrator = new MockTaskOrchestrator();
         _commentState = new ReviewCommentStateService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
         _workspaceState = new WorkspaceStateService();
 
         Services.AddSingleton<ITaskRepository>(_taskRepository);

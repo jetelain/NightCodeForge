@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Infrastructure.Git;
 
@@ -110,7 +111,7 @@ public class GitCliRunner : IGitCliRunner
             var stdout = result.StandardOutput;
             var stderr = result.StandardError;
 
-            if (result.ExitCode == 124 && stderr.Contains("Process timed out"))
+            if (result.ExitCode == WorkflowDefaults.ProcessTimeoutExitCode && stderr.Contains("Process timed out"))
             {
                 throw new TimeoutException($"Git command 'git {displayArgs}' timed out after {timeoutDuration.TotalSeconds:F0}s in '{workingDirectory}'.");
             }

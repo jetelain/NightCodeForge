@@ -96,7 +96,8 @@ public enum StageExecutionStatus
     Completed = 2,
     Failed = 3,
     Skipped = 4,
-    WaitingForHuman = 5
+    WaitingForHuman = 5,
+    Cancelled = 6
 }
 
 /// <summary>

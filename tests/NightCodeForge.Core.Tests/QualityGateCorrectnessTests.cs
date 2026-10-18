@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Configuration;
@@ -425,7 +426,7 @@ Passed! - Failed: 0, Passed: 10, Total: 10";
     {
         var fakeEnv = new FakeEnv();
         var fakePreload = new FakePreload();
-        var stage = new DeterministicBuildStage(fakeEnv, fakePreload);
+        var stage = new DeterministicBuildStage(fakeEnv, fakePreload, new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance), Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
         // Workspace has profiles, but none matching the next stage
@@ -510,6 +511,7 @@ Passed! - Failed: 0, Passed: 10, Total: 10";
         };
         sp.AddService<IExecutionEnvironmentProvider>(fakeEnv);
         sp.AddService<IOllamaModelPreloadService>(new FakePreload());
+        sp.AddService<IBackgroundTaskRunner>(new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance));
         sp.AddService<IWorkflowStageRegistry>(new WorkflowStageRegistry());
 
         var config = new DeterministicStageConfig

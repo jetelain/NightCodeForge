@@ -1,5 +1,6 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Web.Components.DevQueue;
 using NightCodeForge.Web.Components.Pages;
@@ -16,10 +17,11 @@ public class DevQueueComponentTests : BunitContext
     public DevQueueComponentTests()
     {
         _queueService = new MockDevQueueService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
 
         Services.AddSingleton<IDevQueueService>(_queueService);
         Services.AddSingleton(_toastService);
+        Services.AddSingleton<IBackgroundTaskRunner>(new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance));
     }
 
     [Fact]

@@ -26,7 +26,7 @@ public class DependencyLinkingModalTests : BunitContext
         _taskRepository = new InMemoryTaskRepository();
         _markdownSync = new MockTaskMarkdownSyncService();
         _workspaceState = new WorkspaceStateService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
 
         Services.AddSingleton<IDependencyResolutionEngine>(_dependencyEngine);
         Services.AddSingleton<ITaskRepository>(_taskRepository);

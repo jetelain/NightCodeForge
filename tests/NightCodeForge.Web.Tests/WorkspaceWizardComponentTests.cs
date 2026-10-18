@@ -23,7 +23,7 @@ public class WorkspaceWizardComponentTests : BunitContext
     public WorkspaceWizardComponentTests()
     {
         _workspaceState = new WorkspaceStateService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
         _provisioningService = new MockWorkspaceProvisioningService();
         _modelCatalogService = new MockModelCatalogService();
         _wslMetadataService = new MockWslMetadataService();

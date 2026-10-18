@@ -30,7 +30,7 @@ public class IdeationPageTests : BunitContext
         _workspaceRepository.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
         _markdownSync = new MockTaskMarkdownSyncService();
         _ideationService = new MockIdeationService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
         _sessionState = new IdeationSessionState();
 
         Services.AddSingleton(_workspaceState);

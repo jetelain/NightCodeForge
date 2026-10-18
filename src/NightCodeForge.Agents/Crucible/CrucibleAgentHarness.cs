@@ -355,7 +355,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                                 toolResult: entry.ToolResult,
                                 isError: string.Equals(entry.Role, "TOOL_ERROR", StringComparison.OrdinalIgnoreCase),
                                 metadataJson: metadataJson,
-                                cancellationToken: CancellationToken.None),
+                                cancellationToken: cancellationToken),
                             $"Failed to record turn for conversation #{conversationId}");
                     }
                     catch (Exception ex)
@@ -385,7 +385,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         context.StageId,
                         AgentActivityKind.OptimizationAction,
                         optText,
-                        CancellationToken.None,
+                        cancellationToken,
                         metadata: new Dictionary<string, object?>
                         {
                             ["ActionType"] = "ToolResultCompaction",
@@ -403,7 +403,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                                 StageTurnRole.Optimization,
                                 content: optText,
                                 metadataJson: metadataJson,
-                                cancellationToken: CancellationToken.None),
+                                cancellationToken: cancellationToken),
                             $"Failed to record optimization turn for conversation #{conversationId}");
                     }
                 }
@@ -519,8 +519,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
             // otherwise the stage conversation would stay "Running" forever.
             stopwatch.Stop();
             latestSerializedState = SerializeSession(chatHistory);
-            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, "Stage cancelled", CancellationToken.None);
-            await SaveAsync(AgentRunStatus.Failed, "Stage cancelled", CancellationToken.None);
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, "Stage cancelled", timeoutCts.Token);
+            await SaveAsync(AgentRunStatus.Cancelled, "Stage cancelled", timeoutCts.Token);
         }
 
         var toolNamesByCallId = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -573,7 +574,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                                     toolResult: resultStr,
                                     isError: resultIsError,
                                     metadataJson: metadataJson,
-                                    cancellationToken: CancellationToken.None),
+                                    cancellationToken: cancellationToken),
                                 $"Failed to record tool result turn for conversation #{conversationId}");
                         }
 
@@ -598,7 +599,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                             {
                                 var currentTask = context.ForgeTask;
                                 turnWriter.Enqueue(
-                                    () => _taskRepository.UpdateAsync(currentTask, cancellationToken: CancellationToken.None),
+                                    () => _taskRepository.UpdateAsync(currentTask, cancellationToken: cancellationToken),
                                     $"Failed to sync pipeline data bag for task #{currentTask.Id}");
                             }
                         }
@@ -938,6 +939,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 {
                     AgentRunStatus.Completed => StageExecutionStatus.Completed,
                     AgentRunStatus.WaitingForHuman => StageExecutionStatus.Running,
+                    AgentRunStatus.Cancelled => StageExecutionStatus.Cancelled,
                     _ => StageExecutionStatus.Failed
                 };
 

@@ -1,6 +1,6 @@
 # ⏱️ Step 9.12: Async Lifecycle, Cancellation & Residual Policy Violations
 
-> *Parent:* [Phase 9](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md) | *Source:* pre-Phase-10 foundation audit | *Status:* Planned
+> *Parent:* [Phase 9](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md) | *Source:* pre-Phase-10 foundation audit | *Status:* Completed
 
 ## 1. Problem
 
@@ -35,9 +35,9 @@ Steps 9.1-9.9 removed most policy debt, but the audit found async and cancellati
 
 ## 4. Definition of Done
 
-- [ ] Zero `async void` outside framework-required event signatures.
-- [ ] No unobserved fire-and-forget tasks.
-- [ ] Orchestrator catches and handles `OperationCanceledException` cleanly with DB state persistence.
-- [ ] Shell escaping covered by tests, including injection payloads.
-- [ ] No optional or `?.` service access in constructors or services.
-- [ ] `dotnet test` passes (unit, integration and E2E).
+- [x] Zero `async void` outside framework-required event signatures.
+- [x] No unobserved fire-and-forget tasks.
+- [x] Orchestrator catches and handles `OperationCanceledException` cleanly with DB state persistence.
+- [x] Shell escaping covered by tests, including injection payloads.
+- [x] No optional or `?.` service access in constructors or services.
+- [x] `dotnet test` passes (unit, integration and E2E).

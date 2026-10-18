@@ -90,6 +90,7 @@
 @code {
     private IReadOnlyList<Workspace> _workspaces = Array.Empty<Workspace>();
     private string _currentSection = "Overview";
+    private bool _disposed;
 
     protected override async Task OnInitializedAsync()
     {
@@ -153,14 +154,28 @@
         };
     }
 
-    private async void HandleStateChanged()
+    private void HandleStateChanged()
     {
-        await LoadWorkspacesAsync();
-        await InvokeAsync(StateHasChanged);
+        if (_disposed) return;
+
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                if (_disposed) return;
+                await LoadWorkspacesAsync();
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to refresh state in TopNavBar.");
+            }
+        });
     }
 
     public void Dispose()
     {
+        _disposed = true;
         WorkspaceState.OnWorkspaceChanged -= HandleStateChanged;
         WorkerState.OnWorkerStateChanged -= HandleStateChanged;
         Navigation.LocationChanged -= HandleLocationChanged;

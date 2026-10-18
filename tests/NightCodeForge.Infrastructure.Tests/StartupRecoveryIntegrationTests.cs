@@ -21,6 +21,7 @@ namespace NightCodeForge.Infrastructure.Tests;
 public class StartupRecoveryIntegrationTests : IDisposable
 {
     private readonly TestGitRepository _repo;
+    private readonly SystemProcessRunner _processRunner;
     private readonly GitCliRunner _runner;
     private readonly SqliteConnection _connection;
     private readonly AppDbContext _context;
@@ -36,13 +37,15 @@ public class StartupRecoveryIntegrationTests : IDisposable
             CreatePipelineProvider(),
             jobQueue,
             new WorkspacePathResolver(),
+            _processRunner,
             NullLogger<StartupRecoveryService>.Instance);
 
     public StartupRecoveryIntegrationTests()
     {
         _repo = new TestGitRepository("main");
+        _processRunner = new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance);
         _runner = new GitCliRunner(
-            new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance),
+            _processRunner,
             new WorkspacePathResolver(),
             new Mock<IWslMetadataService>().Object,
             NullLogger<GitCliRunner>.Instance);

@@ -17,7 +17,7 @@ public class HostDirtyReconcileDrawerTests : BunitContext
     public HostDirtyReconcileDrawerTests()
     {
         _workspaceState = new WorkspaceStateService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
         _gitSyncService = new MockGitSyncService();
 
         Services.AddSingleton(_workspaceState);

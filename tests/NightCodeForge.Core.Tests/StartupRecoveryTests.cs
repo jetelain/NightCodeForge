@@ -35,6 +35,7 @@ public class StartupRecoveryTests : IDisposable
             pipelineProvider ?? new DefaultWorkflowPipelineProvider(),
             _jobQueue,
             new Moq.Mock<IWorkspacePathResolver>().Object,
+            new Moq.Mock<IProcessRunner>().Object,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<StartupRecoveryService>.Instance);
     }
 

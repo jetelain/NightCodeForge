@@ -15,7 +15,7 @@ public class ApproveMergeModalTests : BunitContext
     public ApproveMergeModalTests()
     {
         _orchestrator = new MockTaskOrchestrator();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
 
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
         Services.AddSingleton(_toastService);

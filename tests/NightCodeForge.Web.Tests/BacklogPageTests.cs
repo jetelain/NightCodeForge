@@ -31,7 +31,7 @@ public class BacklogPageTests : BunitContext
         _markdownSync = new MockTaskMarkdownSyncService();
         _orchestrator = new MockTaskOrchestrator();
         _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
 
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);

@@ -79,7 +79,7 @@ public static class TestWorkflowPipelines
         return new WorkflowPipeline(new IWorkflowStage[]
         {
             reviewStage ?? CreateReviewStage(),
-            preImplStage ?? new DeterministicBuildStage(env, null, "dotnet build", StandardStageIds.PreImplementationBaseline, "Pre-Implementation Baseline"),
+            preImplStage ?? new DeterministicBuildStage(env, null, new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance), Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance, "dotnet build", StandardStageIds.PreImplementationBaseline, "Pre-Implementation Baseline"),
             implStage ?? CreateImplementationStage(),
             postImplStage ?? new DeterministicWarningRatchetStage(),
             fixStage ?? CreateCodeReviewStage(),

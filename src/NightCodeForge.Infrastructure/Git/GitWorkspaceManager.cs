@@ -732,14 +732,22 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             try
             {
                 var distro = _pathResolver.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
-                var cleanPath = path.Replace("\"", "\\\"");
-                using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                var psi = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "wsl.exe",
-                    Arguments = $"-d {distro} -u root -- rm -rf \"{cleanPath}\"",
                     UseShellExecute = false,
                     CreateNoWindow = true
-                });
+                };
+                psi.ArgumentList.Add("-d");
+                psi.ArgumentList.Add(distro);
+                psi.ArgumentList.Add("-u");
+                psi.ArgumentList.Add("root");
+                psi.ArgumentList.Add("--");
+                psi.ArgumentList.Add("rm");
+                psi.ArgumentList.Add("-rf");
+                psi.ArgumentList.Add(path);
+
+                using var p = System.Diagnostics.Process.Start(psi);
                 p?.WaitForExit(3000);
             }
             catch (Exception ex)

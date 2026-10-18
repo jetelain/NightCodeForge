@@ -1,4 +1,5 @@
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Stages;
@@ -7,6 +8,26 @@ namespace NightCodeForge.Core.Tests;
 
 public class DeterministicStageTests
 {
+    private sealed class SynchronousBackgroundTaskRunner : IBackgroundTaskRunner
+    {
+        public void RunTracked(Func<CancellationToken, Task> work, string description, CancellationToken cancellationToken = default)
+        {
+            work(cancellationToken).GetAwaiter().GetResult();
+        }
+
+        public void RunTracked(Func<Task> work, string description)
+        {
+            work().GetAwaiter().GetResult();
+        }
+    }
+
+    private static readonly IBackgroundTaskRunner TestRunner = new SynchronousBackgroundTaskRunner();
+
+    private static DeterministicBuildStage CreateBuildStage(
+        IExecutionEnvironmentProvider env,
+        IOllamaModelPreloadService? preloadService = null) =>
+        new(env, preloadService, TestRunner, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance);
+
     private class FakeExecutionEnvironment : IExecutionEnvironment, IExecutionEnvironmentProvider
     {
         public ExecutionTier Tier => ExecutionTier.BareHost;
@@ -54,7 +75,7 @@ public class DeterministicStageTests
         {
             NextResult = new CommandResult(0, "warning CS0168: variable unused [proj.csproj]\nwarning CS0219: variable assigned [proj.csproj]\nBuild succeeded.", string.Empty, TimeSpan.FromSeconds(1))
         };
-        var stage = new DeterministicBuildStage(fakeEnv);
+        var stage = CreateBuildStage(fakeEnv);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
         var context = new PipelineContext(task, workspace);
@@ -79,7 +100,7 @@ public class DeterministicStageTests
         {
             NextResult = new CommandResult(1, "error CS1002: ; expected [proj.csproj]\nBuild FAILED.", "stderr", TimeSpan.FromSeconds(1))
         };
-        var stage = new DeterministicBuildStage(fakeEnv);
+        var stage = CreateBuildStage(fakeEnv);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
         var context = new PipelineContext(task, workspace);
@@ -98,7 +119,7 @@ public class DeterministicStageTests
     {
         var fakeEnv = new FakeExecutionEnvironment();
         var preload = new FakePreloadService();
-        var stage = new DeterministicBuildStage(fakeEnv, preload);
+        var stage = CreateBuildStage(fakeEnv, preload);
 
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
@@ -201,7 +222,7 @@ public class DeterministicStageTests
         {
             NextResult = new CommandResult(1, "error CS1002: ; expected", string.Empty, TimeSpan.FromMilliseconds(50))
         };
-        var stage = new DeterministicBuildStage(fakeEnv);
+        var stage = CreateBuildStage(fakeEnv);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
         var context = new PipelineContext(task, workspace);
@@ -278,7 +299,7 @@ public class DeterministicStageTests
         {
             NextResult = new CommandResult(124, string.Empty, "Command timed out after 30 seconds", TimeSpan.FromSeconds(30), Truncated: true)
         };
-        var stage = new DeterministicBuildStage(fakeEnv);
+        var stage = CreateBuildStage(fakeEnv);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo", BuildTimeoutSeconds = 30 };
         var context = new PipelineContext(task, workspace);
@@ -301,7 +322,7 @@ public class DeterministicStageTests
         {
             NextResult = new CommandResult(0, "Build succeeded.", string.Empty, TimeSpan.FromSeconds(1))
         };
-        var stage = new DeterministicBuildStage(fakeEnv);
+        var stage = CreateBuildStage(fakeEnv);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo", BuildTimeoutSeconds = 45 };
         var context = new PipelineContext(task, workspace);
@@ -363,7 +384,7 @@ public class DeterministicStageTests
         {
             NextResult = new CommandResult(0, "Build succeeded.", string.Empty, TimeSpan.FromSeconds(1))
         };
-        var stage = new DeterministicBuildStage(fakeEnv);
+        var stage = CreateBuildStage(fakeEnv);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace
         {
@@ -387,7 +408,7 @@ public class DeterministicStageTests
             NextResult = new CommandResult(0, "Build succeeded.", string.Empty, TimeSpan.FromSeconds(1))
         };
         var preloadService = new FakePreloadService();
-        var stage = new DeterministicBuildStage(fakeEnv, preloadService: preloadService);
+        var stage = CreateBuildStage(fakeEnv, preloadService);
 
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };

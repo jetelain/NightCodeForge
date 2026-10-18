@@ -17,7 +17,7 @@ public class WorkflowManagementTabTests : BunitContext
     public WorkflowManagementTabTests()
     {
         _workflowRepo = new InMemoryWorkflowRepository();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
         _workspaceState = new WorkspaceStateService();
 
         Services.AddSingleton<IWorkflowRepository>(_workflowRepo);

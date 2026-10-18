@@ -1,3 +1,5 @@
+using NightCodeForge.Core.Execution;
+
 namespace NightCodeForge.Web.Services;
 
 public enum ToastLevel
@@ -15,8 +17,14 @@ public record ToastMessage(Guid Id, string Title, string Message, ToastLevel Lev
 /// </summary>
 public class ToastService
 {
+    private readonly IBackgroundTaskRunner _backgroundTaskRunner;
     private readonly List<ToastMessage> _toasts = new();
     private readonly object _lock = new();
+
+    public ToastService(IBackgroundTaskRunner backgroundTaskRunner)
+    {
+        _backgroundTaskRunner = backgroundTaskRunner ?? throw new ArgumentNullException(nameof(backgroundTaskRunner));
+    }
 
     public IReadOnlyList<ToastMessage> Toasts
     {
@@ -40,11 +48,11 @@ public class ToastService
         }
         OnToastsChanged?.Invoke();
 
-        _ = Task.Run(async () =>
+        _backgroundTaskRunner.RunTracked(async () =>
         {
-            await Task.Delay(5000);
+            await Task.Delay(5000).ConfigureAwait(false);
             Remove(toast.Id);
-        });
+        }, $"AutoDismissToast-{toast.Id}");
     }
 
     public void Remove(Guid id)

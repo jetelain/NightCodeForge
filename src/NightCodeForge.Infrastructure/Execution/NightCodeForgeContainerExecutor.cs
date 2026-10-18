@@ -256,11 +256,16 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             {
                 foreach (var (k, v) in environmentVariables)
                 {
+                    if (!ShellQuoting.IsValidVariableName(k))
+                    {
+                        _logger.LogWarning("Skipping environment variable with invalid name '{Key}'", k);
+                        continue;
+                    }
                     if (_options.IsRestrictedReadOnly && IsSensitiveEnvVar(k))
                     {
                         continue;
                     }
-                    await _stdin!.WriteLineAsync($"export {k}=\"{v.Replace("\"", "\\\"")}\"");
+                    await _stdin!.WriteLineAsync($"export {k}={ShellQuoting.QuotePosix(v)}");
                 }
             }
 

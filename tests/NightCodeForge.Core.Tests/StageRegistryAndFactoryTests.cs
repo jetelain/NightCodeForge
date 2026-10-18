@@ -53,6 +53,7 @@ public class StageRegistryAndFactoryTests
         _serviceProvider.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv));
         _serviceProvider.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         _serviceProvider.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
+        _serviceProvider.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
         _registry = new WorkflowStageRegistry();
         _factory = new WorkflowStageFactory(_registry, _serviceProvider);
     }

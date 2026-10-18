@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Core.Execution;
 
@@ -362,8 +363,8 @@ public class SystemProcessRunner : IProcessRunner
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !token.IsCancellationRequested)
             {
                 Kill();
-                await _channel.Writer.WriteAsync(new ProcessStreamChunk(ProcessStreamKind.StandardError, $"Process timed out after {_timeoutSeconds}s.", 124), CancellationToken.None).ConfigureAwait(false);
-                await _channel.Writer.WriteAsync(new ProcessStreamChunk(ProcessStreamKind.Exit, string.Empty, 124), CancellationToken.None).ConfigureAwait(false);
+                await _channel.Writer.WriteAsync(new ProcessStreamChunk(ProcessStreamKind.StandardError, $"Process timed out after {_timeoutSeconds}s.", WorkflowDefaults.ProcessTimeoutExitCode), token).ConfigureAwait(false);
+                await _channel.Writer.WriteAsync(new ProcessStreamChunk(ProcessStreamKind.Exit, string.Empty, WorkflowDefaults.ProcessTimeoutExitCode), token).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

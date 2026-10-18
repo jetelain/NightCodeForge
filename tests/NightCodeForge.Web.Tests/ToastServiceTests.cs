@@ -7,7 +7,7 @@ public class ToastServiceTests
     [Fact]
     public void InitialState_ShouldHaveEmptyToasts()
     {
-        var service = new ToastService();
+        var service = TestServices.CreateToastService();
 
         Assert.Empty(service.Toasts);
     }
@@ -15,7 +15,7 @@ public class ToastServiceTests
     [Fact]
     public void Show_ShouldAddToastAndNotify()
     {
-        var service = new ToastService();
+        var service = TestServices.CreateToastService();
         var eventFired = false;
         service.OnToastsChanged += () => eventFired = true;
 
@@ -33,7 +33,7 @@ public class ToastServiceTests
     [Fact]
     public void Remove_ShouldRemoveMatchingToastAndNotify()
     {
-        var service = new ToastService();
+        var service = TestServices.CreateToastService();
         service.Show("Notice 1", "Content 1", ToastLevel.Info);
         service.Show("Notice 2", "Content 2", ToastLevel.Warning);
 
@@ -54,7 +54,7 @@ public class ToastServiceTests
     [Fact]
     public void Remove_WithNonExistentId_ShouldNotThrow()
     {
-        var service = new ToastService();
+        var service = TestServices.CreateToastService();
         service.Show("Notice", "Content", ToastLevel.Info);
 
         service.Remove(Guid.NewGuid());

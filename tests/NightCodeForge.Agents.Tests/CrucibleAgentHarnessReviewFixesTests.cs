@@ -293,7 +293,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
     // ---------- Cancellation ----------
 
     [Fact]
-    public async Task RunStage_WhenCancelled_ClosesTheStageConversationAsFailed()
+    public async Task RunStage_WhenCancelled_ClosesTheStageConversationAsCancelled()
     {
         var repo = new InMemoryTaskRepository();
         var client = new ScriptedChatClient(streamHandler: (messages, options, ct) => HangingStream(ct));
@@ -306,7 +306,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => harness.RunStageAsync(context, cts.Token));
 
         var conversation = Assert.Single(await repo.GetConversationsAsync(context.ForgeTask.Id));
-        Assert.Equal(StageExecutionStatus.Failed, conversation.Status);
+        Assert.Equal(StageExecutionStatus.Cancelled, conversation.Status);
 
         static async IAsyncEnumerable<ChatResponseUpdate> HangingStream([EnumeratorCancellation] CancellationToken ct)
         {

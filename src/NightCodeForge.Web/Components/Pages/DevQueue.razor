@@ -2,9 +2,10 @@
 @namespace NightCodeForge.Web.Components.Pages
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Web.Components.DevQueue
-@using NightCodeForge.Web.Services
+@using NightCodeForge.Core.Execution
 @inject IDevQueueService DevQueueService
 @inject ToastService ToastService
+@inject IBackgroundTaskRunner BackgroundTaskRunner
 @implements IDisposable
 
 <div class="devqueue-container p-4" style="max-width: 1400px; margin: 0 auto;">
@@ -94,24 +95,17 @@
     private void StartAutoRefresh()
     {
         _refreshTimer = new PeriodicTimer(TimeSpan.FromSeconds(5));
-        _ = Task.Run(async () =>
+        BackgroundTaskRunner.RunTracked(async ct =>
         {
-            try
+            while (await _refreshTimer.WaitForNextTickAsync(ct))
             {
-                while (await _refreshTimer.WaitForNextTickAsync(_cts.Token))
+                await InvokeAsync(async () =>
                 {
-                    await InvokeAsync(async () =>
-                    {
-                        await RefreshQueueStateAsync();
-                        StateHasChanged();
-                    });
-                }
+                    await RefreshQueueStateAsync();
+                    StateHasChanged();
+                });
             }
-            catch (OperationCanceledException)
-            {
-                // Expected on dispose
-            }
-        });
+        }, "DevQueue.AutoRefresh", _cts.Token);
     }
 
     public async Task RefreshQueueStateAsync()

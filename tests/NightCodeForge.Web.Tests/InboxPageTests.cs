@@ -22,7 +22,7 @@ public class InboxPageTests : BunitContext
         _taskRepository = new InMemoryTaskRepository();
         _workspaceState = new WorkspaceStateService();
         _workerState = new WorkerStateService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
         _orchestrator = new MockTaskOrchestrator();
 
         Services.AddSingleton<ITaskRepository>(_taskRepository);

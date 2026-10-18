@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Core.Workflow.Stages;
@@ -22,6 +23,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
 
     private readonly IExecutionEnvironmentProvider _envProvider;
     private readonly IOllamaModelPreloadService? _preloadService;
+    private readonly IBackgroundTaskRunner _backgroundTaskRunner;
     private readonly ILogger<DeterministicBuildStage> _logger;
     private readonly string _buildCommand;
 
@@ -33,38 +35,17 @@ public partial class DeterministicBuildStage : IWorkflowStage
     [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public DeterministicBuildStage(
         IExecutionEnvironmentProvider envProvider,
-        IOllamaModelPreloadService preloadService,
+        IOllamaModelPreloadService? preloadService,
+        IBackgroundTaskRunner backgroundTaskRunner,
         ILogger<DeterministicBuildStage> logger)
-        : this(envProvider, preloadService, logger, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
-    {
-    }
-
-    public DeterministicBuildStage(
-        IExecutionEnvironmentProvider envProvider,
-        IOllamaModelPreloadService preloadService)
-        : this(envProvider, preloadService, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
-    {
-    }
-
-    public DeterministicBuildStage(
-        IExecutionEnvironmentProvider envProvider)
-        : this(envProvider, null, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
+        : this(envProvider, preloadService, backgroundTaskRunner, logger, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
     {
     }
 
     public DeterministicBuildStage(
         IExecutionEnvironmentProvider envProvider,
         IOllamaModelPreloadService? preloadService,
-        string buildCommand,
-        string stageId,
-        string displayName)
-        : this(envProvider, preloadService, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance, buildCommand, stageId, displayName)
-    {
-    }
-
-    public DeterministicBuildStage(
-        IExecutionEnvironmentProvider envProvider,
-        IOllamaModelPreloadService? preloadService,
+        IBackgroundTaskRunner backgroundTaskRunner,
         ILogger<DeterministicBuildStage> logger,
         string buildCommand,
         string stageId,
@@ -72,6 +53,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
     {
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _preloadService = preloadService;
+        _backgroundTaskRunner = backgroundTaskRunner ?? throw new ArgumentNullException(nameof(backgroundTaskRunner));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _buildCommand = !string.IsNullOrWhiteSpace(buildCommand) ? buildCommand : "dotnet build";
         StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : DefaultStageId;
@@ -148,25 +130,10 @@ public partial class DeterministicBuildStage : IWorkflowStage
             if (!string.IsNullOrWhiteSpace(nextModelName))
             {
                 var modelToPreload = nextModelName;
-                try
-                {
-                    var preloadTask = _preloadService.PreloadModelAsync(modelToPreload, WorkflowDefaults.ModelPreloadKeepAlive, cancellationToken);
-                    _ = preloadTask.ContinueWith(t =>
-                    {
-                        if (t.IsCanceled)
-                        {
-                            _logger.LogInformation("Model preload for '{ModelName}' was canceled.", modelToPreload);
-                        }
-                        else if (t.IsFaulted)
-                        {
-                            _logger.LogWarning(t.Exception, "Background model preload failed for model '{ModelName}'.", modelToPreload);
-                        }
-                    }, TaskScheduler.Default);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to initiate background model preload for model '{ModelName}'", modelToPreload);
-                }
+                _backgroundTaskRunner.RunTracked(
+                    async ct => await _preloadService.PreloadModelAsync(modelToPreload, WorkflowDefaults.ModelPreloadKeepAlive, ct).ConfigureAwait(false),
+                    $"PreloadModel.{modelToPreload}",
+                    cancellationToken);
             }
         }
 

@@ -20,7 +20,7 @@ public class GitSyncPageTests : BunitContext
     {
         _workspaceState = new WorkspaceStateService();
         _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
         _mirrorSyncService = new MockGitMirrorSyncService();
         _gitSyncService = new MockGitSyncService();
 

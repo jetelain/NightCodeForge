@@ -19,7 +19,7 @@ public class TranscriptComponentTests : BunitContext
         JSInterop.Mode = JSRuntimeMode.Loose;
 
         _workspaceState = new WorkspaceStateService();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
         _browserService = new FakeTranscriptBrowserService();
 
         Services.AddSingleton(_workspaceState);

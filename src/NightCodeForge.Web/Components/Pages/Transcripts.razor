@@ -6,6 +6,7 @@
 @inject WorkspaceStateService WorkspaceState
 @inject ToastService ToastService
 @inject NavigationManager NavigationManager
+@inject ILogger<Transcripts> Logger
 @implements IDisposable
 
 <PageTitle>Transcripts &amp; AI - NightCodeForge</PageTitle>
@@ -299,6 +300,7 @@
 
     private bool _isLoading = true;
     private bool _showDiagnosticsModal;
+    private bool _disposed;
     private string _activeTab = "dialogue";
     private string _searchTerm = string.Empty;
     private string _selectedFilter = "All";
@@ -334,12 +336,23 @@
         }
     }
 
-    private async void HandleWorkspaceChanged()
+    private void HandleWorkspaceChanged()
     {
-        await InvokeAsync(async () =>
+        if (_disposed) return;
+
+        _ = InvokeAsync(async () =>
         {
-            await LoadTranscriptsAsync();
-            StateHasChanged();
+            try
+            {
+                if (_disposed) return;
+                await LoadTranscriptsAsync();
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to reload transcripts on workspace change.");
+                ToastService.Show("Error", "Failed to reload transcripts.", ToastLevel.Error);
+            }
         });
     }
 
@@ -564,6 +577,7 @@ The build encountered compiler error CS0117. I will attempt to edit the file aga
 
     public void Dispose()
     {
+        _disposed = true;
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
     }
 }

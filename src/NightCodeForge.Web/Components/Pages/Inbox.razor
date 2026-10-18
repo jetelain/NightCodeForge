@@ -7,6 +7,7 @@
 @inject WorkspaceStateService WorkspaceState
 @inject WorkerStateService WorkerState
 @inject ToastService ToastService
+@inject ILogger<Inbox> Logger
 @implements IDisposable
 
 <PageTitle>Question Inbox - NightCodeForge</PageTitle>
@@ -58,6 +59,7 @@
     private List<Question> _pendingQuestions = new();
     private bool _filterCurrentWorkspaceOnly;
     private bool _isLoading = true;
+    private bool _disposed;
 
     protected override async Task OnInitializedAsync()
     {
@@ -65,12 +67,23 @@
         await LoadQuestionsAsync();
     }
 
-    private async void HandleWorkspaceChanged()
+    private void HandleWorkspaceChanged()
     {
-        await InvokeAsync(async () =>
+        if (_disposed) return;
+
+        _ = InvokeAsync(async () =>
         {
-            await LoadQuestionsAsync();
-            StateHasChanged();
+            try
+            {
+                if (_disposed) return;
+                await LoadQuestionsAsync();
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to reload questions on workspace change.");
+                ToastService.Show("Error", "Failed to reload questions.", ToastLevel.Error);
+            }
         });
     }
 
@@ -106,6 +119,7 @@
 
     public void Dispose()
     {
+        _disposed = true;
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
     }
 }

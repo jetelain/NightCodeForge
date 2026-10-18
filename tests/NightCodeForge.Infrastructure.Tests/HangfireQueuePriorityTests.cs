@@ -85,6 +85,84 @@ public class HangfireQueuePriorityTests
         // WorkerCount = 1 strictly prevents concurrency: max concurrency must be exactly 1
         Assert.Equal(1, TestJobTarget.MaxConcurrentWorkers);
     }
+
+    [Fact]
+    public void HangfireTaskJobQueue_EnqueueUrgent_EnqueuesToLlmUrgentQueue()
+    {
+        var storage = new MemoryStorage();
+        var client = new BackgroundJobClient(storage);
+        var queue = new HangfireTaskJobQueue(client);
+
+        var jobId = queue.EnqueueUrgent(101);
+
+        Assert.NotNull(jobId);
+        using var connection = storage.GetConnection();
+        var jobData = connection.GetJobData(jobId);
+        Assert.NotNull(jobData);
+        Assert.Equal("ProcessTaskAsync", jobData.Job.Method.Name);
+        Assert.Equal(101, jobData.Job.Args[0]);
+        Assert.Equal(default(CancellationToken), jobData.Job.Args[1]);
+
+        var stateData = connection.GetStateData(jobId);
+        Assert.NotNull(stateData);
+        Assert.Equal(HangfireQueues.LlmUrgent, stateData.Data["Queue"]);
+    }
+
+    [Fact]
+    public void HangfireTaskJobQueue_EnqueueInference_EnqueuesToLlmInferenceQueue()
+    {
+        var storage = new MemoryStorage();
+        var client = new BackgroundJobClient(storage);
+        var queue = new HangfireTaskJobQueue(client);
+
+        var jobId = queue.EnqueueInference(202);
+
+        Assert.NotNull(jobId);
+        using var connection = storage.GetConnection();
+        var jobData = connection.GetJobData(jobId);
+        Assert.NotNull(jobData);
+        Assert.Equal("ProcessTaskAsync", jobData.Job.Method.Name);
+        Assert.Equal(202, jobData.Job.Args[0]);
+        Assert.Equal(default(CancellationToken), jobData.Job.Args[1]);
+
+        var stateData = connection.GetStateData(jobId);
+        Assert.NotNull(stateData);
+        Assert.Equal(HangfireQueues.LlmInference, stateData.Data["Queue"]);
+    }
+
+    [Fact]
+    public async Task HangfireQueue_PropagatesCancellation_WhenServerStops()
+    {
+        var storage = new MemoryStorage();
+        var client = new BackgroundJobClient(storage);
+
+        var startedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelledTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        TestJobTarget.OnJobStarted = startedTcs;
+        TestJobTarget.OnJobCancelled = cancelledTcs;
+
+        client.Create(() => TestJobTarget.CancellableJob(default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var options = HangfireConfigurationExtensions.CreateLlmInferenceServerOptions();
+        var server = new BackgroundJobServer(options, storage);
+
+        try
+        {
+            var started = await Task.WhenAny(startedTcs.Task, Task.Delay(5000));
+            Assert.Same(startedTcs.Task, started);
+
+            server.SendStop();
+
+            var cancelled = await Task.WhenAny(cancelledTcs.Task, Task.Delay(5000));
+            Assert.Same(cancelledTcs.Task, cancelled);
+            Assert.True(await cancelledTcs.Task);
+        }
+        finally
+        {
+            server.Dispose();
+        }
+    }
 }
 
 public static class TestJobTarget
@@ -93,6 +171,22 @@ public static class TestJobTarget
     public static List<string> ExecutionOrder { get; } = new();
     public static int CurrentConcurrentWorkers;
     public static int MaxConcurrentWorkers;
+    public static TaskCompletionSource<bool>? OnJobStarted;
+    public static TaskCompletionSource<bool>? OnJobCancelled;
+
+    public static async Task CancellableJob(CancellationToken cancellationToken)
+    {
+        OnJobStarted?.TrySetResult(true);
+        try
+        {
+            await Task.Delay(10000, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            OnJobCancelled?.TrySetResult(true);
+            throw;
+        }
+    }
 
     public static void RecordJob(string name)
     {

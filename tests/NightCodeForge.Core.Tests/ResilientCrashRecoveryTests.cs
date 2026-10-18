@@ -58,6 +58,7 @@ public class ResilientCrashRecoveryTests
             pipelineProvider,
             _jobQueue,
             new Mock<IWorkspacePathResolver>().Object,
+            new Mock<IProcessRunner>().Object,
             NullLogger<StartupRecoveryService>.Instance);
     }
 

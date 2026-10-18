@@ -18,7 +18,7 @@ public class TaskCreationModalTests : BunitContext
     {
         _taskRepo = new InMemoryTaskRepository();
         _workflowRepo = new InMemoryWorkflowRepository();
-        _toastService = new ToastService();
+        _toastService = TestServices.CreateToastService();
 
         Services.AddSingleton<ITaskRepository>(_taskRepo);
         Services.AddSingleton<IWorkflowRepository>(_workflowRepo);

@@ -201,6 +201,7 @@
     private string _searchQuery = string.Empty;
     private TaskOverallStatus? _statusFilter;
     private bool _isLoading = false;
+    private bool _disposed;
 
     // Modals state
     private ForgeTask? _selectedTask;
@@ -235,45 +236,82 @@
         await LoadDataAsync();
     }
 
-    private async void HandleWorkspaceChanged()
+    private void HandleWorkspaceChanged()
     {
-        await InvokeAsync(async () =>
+        if (_disposed) return;
+        _ = InvokeAsync(async () =>
         {
-            _selectedTask = null;
-            _showPromoteModal = false;
-            _showDepModal = false;
-            _showDrawer = false;
-            await LoadDataAsync();
-            StateHasChanged();
-        });
-    }
-
-    private async void HandleStageTransition(int taskId, string stageId, string stageKind, string status)
-    {
-        await InvokeAsync(async () =>
-        {
-            await LoadDataAsync();
-            StateHasChanged();
-        });
-    }
-
-    private async void HandleGateResult(int taskId, string gateName, bool passed, string metricsSummary)
-    {
-        await InvokeAsync(async () =>
-        {
-            await LoadDataAsync();
-            StateHasChanged();
-        });
-    }
-
-    private async void HandleWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget)
-    {
-        if (activeTaskId.HasValue)
-        {
-            await InvokeAsync(async () =>
+            try
             {
+                if (_disposed) return;
+                _selectedTask = null;
+                _showPromoteModal = false;
+                _showDepModal = false;
+                _showDrawer = false;
                 await LoadDataAsync();
                 StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to update backlog on workspace change.");
+                ToastService.Show("Error", "Failed to update backlog.", ToastLevel.Error);
+            }
+        });
+    }
+
+    private void HandleStageTransition(int taskId, string stageId, string stageKind, string status)
+    {
+        if (_disposed) return;
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                if (_disposed) return;
+                await LoadDataAsync();
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to refresh backlog on stage transition for task #{TaskId}.", taskId);
+            }
+        });
+    }
+
+    private void HandleGateResult(int taskId, string gateName, bool passed, string metricsSummary)
+    {
+        if (_disposed) return;
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                if (_disposed) return;
+                await LoadDataAsync();
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to refresh backlog on gate result for task #{TaskId}.", taskId);
+            }
+        });
+    }
+
+    private void HandleWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget)
+    {
+        if (_disposed) return;
+        if (activeTaskId.HasValue)
+        {
+            _ = InvokeAsync(async () =>
+            {
+                try
+                {
+                    if (_disposed) return;
+                    await LoadDataAsync();
+                    StateHasChanged();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Failed to refresh backlog on worker status update.");
+                }
             });
         }
     }
@@ -444,6 +482,7 @@
 
     public void Dispose()
     {
+        _disposed = true;
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
         HubConnection.OnStageTransitionReceived -= HandleStageTransition;
         HubConnection.OnDeterministicGateResultReceived -= HandleGateResult;

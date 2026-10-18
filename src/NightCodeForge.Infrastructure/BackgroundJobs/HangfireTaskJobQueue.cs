@@ -19,14 +19,14 @@ public class HangfireTaskJobQueue : ITaskJobQueue
     public string EnqueueUrgent(int taskId)
     {
         return _backgroundJobClient.Create<ITaskOrchestrator>(
-            o => o.ProcessTaskAsync(taskId, CancellationToken.None),
+            o => o.ProcessTaskAsync(taskId, default),
             new EnqueuedState(HangfireQueues.LlmUrgent));
     }
 
     public string EnqueueInference(int taskId)
     {
         return _backgroundJobClient.Create<ITaskOrchestrator>(
-            o => o.ProcessTaskAsync(taskId, CancellationToken.None),
+            o => o.ProcessTaskAsync(taskId, default),
             new EnqueuedState(HangfireQueues.LlmInference));
     }
 }

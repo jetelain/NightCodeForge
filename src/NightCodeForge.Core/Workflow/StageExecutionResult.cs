@@ -12,6 +12,7 @@ public class StageExecutionResult
     public string? LoopBackStageId => TargetRoutingStageId;
     public string? ErrorMessage { get; init; }
     public bool NeedsClarification { get; init; }
+    public bool IsCancelled { get; init; }
     public Question? ClarificationQuestion { get; init; }
     public StageExecutionRecord? ExecutionRecord { get; init; }
 
@@ -20,6 +21,9 @@ public class StageExecutionResult
 
     public static StageExecutionResult Failure(string errorMessage, string? loopBackStageId = null, StageExecutionRecord? record = null) =>
         new() { IsSuccess = false, ErrorMessage = errorMessage, TargetRoutingStageId = loopBackStageId, ExecutionRecord = record };
+
+    public static StageExecutionResult Cancelled(string? message = null, StageExecutionRecord? record = null) =>
+        new() { IsSuccess = false, IsCancelled = true, ErrorMessage = message ?? "Execution was cancelled.", ExecutionRecord = record };
 
     public static StageExecutionResult QuestionRequired(Question question, StageExecutionRecord? record = null) =>
         new() { IsSuccess = false, NeedsClarification = true, ClarificationQuestion = question, ExecutionRecord = record };
