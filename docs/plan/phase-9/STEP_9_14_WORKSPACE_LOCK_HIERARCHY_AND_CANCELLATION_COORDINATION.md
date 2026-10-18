@@ -3,7 +3,7 @@
 > **Phase 9 Implementation Step**  
 > *Parent Plan:* [Phase 9 Master Plan](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 ---
 
@@ -81,10 +81,10 @@ flowchart TD
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Exclusive workspace locks block task locks; task locks block workspace locks.
-- [ ] Concurrent tasks on the same workspace can execute simultaneously without deadlocking.
-- [ ] Cancelling a job in `DevQueueService` immediately cancels running `TaskOrchestrator` execution.
-- [ ] Cancelled tasks do not overwrite status on stage termination.
-- [ ] Git lock purging correctly resolves worktrees and WSL mirrors.
-- [ ] Concurrency and cancellation unit/integration tests passing.
-- [ ] `dotnet test --filter "Category!=Acceptance&Category!=E2E"` passes.
+- [x] Exclusive workspace locks block task locks; task locks block workspace locks.
+- [x] Concurrent tasks on the same workspace can execute simultaneously without deadlocking.
+- [x] Cancelling a job in `DevQueueService` immediately cancels running `TaskOrchestrator` execution.
+- [x] Cancelled tasks do not overwrite status on stage termination.
+- [x] Git lock purging correctly resolves worktrees and WSL mirrors.
+- [x] Concurrency and cancellation unit/integration tests passing.
+- [x] `dotnet test --filter "Category!=Acceptance&Category!=E2E"` passes.

@@ -4,6 +4,7 @@ using Hangfire.MemoryStorage;
 using Hangfire.States;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
@@ -23,6 +24,8 @@ public class DevQueueServiceTests : IDisposable
     private readonly InMemoryTaskRepository _taskRepo;
     private readonly InMemoryWorkspaceRepository _workspaceRepo;
     private readonly TestDevQueueMarkdownSyncService _markdownSync;
+    private readonly Mock<ITaskCancellationManager> _cancellationManager;
+    private readonly Mock<IWorkspacePathResolver> _pathResolver;
     private readonly ServiceProvider _serviceProvider;
     private readonly JobStorage _jobStorage = new MemoryStorage();
     private readonly string _tempDir;
@@ -35,6 +38,8 @@ public class DevQueueServiceTests : IDisposable
         _taskRepo = new InMemoryTaskRepository();
         _workspaceRepo = new InMemoryWorkspaceRepository();
         _markdownSync = new TestDevQueueMarkdownSyncService();
+        _cancellationManager = new Mock<ITaskCancellationManager>();
+        _pathResolver = new Mock<IWorkspacePathResolver>();
 
         var services = new ServiceCollection();
         services.AddSingleton<ITaskRepository>(_taskRepo);
@@ -52,6 +57,8 @@ public class DevQueueServiceTests : IDisposable
         _jobQueue,
         _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
         _jobStorage,
+        _cancellationManager.Object,
+        _pathResolver.Object,
         NullLogger<DevQueueService>.Instance);
 
     [Fact]
@@ -188,6 +195,85 @@ public class DevQueueServiceTests : IDisposable
         Assert.True(result);
         Assert.Equal(10, _lockProvider.LastEmergencyWorkspaceId);
         Assert.False(File.Exists(indexLock), ".git/index.lock should have been purged");
+    }
+
+    [Fact]
+    public async Task CancelJobAsync_CancelsActiveTaskOnCancellationManager()
+    {
+        var task = new ForgeTask
+        {
+            Id = 66,
+            WorkspaceId = 1,
+            Title = "Task Active Cancellation",
+            Status = TaskOverallStatus.Open
+        };
+        await _taskRepo.CreateAsync(task);
+
+        var service = CreateService();
+
+        var result = await service.CancelJobAsync("job-66", 66);
+
+        Assert.True(result);
+        _cancellationManager.Verify(c => c.Cancel(66), Times.Once);
+    }
+
+    [Fact]
+    public async Task EmergencyReleaseLockAsync_PurgesLocksInWorktreeLinkedGitDir()
+    {
+        var worktreeDir = Path.Combine(_tempDir, "worktree-1");
+        Directory.CreateDirectory(worktreeDir);
+        var targetGitDir = Path.Combine(_tempDir, "main-repo", ".git", "worktrees", "worktree-1");
+        Directory.CreateDirectory(targetGitDir);
+
+        var gitFile = Path.Combine(worktreeDir, ".git");
+        await File.WriteAllTextAsync(gitFile, $"gitdir: {targetGitDir}");
+
+        var indexLock = Path.Combine(targetGitDir, "index.lock");
+        var headLock = Path.Combine(targetGitDir, "HEAD.lock");
+        await File.WriteAllTextAsync(indexLock, "lock");
+        await File.WriteAllTextAsync(headLock, "lock");
+
+        var workspace = new Workspace
+        {
+            Id = 11,
+            Name = "Worktree Repo",
+            RepositoryPath = worktreeDir
+        };
+        await _workspaceRepo.CreateAsync(workspace);
+
+        var service = CreateService();
+
+        var result = await service.EmergencyReleaseLockAsync(11);
+
+        Assert.True(result);
+        Assert.False(File.Exists(indexLock), "Worktree target index.lock should be purged");
+        Assert.False(File.Exists(headLock), "Worktree target HEAD.lock should be purged");
+    }
+
+    [Fact]
+    public async Task EmergencyReleaseLockAsync_PurgesLocksInExt4Mirror()
+    {
+        var mirrorDir = Path.Combine(_tempDir, "ext4-mirror");
+        var gitDir = Path.Combine(mirrorDir, ".git");
+        Directory.CreateDirectory(gitDir);
+        var indexLock = Path.Combine(gitDir, "index.lock");
+        await File.WriteAllTextAsync(indexLock, "lock");
+
+        var workspace = new Workspace
+        {
+            Id = 12,
+            Name = "WSL Repo",
+            RepositoryPath = _tempDir,
+            Ext4MirrorPath = mirrorDir
+        };
+        await _workspaceRepo.CreateAsync(workspace);
+
+        var service = CreateService();
+
+        var result = await service.EmergencyReleaseLockAsync(12);
+
+        Assert.True(result);
+        Assert.False(File.Exists(indexLock), "Ext4 mirror index.lock should be purged");
     }
 
     [Fact]

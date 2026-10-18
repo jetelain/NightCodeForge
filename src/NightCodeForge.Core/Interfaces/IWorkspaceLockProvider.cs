@@ -66,3 +66,12 @@ public record ActiveLockSnapshot(
     DateTime AcquiredAt,
     TimeSpan DurationHeld);
 
+/// <summary>
+/// Well-known values of <see cref="ActiveLockSnapshot.LockType"/>.
+/// </summary>
+public static class WorkspaceLockTypes
+{
+    public const string WorkspaceExclusive = "WorkspaceExclusive";
+    public const string TaskExclusive = "TaskExclusive";
+}
+

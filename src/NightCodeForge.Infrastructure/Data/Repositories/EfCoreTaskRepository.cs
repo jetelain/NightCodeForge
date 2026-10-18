@@ -16,6 +16,15 @@ public class EfCoreTaskRepository : ITaskRepository
         _context = context ?? throw new ArgumentNullException(nameof(context));
     }
 
+    public async Task<TaskOverallStatus?> GetStatusAsync(int id, CancellationToken cancellationToken = default)
+    {
+        return await _context.Tasks
+            .AsNoTracking()
+            .Where(t => t.Id == id)
+            .Select(t => (TaskOverallStatus?)t.Status)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     public async Task<ForgeTask?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         return await _context.Tasks

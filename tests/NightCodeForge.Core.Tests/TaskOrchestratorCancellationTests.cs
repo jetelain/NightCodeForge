@@ -1,6 +1,7 @@
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Stages;
@@ -14,6 +15,7 @@ public class TaskOrchestratorCancellationTests
     private readonly InMemoryTaskDependencyStore _depStore = new();
     private readonly WorkspaceLockProvider _lockProvider = new();
     private readonly FakeTaskJobQueue _jobQueue = new();
+    private readonly ITaskCancellationManager _cancellationManager = new TaskCancellationManager(Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskCancellationManager>.Instance);
     private readonly Workspace _workspace;
 
     public TaskOrchestratorCancellationTests()
@@ -37,6 +39,7 @@ public class TaskOrchestratorCancellationTests
             LockProvider = _lockProvider,
             JobQueue = _jobQueue,
             DependencyStore = _depStore,
+            CancellationManager = _cancellationManager,
             PipelineProvider = pipelineProvider
         }.Build();
     }
@@ -134,5 +137,72 @@ public class TaskOrchestratorCancellationTests
         var lastRecord = records.LastOrDefault();
         Assert.NotNull(lastRecord);
         Assert.Equal(StageExecutionStatus.Cancelled, lastRecord.Status);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenTaskCancellationManagerSignalsCancel_CancelsRunningOrchestratorAndPersistsCancelledStatus()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 44,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open
+        });
+        _depStore.AddTask(task.Id, _workspace.Id, TaskOverallStatus.Open);
+
+        var pipelineProvider = new CancellingPipelineProvider(async (ctx, ct) =>
+        {
+            // Simulate external cancellation via ITaskCancellationManager
+            _cancellationManager.Cancel(task.Id);
+            ct.ThrowIfCancellationRequested();
+            await Task.Delay(10, ct);
+            return StageExecutionResult.Success();
+        });
+
+        var orchestrator = CreateOrchestrator(pipelineProvider);
+
+        // Act
+        await orchestrator.ProcessTaskAsync(task.Id, CancellationToken.None);
+
+        // Assert
+        var updatedTask = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Cancelled, updatedTask.Status);
+
+        var records = _taskRepo.GetAllExecutionRecords().Where(r => r.TaskId == task.Id).ToList();
+        var lastRecord = records.LastOrDefault();
+        Assert.NotNull(lastRecord);
+        Assert.Equal(StageExecutionStatus.Cancelled, lastRecord.Status);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenTaskCancelledInDatabase_StageTransitionDoesNotOverwriteStatus()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 45,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open
+        });
+        _depStore.AddTask(task.Id, _workspace.Id, TaskOverallStatus.Open);
+
+        var pipelineProvider = new CancellingPipelineProvider(async (ctx, ct) =>
+        {
+            // Simulate out-of-band cancellation update in database while stage is executing
+            task.Status = TaskOverallStatus.Cancelled;
+            await _taskRepo.UpdateAsync(task);
+            return StageExecutionResult.Success();
+        });
+
+        var orchestrator = CreateOrchestrator(pipelineProvider);
+
+        // Act
+        await orchestrator.ProcessTaskAsync(task.Id, CancellationToken.None);
+
+        // Assert
+        var updatedTask = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        // Stage transition must not overwrite out-of-band cancelled status
+        Assert.Equal(TaskOverallStatus.Cancelled, updatedTask.Status);
     }
 }

@@ -41,6 +41,7 @@ public static class ServiceCollectionExtensions
 
         // 3. Concurrency & DAG Engine
         services.TryAddSingleton<IWorkspaceLockProvider, WorkspaceLockProvider>();
+        services.TryAddSingleton<ITaskCancellationManager, TaskCancellationManager>();
         services.TryAddScoped<IDependencyResolutionEngine, DependencyResolutionEngine>();
 
         // 4. Git Infrastructure

@@ -8,6 +8,13 @@ namespace NightCodeForge.Core.Repositories;
 public interface ITaskRepository
 {
     Task<ForgeTask?> GetByIdAsync(int id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the persisted overall status of a task directly from storage, bypassing any change-tracker cache.
+    /// Returns null if the task does not exist.
+    /// </summary>
+    Task<TaskOverallStatus?> GetStatusAsync(int id, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<ForgeTask>> GetByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default);
     Task<ForgeTask> CreateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default);
     Task UpdateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default);
@@ -98,6 +105,14 @@ public class InMemoryTaskRepository : ITaskRepository
     private int _nextLogId = 1;
     private int _nextConversationId = 1;
     private int _nextTurnId = 1;
+
+    public Task<TaskOverallStatus?> GetStatusAsync(int id, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            return Task.FromResult<TaskOverallStatus?>(_tasks.TryGetValue(id, out var task) ? task.Status : null);
+        }
+    }
 
     public Task<ForgeTask?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {

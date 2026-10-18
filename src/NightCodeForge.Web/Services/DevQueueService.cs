@@ -25,6 +25,8 @@ public class DevQueueService : IDevQueueService
     private readonly ITaskJobQueue _taskJobQueue;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly JobStorage _jobStorage;
+    private readonly ITaskCancellationManager _cancellationManager;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly ILogger<DevQueueService> _logger;
 
     public DevQueueService(
@@ -33,6 +35,8 @@ public class DevQueueService : IDevQueueService
         ITaskJobQueue taskJobQueue,
         IServiceScopeFactory scopeFactory,
         JobStorage jobStorage,
+        ITaskCancellationManager cancellationManager,
+        IWorkspacePathResolver pathResolver,
         ILogger<DevQueueService> logger)
     {
         _lockProvider = lockProvider ?? throw new ArgumentNullException(nameof(lockProvider));
@@ -40,6 +44,8 @@ public class DevQueueService : IDevQueueService
         _taskJobQueue = taskJobQueue ?? throw new ArgumentNullException(nameof(taskJobQueue));
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         _jobStorage = jobStorage ?? throw new ArgumentNullException(nameof(jobStorage));
+        _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -135,6 +141,11 @@ public class DevQueueService : IDevQueueService
     {
         try
         {
+            if (taskId.HasValue && taskId.Value > 0)
+            {
+                _cancellationManager.Cancel(taskId.Value);
+            }
+
             if (!string.IsNullOrWhiteSpace(jobId))
             {
                 _backgroundJobClient.Delete(jobId);
@@ -216,13 +227,16 @@ public class DevQueueService : IDevQueueService
             using var scope = _scopeFactory.CreateScope();
             var workspaceRepo = scope.ServiceProvider.GetRequiredService<IWorkspaceRepository>();
             var workspace = await workspaceRepo.GetByIdAsync(workspaceId, cancellationToken);
-            if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+            if (workspace != null)
             {
-                var indexLock = Path.Combine(workspace.RepositoryPath, ".git", "index.lock");
-                if (File.Exists(indexLock))
+                if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath))
                 {
-                    File.Delete(indexLock);
-                    _logger.LogWarning("Purged dangling .git/index.lock file for Workspace #{WorkspaceId}", workspaceId);
+                    GitLockPurgeHelper.PurgeDanglingLocks(workspace.RepositoryPath, workspaceId, _pathResolver, _logger);
+                }
+
+                if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+                {
+                    GitLockPurgeHelper.PurgeDanglingLocks(workspace.Ext4MirrorPath, workspaceId, _pathResolver, _logger);
                 }
             }
 

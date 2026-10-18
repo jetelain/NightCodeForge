@@ -30,6 +30,7 @@ public class TaskOrchestrator : ITaskOrchestrator
     private readonly Services.ITaskMarkdownSyncService _markdownSyncService;
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly Streaming.IAgentActivityStreamer _streamer;
+    private readonly ITaskCancellationManager _cancellationManager;
     private readonly ILogger<TaskOrchestrator> _logger;
 
     public TaskOrchestrator(
@@ -46,6 +47,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         Services.ITaskMarkdownSyncService markdownSyncService,
         IWorkspacePathResolver pathResolver,
         Streaming.IAgentActivityStreamer streamer,
+        ITaskCancellationManager cancellationManager,
         ILogger<TaskOrchestrator> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -61,21 +63,32 @@ public class TaskOrchestrator : ITaskOrchestrator
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _streamer = streamer ?? throw new ArgumentNullException(nameof(streamer));
+        _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     [Hangfire.AutomaticRetry(Attempts = 0, OnAttemptsExceeded = Hangfire.AttemptsExceededAction.Fail)]
     public async Task ProcessTaskAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        try
-        {
-            var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
         if (task == null)
         {
             _logger.LogError("ForgeTask #{TaskId} not found for processing.", taskId);
             return;
         }
 
+        if (task.Status == TaskOverallStatus.Cancelled || task.Status == TaskOverallStatus.Closed)
+        {
+            _logger.LogInformation("ForgeTask #{TaskId} is already in {Status} status; aborting execution.", taskId, task.Status);
+            return;
+        }
+
+        // The cancellation source is registered only once the task lock is held, so that a duplicate job
+        // waiting on the lock can never cancel the execution that is already running.
+        CancellationTokenSource? taskCts = null;
+
+        try
+        {
         // 1. DAG Readiness Check
         var isReady = await _dependencyEngine.IsReadyForExecutionAsync(taskId, cancellationToken);
         if (!isReady)
@@ -93,6 +106,17 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         // 2. ForgeTask Lock Acquisition (Enables concurrent execution of different tasks on the same workspace)
         using var lockReleaser = await _workspaceLockProvider.AcquireTaskLockAsync(task.WorkspaceId, task.Id, cancellationToken);
+
+        // The task may have been cancelled while this job was waiting for the lock.
+        var persistedStatus = await _taskRepository.GetStatusAsync(task.Id, cancellationToken);
+        if (persistedStatus == TaskOverallStatus.Cancelled || persistedStatus == TaskOverallStatus.Closed)
+        {
+            _logger.LogInformation("ForgeTask #{TaskId} is now in {Status} status; aborting execution.", taskId, persistedStatus);
+            return;
+        }
+
+        taskCts = _cancellationManager.Register(task.Id, cancellationToken);
+        cancellationToken = taskCts.Token;
 
         var workspace = task.Workspace ?? await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken);
         if (workspace == null)
@@ -580,7 +604,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         await ReadBackTaskMarkdownFromDiskAsync(stage, workspace, task, pipelineContext, targetSyncPath, cancellationToken);
 
         // 5. Result Evaluation
-        if (result.IsCancelled)
+        if (result.IsCancelled || cancellationToken.IsCancellationRequested)
         {
             _logger.LogInformation("Processing of task #{TaskId} at stage '{StageId}' was cancelled.", task.Id, stage.StageId);
 
@@ -605,6 +629,11 @@ public class TaskOrchestrator : ITaskOrchestrator
                 _logger.LogWarning(cex, "Failed to mark active conversation as Cancelled for task #{TaskId}", task.Id);
             }
 
+            // Only an explicit cancel request is terminal; a parent cancellation (e.g. shutdown) must leave the task recoverable.
+            if (_cancellationManager.IsCancelRequested(task.Id))
+            {
+                task.Status = TaskOverallStatus.Cancelled;
+            }
             pipelineContext.SyncDataBagToTask();
             await _taskRepository.UpdateAsync(task, cancellationToken: ct);
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, ct);
@@ -681,6 +710,30 @@ public class TaskOrchestrator : ITaskOrchestrator
             }, cancellationToken);
 
             // Clean return: Hangfire marks job as Succeeded, GPU worker freed
+            return;
+        }
+
+        // Finding L4: Re-verify cancellation token and persisted (untracked) status to ensure we never overwrite cancellation
+        if (cancellationToken.IsCancellationRequested)
+        {
+            if (_cancellationManager.IsCancelRequested(task.Id))
+            {
+                task.Status = TaskOverallStatus.Cancelled;
+                await _taskRepository.UpdateAsync(task, cancellationToken: CancellationToken.None);
+                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
+                return;
+            }
+
+            // Parent cancellation (e.g. shutdown): leave status untouched so the task stays recoverable.
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        var persistedStageStatus = await _taskRepository.GetStatusAsync(task.Id, CancellationToken.None);
+        if (persistedStageStatus == TaskOverallStatus.Cancelled)
+        {
+            _logger.LogInformation("ForgeTask #{TaskId} was cancelled out-of-band; aborting stage completion.", task.Id);
+            task.Status = TaskOverallStatus.Cancelled;
+            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
             return;
         }
 
@@ -860,6 +913,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             _logger.LogInformation(ocex, "ForgeTask #{TaskId} processing was cancelled.", taskId);
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var ct = timeoutCts.Token;
+            var explicitCancel = _cancellationManager.IsCancelRequested(taskId);
             try
             {
                 var convs = await _taskRepository.GetConversationsAsync(taskId, ct);
@@ -872,10 +926,30 @@ public class TaskOrchestrator : ITaskOrchestrator
                         summary: "Execution was cancelled.",
                         cancellationToken: ct);
                 }
+
+                // Only an explicit cancel request is terminal; parent cancellation (e.g. shutdown) leaves the task recoverable.
+                if (explicitCancel)
+                {
+                    var currentTask = await _taskRepository.GetByIdAsync(taskId, ct);
+                    if (currentTask != null && currentTask.Status != TaskOverallStatus.Closed)
+                    {
+                        currentTask.Status = TaskOverallStatus.Cancelled;
+                        await _taskRepository.UpdateAsync(currentTask, cancellationToken: ct);
+                        await _dependencyStore.UpdateTaskStatusAsync(taskId, TaskOverallStatus.Cancelled, ct);
+                    }
+                }
             }
             catch (Exception cex)
             {
-                _logger.LogWarning(cex, "Failed to mark active conversation as Cancelled for task #{TaskId}", taskId);
+                _logger.LogWarning(cex, "Failed to mark active conversation and status as Cancelled for task #{TaskId}", taskId);
+            }
+        }
+        finally
+        {
+            if (taskCts != null)
+            {
+                _cancellationManager.Unregister(taskId, taskCts);
+                taskCts.Dispose();
             }
         }
     }

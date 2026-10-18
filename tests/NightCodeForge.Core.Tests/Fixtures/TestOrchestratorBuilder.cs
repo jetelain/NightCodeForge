@@ -41,6 +41,7 @@ public class TestOrchestratorBuilder
     public ITaskMarkdownSyncService MarkdownSyncService { get; set; } = new Mock<ITaskMarkdownSyncService>().Object;
     public IWorkspacePathResolver PathResolver { get; set; } = new Mock<IWorkspacePathResolver>().Object;
     public IAgentActivityStreamer Streamer { get; set; } = new InMemoryAgentActivityStreamer();
+    public ITaskCancellationManager CancellationManager { get; set; } = new TaskCancellationManager(NullLogger<TaskCancellationManager>.Instance);
     public ILogger<TaskOrchestrator> Logger { get; set; } = NullLogger<TaskOrchestrator>.Instance;
 
     public TaskOrchestrator Build() => new(
@@ -57,5 +58,6 @@ public class TestOrchestratorBuilder
         MarkdownSyncService,
         PathResolver,
         Streamer,
+        CancellationManager,
         Logger);
 }

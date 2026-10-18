@@ -288,4 +288,141 @@ public class WorkspaceLockTests
         l2.Dispose();
         l3.Dispose();
     }
+
+    [Fact]
+    public async Task ExclusiveWorkspaceLock_BlocksTaskLocksOnSameWorkspace()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 1;
+        const int taskId = 101;
+
+        var exclusiveLock = await provider.AcquireLockAsync(workspaceId);
+        try
+        {
+            // TryAcquireTaskLock must fail while exclusive lock is held
+            Assert.False(provider.TryAcquireTaskLock(workspaceId, taskId, out var immediateReleaser));
+            Assert.Null(immediateReleaser);
+
+            var (asyncAcquired, asyncReleaser) = await provider.TryAcquireTaskLockAsync(workspaceId, taskId, TimeSpan.FromMilliseconds(50));
+            Assert.False(asyncAcquired);
+            Assert.Null(asyncReleaser);
+
+            var taskLockAcquiredTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var taskLockJob = Task.Run(async () =>
+            {
+                using var releaser = await provider.AcquireTaskLockAsync(workspaceId, taskId);
+                taskLockAcquiredTcs.SetResult();
+            });
+
+            // Ensure task lock is blocked
+            await Task.Delay(50);
+            Assert.False(taskLockAcquiredTcs.Task.IsCompleted);
+
+            // Release exclusive lock
+            exclusiveLock.Dispose();
+
+            // Task lock should now unblock and complete
+            await taskLockAcquiredTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await taskLockJob.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            exclusiveLock.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task ActiveTaskLock_BlocksExclusiveWorkspaceLockOnSameWorkspace()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 1;
+        const int taskId = 101;
+
+        var taskLock = await provider.AcquireTaskLockAsync(workspaceId, taskId);
+        try
+        {
+            // TryAcquireLock must fail while task lock is held
+            Assert.False(provider.TryAcquireLock(workspaceId, out var immediateReleaser));
+            Assert.Null(immediateReleaser);
+
+            var (asyncAcquired, asyncReleaser) = await provider.TryAcquireLockAsync(workspaceId, TimeSpan.FromMilliseconds(50));
+            Assert.False(asyncAcquired);
+            Assert.Null(asyncReleaser);
+
+            var exclusiveAcquiredTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var exclusiveJob = Task.Run(async () =>
+            {
+                using var releaser = await provider.AcquireLockAsync(workspaceId);
+                exclusiveAcquiredTcs.SetResult();
+            });
+
+            // Ensure exclusive lock is blocked
+            await Task.Delay(50);
+            Assert.False(exclusiveAcquiredTcs.Task.IsCompleted);
+
+            // Release task lock
+            taskLock.Dispose();
+
+            // Exclusive lock should now unblock and complete
+            await exclusiveAcquiredTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await exclusiveJob.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            taskLock.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task MultipleConcurrentTasks_HoldSharedWorkspaceLock_BlockingExclusiveLock()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 1;
+
+        var task1Lock = await provider.AcquireTaskLockAsync(workspaceId, 101);
+        var task2Lock = await provider.AcquireTaskLockAsync(workspaceId, 102);
+
+        try
+        {
+            var exclusiveAcquiredTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var exclusiveJob = Task.Run(async () =>
+            {
+                using var releaser = await provider.AcquireLockAsync(workspaceId);
+                exclusiveAcquiredTcs.SetResult();
+            });
+
+            // Ensure exclusive lock is blocked
+            await Task.Delay(50);
+            Assert.False(exclusiveAcquiredTcs.Task.IsCompleted);
+
+            // Releasing task 1 only is not enough (task 2 is still running)
+            task1Lock.Dispose();
+            await Task.Delay(50);
+            Assert.False(exclusiveAcquiredTcs.Task.IsCompleted);
+
+            // Releasing task 2 drains readers, allowing exclusive lock to proceed
+            task2Lock.Dispose();
+            await exclusiveAcquiredTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await exclusiveJob.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            task1Lock.Dispose();
+            task2Lock.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task ExclusiveWorkspaceLock_DoesNotBlockTasksOnDifferentWorkspaces()
+    {
+        var provider = new WorkspaceLockProvider();
+
+        using var ws1Lock = await provider.AcquireLockAsync(1);
+
+        // Task on workspace 2 should acquire immediately
+        var acquired = provider.TryAcquireTaskLock(2, 201, out var ws2TaskLock);
+        Assert.True(acquired);
+        Assert.NotNull(ws2TaskLock);
+        ws2TaskLock?.Dispose();
+    }
 }
