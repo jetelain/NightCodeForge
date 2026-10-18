@@ -53,7 +53,7 @@ public static class StandardWorkflowDefinitions
                     SequenceOrder = 2,
                     Kind = WorkflowStageKind.Deterministic,
                     CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
-                    ConfigurationJson = """{"Action": "CompositeBaseline", "FailOnError": false, "TimeoutSeconds": 600, "ExtraParameters": {"Stages": "build,test"}}"""
+                    ConfigurationJson = """{"Action": "CompositeBaseline", "FailOnError": false, "TimeoutSeconds": 600, "ExtraParameters": {"Stages": "build,test-with-coverage"}}"""
                 },
                 new StageDefinition
                 {
@@ -82,7 +82,7 @@ public static class StandardWorkflowDefinitions
                     SequenceOrder = 4,
                     Kind = WorkflowStageKind.Deterministic,
                     CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
-                    ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "{LOOPBACK}", "FailOnError": true, "TimeoutSeconds": 900, "ExtraParameters": {"Stages": "build,test,coverage,sast"}}"""
+                    ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "{LOOPBACK}", "FailOnError": true, "TimeoutSeconds": 900, "ExtraParameters": {"Stages": "format,build,test-with-coverage,sast"}}"""
                         .Replace("{LOOPBACK}", StandardStageIds.Implementation)
                 },
                 new StageDefinition
@@ -113,7 +113,7 @@ public static class StandardWorkflowDefinitions
                     SequenceOrder = 6,
                     Kind = WorkflowStageKind.Deterministic,
                     CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
-                    ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "{LOOPBACK}", "FailOnError": true, "TimeoutSeconds": 600, "ExtraParameters": {"Stages": "build,test"}}"""
+                    ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "{LOOPBACK}", "FailOnError": true, "TimeoutSeconds": 600, "ExtraParameters": {"Stages": "build,test-with-coverage"}}"""
                         .Replace("{LOOPBACK}", StandardStageIds.Implementation)
                 }
             }

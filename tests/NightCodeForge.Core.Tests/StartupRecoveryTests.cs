@@ -173,11 +173,11 @@ public class StartupRecoveryTests : IDisposable
             Id = 302,
             WorkspaceId = 1,
             Status = TaskOverallStatus.Implemented,
-            CurrentStageId = DeterministicCoverageGate.DefaultStageId,
+            CurrentStageId = DeterministicTestWithCoverageGate.DefaultStageId,
             PipelineDataJson = bag.ToJson()
         });
 
-        var stage = new DeterministicCoverageGate(new Moq.Mock<IExecutionEnvironmentProvider>().Object);
+        var stage = new DeterministicTestWithCoverageGate(new Moq.Mock<IExecutionEnvironmentProvider>().Object);
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var recovery = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline));

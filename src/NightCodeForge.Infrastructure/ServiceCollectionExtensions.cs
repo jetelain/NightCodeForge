@@ -76,8 +76,9 @@ public static class ServiceCollectionExtensions
         // 9. Deterministic Quality Gate Stages
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicBuildStage>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicTestStage>();
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicFormatStage>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicSastStage>();
-        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicCoverageGate>();
+        services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicTestWithCoverageGate>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicWarningRatchetStage>();
 
         // 10. Streaming & Activity Streamer

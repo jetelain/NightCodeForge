@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Tests.E2E;
 
@@ -101,8 +102,8 @@ public class CalculatorTests
 ");
 
         // 5. Config, AGENTS.md, .gitignore
-        await File.WriteAllTextAsync(Path.Combine(RepositoryPath, ".nightcodeforge", "config.json"), 
-            @"{ ""CodeStack"": ""dotnet"", ""BuildCommand"": ""dotnet build"", ""TestCommand"": ""dotnet test --no-build"" }");
+        await File.WriteAllTextAsync(Path.Combine(RepositoryPath, ".nightcodeforge", "config.json"),
+            @"{""CodeStack"": ""dotnet""}"); // Commands are computed by CodeStackPresets.ResolveConfig, to ensure tests are done with default values
 
         await File.WriteAllTextAsync(Path.Combine(RepositoryPath, "AGENTS.md"), 
             "# Directives\n- Maintain 100% test coverage.\n- Public APIs must include XML doc.\n- Add unit tests for every method.");

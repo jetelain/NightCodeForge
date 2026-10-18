@@ -206,8 +206,8 @@ public class ResilientCrashRecoveryTests
         bag.Set(PipelineDataBagKeys.CoverageFailureReason, "Line rate below threshold");
         bag.Set(PipelineDataBagKeys.SastFailureReason, "Vulnerability detected");
         bag.Set(PipelineDataBagKeys.RatchetFailureReason, "Regression");
-        bag.Set(PipelineDataBagKeys.StageCommand(DeterministicCoverageGate.DefaultStageId), "dotnet test --coverage");
-        bag.Set(PipelineDataBagKeys.StageOutput(DeterministicCoverageGate.DefaultStageId), "Partial output before crash");
+        bag.Set(PipelineDataBagKeys.StageCommand(DeterministicTestWithCoverageGate.DefaultStageId), "dotnet test --coverage");
+        bag.Set(PipelineDataBagKeys.StageOutput(DeterministicTestWithCoverageGate.DefaultStageId), "Partial output before crash");
 
         var workspace = await _workspaceRepo.CreateAsync(new Workspace
         {
@@ -221,18 +221,18 @@ public class ResilientCrashRecoveryTests
             Id = 402,
             WorkspaceId = workspace.Id,
             Status = TaskOverallStatus.Implemented,
-            CurrentStageId = DeterministicCoverageGate.DefaultStageId,
+            CurrentStageId = DeterministicTestWithCoverageGate.DefaultStageId,
             PipelineDataJson = bag.ToJson()
         });
 
         // Running conversation interrupted by crash
         var runningConv = await _taskRepo.StartConversationAsync(
             task.Id,
-            DeterministicCoverageGate.DefaultStageId,
+            DeterministicTestWithCoverageGate.DefaultStageId,
             WorkflowStageKind.Deterministic,
             attemptIndex: 1);
 
-        var stage = new DeterministicCoverageGate(new Mock<IExecutionEnvironmentProvider>().Object);
+        var stage = new DeterministicTestWithCoverageGate(new Mock<IExecutionEnvironmentProvider>().Object);
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
         var recoveryService = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline));
 
@@ -242,7 +242,7 @@ public class ResilientCrashRecoveryTests
         // Verify task state
         var updatedTask = await _taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(updatedTask);
-        Assert.Equal(DeterministicCoverageGate.DefaultStageId, updatedTask.CurrentStageId);
+        Assert.Equal(DeterministicTestWithCoverageGate.DefaultStageId, updatedTask.CurrentStageId);
 
         var updatedBag = PipelineDataBag.FromJson(updatedTask.PipelineDataJson);
         Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.TestsCurrentTotal));
@@ -258,8 +258,8 @@ public class ResilientCrashRecoveryTests
         Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.CoverageFailureReason));
         Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.SastFailureReason));
         Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.RatchetFailureReason));
-        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.StageCommand(DeterministicCoverageGate.DefaultStageId)));
-        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.StageOutput(DeterministicCoverageGate.DefaultStageId)));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.StageCommand(DeterministicTestWithCoverageGate.DefaultStageId)));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.StageOutput(DeterministicTestWithCoverageGate.DefaultStageId)));
 
         // Conversation marked as Failed/superseded
         var convs = await _taskRepo.GetConversationsAsync(task.Id);

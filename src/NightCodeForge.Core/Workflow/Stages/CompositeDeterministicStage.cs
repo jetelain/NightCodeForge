@@ -24,13 +24,20 @@ public class CompositeDeterministicStage : IWorkflowStage
 
     public CompositeDeterministicStage(
         StageDefinition definition,
+        IServiceProvider serviceProvider)
+        : this(definition, serviceProvider, serviceProvider.GetRequiredService<IWorkflowStageRegistry>())
+    {
+    }
+
+    public CompositeDeterministicStage(
+        StageDefinition definition,
         IServiceProvider serviceProvider,
-        IWorkflowStageRegistry? registry = null)
+        IWorkflowStageRegistry registry)
     {
         StageId = definition.StageId;
         DisplayName = definition.DisplayName;
-        _serviceProvider = serviceProvider;
-        _registry = registry ?? serviceProvider.GetService<IWorkflowStageRegistry>() ?? new WorkflowStageRegistry();
+        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
+        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
 
         Config = !string.IsNullOrWhiteSpace(definition.ConfigurationJson)
             ? JsonSerializer.Deserialize<DeterministicStageConfig>(definition.ConfigurationJson, JsonOptions) ?? new DeterministicStageConfig()
@@ -41,34 +48,68 @@ public class CompositeDeterministicStage : IWorkflowStage
         string stageId,
         string displayName,
         DeterministicStageConfig config,
+        IServiceProvider serviceProvider)
+        : this(stageId, displayName, config, serviceProvider, serviceProvider.GetRequiredService<IWorkflowStageRegistry>())
+    {
+    }
+
+    public CompositeDeterministicStage(
+        string stageId,
+        string displayName,
+        DeterministicStageConfig config,
         IServiceProvider serviceProvider,
-        IWorkflowStageRegistry? registry = null)
+        IWorkflowStageRegistry registry)
     {
         StageId = stageId;
         DisplayName = displayName;
-        Config = config;
-        _serviceProvider = serviceProvider;
-        _registry = registry ?? serviceProvider.GetService<IWorkflowStageRegistry>() ?? new WorkflowStageRegistry();
+        Config = config ?? throw new ArgumentNullException(nameof(config));
+        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
+        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
     }
 
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)
     {
         var stagesCsv = Config.ExtraParameters.TryGetValue("Stages", out var s) ? s : "build,test";
         var stageKeys = stagesCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var commandList = new List<StageCommandExecution>();
+
+        context.DataBag.Remove(PipelineDataBagKeys.StageCommands(StageId));
 
         foreach (var key in stageKeys)
         {
             var subStage = ResolveSubStage(key);
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             var result = await subStage.ExecuteAsync(context, cancellationToken);
+            sw.Stop();
+
+            var subCmd = context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(subStage.StageId))
+                         ?? key;
+            var subOut = context.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(subStage.StageId))
+                         ?? (result.IsSuccess ? "Verification completed successfully." : result.ErrorMessage ?? "Deterministic step failed.");
+
+            commandList.Add(new StageCommandExecution(subCmd, subOut, key, result.IsSuccess, sw.ElapsedMilliseconds));
+
             if (!result.IsSuccess && Config.FailOnError)
             {
+                context.DataBag.Set(PipelineDataBagKeys.StageCommands(StageId), commandList);
+                var failCmds = string.Join(" && ", commandList.Select(c => c.Command));
+                var failOutputs = string.Join("\n---\n", commandList.Select(c => $"[{c.StageName}] {c.Output}"));
+                context.DataBag.Set(PipelineDataBagKeys.StageCommand(StageId), failCmds);
+                context.DataBag.Set(PipelineDataBagKeys.StageOutput(StageId), WorkflowDefaults.TruncateStageOutput(failOutputs));
+
                 return StageExecutionResult.Failure(
                     result.ErrorMessage ?? $"Composite sub-stage '{key}' failed.",
                     loopBackStageId: Config.LoopBackStageId,
                     record: result.ExecutionRecord);
             }
         }
+
+        context.DataBag.Set(PipelineDataBagKeys.StageCommands(StageId), commandList);
+        var combinedCmds = string.Join(" && ", commandList.Select(c => c.Command));
+        var combinedOutputs = string.Join("\n---\n", commandList.Select(c => $"[{c.StageName}] {c.Output}"));
+        context.DataBag.Set(PipelineDataBagKeys.StageCommand(StageId), combinedCmds);
+        context.DataBag.Set(PipelineDataBagKeys.StageOutput(StageId), WorkflowDefaults.TruncateStageOutput(combinedOutputs));
 
         return StageExecutionResult.Success();
     }

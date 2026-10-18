@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 
@@ -13,7 +14,8 @@ public class DeterministicSastStage : IWorkflowStage
     public const string FallbackLoopBackStageId = StandardStageIds.Implementation;
 
     private readonly IExecutionEnvironmentProvider _envProvider;
-    private readonly string _sastCommand;
+    private readonly ILogger<DeterministicSastStage> _logger;
+    private readonly string? _sastCommand;
 
     public string StageId { get; }
     public string DisplayName { get; }
@@ -21,19 +23,37 @@ public class DeterministicSastStage : IWorkflowStage
     public string LoopBackStageId { get; set; } = FallbackLoopBackStageId;
 
     [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
+    public DeterministicSastStage(
+        IExecutionEnvironmentProvider envProvider,
+        ILogger<DeterministicSastStage> logger)
+        : this(envProvider, logger, null, DefaultStageId, "Deterministic SAST & Security Scan Gate")
+    {
+    }
+
     public DeterministicSastStage(IExecutionEnvironmentProvider envProvider)
-        : this(envProvider, "echo 'SAST check completed.'", DefaultStageId, "Deterministic SAST & Security Scan Gate")
+        : this(envProvider, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicSastStage>.Instance, null, DefaultStageId, "Deterministic SAST & Security Scan Gate")
     {
     }
 
     public DeterministicSastStage(
         IExecutionEnvironmentProvider envProvider,
-        string sastCommand,
+        string? sastCommand,
+        string stageId,
+        string displayName)
+        : this(envProvider, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicSastStage>.Instance, sastCommand, stageId, displayName)
+    {
+    }
+
+    public DeterministicSastStage(
+        IExecutionEnvironmentProvider envProvider,
+        ILogger<DeterministicSastStage> logger,
+        string? sastCommand,
         string stageId,
         string displayName)
     {
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
-        _sastCommand = !string.IsNullOrWhiteSpace(sastCommand) ? sastCommand : "echo 'SAST check completed.'";
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _sastCommand = sastCommand;
         StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : DefaultStageId;
         DisplayName = !string.IsNullOrWhiteSpace(displayName) ? displayName : "Deterministic SAST & Security Scan Gate";
     }
@@ -44,6 +64,8 @@ public class DeterministicSastStage : IWorkflowStage
         var workspace = context.Workspace ?? throw new InvalidOperationException("Workspace is required to resolve execution environment.");
 
         var bag = context.DataBag;
+        bag.Remove(PipelineDataBagKeys.SastFailureReason);
+
         var repoPath = workspace.RepositoryPath;
         var workDir = !string.IsNullOrWhiteSpace(context.WorkingDirectory)
             ? context.WorkingDirectory
@@ -52,27 +74,39 @@ public class DeterministicSastStage : IWorkflowStage
                 : repoPath);
 
         var config = CodeStackPresets.ResolveConfig(repoPath, bag);
-        var command = config.SastCommand ?? _sastCommand;
+        var command = _sastCommand ?? config.SastCommand;
+
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            var infoMsg = "Deterministic SAST gate skipped: no SAST analyzer command configured (extension point for SonarQube, Semgrep, Trivy, etc.).";
+            _logger.LogInformation("{Message}", infoMsg);
+            bag.Set(PipelineDataBagKeys.StageCommand(StageId), "sast (skipped)");
+            bag.Set(PipelineDataBagKeys.StageOutput(StageId), infoMsg);
+            return StageExecutionResult.Success();
+        }
 
         var effectiveEnv = _envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id)
             ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
 
-        var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: 180, cancellationToken: cancellationToken);
+        var timeout = WorkflowDefaults.DefaultSastTimeoutSeconds;
+        var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: timeout, cancellationToken: cancellationToken);
         var fullOutput = string.IsNullOrWhiteSpace(res.StandardError)
             ? res.StandardOutput
             : $"{res.StandardOutput}\n{res.StandardError}";
 
         bag.Set(PipelineDataBagKeys.StageCommand(StageId), command);
-        bag.Set(PipelineDataBagKeys.StageOutput(StageId), fullOutput);
+        bag.Set(PipelineDataBagKeys.StageOutput(StageId), WorkflowDefaults.TruncateStageOutput(fullOutput));
 
         if (!res.Success)
         {
-            var errorMsg = $"SAST analyzer failed with exit code {res.ExitCode}: {res.StandardError}";
+            var errorDetail = !string.IsNullOrWhiteSpace(res.StandardError) ? res.StandardError : res.StandardOutput;
+            var errorMsg = $"SAST analyzer failed with exit code {res.ExitCode}: {errorDetail}".Trim();
             bag.Set(PipelineDataBagKeys.SastFailureReason, errorMsg);
             var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
             return StageExecutionResult.Failure(errorMsg, targetStage);
         }
 
+        bag.Remove(PipelineDataBagKeys.SastFailureReason);
         return StageExecutionResult.Success();
     }
 }

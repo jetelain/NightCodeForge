@@ -141,8 +141,8 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
      * `IWorkflowPipeline` and `IWorkflowStage` abstractions supporting both **Agentic** (LLM-driven with GPU allocation) and **Deterministic** (CPU-native builds, tests, SAST with 0 GPU/tokens) stages via `WorkflowStageKind`.
       * **`PipelineDataBag` Cross-Stage Data Persistence:** Thread-safe, serializable key-value store in `PipelineContext` (persisted to `AppDbContext.Tasks.PipelineDataJson`) enabling stages to record baseline metrics and share state across pipeline executions.
       * **Deterministic Quality Gates & Differential Outcome Routing:**
-        - `DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicSastStage`.
-        - **`DeterministicCoverageGate`:** Captures baseline code coverage (e.g. via Coverlet / Cobertura XML) on base branch and evaluates differential after implementation. Fails and loops back if coverage degrades below tolerance or if total test count decreases ("anti-cheating" detection).
+        - `DeterministicFormatStage`, `DeterministicBuildStage`, `DeterministicTestStage`, `DeterministicSastStage`.
+        - **`DeterministicTestWithCoverageGate`:** Executes test suite with coverage collection (e.g. via Coverlet / Cobertura XML) on base branch and evaluates differential after implementation. Fails and loops back if coverage degrades below tolerance or if total test count decreases ("anti-cheating" detection).
         - **`DeterministicWarningRatchetStage`:** Captures baseline compiler/linter warning count; fails if newly introduced warnings exceed baseline ($\Delta > 0$).
         - Advances forward on pass, or loops backward to Stage 2 with structured diagnostic artifacts and **Synthetic Conversation Priming** to prevent agents from re-running redundant builds/tests.
      * **Explicit Stage Boundary Handover Protocol:** Enforces zero-memory clean context resets at stage transitions (archives previous stage chat history to disk transcripts, injecting only structured plan/diff/diagnostic artifacts into next stage).

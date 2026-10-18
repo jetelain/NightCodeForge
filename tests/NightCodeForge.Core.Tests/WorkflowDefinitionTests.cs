@@ -214,7 +214,7 @@ public class WorkflowDefinitionTests
             TimeoutSeconds = 900,
             ExtraParameters = new Dictionary<string, string>
             {
-                { "Stages", "build,test,coverage" },
+                { "Stages", "format,build,test-with-coverage" },
                 { "MinimumLineCoveragePercent", "85.5" }
             }
         };
@@ -229,7 +229,7 @@ public class WorkflowDefinitionTests
         Assert.False(deserialized.FailOnError);
         Assert.Equal(900, deserialized.TimeoutSeconds);
         Assert.Equal(2, deserialized.ExtraParameters.Count);
-        Assert.Equal("build,test,coverage", deserialized.ExtraParameters["Stages"]);
+        Assert.Equal("format,build,test-with-coverage", deserialized.ExtraParameters["Stages"]);
         Assert.Equal("85.5", deserialized.ExtraParameters["MinimumLineCoveragePercent"]);
     }
 

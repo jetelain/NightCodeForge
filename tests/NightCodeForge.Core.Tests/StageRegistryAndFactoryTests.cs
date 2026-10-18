@@ -65,7 +65,7 @@ public class StageRegistryAndFactoryTests
         Assert.Contains("agentic", registered);
         Assert.Contains("deterministic-build", registered);
         Assert.Contains("deterministic-test", registered);
-        Assert.Contains("deterministic-coverage", registered);
+        Assert.Contains("deterministic-test-with-coverage", registered);
         Assert.Contains("deterministic-sast", registered);
         Assert.Contains("deterministic-ratchet", registered);
         Assert.Contains("deterministic-composite", registered);
@@ -76,7 +76,7 @@ public class StageRegistryAndFactoryTests
     [InlineData("agentic", typeof(GenericAgenticStage))]
     [InlineData("deterministic-build", typeof(DeterministicBuildStage))]
     [InlineData("deterministic-test", typeof(DeterministicTestStage))]
-    [InlineData("deterministic-coverage", typeof(DeterministicCoverageGate))]
+    [InlineData("deterministic-test-with-coverage", typeof(DeterministicTestWithCoverageGate))]
     [InlineData("deterministic-sast", typeof(DeterministicSastStage))]
     [InlineData("deterministic-ratchet", typeof(DeterministicWarningRatchetStage))]
     [InlineData("deterministic-composite", typeof(CompositeDeterministicStage))]

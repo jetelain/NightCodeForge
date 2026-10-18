@@ -261,7 +261,7 @@ flowchart TD
    - **Mission:** Implement the code changes outlined in the approved plan. Modify files, generate unit tests, iterate on compiler/test feedback inside the sandbox.
    - **Transition:** On completion, updates `task.Status = TaskOverallStatus.Implemented`.
 4. **Stage 4: Deterministic Post-Implementation Quality Gates:**
-   - **Mission:** Run `DeterministicCoverageGate` ($\Delta \ge 0$) and `DeterministicWarningRatchetStage` ($\Delta \le 0$). If tests fail or coverage drops, loops back to Stage 3 with structured compiler and assertion diagnostics.
+   - **Mission:** Run `format,build,test-with-coverage,sast` via `CompositeDeterministicStage` (incorporating `DeterministicFormatStage`, `DeterministicBuildStage`, `DeterministicTestWithCoverageGate` [$\Delta \ge 0$], and `DeterministicSastStage`). If tests fail, coverage regresses, or build breaks, loops back to Stage 3 with structured compiler and assertion diagnostics.
 5. **Stage 5: Code Review Agent (`CodeReviewAndFixStage`):**
    - **Mission:** Act as a critical reviewer and automated fixer. Inspect the noise-filtered `git diff -U2`, check coding conventions, detect subtle regressions, and apply direct minor polish patches.
 6. **Stage 6: Deterministic Post-Review Verification:**
@@ -499,7 +499,7 @@ flowchart TD
     end
 
     subgraph DifferentialGate ["3. Differential Quality Gate Verification"]
-        RunCurrent["DeterministicCoverageGate\n(Executes dotnet test --collect:'XPlat Code Coverage')"]
+        RunCurrent["DeterministicTestWithCoverageGate\n(Executes dotnet test --collect:'XPlat Code Coverage')"]
         Compare{"Differential Evaluation:\n- Coverage dropped > 0.5%?\n- Total tests decreased?\n- New warnings added?"}
         PassGate["Advance to Stage 3: Code Review\n(Passes Coverage Diffs & Health Status)"]
         FailGate["Loop Back to Stage 2 (Implementation)\n(Injects exact missing coverage files & line offsets)"]
@@ -515,7 +515,7 @@ flowchart TD
 
 #### Core Differential Gates Supported:
 
-1. **Test Coverage Degradation Gate (`DeterministicCoverageGate`):**
+1. **Test Coverage Degradation Gate (`DeterministicTestWithCoverageGate`):**
    * **Mechanism:** Executes coverage toolchain (`dotnet test --collect:"XPlat Code Coverage"` / Coverlet / Istanbul / lcov) and parses Cobertura XML or JSON coverage reports.
    * **Baseline:** Records `coverage.baseline.lineRate = 85.2%` and `coverage.baseline.branchRate = 78.4%`.
    * **Post-Implementation:** Computes `coverage.current.lineRate = 81.0%` ($\Delta = -4.2\%$).

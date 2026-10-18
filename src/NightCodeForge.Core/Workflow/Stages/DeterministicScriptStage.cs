@@ -78,7 +78,7 @@ public class DeterministicScriptStage : IWorkflowStage
             : $"{res.StandardOutput}\n{res.StandardError}";
 
         context.DataBag.Set(PipelineDataBagKeys.StageCommand(StageId), command);
-        context.DataBag.Set(PipelineDataBagKeys.StageOutput(StageId), fullOutput);
+        context.DataBag.Set(PipelineDataBagKeys.StageOutput(StageId), WorkflowDefaults.TruncateStageOutput(fullOutput));
 
         if (!res.Success && Config.FailOnError)
         {

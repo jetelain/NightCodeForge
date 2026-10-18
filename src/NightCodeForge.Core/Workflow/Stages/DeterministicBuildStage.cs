@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 
@@ -21,6 +22,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
 
     private readonly IExecutionEnvironmentProvider _envProvider;
     private readonly IOllamaModelPreloadService? _preloadService;
+    private readonly ILogger<DeterministicBuildStage> _logger;
     private readonly string _buildCommand;
 
     public string StageId { get; }
@@ -31,14 +33,22 @@ public partial class DeterministicBuildStage : IWorkflowStage
     [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public DeterministicBuildStage(
         IExecutionEnvironmentProvider envProvider,
+        IOllamaModelPreloadService preloadService,
+        ILogger<DeterministicBuildStage> logger)
+        : this(envProvider, preloadService, logger, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
+    {
+    }
+
+    public DeterministicBuildStage(
+        IExecutionEnvironmentProvider envProvider,
         IOllamaModelPreloadService preloadService)
-        : this(envProvider, preloadService, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
+        : this(envProvider, preloadService, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
     {
     }
 
     public DeterministicBuildStage(
         IExecutionEnvironmentProvider envProvider)
-        : this(envProvider, null, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
+        : this(envProvider, null, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
     {
     }
 
@@ -48,9 +58,21 @@ public partial class DeterministicBuildStage : IWorkflowStage
         string buildCommand,
         string stageId,
         string displayName)
+        : this(envProvider, preloadService, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance, buildCommand, stageId, displayName)
+    {
+    }
+
+    public DeterministicBuildStage(
+        IExecutionEnvironmentProvider envProvider,
+        IOllamaModelPreloadService? preloadService,
+        ILogger<DeterministicBuildStage> logger,
+        string buildCommand,
+        string stageId,
+        string displayName)
     {
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _preloadService = preloadService;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _buildCommand = !string.IsNullOrWhiteSpace(buildCommand) ? buildCommand : "dotnet build";
         StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : DefaultStageId;
         DisplayName = !string.IsNullOrWhiteSpace(displayName) ? displayName : "Deterministic Build & Compilation Gate";
@@ -62,6 +84,13 @@ public partial class DeterministicBuildStage : IWorkflowStage
         var workspace = context.Workspace ?? throw new InvalidOperationException("Workspace is required to resolve execution environment.");
 
         var bag = context.DataBag;
+
+        // Reset previous build failure metrics so stale errors do not carry over
+        bag.Remove(PipelineDataBagKeys.CompilerErrors);
+        bag.Remove(PipelineDataBagKeys.BuildFailureReason);
+        bag.Remove(PipelineDataBagKeys.WarningsCurrentTotal);
+        bag.Remove(PipelineDataBagKeys.WarningsNew);
+
         var repoPath = workspace.RepositoryPath;
         var workDir = !string.IsNullOrWhiteSpace(context.WorkingDirectory)
             ? context.WorkingDirectory
@@ -78,18 +107,15 @@ public partial class DeterministicBuildStage : IWorkflowStage
             string? nextModelName = null;
             if (context.Pipeline != null)
             {
-                var nextStage = context.Pipeline.GetNextStage(StageId);
-                if (nextStage == null)
+                // Find matching pipeline stage: exact match or prefix of composite sub-stage
+                var currentPipelineStage = context.Pipeline.Stages.FirstOrDefault(s =>
+                    string.Equals(s.StageId, StageId, StringComparison.OrdinalIgnoreCase) ||
+                    StageId.StartsWith($"{s.StageId}-", StringComparison.OrdinalIgnoreCase));
+
+                var nextStage = currentPipelineStage != null ? context.Pipeline.GetNextStage(currentPipelineStage.StageId) : null;
+                while (nextStage != null && nextStage.Kind != WorkflowStageKind.Agentic)
                 {
-                    // Fallback for compound stages (e.g. pre-impl-build inside deterministic-pre-impl)
-                    nextStage = context.Pipeline.Stages.FirstOrDefault(s => s.Kind == WorkflowStageKind.Agentic);
-                }
-                else
-                {
-                    while (nextStage != null && nextStage.Kind != WorkflowStageKind.Agentic)
-                    {
-                        nextStage = context.Pipeline.GetNextStage(nextStage.StageId);
-                    }
+                    nextStage = context.Pipeline.GetNextStage(nextStage.StageId);
                 }
 
                 if (nextStage != null)
@@ -97,9 +123,20 @@ public partial class DeterministicBuildStage : IWorkflowStage
                     var nextProfile = context.Workspace?.AgentProfiles?.FirstOrDefault(p =>
                         string.Equals(p.Id, nextStage.StageId, StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(p.Name, nextStage.StageId, StringComparison.OrdinalIgnoreCase) ||
-                        (p.StageDirectives != null && p.StageDirectives.ContainsKey(nextStage.StageId)))
-                        ?? context.Workspace?.AgentProfiles?.FirstOrDefault();
-                    nextModelName = nextProfile?.ModelName;
+                        (p.StageDirectives != null && p.StageDirectives.ContainsKey(nextStage.StageId)));
+
+                    if (nextProfile != null)
+                    {
+                        nextModelName = nextProfile.ModelName;
+                    }
+                    else
+                    {
+                        _logger.LogInformation("No matching agent profile found for next stage '{StageId}'. Skipping JIT model preload.", nextStage.StageId);
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("No subsequent agentic stage found after '{StageId}'. Skipping JIT model preload.", StageId);
                 }
             }
 
@@ -110,7 +147,26 @@ public partial class DeterministicBuildStage : IWorkflowStage
 
             if (!string.IsNullOrWhiteSpace(nextModelName))
             {
-                _ = _preloadService.PreloadModelAsync(nextModelName, "15m", CancellationToken.None);
+                var modelToPreload = nextModelName;
+                try
+                {
+                    var preloadTask = _preloadService.PreloadModelAsync(modelToPreload, WorkflowDefaults.ModelPreloadKeepAlive, cancellationToken);
+                    _ = preloadTask.ContinueWith(t =>
+                    {
+                        if (t.IsCanceled)
+                        {
+                            _logger.LogInformation("Model preload for '{ModelName}' was canceled.", modelToPreload);
+                        }
+                        else if (t.IsFaulted)
+                        {
+                            _logger.LogWarning(t.Exception, "Background model preload failed for model '{ModelName}'.", modelToPreload);
+                        }
+                    }, TaskScheduler.Default);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to initiate background model preload for model '{ModelName}'", modelToPreload);
+                }
             }
         }
 
@@ -127,7 +183,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
             : $"{res.StandardOutput}\n{res.StandardError}";
 
         bag.Set(PipelineDataBagKeys.StageCommand(StageId), command);
-        bag.Set(PipelineDataBagKeys.StageOutput(StageId), fullOutput);
+        bag.Set(PipelineDataBagKeys.StageOutput(StageId), WorkflowDefaults.TruncateStageOutput(fullOutput));
 
         // Count warnings
         var warnings = WarningRegex().Matches(fullOutput);
@@ -137,7 +193,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
         var warningLines = warnings.Select(w => w.Value.Trim()).Distinct().Take(20).ToList();
         bag.Set(PipelineDataBagKeys.WarningsNew, warningLines);
 
-        if (!bag.TryGet<int>(PipelineDataBagKeys.WarningsBaselineTotal, out _))
+        if (res.Success && !bag.TryGet<int>(PipelineDataBagKeys.WarningsBaselineTotal, out _))
         {
             bag.Set(PipelineDataBagKeys.WarningsBaselineTotal, warningCount);
         }
@@ -169,6 +225,8 @@ public partial class DeterministicBuildStage : IWorkflowStage
             return StageExecutionResult.Failure(errorMsg, targetStage);
         }
 
+        bag.Remove(PipelineDataBagKeys.CompilerErrors);
+        bag.Remove(PipelineDataBagKeys.BuildFailureReason);
         return StageExecutionResult.Success();
     }
 }

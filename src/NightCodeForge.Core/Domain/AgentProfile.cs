@@ -51,6 +51,7 @@ public class AgentProfile
     public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard;
     public string? SystemPrompt { get; set; }
     public int? MaxTurns { get; set; } = DefaultMaxTurns;
+    public bool AllowNoTests { get; set; }
 
     /// <summary>
     /// OllamaRouter target pinning policy (propagated as X-OllamaRouter-Target header).

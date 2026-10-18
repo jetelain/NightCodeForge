@@ -468,22 +468,46 @@ public class TaskOrchestrator : ITaskOrchestrator
                     content: $"Execute deterministic gate '{stage.DisplayName}' ({stage.StageId})",
                     cancellationToken: cancellationToken);
 
-                // Turn 2: Tool execution
-                var cmd = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId)) 
-                    ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.BuildCommand) 
-                    ?? "dotnet build";
-                var output = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId)) 
-                    ?? (result.IsSuccess ? "Verification completed successfully with exit code 0." : result.ErrorMessage ?? "Deterministic step failed");
-                await _taskRepository.AddConversationTurnAsync(
-                    deterministicConv.Id,
-                    StageTurnRole.Tool,
-                    content: $"Execute {cmd}",
-                    toolName: stage.StageId,
-                    toolArguments: cmd,
-                    toolResult: output,
-                    durationMs: durationMs,
-                    isError: !result.IsSuccess,
-                    cancellationToken: cancellationToken);
+                // Turn 2: Tool execution(s)
+                var commandExecutions = pipelineContext.DataBag.Get<List<StageCommandExecution>>(PipelineDataBagKeys.StageCommands(stage.StageId));
+                if (commandExecutions != null && commandExecutions.Count > 0)
+                {
+                    foreach (var exec in commandExecutions)
+                    {
+                        var toolStageName = !string.IsNullOrWhiteSpace(exec.StageName)
+                            ? $"{stage.StageId}-{exec.StageName}"
+                            : stage.StageId;
+
+                        await _taskRepository.AddConversationTurnAsync(
+                            deterministicConv.Id,
+                            StageTurnRole.Tool,
+                            content: $"Execute {exec.Command}",
+                            toolName: toolStageName,
+                            toolArguments: exec.Command,
+                            toolResult: exec.Output,
+                            durationMs: exec.DurationMs > 0 ? exec.DurationMs : durationMs,
+                            isError: !exec.IsSuccess,
+                            cancellationToken: cancellationToken);
+                    }
+                }
+                else
+                {
+                    var cmd = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId)) 
+                        ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.BuildCommand) 
+                        ?? "dotnet build";
+                    var output = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId)) 
+                        ?? (result.IsSuccess ? "Verification completed successfully with exit code 0." : result.ErrorMessage ?? "Deterministic step failed");
+                    await _taskRepository.AddConversationTurnAsync(
+                        deterministicConv.Id,
+                        StageTurnRole.Tool,
+                        content: $"Execute {cmd}",
+                        toolName: stage.StageId,
+                        toolArguments: cmd,
+                        toolResult: output,
+                        durationMs: durationMs,
+                        isError: !result.IsSuccess,
+                        cancellationToken: cancellationToken);
+                }
 
                 // Turn 3: Assistant result summary
                 var summary = result.IsSuccess 

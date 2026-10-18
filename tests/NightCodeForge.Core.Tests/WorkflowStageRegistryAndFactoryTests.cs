@@ -101,7 +101,7 @@ public class WorkflowStageRegistryAndFactoryTests
     [Theory]
     [InlineData("deterministic-build", typeof(DeterministicBuildStage))]
     [InlineData("deterministic-test", typeof(DeterministicTestStage))]
-    [InlineData("deterministic-coverage", typeof(DeterministicCoverageGate))]
+    [InlineData("deterministic-test-with-coverage", typeof(DeterministicTestWithCoverageGate))]
     [InlineData("deterministic-sast", typeof(DeterministicSastStage))]
     [InlineData("deterministic-ratchet", typeof(DeterministicWarningRatchetStage))]
     [InlineData("deterministic-composite", typeof(CompositeDeterministicStage))]

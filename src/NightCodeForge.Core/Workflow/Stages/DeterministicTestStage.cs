@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
@@ -15,7 +16,7 @@ public partial class DeterministicTestStage : IWorkflowStage
     public const string DefaultStageId = StageImplementationTypes.DeterministicTest;
     public const string FallbackLoopBackStageId = StandardStageIds.Implementation;
 
-    [GeneratedRegex(@"(?:Total:[ \t]*(\d+)|total[ \t]*:[ \t]*(\d+)|(\d+)[ \t]+total)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:Total tests:[ \t]*(\d+)|Total:[ \t]*(\d+)|total[ \t]*:[ \t]*(\d+)|(\d+)[ \t]+total)", RegexOptions.IgnoreCase)]
     private static partial Regex TotalTestsRegex();
 
     [GeneratedRegex(@"(?:Failed:[ \t]*(\d+)|échec[ \t]*:[ \t]*(\d+)|(\d+)[ \t]+failed)", RegexOptions.IgnoreCase)]
@@ -24,11 +25,14 @@ public partial class DeterministicTestStage : IWorkflowStage
     [GeneratedRegex(@"(?:Passed:[ \t]*(\d+)|réussite[ \t]*:[ \t]*(\d+)|(\d+)[ \t]+passed)", RegexOptions.IgnoreCase)]
     private static partial Regex PassedTestsRegex();
 
+    [GeneratedRegex(@"Total tests:[ \t]*(\d+)\.[ \t]*Passed:[ \t]*(\d+)\.[ \t]*Failed:[ \t]*(\d+)", RegexOptions.IgnoreCase)]
+    private static partial Regex VSTestGlobalSummaryRegex();
+
     [GeneratedRegex(@"(?:Failed\s+([A-Za-z0-9_.]+)|\[FAIL\]\s+(.+)|FAIL:\s+(.+))")]
     private static partial Regex TestFailureLineRegex();
 
     private readonly IExecutionEnvironmentProvider _envProvider;
-    private readonly ILogger<DeterministicTestStage>? _logger;
+    private readonly ILogger<DeterministicTestStage> _logger;
     private readonly string _testCommand;
 
     public string StageId { get; }
@@ -36,6 +40,12 @@ public partial class DeterministicTestStage : IWorkflowStage
     public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;
     public string LoopBackStageId { get; set; } = FallbackLoopBackStageId;
 
+    /// <summary>
+    /// When true, runs the stack's coverage-collecting command (CoverageCommand) instead of the plain test command.
+    /// </summary>
+    public bool CollectCoverage { get; init; }
+
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public DeterministicTestStage(
         IExecutionEnvironmentProvider envProvider,
         ILogger<DeterministicTestStage> logger)
@@ -44,7 +54,7 @@ public partial class DeterministicTestStage : IWorkflowStage
     }
 
     public DeterministicTestStage(IExecutionEnvironmentProvider envProvider)
-        : this(envProvider, null, "dotnet test --no-build", DefaultStageId, "Deterministic Unit Test Gate")
+        : this(envProvider, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicTestStage>.Instance, "dotnet test --no-build", DefaultStageId, "Deterministic Unit Test Gate")
     {
     }
 
@@ -53,19 +63,19 @@ public partial class DeterministicTestStage : IWorkflowStage
         string testCommand,
         string stageId,
         string displayName)
-        : this(envProvider, null, testCommand, stageId, displayName)
+        : this(envProvider, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicTestStage>.Instance, testCommand, stageId, displayName)
     {
     }
 
     public DeterministicTestStage(
         IExecutionEnvironmentProvider envProvider,
-        ILogger<DeterministicTestStage>? logger,
+        ILogger<DeterministicTestStage> logger,
         string testCommand,
         string stageId,
         string displayName)
     {
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
-        _logger = logger;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _testCommand = !string.IsNullOrWhiteSpace(testCommand) ? testCommand : "dotnet test --no-build";
         StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : DefaultStageId;
         DisplayName = !string.IsNullOrWhiteSpace(displayName) ? displayName : "Deterministic Unit Test Gate";
@@ -77,6 +87,19 @@ public partial class DeterministicTestStage : IWorkflowStage
         var workspace = context.Workspace ?? throw new InvalidOperationException("Workspace is required to resolve execution environment.");
 
         var bag = context.DataBag;
+
+        // Reset previous run test metrics and failure keys so stale data is never carried over
+        bag.Remove(PipelineDataBagKeys.TestsCurrentTotal);
+        bag.Remove(PipelineDataBagKeys.TestsCurrentPassed);
+        bag.Remove(PipelineDataBagKeys.TestsCurrentFailed);
+        bag.Remove(PipelineDataBagKeys.TestsCurrentDurationMs);
+        bag.Remove(PipelineDataBagKeys.CoverageCurrentLineRate);
+        bag.Remove(PipelineDataBagKeys.CoverageDelta);
+        bag.Remove(PipelineDataBagKeys.FailedTests);
+        bag.Remove(PipelineDataBagKeys.FailedTestsTruncated);
+        bag.Remove(PipelineDataBagKeys.TestFailureReason);
+        bag.Remove(PipelineDataBagKeys.CoverageFailureReason);
+
         var repoPath = workspace.RepositoryPath;
         var workDir = !string.IsNullOrWhiteSpace(context.WorkingDirectory)
             ? context.WorkingDirectory
@@ -85,7 +108,9 @@ public partial class DeterministicTestStage : IWorkflowStage
                 : repoPath);
 
         var config = CodeStackPresets.ResolveConfig(repoPath, bag);
-        var command = config.TestCommand ?? _testCommand;
+        var command = CollectCoverage
+            ? (config.CoverageCommand ?? _testCommand)
+            : (config.TestCommand ?? _testCommand);
 
         var effectiveEnv = _envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id)
             ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
@@ -93,6 +118,7 @@ public partial class DeterministicTestStage : IWorkflowStage
         var timeout = workspace.TestTimeoutSeconds ?? config.TestTimeoutSeconds ?? WorkflowDefaults.DefaultTestTimeoutSeconds;
         bag.Set(PipelineDataBagKeys.TestTimeoutSeconds, timeout);
 
+        var stageStartTimeUtc = DateTime.UtcNow;
         var stopwatch = Stopwatch.StartNew();
         var res = await effectiveEnv.ExecuteAsync(command, workDir, timeoutSeconds: timeout, cancellationToken: cancellationToken);
         stopwatch.Stop();
@@ -102,38 +128,78 @@ public partial class DeterministicTestStage : IWorkflowStage
             : $"{res.StandardOutput}\n{res.StandardError}";
 
         bag.Set(PipelineDataBagKeys.StageCommand(StageId), command);
-        bag.Set(PipelineDataBagKeys.StageOutput(StageId), fullOutput);
+        bag.Set(PipelineDataBagKeys.StageOutput(StageId), WorkflowDefaults.TruncateStageOutput(fullOutput));
 
-        // Parse total tests
         int totalTests = 0;
-        var totalMatch = TotalTestsRegex().Match(fullOutput);
-        if (totalMatch.Success)
-        {
-            var val = totalMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
-            int.TryParse(val, out totalTests);
-        }
-
-        // Parse failed tests
         int failedTests = 0;
-        var failedMatch = FailedTestsRegex().Match(fullOutput);
-        if (failedMatch.Success)
-        {
-            var val = failedMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
-            int.TryParse(val, out failedTests);
-        }
-
-        // Parse passed tests
         int passedTests = 0;
-        var passedMatch = PassedTestsRegex().Match(fullOutput);
-        if (passedMatch.Success)
-        {
-            var val = passedMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
-            int.TryParse(val, out passedTests);
-        }
+        var failedList = new List<string>();
 
-        if (totalTests == 0 && (passedTests > 0 || failedTests > 0))
+        // 1. Attempt structured TRX parsing from fresh test result files
+        var trxMetrics = TestDiagnosticsParser.ParseFreshTrxFiles(workDir, stageStartTimeUtc, _logger);
+        if (trxMetrics != null && trxMetrics.Total > 0)
         {
-            totalTests = passedTests + failedTests;
+            totalTests = trxMetrics.Total;
+            passedTests = trxMetrics.Passed;
+            failedTests = trxMetrics.Failed;
+            failedList.AddRange(trxMetrics.FailedTestNames);
+        }
+        else
+        {
+            // 2. Check for VSTest summary lines (aggregate across all assemblies if present)
+            var summaryMatches = VSTestGlobalSummaryRegex().Matches(fullOutput);
+            if (summaryMatches.Count > 0)
+            {
+                foreach (Match m in summaryMatches)
+                {
+                    if (int.TryParse(m.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var t))
+                        totalTests += t;
+                    if (int.TryParse(m.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var p))
+                        passedTests += p;
+                    if (int.TryParse(m.Groups[3].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var f))
+                        failedTests += f;
+                }
+                var regexFailures = TestFailureLineRegex().Matches(fullOutput).Select(m => m.Value.Trim()).Distinct();
+                failedList.AddRange(regexFailures);
+            }
+            else
+            {
+                // 3. Fallback to stdout regex parsing with multi-match aggregation
+                foreach (Match totalMatch in TotalTestsRegex().Matches(fullOutput))
+                {
+                    var val = totalMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
+                    if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out var t))
+                    {
+                        totalTests += t;
+                    }
+                }
+
+                foreach (Match failedMatch in FailedTestsRegex().Matches(fullOutput))
+                {
+                    var val = failedMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
+                    if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out var f))
+                    {
+                        failedTests += f;
+                    }
+                }
+
+                foreach (Match passedMatch in PassedTestsRegex().Matches(fullOutput))
+                {
+                    var val = passedMatch.Groups.Cast<Group>().Skip(1).FirstOrDefault(g => !string.IsNullOrEmpty(g.Value))?.Value;
+                    if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out var p))
+                    {
+                        passedTests += p;
+                    }
+                }
+
+                if (totalTests == 0 && (passedTests > 0 || failedTests > 0))
+                {
+                    totalTests = passedTests + failedTests;
+                }
+
+                var regexFailures = TestFailureLineRegex().Matches(fullOutput).Select(m => m.Value.Trim()).Distinct();
+                failedList.AddRange(regexFailures);
+            }
         }
 
         bag.Set(PipelineDataBagKeys.TestsCurrentTotal, totalTests);
@@ -141,96 +207,113 @@ public partial class DeterministicTestStage : IWorkflowStage
         bag.Set(PipelineDataBagKeys.TestsCurrentFailed, failedTests);
         bag.Set(PipelineDataBagKeys.TestsCurrentDurationMs, (int)stopwatch.ElapsedMilliseconds);
 
+        // Parse code coverage across fresh reports and stdout summary tables
+        var coverageRate = await CoverletCoverageParser.AggregateCoverageAsync(
+            workDir,
+            stageStartTimeUtc,
+            fullOutput,
+            _logger,
+            cancellationToken);
+
+        if (coverageRate.HasValue)
+        {
+            bag.Set(PipelineDataBagKeys.CoverageCurrentLineRate, coverageRate.Value);
+        }
+        else
+        {
+            bag.Remove(PipelineDataBagKeys.CoverageCurrentLineRate);
+        }
+
+        // Check timeout
+        bool isTimeout = res.ExitCode == WorkflowDefaults.ProcessTimeoutExitCode ||
+                         res.Truncated && (res.StandardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+                                           res.StandardOutput.Contains("timed out", StringComparison.OrdinalIgnoreCase));
+
+        if (isTimeout)
+        {
+            var timeoutMsg = $"Deterministic test execution timed out after {timeout} seconds. Tests failed to complete within the configured limit to avoid locking resources. Check recent edits for infinite loops, deadlocks, blocking network calls, or hanging tests.";
+            bag.Set(PipelineDataBagKeys.FailedTests, new List<string> { timeoutMsg });
+            bag.Set(PipelineDataBagKeys.TestFailureReason, timeoutMsg);
+            bag.Set(PipelineDataBagKeys.FailedTestsTruncated, false);
+            var target = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
+            return StageExecutionResult.Failure(timeoutMsg, target);
+        }
+
+        // Anti-silent success / zero-tests policy
+        if (res.Success && totalTests == 0)
+        {
+            bool allowNoTests = (context.CurrentProfile != null && context.CurrentProfile.AllowNoTests) ||
+                                (bag.TryGet<bool>(PipelineDataBagKeys.AllowNoTests, out var bagAllow) && bagAllow) ||
+                                config.AllowNoTests == true;
+
+            if (!allowNoTests)
+            {
+                var zeroMsg = "Deterministic test runner reported 0 tests executed. Zero tests discovered is treated as a quality gate failure unless AllowNoTests is explicitly configured.";
+                bag.Set(PipelineDataBagKeys.TestFailureReason, zeroMsg);
+                var target = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
+                return StageExecutionResult.Failure(zeroMsg, target);
+            }
+        }
+
+        // Test failures or non-zero exit
+        if (!res.Success || failedTests > 0)
+        {
+            if (failedList.Count > 10)
+            {
+                var truncatedList = failedList.Take(10).ToList();
+                truncatedList.Add($"… and {failedList.Count - 10} more failure(s)");
+                bag.Set(PipelineDataBagKeys.FailedTests, truncatedList);
+                bag.Set(PipelineDataBagKeys.FailedTestsTruncated, true);
+            }
+            else
+            {
+                bag.Set(PipelineDataBagKeys.FailedTests, failedList);
+                bag.Set(PipelineDataBagKeys.FailedTestsTruncated, false);
+            }
+
+            string errorMsg;
+            if (failedTests > 0)
+            {
+                errorMsg = $"Deterministic tests failed: {failedTests} failed test(s) out of {totalTests}.";
+            }
+            else
+            {
+                var summarySnippet = fullOutput.Length > 300 ? fullOutput[^300..].Trim() : fullOutput.Trim();
+                errorMsg = $"Deterministic test runner failed with exit code {res.ExitCode}. Output: {summarySnippet}";
+                _logger?.LogWarning("Test runner exited with code {ExitCode} but 0 failed tests were parsed. Output: {Output}", res.ExitCode, fullOutput);
+            }
+
+            bag.Set(PipelineDataBagKeys.TestFailureReason, errorMsg);
+            var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
+            return StageExecutionResult.Failure(errorMsg, targetStage);
+        }
+
+        bag.Remove(PipelineDataBagKeys.FailedTests);
+        bag.Remove(PipelineDataBagKeys.FailedTestsTruncated);
+        bag.Remove(PipelineDataBagKeys.TestFailureReason);
+
+        // Baseline policy: only record baseline on a successful run with > 0 tests
+        if (res.Success && failedTests == 0 && totalTests > 0)
+        {
             if (!bag.TryGet<int>(PipelineDataBagKeys.TestsBaselineTotal, out _))
             {
                 bag.Set(PipelineDataBagKeys.TestsBaselineTotal, totalTests);
             }
 
-            // Parse code coverage (Cobertura / Coverlet XML)
-            if (Directory.Exists(workDir))
+            if (coverageRate.HasValue && !bag.TryGet<double>(PipelineDataBagKeys.CoverageBaselineLineRate, out _))
             {
-                try
-                {
-                    var coverageFiles = Directory.GetFiles(workDir, "*coverage*.xml", SearchOption.AllDirectories);
-                    foreach (var covFile in coverageFiles)
-                    {
-                        var xml = await File.ReadAllTextAsync(covFile, cancellationToken);
-                        var rate = ParseCoberturaLineRate(xml, _logger);
-                        if (rate.HasValue)
-                        {
-                            bag.Set(PipelineDataBagKeys.CoverageCurrentLineRate, rate.Value);
-                            if (!bag.TryGet<double>(PipelineDataBagKeys.CoverageBaselineLineRate, out _))
-                            {
-                                bag.Set(PipelineDataBagKeys.CoverageBaselineLineRate, rate.Value);
-                            }
-                            break;
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogWarning(ex, "Failed to scan or parse code coverage in '{WorkDir}'", workDir);
-                }
+                bag.Set(PipelineDataBagKeys.CoverageBaselineLineRate, coverageRate.Value);
             }
-
-            if (!res.Success || failedTests > 0)
-            {
-                bool isTimeout = res.ExitCode == WorkflowDefaults.ProcessTimeoutExitCode ||
-                                 res.Truncated && (res.StandardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
-                                                   res.StandardOutput.Contains("timed out", StringComparison.OrdinalIgnoreCase));
-
-                if (isTimeout)
-                {
-                    var timeoutMsg = $"Deterministic test execution timed out after {timeout} seconds. Tests failed to complete within the configured limit to avoid locking resources. Check recent edits for infinite loops, deadlocks, blocking network calls, or hanging tests.";
-                    bag.Set(PipelineDataBagKeys.FailedTests, new List<string> { timeoutMsg });
-                    bag.Set(PipelineDataBagKeys.TestFailureReason, timeoutMsg);
-                    var target = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
-                    return StageExecutionResult.Failure(timeoutMsg, target);
-                }
-
-                var failedLines = TestFailureLineRegex().Matches(fullOutput).Select(m => m.Value.Trim()).Take(10).ToList();
-                bag.Set(PipelineDataBagKeys.FailedTests, failedLines);
-
-                var errorMsg = $"Deterministic tests failed: {failedTests} failed test(s) out of {totalTests}.";
-                bag.Set(PipelineDataBagKeys.TestFailureReason, errorMsg);
-                var targetStage = bag.Get<string>(PipelineDataBagKeys.LoopBackId) ?? LoopBackStageId;
-                return StageExecutionResult.Failure(errorMsg, targetStage);
-            }
+        }
 
         return StageExecutionResult.Success();
     }
 
+    /// <summary>
+    /// Legacy helper preserved for backward compatibility; delegates to <see cref="CoverletCoverageParser.ParseCobertura"/>.
+    /// </summary>
     public static double? ParseCoberturaLineRate(string xmlContent, ILogger? logger = null)
     {
-        if (string.IsNullOrWhiteSpace(xmlContent)) return null;
-
-        try
-        {
-            var doc = System.Xml.Linq.XDocument.Parse(xmlContent);
-            var root = doc.Root;
-            if (root != null)
-            {
-                var lineRateAttr = root.Attribute("line-rate");
-                if (lineRateAttr != null && double.TryParse(lineRateAttr.Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var rate))
-                {
-                    return rate;
-                }
-                var linesCovered = root.Attribute("lines-covered");
-                var linesValid = root.Attribute("lines-valid");
-                if (linesCovered != null && linesValid != null &&
-                    double.TryParse(linesCovered.Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var covered) &&
-                    double.TryParse(linesValid.Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var valid) &&
-                    valid > 0)
-                {
-                    return covered / valid;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "Failed to parse Cobertura coverage XML content");
-        }
-
-        return null;
+        return CoverletCoverageParser.ParseCobertura(xmlContent, logger)?.LineRate;
     }
 }

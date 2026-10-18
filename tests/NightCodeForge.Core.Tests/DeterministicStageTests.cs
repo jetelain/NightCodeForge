@@ -164,7 +164,7 @@ public class DeterministicStageTests
         {
             NextResult = new CommandResult(0, "All rules passed.", string.Empty, TimeSpan.FromMilliseconds(50))
         };
-        var stage = new DeterministicSastStage(fakeEnv);
+        var stage = new DeterministicSastStage(fakeEnv, "dotnet-sonar-scanner", DeterministicSastStage.DefaultStageId, "SAST");
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
         var context = new PipelineContext(task, workspace);
@@ -251,10 +251,10 @@ public class DeterministicStageTests
     {
         var fakeEnv = new FakeExecutionEnvironment
         {
-            NextResult = new CommandResult(0, "Passed: 10\nFailed: 0\nTotal: 10\nPassed!", string.Empty, TimeSpan.FromMilliseconds(50))
+            NextResult = new CommandResult(0, "Passed: 10\nFailed: 0\nTotal: 10\nPassed!\n| Total | 85.0% |", string.Empty, TimeSpan.FromMilliseconds(50))
         };
 
-        var gate = new DeterministicCoverageGate(envProvider: fakeEnv);
+        var gate = new DeterministicTestWithCoverageGate(envProvider: fakeEnv);
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
         var context = new PipelineContext(task, workspace);
@@ -267,6 +267,8 @@ public class DeterministicStageTests
         Assert.True(result.IsSuccess, result.ErrorMessage);
         Assert.True(context.DataBag.TryGet<int>("tests.current.total", out var total));
         Assert.Equal(10, total);
+        Assert.True(context.DataBag.TryGet<double>("coverage.current.line_rate", out var rate));
+        Assert.Equal(0.85, rate, 2);
     }
 
     [Fact]

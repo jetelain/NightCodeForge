@@ -11,6 +11,7 @@ public record CodeStackPreset(
     string Name,
     string BuildCommand,
     string TestCommand,
+    string? FormatCommand = null,
     string? SastCommand = null,
     string? CoverageCommand = null);
 
@@ -22,10 +23,12 @@ public class WorkspaceProjectConfig
     public string? CodeStack { get; set; }
     public string? BuildCommand { get; set; }
     public string? TestCommand { get; set; }
+    public string? FormatCommand { get; set; }
     public string? SastCommand { get; set; }
     public string? CoverageCommand { get; set; }
     public int? BuildTimeoutSeconds { get; set; }
     public int? TestTimeoutSeconds { get; set; }
+    public bool? AllowNoTests { get; set; }
     public string? ParseWarning { get; set; }
 }
 
@@ -35,31 +38,41 @@ public static class CodeStackPresets
         Name: "dotnet",
         BuildCommand: "dotnet build",
         TestCommand: "dotnet test --no-build",
-        SastCommand: "dotnet format --verify-no-changes");
+        FormatCommand: "dotnet format",
+        SastCommand: null,
+        CoverageCommand: WorkflowDefaults.DefaultCoverageTestCommand);
 
     public static readonly CodeStackPreset Node = new(
         Name: "node",
         BuildCommand: "npm run build",
         TestCommand: "npm test",
-        SastCommand: "npm run lint");
+        FormatCommand: null,
+        SastCommand: null,
+        CoverageCommand: "npm test -- --coverage");
 
     public static readonly CodeStackPreset Python = new(
         Name: "python",
         BuildCommand: "python -m py_compile",
         TestCommand: "pytest",
-        SastCommand: "ruff check .");
+        FormatCommand: "ruff format .",
+        SastCommand: null,
+        CoverageCommand: "pytest --cov");
 
     public static readonly CodeStackPreset Rust = new(
         Name: "rust",
         BuildCommand: "cargo build",
         TestCommand: "cargo test",
-        SastCommand: "cargo clippy -- -D warnings");
+        FormatCommand: "cargo fmt",
+        SastCommand: null,
+        CoverageCommand: "cargo tarpaulin");
 
     public static readonly CodeStackPreset Go = new(
         Name: "go",
         BuildCommand: "go build ./...",
         TestCommand: "go test ./...",
-        SastCommand: "golangci-lint run");
+        FormatCommand: "gofmt -w .",
+        SastCommand: null,
+        CoverageCommand: "go test -coverprofile=coverage.out ./...");
 
     public static CodeStackPreset Resolve(string? stackName)
     {
@@ -123,24 +136,29 @@ public static class CodeStackPresets
 
         config.BuildCommand ??= preset.BuildCommand;
         config.TestCommand ??= preset.TestCommand;
+        config.FormatCommand ??= preset.FormatCommand;
         config.SastCommand ??= preset.SastCommand;
         config.CoverageCommand ??= preset.CoverageCommand;
 
         // 3. Pipeline DataBag dynamic overrides
         if (dataBag != null)
         {
-            if ((dataBag.TryGet<string>(PipelineDataBagKeys.BuildCommand, out var bCmd) || dataBag.TryGet<string>("BuildCommand", out bCmd)) && !string.IsNullOrWhiteSpace(bCmd))
+            if (dataBag.TryGet<string>(PipelineDataBagKeys.BuildCommand, out var bCmd) || dataBag.TryGet<string>("BuildCommand", out bCmd))
                 config.BuildCommand = bCmd;
-            if ((dataBag.TryGet<string>(PipelineDataBagKeys.TestCommand, out var tCmd) || dataBag.TryGet<string>("TestCommand", out tCmd)) && !string.IsNullOrWhiteSpace(tCmd))
+            if (dataBag.TryGet<string>(PipelineDataBagKeys.TestCommand, out var tCmd) || dataBag.TryGet<string>("TestCommand", out tCmd))
                 config.TestCommand = tCmd;
-            if ((dataBag.TryGet<string>(PipelineDataBagKeys.SastCommand, out var sCmd) || dataBag.TryGet<string>("SastCommand", out sCmd)) && !string.IsNullOrWhiteSpace(sCmd))
+            if (dataBag.TryGet<string>(PipelineDataBagKeys.FormatCommand, out var fCmd) || dataBag.TryGet<string>("FormatCommand", out fCmd))
+                config.FormatCommand = fCmd;
+            if (dataBag.TryGet<string>(PipelineDataBagKeys.SastCommand, out var sCmd) || dataBag.TryGet<string>("SastCommand", out sCmd))
                 config.SastCommand = sCmd;
-            if ((dataBag.TryGet<string>(PipelineDataBagKeys.CoverageCommand, out var cCmd) || dataBag.TryGet<string>("CoverageCommand", out cCmd)) && !string.IsNullOrWhiteSpace(cCmd))
+            if (dataBag.TryGet<string>(PipelineDataBagKeys.CoverageCommand, out var cCmd) || dataBag.TryGet<string>("CoverageCommand", out cCmd))
                 config.CoverageCommand = cCmd;
             if ((dataBag.TryGet<int>(PipelineDataBagKeys.BuildTimeoutSeconds, out var bSec) || dataBag.TryGet<int>("BuildTimeoutSeconds", out bSec)) && bSec > 0)
                 config.BuildTimeoutSeconds = bSec;
             if ((dataBag.TryGet<int>(PipelineDataBagKeys.TestTimeoutSeconds, out var tSec) || dataBag.TryGet<int>("TestTimeoutSeconds", out tSec)) && tSec > 0)
                 config.TestTimeoutSeconds = tSec;
+            if (dataBag.TryGet<bool>(PipelineDataBagKeys.AllowNoTests, out var aTests) || dataBag.TryGet<bool>("AllowNoTests", out aTests))
+                config.AllowNoTests = aTests;
         }
 
         config.BuildTimeoutSeconds ??= WorkflowDefaults.DefaultBuildTimeoutSeconds;

@@ -19,6 +19,7 @@ public static class PipelineDataBagKeys
     public const string LoopBackId = "Stage.LoopBackId";
     public const string BuildCommand = "build.command";
     public const string TestCommand = "test.command";
+    public const string FormatCommand = "format.command";
     public const string SastCommand = "sast.command";
     public const string CoverageCommand = "coverage.command";
     public const string BuildTimeoutSeconds = "build.timeout_seconds";
@@ -32,8 +33,11 @@ public static class PipelineDataBagKeys
     public const string CoverageBaselineLineRate = "coverage.baseline.line_rate";
     public const string CoverageDelta = "coverage.delta";
     public const string FailedTests = "diagnostics.failed_tests";
+    public const string FailedTestsTruncated = "diagnostics.failed_tests_truncated";
+    public const string AllowNoTests = "tests.allow_no_tests";
     public const string TestFailureReason = "test.failure.reason";
     public const string BuildFailureReason = "build.failure.reason";
+    public const string FormatFailureReason = "format.failure.reason";
     public const string CoverageFailureReason = "coverage.failure.reason";
     public const string SastFailureReason = "sast.failure.reason";
     public const string RatchetFailureReason = "ratchet.failure.reason";
@@ -50,4 +54,5 @@ public static class PipelineDataBagKeys
     public static string StageSummary(string stageId) => $"StageSummary_{stageId}";
     public static string StageCommand(string stageId) => $"{stageId}.command";
     public static string StageOutput(string stageId) => $"{stageId}.output";
+    public static string StageCommands(string stageId) => $"{stageId}.commands";
 }

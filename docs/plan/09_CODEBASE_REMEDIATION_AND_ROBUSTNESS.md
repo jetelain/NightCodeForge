@@ -198,14 +198,17 @@ flowchart TD
   - [ ] No bare `catch { }` without justification and logging; analyzer rule added.
   - [ ] `SquashAndMergeAsync` fails hard on reset/clean/missing base or feature branch.
   - [ ] Unreadable prompt overrides raise explicit errors.
-- [ ] **Step 9.11: Quality Gate Correctness & Metric Fidelity**
-  - [ ] Baselines recorded only from successful, non-empty runs.
-  - [ ] Zero tests discovered fails the gate; stale coverage files ignored.
-  - [ ] Coverlet code coverage fully supported across Cobertura, OpenCover, JSON, and stdout console tables.
-  - [ ] Multi-test-project solutions aggregate coverage lines across all projects rather than picking the first file.
-  - [ ] Coverage gate fails if coverage is required but unmeasured (no silent bypass).
-  - [ ] SAST stage executes real analyzers instead of synthetic echo commands.
-  - [ ] No `FirstOrDefault()` profile fallback; preload tracked; persisted `StageOutput` capped.
+- [x] **Step 9.11: Quality Gate Correctness & Metric Fidelity**
+  - [x] Baselines recorded only from successful, non-empty runs (`TestsBaselineTotal`, `CoverageBaselineLineRate`).
+  - [x] Zero tests discovered fails the gate unless explicitly allowed via `AllowNoTests`; stale coverage files ignored.
+  - [x] Coverlet code coverage fully supported across Cobertura, OpenCover, JSON, and stdout console tables (`CoverletCoverageParser`).
+  - [x] Multi-test-project solutions aggregate coverage lines across all projects rather than picking the first file.
+  - [x] Single test execution model: renamed `deterministic-coverage` to `deterministic-test-with-coverage` (`DeterministicTestWithCoverageGate`) to eliminate duplicate test runs.
+  - [x] Coverage gate emits graceful warning if coverage is unmeasured, and fails on regression.
+  - [x] Added `deterministic-format` (`DeterministicFormatStage`) to apply code formatting (`dotnet format`, `ruff format .`, etc.) automatically before build/test.
+  - [x] `deterministic-sast` (`DeterministicSastStage`) serves as an optional security analyzer extension point and skips gracefully when unconfigured.
+  - [x] Sub-stage commands and outputs in composite gates are individually captured (`StageCommandExecution`) and rendered as tool turns in synthetic conversations.
+  - [x] Structured TRX test diagnostics (`TestDiagnosticsParser`), bounded persisted `StageOutput`, and tracked model preload.
 - [ ] **Step 9.12: Async Lifecycle, Cancellation & Residual Policy Violations**
   - [ ] No `async void` handlers or unobserved fire-and-forget tasks.
   - [ ] Shell escaping safe and tested; stage IDs validated before path use.

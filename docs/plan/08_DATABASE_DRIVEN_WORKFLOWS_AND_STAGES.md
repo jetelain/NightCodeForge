@@ -505,10 +505,11 @@ public interface IWorkflowStageRegistry
 | `agentic-impl` | `ImplementationStage` | Agentic | `AgenticStageConfig` | Code editing, TDD, incremental compilation. |
 | `agentic-review-fix` | `CodeReviewAndFixStage` | Agentic | `AgenticStageConfig` | Git diff audit, precision fixes, change requests. |
 | `agentic-custom` | `GenericAgenticStage` | Agentic | `AgenticStageConfig` | Arbitrary custom agentic role/directive. |
+| `deterministic-format`| `DeterministicFormatStage` | Deterministic | `DeterministicStageConfig` | Direct code formatting (e.g. dotnet format, ruff format). |
 | `deterministic-build` | `DeterministicBuildStage` | Deterministic | `DeterministicStageConfig` | Native CPU build & compiler error/warning gate. |
-| `deterministic-test` | `DeterministicTestStage` | Deterministic | `DeterministicStageConfig` | Native unit/integration test runner gate. |
-| `deterministic-coverage`| `DeterministicCoverageGate` | Deterministic | `DeterministicStageConfig` | Diff & absolute code coverage threshold gate. |
-| `deterministic-sast` | `DeterministicSastStage` | Deterministic | `DeterministicStageConfig` | Security analysis & code vulnerability scan. |
+| `deterministic-test` | `DeterministicTestStage` | Deterministic | `DeterministicStageConfig` | Native unit/integration test runner gate without coverage. |
+| `deterministic-test-with-coverage`| `DeterministicTestWithCoverageGate` | Deterministic | `DeterministicStageConfig` | Test runner with coverage collection & regression ratchet. |
+| `deterministic-sast` | `DeterministicSastStage` | Deterministic | `DeterministicStageConfig` | Security analysis & code vulnerability scan extension point. |
 | `deterministic-ratchet` | `DeterministicWarningRatchetStage` | Deterministic | `DeterministicStageConfig` | Zero-warning regression ratchet gate. |
 | `deterministic-composite`| `CompositeDeterministicStage` | Deterministic | `DeterministicStageConfig` | Bundled baseline or post-verification stages. |
 | `deterministic-script` | `DeterministicScriptStage` | Deterministic | `DeterministicStageConfig` | Custom shell script, Python script, or container tool. |
