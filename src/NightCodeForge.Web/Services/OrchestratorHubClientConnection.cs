@@ -11,10 +11,23 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
 {
     private readonly NavigationManager? _navigationManager;
     private readonly string? _configuredHubUrl;
+    private readonly HashSet<int> _activeTaskGroups = new();
+    private readonly object _taskGroupsLock = new();
+    private readonly SemaphoreSlim _connectionGate = new(1, 1);
     private HubConnection? _hubConnection;
 
     public HubConnection? HubConnection => _hubConnection;
     public HubConnectionState State => _hubConnection?.State ?? HubConnectionState.Disconnected;
+    public IReadOnlyCollection<int> ActiveTaskGroups
+    {
+        get
+        {
+            lock (_taskGroupsLock)
+            {
+                return _activeTaskGroups.ToList();
+            }
+        }
+    }
 
     public event Action<int, string, bool>? OnTokenDeltaReceived;
     public event Action<int, string, string, string, int?>? OnToolExecutionReceived;
@@ -42,82 +55,147 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
         _hubConnection = hubConnection;
         RegisterHandlers(_hubConnection);
         _hubConnection.Reconnecting += _ => { OnConnectionStateChanged?.Invoke(HubConnectionState.Reconnecting); return Task.CompletedTask; };
-        _hubConnection.Reconnected += _ => { OnConnectionStateChanged?.Invoke(HubConnectionState.Connected); return Task.CompletedTask; };
+        _hubConnection.Reconnected += async _ =>
+        {
+            OnConnectionStateChanged?.Invoke(HubConnectionState.Connected);
+            await RejoinActiveTaskGroupsAsync();
+        };
         _hubConnection.Closed += _ => { OnConnectionStateChanged?.Invoke(HubConnectionState.Disconnected); return Task.CompletedTask; };
     }
 
     public async Task StartAsync()
     {
-        if (_hubConnection != null && _hubConnection.State == HubConnectionState.Connected)
+        await _connectionGate.WaitAsync();
+        try
         {
-            return;
-        }
-
-        if (_hubConnection == null)
-        {
-            Uri hubUri;
-            if (!string.IsNullOrEmpty(_configuredHubUrl))
+            if (_hubConnection != null && _hubConnection.State == HubConnectionState.Connected)
             {
-                hubUri = new Uri(_configuredHubUrl, UriKind.RelativeOrAbsolute);
-            }
-            else if (_navigationManager != null)
-            {
-                hubUri = _navigationManager.ToAbsoluteUri("/hubs/orchestrator");
-            }
-            else
-            {
-                hubUri = new Uri("/hubs/orchestrator", UriKind.Relative);
+                await RejoinActiveTaskGroupsAsync();
+                return;
             }
 
-            _hubConnection = new HubConnectionBuilder()
-                .WithUrl(hubUri)
-                .WithAutomaticReconnect(new[]
+            if (_hubConnection == null)
+            {
+                Uri hubUri;
+                if (!string.IsNullOrEmpty(_configuredHubUrl))
                 {
-                    TimeSpan.Zero,
-                    TimeSpan.FromSeconds(2),
-                    TimeSpan.FromSeconds(5),
-                    TimeSpan.FromSeconds(10)
-                })
-                .Build();
+                    hubUri = new Uri(_configuredHubUrl, UriKind.RelativeOrAbsolute);
+                }
+                else if (_navigationManager != null)
+                {
+                    hubUri = _navigationManager.ToAbsoluteUri("/hubs/orchestrator");
+                }
+                else
+                {
+                    hubUri = new Uri("/hubs/orchestrator", UriKind.Relative);
+                }
 
-            RegisterHandlers(_hubConnection);
+                _hubConnection = new HubConnectionBuilder()
+                    .WithUrl(hubUri)
+                    .WithAutomaticReconnect(new[]
+                    {
+                        TimeSpan.Zero,
+                        TimeSpan.FromSeconds(2),
+                        TimeSpan.FromSeconds(5),
+                        TimeSpan.FromSeconds(10)
+                    })
+                    .Build();
 
-            _hubConnection.Reconnecting += _ =>
-            {
-                OnConnectionStateChanged?.Invoke(HubConnectionState.Reconnecting);
-                return Task.CompletedTask;
-            };
+                RegisterHandlers(_hubConnection);
 
-            _hubConnection.Reconnected += _ =>
-            {
-                OnConnectionStateChanged?.Invoke(HubConnectionState.Connected);
-                return Task.CompletedTask;
-            };
+                _hubConnection.Reconnecting += _ =>
+                {
+                    OnConnectionStateChanged?.Invoke(HubConnectionState.Reconnecting);
+                    return Task.CompletedTask;
+                };
 
-            _hubConnection.Closed += _ =>
-            {
-                OnConnectionStateChanged?.Invoke(HubConnectionState.Disconnected);
-                return Task.CompletedTask;
-            };
+                _hubConnection.Reconnected += async _ =>
+                {
+                    OnConnectionStateChanged?.Invoke(HubConnectionState.Connected);
+                    await RejoinActiveTaskGroupsAsync();
+                };
+
+                _hubConnection.Closed += _ =>
+                {
+                    OnConnectionStateChanged?.Invoke(HubConnectionState.Disconnected);
+                    return Task.CompletedTask;
+                };
+            }
+
+            await _hubConnection.StartAsync();
+            OnConnectionStateChanged?.Invoke(HubConnectionState.Connected);
+            await RejoinActiveTaskGroupsAsync();
         }
-
-        await _hubConnection.StartAsync();
-        OnConnectionStateChanged?.Invoke(HubConnectionState.Connected);
+        finally
+        {
+            _connectionGate.Release();
+        }
     }
 
     public async Task JoinTaskGroupAsync(int taskId)
     {
+        if (taskId <= 0) return;
+
+        lock (_taskGroupsLock)
+        {
+            _activeTaskGroups.Add(taskId);
+        }
+
         if (_hubConnection?.State == HubConnectionState.Connected)
         {
-            await _hubConnection.InvokeAsync("JoinTaskGroup", taskId);
+            try
+            {
+                await _hubConnection.InvokeAsync("JoinTaskGroup", taskId);
+            }
+            catch (Exception)
+            {
+                // Silently avoid breaking caller; will rejoin on reconnect
+            }
         }
     }
 
     public async Task LeaveTaskGroupAsync(int taskId)
     {
+        if (taskId <= 0) return;
+
+        lock (_taskGroupsLock)
+        {
+            _activeTaskGroups.Remove(taskId);
+        }
+
         if (_hubConnection?.State == HubConnectionState.Connected)
         {
-            await _hubConnection.InvokeAsync("LeaveTaskGroup", taskId);
+            try
+            {
+                await _hubConnection.InvokeAsync("LeaveTaskGroup", taskId);
+            }
+            catch (Exception)
+            {
+                // Best effort
+            }
+        }
+    }
+
+    private async Task RejoinActiveTaskGroupsAsync()
+    {
+        if (_hubConnection?.State != HubConnectionState.Connected) return;
+
+        int[] groups;
+        lock (_taskGroupsLock)
+        {
+            groups = _activeTaskGroups.ToArray();
+        }
+
+        foreach (var taskId in groups)
+        {
+            try
+            {
+                await _hubConnection.InvokeAsync("JoinTaskGroup", taskId);
+            }
+            catch (Exception)
+            {
+                // Silently avoid breaking connection state change if one group join fails
+            }
         }
     }
 
@@ -170,5 +248,6 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
         {
             await _hubConnection.DisposeAsync();
         }
+        _connectionGate.Dispose();
     }
 }

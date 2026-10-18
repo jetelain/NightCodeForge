@@ -580,6 +580,49 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         Assert.Contains("<code>RSA</code>", cut.Markup);
     }
 
+    [Fact]
+    public async Task TaskExecutionInspector_OnInitialized_JoinsTaskGroup()
+    {
+        var task = new ForgeTask { Id = 101, Title = "SignalR Join Group Task", Status = TaskOverallStatus.Open };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 101));
+
+        Assert.Contains(101, _hubConnection.ActiveTaskGroups);
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_OnParameterChange_LeavesOldAndJoinsNewTaskGroup()
+    {
+        var task1 = new ForgeTask { Id = 102, Title = "Task 1", Status = TaskOverallStatus.Open };
+        var task2 = new ForgeTask { Id = 103, Title = "Task 2", Status = TaskOverallStatus.Open };
+        await _taskRepository.CreateAsync(task1);
+        await _taskRepository.CreateAsync(task2);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 102));
+        Assert.Contains(102, _hubConnection.ActiveTaskGroups);
+        Assert.DoesNotContain(103, _hubConnection.ActiveTaskGroups);
+
+        cut.Render(p => p.Add(x => x.TaskId, 103));
+
+        Assert.DoesNotContain(102, _hubConnection.ActiveTaskGroups);
+        Assert.Contains(103, _hubConnection.ActiveTaskGroups);
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_OnDispose_LeavesTaskGroup()
+    {
+        var task = new ForgeTask { Id = 104, Title = "Task to Dispose", Status = TaskOverallStatus.Open };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 104));
+        Assert.Contains(104, _hubConnection.ActiveTaskGroups);
+
+        cut.Instance.Dispose();
+
+        Assert.DoesNotContain(104, _hubConnection.ActiveTaskGroups);
+    }
+
     #region Fakes
 
     private class FakeDevQueueService : IDevQueueService

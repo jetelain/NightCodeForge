@@ -568,6 +568,25 @@ public class TaskOrchestrator : ITaskOrchestrator
                     result.IsSuccess ? StageExecutionStatus.Completed : StageExecutionStatus.Failed,
                     summary: summary,
                     cancellationToken: cancellationToken);
+
+                if (result.IsSuccess)
+                {
+                    try
+                    {
+                        await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                            Guid.NewGuid().ToString("N"),
+                            task.Id,
+                            stage.StageId,
+                            Streaming.AgentActivityKind.StageCompleted,
+                            summary,
+                            DateTime.UtcNow,
+                            new Dictionary<string, object?> { ["StageKind"] = "Deterministic" }), cancellationToken);
+                    }
+                    catch (Exception sex)
+                    {
+                        _logger.LogDebug(sex, "Failed broadcasting deterministic stage completion event for task #{TaskId}", task.Id);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -588,7 +607,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     Description = p.Description,
                     Status = TaskOverallStatus.Suggested,
                     MergeMode = MergeMode.ManualReviewRequired,
-                    BaseBranch = workspace.DefaultBaseBranch ?? "main",
+                    BaseBranch = workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch,
                     Priority = 1,
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
@@ -741,6 +760,25 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             // Case B: Stage Completed
             pipelineContext.ResetRetries();
+
+            if (stage.Kind != WorkflowStageKind.Deterministic)
+            {
+                try
+                {
+                    await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                        Guid.NewGuid().ToString("N"),
+                        task.Id,
+                        stage.StageId,
+                        Streaming.AgentActivityKind.StageCompleted,
+                        $"Stage '{stage.StageId}' completed successfully.",
+                        DateTime.UtcNow,
+                        new Dictionary<string, object?> { ["StageKind"] = stage.Kind.ToString() }), cancellationToken);
+                }
+                catch (Exception sex)
+                {
+                    _logger.LogDebug(sex, "Failed broadcasting stage completion event for task #{TaskId}", task.Id);
+                }
+            }
 
             string commitHash = string.Empty;
             try

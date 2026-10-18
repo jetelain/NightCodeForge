@@ -157,6 +157,34 @@ public class TaskInspectorPageTests : BunitContext
         }
     }
 
+    [Fact]
+    public async Task TaskInspector_WhenStageTransitionReceived_UpdatesDropdownTaskStatus()
+    {
+        var task = new ForgeTask
+        {
+            Id = 401,
+            WorkspaceId = 1,
+            Title = "Live Stepper Task",
+            Status = TaskOverallStatus.Open
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskInspector>(p => p.Add(x => x.TaskId, 401));
+        cut.WaitForState(() => cut.Markup.Contains("Live Stepper Task"));
+
+        Assert.Contains("#401 - Live Stepper Task (Open)", cut.Markup);
+
+        // Transition task in repository
+        task.Status = TaskOverallStatus.Implemented;
+        await _taskRepository.UpdateAsync(task);
+
+        // Fire SignalR stage transition event
+        _hubConnection.TriggerStageTransition(401, "task-review", "Deterministic", "Completed");
+
+        cut.WaitForState(() => cut.Markup.Contains("#401 - Live Stepper Task (Implemented)"));
+        Assert.Contains("#401 - Live Stepper Task (Implemented)", cut.Markup);
+    }
+
     #region Fakes
 
     private class FakeDevQueueService : IDevQueueService

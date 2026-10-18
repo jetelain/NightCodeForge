@@ -6,6 +6,7 @@
 @inject IDevQueueService DevQueueService
 @inject ToastService ToastService
 @inject IBackgroundTaskRunner BackgroundTaskRunner
+@inject ILogger<DevQueue> Logger
 @implements IDisposable
 
 <div class="devqueue-container p-4" style="max-width: 1400px; margin: 0 auto;">
@@ -83,6 +84,7 @@
     private bool _isRefreshing;
     private PeriodicTimer? _refreshTimer;
     private CancellationTokenSource _cts = new();
+    private bool _disposed;
 
     public IReadOnlyList<QueuedJobItem> AllQueuedJobs => _urgentJobs.Concat(_inferenceJobs).Concat(_processingJobs).ToList();
 
@@ -99,11 +101,23 @@
         {
             while (await _refreshTimer.WaitForNextTickAsync(ct))
             {
-                await InvokeAsync(async () =>
+                try
                 {
-                    await RefreshQueueStateAsync();
-                    StateHasChanged();
-                });
+                    await InvokeAsync(async () =>
+                    {
+                        if (_disposed) return;
+                        await RefreshQueueStateAsync();
+                        if (!_disposed) StateHasChanged();
+                    });
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "DevQueue auto-refresh tick failed.");
+                }
             }
         }, "DevQueue.AutoRefresh", _cts.Token);
     }
@@ -191,6 +205,9 @@
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
+
         _cts.Cancel();
         _refreshTimer?.Dispose();
         _cts.Dispose();

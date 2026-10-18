@@ -49,7 +49,7 @@ public class TriageService : ITriageService
 
         var baseBranch = !string.IsNullOrWhiteSpace(request.BaseBranch)
             ? request.BaseBranch
-            : (!string.IsNullOrWhiteSpace(workspace.DefaultBaseBranch) ? workspace.DefaultBaseBranch : "main");
+            : (!string.IsNullOrWhiteSpace(workspace.DefaultBaseBranch) ? workspace.DefaultBaseBranch : WorkflowDefaults.DefaultBaseBranch);
 
         _logger.LogInformation("Starting untrusted intake triage for '{ReportTitle}' on workspace #{WorkspaceId} ({BaseBranch})",
             request.Title, workspace.Id, baseBranch);

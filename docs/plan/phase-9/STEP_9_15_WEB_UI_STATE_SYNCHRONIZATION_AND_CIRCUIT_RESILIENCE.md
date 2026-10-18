@@ -3,7 +3,7 @@
 > **Phase 9 Implementation Step**  
 > *Parent Plan:* [Phase 9 Master Plan](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 ---
 
@@ -153,15 +153,15 @@ During the foundation audit of `src/NightCodeForge.Web/` and related orchestrato
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Navigating directly to `/inspector` or `/tasks/{id}` automatically starts `HubClient` and joins the task SignalR group.
-- [ ] Switching tasks in the inspector cleanly leaves the previous task group and joins the new task group.
-- [ ] SignalR auto-reconnection automatically rejoins all active task groups on the server.
-- [ ] `EfCoreTaskRepository.GetByIdAsync` uses `.AsNoTracking()`, guaranteeing fresh state is read from the SQLite database on each refresh.
-- [ ] `TaskOrchestrator` broadcasts `StageCompleted` for deterministic stages and workflow stage handoffs.
-- [ ] Pipeline stepper, turns, and terminal logs in `TaskExecutionInspector.razor` update immediately in real-time when a stage starts or completes without manual browser reload.
-- [ ] `TaskInspector.razor` dropdown status and active running task button update dynamically on stage transitions.
-- [ ] Switching active workspace in the top navigation bar immediately updates `Settings.razor` and `Review.razor`.
-- [ ] `Settings.razor` and `Review.razor` implement `IDisposable` with zero event handler leaks.
-- [ ] `DevQueue.razor` periodic refresh loop survives transient exceptions with structured logging.
-- [ ] No magic `"main"` literals remain in `TriageService`.
-- [ ] `dotnet test --filter "Category!=Acceptance&Category!=E2E"` passes.
+- [x] Navigating directly to `/inspector` or `/tasks/{id}` automatically starts `HubClient` and joins the task SignalR group.
+- [x] Switching tasks in the inspector cleanly leaves the previous task group and joins the new task group.
+- [x] SignalR auto-reconnection automatically rejoins all active task groups on the server.
+- [x] `EfCoreTaskRepository.GetByIdAsync` uses `.AsNoTracking()`, guaranteeing fresh state is read from the SQLite database on each refresh.
+- [x] `TaskOrchestrator` broadcasts `StageCompleted` for deterministic stages and workflow stage handoffs.
+- [x] Pipeline stepper, turns, and terminal logs in `TaskExecutionInspector.razor` update immediately in real-time when a stage starts or completes without manual browser reload.
+- [x] `TaskInspector.razor` dropdown status and active running task button update dynamically on stage transitions.
+- [x] Switching active workspace in the top navigation bar immediately updates `Settings.razor` and `Review.razor`.
+- [x] `Settings.razor` and `Review.razor` implement `IDisposable` with zero event handler leaks.
+- [x] `DevQueue.razor` periodic refresh loop survives transient exceptions with structured logging.
+- [x] No magic `"main"` literals remain in `TriageService`.
+- [x] `dotnet test --filter "Category!=Acceptance&Category!=E2E"` passes.

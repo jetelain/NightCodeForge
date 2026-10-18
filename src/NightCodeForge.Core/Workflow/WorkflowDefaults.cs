@@ -16,6 +16,7 @@ public static class WorkflowDefaults
     public const int MaxStageOutputChars = 32768;
     public const string DefaultCoverageTestCommand = "dotnet test --no-build --collect:\"XPlat Code Coverage\" --logger trx";
     public const string ModelPreloadKeepAlive = "15m";
+    public const string DefaultBaseBranch = "main";
 
     /// <summary>
     /// Tail-truncates stage output if it exceeds <see cref="MaxStageOutputChars"/> to prevent DataBag bloat.

@@ -22,6 +22,7 @@ public class DevQueueComponentTests : BunitContext
         Services.AddSingleton<IDevQueueService>(_queueService);
         Services.AddSingleton(_toastService);
         Services.AddSingleton<IBackgroundTaskRunner>(new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance));
+        Services.AddSingleton<Microsoft.Extensions.Logging.ILogger<DevQueue>>(Microsoft.Extensions.Logging.Abstractions.NullLogger<DevQueue>.Instance);
     }
 
     [Fact]
@@ -207,10 +208,23 @@ public class DevQueueComponentTests : BunitContext
         Assert.Empty(cut.FindAll("#sequential-queue-table"));
     }
 
+    [Fact]
+    public async Task DevQueuePage_WhenRefreshThrowsException_DoesNotCrashAndShowsToast()
+    {
+        _queueService.ShouldThrowOnGetSnapshot = true;
+        var cut = Render<DevQueue>();
+
+        await cut.Instance.RefreshQueueStateAsync();
+
+        Assert.Contains("Dev-Queue &amp; Concurrency Operations", cut.Markup);
+        Assert.Contains(_toastService.Toasts, t => t.Title == "Refresh Failed");
+    }
+
     #region Mock DevQueueService
 
     private class MockDevQueueService : IDevQueueService
     {
+        public bool ShouldThrowOnGetSnapshot { get; set; }
         public DevQueueSnapshot Snapshot { get; set; } = new(
             UrgentJobs: new List<QueuedJobItem>(),
             InferenceJobs: new List<QueuedJobItem>(),
@@ -229,7 +243,13 @@ public class DevQueueComponentTests : BunitContext
         public int? LastReleasedTaskId { get; private set; }
 
         public Task<DevQueueSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(Snapshot);
+        {
+            if (ShouldThrowOnGetSnapshot)
+            {
+                throw new InvalidOperationException("Simulated transient database error");
+            }
+            return Task.FromResult(Snapshot);
+        }
 
         public Task<bool> PromoteToUrgentAsync(string jobId, int taskId, CancellationToken cancellationToken = default)
         {

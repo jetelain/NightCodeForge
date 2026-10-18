@@ -28,6 +28,7 @@ public class EfCoreTaskRepository : ITaskRepository
     public async Task<ForgeTask?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         return await _context.Tasks
+            .AsNoTracking()
             .AsSplitQuery()
             .Include(i => i.Workspace)
             .Include(i => i.Workflow)

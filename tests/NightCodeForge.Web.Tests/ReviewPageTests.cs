@@ -177,4 +177,41 @@ public class ReviewPageTests : BunitContext
         Assert.Null(cut.FindAll("#btn-request-changes").FirstOrDefault());
         Assert.Null(cut.FindAll("#btn-approve-merge").FirstOrDefault());
     }
+
+    [Fact]
+    public async Task ReviewRoom_WhenActiveWorkspaceChanges_ReloadsPendingReviewsForWorkspace()
+    {
+        var task1 = new ForgeTask
+        {
+            Id = 81,
+            WorkspaceId = 1,
+            Title = "Task in Workspace 1",
+            Status = TaskOverallStatus.Ready,
+            BaseBranch = "main",
+            PipelineDataJson = new PipelineDataBag().ToJson()
+        };
+        var task2 = new ForgeTask
+        {
+            Id = 82,
+            WorkspaceId = 2,
+            Title = "Task in Workspace 2",
+            Status = TaskOverallStatus.Ready,
+            BaseBranch = "main",
+            PipelineDataJson = new PipelineDataBag().ToJson()
+        };
+        await _taskRepository.CreateAsync(task1);
+        await _taskRepository.CreateAsync(task2);
+
+        _workspaceState.SetActiveWorkspace(new Workspace { Id = 1, Name = "WS1" });
+
+        var cut = Render<Review>();
+        cut.WaitForState(() => cut.Markup.Contains("Task in Workspace 1"));
+        Assert.Contains("Task in Workspace 1", cut.Markup);
+
+        // Switch to Workspace 2; Review should automatically reload and display Task in Workspace 2
+        _workspaceState.SetActiveWorkspace(new Workspace { Id = 2, Name = "WS2" });
+
+        cut.WaitForState(() => cut.Markup.Contains("Task in Workspace 2"));
+        Assert.Contains("Task in Workspace 2", cut.Markup);
+    }
 }

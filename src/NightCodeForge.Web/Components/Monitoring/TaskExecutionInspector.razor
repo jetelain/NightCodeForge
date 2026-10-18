@@ -4,6 +4,7 @@
 @using NightCodeForge.Web.Services
 @using NightCodeForge.Web.Components.Review
 @implements IAsyncDisposable
+@implements IDisposable
 @inject ITaskRepository TaskRepository
 @inject IWorkflowRepository WorkflowRepository
 @inject IServiceProvider ServiceProvider
@@ -339,6 +340,8 @@
     private string? _liveStreamingThinking;
     private string? _liveStreamingMessage;
     private int _selectedTurnCount;
+    private int? _joinedTaskId;
+    private bool _disposed;
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private TerminalConsole? _terminalRef;
     private PipelineStepper? _stepperRef;
@@ -348,6 +351,8 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _joinedTaskId = TaskId;
+
         if (HubClient != null)
         {
             HubClient.OnTokenDeltaReceived += HandleTokenDelta;
@@ -356,6 +361,20 @@
             HubClient.OnExecutionLogReceived += HandleExecutionLog;
             HubClient.OnStageTransitionReceived += HandleStageTransition;
             HubClient.OnDeterministicGateResultReceived += HandleDeterministicGateResult;
+
+            try
+            {
+                await HubClient.StartAsync();
+            }
+            catch (Exception)
+            {
+                // In disconnected or testing scenarios, avoid blocking component initialization
+            }
+
+            if (TaskId > 0)
+            {
+                await HubClient.JoinTaskGroupAsync(TaskId);
+            }
         }
 
         await LoadTaskDataAsync();
@@ -363,7 +382,23 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (_task != null && _task.Id != TaskId)
+        if (_joinedTaskId != TaskId)
+        {
+            if (HubClient != null)
+            {
+                if (_joinedTaskId.HasValue && _joinedTaskId.Value > 0)
+                {
+                    await HubClient.LeaveTaskGroupAsync(_joinedTaskId.Value);
+                }
+                if (TaskId > 0)
+                {
+                    await HubClient.JoinTaskGroupAsync(TaskId);
+                }
+            }
+            _joinedTaskId = TaskId;
+            await LoadTaskDataAsync();
+        }
+        else if (_task != null && _task.Id != TaskId)
         {
             await LoadTaskDataAsync();
         }
@@ -493,14 +528,23 @@
     /// </summary>
     private async Task ReloadSelectedTurnsAsync()
     {
-        if (_selectedConversation == null) return;
+        if (_disposed || _selectedConversation == null) return;
 
-        await _loadGate.WaitAsync();
         try
         {
+            await _loadGate.WaitAsync();
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_disposed) return;
             var selectedId = _selectedConversation.Id;
             var loaded = await TaskRepository.GetConversationWithTurnsAsync(selectedId);
-            if (loaded == null || _selectedConversation?.Id != selectedId) return;
+            if (loaded == null || _selectedConversation?.Id != selectedId || _disposed) return;
 
             _selectedConversation = loaded;
             var index = _conversations.FindIndex(c => c.Id == selectedId);
@@ -516,7 +560,14 @@
         }
         finally
         {
-            _loadGate.Release();
+            try
+            {
+                _loadGate.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Disposed concurrently
+            }
         }
     }
 
@@ -569,15 +620,19 @@
         {
             await LoadDiffFilesAsync();
         }
-        StateHasChanged();
+        if (!_disposed)
+        {
+            StateHasChanged();
+        }
     }
 
     private void HandleTokenDelta(int taskId, string token, bool isThinking)
     {
-        if (taskId != TaskId) return;
+        if (_disposed || taskId != TaskId) return;
 
         InvokeAsync(() =>
         {
+            if (_disposed) return;
             if (isThinking)
             {
                 _liveStreamingThinking = (_liveStreamingThinking ?? "") + token;
@@ -592,47 +647,51 @@
 
     private void HandleToolExecution(int taskId, string toolName, string arguments, string status, int? durationMs)
     {
-        if (taskId != TaskId) return;
+        if (_disposed || taskId != TaskId) return;
 
         InvokeAsync(async () =>
         {
+            if (_disposed) return;
             _terminalRef?.AddLog(taskId, "Tool", status.Equals("Running", StringComparison.OrdinalIgnoreCase) ? "Info" : "Debug",
                 $"[{toolName}] {status} {(durationMs.HasValue ? $"({durationMs}ms)" : "")}: {arguments}", DateTime.UtcNow);
 
             // A model response just ended: surface what was persisted (thinking, tool call, tool result).
             await ReloadSelectedTurnsAsync();
-            StateHasChanged();
+            if (!_disposed) StateHasChanged();
         });
     }
 
     private void HandleOptimizationAction(int taskId, string stageId, string actionType, string description, int tokensSaved, DateTime timestamp)
     {
-        if (taskId != TaskId) return;
+        if (_disposed || taskId != TaskId) return;
 
         InvokeAsync(async () =>
         {
+            if (_disposed) return;
             _terminalRef?.AddLog(taskId, stageId, "Info", $"[OPTIMIZATION] {actionType}: {description} (Saved {tokensSaved} chars)", timestamp);
             await ReloadSelectedTurnsAsync();
-            StateHasChanged();
+            if (!_disposed) StateHasChanged();
         });
     }
 
     private void HandleExecutionLog(int taskId, string stageId, string level, string message, DateTime timestamp)
     {
-        if (taskId != TaskId) return;
+        if (_disposed || taskId != TaskId) return;
 
         InvokeAsync(() =>
         {
+            if (_disposed) return;
             _terminalRef?.AddLog(taskId, stageId, level, message, timestamp);
         });
     }
 
     private void HandleStageTransition(int taskId, string stageId, string stageKind, string status)
     {
-        if (taskId != TaskId) return;
+        if (_disposed || taskId != TaskId) return;
 
         InvokeAsync(async () =>
         {
+            if (_disposed) return;
             _liveStreamingThinking = null;
             _liveStreamingMessage = null;
             _selectedTurnCount = 0;
@@ -648,9 +707,10 @@
 
     private void HandleDeterministicGateResult(int taskId, string gateName, bool passed, string metricsSummary)
     {
-        if (taskId != TaskId) return;
+        if (_disposed || taskId != TaskId) return;
         InvokeAsync(() =>
         {
+            if (_disposed) return;
             _stepperRef?.ApplyGateResult(gateName, passed, metricsSummary);
             StateHasChanged();
         });
@@ -700,10 +760,19 @@
         };
     }
 
-    public async ValueTask DisposeAsync()
+    public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
+
         if (HubClient != null)
         {
+            if (_joinedTaskId.HasValue && _joinedTaskId.Value > 0)
+            {
+                _ = HubClient.LeaveTaskGroupAsync(_joinedTaskId.Value);
+                _joinedTaskId = null;
+            }
+
             HubClient.OnTokenDeltaReceived -= HandleTokenDelta;
             HubClient.OnToolExecutionReceived -= HandleToolExecution;
             HubClient.OnOptimizationActionReceived -= HandleOptimizationAction;
@@ -713,5 +782,16 @@
         }
 
         _loadGate.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (HubClient != null && _joinedTaskId.HasValue && _joinedTaskId.Value > 0)
+        {
+            await HubClient.LeaveTaskGroupAsync(_joinedTaskId.Value);
+            _joinedTaskId = null;
+        }
+
+        Dispose();
     }
 }

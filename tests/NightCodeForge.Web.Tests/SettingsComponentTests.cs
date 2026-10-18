@@ -111,6 +111,30 @@ public class SettingsComponentTests : BunitContext, IDisposable
     }
 
     [Fact]
+    public void SettingsPage_WhenActiveWorkspaceChanges_AutomaticallyReRendersWorkspaceSettings()
+    {
+        var cut = Render<Settings>();
+
+        var scopeButtons = cut.FindAll(".scope-switcher button");
+        scopeButtons[1].Click();
+
+        Assert.Contains("No Active Workspace Selected", cut.Markup);
+
+        // Setting active workspace triggers OnWorkspaceChanged, automatically updating the view
+        _workspaceState.SetActiveWorkspace(new Workspace
+        {
+            Id = 1,
+            Name = "ForgeRepo",
+            RepositoryPath = @"C:\repos\ForgeRepo",
+            DefaultBaseBranch = "main",
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        cut.WaitForState(() => cut.Markup.Contains("Confinement &amp; Sandboxing"));
+        Assert.Contains("Workspace Agent Profiles", cut.Markup);
+    }
+
+    [Fact]
     public void SettingsPage_GlobalScope_RendersSixGlobalTabs_ExcludesABTesting()
     {
         var cut = Render<Settings>();

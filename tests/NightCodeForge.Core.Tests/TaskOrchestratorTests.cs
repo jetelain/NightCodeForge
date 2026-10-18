@@ -1,7 +1,9 @@
+using Moq;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Stages;
 
@@ -344,5 +346,100 @@ public class TaskOrchestratorTests
         Assert.Equal(TaskOverallStatus.Suggested, proposal.Status);
         Assert.Equal("Found memory leak in parser", proposal.Description);
         Assert.Equal(1, proposal.Priority);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenDeterministicStageSucceeds_BroadcastsStageCompleted()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 91,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "deterministic-gate"
+        });
+        _depStore.AddTask(91, 1, TaskOverallStatus.Open);
+
+        var deterministicStage = new TestWorkflowStage("deterministic-gate", WorkflowStageKind.Deterministic)
+        {
+            Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success())
+        };
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { deterministicStage });
+
+        var broadcastEvents = new List<AgentActivityEvent>();
+        var capturingStreamer = new Mock<IAgentActivityStreamer>();
+        capturingStreamer
+            .Setup(s => s.BroadcastAsync(It.IsAny<AgentActivityEvent>(), It.IsAny<CancellationToken>()))
+            .Callback<AgentActivityEvent, CancellationToken>((evt, _) => broadcastEvents.Add(evt))
+            .Returns(Task.CompletedTask);
+
+        var orchestrator = new Fixtures.TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            Streamer = capturingStreamer.Object
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var completedEvt = broadcastEvents.FirstOrDefault(e => e.Kind == AgentActivityKind.StageCompleted && e.StageId == "deterministic-gate");
+        Assert.NotNull(completedEvt);
+        Assert.Equal(91, completedEvt.TaskId);
+        Assert.Equal("Deterministic", completedEvt.Metadata?["StageKind"]);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenWorkflowStageSucceeds_BroadcastsStageCompletedBeforeNextStage()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 92,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "stage-1"
+        });
+        _depStore.AddTask(92, 1, TaskOverallStatus.Open);
+
+        var stage1 = new TestWorkflowStage("stage-1", WorkflowStageKind.Agentic)
+        {
+            Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success())
+        };
+        var stage2 = new TestWorkflowStage("stage-2", WorkflowStageKind.Agentic)
+        {
+            Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success())
+        };
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2 });
+
+        var broadcastEvents = new List<AgentActivityEvent>();
+        var capturingStreamer = new Mock<IAgentActivityStreamer>();
+        capturingStreamer
+            .Setup(s => s.BroadcastAsync(It.IsAny<AgentActivityEvent>(), It.IsAny<CancellationToken>()))
+            .Callback<AgentActivityEvent, CancellationToken>((evt, _) => broadcastEvents.Add(evt))
+            .Returns(Task.CompletedTask);
+
+        var orchestrator = new Fixtures.TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            Streamer = capturingStreamer.Object
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var completedEvt = broadcastEvents.FirstOrDefault(e => e.Kind == AgentActivityKind.StageCompleted && e.StageId == "stage-1");
+        Assert.NotNull(completedEvt);
+        Assert.Equal(92, completedEvt.TaskId);
     }
 }

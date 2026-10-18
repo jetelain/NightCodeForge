@@ -3,6 +3,7 @@
 @using NightCodeForge.Web.Components.Workspaces
 @using NightCodeForge.Web.Services
 @inject WorkspaceStateService WorkspaceState
+@implements IDisposable
 
 <PageTitle>Settings &amp; Optimizations - NightCodeForge</PageTitle>
 
@@ -166,6 +167,29 @@ else
     private SettingsScope _activeScope = SettingsScope.Global;
     private string _activeGlobalTab = "optimizations";
     private string _activeWorkspaceTab = "confinement";
+    private bool _disposed;
 
     public void SetScope(SettingsScope scope) => _activeScope = scope;
+
+    protected override void OnInitialized()
+    {
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        if (_disposed) return;
+        InvokeAsync(() =>
+        {
+            if (!_disposed) StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+    }
 }

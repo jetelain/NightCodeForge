@@ -6,6 +6,7 @@
 @inject WorkerStateService WorkerState
 @inject WorkspaceStateService WorkspaceState
 @inject NavigationManager Navigation
+@inject OrchestratorHubClientConnection HubClient
 
 <PageTitle>Task Inspector - NightCodeForge</PageTitle>
 
@@ -82,11 +83,25 @@ else if (!_isLoadingTasks)
     private int? _inspectedTaskId;
     private List<ForgeTask> _availableTasks = new();
     private bool _isLoadingTasks = true;
+    private bool _disposed;
 
     protected override async Task OnInitializedAsync()
     {
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
         WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
+
+        if (HubClient != null)
+        {
+            HubClient.OnStageTransitionReceived += HandleStageTransition;
+            try
+            {
+                await HubClient.StartAsync();
+            }
+            catch (Exception)
+            {
+                // In disconnected or testing scenarios, avoid blocking component initialization
+            }
+        }
 
         await LoadAvailableTasksAsync();
         ResolveInitialInspectedTask();
@@ -178,9 +193,12 @@ else if (!_isLoadingTasks)
 
     private void HandleWorkspaceChanged()
     {
+        if (_disposed) return;
         InvokeAsync(async () =>
         {
+            if (_disposed) return;
             await LoadAvailableTasksAsync();
+            if (_disposed) return;
             ResolveInitialInspectedTask();
             StateHasChanged();
         });
@@ -188,12 +206,46 @@ else if (!_isLoadingTasks)
 
     private void HandleWorkerStateChanged()
     {
-        InvokeAsync(StateHasChanged);
+        if (_disposed) return;
+        InvokeAsync(() =>
+        {
+            if (!_disposed) StateHasChanged();
+        });
+    }
+
+    private void HandleStageTransition(int taskId, string stageId, string stageKind, string status)
+    {
+        if (_disposed) return;
+        InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            var matched = _availableTasks.FirstOrDefault(t => t.Id == taskId);
+            if (matched != null)
+            {
+                var updated = await TaskRepository.GetByIdAsync(taskId);
+                if (updated != null && !_disposed)
+                {
+                    var idx = _availableTasks.FindIndex(t => t.Id == taskId);
+                    if (idx >= 0)
+                    {
+                        _availableTasks[idx] = updated;
+                    }
+                }
+            }
+            if (!_disposed) StateHasChanged();
+        });
     }
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
+
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
         WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
+        if (HubClient != null)
+        {
+            HubClient.OnStageTransitionReceived -= HandleStageTransition;
+        }
     }
 }

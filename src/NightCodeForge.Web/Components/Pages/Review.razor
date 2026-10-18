@@ -183,10 +183,32 @@
     private bool _showChangeRequestModal;
     private bool _showApproveModal;
     private bool _isLoading = true;
+    private bool _disposed;
 
     protected override void OnInitialized()
     {
-        CommentState.OnCommentsChanged += StateHasChanged;
+        CommentState.OnCommentsChanged += HandleCommentsChanged;
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+    }
+
+    private void HandleCommentsChanged()
+    {
+        if (_disposed) return;
+        InvokeAsync(() =>
+        {
+            if (!_disposed) StateHasChanged();
+        });
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        if (_disposed) return;
+        InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            await LoadReviewDataAsync();
+            if (!_disposed) StateHasChanged();
+        });
     }
 
     protected override async Task OnParametersSetAsync()
@@ -279,6 +301,10 @@
 
     public void Dispose()
     {
-        CommentState.OnCommentsChanged -= StateHasChanged;
+        if (_disposed) return;
+        _disposed = true;
+
+        CommentState.OnCommentsChanged -= HandleCommentsChanged;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
     }
 }

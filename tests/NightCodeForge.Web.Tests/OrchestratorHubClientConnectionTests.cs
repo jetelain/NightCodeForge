@@ -234,6 +234,45 @@ public class OrchestratorHubClientConnectionTests
     }
 
     [Fact]
+    public async Task JoinTaskGroupAsync_TracksActiveTaskGroup()
+    {
+        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        Assert.Empty(connection.ActiveTaskGroups);
+
+        await connection.JoinTaskGroupAsync(42);
+        await connection.JoinTaskGroupAsync(99);
+
+        Assert.Contains(42, connection.ActiveTaskGroups);
+        Assert.Contains(99, connection.ActiveTaskGroups);
+        Assert.Equal(2, connection.ActiveTaskGroups.Count);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task JoinTaskGroupAsync_WithNonPositiveTaskId_DoesNotTrackGroup(int invalidTaskId)
+    {
+        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        await connection.JoinTaskGroupAsync(invalidTaskId);
+
+        Assert.Empty(connection.ActiveTaskGroups);
+    }
+
+    [Fact]
+    public async Task LeaveTaskGroupAsync_RemovesActiveTaskGroup()
+    {
+        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        await connection.JoinTaskGroupAsync(42);
+        await connection.JoinTaskGroupAsync(99);
+
+        await connection.LeaveTaskGroupAsync(42);
+
+        Assert.DoesNotContain(42, connection.ActiveTaskGroups);
+        Assert.Contains(99, connection.ActiveTaskGroups);
+        Assert.Single(connection.ActiveTaskGroups);
+    }
+
+    [Fact]
     public async Task DisposeAsync_WhenUninitialized_DoesNotThrow()
     {
         var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");

@@ -317,6 +317,34 @@ public class AppDbContextTests : IDisposable
     }
 
     [Fact]
+    public async Task TaskRepository_GetByIdAsync_UsesAsNoTracking_ReturnsDetachedEntity()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var ws = new Workspace { Name = "NoTrackingWs", RepositoryPath = "/path/test2", DefaultBaseBranch = "main" };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "No Tracking Task",
+            Status = TaskOverallStatus.Open
+        };
+        context.Tasks.Add(task);
+        await context.SaveChangesAsync();
+
+        context.ChangeTracker.Clear();
+
+        var taskRepo = new EfCoreTaskRepository(context);
+        var loaded = await taskRepo.GetByIdAsync(task.Id);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(EntityState.Detached, context.Entry(loaded).State);
+    }
+
+    [Fact]
     public async Task WorkspaceRepository_UpdateAsync_WithDetachedWorkspaceAndTrackedInstance_DoesNotConflict()
     {
         using var context = new AppDbContext(_options);
