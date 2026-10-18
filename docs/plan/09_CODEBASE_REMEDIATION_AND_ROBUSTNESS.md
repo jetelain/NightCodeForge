@@ -48,6 +48,9 @@ During initial rapid development, various lenient patterns, fallback strategies,
 | **9.13** | [💉 Step 9.13: Infrastructure Constructor DI & Options Remediation](phase-9/STEP_9_13_INFRASTRUCTURE_CONSTRUCTOR_DI_AND_OPTIONS_REMEDIATION.md) | Eliminate residual optional constructor parameters (`= null`, `= default`) and fallback instantiations (`?? new ...`) across `NightCodeForge.Infrastructure` and `NightCodeForge.Agents`. Configure DI options. | Planned |
 | **9.14** | [🔒 Step 9.14: Workspace Lock Hierarchy & Cancellation Coordination](phase-9/STEP_9_14_WORKSPACE_LOCK_HIERARCHY_AND_CANCELLATION_COORDINATION.md) | Coordinate workspace-level exclusive locking with concurrent task executions. Propagate active cancellation tokens to executing orchestrator instances. Purge worktree/WSL git locks. | Planned |
 | **9.15** | [🖥️ Step 9.15: Web UI State Synchronization & Circuit Resilience](phase-9/STEP_9_15_WEB_UI_STATE_SYNCHRONIZATION_AND_CIRCUIT_RESILIENCE.md) | Synchronize `Settings.razor` and `Review.razor` with `WorkspaceState.OnWorkspaceChanged`. Remediate Task Execution Inspector live telemetry desynchronization on stage start/complete, SignalR auto-reconnect group retention, repository `AsNoTracking`, and supervise background timers. | Planned |
+| **9.16** | [🔄 Step 9.16: Bidirectional Task Markdown Synchronization, Workspace Hygiene & Audit Trail Anticipation](phase-9/STEP_9_16_TASK_SYNC_HYGIENE_AND_AUDIT_TRAIL.md) | Synchronize all active workspace tasks to `docs/tasks/` in agent worktrees before launch; scan and sync back modified/new tasks to database on stage completion; anticipate Step 10.6 with `ForgeTaskHistory` entity and audit recording; ensure `*.trx` and `TestResults/` in `.gitignore`. | Planned |
+| **9.17** | [🔍 Step 9.17: Diff Stat Review Prompts & Multi-Question Clarification Rework](phase-9/STEP_9_17_DIFF_STAT_PROMPTS_AND_BATCHED_CLARIFICATIONS.md) | Inject concise fenced `git diff --stat` into Code Review / Fix bootstrap prompts instead of full raw diffs; rework `ask` tool, `HumanInterruptionException`, and orchestrator to support structured multi-question batches; direct review agents to consolidate all questions into a single `ask` call. | Planned |
+| **9.18** | [📊 Step 9.18: Agentic Stage Summary Fidelity & Stepper Readability Polish](phase-9/STEP_9_18_STAGE_SUMMARY_FIDELITY_AND_STEPPER_POLISH.md) | Ensure agent stage summary represents strictly the final assistant message (not all concatenated turn text); drop `DisplayName` and `StatusText` from pipeline stepper bar, displaying clean status circles with comprehensive tooltips. | Planned |
 
 ---
 
@@ -142,6 +145,9 @@ flowchart TD
     Step12 --> Step13
     Step13 --> Step14
     Step14 --> Step15
+    Step15 --> Step16
+    Step16 --> Step17
+    Step17 --> Step18
 ```
 
 ---
@@ -237,5 +243,21 @@ flowchart TD
   - [ ] `Settings.razor` and `Review.razor` implement `IDisposable` with zero event handler leaks.
   - [ ] `DevQueue.razor` periodic refresh loop survives transient exceptions with structured logging.
   - [ ] No magic `"main"` literals remain in `TriageService`.
-  - [ ] Complete test suite passes: `dotnet test` (all unit, integration, and E2E tests passing).
+- [ ] **Step 9.16: Bidirectional Task Markdown Synchronization, Workspace Hygiene & Audit Trail Anticipation**
+  - [ ] All active workspace tasks pre-synced to `docs/tasks/*.md` in worktrees before agent launch.
+  - [ ] Modified and newly created task files in `docs/tasks/` read back and synced to database upon stage completion.
+  - [ ] `ForgeTaskHistory` entity and `TaskHistories` table configured with EF Core migration.
+  - [ ] Task updates record revision snapshots with `ChangedBy` ("TaskReviewAgent", "User", "TaskOrchestrator").
+  - [ ] `*.trx` and `TestResults/` included in `.gitignore` across provisioning, mirror sync, fixtures, and repository root.
+- [ ] **Step 9.17: Diff Stat Review Prompts & Multi-Question Clarification Rework**
+  - [ ] `GenerateDiffStatAsync` implemented on `IGitWorkspaceManager` using `git diff --stat`.
+  - [ ] Bootstrap prompt renderer injects fenced `git diff --stat` code block instead of full raw diff.
+  - [ ] Multi-question `ask` schema (`IReadOnlyList<QuestionItem>`) and `HumanInterruptionException` collection support implemented.
+  - [ ] `TaskOrchestrator` persists all batched questions and resumes when all are answered.
+  - [ ] `task-review` stage directives in standard workflows instruct agent to consolidate all questions into a single `ask` call.
+- [ ] **Step 9.18: Agentic Stage Summary Fidelity & Stepper Readability Polish**
+  - [ ] `CrucibleAgentHarness`, `AcpAgentHarness`, and `PiRpcAgentHarness` return only the final assistant message as stage summary.
+  - [ ] `PipelineStepper.razor` drops `DisplayName` and `StatusText` text elements below circles.
+  - [ ] Full stage name and execution status displayed via comprehensive tooltips.
+- [ ] **Phase 9 Final Verification:** Complete test suite passes: `dotnet test` (all unit, integration, and E2E tests passing).
 

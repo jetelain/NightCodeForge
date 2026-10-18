@@ -9,3 +9,5 @@ Clean break policy : we are still in early developpement stage. Do not try to ha
 Avoid magic number and strings. Use constants or enums. This avoid bugs and make code easier to maintain.
 
 Avoid creating synthetic values for something that should exists in database, make a hard error. For instance, if a workflow is not found, throw an exception. Do not create a default workflow on the fly. Instead, return the proper exception so that the UI can display an appropriate message.
+
+Planning documents (docs/plan) are **specifications**: they state required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
