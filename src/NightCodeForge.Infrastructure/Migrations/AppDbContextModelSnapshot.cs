@@ -23,6 +23,9 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("AllowNoTests")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("HarnessConfigurationJson")
                         .HasColumnType("TEXT");
 
@@ -84,6 +87,123 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.HasIndex("WorkspaceId");
 
                     b.ToTable("AgentProfiles");
+                });
+
+            modelBuilder.Entity("NightCodeForge.Core.Domain.Conversation", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AgentProfileId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("AttemptIndex")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ConversationType")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("HarnessId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ModelName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StageId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("StageKind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Summary")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("TaskId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TranscriptFileName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("WorkspaceId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WorkspaceId");
+
+                    b.HasIndex("TaskId", "StageId", "AttemptIndex");
+
+                    b.ToTable("Conversations");
+                });
+
+            modelBuilder.Entity("NightCodeForge.Core.Domain.ConversationTurn", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Content")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ConversationId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("DurationMs")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsError")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ThinkingTrace")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("Timestamp")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ToolArguments")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ToolName")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ToolResult")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TurnIndex")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConversationId", "TurnIndex");
+
+                    b.ToTable("ConversationTurns");
                 });
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.ExecutionLog", b =>
@@ -178,6 +298,10 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<int>("Priority")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("SquashCommitSha")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("Status")
                         .HasColumnType("INTEGER");
 
@@ -189,14 +313,93 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("Version")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(1);
+
+                    b.Property<int?>("WorkflowId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("WorkspaceId")
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 
+                    b.HasIndex("WorkflowId");
+
                     b.HasIndex("WorkspaceId");
 
                     b.ToTable("Tasks");
+                });
+
+            modelBuilder.Entity("NightCodeForge.Core.Domain.ForgeTaskHistory", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("BaseBranch")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChangeReason")
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ChangedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChangedBy")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CurrentStageId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FeatureBranch")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("MergeMode")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SerializedDependencies")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TaskId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChangedAt");
+
+                    b.HasIndex("TaskId", "Version")
+                        .IsUnique();
+
+                    b.ToTable("TaskHistories", (string)null);
                 });
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.Question", b =>
@@ -281,6 +484,60 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.HasIndex("TaskId");
 
                     b.ToTable("StageCheckpoints");
+                });
+
+            modelBuilder.Entity("NightCodeForge.Core.Domain.StageDefinition", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ConfigurationJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CsharpImplementationType")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Icon")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("⚙️");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("SequenceOrder")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("StageId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("WorkflowId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WorkflowId", "SequenceOrder");
+
+                    b.HasIndex("WorkflowId", "StageId")
+                        .IsUnique();
+
+                    b.ToTable("StageDefinitions");
                 });
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.StageExecutionRecord", b =>
@@ -391,6 +648,58 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.ToTable("TaskDependencies");
                 });
 
+            modelBuilder.Entity("NightCodeForge.Core.Domain.WorkflowDefinition", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Icon")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("⚡");
+
+                    b.Property<bool>("IsDefault")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("WorkspaceId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("WorkspaceId");
+
+                    b.ToTable("WorkflowDefinitions");
+                });
+
             modelBuilder.Entity("NightCodeForge.Core.Domain.Workspace", b =>
                 {
                     b.Property<int>("Id")
@@ -415,6 +724,9 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("DefaultWorkflowId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int>("ExecutionMode")
                         .HasColumnType("INTEGER");
@@ -460,6 +772,34 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Navigation("Workspace");
                 });
 
+            modelBuilder.Entity("NightCodeForge.Core.Domain.Conversation", b =>
+                {
+                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "ForgeTask")
+                        .WithMany("Conversations")
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("NightCodeForge.Core.Domain.Workspace", "Workspace")
+                        .WithMany("Conversations")
+                        .HasForeignKey("WorkspaceId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("ForgeTask");
+
+                    b.Navigation("Workspace");
+                });
+
+            modelBuilder.Entity("NightCodeForge.Core.Domain.ConversationTurn", b =>
+                {
+                    b.HasOne("NightCodeForge.Core.Domain.Conversation", "Conversation")
+                        .WithMany("Turns")
+                        .HasForeignKey("ConversationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Conversation");
+                });
+
             modelBuilder.Entity("NightCodeForge.Core.Domain.ExecutionLog", b =>
                 {
                     b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "ForgeTask")
@@ -473,13 +813,31 @@ namespace NightCodeForge.Infrastructure.Migrations
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.ForgeTask", b =>
                 {
+                    b.HasOne("NightCodeForge.Core.Domain.WorkflowDefinition", "Workflow")
+                        .WithMany("Tasks")
+                        .HasForeignKey("WorkflowId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("NightCodeForge.Core.Domain.Workspace", "Workspace")
                         .WithMany("Tasks")
                         .HasForeignKey("WorkspaceId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.Navigation("Workflow");
+
                     b.Navigation("Workspace");
+                });
+
+            modelBuilder.Entity("NightCodeForge.Core.Domain.ForgeTaskHistory", b =>
+                {
+                    b.HasOne("NightCodeForge.Core.Domain.ForgeTask", "ForgeTask")
+                        .WithMany("History")
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ForgeTask");
                 });
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.Question", b =>
@@ -502,6 +860,17 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("ForgeTask");
+                });
+
+            modelBuilder.Entity("NightCodeForge.Core.Domain.StageDefinition", b =>
+                {
+                    b.HasOne("NightCodeForge.Core.Domain.WorkflowDefinition", "Workflow")
+                        .WithMany("Stages")
+                        .HasForeignKey("WorkflowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Workflow");
                 });
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.StageExecutionRecord", b =>
@@ -534,9 +903,26 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Navigation("ForgeTask");
                 });
 
+            modelBuilder.Entity("NightCodeForge.Core.Domain.WorkflowDefinition", b =>
+                {
+                    b.HasOne("NightCodeForge.Core.Domain.Workspace", "Workspace")
+                        .WithMany("Workflows")
+                        .HasForeignKey("WorkspaceId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Workspace");
+                });
+
+            modelBuilder.Entity("NightCodeForge.Core.Domain.Conversation", b =>
+                {
+                    b.Navigation("Turns");
+                });
+
             modelBuilder.Entity("NightCodeForge.Core.Domain.ForgeTask", b =>
                 {
                     b.Navigation("Checkpoints");
+
+                    b.Navigation("Conversations");
 
                     b.Navigation("Dependencies");
 
@@ -546,14 +932,27 @@ namespace NightCodeForge.Infrastructure.Migrations
 
                     b.Navigation("ExecutionRecords");
 
+                    b.Navigation("History");
+
                     b.Navigation("Questions");
+                });
+
+            modelBuilder.Entity("NightCodeForge.Core.Domain.WorkflowDefinition", b =>
+                {
+                    b.Navigation("Stages");
+
+                    b.Navigation("Tasks");
                 });
 
             modelBuilder.Entity("NightCodeForge.Core.Domain.Workspace", b =>
                 {
                     b.Navigation("AgentProfiles");
 
+                    b.Navigation("Conversations");
+
                     b.Navigation("Tasks");
+
+                    b.Navigation("Workflows");
                 });
 #pragma warning restore 612, 618
         }

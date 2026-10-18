@@ -74,6 +74,23 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         return _wslMetadataService.GetDefaultUserName();
     }
 
+    public string ToHostPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return path;
+        }
+
+        if (IsWindows && (path.StartsWith('/') || path.StartsWith('~')) && !path.StartsWith("//"))
+        {
+            var distro = GetWslDistributionName();
+            var user = GetWslUserName();
+            return WslPathConverter.ToWslUncPath(path, distro, user);
+        }
+
+        return path;
+    }
+
     public string GetAgentWorkspaceRootPath(int workspaceId)
     {
         if (IsWindows)

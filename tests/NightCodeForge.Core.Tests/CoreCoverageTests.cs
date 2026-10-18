@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
@@ -27,6 +28,17 @@ public class CoreCoverageTests : IDisposable
             if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, true);
         }
         catch { }
+    }
+
+    private static TaskMarkdownSyncService CreateSyncService(ITaskRepository repo)
+    {
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        services.AddSingleton<ITaskRepository>(repo);
+        var depStore = new InMemoryTaskDependencyStore();
+        services.AddSingleton<ITaskDependencyStore>(depStore);
+        services.AddSingleton<IDependencyResolutionEngine>(new DependencyResolutionEngine(depStore));
+        var sp = services.BuildServiceProvider();
+        return new TaskMarkdownSyncService(sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>());
     }
 
     [Fact]
@@ -77,7 +89,7 @@ public class CoreCoverageTests : IDisposable
     public async Task ArchiveOrCleanupTaskFileAsync_ArchivesAndDeletesCorrectly()
     {
         var repo = new InMemoryTaskRepository();
-        var sync = new TaskMarkdownSyncService(repo);
+        var sync = CreateSyncService(repo);
 
         var task = new ForgeTask { Id = 500, Title = "Archival Test", Description = "Test" };
         var filePath = await sync.SyncTaskToDiskAsync(task, _tempDir);
@@ -100,7 +112,7 @@ public class CoreCoverageTests : IDisposable
     public void Watcher_StartAndStop_DoNotThrow()
     {
         var repo = new InMemoryTaskRepository();
-        using var sync = new TaskMarkdownSyncService(repo);
+        using var sync = CreateSyncService(repo);
 
         sync.StartWatching(1, _tempDir);
         sync.StartWatching(1, _tempDir); // Idempotent call
@@ -160,7 +172,7 @@ public class CoreCoverageTests : IDisposable
     public void GenerateMarkdown_IncludesQuestionsWhenPresent()
     {
         var repo = new InMemoryTaskRepository();
-        var sync = new TaskMarkdownSyncService(repo);
+        var sync = CreateSyncService(repo);
 
         var task = new ForgeTask
         {

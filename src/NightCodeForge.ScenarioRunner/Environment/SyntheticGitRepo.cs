@@ -54,6 +54,8 @@ obj/
 .vs/
 docs/tasks/
 docs/transcripts/
+TestResults/
+*.trx
 ");
 
         // 2. Calculator.cs

@@ -25,6 +25,7 @@ public class AppDbContext : DbContext
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<WorkflowDefinition> WorkflowDefinitions => Set<WorkflowDefinition>();
     public DbSet<StageDefinition> StageDefinitions => Set<StageDefinition>();
+    public DbSet<ForgeTaskHistory> TaskHistories => Set<ForgeTaskHistory>();
 
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {
@@ -141,6 +142,7 @@ public class AppDbContext : DbContext
             b.Property(i => i.LastHangfireJobId).HasMaxLength(128);
             b.Property(i => i.SquashCommitSha).HasMaxLength(64);
             b.Property(i => i.WorkflowId);
+            b.Property(i => i.Version).HasDefaultValue(1);
 
             b.HasOne(i => i.Workflow)
                 .WithMany(w => w.Tasks)
@@ -180,6 +182,11 @@ public class AppDbContext : DbContext
             b.HasMany(i => i.Conversations)
                 .WithOne(c => c.ForgeTask)
                 .HasForeignKey(c => c.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasMany(i => i.History)
+                .WithOne(h => h.ForgeTask)
+                .HasForeignKey(h => h.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -329,6 +336,34 @@ public class AppDbContext : DbContext
             b.HasOne(s => s.Workflow)
                 .WithMany(w => w.Stages)
                 .HasForeignKey(s => s.WorkflowId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // 14. ForgeTaskHistory
+        modelBuilder.Entity<ForgeTaskHistory>(b =>
+        {
+            b.ToTable("TaskHistories");
+            b.HasKey(h => h.Id);
+            b.Property(h => h.Version).IsRequired();
+            b.Property(h => h.Title).IsRequired().HasMaxLength(512);
+            b.Property(h => h.Description).IsRequired();
+            b.Property(h => h.Status).HasConversion<int>();
+            b.Property(h => h.Priority).IsRequired();
+            b.Property(h => h.MergeMode).HasConversion<int>();
+            b.Property(h => h.BaseBranch).IsRequired().HasMaxLength(128);
+            b.Property(h => h.FeatureBranch).HasMaxLength(256);
+            b.Property(h => h.CurrentStageId).HasMaxLength(128);
+            b.Property(h => h.SerializedDependencies).IsRequired();
+            b.Property(h => h.ChangedAt).IsRequired();
+            b.Property(h => h.ChangedBy).IsRequired().HasMaxLength(128);
+            b.Property(h => h.ChangeReason).HasMaxLength(1024);
+
+            b.HasIndex(h => new { h.TaskId, h.Version }).IsUnique();
+            b.HasIndex(h => h.ChangedAt);
+
+            b.HasOne(h => h.ForgeTask)
+                .WithMany(t => t.History)
+                .HasForeignKey(h => h.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

@@ -291,6 +291,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
         }
 
+        bool isResumedRun = task.IsWaitingForHuman || !string.IsNullOrWhiteSpace(task.InterruptedStageId);
         if (task.IsWaitingForHuman)
         {
             task.IsWaitingForHuman = false;
@@ -309,28 +310,69 @@ public class TaskOrchestrator : ITaskOrchestrator
             CurrentProfile = profile
         };
 
-        var targetSyncPath = (!string.IsNullOrWhiteSpace(taskWorkingPath) && Directory.Exists(taskWorkingPath))
-            ? taskWorkingPath
-            : workspace.RepositoryPath;
+        var hostWorkingPath = !string.IsNullOrWhiteSpace(taskWorkingPath) ? _pathResolver.ToHostPath(taskWorkingPath) : null;
+        if (string.IsNullOrWhiteSpace(hostWorkingPath))
+        {
+            hostWorkingPath = taskWorkingPath;
+        }
 
+        var hostRepoPath = !string.IsNullOrWhiteSpace(workspace.RepositoryPath) ? _pathResolver.ToHostPath(workspace.RepositoryPath) : null;
+        if (string.IsNullOrWhiteSpace(hostRepoPath))
+        {
+            hostRepoPath = workspace.RepositoryPath;
+        }
+
+        var targetSyncPath = (!string.IsNullOrWhiteSpace(hostWorkingPath) && Directory.Exists(hostWorkingPath))
+            ? hostWorkingPath
+            : hostRepoPath;
+
+        IReadOnlyDictionary<int, Services.TaskBaselineEntry>? baselineSnapshot = null;
         if (!string.IsNullOrWhiteSpace(targetSyncPath) && Directory.Exists(targetSyncPath))
         {
             try
             {
-                var syncedFile = await _markdownSyncService.SyncTaskToDiskAsync(task, targetSyncPath, cancellationToken: cancellationToken);
-                var relPath = Path.GetRelativePath(targetSyncPath, syncedFile).Replace('\\', '/');
-                pipelineContext.DataBag.Set(PipelineDataBagKeys.TaskMarkdownPath, relPath);
-
-                if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
-                    Directory.Exists(workspace.RepositoryPath) &&
-                    !string.Equals(workspace.RepositoryPath, targetSyncPath, StringComparison.OrdinalIgnoreCase))
+                // If resuming from human interruption or interrupted stage, run read-back first to preserve edits made before pause
+                if (isResumedRun)
                 {
-                    await _markdownSyncService.SyncTaskToDiskAsync(task, workspace.RepositoryPath, cancellationToken: cancellationToken);
+                    var preserveActor = AuditActors.GetActorForStage(stage.StageId);
+                    await _markdownSyncService.SyncAllTasksFromDiskAsync(
+                        workspace,
+                        targetSyncPath,
+                        hostRepoPath,
+                        baselineSnapshot: null,
+                        preserveActor,
+                        TaskSyncConstants.PreserveEditsBeforeResumeReason,
+                        cancellationToken);
+                }
+
+                var preSyncResult = await _markdownSyncService.SyncAllTasksToDiskAsync(
+                    workspace,
+                    targetSyncPath,
+                    hostRepoPath,
+                    cancellationToken);
+
+                if (preSyncResult != null)
+                {
+                    baselineSnapshot = preSyncResult.Baseline;
+
+                    if (preSyncResult.WrittenPaths != null && preSyncResult.WrittenPaths.TryGetValue(task.Id, out var currentTaskFile))
+                    {
+                        var relPath = Path.GetRelativePath(targetSyncPath, currentTaskFile).Replace('\\', '/');
+                        pipelineContext.DataBag.Set(PipelineDataBagKeys.TaskMarkdownPath, relPath);
+                    }
                 }
             }
-            catch (Exception mex)
+            catch (OperationCanceledException)
             {
-                _logger.LogWarning(mex, "Failed pre-stage mirroring of task #{TaskId} to docs/tasks/*.md", task.Id);
+                throw;
+            }
+            catch (TaskMarkdownSyncException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new TaskMarkdownSyncException($"Pre-stage task synchronization failed for task #{task.Id}: {ex.Message}", ex, taskId: task.Id);
             }
         }
 
@@ -619,8 +661,89 @@ public class TaskOrchestrator : ITaskOrchestrator
             pipelineContext.DataBag.Remove(PipelineDataBagKeys.PendingProposals);
         }
 
-        // Read back any disk modifications to the task specification document
-        await ReadBackTaskMarkdownFromDiskAsync(stage, workspace, task, pipelineContext, targetSyncPath, cancellationToken);
+        // Read back all disk modifications to tasks using single authority (TaskMarkdownSyncService)
+        if (!string.IsNullOrWhiteSpace(targetSyncPath) && Directory.Exists(targetSyncPath))
+        {
+            var stageActor = AuditActors.GetActorForStage(stage.StageId);
+            var stageReason = $"Stage '{stage.StageId}' completed disk synchronization";
+
+            IReadOnlyList<ForgeTask> refreshedTasks;
+            try
+            {
+                refreshedTasks = await _markdownSyncService.SyncAllTasksFromDiskAsync(
+                    workspace,
+                    targetSyncPath,
+                    hostRepoPath,
+                    baselineSnapshot,
+                    stageActor,
+                    stageReason,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (TaskMarkdownSyncException)
+            {
+                throw;
+            }
+            catch (TaskConcurrencyException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new TaskMarkdownSyncException(
+                    $"Post-stage disk synchronization failed for stage '{stage.StageId}' on task #{task.Id}: {ex.Message}",
+                    ex,
+                    taskId: task.Id);
+            }
+
+            var refreshedTask = refreshedTasks?.FirstOrDefault(t => t.Id == task.Id);
+            if (refreshedTask != null)
+            {
+                task.Title = refreshedTask.Title;
+                task.Description = refreshedTask.Description;
+                task.Priority = refreshedTask.Priority;
+                task.BaseBranch = refreshedTask.BaseBranch;
+                task.FeatureBranch = refreshedTask.FeatureBranch;
+                task.UpdatedAt = refreshedTask.UpdatedAt;
+                task.Version = refreshedTask.Version;
+            }
+
+            if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase) && result.IsSuccess && !result.IsCancelled && !result.NeedsClarification)
+            {
+                bool modifiedInThisStage = false;
+                if (baselineSnapshot != null && baselineSnapshot.TryGetValue(task.Id, out var baseEntry))
+                {
+                    if (task.Version > baseEntry.Version ||
+                        !string.Equals(task.Description?.Trim(), baseEntry.Description?.Trim(), StringComparison.Ordinal) ||
+                        !string.Equals(task.Title?.Trim(), baseEntry.Frontmatter.Title?.Trim(), StringComparison.Ordinal))
+                    {
+                        modifiedInThisStage = true;
+                    }
+                }
+
+                // Only an earlier recorded modification (version beyond the creation baseline) excuses an unchanged resumed run.
+                bool alreadyModifiedByEarlierRun = baselineSnapshot != null &&
+                                                   baselineSnapshot.TryGetValue(task.Id, out var b) &&
+                                                   b.Version > 1;
+
+                if (!modifiedInThisStage && !alreadyModifiedByEarlierRun)
+                {
+                    throw new WorkflowExecutionException($"Stage '{stage.StageId}' completed without producing a modified task specification document.");
+                }
+
+                if (!string.IsNullOrWhiteSpace(task.Description))
+                {
+                    pipelineContext.DataBag.Set(PipelineDataBagKeys.ApprovedPlan, task.Description);
+                    if (pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview)) == null)
+                    {
+                        pipelineContext.DataBag.Set(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview), task.Description);
+                    }
+                }
+            }
+        }
 
         // 5. Result Evaluation
         if (result.IsCancelled || cancellationToken.IsCancellationRequested)
@@ -1309,154 +1432,18 @@ public class TaskOrchestrator : ITaskOrchestrator
         return StageExecutionResult.Failure(runResult.Error ?? "Stage failed.", record: record);
     }
 
-    private async Task ReadBackTaskMarkdownFromDiskAsync(
-        IWorkflowStage stage,
-        Workspace workspace,
-        ForgeTask task,
-        PipelineContext pipelineContext,
-        string targetSyncPath,
-        CancellationToken cancellationToken)
-    {
-        if (_markdownSyncService == null || string.IsNullOrWhiteSpace(targetSyncPath) || !Directory.Exists(targetSyncPath))
-        {
-            return;
-        }
-
-        try
-        {
-            var relPath = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
-            string? targetFile = null;
-
-            if (!string.IsNullOrWhiteSpace(relPath))
-            {
-                var candidate = Path.Combine(targetSyncPath, relPath);
-                if (File.Exists(candidate))
-                {
-                    targetFile = candidate;
-                }
-            }
-
-            if (targetFile == null)
-            {
-                var tasksDir = Path.Combine(targetSyncPath, "docs", "tasks");
-                if (Directory.Exists(tasksDir))
-                {
-                    var files = Directory.GetFiles(tasksDir, "*.md");
-                    foreach (var file in files)
-                    {
-                        try
-                        {
-                            var content = await File.ReadAllTextAsync(file, cancellationToken);
-                            var (fm, _) = _markdownSyncService.ParseMarkdown(content);
-                            if (fm.Id == task.Id)
-                            {
-                                targetFile = file;
-                                break;
-                            }
-                        }
-                        catch
-                        {
-                            // Ignore unreadable files during scan
-                        }
-                    }
-                }
-            }
-
-            if (targetFile == null || !File.Exists(targetFile))
-            {
-                return;
-            }
-
-            // Sync modified file from disk into repository and database
-            await _markdownSyncService.ProcessFileChangedAsync(targetFile, workspace.Id, expectedTaskId: task.Id, cancellationToken: cancellationToken);
-
-            // Directly read and apply disk description and title to ensure in-memory task reflects agent edits
-            if (File.Exists(targetFile))
-            {
-                try
-                {
-                    var fileContent = await File.ReadAllTextAsync(targetFile, cancellationToken);
-                    var (fm, body) = _markdownSyncService.ParseMarkdown(fileContent);
-                    var diskDesc = Services.TaskMarkdownSyncService.ExtractDescriptionFromBody(body);
-                    if (!string.IsNullOrWhiteSpace(diskDesc))
-                    {
-                        task.Description = diskDesc;
-                    }
-                    if (!string.IsNullOrWhiteSpace(fm.Title) &&
-                        !string.Equals(fm.Title.Trim(), "Task", StringComparison.OrdinalIgnoreCase))
-                    {
-                        task.Title = fm.Title.Trim();
-                    }
-                }
-                catch (Exception pex)
-                {
-                    _logger.LogDebug(pex, "Failed direct parse of task markdown file {Path}", targetFile);
-                }
-            }
-
-            // Refresh task from repository to capture agent's updated description, title, and dependencies
-            var refreshedTask = await _taskRepository.GetByIdAsync(task.Id, cancellationToken);
-            if (refreshedTask != null)
-            {
-                if (!string.IsNullOrWhiteSpace(refreshedTask.Title) && !string.Equals(refreshedTask.Title.Trim(), "Task", StringComparison.OrdinalIgnoreCase)) task.Title = refreshedTask.Title;
-                if (!string.IsNullOrWhiteSpace(refreshedTask.Description)) task.Description = refreshedTask.Description;
-                task.Priority = refreshedTask.Priority;
-                task.BaseBranch = refreshedTask.BaseBranch;
-                task.FeatureBranch = refreshedTask.FeatureBranch;
-                task.UpdatedAt = refreshedTask.UpdatedAt;
-            }
-
-            // If this is the task-review stage, prioritize the disk description as the approved technical plan
-            if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrWhiteSpace(task.Description))
-            {
-                pipelineContext.DataBag.Set(PipelineDataBagKeys.ApprovedPlan, task.Description);
-                if (pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview)) == null)
-                {
-                    pipelineContext.DataBag.Set(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview), task.Description);
-                }
-            }
-
-            // Mirror the exact file to workspace RepositoryPath if different
-            if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
-                Directory.Exists(workspace.RepositoryPath) &&
-                !string.Equals(workspace.RepositoryPath, targetSyncPath, StringComparison.OrdinalIgnoreCase))
-            {
-                var destRelPath = !string.IsNullOrWhiteSpace(relPath) ? relPath : Path.GetRelativePath(targetSyncPath, targetFile);
-                var destFile = Path.Combine(workspace.RepositoryPath, destRelPath);
-                var destDir = Path.GetDirectoryName(destFile);
-                if (!string.IsNullOrWhiteSpace(destDir))
-                {
-                    Directory.CreateDirectory(destDir);
-                }
-
-                var diskContent = await File.ReadAllTextAsync(targetFile, cancellationToken);
-                _markdownSyncService.SuppressContentHash(diskContent);
-                await File.WriteAllTextAsync(destFile, diskContent, Encoding.UTF8, cancellationToken);
-            }
-
-            _logger.LogInformation("Read back modified task specification for task #{TaskId} from disk ({Path})", task.Id, targetFile);
-            await _taskRepository.AddExecutionLogAsync(new ExecutionLog
-            {
-                TaskId = task.Id,
-                Level = LogLevel.Information,
-                Message = $"Synchronized agent modifications to task specification from {Path.GetFileName(targetFile)} into task #{task.Id}.",
-                Timestamp = DateTime.UtcNow
-            }, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed reading back modified task specification for task #{TaskId} from disk", task.Id);
-        }
-    }
-
     private async Task SyncMarkdownTaskSafeAsync(Workspace workspace, ForgeTask task, CancellationToken cancellationToken)
     {
-        if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+        var hostRepoPath = !string.IsNullOrWhiteSpace(workspace.RepositoryPath) ? _pathResolver.ToHostPath(workspace.RepositoryPath) : null;
+        if (string.IsNullOrWhiteSpace(hostRepoPath))
+        {
+            hostRepoPath = workspace.RepositoryPath;
+        }
+        if (!string.IsNullOrWhiteSpace(hostRepoPath))
         {
             try
             {
-                await _markdownSyncService.SyncTaskToDiskAsync(task, workspace.RepositoryPath, cancellationToken: cancellationToken);
+                await _markdownSyncService.SyncTaskToDiskAsync(task, hostRepoPath, cancellationToken: cancellationToken);
             }
             catch (Exception mex)
             {

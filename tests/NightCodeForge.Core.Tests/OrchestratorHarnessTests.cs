@@ -80,6 +80,12 @@ public class OrchestratorHarnessTests
             return Task.FromResult(Path.Combine(workspacePath, $"task-{task.Id}.md"));
         }
 
+        public Task<SyncAllToDiskResult> SyncAllTasksToDiskAsync(Workspace workspace, string targetDirectory, string? hostRepositoryPath = null, CancellationToken cancellationToken = default)
+        {
+            SyncCount++;
+            return Task.FromResult(new SyncAllToDiskResult(new Dictionary<int, string>(), new Dictionary<int, TaskBaselineEntry>()));
+        }
+
         public Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task ProcessFileChangedAsync(string filePath, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive = true, CancellationToken cancellationToken = default)

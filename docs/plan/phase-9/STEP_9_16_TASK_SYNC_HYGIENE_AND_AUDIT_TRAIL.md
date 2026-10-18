@@ -90,35 +90,35 @@ The sync service constructor requires all dependencies (no optional parameters, 
 
 ## 4. Implementation Checklist & Deliverables
 
-- [ ] **Domain & migration**
-  - [ ] Actor/reason/default constants.
-  - [ ] `ForgeTaskHistory`, `History` navigation on `ForgeTask`, version token on `ForgeTask`, EF mapping, migration `AddTaskHistories`.
-  - [ ] `TaskMarkdownSyncException`, `TaskConcurrencyException`.
-- [ ] **Repository**
-  - [ ] History read/max-version operations.
-  - [ ] Atomic update-with-history and create-with-baseline operations (EF + in-memory).
-  - [ ] Confirm existing workspace-task, dependency read and dependency write operations exist on the repository interface; add if missing.
-- [ ] **Sync service**
-  - [ ] Constructor clean break (required `IServiceScopeFactory` only).
-  - [ ] Sync-all-to-disk (full backlog, dependencies, baseline snapshot).
-  - [ ] Sync-all-from-disk implementing section 3.3 (concurrency, status guard, dependency semantics, new-task ID write-back/rename/mirror, hash suppression for mirrors).
-  - [ ] No `AppDbContext` usage in Core.
-- [ ] **Orchestrator**
-  - [ ] Replace pre-stage and post-stage logic per 3.6, including interrupted-stage preservation and cancellation passthrough.
-  - [ ] Remove duplicated parsing and the null-check.
-- [ ] **Hygiene**
-  - [ ] Provisioning, git mirror sync, root `.gitignore`, `SyntheticRepoFixture`, `SyntheticGitRepo`.
-- [ ] **Tests**
-  - [ ] Sync-to-disk writes every task with dependencies.
-  - [ ] Round-trip: dependencies preserved; missing `depends_on` does not wipe; explicit empty removes.
-  - [ ] History: baseline created exactly once; versions increment only on real changes.
-  - [ ] Cycle detection (including cycles formed across two edited files) and unknown/cross-workspace dependency IDs.
-  - [ ] Concurrency conflict raises `TaskConcurrencyException`.
-  - [ ] Any status change on disk is rejected.
-  - [ ] New file: task created, ID written back, file renamed, host mirror correct, second read-back creates no duplicate; blank title fails.
-  - [ ] Watcher suppression of mirrored files.
-  - [ ] Unchanged files returned as unchanged; `task-review` with no modification fails; resumed `task-review` after an earlier edit does not fail.
-  - [ ] Agent edits before an `ask` survive resume.
-  - [ ] Cancellation is not wrapped.
-  - [ ] `.gitignore` entries present in all managed locations.
-- [ ] Run the full test suite including E2E, per AGENTS.md.
+- [x] **Domain & migration**
+  - [x] Actor/reason/default constants.
+  - [x] `ForgeTaskHistory`, `History` navigation on `ForgeTask`, version token on `ForgeTask`, EF mapping, migration `AddTaskHistories`.
+  - [x] `TaskMarkdownSyncException`, `TaskConcurrencyException`.
+- [x] **Repository**
+  - [x] History read/max-version operations.
+  - [x] Atomic update-with-history and create-with-baseline operations (EF + in-memory).
+  - [x] Confirm existing workspace-task, dependency read and dependency write operations exist on the repository interface; add if missing.
+- [x] **Sync service**
+  - [x] Constructor clean break (required `IServiceScopeFactory` only).
+  - [x] Sync-all-to-disk (full backlog, dependencies, baseline snapshot).
+  - [x] Sync-all-from-disk implementing section 3.3 (concurrency, status guard, dependency semantics, new-task ID write-back/rename/mirror, hash suppression for mirrors).
+  - [x] No `AppDbContext` usage in Core.
+- [x] **Orchestrator**
+  - [x] Replace pre-stage and post-stage logic per 3.6, including interrupted-stage preservation and cancellation passthrough.
+  - [x] Remove duplicated parsing and the null-check.
+- [x] **Hygiene**
+  - [x] Provisioning, git mirror sync, root `.gitignore`, `SyntheticRepoFixture`, `SyntheticGitRepo`.
+- [x] **Tests**
+  - [x] Sync-to-disk writes every task with dependencies.
+  - [x] Round-trip: dependencies preserved; missing `depends_on` does not wipe; explicit empty removes.
+  - [x] History: baseline created exactly once; versions increment only on real changes.
+  - [x] Cycle detection (including cycles formed across two edited files) and unknown/cross-workspace dependency IDs.
+  - [x] Concurrency conflict raises `TaskConcurrencyException`.
+  - [x] Any status change on disk is rejected.
+  - [x] New file: task created, ID written back, file renamed, host mirror correct, second read-back creates no duplicate; blank title fails.
+  - [x] Watcher suppression of mirrored files.
+  - [x] Unchanged files returned as unchanged; `task-review` with no modification fails; resumed `task-review` after an earlier edit does not fail.
+  - [x] Agent edits before an `ask` survive resume.
+  - [x] Cancellation is not wrapped.
+  - [x] `.gitignore` entries present in all managed locations.
+- [x] Run the full test suite including E2E, per AGENTS.md.

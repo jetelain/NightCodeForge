@@ -9,9 +9,14 @@ public interface ITaskMarkdownSyncService : IDisposable
 {
     string GenerateMarkdown(ForgeTask task, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null);
     (TaskFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent);
+    (TaskFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent, string? filePath) => ParseMarkdown(markdownContent);
     string ComputeContentHash(string content);
     void SuppressContentHash(string content) { }
     Task<string> SyncTaskToDiskAsync(ForgeTask task, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default);
+    Task<SyncAllToDiskResult> SyncAllTasksToDiskAsync(Workspace workspace, string targetDirectory, string? hostRepositoryPath = null, CancellationToken cancellationToken = default)
+        => Task.FromResult(new SyncAllToDiskResult(new Dictionary<int, string>(), new Dictionary<int, TaskBaselineEntry>()));
+    Task<IReadOnlyList<ForgeTask>> SyncAllTasksFromDiskAsync(Workspace workspace, string targetDirectory, string? hostRepositoryPath, IReadOnlyDictionary<int, TaskBaselineEntry>? baselineSnapshot, string changeActor, string? changeReason, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<ForgeTask>>(Array.Empty<ForgeTask>());
     Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default);
     Task ProcessFileContentAsync(string filePath, string content, int workspaceId, int? expectedTaskId, CancellationToken cancellationToken = default)
         => ProcessFileContentAsync(filePath, content, workspaceId, cancellationToken);

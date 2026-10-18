@@ -1,4 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 
@@ -29,11 +31,22 @@ public class TaskMarkdownSyncTests : IDisposable
         }
     }
 
+    private static TaskMarkdownSyncService CreateSyncService(ITaskRepository repo)
+    {
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        services.AddSingleton<ITaskRepository>(repo);
+        var depStore = new NightCodeForge.Core.Dependencies.InMemoryTaskDependencyStore();
+        services.AddSingleton<NightCodeForge.Core.Dependencies.ITaskDependencyStore>(depStore);
+        services.AddSingleton<NightCodeForge.Core.Dependencies.IDependencyResolutionEngine>(new NightCodeForge.Core.Dependencies.DependencyResolutionEngine(depStore));
+        var sp = services.BuildServiceProvider();
+        return new TaskMarkdownSyncService(sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>());
+    }
+
     [Fact]
     public void GenerateMarkdown_And_ParseMarkdown_RoundTripPreservesFrontmatter()
     {
         var repo = new InMemoryTaskRepository();
-        var sync = new TaskMarkdownSyncService(repo);
+        var sync = CreateSyncService(repo);
 
         var task = new ForgeTask
         {
@@ -70,7 +83,7 @@ public class TaskMarkdownSyncTests : IDisposable
     public async Task SyncTaskToDiskAsync_CreatesDatedMarkdownFileAndHandlesSlugCollisions()
     {
         var repo = new InMemoryTaskRepository();
-        var sync = new TaskMarkdownSyncService(repo);
+        var sync = CreateSyncService(repo);
 
         var task1 = new ForgeTask
         {
@@ -102,7 +115,7 @@ public class TaskMarkdownSyncTests : IDisposable
     public async Task ProcessFileContentAsync_ProtectsSystemManagedFieldsAndSyncsUserFields()
     {
         var repo = new InMemoryTaskRepository();
-        var sync = new TaskMarkdownSyncService(repo);
+        var sync = CreateSyncService(repo);
 
         var task = new ForgeTask
         {
@@ -118,7 +131,7 @@ public class TaskMarkdownSyncTests : IDisposable
 
         var filePath = await sync.SyncTaskToDiskAsync(task, _tempWorkspaceDir);
 
-        // Simulate external edit: user changes Title, but also tampers with protected Status and Stage
+        // Tampering with status throws TaskMarkdownSyncException per Step 9.16 fail-fast policy
         var tamperedMarkdown = @"---
 id: 200
 title: Updated User Title
@@ -134,7 +147,26 @@ base_branch: develop
 Updated user requirements on disk.
 ";
 
-        await sync.ProcessFileContentAsync(filePath, tamperedMarkdown, 1);
+        await Assert.ThrowsAsync<TaskMarkdownSyncException>(() =>
+            sync.ProcessFileContentAsync(filePath, tamperedMarkdown, 1));
+
+        // When status is omitted or matches current status, user fields sync correctly
+        var validMarkdown = @"---
+id: 200
+title: Updated User Title
+status: Implemented
+current_stage: code-review-fix
+priority: 5
+base_branch: develop
+---
+
+# Updated User Title
+
+## 📋 Requirements & Description
+Updated user requirements on disk.
+";
+
+        await sync.ProcessFileContentAsync(filePath, validMarkdown, 1);
 
         // Verify DB was updated for editable fields
         var updated = await repo.GetByIdAsync(200);
@@ -147,20 +179,13 @@ Updated user requirements on disk.
         // Verify protected fields were NOT modified in DB
         Assert.Equal(TaskOverallStatus.Implemented, updated.Status);
         Assert.Equal("implementation", updated.CurrentStageId);
-
-        // Verify file on disk was rewritten to restore protected fields
-        var diskContent = await File.ReadAllTextAsync(filePath);
-        var (restoredFm, _) = sync.ParseMarkdown(diskContent);
-        Assert.Equal("Implemented", restoredFm.Status);
-        Assert.Equal("implementation", restoredFm.CurrentStage);
-        Assert.Equal("Updated User Title", restoredFm.Title);
     }
 
     [Fact]
     public async Task ProcessFileContentAsync_AllocatesIdForNewDropInFileWithoutId()
     {
         var repo = new InMemoryTaskRepository();
-        var sync = new TaskMarkdownSyncService(repo);
+        var sync = CreateSyncService(repo);
 
         var dropInMarkdown = @"---
 title: Brand New Feature
@@ -201,7 +226,7 @@ Detailed spec of drop-in feature.
     public async Task EchoLoopSuppression_IgnoresSelfTriggeredWrites()
     {
         var repo = new InMemoryTaskRepository();
-        var sync = new TaskMarkdownSyncService(repo);
+        var sync = CreateSyncService(repo);
 
         var task = new ForgeTask
         {
@@ -229,7 +254,7 @@ Detailed spec of drop-in feature.
     public async Task ParseMarkdown_ExtractDescriptionFromBody_PreservesArchitectureAndAcceptanceCriteriaSections()
     {
         var repo = new InMemoryTaskRepository();
-        var sync = new TaskMarkdownSyncService(repo);
+        var sync = CreateSyncService(repo);
 
         var markdown = @"---
 id: 50
@@ -293,7 +318,7 @@ Support Stripe and PayPal with unified interface.
     public async Task ProcessFileChangedAsync_WithExpectedTaskId_UpdatesExistingTaskWhenIdOmittedInFrontmatter()
     {
         var repo = new InMemoryTaskRepository();
-        var sync = new TaskMarkdownSyncService(repo);
+        var sync = CreateSyncService(repo);
 
         var task = new ForgeTask
         {
@@ -338,7 +363,7 @@ Enriched description formulated by review agent directly on disk.
     public void GenerateMarkdown_StrictlyEmitsLfLineEndings()
     {
         var repo = new InMemoryTaskRepository();
-        var sync = new TaskMarkdownSyncService(repo);
+        var sync = CreateSyncService(repo);
 
         var task = new ForgeTask
         {
@@ -358,7 +383,7 @@ Enriched description formulated by review agent directly on disk.
     public async Task SyncTaskToDiskAsync_WritesPureLfContent_ToDisk()
     {
         var repo = new InMemoryTaskRepository();
-        var sync = new TaskMarkdownSyncService(repo);
+        var sync = CreateSyncService(repo);
 
         var task = new ForgeTask
         {

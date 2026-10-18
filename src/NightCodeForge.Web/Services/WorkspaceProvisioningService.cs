@@ -487,7 +487,7 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         try
         {
             var gitignorePath = Path.Combine(repoPath, ".gitignore");
-            var requiredEntries = new[] { "docs/tasks/", "docs/transcripts/" };
+            var requiredEntries = TaskSyncConstants.RequiredGitIgnoreEntries;
 
             if (File.Exists(gitignorePath))
             {
@@ -497,14 +497,14 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
 
                 if (missing.Count > 0)
                 {
-                    var textToAppend = "\n# NightCodeForge task artifacts and transcripts\n" + string.Join("\n", missing) + "\n";
+                    var textToAppend = "\n# NightCodeForge task artifacts, test outputs and transcripts\n" + string.Join("\n", missing) + "\n";
                     await File.AppendAllTextAsync(gitignorePath, textToAppend, cancellationToken);
                     _logger.LogInformation("Appended {Count} NightCodeForge entries to '{GitIgnorePath}'", missing.Count, gitignorePath);
                 }
             }
             else
             {
-                var initialContent = "# NightCodeForge task artifacts and transcripts\ndocs/tasks/\ndocs/transcripts/\n";
+                var initialContent = "# NightCodeForge task artifacts, test outputs and transcripts\n" + string.Join("\n", requiredEntries) + "\n";
                 await File.WriteAllTextAsync(gitignorePath, initialContent, cancellationToken);
                 _logger.LogInformation("Created '{GitIgnorePath}' with NightCodeForge entries", gitignorePath);
             }

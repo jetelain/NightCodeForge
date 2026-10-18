@@ -24,6 +24,7 @@ public class ForgeTask
     public string? LastHangfireJobId { get; set; }
     public string? SquashCommitSha { get; set; }
     public int? WorkflowId { get; set; }
+    public int Version { get; set; } = 1;
 
     public Workspace? Workspace { get; set; }
     public WorkflowDefinition? Workflow { get; set; }
@@ -34,6 +35,7 @@ public class ForgeTask
     public ICollection<StageExecutionRecord> ExecutionRecords { get; set; } = new List<StageExecutionRecord>();
     public ICollection<ExecutionLog> ExecutionLogs { get; set; } = new List<ExecutionLog>();
     public ICollection<Conversation> Conversations { get; set; } = new List<Conversation>();
+    public ICollection<ForgeTaskHistory> History { get; set; } = new List<ForgeTaskHistory>();
 }
 
 /// <summary>

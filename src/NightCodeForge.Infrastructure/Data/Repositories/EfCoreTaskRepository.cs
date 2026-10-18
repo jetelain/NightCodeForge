@@ -39,6 +39,7 @@ public class EfCoreTaskRepository : ITaskRepository
             .Include(i => i.ExecutionRecords)
             .Include(i => i.ExecutionLogs)
             .Include(i => i.Conversations)
+            .Include(i => i.History)
             .FirstOrDefaultAsync(i => i.Id == id, cancellationToken);
     }
 
@@ -59,14 +60,31 @@ public class EfCoreTaskRepository : ITaskRepository
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<ForgeTask> CreateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
+    public Task<ForgeTask> CreateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
     {
+        return CreateWithBaselineAsync(task, dependsOn, AuditActors.System, TaskSyncConstants.InitialTaskCreation, cancellationToken);
+    }
+
+    public async Task<ForgeTask> CreateWithBaselineAsync(ForgeTask task, IEnumerable<int>? dependsOn, string createdBy, string? reason, CancellationToken cancellationToken = default)
+    {
+        if (task.Version <= 0)
+        {
+            task.Version = 1;
+        }
+
+        // Task, dependencies and Version 1 baseline must be one atomic unit.
+        await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+
         _context.Tasks.Add(task);
         await _context.SaveChangesAsync(cancellationToken);
 
-        if (dependsOn != null)
+        var depList = dependsOn != null
+            ? dependsOn.Distinct().ToList()
+            : (task.Dependencies?.Select(d => d.DependsOnTaskId).Distinct().ToList() ?? new List<int>());
+
+        if (depList.Count > 0)
         {
-            foreach (var depId in dependsOn.Distinct())
+            foreach (var depId in depList)
             {
                 _context.TaskDependencies.Add(new TaskDependency
                 {
@@ -76,6 +94,28 @@ public class EfCoreTaskRepository : ITaskRepository
             }
             await _context.SaveChangesAsync(cancellationToken);
         }
+
+        var baselineHistory = new ForgeTaskHistory
+        {
+            TaskId = task.Id,
+            Version = task.Version,
+            Title = task.Title,
+            Description = task.Description,
+            Status = task.Status,
+            Priority = task.Priority,
+            MergeMode = task.MergeMode,
+            BaseBranch = task.BaseBranch,
+            FeatureBranch = task.FeatureBranch,
+            CurrentStageId = task.CurrentStageId,
+            SerializedDependencies = System.Text.Json.JsonSerializer.Serialize(depList),
+            ChangedAt = task.CreatedAt != default ? task.CreatedAt : DateTime.UtcNow,
+            ChangedBy = createdBy,
+            ChangeReason = reason
+        };
+
+        _context.TaskHistories.Add(baselineHistory);
+        await _context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         return task;
     }
@@ -89,7 +129,10 @@ public class EfCoreTaskRepository : ITaskRepository
         {
             if (!ReferenceEquals(existing, task))
             {
+                // The version token is owned by UpdateWithHistoryAsync: a stale in-memory copy must never regress it.
+                var currentVersion = existing.Version;
                 _context.Entry(existing).CurrentValues.SetValues(task);
+                existing.Version = currentVersion;
             }
         }
         else
@@ -116,6 +159,121 @@ public class EfCoreTaskRepository : ITaskRepository
         }
 
         await _context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task UpdateWithHistoryAsync(ForgeTask task, IEnumerable<int>? dependsOn, string changedBy, string? reason, CancellationToken cancellationToken = default)
+    {
+        var currentMaxVersion = await _context.TaskHistories
+            .Where(h => h.TaskId == task.Id)
+            .Select(h => (int?)h.Version)
+            .MaxAsync(cancellationToken) ?? 0;
+
+        task.Version = Math.Max(task.Version + 1, currentMaxVersion + 1);
+
+        var existing = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == task.Id)
+                       ?? await _context.Tasks.FindAsync(new object[] { task.Id }, cancellationToken);
+
+        if (existing != null)
+        {
+            if (!ReferenceEquals(existing, task))
+            {
+                _context.Entry(existing).CurrentValues.SetValues(task);
+            }
+        }
+        else
+        {
+            _context.Tasks.Update(task);
+        }
+
+        List<int> depList;
+        if (dependsOn != null)
+        {
+            depList = dependsOn.Distinct().ToList();
+            var existingDeps = await _context.TaskDependencies
+                .Where(d => d.TaskId == task.Id)
+                .ToListAsync(cancellationToken);
+
+            _context.TaskDependencies.RemoveRange(existingDeps);
+
+            foreach (var depId in depList)
+            {
+                _context.TaskDependencies.Add(new TaskDependency
+                {
+                    TaskId = task.Id,
+                    DependsOnTaskId = depId
+                });
+            }
+        }
+        else
+        {
+            depList = await _context.TaskDependencies
+                .Where(d => d.TaskId == task.Id)
+                .Select(d => d.DependsOnTaskId)
+                .ToListAsync(cancellationToken);
+        }
+
+        var history = new ForgeTaskHistory
+        {
+            TaskId = task.Id,
+            Version = task.Version,
+            Title = task.Title,
+            Description = task.Description,
+            Status = task.Status,
+            Priority = task.Priority,
+            MergeMode = task.MergeMode,
+            BaseBranch = task.BaseBranch,
+            FeatureBranch = task.FeatureBranch,
+            CurrentStageId = task.CurrentStageId,
+            SerializedDependencies = System.Text.Json.JsonSerializer.Serialize(depList),
+            ChangedAt = DateTime.UtcNow,
+            ChangedBy = changedBy,
+            ChangeReason = reason
+        };
+
+        _context.TaskHistories.Add(history);
+        await _context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ForgeTaskHistory>> GetHistoryAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        return await _context.TaskHistories
+            .AsNoTracking()
+            .Where(h => h.TaskId == taskId)
+            .OrderBy(h => h.Version)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<int> GetMaxHistoryVersionAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        return await _context.TaskHistories
+            .Where(h => h.TaskId == taskId)
+            .Select(h => (int?)h.Version)
+            .MaxAsync(cancellationToken) ?? 0;
+    }
+
+    public async Task<IReadOnlyDictionary<int, IReadOnlyList<int>>> GetWorkspaceDependenciesAsync(int workspaceId, CancellationToken cancellationToken = default)
+    {
+        var taskIds = await _context.Tasks
+            .AsNoTracking()
+            .Where(t => t.WorkspaceId == workspaceId)
+            .Select(t => t.Id)
+            .ToListAsync(cancellationToken);
+
+        var deps = await _context.TaskDependencies
+            .AsNoTracking()
+            .Where(d => taskIds.Contains(d.TaskId))
+            .Select(d => new { d.TaskId, d.DependsOnTaskId })
+            .ToListAsync(cancellationToken);
+
+        var dict = taskIds.ToDictionary(id => id, id => (IReadOnlyList<int>)new List<int>());
+        foreach (var dep in deps)
+        {
+            if (dict.TryGetValue(dep.TaskId, out var list) && list is List<int> mutableList)
+            {
+                mutableList.Add(dep.DependsOnTaskId);
+            }
+        }
+        return dict;
     }
 
     public async Task<IReadOnlyList<int>> GetDependenciesAsync(int taskId, CancellationToken cancellationToken = default)

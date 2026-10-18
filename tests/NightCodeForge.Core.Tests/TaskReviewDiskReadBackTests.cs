@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
@@ -129,7 +130,11 @@ public class TaskReviewDiskReadBackTests : IDisposable
         var lockProvider = new WorkspaceLockProvider();
         var jobQueue = new FakeTaskJobQueue();
         var gitManager = new TestGitWorkspaceManager(_tempWorktreeDir);
-        var syncService = new TaskMarkdownSyncService(taskRepo);
+        var syncServices = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        syncServices.AddSingleton<ITaskRepository>(taskRepo);
+        syncServices.AddSingleton<IDependencyResolutionEngine>(depEngine);
+        var syncSp = syncServices.BuildServiceProvider();
+        var syncService = new TaskMarkdownSyncService(syncSp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>());
 
         var harness = new TestHarness();
         var harnessRegistry = new TestHarnessRegistry(harness);

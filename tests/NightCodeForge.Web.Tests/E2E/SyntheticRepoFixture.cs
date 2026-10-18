@@ -108,7 +108,7 @@ public class CalculatorTests
         await File.WriteAllTextAsync(Path.Combine(RepositoryPath, "AGENTS.md"), 
             "# Directives\n- Maintain 100% test coverage.\n- Public APIs must include XML doc.\n- Add unit tests for every method.");
 
-        await File.WriteAllTextAsync(Path.Combine(RepositoryPath, ".gitignore"), "bin/\nobj/\n.vs/\ndocs/tasks/\ndocs/transcripts/\n");
+        await File.WriteAllTextAsync(Path.Combine(RepositoryPath, ".gitignore"), "bin/\nobj/\n.vs/\ndocs/tasks/\ndocs/transcripts/\nTestResults/\n*.trx\n");
         await File.WriteAllTextAsync(Path.Combine(RepositoryPath, ".gitattributes"), "* text=auto eol=lf\n");
 
         // Create solution file so dotnet build & dotnet test work cleanly in root directory

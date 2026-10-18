@@ -429,3 +429,10 @@ FodyWeavers.xsd
 *.db
 *.db-shm
 *.db-wal
+
+# NightCodeForge task artifacts, test outputs and transcripts
+docs/tasks/
+docs/transcripts/
+TestResults/
+*.trx
+

@@ -17,8 +17,13 @@ public interface ITaskRepository
 
     Task<IReadOnlyList<ForgeTask>> GetByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default);
     Task<ForgeTask> CreateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default);
+    Task<ForgeTask> CreateWithBaselineAsync(ForgeTask task, IEnumerable<int>? dependsOn, string createdBy, string? reason, CancellationToken cancellationToken = default);
     Task UpdateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default);
+    Task UpdateWithHistoryAsync(ForgeTask task, IEnumerable<int>? dependsOn, string changedBy, string? reason, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<int>> GetDependenciesAsync(int taskId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyDictionary<int, IReadOnlyList<int>>> GetWorkspaceDependenciesAsync(int workspaceId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ForgeTaskHistory>> GetHistoryAsync(int taskId, CancellationToken cancellationToken = default);
+    Task<int> GetMaxHistoryVersionAsync(int taskId, CancellationToken cancellationToken = default);
     Task DeleteAsync(int id, CancellationToken cancellationToken = default);
     Task<Question?> GetQuestionByIdAsync(int questionId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Question>> GetQuestionsByStatusAsync(QuestionStatus status, int? workspaceId = null, CancellationToken cancellationToken = default);
@@ -92,6 +97,7 @@ public class InMemoryTaskRepository : ITaskRepository
     private readonly object _lock = new();
     private readonly Dictionary<int, ForgeTask> _tasks = new();
     private readonly Dictionary<int, List<int>> _dependencies = new();
+    private readonly Dictionary<int, List<ForgeTaskHistory>> _taskHistories = new();
     private readonly Dictionary<int, Question> _questions = new();
     private readonly List<StageExecutionRecord> _records = new();
     private readonly List<StageCheckpoint> _checkpoints = new();
@@ -99,6 +105,7 @@ public class InMemoryTaskRepository : ITaskRepository
     private readonly Dictionary<int, Conversation> _conversations = new();
     private readonly List<ConversationTurn> _turns = new();
     private int _nextId = 1;
+    private int _nextHistoryId = 1;
     private int _nextQuestionId = 1;
     private int _nextCheckpointId = 1;
     private int _nextRecordId = 1;
@@ -144,6 +151,11 @@ public class InMemoryTaskRepository : ITaskRepository
 
     public Task<ForgeTask> CreateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
     {
+        return CreateWithBaselineAsync(task, dependsOn, AuditActors.System, TaskSyncConstants.InitialTaskCreation, cancellationToken);
+    }
+
+    public Task<ForgeTask> CreateWithBaselineAsync(ForgeTask task, IEnumerable<int>? dependsOn, string createdBy, string? reason, CancellationToken cancellationToken = default)
+    {
         lock (_lock)
         {
             if (task.Id <= 0)
@@ -155,10 +167,46 @@ public class InMemoryTaskRepository : ITaskRepository
                 _nextId = task.Id + 1;
             }
 
-            var depList = dependsOn != null ? dependsOn.ToList() : new List<int>();
+            if (task.Version <= 0)
+            {
+                task.Version = 1;
+            }
+
+            var depList = dependsOn != null
+                ? dependsOn.Distinct().ToList()
+                : (task.Dependencies?.Select(d => d.DependsOnTaskId).Distinct().ToList() ?? new List<int>());
+
             _tasks[task.Id] = task;
             _dependencies[task.Id] = depList;
             task.Dependencies = depList.Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
+
+            var baselineHistory = new ForgeTaskHistory
+            {
+                Id = _nextHistoryId++,
+                TaskId = task.Id,
+                Version = task.Version,
+                Title = task.Title,
+                Description = task.Description,
+                Status = task.Status,
+                Priority = task.Priority,
+                MergeMode = task.MergeMode,
+                BaseBranch = task.BaseBranch,
+                FeatureBranch = task.FeatureBranch,
+                CurrentStageId = task.CurrentStageId,
+                SerializedDependencies = System.Text.Json.JsonSerializer.Serialize(depList),
+                ChangedAt = task.CreatedAt != default ? task.CreatedAt : DateTime.UtcNow,
+                ChangedBy = createdBy,
+                ChangeReason = reason,
+                ForgeTask = task
+            };
+
+            if (!_taskHistories.TryGetValue(task.Id, out var historyList))
+            {
+                historyList = new List<ForgeTaskHistory>();
+                _taskHistories[task.Id] = historyList;
+            }
+            historyList.Add(baselineHistory);
+            task.History.Add(baselineHistory);
 
             foreach (var q in task.Questions)
             {
@@ -177,7 +225,7 @@ public class InMemoryTaskRepository : ITaskRepository
             _tasks[task.Id] = task;
             if (dependsOn != null)
             {
-                var depList = dependsOn.ToList();
+                var depList = dependsOn.Distinct().ToList();
                 _dependencies[task.Id] = depList;
                 task.Dependencies = depList.Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
             }
@@ -189,6 +237,112 @@ public class InMemoryTaskRepository : ITaskRepository
             }
 
             return Task.CompletedTask;
+        }
+    }
+
+    public Task UpdateWithHistoryAsync(ForgeTask task, IEnumerable<int>? dependsOn, string changedBy, string? reason, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var maxVersion = _taskHistories.TryGetValue(task.Id, out var histories) && histories.Count > 0
+                ? histories.Max(h => h.Version)
+                : 0;
+
+            task.Version = Math.Max(task.Version + 1, maxVersion + 1);
+            _tasks[task.Id] = task;
+
+            List<int> depList;
+            if (dependsOn != null)
+            {
+                depList = dependsOn.Distinct().ToList();
+                _dependencies[task.Id] = depList;
+                task.Dependencies = depList.Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
+            }
+            else
+            {
+                depList = _dependencies.TryGetValue(task.Id, out var existingDeps) ? existingDeps.ToList() : new List<int>();
+            }
+
+            var history = new ForgeTaskHistory
+            {
+                Id = _nextHistoryId++,
+                TaskId = task.Id,
+                Version = task.Version,
+                Title = task.Title,
+                Description = task.Description,
+                Status = task.Status,
+                Priority = task.Priority,
+                MergeMode = task.MergeMode,
+                BaseBranch = task.BaseBranch,
+                FeatureBranch = task.FeatureBranch,
+                CurrentStageId = task.CurrentStageId,
+                SerializedDependencies = System.Text.Json.JsonSerializer.Serialize(depList),
+                ChangedAt = DateTime.UtcNow,
+                ChangedBy = changedBy,
+                ChangeReason = reason,
+                ForgeTask = task
+            };
+
+            if (!_taskHistories.TryGetValue(task.Id, out var list))
+            {
+                list = new List<ForgeTaskHistory>();
+                _taskHistories[task.Id] = list;
+            }
+            list.Add(history);
+            task.History.Add(history);
+
+            foreach (var q in task.Questions)
+            {
+                if (q.Id <= 0) q.Id = _nextQuestionId++;
+                _questions[q.Id] = q;
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task<IReadOnlyList<ForgeTaskHistory>> GetHistoryAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            if (_taskHistories.TryGetValue(taskId, out var histories))
+            {
+                return Task.FromResult<IReadOnlyList<ForgeTaskHistory>>(histories.OrderBy(h => h.Version).ToList());
+            }
+            return Task.FromResult<IReadOnlyList<ForgeTaskHistory>>(Array.Empty<ForgeTaskHistory>());
+        }
+    }
+
+    public Task<int> GetMaxHistoryVersionAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            if (_taskHistories.TryGetValue(taskId, out var histories) && histories.Count > 0)
+            {
+                return Task.FromResult(histories.Max(h => h.Version));
+            }
+            return Task.FromResult(0);
+        }
+    }
+
+    public Task<IReadOnlyDictionary<int, IReadOnlyList<int>>> GetWorkspaceDependenciesAsync(int workspaceId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var result = new Dictionary<int, IReadOnlyList<int>>();
+            var workspaceTasks = _tasks.Values.Where(t => t.WorkspaceId == workspaceId);
+            foreach (var t in workspaceTasks)
+            {
+                if (_dependencies.TryGetValue(t.Id, out var deps))
+                {
+                    result[t.Id] = deps.ToList();
+                }
+                else
+                {
+                    result[t.Id] = Array.Empty<int>();
+                }
+            }
+            return Task.FromResult<IReadOnlyDictionary<int, IReadOnlyList<int>>>(result);
         }
     }
 
@@ -210,6 +364,7 @@ public class InMemoryTaskRepository : ITaskRepository
         {
             _tasks.Remove(id);
             _dependencies.Remove(id);
+            _taskHistories.Remove(id);
             var convsToRemove = _conversations.Values.Where(c => c.TaskId == id).Select(c => c.Id).ToList();
             foreach (var convId in convsToRemove)
             {

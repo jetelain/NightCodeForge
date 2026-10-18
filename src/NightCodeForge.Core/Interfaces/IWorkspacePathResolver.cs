@@ -58,4 +58,11 @@ public interface IWorkspacePathResolver
     /// Gets the targeted WSL2 user name.
     /// </summary>
     string GetWslUserName();
+
+    /// <summary>
+    /// Converts a Unix agent execution path (e.g. /home/user/.nightcodeforge/... or ~/...) to a host-accessible path.
+    /// On Windows, this maps to the WSL UNC path (\\wsl.localhost\{distro}\home\{wslUser}\...).
+    /// On Linux/macOS or if the path is already a Windows path, it returns the path unchanged.
+    /// </summary>
+    string ToHostPath(string path) => path;
 }
