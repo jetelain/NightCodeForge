@@ -1,4 +1,7 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Moq;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
 using Xunit;
@@ -7,6 +10,20 @@ namespace NightCodeForge.Infrastructure.Tests.Execution;
 
 public class HostSdkDiscoveryServiceTests
 {
+    private static HostSdkDiscoveryService CreateService(
+        IProcessRunner runner,
+        IWslMetadataService? wslMetadataService = null,
+        IOptions<ExecutionEnvironmentProviderOptions>? options = null,
+        bool? isWindowsOverride = null,
+        ILogger<HostSdkDiscoveryService>? logger = null)
+    {
+        return new HostSdkDiscoveryService(
+            runner,
+            wslMetadataService ?? new Mock<IWslMetadataService>().Object,
+            options ?? Options.Create(new ExecutionEnvironmentProviderOptions()),
+            isWindowsOverride,
+            logger ?? NullLogger<HostSdkDiscoveryService>.Instance);
+    }
     private class MockProcessRunner : IProcessRunner
     {
         public int CallCount { get; private set; }
@@ -146,7 +163,7 @@ dotnet=/usr/bin/dotnet=/usr/lib/dotnet/dotnet
             }
         };
 
-        var service = new HostSdkDiscoveryService(mockRunner, isWindowsOverride: true);
+        var service = CreateService(mockRunner, isWindowsOverride: true);
 
         // First call: executes process runner
         var paths1 = service.DiscoverSdkMountPaths("Ubuntu");
@@ -180,7 +197,7 @@ JAVA_HOME=/opt/jdk-21
             }
         };
 
-        var service = new HostSdkDiscoveryService(mockRunner, isWindowsOverride: false);
+        var service = CreateService(mockRunner, isWindowsOverride: false);
 
         var paths1 = service.DiscoverSdkMountPaths();
         Assert.Equal(1, mockRunner.CallCount);
@@ -208,7 +225,7 @@ JAVA_HOME=/opt/jdk-21
             }
         };
 
-        var service = new HostSdkDiscoveryService(mockRunner, isWindowsOverride: true);
+        var service = CreateService(mockRunner, isWindowsOverride: true);
 
         service.DiscoverSdkMountPaths("Ubuntu");
         Assert.Equal(1, mockRunner.CallCount);
@@ -236,7 +253,7 @@ ANDROID_HOME=/opt/android-sdk
             }
         };
 
-        var service = new HostSdkDiscoveryService(mockRunner, isWindowsOverride: false);
+        var service = CreateService(mockRunner, isWindowsOverride: false);
 
         var paths = await service.DiscoverSdkMountPathsAsync();
         Assert.Equal(1, mockRunner.CallCount);
@@ -252,7 +269,7 @@ ANDROID_HOME=/opt/android-sdk
             Handler = (file, args) => new ProcessExecutionResult(1, string.Empty, "Command failed")
         };
 
-        var service = new HostSdkDiscoveryService(mockRunner, isWindowsOverride: true);
+        var service = CreateService(mockRunner, isWindowsOverride: true);
 
         var paths = service.DiscoverSdkMountPaths("Ubuntu");
 
@@ -280,7 +297,7 @@ ANDROID_HOME=/opt/android-sdk
             AdditionalSdkMountPaths = new List<string> { "/opt/custom-sdk" }
         });
 
-        var service = new HostSdkDiscoveryService(mockRunner, options: options, isWindowsOverride: false);
+        var service = CreateService(mockRunner, options: options, isWindowsOverride: false);
 
         var paths = service.DiscoverSdkMountPaths();
 
@@ -307,7 +324,7 @@ ANDROID_HOME=/opt/android-sdk
         try
         {
             Environment.SetEnvironmentVariable("NCF_SDK_MOUNT_PATHS", "/custom/env/sdk1:/custom/env/sdk2");
-            var service = new HostSdkDiscoveryService(mockRunner, isWindowsOverride: false);
+            var service = CreateService(mockRunner, isWindowsOverride: false);
 
             var paths = service.DiscoverSdkMountPaths();
 

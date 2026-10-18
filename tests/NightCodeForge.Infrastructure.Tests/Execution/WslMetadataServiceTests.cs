@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
@@ -6,6 +8,18 @@ namespace NightCodeForge.Infrastructure.Tests.Execution;
 
 public class WslMetadataServiceTests
 {
+    private static WslMetadataService CreateService(
+        IProcessRunner runner,
+        IOptions<ExecutionEnvironmentProviderOptions>? options = null,
+        bool? isWindowsOverride = true,
+        ILogger<WslMetadataService>? logger = null)
+    {
+        return new WslMetadataService(
+            runner,
+            options ?? Options.Create(new ExecutionEnvironmentProviderOptions()),
+            isWindowsOverride,
+            logger ?? NullLogger<WslMetadataService>.Instance);
+    }
     private class MockProcessRunner : IProcessRunner
     {
         public int CallCount { get; private set; }
@@ -56,7 +70,7 @@ public class WslMetadataServiceTests
             }
         };
 
-        var service = new WslMetadataService(mockRunner, isWindowsOverride: true);
+        var service = CreateService(mockRunner, isWindowsOverride: true);
 
         // Act
         var distro = service.GetDefaultDistributionName();
@@ -91,7 +105,7 @@ public class WslMetadataServiceTests
             Handler = (file, args) => new ProcessExecutionResult(0, "  NAME    STATE\n* Ubuntu  Running\n", string.Empty)
         };
 
-        var service = new WslMetadataService(mockRunner, isWindowsOverride: true);
+        var service = CreateService(mockRunner, isWindowsOverride: true);
 
         // Act
         var first = service.GetDefaultDistributionName();
@@ -118,7 +132,7 @@ public class WslMetadataServiceTests
             }
         };
 
-        var service = new WslMetadataService(mockRunner, isWindowsOverride: true);
+        var service = CreateService(mockRunner, isWindowsOverride: true);
 
         // Act & Assert
         Assert.Equal("Ubuntu", service.GetDefaultDistributionName());
@@ -139,7 +153,7 @@ public class WslMetadataServiceTests
             Handler = (file, args) => new ProcessExecutionResult(0, "gruearbre\n", string.Empty)
         };
 
-        var service = new WslMetadataService(mockRunner, isWindowsOverride: true);
+        var service = CreateService(mockRunner, isWindowsOverride: true);
 
         // Act
         var user1 = service.GetDefaultUserName();
@@ -163,7 +177,7 @@ public class WslMetadataServiceTests
         };
 
         var options = Options.Create(new ExecutionEnvironmentProviderOptions { DefaultWslDistribution = "ArchLinux" });
-        var service = new WslMetadataService(mockRunner, options, isWindowsOverride: true);
+        var service = CreateService(mockRunner, options: options, isWindowsOverride: true);
 
         // Act
         var distro = service.GetDefaultDistributionName();
@@ -181,7 +195,7 @@ public class WslMetadataServiceTests
             Handler = (file, args) => new ProcessExecutionResult(1, string.Empty, "Error")
         };
 
-        var service = new WslMetadataService(mockRunner, isWindowsOverride: true);
+        var service = CreateService(mockRunner, isWindowsOverride: true);
 
         // Act
         var user = service.GetDefaultUserName();
@@ -204,7 +218,7 @@ public class WslMetadataServiceTests
             Environment.SetEnvironmentVariable(envVarName, "CustomDistroOverride");
 
             var mockRunner = new MockProcessRunner();
-            var service = new WslMetadataService(mockRunner, isWindowsOverride: true);
+            var service = CreateService(mockRunner, isWindowsOverride: true);
 
             var distro = service.GetDefaultDistributionName();
 

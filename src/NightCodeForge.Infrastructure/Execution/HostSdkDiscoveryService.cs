@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -68,34 +69,36 @@ done";
     };
 
     private readonly IProcessRunner _processRunner;
-    private readonly IWslMetadataService? _wslMetadataService;
+    private readonly IWslMetadataService _wslMetadataService;
     private readonly ExecutionEnvironmentProviderOptions _options;
     private readonly bool? _isWindowsOverride;
     private readonly ILogger<HostSdkDiscoveryService> _logger;
 
     private readonly ConcurrentDictionary<string, HostSdkDiscoveryDetails> _cachedDetails = new(StringComparer.OrdinalIgnoreCase);
 
+    [ActivatorUtilitiesConstructor]
     public HostSdkDiscoveryService(
         IProcessRunner processRunner,
-        IWslMetadataService? wslMetadataService = null,
-        IOptions<ExecutionEnvironmentProviderOptions>? options = null,
-        ILogger<HostSdkDiscoveryService>? logger = null)
+        IWslMetadataService wslMetadataService,
+        IOptions<ExecutionEnvironmentProviderOptions> options,
+        ILogger<HostSdkDiscoveryService> logger)
         : this(processRunner, wslMetadataService, options, isWindowsOverride: null, logger)
     {
     }
 
     public HostSdkDiscoveryService(
         IProcessRunner processRunner,
-        IWslMetadataService? wslMetadataService = null,
-        IOptions<ExecutionEnvironmentProviderOptions>? options = null,
-        bool? isWindowsOverride = null,
-        ILogger<HostSdkDiscoveryService>? logger = null)
+        IWslMetadataService wslMetadataService,
+        IOptions<ExecutionEnvironmentProviderOptions> options,
+        bool? isWindowsOverride,
+        ILogger<HostSdkDiscoveryService> logger)
     {
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
-        _wslMetadataService = wslMetadataService;
-        _options = options?.Value ?? new ExecutionEnvironmentProviderOptions();
+        _wslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
+        ArgumentNullException.ThrowIfNull(options);
+        _options = options.Value ?? throw new ArgumentException("Options value cannot be null.", nameof(options));
         _isWindowsOverride = isWindowsOverride;
-        _logger = logger ?? NullLogger<HostSdkDiscoveryService>.Instance;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     private bool IsWindows => _isWindowsOverride ?? RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
@@ -194,7 +197,7 @@ done";
     {
         if (IsWindows)
         {
-            var distro = distribution ?? _wslMetadataService?.GetDefaultDistributionName() ?? _options.DefaultWslDistribution ?? "Ubuntu";
+            var distro = distribution ?? _wslMetadataService.GetDefaultDistributionName();
             return $"wsl:{distro}";
         }
 
@@ -206,7 +209,7 @@ done";
         if (IsWindows)
         {
             var fileName = !string.IsNullOrWhiteSpace(_options.WslExecutable) ? _options.WslExecutable : "wsl.exe";
-            var distro = distribution ?? _wslMetadataService?.GetDefaultDistributionName() ?? _options.DefaultWslDistribution;
+            var distro = distribution ?? _wslMetadataService.GetDefaultDistributionName();
 
             var args = new List<string>();
             if (!string.IsNullOrWhiteSpace(distro))

@@ -58,7 +58,11 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
         Directory.CreateDirectory(RootDirectory);
 
         // 1. Initialize Synthetic Git Repository
-        GitRepo = new SyntheticGitRepo(RepositoryPath);
+        var wslMetadata = new NightCodeForge.Infrastructure.Execution.WslMetadataService(
+            new NightCodeForge.Core.Execution.SystemProcessRunner(),
+            Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Infrastructure.Execution.ExecutionEnvironmentProviderOptions()),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Infrastructure.Execution.WslMetadataService>.Instance);
+        GitRepo = new SyntheticGitRepo(RepositoryPath, wslMetadata);
         await GitRepo.InitializeAsync("main", cancellationToken);
 
         // 2. Build Dependency Injection Container

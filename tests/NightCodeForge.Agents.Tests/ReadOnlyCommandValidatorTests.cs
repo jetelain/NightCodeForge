@@ -129,7 +129,7 @@ public class ReadOnlyCommandValidatorTests
             var filePath = Path.Combine(tempDir, "sample.txt");
             await File.WriteAllTextAsync(filePath, "original content");
 
-            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), isReadOnly: true);
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create(), isReadOnly: true);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 tools.WriteAsync("sample.txt", "overwritten"));
@@ -155,7 +155,7 @@ public class ReadOnlyCommandValidatorTests
         try
         {
             var fakeEnv = new FakeEchoEnv();
-            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(), executionEnv: fakeEnv, isReadOnly: true);
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create(), executionEnv: fakeEnv, isReadOnly: true);
 
             // Mutation command should be blocked with [READ-ONLY VIOLATION]
             var blockedResult = await tools.BashAsync("rm -rf src");

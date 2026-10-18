@@ -1,13 +1,29 @@
+using Microsoft.Extensions.Options;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
 
 namespace NightCodeForge.Infrastructure.Tests.Execution;
 
 public class WorkspacePathResolverTests
 {
+    private static WorkspacePathResolver CreateResolver(
+        IWslMetadataService? wslMetadataService = null,
+        IOptions<ExecutionEnvironmentProviderOptions>? options = null,
+        bool? isWindowsOverride = null,
+        string? distributionOverride = null,
+        string? userOverride = null)
+    {
+        return new WorkspacePathResolver(
+            wslMetadataService ?? new FakeWslMetadata(),
+            options ?? Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()),
+            isWindowsOverride,
+            distributionOverride,
+            userOverride);
+    }
     [Fact]
     public void GetHostRemoteUrl_TranslatesWindowsDriveToWslMount()
     {
-        var resolver = new WorkspacePathResolver(
+        var resolver = CreateResolver(
             isWindowsOverride: true,
             distributionOverride: "Ubuntu",
             userOverride: "julien");
@@ -22,7 +38,7 @@ public class WorkspacePathResolverTests
     [Fact]
     public void GetHostRemoteUrl_PreservesRawUnixPath_WhenOnUnix()
     {
-        var resolver = new WorkspacePathResolver(
+        var resolver = CreateResolver(
             isWindowsOverride: false,
             distributionOverride: "Ubuntu",
             userOverride: "julien");
@@ -34,7 +50,7 @@ public class WorkspacePathResolverTests
     [Fact]
     public void ResolveCruciblePath_StripsVirtualContainerWorkspacePrefix_Windows()
     {
-        var resolver = new WorkspacePathResolver(
+        var resolver = CreateResolver(
             isWindowsOverride: true,
             distributionOverride: "Ubuntu-24.04",
             userOverride: "devuser");
@@ -67,7 +83,7 @@ public class WorkspacePathResolverTests
     [Fact]
     public void ResolveCruciblePath_StripsVirtualContainerWorkspacePrefix_Unix()
     {
-        var resolver = new WorkspacePathResolver(
+        var resolver = CreateResolver(
             isWindowsOverride: false,
             distributionOverride: "Ubuntu",
             userOverride: "julien");
@@ -79,7 +95,7 @@ public class WorkspacePathResolverTests
     [Fact]
     public void GetAgentWorkingClonePath_ReturnsExpectedCanonicalUnixPath()
     {
-        var resolver = new WorkspacePathResolver(
+        var resolver = CreateResolver(
             isWindowsOverride: true,
             distributionOverride: "Ubuntu",
             userOverride: "agentuser");
@@ -91,7 +107,7 @@ public class WorkspacePathResolverTests
     [Fact]
     public void ResolveCruciblePath_WithWorkspaceRoot_RemapsWorkspacePrefix()
     {
-        var resolver = new WorkspacePathResolver();
+        var resolver = CreateResolver();
         var tempRoot = Path.Combine(Path.GetTempPath(), "resolver-test-" + Guid.NewGuid().ToString("N"));
         var cloneDir = Path.Combine(tempRoot, "clone");
         var taskDir = Path.Combine(tempRoot, "task-7");
@@ -122,7 +138,7 @@ public class WorkspacePathResolverTests
     [Fact]
     public void ResolveCruciblePath_DirectRepositoryRootWithoutCloneSubdir_ResolvesCloneAndWorkspacePrefixesDirectly()
     {
-        var resolver = new WorkspacePathResolver();
+        var resolver = CreateResolver();
         var tempRepoRoot = Path.Combine(Path.GetTempPath(), "repo-root-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRepoRoot);
 
@@ -167,7 +183,7 @@ public class WorkspacePathResolverTests
     public void GetWslDistributionName_And_UserName_DelegatesToMetadataService()
     {
         var meta = new FakeWslMetadata { Distro = "AlmaLinux", User = "almadev" };
-        var resolver = new WorkspacePathResolver(wslMetadataService: meta, isWindowsOverride: true);
+        var resolver = CreateResolver(wslMetadataService: meta, isWindowsOverride: true);
 
         Assert.Equal("AlmaLinux", resolver.GetWslDistributionName());
         Assert.Equal("almadev", resolver.GetWslUserName());
@@ -177,7 +193,7 @@ public class WorkspacePathResolverTests
     public void ExplicitOverrides_TakePrecedenceOverMetadataService()
     {
         var meta = new FakeWslMetadata { Distro = "AlmaLinux", User = "almadev" };
-        var resolver = new WorkspacePathResolver(
+        var resolver = CreateResolver(
             wslMetadataService: meta,
             isWindowsOverride: true,
             distributionOverride: "Debian-Override",

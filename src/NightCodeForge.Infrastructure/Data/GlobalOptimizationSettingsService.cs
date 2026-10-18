@@ -24,10 +24,10 @@ public class GlobalOptimizationSettingsService : IGlobalOptimizationSettingsServ
 
     public GlobalOptimizationSettingsService(
         IServiceScopeFactory scopeFactory,
-        ILogger<GlobalOptimizationSettingsService>? logger = null)
+        ILogger<GlobalOptimizationSettingsService> logger)
     {
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<GlobalOptimizationSettingsService>.Instance;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     /// <inheritdoc />

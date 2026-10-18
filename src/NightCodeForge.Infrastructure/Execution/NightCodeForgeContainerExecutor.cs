@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 
@@ -207,21 +209,23 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
     public ExecutionTier Tier => ExecutionTier.ContainerSandbox;
 
+    [ActivatorUtilitiesConstructor]
     public NightCodeForgeContainerExecutor(
-        ContainerExecutorOptions? options,
-        ILogger<NightCodeForgeContainerExecutor>? logger)
-        : this(options, null, logger)
+        IOptions<ContainerExecutorOptions> options,
+        IProcessRunner processRunner,
+        ILogger<NightCodeForgeContainerExecutor> logger)
+        : this(options?.Value ?? throw new ArgumentNullException(nameof(options)), processRunner, logger)
     {
     }
 
     public NightCodeForgeContainerExecutor(
-        ContainerExecutorOptions? options = null,
-        IProcessRunner? processRunner = null,
-        ILogger<NightCodeForgeContainerExecutor>? logger = null)
+        ContainerExecutorOptions options,
+        IProcessRunner processRunner,
+        ILogger<NightCodeForgeContainerExecutor> logger)
     {
-        _options = options ?? new ContainerExecutorOptions();
-        _processRunner = processRunner ?? new SystemProcessRunner();
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForgeContainerExecutor>.Instance;
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<CommandResult> ExecuteAsync(

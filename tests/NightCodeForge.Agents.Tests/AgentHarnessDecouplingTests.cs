@@ -83,7 +83,7 @@ public class AgentHarnessDecouplingTests : IDisposable
         var harness = new TestCrucibleHarnessBuilder
         {
             BaseChatClient = mockClient,
-            PathResolver = new WorkspacePathResolver(),
+            PathResolver = TestPathResolver.Create(),
             ActivityStreamer = new InMemoryAgentActivityStreamer(),
             TaskRepository = new InMemoryTaskRepository()
         }.Build();
@@ -130,7 +130,7 @@ public class AgentHarnessDecouplingTests : IDisposable
         var harness = new TestCrucibleHarnessBuilder
         {
             BaseChatClient = mockClient,
-            PathResolver = new WorkspacePathResolver(),
+            PathResolver = TestPathResolver.Create(),
             ActivityStreamer = new InMemoryAgentActivityStreamer(),
             TaskRepository = new InMemoryTaskRepository()
         }.Build();

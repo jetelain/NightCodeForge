@@ -87,7 +87,7 @@ public class IdeationTranscriptAndSkillsTests
         var client = new ScriptedStreamingClient(Text("Ready."));
         var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
         {
-            PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+            PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create(),
             BaseChatClient = client
         }.Build();
         var workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory() };
@@ -119,7 +119,7 @@ description: Guidelines for unit testing with xUnit
             var client = new ScriptedStreamingClient(Text("Ready."));
             var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
             {
-                PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+                PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create(),
                 BaseChatClient = client,
                 TranscriptService = new SessionTranscriptService(transcripts)
             }.Build();
@@ -152,7 +152,7 @@ description: Guidelines for unit testing with xUnit
                 Text("The answer "), Text("is "), Text("42."));
             var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
             {
-                PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+                PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create(),
                 BaseChatClient = client,
                 TranscriptService = new SessionTranscriptService(transcripts)
             }.Build();
@@ -179,7 +179,7 @@ description: Guidelines for unit testing with xUnit
         var client = new ScriptedStreamingClient(Text("<think>not reasoning</think>Answer"));
         var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
         {
-            PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+            PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create(),
             BaseChatClient = client
         }.Build();
         var workspace = new Workspace { Id = 4, RepositoryPath = Directory.GetCurrentDirectory() };

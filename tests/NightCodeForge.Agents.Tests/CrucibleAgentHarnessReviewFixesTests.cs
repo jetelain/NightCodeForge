@@ -24,7 +24,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
         new TestCrucibleHarnessBuilder
         {
             BaseChatClient = client,
-            PathResolver = new WorkspacePathResolver(),
+            PathResolver = TestPathResolver.Create(),
             ActivityStreamer = streamer ?? new InMemoryAgentActivityStreamer(),
             TaskRepository = repo ?? new InMemoryTaskRepository()
         }.Build();
@@ -66,7 +66,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
     [Fact]
     public async Task BuildAIFunctionList_DispatcherTool_ReceivesModelArgumentsWithoutWrapper()
     {
-        var tools = TestCanonicalToolsBuilder.Create(_tempDir, pathResolver: new WorkspacePathResolver());
+        var tools = TestCanonicalToolsBuilder.Create(_tempDir, pathResolver: TestPathResolver.Create());
         var dispatcher = new LenientToolDispatcher(tools);
         dispatcher.RegisterTool(new ToolDefinition("my_tool", "Echo", (args, ct) =>
             Task.FromResult(string.Join(",", args.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}")))));

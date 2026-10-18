@@ -10,7 +10,7 @@ public class LenientToolDispatcherTests
 
     public LenientToolDispatcherTests()
     {
-        var canonical = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+        var canonical = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
         _dispatcher = new LenientToolDispatcher(canonical);
     }
 

@@ -32,7 +32,7 @@ public class CoreCoverageTests : IDisposable
     [Fact]
     public async Task DefaultWorkflowPipelineProvider_ReturnsConfiguredPipeline()
     {
-        var stage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full });
+        var stage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer());
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
         var provider = new DefaultWorkflowPipelineProvider(pipeline);
 

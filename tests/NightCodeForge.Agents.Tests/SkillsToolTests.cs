@@ -123,7 +123,7 @@ Check logs first.
 
         try
         {
-            var canonicalTools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var canonicalTools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
             var tools = CanonicalAIFunctionFactory.CreateTools(canonicalTools);
 
             var loadSkillTool = tools.FirstOrDefault(t => t.Name == "load_skill");
@@ -153,7 +153,7 @@ Check logs first.
 
         try
         {
-            var canonicalTools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var canonicalTools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
             var editTool = CanonicalAIFunctionFactory.CreateTools(canonicalTools).Single(t => t.Name == "edit");
 
             // The schema must expose the multi-edit array alongside the single-edit shortcut.

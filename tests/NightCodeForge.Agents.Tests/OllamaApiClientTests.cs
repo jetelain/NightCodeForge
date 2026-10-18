@@ -131,7 +131,7 @@ public class OllamaApiClientTests
         var harness = new Fixtures.TestCrucibleHarnessBuilder
         {
             BaseChatClient = mockChatClient,
-            PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver()
+            PathResolver = Fixtures.TestPathResolver.Create()
         }.Build();
 
         var profile = new Core.Domain.AgentProfile

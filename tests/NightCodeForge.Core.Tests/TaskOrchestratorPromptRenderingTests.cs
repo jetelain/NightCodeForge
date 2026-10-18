@@ -127,7 +127,7 @@ public class TaskOrchestratorPromptRenderingTests
             """
         };
 
-        var genericStage = new GenericAgenticStage("custom-agentic", "Authentication Designer", config);
+        var genericStage = new GenericAgenticStage("custom-agentic", "Authentication Designer", config, new ScribanPromptTemplateRenderer());
         var pipeline = new SingleStagePipeline(genericStage);
         var pipelineProvider = new SingleStagePipelineProvider(pipeline);
 
@@ -193,7 +193,7 @@ public class TaskOrchestratorPromptRenderingTests
         await taskRepo.CreateAsync(task);
         depStore.AddTask(task.Id, workspace.Id, TaskOverallStatus.Open);
 
-        var legacyStage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full });
+        var legacyStage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer());
         var pipeline = new SingleStagePipeline(legacyStage);
         var pipelineProvider = new SingleStagePipelineProvider(pipeline);
 
@@ -225,7 +225,7 @@ public class TaskOrchestratorPromptRenderingTests
         {
             PromptTemplate = "Stage {{ stage.display_name }} on #{{ task.id }}"
         };
-        var stage = new GenericAgenticStage("test-stage", "Tester", config);
+        var stage = new GenericAgenticStage("test-stage", "Tester", config, new ScribanPromptTemplateRenderer());
         var task = new ForgeTask { Id = 7, Title = "Test Task" };
         var context = new PipelineContext(task, new Workspace());
 
@@ -237,7 +237,7 @@ public class TaskOrchestratorPromptRenderingTests
     [Fact]
     public void BuildBootstrapPrompt_WithoutPromptTemplate_ThrowsInvalidOperationException()
     {
-        IWorkflowStage stage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full });
+        IWorkflowStage stage = new GenericAgenticStage("task-review", "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer());
         var task = new ForgeTask { Id = 8, Title = "Review Task", Description = "Review details" };
         var context = new PipelineContext(task, new Workspace());
 
@@ -251,7 +251,7 @@ public class TaskOrchestratorPromptRenderingTests
         {
             PromptTemplate = "Reason: {{ context.failure_reason }} | Tests: {{~ for ft in context.failed_tests ~}} {{ ft }} {{~ end ~}}"
         };
-        var stage = new GenericAgenticStage("fix-stage", "Fixer", config);
+        var stage = new GenericAgenticStage("fix-stage", "Fixer", config, new ScribanPromptTemplateRenderer());
         var task = new ForgeTask { Id = 9, Title = "Fix Task" };
         var context = new PipelineContext(task, new Workspace());
         context.DataBag.Set(PipelineDataBagKeys.TestFailureReason, "1 test failed");

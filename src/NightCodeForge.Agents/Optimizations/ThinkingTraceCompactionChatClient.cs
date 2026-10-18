@@ -15,14 +15,26 @@ public class ThinkingTraceCompactionChatClient : DelegatingChatClient
     private readonly LocalOptimizationFlags _flags;
     private readonly int _keepVerbatimCount;
 
+    public ThinkingTraceCompactionChatClient(IChatClient innerClient)
+        : this(innerClient, new LocalOptimizationFlags())
+    {
+    }
+
     public ThinkingTraceCompactionChatClient(
         IChatClient innerClient,
-        LocalOptimizationFlags? flags = null,
-        int? keepVerbatimCount = null)
-        : base(innerClient)
+        LocalOptimizationFlags flags)
+        : this(innerClient, flags, (flags ?? throw new ArgumentNullException(nameof(flags))).ThinkingKeepVerbatimCount)
     {
-        _flags = flags ?? new LocalOptimizationFlags();
-        _keepVerbatimCount = keepVerbatimCount ?? _flags.ThinkingKeepVerbatimCount;
+    }
+
+    public ThinkingTraceCompactionChatClient(
+        IChatClient innerClient,
+        LocalOptimizationFlags flags,
+        int keepVerbatimCount)
+        : base(innerClient ?? throw new ArgumentNullException(nameof(innerClient)))
+    {
+        _flags = flags ?? throw new ArgumentNullException(nameof(flags));
+        _keepVerbatimCount = keepVerbatimCount;
     }
 
     public override async Task<ChatResponse> GetResponseAsync(

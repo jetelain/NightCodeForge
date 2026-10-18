@@ -17,7 +17,7 @@ public class GitCliRunnerTests : IDisposable
         _repo = new TestGitRepository();
         _runner = new GitCliRunner(
             new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance),
-            new WorkspacePathResolver(),
+            new WorkspacePathResolver(new Mock<IWslMetadataService>().Object, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions())),
             new Mock<IWslMetadataService>().Object,
             NullLogger<GitCliRunner>.Instance);
     }
@@ -117,7 +117,7 @@ public class GitCliRunnerTests : IDisposable
 
         var gitRunner = new GitCliRunner(
             mockRunner,
-            new WorkspacePathResolver(),
+            new WorkspacePathResolver(new Mock<IWslMetadataService>().Object, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions())),
             new Mock<IWslMetadataService>().Object,
             NullLogger<GitCliRunner>.Instance);
 

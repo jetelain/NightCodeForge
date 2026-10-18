@@ -17,7 +17,7 @@ public class WebSearchSettingsService : IWebSearchSettingsService
     public const string SettingKey = "WebSearchSettings";
 
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IConfiguration? _configuration;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<WebSearchSettingsService> _logger;
     private readonly object _lock = new();
     private WebSearchSettings _cachedSettings = new();
@@ -26,12 +26,12 @@ public class WebSearchSettingsService : IWebSearchSettingsService
 
     public WebSearchSettingsService(
         IServiceScopeFactory scopeFactory,
-        IConfiguration? configuration = null,
-        ILogger<WebSearchSettingsService>? logger = null)
+        IConfiguration configuration,
+        ILogger<WebSearchSettingsService> logger)
     {
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
-        _configuration = configuration;
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<WebSearchSettingsService>.Instance;
+        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         // Initialize fallback from environment variable or configuration if available
         InitializeDefaults();
@@ -40,8 +40,8 @@ public class WebSearchSettingsService : IWebSearchSettingsService
     private void InitializeDefaults()
     {
         var envKey = Environment.GetEnvironmentVariable("OLLAMA_API_KEY");
-        var configKey = _configuration?["WebSearch:Ollama:ApiKey"] ?? _configuration?["OLLAMA_API_KEY"];
-        var endpoint = _configuration?["WebSearch:Ollama:Endpoint"];
+        var configKey = _configuration["WebSearch:Ollama:ApiKey"] ?? _configuration["OLLAMA_API_KEY"];
+        var endpoint = _configuration["WebSearch:Ollama:Endpoint"];
 
         lock (_lock)
         {

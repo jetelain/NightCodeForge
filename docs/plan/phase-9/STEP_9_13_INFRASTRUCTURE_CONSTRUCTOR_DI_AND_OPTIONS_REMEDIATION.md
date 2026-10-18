@@ -3,7 +3,7 @@
 > **Phase 9 Implementation Step**  
 > *Parent Plan:* [Phase 9 Master Plan](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 ---
 
@@ -61,8 +61,8 @@ Per [AGENTS.md](../../../AGENTS.md):
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Zero optional parameters (`= null`, `= default`) in service constructors across `NightCodeForge.Infrastructure` and `NightCodeForge.Agents`.
-- [ ] Zero fallback initializations (`?? new ...`, `?? NullLogger...`) in service constructors.
-- [ ] `ExecutionEnvironmentProviderOptions` and `ContainerExecutorOptions` configured in DI.
-- [ ] `TaskMarkdownSyncService` has zero fallback shims.
-- [ ] `dotnet test --filter "Category!=Acceptance&Category!=E2E"` passes with zero failures.
+- [x] Zero optional parameters (`= null`, `= default`) in service constructors across `NightCodeForge.Infrastructure` and `NightCodeForge.Agents`.
+- [x] Zero fallback initializations (`?? new ...`, `?? NullLogger...`) in service constructors.
+- [x] `ExecutionEnvironmentProviderOptions` and `ContainerExecutorOptions` configured in DI.
+- [x] `TaskMarkdownSyncService` has zero fallback shims.
+- [x] `dotnet test --filter "Category!=Acceptance&Category!=E2E"` passes with zero failures.

@@ -343,8 +343,9 @@ public class ExecutionEnvironmentTests
         });
 
         var env = new WslExecutionEnvironment(
-            processRunner: fakeRunner,
-            distribution: "Ubuntu");
+            fakeRunner,
+            distribution: "Ubuntu",
+            defaultWorkingDirectory: null);
 
         var result = await env.ExecuteAsync("long_running_job", timeoutSeconds: 5);
 
@@ -357,6 +358,7 @@ public class ExecutionEnvironmentTests
     public void WslExecutionEnvironment_Properties_ReflectConstructorParameters()
     {
         var env = new WslExecutionEnvironment(
+            new MockProcessRunner((_, _) => new ProcessExecutionResult(0, string.Empty, string.Empty)),
             distribution: "Debian",
             defaultWorkingDirectory: "/mnt/c/project");
 

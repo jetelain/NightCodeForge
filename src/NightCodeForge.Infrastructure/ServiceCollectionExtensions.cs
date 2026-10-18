@@ -55,6 +55,10 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IStartupRecoveryService, StartupRecoveryService>();
 
         // 6. Execution Environments, Process Runner & Path Resolution
+        services.AddOptions<Execution.ExecutionEnvironmentProviderOptions>();
+        services.AddOptions<Execution.ContainerExecutorOptions>();
+        services.AddOptions<Inference.OllamaRouterOptions>();
+
         services.TryAddSingleton<NightCodeForge.Core.Execution.IBackgroundTaskRunner, NightCodeForge.Core.Execution.BackgroundTaskRunner>();
         services.TryAddSingleton<IProcessRunner, NightCodeForge.Core.Execution.SystemProcessRunner>();
         services.TryAddSingleton<IWslMetadataService, Execution.WslMetadataService>();
@@ -63,6 +67,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<Execution.BareHostExecutionEnvironment>();
         services.TryAddSingleton<IExecutionEnvironment>(sp => sp.GetRequiredService<Execution.BareHostExecutionEnvironment>());
         services.TryAddTransient<Execution.WslExecutionEnvironment>();
+        services.TryAddTransient<Execution.NightCodeForgeContainerExecutor>();
         services.TryAddScoped<IExecutionEnvironmentProvider, Execution.ExecutionEnvironmentProvider>();
 
         // 7. OllamaRouter Services

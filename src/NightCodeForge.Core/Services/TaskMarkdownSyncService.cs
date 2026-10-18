@@ -31,44 +31,36 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
     [ActivatorUtilitiesConstructor]
     public TaskMarkdownSyncService(IServiceScopeFactory scopeFactory)
-        : this(null, null, scopeFactory)
     {
+        _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+        _yamlDeserializer = CreateYamlDeserializer();
+        _yamlSerializer = CreateYamlSerializer();
     }
 
     public TaskMarkdownSyncService(ITaskRepository taskRepository)
-        : this(taskRepository, null, null)
+        : this(taskRepository, dependencyEngine: null)
     {
     }
 
-    public TaskMarkdownSyncService(ITaskRepository taskRepository, IDependencyResolutionEngine dependencyEngine)
-        : this(taskRepository, dependencyEngine, null)
+    public TaskMarkdownSyncService(ITaskRepository taskRepository, IDependencyResolutionEngine? dependencyEngine)
     {
-    }
-
-    public TaskMarkdownSyncService(
-        ITaskRepository? taskRepository,
-        IDependencyResolutionEngine? dependencyEngine,
-        IServiceScopeFactory? scopeFactory)
-    {
-        _fallbackTaskRepository = taskRepository;
+        _fallbackTaskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _fallbackDependencyEngine = dependencyEngine;
-        _scopeFactory = scopeFactory;
+        _yamlDeserializer = CreateYamlDeserializer();
+        _yamlSerializer = CreateYamlSerializer();
+    }
 
-        if (_fallbackTaskRepository == null && _scopeFactory == null)
-        {
-            throw new ArgumentException("Either taskRepository or scopeFactory must be provided.");
-        }
-
-        _yamlDeserializer = new DeserializerBuilder()
+    private static IDeserializer CreateYamlDeserializer() =>
+        new DeserializerBuilder()
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .IgnoreUnmatchedProperties()
             .Build();
 
-        _yamlSerializer = new SerializerBuilder()
+    private static ISerializer CreateYamlSerializer() =>
+        new SerializerBuilder()
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
             .Build();
-    }
 
     private (ITaskRepository TaskRepo, IDependencyResolutionEngine? DepEngine, IDisposable? Scope) ResolveDependencies()
     {

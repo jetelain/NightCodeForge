@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Git;
@@ -14,21 +15,38 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
     [GeneratedRegex(@"^([a-zA-Z]):[\\/]")]
     private static partial Regex WindowsDrivePrefixRegex();
 
-    private readonly IWslMetadataService? _wslMetadataService;
+    private readonly IWslMetadataService _wslMetadataService;
     private readonly ExecutionEnvironmentProviderOptions _options;
     private readonly bool? _isWindowsOverride;
     private readonly string? _distributionOverride;
     private readonly string? _userOverride;
 
+    [ActivatorUtilitiesConstructor]
     public WorkspacePathResolver(
-        IWslMetadataService? wslMetadataService = null,
-        IOptions<ExecutionEnvironmentProviderOptions>? options = null,
-        bool? isWindowsOverride = null,
-        string? distributionOverride = null,
-        string? userOverride = null)
+        IWslMetadataService wslMetadataService,
+        IOptions<ExecutionEnvironmentProviderOptions> options)
+        : this(wslMetadataService, options, isWindowsOverride: null, distributionOverride: null, userOverride: null)
     {
-        _wslMetadataService = wslMetadataService;
-        _options = options?.Value ?? new ExecutionEnvironmentProviderOptions();
+    }
+
+    public WorkspacePathResolver(
+        IWslMetadataService wslMetadataService,
+        IOptions<ExecutionEnvironmentProviderOptions> options,
+        bool isWindowsOverride)
+        : this(wslMetadataService, options, isWindowsOverride: isWindowsOverride, distributionOverride: null, userOverride: null)
+    {
+    }
+
+    public WorkspacePathResolver(
+        IWslMetadataService wslMetadataService,
+        IOptions<ExecutionEnvironmentProviderOptions> options,
+        bool? isWindowsOverride,
+        string? distributionOverride,
+        string? userOverride)
+    {
+        _wslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
+        ArgumentNullException.ThrowIfNull(options);
+        _options = options.Value ?? throw new ArgumentException("Options value cannot be null.", nameof(options));
         _isWindowsOverride = isWindowsOverride;
         _distributionOverride = distributionOverride;
         _userOverride = userOverride;
@@ -43,23 +61,7 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             return _distributionOverride;
         }
 
-        if (_wslMetadataService != null)
-        {
-            return _wslMetadataService.GetDefaultDistributionName();
-        }
-
-        var envDistro = Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION");
-        if (!string.IsNullOrWhiteSpace(envDistro))
-        {
-            return envDistro;
-        }
-
-        if (!string.IsNullOrWhiteSpace(_options.DefaultWslDistribution))
-        {
-            return _options.DefaultWslDistribution;
-        }
-
-        return "Ubuntu";
+        return _wslMetadataService.GetDefaultDistributionName();
     }
 
     public string GetWslUserName()
@@ -69,24 +71,7 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             return _userOverride;
         }
 
-        if (_wslMetadataService != null)
-        {
-            return _wslMetadataService.GetDefaultUserName();
-        }
-
-        var envUser = Environment.GetEnvironmentVariable("NCF_WSL_USER");
-        if (!string.IsNullOrWhiteSpace(envUser))
-        {
-            return envUser;
-        }
-
-        var username = Environment.UserName;
-        if (!string.IsNullOrWhiteSpace(username))
-        {
-            return username.ToLowerInvariant();
-        }
-
-        return "user";
+        return _wslMetadataService.GetDefaultUserName();
     }
 
     public string GetAgentWorkspaceRootPath(int workspaceId)

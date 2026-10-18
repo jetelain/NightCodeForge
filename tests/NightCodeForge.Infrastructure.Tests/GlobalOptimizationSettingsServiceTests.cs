@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Infrastructure.Data;
 using Xunit;
@@ -41,7 +42,7 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
     public void GetFlags_ReturnsDefaultFlags_WhenUninitialized()
     {
         var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var service = new GlobalOptimizationSettingsService(scopeFactory);
+        var service = new GlobalOptimizationSettingsService(scopeFactory, NullLogger<GlobalOptimizationSettingsService>.Instance);
 
         var flags = service.GetFlags();
 
@@ -59,7 +60,7 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
     public async Task UpdateFlagsAsync_PersistsToDatabase_AndUpdatesCache()
     {
         var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var service = new GlobalOptimizationSettingsService(scopeFactory);
+        var service = new GlobalOptimizationSettingsService(scopeFactory, NullLogger<GlobalOptimizationSettingsService>.Instance);
 
         bool eventFired = false;
         LocalOptimizationFlags? updatedFromEvent = null;
@@ -116,7 +117,7 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
         }
 
         var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var service = new GlobalOptimizationSettingsService(scopeFactory);
+        var service = new GlobalOptimizationSettingsService(scopeFactory, NullLogger<GlobalOptimizationSettingsService>.Instance);
 
         var loaded = await service.LoadFlagsAsync();
 

@@ -21,16 +21,36 @@ public class ToolResultCompactor
     private readonly int _maxResultLength;
     private readonly int _truncateToLength;
 
-    public ToolResultCompactor(
-        LocalOptimizationFlags? flags = null,
-        int? keepVerbatimCount = null,
-        int? maxResultLength = null,
-        int? truncateToLength = null)
+    public ToolResultCompactor()
+        : this(new LocalOptimizationFlags())
     {
-        _flags = flags ?? new LocalOptimizationFlags();
-        _keepVerbatimCount = keepVerbatimCount ?? _flags.ToolKeepVerbatimCount;
-        _maxResultLength = maxResultLength ?? _flags.ToolMaxResultLength;
-        _truncateToLength = truncateToLength ?? _flags.ToolTruncateToLength;
+    }
+
+    public ToolResultCompactor(LocalOptimizationFlags flags)
+        : this(flags, (flags ?? throw new ArgumentNullException(nameof(flags))).ToolKeepVerbatimCount, flags.ToolMaxResultLength, flags.ToolTruncateToLength)
+    {
+    }
+
+    public ToolResultCompactor(LocalOptimizationFlags flags, int keepVerbatimCount)
+        : this(flags, keepVerbatimCount, (flags ?? throw new ArgumentNullException(nameof(flags))).ToolMaxResultLength, flags.ToolTruncateToLength)
+    {
+    }
+
+    public ToolResultCompactor(int keepVerbatimCount)
+        : this(new LocalOptimizationFlags(), keepVerbatimCount)
+    {
+    }
+
+    public ToolResultCompactor(
+        LocalOptimizationFlags flags,
+        int keepVerbatimCount,
+        int maxResultLength,
+        int truncateToLength)
+    {
+        _flags = flags ?? throw new ArgumentNullException(nameof(flags));
+        _keepVerbatimCount = keepVerbatimCount;
+        _maxResultLength = maxResultLength;
+        _truncateToLength = truncateToLength;
     }
 
     /// <summary>

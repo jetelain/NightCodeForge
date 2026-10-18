@@ -21,21 +21,19 @@ public class WslExecutionEnvironment : IExecutionEnvironment
     public string? DefaultWorkingDirectory => _defaultWorkingDirectory;
 
     [ActivatorUtilitiesConstructor]
-    public WslExecutionEnvironment(
-        IProcessRunner processRunner,
-        string? distribution = null,
-        string? defaultWorkingDirectory = null)
+    public WslExecutionEnvironment(IProcessRunner processRunner)
+        : this(processRunner, distribution: null, defaultWorkingDirectory: null)
     {
-        _processRunner = processRunner ?? new SystemProcessRunner();
-        _distribution = distribution;
-        _defaultWorkingDirectory = defaultWorkingDirectory;
     }
 
     public WslExecutionEnvironment(
-        string? distribution = null,
-        string? defaultWorkingDirectory = null)
-        : this(new SystemProcessRunner(), distribution, defaultWorkingDirectory)
+        IProcessRunner processRunner,
+        string? distribution,
+        string? defaultWorkingDirectory)
     {
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _distribution = distribution;
+        _defaultWorkingDirectory = defaultWorkingDirectory;
     }
 
     public async Task<NightCodeForge.Core.Interfaces.CommandResult> ExecuteAsync(

@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -16,7 +17,7 @@ namespace NightCodeForge.Agents.Tools;
 public class OllamaWebSearchService : IWebSearchService
 {
     private readonly HttpClient _httpClient;
-    private readonly IWebSearchSettingsService? _settingsService;
+    private readonly IWebSearchSettingsService _settingsService;
     private readonly ILogger<OllamaWebSearchService> _logger;
     private readonly string? _explicitApiKey;
     private readonly string? _explicitEndpoint;
@@ -28,16 +29,25 @@ public class OllamaWebSearchService : IWebSearchService
     /// </summary>
     public bool IsConfigured => !string.IsNullOrWhiteSpace(GetEffectiveApiKey());
 
+    [ActivatorUtilitiesConstructor]
     public OllamaWebSearchService(
         HttpClient httpClient,
-        IWebSearchSettingsService? settingsService = null,
-        ILogger<OllamaWebSearchService>? logger = null,
-        string? explicitApiKey = null,
-        string? explicitEndpoint = null)
+        IWebSearchSettingsService settingsService,
+        ILogger<OllamaWebSearchService> logger)
+        : this(httpClient, settingsService, logger, explicitApiKey: null, explicitEndpoint: null)
+    {
+    }
+
+    public OllamaWebSearchService(
+        HttpClient httpClient,
+        IWebSearchSettingsService settingsService,
+        ILogger<OllamaWebSearchService> logger,
+        string? explicitApiKey,
+        string? explicitEndpoint)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        _settingsService = settingsService;
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<OllamaWebSearchService>.Instance;
+        _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _explicitApiKey = explicitApiKey;
         _explicitEndpoint = explicitEndpoint;
     }
@@ -120,7 +130,7 @@ public class OllamaWebSearchService : IWebSearchService
     public string? GetEffectiveApiKey()
     {
         if (!string.IsNullOrWhiteSpace(_explicitApiKey)) return _explicitApiKey;
-        var settingsKey = _settingsService?.GetSettings().ApiKey;
+        var settingsKey = _settingsService.GetSettings().ApiKey;
         if (!string.IsNullOrWhiteSpace(settingsKey)) return settingsKey;
         return Environment.GetEnvironmentVariable("OLLAMA_API_KEY");
     }
@@ -128,7 +138,7 @@ public class OllamaWebSearchService : IWebSearchService
     public string GetEffectiveEndpoint()
     {
         if (!string.IsNullOrWhiteSpace(_explicitEndpoint)) return _explicitEndpoint;
-        var settingsEndpoint = _settingsService?.GetSettings().Endpoint;
+        var settingsEndpoint = _settingsService.GetSettings().Endpoint;
         if (!string.IsNullOrWhiteSpace(settingsEndpoint)) return settingsEndpoint;
         return WebSearchSettings.DefaultEndpoint;
     }

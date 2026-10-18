@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -25,16 +26,26 @@ public partial class WslMetadataService : IWslMetadataService
     private string? _cachedDistributionName;
     private string? _cachedUserName;
 
+    [ActivatorUtilitiesConstructor]
     public WslMetadataService(
         IProcessRunner processRunner,
-        IOptions<ExecutionEnvironmentProviderOptions>? options = null,
-        bool? isWindowsOverride = null,
-        ILogger<WslMetadataService>? logger = null)
+        IOptions<ExecutionEnvironmentProviderOptions> options,
+        ILogger<WslMetadataService> logger)
+        : this(processRunner, options, isWindowsOverride: null, logger)
+    {
+    }
+
+    public WslMetadataService(
+        IProcessRunner processRunner,
+        IOptions<ExecutionEnvironmentProviderOptions> options,
+        bool? isWindowsOverride,
+        ILogger<WslMetadataService> logger)
     {
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
-        _options = options?.Value ?? new ExecutionEnvironmentProviderOptions();
+        ArgumentNullException.ThrowIfNull(options);
+        _options = options.Value ?? throw new ArgumentException("Options value cannot be null.", nameof(options));
         _isWindowsOverride = isWindowsOverride;
-        _logger = logger ?? NullLogger<WslMetadataService>.Instance;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     private bool IsWindows => _isWindowsOverride ?? RuntimeInformation.IsOSPlatform(OSPlatform.Windows);

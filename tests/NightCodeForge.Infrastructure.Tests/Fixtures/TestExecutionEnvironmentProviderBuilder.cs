@@ -11,7 +11,9 @@ using NightCodeForge.Infrastructure.Execution;
 public class TestExecutionEnvironmentProviderBuilder
 {
     public IProcessRunner ProcessRunner { get; set; } = new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance);
-    public IWorkspacePathResolver PathResolver { get; set; } = new WorkspacePathResolver();
+    public IWorkspacePathResolver PathResolver { get; set; } = new WorkspacePathResolver(
+        new Mock<IWslMetadataService>().Object,
+        Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
     public BareHostExecutionEnvironment? BareHost { get; set; }
     public IOptions<ExecutionEnvironmentProviderOptions> Options { get; set; } = Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions());
     public IHostSdkDiscoveryService SdkDiscoveryService { get; set; } = new Mock<IHostSdkDiscoveryService>().Object;

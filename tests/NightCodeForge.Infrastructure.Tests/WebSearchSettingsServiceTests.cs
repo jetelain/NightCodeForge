@@ -2,6 +2,8 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Infrastructure.Data;
 using Xunit;
@@ -13,6 +15,14 @@ public class WebSearchSettingsServiceTests : IDisposable
     private readonly SqliteConnection _connection;
     private readonly DbContextOptions<AppDbContext> _dbOptions;
     private readonly IServiceProvider _serviceProvider;
+    private readonly IConfiguration _emptyConfig = new ConfigurationBuilder().Build();
+    private readonly ILogger<WebSearchSettingsService> _logger = NullLogger<WebSearchSettingsService>.Instance;
+
+    private WebSearchSettingsService CreateService(IConfiguration? config = null)
+    {
+        var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
+        return new WebSearchSettingsService(scopeFactory, config ?? _emptyConfig, _logger);
+    }
 
     public WebSearchSettingsServiceTests()
     {
@@ -41,8 +51,7 @@ public class WebSearchSettingsServiceTests : IDisposable
     [Fact]
     public void GetSettings_ReturnsDefaultSettings_WhenUninitialized()
     {
-        var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var service = new WebSearchSettingsService(scopeFactory);
+        var service = CreateService();
 
         var settings = service.GetSettings();
 
@@ -55,8 +64,7 @@ public class WebSearchSettingsServiceTests : IDisposable
     [Fact]
     public async Task UpdateSettingsAsync_PersistsToDatabase_AndUpdatesCache()
     {
-        var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var service = new WebSearchSettingsService(scopeFactory);
+        var service = CreateService();
 
         bool eventFired = false;
         WebSearchSettings? updatedFromEvent = null;
@@ -109,8 +117,7 @@ public class WebSearchSettingsServiceTests : IDisposable
             await db.SaveChangesAsync();
         }
 
-        var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var service = new WebSearchSettingsService(scopeFactory);
+        var service = CreateService();
 
         var loaded = await service.LoadSettingsAsync();
 
@@ -134,8 +141,7 @@ public class WebSearchSettingsServiceTests : IDisposable
             .AddInMemoryCollection(configValues)
             .Build();
 
-        var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var service = new WebSearchSettingsService(scopeFactory, configuration);
+        var service = CreateService(configuration);
 
         var settings = service.GetSettings();
         Assert.Equal("config_key_555", settings.ApiKey);

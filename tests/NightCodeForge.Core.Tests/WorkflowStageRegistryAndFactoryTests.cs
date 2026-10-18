@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
@@ -144,7 +145,7 @@ public class WorkflowStageRegistryAndFactoryTests
     public void RegisterHandler_CustomHandler_ResolvesSuccessfully()
     {
         _registry.RegisterHandler("custom-mock-stage", (sp, def) =>
-            new GenericAgenticStage(def.StageId, def.DisplayName, new AgenticStageConfig { StageDirective = "Custom" }));
+            new GenericAgenticStage(def.StageId, def.DisplayName, new AgenticStageConfig { StageDirective = "Custom" }, sp.GetRequiredService<IPromptTemplateRenderer>()));
 
         var definition = new StageDefinition
         {
@@ -166,7 +167,7 @@ public class WorkflowStageRegistryAndFactoryTests
         var customRegistry = new WorkflowStageRegistry();
         // Register an agentic handler under a sub-stage name
         customRegistry.RegisterHandler("deterministic-not-really", (sp, def) =>
-            new GenericAgenticStage(def.StageId, def.DisplayName, new AgenticStageConfig()));
+            new GenericAgenticStage(def.StageId, def.DisplayName, new AgenticStageConfig(), sp.GetRequiredService<IPromptTemplateRenderer>()));
 
         var config = new DeterministicStageConfig
         {

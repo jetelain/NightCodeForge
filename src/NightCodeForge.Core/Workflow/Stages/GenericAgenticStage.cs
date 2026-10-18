@@ -27,7 +27,7 @@ public class GenericAgenticStage : IWorkflowStage
         string stageId,
         string displayName,
         AgenticStageConfig config,
-        IPromptTemplateRenderer? renderer = null)
+        IPromptTemplateRenderer renderer)
     {
         StageId = stageId;
         DisplayName = displayName;
@@ -38,7 +38,7 @@ public class GenericAgenticStage : IWorkflowStage
         LoopBackStageId = config.LoopBackStageId;
         MaxRetries = config.MaxRetries;
         TimeoutMinutes = config.TimeoutMinutes;
-        _renderer = renderer ?? new ScribanPromptTemplateRenderer();
+        _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
     }
 
     public virtual string BuildBootstrapPrompt(ForgeTask task, PipelineContext context, string? stageDirective = null)

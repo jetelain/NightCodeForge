@@ -15,13 +15,17 @@ public class OllamaRouterGatewayService : IOllamaRouterGatewayService
 
     public OllamaRouterGatewayService(
         HttpClient httpClient,
-        IOptions<OllamaRouterOptions>? options = null,
-        ILogger<OllamaRouterGatewayService>? logger = null)
+        IOptions<OllamaRouterOptions> options,
+        ILogger<OllamaRouterGatewayService> logger)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<OllamaRouterGatewayService>.Instance;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(options);
 
-        _baseUrl = options?.Value.BaseUrl ?? "http://localhost:11434";
+        _baseUrl = !string.IsNullOrWhiteSpace(options.Value?.BaseUrl)
+            ? options.Value.BaseUrl
+            : "http://localhost:11434";
+
         if (_httpClient.BaseAddress == null)
         {
             _httpClient.BaseAddress = new Uri(_baseUrl.TrimEnd('/') + "/");

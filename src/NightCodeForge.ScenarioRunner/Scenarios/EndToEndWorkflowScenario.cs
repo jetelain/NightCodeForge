@@ -55,7 +55,11 @@ public class EndToEndWorkflowScenario : IScenario
         }
 
         // Step 2: Configure custom stage handlers for deterministic end-to-end progression
-        var reviewStage = new GenericAgenticStage(StandardStageIds.TaskReview, "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full })
+        using var scopeServices = context.Environment.Services.CreateScope();
+        var registry = scopeServices.ServiceProvider.GetRequiredService<IWorkflowStageRegistry>();
+        var renderer = scopeServices.ServiceProvider.GetRequiredService<IPromptTemplateRenderer>();
+
+        var reviewStage = new GenericAgenticStage(StandardStageIds.TaskReview, "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer)
         {
             Handler = (pipelineCtx, ct) =>
             {
@@ -64,7 +68,7 @@ public class EndToEndWorkflowScenario : IScenario
             }
         };
 
-        var implStage = new GenericAgenticStage(StandardStageIds.Implementation, "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full })
+        var implStage = new GenericAgenticStage(StandardStageIds.Implementation, "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer)
         {
             Handler = (pipelineCtx, ct) =>
             {
@@ -74,7 +78,7 @@ public class EndToEndWorkflowScenario : IScenario
             }
         };
 
-        var reviewFixStage = new GenericAgenticStage(StandardStageIds.CodeReviewAndFix, "Code Review & Fix", new AgenticStageConfig { RequiredMode = AgentMode.Review, LoopBackStageId = StandardStageIds.Implementation })
+        var reviewFixStage = new GenericAgenticStage(StandardStageIds.CodeReviewAndFix, "Code Review & Fix", new AgenticStageConfig { RequiredMode = AgentMode.Review, LoopBackStageId = StandardStageIds.Implementation }, renderer)
         {
             Handler = (pipelineCtx, ct) =>
             {
@@ -82,9 +86,6 @@ public class EndToEndWorkflowScenario : IScenario
                 return Task.FromResult(StageExecutionResult.Success());
             }
         };
-
-        using var scopeServices = context.Environment.Services.CreateScope();
-        var registry = scopeServices.ServiceProvider.GetRequiredService<IWorkflowStageRegistry>();
 
         var preImplDef = new StageDefinition
         {

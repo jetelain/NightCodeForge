@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
@@ -136,7 +137,7 @@ public class StageRegistryAndFactoryTests
         _registry.RegisterHandler("agentic", (sp, def) =>
         {
             customCalled = true;
-            return new GenericAgenticStage(def.StageId, "Overridden", new AgenticStageConfig());
+            return new GenericAgenticStage(def.StageId, "Overridden", new AgenticStageConfig(), sp.GetRequiredService<IPromptTemplateRenderer>());
         });
 
         var stage = _factory.CreateStage(new StageDefinition

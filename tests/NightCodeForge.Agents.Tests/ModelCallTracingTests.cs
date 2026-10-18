@@ -216,7 +216,7 @@ public class ModelCallTracingTests
         {
             var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
             {
-                PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+                PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create(),
                 BaseChatClient = new EchoClient(),
                 TranscriptService = new SessionTranscriptService(Path.Combine(repo, "t"))
             }.Build();

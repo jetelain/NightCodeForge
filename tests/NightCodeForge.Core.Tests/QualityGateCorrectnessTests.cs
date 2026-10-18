@@ -522,7 +522,7 @@ Passed! - Failed: 0, Passed: 10, Total: 10";
             }
         };
 
-        var composite = new CompositeDeterministicStage("deterministic-post-impl", "Post-Impl Gates", config, sp);
+        var composite = new CompositeDeterministicStage("deterministic-post-impl", "Post-Impl Gates", config, sp, sp.GetRequiredService<IWorkflowStageRegistry>());
         var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
         var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
         var context = new PipelineContext(task, workspace);
@@ -871,12 +871,12 @@ Failed!  - Failed: 3, Passed: 12, Total: 15 - Assembly2.dll
     {
         var sp = new TestServiceProvider();
         var def = new StageDefinition { StageId = "test-stage", DisplayName = "Test" };
+        var registry = new WorkflowStageRegistry();
 
-        // Constructor requiring registry in DI
-        Assert.Throws<InvalidOperationException>(() => new CompositeDeterministicStage(def, sp));
+        // Constructor throws if registry is null
+        Assert.Throws<ArgumentNullException>(() => new CompositeDeterministicStage(def, sp, null!));
 
         // Constructor with explicit registry
-        var registry = new WorkflowStageRegistry();
         var stage = new CompositeDeterministicStage(def, sp, registry);
         Assert.NotNull(stage);
         Assert.Equal("test-stage", stage.StageId);

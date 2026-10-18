@@ -20,7 +20,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
         Directory.CreateDirectory(tempDir);
         try
         {
-            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
             var ex = Assert.Throws<RequestChangesException>(() => tools.RequestChanges("Feature incomplete", "Missing tests"));
             Assert.Equal("Feature incomplete", ex.Feedback);
             Assert.Equal("Missing tests", ex.Reason);
@@ -39,7 +39,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
         Directory.CreateDirectory(tempDir);
         try
         {
-            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver());
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
             var dispatcher = new LenientToolDispatcher(tools);
 
             // Test canonical name
@@ -168,7 +168,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             }
 
             var mockClient = new MockChatClient(StreamGen);
-            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver() }.Build();
+            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = TestPathResolver.Create() }.Build();
 
             var task = new ForgeTask { Id = 1, Title = "Test ForgeTask", Description = "Test" };
             var bag = new PipelineDataBag();
@@ -218,7 +218,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             }
 
             var mockClient = new MockChatClient(StreamGen);
-            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver() }.Build();
+            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = TestPathResolver.Create() }.Build();
 
             var task = new ForgeTask { Id = 2, Title = "Test ForgeTask 2", Description = "Test" };
             var bag = new PipelineDataBag();
@@ -258,7 +258,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             LoopBackStageId = StandardStageIds.Implementation,
             StageDirective = "You are a Principal Code Reviewer and Quality Gatekeeper.\nrequest_changes"
         };
-        var stage = new GenericAgenticStage(StandardStageIds.CodeReviewAndFix, "Code Review & Fix", config);
+        var stage = new GenericAgenticStage(StandardStageIds.CodeReviewAndFix, "Code Review & Fix", config, new ScribanPromptTemplateRenderer());
         Assert.Equal(AgentMode.Review, stage.RequiredMode);
         Assert.Equal(StandardStageIds.Implementation, stage.LoopBackStageId);
         Assert.Contains("Principal Code Reviewer", stage.StageDirective);
@@ -301,7 +301,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             }
 
             var mockClient = new MockChatClient(StreamGen);
-            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver() }.Build();
+            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = TestPathResolver.Create() }.Build();
 
             var task = new ForgeTask { Id = 3, Title = "Test ForgeTask 3", Description = "Test" };
             var pipelineContext = new PipelineContext(task, new Workspace { Id = 1 });
@@ -353,7 +353,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             }
 
             var mockClient = new MockChatClient(StreamGen);
-            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver() }.Build();
+            var harness = new TestCrucibleHarnessBuilder { BaseChatClient = mockClient, PathResolver = TestPathResolver.Create() }.Build();
 
             var task = new ForgeTask { Id = 4, Title = "Doc Path ForgeTask", Description = "Testing doc path" };
             var bag = new PipelineDataBag();
@@ -397,7 +397,8 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             {
                 RequiredMode = AgentMode.Full,
                 StageDirective = "1. MANDATORY FILE EDIT: You must edit the task specification document on disk (specified in docs/tasks/)... 4. Do not write or modify production code in this stage."
-            });
+            },
+            new ScribanPromptTemplateRenderer());
         Assert.Contains("docs/tasks/", reviewStage.StageDirective);
         Assert.Contains("Do not write or modify production code", reviewStage.StageDirective);
 
@@ -408,7 +409,8 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             {
                 RequiredMode = AgentMode.Full,
                 StageDirective = "1. Implement clean, robust, and maintainable code adhering to the task specification document in docs/tasks/..."
-            });
+            },
+            new ScribanPromptTemplateRenderer());
         Assert.Contains("docs/tasks/", implStage.StageDirective);
 
         var codeReviewStage = new GenericAgenticStage(
@@ -419,7 +421,8 @@ public class CodeReviewLoopbackAndPromptOverrideTests
                 RequiredMode = AgentMode.Review,
                 LoopBackStageId = StandardStageIds.Implementation,
                 StageDirective = "2. TIER 1 - MINOR POLISH: ... 3. TIER 2 - REJECTION GATE: Rejection is strictly reserved for major tasks or missing features..."
-            });
+            },
+            new ScribanPromptTemplateRenderer());
         Assert.Contains("TIER 1 - MINOR POLISH", codeReviewStage.StageDirective);
         Assert.Contains("TIER 2 - REJECTION GATE", codeReviewStage.StageDirective);
         Assert.Contains("Rejection is strictly reserved for major tasks or missing features", codeReviewStage.StageDirective);

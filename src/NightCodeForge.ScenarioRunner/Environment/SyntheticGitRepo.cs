@@ -14,10 +14,10 @@ public sealed class SyntheticGitRepo
     public string RepositoryPath { get; }
     public IWslMetadataService WslMetadataService { get; set; }
 
-    public SyntheticGitRepo(string repositoryPath, IWslMetadataService? wslMetadataService = null)
+    public SyntheticGitRepo(string repositoryPath, IWslMetadataService wslMetadataService)
     {
         RepositoryPath = repositoryPath ?? throw new ArgumentNullException(nameof(repositoryPath));
-        WslMetadataService = wslMetadataService ?? new NightCodeForge.Infrastructure.Execution.WslMetadataService(new NightCodeForge.Core.Execution.SystemProcessRunner());
+        WslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
     }
 
     /// <summary>

@@ -24,13 +24,6 @@ public class CompositeDeterministicStage : IWorkflowStage
 
     public CompositeDeterministicStage(
         StageDefinition definition,
-        IServiceProvider serviceProvider)
-        : this(definition, serviceProvider, serviceProvider.GetRequiredService<IWorkflowStageRegistry>())
-    {
-    }
-
-    public CompositeDeterministicStage(
-        StageDefinition definition,
         IServiceProvider serviceProvider,
         IWorkflowStageRegistry registry)
     {
@@ -42,15 +35,6 @@ public class CompositeDeterministicStage : IWorkflowStage
         Config = !string.IsNullOrWhiteSpace(definition.ConfigurationJson)
             ? JsonSerializer.Deserialize<DeterministicStageConfig>(definition.ConfigurationJson, JsonOptions) ?? new DeterministicStageConfig()
             : new DeterministicStageConfig();
-    }
-
-    public CompositeDeterministicStage(
-        string stageId,
-        string displayName,
-        DeterministicStageConfig config,
-        IServiceProvider serviceProvider)
-        : this(stageId, displayName, config, serviceProvider, serviceProvider.GetRequiredService<IWorkflowStageRegistry>())
-    {
     }
 
     public CompositeDeterministicStage(

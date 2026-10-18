@@ -25,7 +25,7 @@ public class IdeationServiceTests
         {
             BaseChatClient = client,
             ChatClientFactory = chatClientFactory,
-            PathResolver = pathResolver ?? new NightCodeForge.Infrastructure.Execution.WorkspacePathResolver(),
+            PathResolver = pathResolver ?? NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create(),
             ActivityStreamer = activityStreamer ?? new InMemoryAgentActivityStreamer(),
             TranscriptService = transcriptService ?? new SessionTranscriptService(),
             Logger = logger ?? NullLogger<IdeationService>.Instance

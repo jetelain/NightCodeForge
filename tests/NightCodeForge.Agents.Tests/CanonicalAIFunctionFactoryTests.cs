@@ -13,7 +13,7 @@ public class CanonicalAIFunctionFactoryTests
         var unconfiguredSearch = new MockWebSearchService(isConfigured: false);
         var tools = TestCanonicalToolsBuilder.Create(
             AppContext.BaseDirectory,
-            pathResolver: new WorkspacePathResolver(),
+            pathResolver: TestPathResolver.Create(),
             webSearchService: unconfiguredSearch);
 
         Assert.False(tools.IsWebSearchConfigured);
@@ -34,7 +34,7 @@ public class CanonicalAIFunctionFactoryTests
         var configuredSearch = new MockWebSearchService(isConfigured: true);
         var tools = TestCanonicalToolsBuilder.Create(
             AppContext.BaseDirectory,
-            pathResolver: new WorkspacePathResolver(),
+            pathResolver: TestPathResolver.Create(),
             webSearchService: configuredSearch);
 
         Assert.True(tools.IsWebSearchConfigured);
@@ -53,7 +53,7 @@ public class CanonicalAIFunctionFactoryTests
         var unconfiguredSearch = new MockWebSearchService(isConfigured: false);
         var tools = TestCanonicalToolsBuilder.Create(
             AppContext.BaseDirectory,
-            pathResolver: new WorkspacePathResolver(),
+            pathResolver: TestPathResolver.Create(),
             webSearchService: unconfiguredSearch);
 
         var result = await tools.WebSearchAsync("how to run local models");
@@ -73,7 +73,7 @@ public class CanonicalAIFunctionFactoryTests
 
         var tools = TestCanonicalToolsBuilder.Create(
             AppContext.BaseDirectory,
-            pathResolver: new WorkspacePathResolver(),
+            pathResolver: TestPathResolver.Create(),
             webSearchService: configuredSearch);
 
         var result = await tools.WebSearchAsync("test query");

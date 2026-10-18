@@ -36,9 +36,13 @@ public class StartupRecoveryIntegrationTests : IDisposable
             _runner,
             CreatePipelineProvider(),
             jobQueue,
-            new WorkspacePathResolver(),
+            _pathResolver,
             _processRunner,
             NullLogger<StartupRecoveryService>.Instance);
+
+    private readonly IWorkspacePathResolver _pathResolver = new WorkspacePathResolver(
+        new Mock<IWslMetadataService>().Object,
+        Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
 
     public StartupRecoveryIntegrationTests()
     {
@@ -46,7 +50,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
         _processRunner = new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance);
         _runner = new GitCliRunner(
             _processRunner,
-            new WorkspacePathResolver(),
+            _pathResolver,
             new Mock<IWslMetadataService>().Object,
             NullLogger<GitCliRunner>.Instance);
 
@@ -254,8 +258,8 @@ public class StartupRecoveryIntegrationTests : IDisposable
     private static IWorkflowPipelineProvider CreatePipelineProvider() =>
         new DefaultWorkflowPipelineProvider(new WorkflowPipeline(new IWorkflowStage[]
         {
-            new GenericAgenticStage("task-review", "Task Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }),
-            new GenericAgenticStage("implementation", "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full })
+            new GenericAgenticStage("task-review", "Task Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer()),
+            new GenericAgenticStage("implementation", "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer())
         }));
 }
 

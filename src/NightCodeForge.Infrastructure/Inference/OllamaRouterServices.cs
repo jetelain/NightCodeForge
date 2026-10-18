@@ -20,13 +20,17 @@ public class OllamaModelCatalogService : IOllamaModelCatalogService
 
     public OllamaModelCatalogService(
         HttpClient httpClient,
-        IOptions<OllamaRouterOptions>? options = null,
-        ILogger<OllamaModelCatalogService>? logger = null)
+        IOptions<OllamaRouterOptions> options,
+        ILogger<OllamaModelCatalogService> logger)
     {
-        _httpClient = httpClient;
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<OllamaModelCatalogService>.Instance;
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(options);
 
-        var baseUrl = options?.Value.BaseUrl ?? "http://localhost:11434";
+        var baseUrl = !string.IsNullOrWhiteSpace(options.Value?.BaseUrl)
+            ? options.Value.BaseUrl
+            : "http://localhost:11434";
+
         if (_httpClient.BaseAddress == null)
         {
             _httpClient.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
@@ -94,13 +98,17 @@ public class OllamaModelPreloadService : IOllamaModelPreloadService
 
     public OllamaModelPreloadService(
         HttpClient httpClient,
-        IOptions<OllamaRouterOptions>? options = null,
-        ILogger<OllamaModelPreloadService>? logger = null)
+        IOptions<OllamaRouterOptions> options,
+        ILogger<OllamaModelPreloadService> logger)
     {
-        _httpClient = httpClient;
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<OllamaModelPreloadService>.Instance;
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(options);
 
-        var baseUrl = options?.Value.BaseUrl ?? "http://localhost:11434";
+        var baseUrl = !string.IsNullOrWhiteSpace(options.Value?.BaseUrl)
+            ? options.Value.BaseUrl
+            : "http://localhost:11434";
+
         if (_httpClient.BaseAddress == null)
         {
             _httpClient.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");

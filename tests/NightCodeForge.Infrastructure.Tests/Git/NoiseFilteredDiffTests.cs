@@ -17,16 +17,18 @@ public class NoiseFilteredDiffTests : IDisposable
 
     public NoiseFilteredDiffTests()
     {
+        var wslMeta = new Mock<IWslMetadataService>().Object;
+        var pathResolver = new WorkspacePathResolver(wslMeta, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
         _repo = new TestGitRepository("main");
         _runner = new GitCliRunner(
             new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance),
-            new WorkspacePathResolver(),
-            new Mock<IWslMetadataService>().Object,
+            pathResolver,
+            wslMeta,
             NullLogger<GitCliRunner>.Instance);
         _manager = new GitWorkspaceManager(
             _runner,
-            new WorkspacePathResolver(),
-            new Mock<IWslMetadataService>().Object,
+            pathResolver,
+            wslMeta,
             NullLogger<GitWorkspaceManager>.Instance);
 
         // Base branch setup

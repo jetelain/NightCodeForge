@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -43,6 +44,18 @@ public class OllamaWebSearchServiceTests
         }
     }
 
+    private static OllamaWebSearchService CreateService(
+        HttpClient client,
+        IWebSearchSettingsService? settingsService = null,
+        string? explicitApiKey = null,
+        string? explicitEndpoint = null) =>
+        new(
+            client,
+            settingsService ?? new FakeSettingsService(),
+            NullLogger<OllamaWebSearchService>.Instance,
+            explicitApiKey,
+            explicitEndpoint);
+
     [Fact]
     public void IsConfigured_False_WhenNoApiKeyProvided()
     {
@@ -50,7 +63,7 @@ public class OllamaWebSearchServiceTests
         var client = new HttpClient(handler);
         var settingsService = new FakeSettingsService(new WebSearchSettings { ApiKey = "" });
 
-        var service = new OllamaWebSearchService(client, settingsService, explicitApiKey: null);
+        var service = CreateService(client, settingsService, explicitApiKey: null);
 
         Assert.False(service.IsConfigured);
         Assert.Equal("Ollama", service.ProviderName);
@@ -62,7 +75,7 @@ public class OllamaWebSearchServiceTests
         var handler = new MockHttpMessageHandler((req, ct) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
         var client = new HttpClient(handler);
 
-        var service = new OllamaWebSearchService(client, explicitApiKey: "ollama_key_123");
+        var service = CreateService(client, explicitApiKey: "ollama_key_123");
 
         Assert.True(service.IsConfigured);
     }
@@ -74,7 +87,7 @@ public class OllamaWebSearchServiceTests
         var client = new HttpClient(handler);
         var settingsService = new FakeSettingsService(new WebSearchSettings { ApiKey = "settings_key_abc" });
 
-        var service = new OllamaWebSearchService(client, settingsService);
+        var service = CreateService(client, settingsService);
 
         Assert.True(service.IsConfigured);
     }
@@ -84,7 +97,7 @@ public class OllamaWebSearchServiceTests
     {
         var handler = new MockHttpMessageHandler((req, ct) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
         var client = new HttpClient(handler);
-        var service = new OllamaWebSearchService(client, explicitApiKey: "");
+        var service = CreateService(client, explicitApiKey: "");
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.SearchAsync("test query"));
         Assert.Contains("OLLAMA_API_KEY is not configured", ex.Message);
@@ -95,7 +108,7 @@ public class OllamaWebSearchServiceTests
     {
         var handler = new MockHttpMessageHandler((req, ct) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
         var client = new HttpClient(handler);
-        var service = new OllamaWebSearchService(client, explicitApiKey: "test_key");
+        var service = CreateService(client, explicitApiKey: "test_key");
 
         var response = await service.SearchAsync("   ");
 
@@ -130,7 +143,7 @@ public class OllamaWebSearchServiceTests
         });
 
         var client = new HttpClient(handler);
-        var service = new OllamaWebSearchService(client, explicitApiKey: "ollama_secret_456");
+        var service = CreateService(client, explicitApiKey: "ollama_secret_456");
 
         var result = await service.SearchAsync("Ollama local LLM", 5);
 
@@ -164,7 +177,7 @@ public class OllamaWebSearchServiceTests
         });
 
         var client = new HttpClient(handler);
-        var service = new OllamaWebSearchService(client, explicitApiKey: "test_key");
+        var service = CreateService(client, explicitApiKey: "test_key");
 
         await service.SearchAsync("test query", 25);
 
@@ -184,7 +197,7 @@ public class OllamaWebSearchServiceTests
         });
 
         var client = new HttpClient(handler);
-        var service = new OllamaWebSearchService(client, explicitApiKey: "bad_key");
+        var service = CreateService(client, explicitApiKey: "bad_key");
 
         var ex = await Assert.ThrowsAsync<HttpRequestException>(() => service.SearchAsync("query"));
         Assert.Equal(HttpStatusCode.Unauthorized, ex.StatusCode);
@@ -207,7 +220,7 @@ public class OllamaWebSearchServiceTests
         });
 
         var client = new HttpClient(handler);
-        var service = new OllamaWebSearchService(client, explicitApiKey: "test_key");
+        var service = CreateService(client, explicitApiKey: "test_key");
 
         var (success, message, count, elapsed) = await service.TestConnectionAsync("Ollama");
 
@@ -228,7 +241,7 @@ public class OllamaWebSearchServiceTests
         });
 
         var client = new HttpClient(handler);
-        var service = new OllamaWebSearchService(client, explicitApiKey: "bad_key");
+        var service = CreateService(client, explicitApiKey: "bad_key");
 
         var (success, message, count, elapsed) = await service.TestConnectionAsync("Ollama");
 
