@@ -101,7 +101,8 @@ public class AgentSessionContextPromotionTests
             {
                 PromptTemplate = "Reviewing task #{{ task.id }}\n{{- if context.review_diff_stat }}\nDiff Stat:\n{{ context.review_diff_stat }}\n{{- end }}"
             },
-            new ScribanPromptTemplateRenderer());
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 
@@ -122,7 +123,8 @@ public class AgentSessionContextPromotionTests
             {
                 PromptTemplate = "Reviewing task #{{ task.id }}: {{ task.title }}"
             },
-            new ScribanPromptTemplateRenderer());
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 

@@ -37,6 +37,7 @@ public class TestIdeationServiceBuilder
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
     public ILogger<IdeationService> Logger { get; set; } = NullLogger<IdeationService>.Instance;
     public ILogger<CanonicalTools> CanonicalToolsLogger { get; set; } = NullLogger<CanonicalTools>.Instance;
+    public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     public IdeationService Build()
     {
@@ -62,6 +63,7 @@ public class TestIdeationServiceBuilder
             WorkspaceRepository,
             LlmOptions,
             Logger,
-            CanonicalToolsLogger);
+            CanonicalToolsLogger,
+            TimeProvider);
     }
 }

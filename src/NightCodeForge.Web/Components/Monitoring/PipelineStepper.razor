@@ -31,7 +31,7 @@
                     <span class="step-badge @(stage.IsAgentic ? "badge-gpu" : "badge-cpu")">
                         @(stage.IsAgentic ? "⚡ GPU" : "⚙️ CPU")
                     </span>
-                    <span class="step-index">#@stage.SequenceOrder</span>
+                    @* <span class="step-index">#@stage.SequenceOrder</span> *@
                 </div>
                 <div class="step-icon-circle">
                     @if (stage.Status == StageExecutionStatus.Running)
@@ -59,6 +59,7 @@
                         <span class="stage-icon-text">@stage.Icon</span>
                     }
                 </div>
+                <div class="step-title">@stage.DisplayName</div>
                 @if (!string.IsNullOrEmpty(stage.MetricsSummary))
                 {
                     <div class="step-metrics-badge">@stage.MetricsSummary</div>
@@ -186,10 +187,6 @@
                     {
                         st.Status = conv.Status;
                         st.StatusText = GetDefaultStatusText(conv.Status);
-                    }
-                    if (!string.IsNullOrWhiteSpace(conv.Summary))
-                    {
-                        st.MetricsSummary = conv.Summary;
                     }
                 }
             }

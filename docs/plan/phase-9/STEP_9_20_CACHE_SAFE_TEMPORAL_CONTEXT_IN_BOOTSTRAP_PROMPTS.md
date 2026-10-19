@@ -4,7 +4,7 @@
 > *Parent Plan:* [Phase 9 Master Plan](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md) | [LOCAL_LLM_OPTIMIZATIONS.md](../../LOCAL_LLM_OPTIMIZATIONS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Agents.Tests`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Complete | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -63,17 +63,17 @@
 ---
 
 ## 4. Implementation Checklist & Deliverables
-
-- [ ] **DefaultBootstrapPromptBuilder:**
-  - [ ] Add `current_date` property to Scriban model under `context.current_date`.
-  - [ ] Render `[Current Date]: {currentDate}` in the bootstrap prompt output.
-  - [ ] Support injecting `TimeProvider` (or passing date string parameter).
-- [ ] **CrucibleAgentHarness & PromptPrefixStabilizer:**
-  - [ ] Verify that Layers 1 and 2 in `PromptPrefixStabilizer.cs` contain zero date/timestamp strings.
-  - [ ] Add optional `date="yyyy-MM-dd"` attribute to `<task>` in `CrucibleAgentHarness.BuildTaskScope`.
-- [ ] **IdeationService:**
-  - [ ] Inject current calendar date into initial ideation conversation context.
-- [ ] **Automated Testing:**
-  - [ ] Test `DefaultBootstrapPromptBuilder` produces `Current Date: yyyy-MM-dd` in output with custom `TimeProvider`.
-  - [ ] Test `PromptPrefixStabilizer` Layer 1 and Layer 2 output is byte-identical across calls on different dates.
-  - [ ] Run full test suite per AGENTS.md: `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+ 
+- [x] **DefaultBootstrapPromptBuilder:**
+  - [x] Add `current_date` property to Scriban model under `context.current_date`.
+  - [x] Render `[Current Date]: {currentDate}` in the bootstrap prompt output.
+  - [x] Support injecting `TimeProvider` (or passing date string parameter).
+- [x] **CrucibleAgentHarness & PromptPrefixStabilizer:**
+  - [x] Verify that Layers 1 and 2 in `PromptPrefixStabilizer.cs` contain zero date/timestamp strings.
+  - [x] Add optional `date="yyyy-MM-dd"` attribute to `<task>` in `CrucibleAgentHarness.BuildTaskScope`.
+- [x] **IdeationService:**
+  - [x] Inject current calendar date into initial ideation conversation context.
+- [x] **Automated Testing:**
+  - [x] Test `DefaultBootstrapPromptBuilder` produces `Current Date: yyyy-MM-dd` in output with custom `TimeProvider`.
+  - [x] Test `PromptPrefixStabilizer` Layer 1 and Layer 2 output is byte-identical across calls on different dates.
+  - [x] Run full test suite per AGENTS.md: `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

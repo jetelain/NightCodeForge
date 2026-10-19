@@ -12,7 +12,9 @@ public static class DefaultBootstrapPromptBuilder
         ForgeTask task,
         PipelineContext context,
         string? stageDirective = null,
-        IPromptTemplateRenderer? renderer = null)
+        IPromptTemplateRenderer? renderer = null,
+        TimeProvider? timeProvider = null,
+        string? currentDate = null)
     {
         var promptTemplate = WorkspacePromptResolver.ResolveBootstrapPromptOverride(context.WorkingDirectory, stage.StageId)
             ?? stage.PromptTemplate;
@@ -26,6 +28,11 @@ public static class DefaultBootstrapPromptBuilder
         var effectiveDirective = !string.IsNullOrWhiteSpace(stageDirective)
             ? stageDirective
             : stage.StageDirective;
+
+        var provider = timeProvider ?? TimeProvider.System;
+        var effectiveDate = !string.IsNullOrWhiteSpace(currentDate)
+            ? currentDate
+            : provider.GetUtcNow().ToString("yyyy-MM-dd");
 
         var reviewerFeedback = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewerFeedback);
         var reviewDiffStat = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiffStat);
@@ -70,8 +77,10 @@ public static class DefaultBootstrapPromptBuilder
             },
             stage = new { id = stage.StageId, display_name = stage.DisplayName, directive = effectiveDirective },
             stage_directive = effectiveDirective,
+            current_date = effectiveDate,
             context = new
             {
+                current_date = effectiveDate,
                 task_markdown_path = string.IsNullOrWhiteSpace(taskPath) ? null : taskPath,
                 approved_plan = string.IsNullOrWhiteSpace(approvedPlan) ? null : approvedPlan,
                 reviewer_feedback = string.IsNullOrWhiteSpace(reviewerFeedback) ? null : reviewerFeedback,
@@ -87,6 +96,20 @@ public static class DefaultBootstrapPromptBuilder
         };
 
         var rendered = renderer.Render(promptTemplate, model).Trim();
+
+        if (!promptTemplate.Contains("current_date", StringComparison.OrdinalIgnoreCase))
+        {
+            if (rendered.Contains("[Context]:", StringComparison.Ordinal))
+            {
+                var contextIdx = rendered.IndexOf("[Context]:", StringComparison.Ordinal);
+                rendered = rendered.Insert(contextIdx + "[Context]:".Length, $"\n- Current Date: {effectiveDate}");
+            }
+            else
+            {
+                rendered = $"{rendered}\n\n[Context]:\n- Current Date: {effectiveDate}".Trim();
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(effectiveDirective) && !rendered.Contains(effectiveDirective))
         {
             rendered = $"{rendered}\n\n[Stage Directive]:\n{effectiveDirective}".Trim();

@@ -56,8 +56,9 @@ public class HumanInterruptionScenario : IScenario
 
         // Step 2: Configure custom stage handler that triggers human interruption on turn 1
         var renderer = context.Environment.Services.GetRequiredService<IPromptTemplateRenderer>();
+        var timeProvider = context.Environment.Services.GetRequiredService<TimeProvider>();
 
-        var reviewStage = new GenericAgenticStage(StandardStageIds.TaskReview, "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer)
+        var reviewStage = new GenericAgenticStage(StandardStageIds.TaskReview, "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer, timeProvider)
         {
             Handler = (pipelineContext, ct) =>
             {
@@ -77,7 +78,7 @@ public class HumanInterruptionScenario : IScenario
         var customPipeline = new WorkflowPipeline(new IWorkflowStage[]
         {
             reviewStage,
-            new GenericAgenticStage(StandardStageIds.Implementation, "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer)
+            new GenericAgenticStage(StandardStageIds.Implementation, "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer, timeProvider)
         });
 
         context.Environment.SetCustomPipeline(customPipeline);

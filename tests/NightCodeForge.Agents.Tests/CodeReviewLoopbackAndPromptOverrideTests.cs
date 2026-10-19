@@ -258,7 +258,7 @@ public class CodeReviewLoopbackAndPromptOverrideTests
             LoopBackStageId = StandardStageIds.Implementation,
             StageDirective = "You are a Principal Code Reviewer and Quality Gatekeeper.\nrequest_changes"
         };
-        var stage = new GenericAgenticStage(StandardStageIds.CodeReviewAndFix, "Code Review & Fix", config, new ScribanPromptTemplateRenderer());
+        var stage = new GenericAgenticStage(StandardStageIds.CodeReviewAndFix, "Code Review & Fix", config, new ScribanPromptTemplateRenderer(), TimeProvider.System);
         Assert.Equal(AgentMode.Review, stage.RequiredMode);
         Assert.Equal(StandardStageIds.Implementation, stage.LoopBackStageId);
         Assert.Contains("Principal Code Reviewer", stage.StageDirective);
@@ -398,7 +398,8 @@ public class CodeReviewLoopbackAndPromptOverrideTests
                 RequiredMode = AgentMode.Full,
                 StageDirective = "1. MANDATORY FILE EDIT: You must edit the task specification document on disk (specified in docs/tasks/)... 4. Do not write or modify production code in this stage."
             },
-            new ScribanPromptTemplateRenderer());
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
         Assert.Contains("docs/tasks/", reviewStage.StageDirective);
         Assert.Contains("Do not write or modify production code", reviewStage.StageDirective);
 
@@ -410,7 +411,8 @@ public class CodeReviewLoopbackAndPromptOverrideTests
                 RequiredMode = AgentMode.Full,
                 StageDirective = "1. Implement clean, robust, and maintainable code adhering to the task specification document in docs/tasks/..."
             },
-            new ScribanPromptTemplateRenderer());
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
         Assert.Contains("docs/tasks/", implStage.StageDirective);
 
         var codeReviewStage = new GenericAgenticStage(
@@ -422,7 +424,8 @@ public class CodeReviewLoopbackAndPromptOverrideTests
                 LoopBackStageId = StandardStageIds.Implementation,
                 StageDirective = "2. TIER 1 - MINOR POLISH: ... 3. TIER 2 - REJECTION GATE: Rejection is strictly reserved for major tasks or missing features..."
             },
-            new ScribanPromptTemplateRenderer());
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
         Assert.Contains("TIER 1 - MINOR POLISH", codeReviewStage.StageDirective);
         Assert.Contains("TIER 2 - REJECTION GATE", codeReviewStage.StageDirective);
         Assert.Contains("Rejection is strictly reserved for major tasks or missing features", codeReviewStage.StageDirective);

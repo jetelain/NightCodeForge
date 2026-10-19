@@ -55,6 +55,7 @@ public partial class IdeationService : IIdeationService
     private readonly LlmProviderOptions _llmOptions;
     private readonly SkillsService _skillsService;
     private readonly IWorkspaceRepository _workspaceRepository;
+    private readonly TimeProvider _timeProvider;
 
     public IdeationService(
         IWorkspacePathResolver pathResolver,
@@ -71,7 +72,8 @@ public partial class IdeationService : IIdeationService
         IWorkspaceRepository workspaceRepository,
         Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
         ILogger<IdeationService> logger,
-        ILogger<CanonicalTools> canonicalToolsLogger)
+        ILogger<CanonicalTools> canonicalToolsLogger,
+        TimeProvider timeProvider)
     {
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
@@ -89,6 +91,7 @@ public partial class IdeationService : IIdeationService
         _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _canonicalToolsLogger = canonicalToolsLogger ?? throw new ArgumentNullException(nameof(canonicalToolsLogger));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     /// <summary>
@@ -328,12 +331,28 @@ When proposing implementation tasks to the developer, adhere to the following ru
             }
         }
 
-        messages.Add(new ChatMessage(ChatRole.User, userPrompt));
+        var currentDate = _timeProvider.GetUtcNow().ToString("yyyy-MM-dd");
+        var effectiveUserPrompt = userPrompt;
+        var hasDateInHistory = conversationHistory != null && conversationHistory.Any(m => m.Content.Contains("Current Date:", StringComparison.OrdinalIgnoreCase));
+        if (!hasDateInHistory && !effectiveUserPrompt.Contains("Current Date:", StringComparison.OrdinalIgnoreCase))
+        {
+            if (effectiveUserPrompt.Contains("[Context]:", StringComparison.OrdinalIgnoreCase))
+            {
+                var contextIdx = effectiveUserPrompt.IndexOf("[Context]:", StringComparison.OrdinalIgnoreCase);
+                effectiveUserPrompt = effectiveUserPrompt.Insert(contextIdx + "[Context]:".Length, $"\n- Current Date: {currentDate}");
+            }
+            else
+            {
+                effectiveUserPrompt = $"{effectiveUserPrompt}\n\n[Context]:\n- Current Date: {currentDate}".Trim();
+            }
+        }
+
+        messages.Add(new ChatMessage(ChatRole.User, effectiveUserPrompt));
 
         var sessionStopwatch = System.Diagnostics.Stopwatch.StartNew();
         var transcriptEntries = new List<TranscriptEntry>
         {
-            new(DateTime.UtcNow, "USER", userPrompt)
+            new(_timeProvider.GetUtcNow().UtcDateTime, "USER", effectiveUserPrompt)
         };
 
         var transcriptBuffer = new TranscriptStreamBuffer(transcriptEntries);

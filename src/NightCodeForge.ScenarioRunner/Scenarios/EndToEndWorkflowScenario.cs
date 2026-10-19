@@ -58,8 +58,9 @@ public class EndToEndWorkflowScenario : IScenario
         using var scopeServices = context.Environment.Services.CreateScope();
         var registry = scopeServices.ServiceProvider.GetRequiredService<IWorkflowStageRegistry>();
         var renderer = scopeServices.ServiceProvider.GetRequiredService<IPromptTemplateRenderer>();
+        var timeProvider = scopeServices.ServiceProvider.GetRequiredService<TimeProvider>();
 
-        var reviewStage = new GenericAgenticStage(StandardStageIds.TaskReview, "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer)
+        var reviewStage = new GenericAgenticStage(StandardStageIds.TaskReview, "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer, timeProvider)
         {
             Handler = (pipelineCtx, ct) =>
             {
@@ -68,7 +69,7 @@ public class EndToEndWorkflowScenario : IScenario
             }
         };
 
-        var implStage = new GenericAgenticStage(StandardStageIds.Implementation, "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer)
+        var implStage = new GenericAgenticStage(StandardStageIds.Implementation, "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer, timeProvider)
         {
             Handler = (pipelineCtx, ct) =>
             {
@@ -78,7 +79,7 @@ public class EndToEndWorkflowScenario : IScenario
             }
         };
 
-        var reviewFixStage = new GenericAgenticStage(StandardStageIds.CodeReviewAndFix, "Code Review & Fix", new AgenticStageConfig { RequiredMode = AgentMode.Review, LoopBackStageId = StandardStageIds.Implementation }, renderer)
+        var reviewFixStage = new GenericAgenticStage(StandardStageIds.CodeReviewAndFix, "Code Review & Fix", new AgenticStageConfig { RequiredMode = AgentMode.Review, LoopBackStageId = StandardStageIds.Implementation }, renderer, timeProvider)
         {
             Handler = (pipelineCtx, ct) =>
             {

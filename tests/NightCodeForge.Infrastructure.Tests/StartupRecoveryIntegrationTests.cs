@@ -258,8 +258,8 @@ public class StartupRecoveryIntegrationTests : IDisposable
     private static IWorkflowPipelineProvider CreatePipelineProvider() =>
         new DefaultWorkflowPipelineProvider(new WorkflowPipeline(new IWorkflowStage[]
         {
-            new GenericAgenticStage("task-review", "Task Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer()),
-            new GenericAgenticStage("implementation", "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer())
+            new GenericAgenticStage("task-review", "Task Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer(), TimeProvider.System),
+            new GenericAgenticStage("implementation", "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer(), TimeProvider.System)
         }));
 }
 

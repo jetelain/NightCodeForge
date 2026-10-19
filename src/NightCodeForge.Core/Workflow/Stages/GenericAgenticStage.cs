@@ -22,12 +22,14 @@ public class GenericAgenticStage : IWorkflowStage
     public Func<PipelineContext, CancellationToken, Task<StageExecutionResult>>? Handler { get; set; }
 
     private readonly IPromptTemplateRenderer _renderer;
+    private readonly TimeProvider _timeProvider;
 
     public GenericAgenticStage(
         string stageId,
         string displayName,
         AgenticStageConfig config,
-        IPromptTemplateRenderer renderer)
+        IPromptTemplateRenderer renderer,
+        TimeProvider timeProvider)
     {
         StageId = stageId;
         DisplayName = displayName;
@@ -39,11 +41,12 @@ public class GenericAgenticStage : IWorkflowStage
         MaxRetries = config.MaxRetries;
         TimeoutMinutes = config.TimeoutMinutes;
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     public virtual string BuildBootstrapPrompt(ForgeTask task, PipelineContext context, string? stageDirective = null)
     {
-        return DefaultBootstrapPromptBuilder.Build(this, task, context, stageDirective, _renderer);
+        return DefaultBootstrapPromptBuilder.Build(this, task, context, stageDirective, _renderer, _timeProvider);
     }
 
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)

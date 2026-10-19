@@ -49,6 +49,7 @@ public class TestCrucibleHarnessBuilder
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
     public ILogger<CrucibleAgentHarness> Logger { get; set; } = NullLogger<CrucibleAgentHarness>.Instance;
     public ILogger<CanonicalTools> CanonicalToolsLogger { get; set; } = NullLogger<CanonicalTools>.Instance;
+    public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     public CrucibleAgentHarness Build()
     {
@@ -76,7 +77,8 @@ public class TestCrucibleHarnessBuilder
             TaskRepository,
             LlmOptions,
             Logger,
-            CanonicalToolsLogger);
+            CanonicalToolsLogger,
+            TimeProvider);
     }
 
     public class TestSingleChatClientFactory : IOllamaChatClientFactory

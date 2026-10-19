@@ -55,7 +55,7 @@ public class TaskOrchestratorCancellationTests
 
         public Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default)
         {
-            var stage = new GenericAgenticStage("test-stage", "Test Stage", new(), new MockPromptRenderer())
+            var stage = new GenericAgenticStage("test-stage", "Test Stage", new(), new MockPromptRenderer(), TimeProvider.System)
             {
                 Handler = _stageFunc
             };

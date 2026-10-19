@@ -53,7 +53,8 @@ public class WorkflowStageRegistry : IWorkflowStageRegistry
                 ? JsonSerializer.Deserialize<AgenticStageConfig>(def.ConfigurationJson, JsonOptions) ?? new AgenticStageConfig()
                 : new AgenticStageConfig();
             var renderer = sp.GetRequiredService<IPromptTemplateRenderer>();
-            return new GenericAgenticStage(def.StageId, def.DisplayName, config, renderer);
+            var timeProvider = sp.GetRequiredService<TimeProvider>();
+            return new GenericAgenticStage(def.StageId, def.DisplayName, config, renderer, timeProvider);
         });
 
         // 2. Deterministic discrete quality gate stages

@@ -56,6 +56,7 @@ public class WorkflowStageRegistryAndFactoryTests
         _serviceProvider.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv));
         _serviceProvider.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         _serviceProvider.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
+        _serviceProvider.AddService<TimeProvider>(TimeProvider.System);
         _serviceProvider.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
         _registry = new WorkflowStageRegistry();
         _factory = new WorkflowStageFactory(_registry, _serviceProvider);
@@ -145,7 +146,7 @@ public class WorkflowStageRegistryAndFactoryTests
     public void RegisterHandler_CustomHandler_ResolvesSuccessfully()
     {
         _registry.RegisterHandler("custom-mock-stage", (sp, def) =>
-            new GenericAgenticStage(def.StageId, def.DisplayName, new AgenticStageConfig { StageDirective = "Custom" }, sp.GetRequiredService<IPromptTemplateRenderer>()));
+            new GenericAgenticStage(def.StageId, def.DisplayName, new AgenticStageConfig { StageDirective = "Custom" }, sp.GetRequiredService<IPromptTemplateRenderer>(), sp.GetRequiredService<TimeProvider>()));
 
         var definition = new StageDefinition
         {
@@ -167,7 +168,7 @@ public class WorkflowStageRegistryAndFactoryTests
         var customRegistry = new WorkflowStageRegistry();
         // Register an agentic handler under a sub-stage name
         customRegistry.RegisterHandler("deterministic-not-really", (sp, def) =>
-            new GenericAgenticStage(def.StageId, def.DisplayName, new AgenticStageConfig(), sp.GetRequiredService<IPromptTemplateRenderer>()));
+            new GenericAgenticStage(def.StageId, def.DisplayName, new AgenticStageConfig(), sp.GetRequiredService<IPromptTemplateRenderer>(), sp.GetRequiredService<TimeProvider>()));
 
         var config = new DeterministicStageConfig
         {

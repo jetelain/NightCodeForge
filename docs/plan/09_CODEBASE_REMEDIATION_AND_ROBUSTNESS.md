@@ -267,11 +267,11 @@ flowchart TD
   - [ ] Canonical tools (`bash`, `load_skill`, `web_search`) accept parameter aliases (`workingDirectory`, `skillName`, `maxResults`).
   - [ ] Non-confusing error message emitted when `edit` arguments are missing.
   - [ ] Automated tests cover camelCase, snake_case, and chunk edit invocations.
-- [ ] **Step 9.20: Cache-Safe Temporal Context Injection in Bootstrap Prompts**
-  - [ ] In `DefaultBootstrapPromptBuilder`, expose `context.current_date` in Scriban model and render `[Current Date]: {currentDate}`.
-  - [ ] Guarantee Layers 1 and 2 of `PromptPrefixStabilizer` remain strictly 100% byte-identical without dynamic dates/timestamps.
-  - [ ] Date format strictly constrained to `yyyy-MM-dd` (zero hours/seconds) to preserve intra-day KV cache stability.
-  - [ ] Provide current date context to `IdeationService` for task proposal file authoring.
-  - [ ] Automated tests verify date injection in user prompt and byte-identical Layer 1/2 prefix stability across dates.
-- [ ] **Phase 9 Final Verification:** Complete test suite passes: `dotnet test` (all unit, integration, and E2E tests passing).
+- [x] **Step 9.20: Cache-Safe Temporal Context Injection in Bootstrap Prompts**
+  - [x] In `DefaultBootstrapPromptBuilder`, expose `context.current_date` in Scriban model and render `[Current Date]: {currentDate}`.
+  - [x] Guarantee Layers 1 and 2 of `PromptPrefixStabilizer` remain strictly 100% byte-identical without dynamic dates/timestamps.
+  - [x] Date format strictly constrained to `yyyy-MM-dd` (zero hours/seconds) to preserve intra-day KV cache stability.
+  - [x] Provide current date context to `IdeationService` for task proposal file authoring.
+  - [x] Automated tests verify date injection in user prompt and byte-identical Layer 1/2 prefix stability across dates.
+- [x] **Phase 9 Final Verification:** Complete test suite passes: `dotnet test` (all unit, integration, and E2E tests passing).
 

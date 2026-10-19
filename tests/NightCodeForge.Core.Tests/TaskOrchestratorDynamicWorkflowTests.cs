@@ -72,6 +72,7 @@ public class TaskOrchestratorDynamicWorkflowTests
 
         var sp = new TestServiceProvider();
         sp.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
+        sp.AddService<TimeProvider>(TimeProvider.System);
         var fakeEnv = new DynamicFakeExecutionEnvironment();
         sp.AddService<IExecutionEnvironment>(fakeEnv);
         sp.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv));

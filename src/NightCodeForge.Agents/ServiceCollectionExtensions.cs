@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddNightCodeForgeAgents(this IServiceCollection services)
     {
         // 1. Streaming & Realtime Telemetry
+        services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IAgentActivityStreamer, InMemoryAgentActivityStreamer>();
 
         // 2. Canonical Tools & Context Services

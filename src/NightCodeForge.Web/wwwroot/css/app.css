@@ -3630,6 +3630,16 @@ code, kbd, samp, pre {
     height: var(--step-header-height);
 }
 
+.step-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-top: 0.6rem;
+    margin-left: -2rem;
+    margin-right: -2rem;
+    line-height: 1.25;
+}
+
 .step-badge {
     font-size: 0.68rem;
     font-weight: 700;

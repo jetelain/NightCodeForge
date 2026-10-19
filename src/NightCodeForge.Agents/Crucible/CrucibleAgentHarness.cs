@@ -41,6 +41,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly ILogger<CrucibleAgentHarness> _logger;
     private readonly ILogger<CanonicalTools> _canonicalToolsLogger;
     private readonly LlmProviderOptions _llmOptions;
+    private readonly TimeProvider _timeProvider;
 
     public string HarnessId => StandardHarnessIds.Crucible;
 
@@ -61,7 +62,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         NightCodeForge.Core.Repositories.ITaskRepository taskRepository,
         Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
         ILogger<CrucibleAgentHarness> logger,
-        ILogger<CanonicalTools> canonicalToolsLogger)
+        ILogger<CanonicalTools> canonicalToolsLogger,
+        TimeProvider timeProvider)
     {
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
@@ -81,6 +83,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _canonicalToolsLogger = canonicalToolsLogger ?? throw new ArgumentNullException(nameof(canonicalToolsLogger));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
@@ -256,7 +259,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
             ? context.StageDirective
             : WorkspacePromptResolver.ResolveStageDirective(workspacePath, context.StageId, GetStageDirective(harnessConfig, context.StageId));
         var taskDocPath = context.TaskMarkdownPath ?? context.PipelineContext?.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
-        var taskScope = BuildTaskScope(context.ForgeTask, taskDocPath);
+        var taskDate = _timeProvider.GetUtcNow().ToString("yyyy-MM-dd");
+        var taskScope = BuildTaskScope(context.ForgeTask, taskDocPath, taskDate);
         var workspaceSystemPrompt = WorkspacePromptResolver.ResolveSystemPrompt(workspacePath);
         var customPersona = !string.IsNullOrWhiteSpace(workspaceSystemPrompt)
             ? workspaceSystemPrompt
@@ -935,7 +939,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
     /// <summary>
     /// Builds the &lt;task&gt; scope block of the prompt, neutralising characters that would break out of the
     /// attribute values or close the block early.
-    public static string BuildTaskScope(ForgeTask task, string? taskDocPath)
+    /// </summary>
+    public static string BuildTaskScope(ForgeTask task, string? taskDocPath, string? date = null)
     {
         ArgumentNullException.ThrowIfNull(task);
 
@@ -943,10 +948,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
             value.Replace("\"", "&quot;").Replace("<", "&lt;").Replace(">", "&gt;");
 
         var docAttr = !string.IsNullOrWhiteSpace(taskDocPath) ? $" path=\"{EscapeAttribute(taskDocPath)}\"" : string.Empty;
+        var dateAttr = !string.IsNullOrWhiteSpace(date) ? $" date=\"{EscapeAttribute(date)}\"" : string.Empty;
         var description = (task.Description ?? string.Empty)
             .Replace("</task>", "&lt;/task&gt;", StringComparison.OrdinalIgnoreCase);
 
-        return $"<task id=\"{task.Id}\" title=\"{EscapeAttribute(task.Title ?? string.Empty)}\"{docAttr}>\n{description}\n</task>";
+        return $"<task id=\"{task.Id}\" title=\"{EscapeAttribute(task.Title ?? string.Empty)}\"{docAttr}{dateAttr}>\n{description}\n</task>";
     }
 
     /// <summary>Runs persistence work sequentially, in submission order, logging (never throwing) failures.</summary>

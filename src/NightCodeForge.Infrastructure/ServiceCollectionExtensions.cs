@@ -48,6 +48,7 @@ public static class ServiceCollectionExtensions
         services.AddGitInfrastructure();
 
         // 5. Workflow Pipeline & Orchestration
+        services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IPromptTemplateRenderer, ScribanPromptTemplateRenderer>();
         services.TryAddSingleton<IWorkflowStageRegistry, WorkflowStageRegistry>();
         services.TryAddScoped<IWorkflowStageFactory, WorkflowStageFactory>();

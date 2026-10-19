@@ -24,20 +24,13 @@ public class PromptPrefixStabilizer
 - Be concise and focused in your responses.
 </rules>";
 
-    public string BuildStabilizedPrefix(
-        string stagePersonaDirective,
-        string taskScopeAndPlan,
+    public string BuildLayer1GlobalRules(
         string? projectGuidelines = null,
         string? skillsCatalog = null,
-        string? discoveredSymbols = null,
-        LocalOptimizationFlags? flags = null,
         string? customRulesPrompt = null,
-        string? customRolePersona = null,
-        string? workingDirectory = null)
+        string? customRolePersona = null)
     {
         var sb = new StringBuilder();
-
-        // LAYER 1: Immutable Global Rules & Guidelines (Byte-Identical across ALL turns & tasks)
         sb.AppendLine(!string.IsNullOrWhiteSpace(customRolePersona)
             ? customRolePersona
             : "You are an expert AI software engineer operating in NightCodeForge.");
@@ -53,16 +46,24 @@ public class PromptPrefixStabilizer
             sb.AppendLine(skillsCatalog);
         }
 
-        sb.AppendLine("---");
+        return sb.ToString().TrimEnd();
+    }
 
-        // LAYER 2: Stage-Specific Persona & Directives (Byte-Identical across turns of that stage)
+    public string BuildLayer2StagePersona(string stagePersonaDirective)
+    {
+        var sb = new StringBuilder();
         sb.AppendLine("<stage_directives>");
         sb.AppendLine(stagePersonaDirective.Trim());
         sb.AppendLine("</stage_directives>");
+        return sb.ToString().TrimEnd();
+    }
 
-        sb.AppendLine("---");
-
-        // LAYER 3: Dynamic ForgeTask Scope & Artifacts (Stable per task stage)
+    public string BuildLayer3TaskScope(
+        string taskScopeAndPlan,
+        string? workingDirectory = null,
+        string? discoveredSymbols = null)
+    {
+        var sb = new StringBuilder();
         sb.AppendLine("<task_scope>");
         sb.AppendLine(taskScopeAndPlan.Trim());
 
@@ -81,7 +82,54 @@ public class PromptPrefixStabilizer
             sb.AppendLine(discoveredSymbols);
         }
         sb.AppendLine("</task_scope>");
+        return sb.ToString().TrimEnd();
+    }
 
+    public PromptLayers BuildLayers(
+        string stagePersonaDirective,
+        string taskScopeAndPlan,
+        string? projectGuidelines = null,
+        string? skillsCatalog = null,
+        string? discoveredSymbols = null,
+        LocalOptimizationFlags? flags = null,
+        string? customRulesPrompt = null,
+        string? customRolePersona = null,
+        string? workingDirectory = null)
+    {
+        var layer1 = BuildLayer1GlobalRules(projectGuidelines, skillsCatalog, customRulesPrompt, customRolePersona);
+        var layer2 = BuildLayer2StagePersona(stagePersonaDirective);
+        var layer3 = BuildLayer3TaskScope(taskScopeAndPlan, workingDirectory, discoveredSymbols);
+        return new PromptLayers(layer1, layer2, layer3);
+    }
+
+    public string BuildStabilizedPrefix(
+        string stagePersonaDirective,
+        string taskScopeAndPlan,
+        string? projectGuidelines = null,
+        string? skillsCatalog = null,
+        string? discoveredSymbols = null,
+        LocalOptimizationFlags? flags = null,
+        string? customRulesPrompt = null,
+        string? customRolePersona = null,
+        string? workingDirectory = null)
+    {
+        var layers = BuildLayers(
+            stagePersonaDirective,
+            taskScopeAndPlan,
+            projectGuidelines,
+            skillsCatalog,
+            discoveredSymbols,
+            flags,
+            customRulesPrompt,
+            customRolePersona,
+            workingDirectory);
+
+        var sb = new StringBuilder();
+        sb.AppendLine(layers.Layer1GlobalRules);
+        sb.AppendLine("---");
+        sb.AppendLine(layers.Layer2StagePersona);
+        sb.AppendLine("---");
+        sb.AppendLine(layers.Layer3TaskScope);
         return sb.ToString().TrimEnd();
     }
 }

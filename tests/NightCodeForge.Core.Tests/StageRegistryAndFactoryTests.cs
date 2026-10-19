@@ -54,6 +54,7 @@ public class StageRegistryAndFactoryTests
         _serviceProvider.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv));
         _serviceProvider.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         _serviceProvider.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
+        _serviceProvider.AddService<TimeProvider>(TimeProvider.System);
         _serviceProvider.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
         _registry = new WorkflowStageRegistry();
         _factory = new WorkflowStageFactory(_registry, _serviceProvider);
@@ -137,7 +138,7 @@ public class StageRegistryAndFactoryTests
         _registry.RegisterHandler("agentic", (sp, def) =>
         {
             customCalled = true;
-            return new GenericAgenticStage(def.StageId, "Overridden", new AgenticStageConfig(), sp.GetRequiredService<IPromptTemplateRenderer>());
+            return new GenericAgenticStage(def.StageId, "Overridden", new AgenticStageConfig(), sp.GetRequiredService<IPromptTemplateRenderer>(), sp.GetRequiredService<TimeProvider>());
         });
 
         var stage = _factory.CreateStage(new StageDefinition

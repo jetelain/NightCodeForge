@@ -23,6 +23,7 @@ public class WorkflowRepositoryAndPipelineProviderTests
     {
         _serviceProvider = new TestServiceProvider();
         _serviceProvider.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
+        _serviceProvider.AddService<TimeProvider>(TimeProvider.System);
         _registry = new WorkflowStageRegistry();
         _stageFactory = new WorkflowStageFactory(_registry, _serviceProvider);
     }

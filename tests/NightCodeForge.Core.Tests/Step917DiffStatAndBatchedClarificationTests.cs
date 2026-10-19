@@ -39,7 +39,8 @@ public class Step917DiffStatAndBatchedClarificationTests
             {
                 PromptTemplate = "Reviewing task #{{ task.id }}: {{ task.title }}"
             },
-            new ScribanPromptTemplateRenderer());
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 
@@ -83,7 +84,8 @@ public class Step917DiffStatAndBatchedClarificationTests
             reviewStageDef.StageId,
             reviewStageDef.DisplayName,
             config,
-            new ScribanPromptTemplateRenderer());
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 
@@ -266,7 +268,8 @@ public class Step917DiffStatAndBatchedClarificationTests
             {
                 PromptTemplate = "Task: {{ task.title }}\n{{- if context.answered_questions }}\n[Answers]:\n{{ for qa in context.answered_questions }}{{ qa.prompt }} -> {{ qa.answer }}\n{{ end }}{{- end }}"
             },
-            new ScribanPromptTemplateRenderer());
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 
@@ -438,7 +441,8 @@ public class Step917DiffStatAndBatchedClarificationTests
             implStageDef.StageId,
             implStageDef.DisplayName,
             config,
-            new ScribanPromptTemplateRenderer());
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 
@@ -473,7 +477,8 @@ public class Step917DiffStatAndBatchedClarificationTests
             implStageDef.StageId,
             implStageDef.DisplayName,
             config,
-            new ScribanPromptTemplateRenderer());
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 
@@ -515,7 +520,8 @@ public class Step917DiffStatAndBatchedClarificationTests
             StandardStageIds.PostImplementationGates,
             "Gates",
             new AgenticStageConfig(),
-            new ScribanPromptTemplateRenderer())
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System)
         {
             Handler = (_, _) => Task.FromResult(StageExecutionResult.Success(StandardStageIds.CodeReviewAndFix))
         };
@@ -523,7 +529,8 @@ public class Step917DiffStatAndBatchedClarificationTests
             StandardStageIds.CodeReviewAndFix,
             "Review",
             new AgenticStageConfig(),
-            new ScribanPromptTemplateRenderer());
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { gateStage, reviewStage });
         var orchestrator = new TestOrchestratorBuilder
