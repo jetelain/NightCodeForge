@@ -1,4 +1,4 @@
-# ⚡ Step 10.1: Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio
+# ⚡ Step 10.9: Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio
 
 > **Phase 10 Implementation Step**  
 > *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  

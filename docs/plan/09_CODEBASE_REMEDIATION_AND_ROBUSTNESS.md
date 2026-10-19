@@ -51,6 +51,8 @@ During initial rapid development, various lenient patterns, fallback strategies,
 | **9.16** | [🔄 Step 9.16: Bidirectional Task Markdown Synchronization, Workspace Hygiene & Audit Trail Anticipation](phase-9/STEP_9_16_TASK_SYNC_HYGIENE_AND_AUDIT_TRAIL.md) | Synchronize all active workspace tasks to `docs/tasks/` in agent worktrees before launch; scan and sync back modified/new tasks to database on stage completion; anticipate Step 10.6 with `ForgeTaskHistory` entity and audit recording; ensure `*.trx` and `TestResults/` in `.gitignore`. | Planned |
 | **9.17** | [🔍 Step 9.17: Diff Stat Review Prompts & Multi-Question Clarification Rework](phase-9/STEP_9_17_DIFF_STAT_PROMPTS_AND_BATCHED_CLARIFICATIONS.md) | Inject concise fenced `git diff --stat` into Code Review / Fix bootstrap prompts instead of full raw diffs; rework `ask` tool, `HumanInterruptionException`, and orchestrator to support structured multi-question batches; direct review agents to consolidate all questions into a single `ask` call. | Planned |
 | **9.18** | [📊 Step 9.18: Agentic Stage Summary Fidelity & Stepper Readability Polish](phase-9/STEP_9_18_STAGE_SUMMARY_FIDELITY_AND_STEPPER_POLISH.md) | Ensure agent stage summary represents strictly the final assistant message (not all concatenated turn text); drop `DisplayName` and `StatusText` from pipeline stepper bar, displaying clean status circles with comprehensive tooltips. | Planned |
+| **9.19** | [🛠️ Step 9.19: Canonical Tool Signature Leniency & Edit Tool Robustness](phase-9/STEP_9_19_CANONICAL_TOOL_SIGNATURE_LENIENCY_AND_EDIT_ROBUSTNESS.md) | Eliminate casing and shortcut parameter mismatches across canonical tools (`edit`, `bash`, `load_skill`, `web_search`); accept both camelCase (`oldText`, `newText`) and snake_case (`old_text`, `new_text`) shortcuts; harmonize error messages and parameter schemas to prevent agent repair loops. | Planned |
+| **9.20** | [📅 Step 9.20: Cache-Safe Temporal Context Injection in Bootstrap Prompts](phase-9/STEP_9_20_CACHE_SAFE_TEMPORAL_CONTEXT_IN_BOOTSTRAP_PROMPTS.md) | Inject current calendar date (`YYYY-MM-DD`) into initial user bootstrap prompts and task context while strictly preserving Layer 1/2 byte-identical system prompt prefixes for local LLM KV cache reuse (90%+ hit rate); eliminate LLM knowledge cutoff hallucinations in dated task specifications and documentation. | Planned |
 
 ---
 
@@ -259,5 +261,17 @@ flowchart TD
   - [ ] `CrucibleAgentHarness`, `AcpAgentHarness`, and `PiRpcAgentHarness` return only the final assistant message as stage summary.
   - [ ] `PipelineStepper.razor` drops `DisplayName` and `StatusText` text elements below circles.
   - [ ] Full stage name and execution status displayed via comprehensive tooltips.
+- [ ] **Step 9.19: Canonical Tool Signature Leniency & Edit Tool Robustness**
+  - [ ] `edit` tool in `CanonicalAIFunctionFactory` accepts both `oldText`/`newText` and `old_text`/`new_text` shortcuts seamlessly.
+  - [ ] `EditChunk` deserialization in `edit` tool supports both camelCase and snake_case keys in `edits` array.
+  - [ ] Canonical tools (`bash`, `load_skill`, `web_search`) accept parameter aliases (`workingDirectory`, `skillName`, `maxResults`).
+  - [ ] Non-confusing error message emitted when `edit` arguments are missing.
+  - [ ] Automated tests cover camelCase, snake_case, and chunk edit invocations.
+- [ ] **Step 9.20: Cache-Safe Temporal Context Injection in Bootstrap Prompts**
+  - [ ] In `DefaultBootstrapPromptBuilder`, expose `context.current_date` in Scriban model and render `[Current Date]: {currentDate}`.
+  - [ ] Guarantee Layers 1 and 2 of `PromptPrefixStabilizer` remain strictly 100% byte-identical without dynamic dates/timestamps.
+  - [ ] Date format strictly constrained to `yyyy-MM-dd` (zero hours/seconds) to preserve intra-day KV cache stability.
+  - [ ] Provide current date context to `IdeationService` for task proposal file authoring.
+  - [ ] Automated tests verify date injection in user prompt and byte-identical Layer 1/2 prefix stability across dates.
 - [ ] **Phase 9 Final Verification:** Complete test suite passes: `dotnet test` (all unit, integration, and E2E tests passing).
 

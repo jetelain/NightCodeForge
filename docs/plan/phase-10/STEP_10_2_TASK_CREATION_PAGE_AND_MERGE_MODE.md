@@ -1,4 +1,4 @@
-# 📄 Step 10.7: Dedicated Task Creation Page & MergeMode Management
+# 📄 Step 10.2: Dedicated Task Creation Page & MergeMode Management
 
 > **Phase 10 Implementation Step**  
 > *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  

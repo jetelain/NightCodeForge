@@ -1,4 +1,4 @@
-# 📜 Step 10.2: Custom Repository Scripts for Deterministic Steps (Bash, Python, PowerShell)
+# 📜 Step 10.8: Custom Repository Scripts for Deterministic Steps (Bash, Python, PowerShell)
 
 > **Phase 10 Implementation Step**  
 > *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  

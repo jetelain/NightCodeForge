@@ -1,4 +1,4 @@
-# 🕰️ Step 10.6: Task State History & Temporal Snapshot Audit Trail
+# 🕰️ Step 10.7: Task State History & Temporal Snapshot Audit Trail
 
 > **Phase 10 Implementation Step**  
 > *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  

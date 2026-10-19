@@ -1,4 +1,4 @@
-# 🐙 Step 10.3: GitHub Integration (Untrusted Intake Triage, PR Delivery & Task Mirroring)
+# 🐙 Step 10.10: GitHub Integration (Untrusted Intake Triage, PR Delivery & Task Mirroring)
 
 > **Phase 10 Implementation Step**  
 > *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  

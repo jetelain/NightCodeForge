@@ -1,4 +1,4 @@
-# 🧹 Step 10.4: Smart CLI & Build Tool Output Filtering (Context Compression & Noise Reduction)
+# 🧹 Step 10.3: Smart CLI & Build Tool Output Filtering (Context Compression & Noise Reduction)
 
 > **Phase 10 Implementation Step**  
 > *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  
