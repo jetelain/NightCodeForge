@@ -17,6 +17,12 @@ public interface IDevQueueService
     Task<bool> PromoteToUrgentAsync(string jobId, int taskId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Escalates a task to P1 Critical and promotes it immediately to the head of the llm-urgent queue.
+    /// Automatically discovers any active or queued job for this task.
+    /// </summary>
+    Task<bool> PromoteToUrgentAsync(int taskId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Cancels a queued or executing background job.
     /// </summary>
     Task<bool> CancelJobAsync(string jobId, int? taskId = null, CancellationToken cancellationToken = default);

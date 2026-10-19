@@ -30,7 +30,8 @@
                                     PrerequisiteIds="prereqs"
                                     OnClick="OnTaskSelected"
                                     OnPromote="OnPromoteTask"
-                                    OnLinkDependencies="OnLinkDependencies" />
+                                    OnLinkDependencies="OnLinkDependencies"
+                                    OnPriorityChanged="OnPriorityChanged" />
                     }
                 }
             </div>
@@ -63,7 +64,8 @@
                                     PrerequisiteIds="prereqs"
                                     OnClick="OnTaskSelected"
                                     OnPromote="OnPromoteTask"
-                                    OnLinkDependencies="OnLinkDependencies" />
+                                    OnLinkDependencies="OnLinkDependencies"
+                                    OnPriorityChanged="OnPriorityChanged" />
                     }
                 }
             </div>
@@ -96,7 +98,8 @@
                                     PrerequisiteIds="prereqs"
                                     OnClick="OnTaskSelected"
                                     OnPromote="OnPromoteTask"
-                                    OnLinkDependencies="OnLinkDependencies" />
+                                    OnLinkDependencies="OnLinkDependencies"
+                                    OnPriorityChanged="OnPriorityChanged" />
                     }
                 }
             </div>
@@ -129,7 +132,8 @@
                                     PrerequisiteIds="prereqs"
                                     OnClick="OnTaskSelected"
                                     OnPromote="OnPromoteTask"
-                                    OnLinkDependencies="OnLinkDependencies" />
+                                    OnLinkDependencies="OnLinkDependencies"
+                                    OnPriorityChanged="OnPriorityChanged" />
                     }
                 }
             </div>
@@ -162,7 +166,8 @@
                                     PrerequisiteIds="prereqs"
                                     OnClick="OnTaskSelected"
                                     OnPromote="OnPromoteTask"
-                                    OnLinkDependencies="OnLinkDependencies" />
+                                    OnLinkDependencies="OnLinkDependencies"
+                                    OnPriorityChanged="OnPriorityChanged" />
                     }
                 }
             </div>
@@ -176,4 +181,5 @@
     [Parameter] public EventCallback<ForgeTask> OnTaskSelected { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnPromoteTask { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnLinkDependencies { get; set; }
+    [Parameter] public EventCallback<(ForgeTask Task, int NewPriority)> OnPriorityChanged { get; set; }
 }

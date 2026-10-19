@@ -45,6 +45,12 @@
     </div>
 
     <div class="top-navbar-right">
+        <!-- Global + New Task Button -->
+        <NavLink href="tasks/new" class="forge-btn forge-btn-primary btn-sm" id="nav-btn-new-task" style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.75rem; font-size: 0.82rem;" title="Create a new task">
+            <span>➕</span>
+            <span>New Task</span>
+        </NavLink>
+
         <!-- Question Inbox Shortcut Pill -->
         @{
             var pendingQuestions = WorkerState.Current.PendingQuestionCount;

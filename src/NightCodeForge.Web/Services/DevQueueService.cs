@@ -104,26 +104,7 @@ public class DevQueueService : IDevQueueService
         {
             if (taskId > 0)
             {
-                using var scope = _scopeFactory.CreateScope();
-                var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
-                var task = await taskRepo.GetByIdAsync(taskId, cancellationToken);
-                if (task != null && task.Priority != TaskPriority.Critical)
-                {
-                    task.Priority = TaskPriority.Critical;
-                    await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);
-
-                    var workspaceRepo = scope.ServiceProvider.GetService<IWorkspaceRepository>();
-                    var markdownSync = scope.ServiceProvider.GetService<ITaskMarkdownSyncService>();
-                    if (workspaceRepo != null && markdownSync != null)
-                    {
-                        var workspace = await workspaceRepo.GetByIdAsync(task.WorkspaceId, cancellationToken);
-                        if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
-                        {
-                            await markdownSync.SyncTaskToDiskAsync(task, workspace.RepositoryPath, cancellationToken: cancellationToken);
-                            _logger.LogInformation("Synced promoted task markdown to disk for Task #{TaskId}", taskId);
-                        }
-                    }
-                }
+                await EnsureTaskPriorityEscalatedAsync(taskId, cancellationToken);
             }
 
             if (!string.IsNullOrWhiteSpace(jobId))
@@ -158,6 +139,73 @@ public class DevQueueService : IDevQueueService
                 }
             }
             return false;
+        }
+    }
+
+    public async Task<bool> PromoteToUrgentAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        if (taskId <= 0) return false;
+
+        try
+        {
+            var snapshot = await GetSnapshotAsync(cancellationToken);
+            var queuedJob = snapshot.InferenceJobs.FirstOrDefault(j => j.TaskId == taskId)
+                         ?? snapshot.UtilityJobs.FirstOrDefault(j => j.TaskId == taskId);
+
+            if (queuedJob != null && !string.IsNullOrWhiteSpace(queuedJob.JobId))
+            {
+                return await PromoteToUrgentAsync(queuedJob.JobId, taskId, cancellationToken);
+            }
+
+            if (snapshot.UrgentJobs.Any(j => j.TaskId == taskId))
+            {
+                await EnsureTaskPriorityEscalatedAsync(taskId, cancellationToken);
+                return true;
+            }
+
+            // Task is not currently queued in Hangfire (e.g. Suggested, DAG-blocked, or Closed).
+            // Escalate DB priority, but do not enqueue to workers to avoid bypassing triage/DAG rules.
+            await EnsureTaskPriorityEscalatedAsync(taskId, cancellationToken);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query snapshot when resolving job for Task #{TaskId}", taskId);
+            return false;
+        }
+    }
+
+    private async Task EnsureTaskPriorityEscalatedAsync(int taskId, CancellationToken cancellationToken)
+    {
+        if (taskId <= 0) return;
+
+        using var scope = _scopeFactory.CreateScope();
+        var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+        var task = await taskRepo.GetByIdAsync(taskId, cancellationToken);
+        if (task != null && task.Priority != TaskPriority.Critical)
+        {
+            var oldPriority = task.Priority;
+            task.Priority = TaskPriority.Critical;
+            task.UpdatedAt = DateTime.UtcNow;
+
+            await taskRepo.UpdateWithHistoryAsync(
+                task,
+                dependsOn: null,
+                changedBy: "User",
+                reason: $"Updated Priority from P{oldPriority} to P{TaskPriority.Critical} (llm-urgent promotion)",
+                cancellationToken: cancellationToken);
+
+            var workspaceRepo = scope.ServiceProvider.GetService<IWorkspaceRepository>();
+            var markdownSync = scope.ServiceProvider.GetService<ITaskMarkdownSyncService>();
+            if (workspaceRepo != null && markdownSync != null)
+            {
+                var workspace = await workspaceRepo.GetByIdAsync(task.WorkspaceId, cancellationToken);
+                if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+                {
+                    await markdownSync.SyncTaskToDiskAsync(task, workspace.RepositoryPath, cancellationToken: cancellationToken);
+                    _logger.LogInformation("Synced promoted task markdown to disk for Task #{TaskId}", taskId);
+                }
+            }
         }
     }
 

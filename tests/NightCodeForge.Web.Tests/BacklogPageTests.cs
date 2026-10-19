@@ -42,6 +42,7 @@ public class BacklogPageTests : BunitContext
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton(_toastService);
+        Services.AddSingleton<IDevQueueService>(new MockDevQueueService());
     }
 
     [Fact]

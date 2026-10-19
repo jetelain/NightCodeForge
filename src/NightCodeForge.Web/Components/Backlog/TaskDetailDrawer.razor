@@ -1,5 +1,13 @@
 @namespace NightCodeForge.Web.Components.Backlog
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Services
+@using NightCodeForge.Web.Services
+@inject ITaskRepository TaskRepository
+@inject IDevQueueService DevQueueService
+@inject ToastService ToastService
+@inject IServiceProvider ServiceProvider
+@inject ILogger<TaskDetailDrawer> Logger
 
 @if (IsOpen && Task != null)
 {
@@ -43,6 +51,64 @@
 
             <!-- Drawer Body -->
             <div class="task-drawer-body">
+                <!-- Interactive Priority & Merge Mode Section -->
+                <div class="drawer-section priority-mergemode-controls card-glass" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.85rem; margin-bottom: 1rem;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                        <!-- Editable Priority -->
+                        <div>
+                            <label class="meta-label" style="display: block; margin-bottom: 0.35rem; font-weight: 600; color: var(--text-primary); font-size: 0.82rem;">
+                                Priority Level
+                            </label>
+                            <div class="priority-chip-row" style="display: flex; gap: 0.3rem; flex-wrap: wrap;">
+                                @foreach (var p in TaskPriority.All)
+                                {
+                                    var isSelected = Task.Priority == p;
+                                    <button type="button"
+                                            class="forge-btn btn-xs priority-chip-btn @(isSelected ? "selected" : "")"
+                                            style="border: 1px solid @(isSelected ? TaskPriority.GetBadgeColor(p) : "var(--border-subtle)"); background: @(isSelected ? "rgba(32, 36, 51, 0.95)" : "var(--bg-input)"); color: @(isSelected ? "#fff" : "var(--text-secondary)"); cursor: pointer; padding: 0.25rem 0.5rem; border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: @(isSelected ? "700" : "500"); display: flex; align-items: center; gap: 0.3rem;"
+                                            @onclick="() => UpdatePriorityAsync(p)"
+                                            disabled="@_isUpdatingPriority"
+                                            title="@TaskPriority.GetDescription(p)">
+                                        <span class="badge-dot" style="width: 8px; height: 8px; border-radius: 50%; background: @TaskPriority.GetBadgeColor(p); display: inline-block;"></span>
+                                        <span>P@(p)</span>
+                                    </button>
+                                }
+                            </div>
+                            <small class="text-secondary" style="display: block; margin-top: 0.3rem; font-size: 0.75rem;">
+                                @TaskPriority.GetLabel(Task.Priority)
+                            </small>
+                        </div>
+
+                        <!-- Editable MergeMode -->
+                        <div>
+                            <label class="meta-label" style="display: block; margin-bottom: 0.35rem; font-weight: 600; color: var(--text-primary); font-size: 0.82rem;">
+                                Merge Delivery Mode
+                            </label>
+                            <div style="display: flex; gap: 0.35rem;">
+                                <button type="button"
+                                        class="forge-btn btn-xs @(Task.MergeMode == MergeMode.ManualReviewRequired ? "forge-btn-primary" : "forge-btn-secondary")"
+                                        style="padding: 0.25rem 0.55rem; font-size: 0.78rem;"
+                                        @onclick="() => UpdateMergeModeAsync(MergeMode.ManualReviewRequired)"
+                                        disabled="@_isUpdatingMergeMode"
+                                        title="Pauses at Ready for human review in Review Room">
+                                    🔍 Manual
+                                </button>
+                                <button type="button"
+                                        class="forge-btn btn-xs @(Task.MergeMode == MergeMode.Automatic ? "forge-btn-primary" : "forge-btn-secondary")"
+                                        style="padding: 0.25rem 0.55rem; font-size: 0.78rem;"
+                                        @onclick="() => UpdateMergeModeAsync(MergeMode.Automatic)"
+                                        disabled="@_isUpdatingMergeMode"
+                                        title="Auto-squashes and merges to base branch upon reaching Ready">
+                                    ⚡ Auto
+                                </button>
+                            </div>
+                            <small class="text-secondary" style="display: block; margin-top: 0.3rem; font-size: 0.75rem;">
+                                @MergeModeHelper.GetLabel(Task.MergeMode)
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Metadata Grid -->
                 <div class="task-metadata-grid">
                     <div class="meta-item">
@@ -226,6 +292,118 @@
     [Parameter] public EventCallback OnClose { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnPromoteClicked { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnLinkDependenciesClicked { get; set; }
+    [Parameter] public EventCallback<ForgeTask> OnTaskUpdated { get; set; }
+
+    private bool _isUpdatingPriority;
+    private bool _isUpdatingMergeMode;
+
+    private ITaskMarkdownSyncService? MarkdownSync => ServiceProvider.GetService<ITaskMarkdownSyncService>();
+    private IWorkspaceRepository? WorkspaceRepo => ServiceProvider.GetService<IWorkspaceRepository>();
+
+    private async Task UpdatePriorityAsync(int newPriority)
+    {
+        if (Task == null || Task.Priority == newPriority || _isUpdatingPriority) return;
+
+        _isUpdatingPriority = true;
+        try
+        {
+            var oldPriority = Task.Priority;
+            Task.Priority = newPriority;
+            Task.UpdatedAt = DateTime.UtcNow;
+
+            await TaskRepository.UpdateWithHistoryAsync(
+                Task,
+                dependsOn: PrerequisiteIds,
+                changedBy: "User",
+                reason: $"Updated Priority from P{oldPriority} to P{newPriority}");
+
+            if (WorkspaceRepo != null && MarkdownSync != null)
+            {
+                try
+                {
+                    var workspace = await WorkspaceRepo.GetByIdAsync(Task.WorkspaceId);
+                    if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
+                    {
+                        await MarkdownSync.SyncTaskToDiskAsync(Task, workspace.RepositoryPath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to sync markdown on priority update for Task #{TaskId}", Task.Id);
+                }
+            }
+
+            if (newPriority == TaskPriority.Critical)
+            {
+                var promoted = await DevQueueService.PromoteToUrgentAsync(Task.Id);
+                var detail = promoted ? "(llm-urgent)" : "";
+                ToastService.Show("Priority Escalated", $"Task #{Task.Id} escalated to P1 Critical {detail}.".Trim(), ToastLevel.Success);
+            }
+            else
+            {
+                await DevQueueService.ReorderInferenceQueueByPriorityAsync();
+                ToastService.Show("Priority Updated", $"Task #{Task.Id} priority updated to P{newPriority} ({TaskPriority.GetLabel(newPriority)}).", ToastLevel.Success);
+            }
+
+            await OnTaskUpdated.InvokeAsync(Task);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update priority for Task #{TaskId}", Task.Id);
+            ToastService.Show("Priority Update Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isUpdatingPriority = false;
+        }
+    }
+
+    private async Task UpdateMergeModeAsync(MergeMode newMode)
+    {
+        if (Task == null || Task.MergeMode == newMode || _isUpdatingMergeMode) return;
+
+        _isUpdatingMergeMode = true;
+        try
+        {
+            var oldMode = Task.MergeMode;
+            Task.MergeMode = newMode;
+            Task.UpdatedAt = DateTime.UtcNow;
+
+            await TaskRepository.UpdateWithHistoryAsync(
+                Task,
+                dependsOn: PrerequisiteIds,
+                changedBy: "User",
+                reason: $"Updated MergeMode from {oldMode} to {newMode}");
+
+            if (WorkspaceRepo != null && MarkdownSync != null)
+            {
+                try
+                {
+                    var workspace = await WorkspaceRepo.GetByIdAsync(Task.WorkspaceId);
+                    if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
+                    {
+                        await MarkdownSync.SyncTaskToDiskAsync(Task, workspace.RepositoryPath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to sync markdown on MergeMode update for Task #{TaskId}", Task.Id);
+                }
+            }
+
+            ToastService.Show("Merge Mode Updated", $"Task #{Task.Id} merge mode set to {MergeModeHelper.GetLabel(newMode)}.", ToastLevel.Success);
+            await OnTaskUpdated.InvokeAsync(Task);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update MergeMode for Task #{TaskId}", Task.Id);
+            ToastService.Show("Merge Mode Update Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isUpdatingMergeMode = false;
+        }
+    }
 
     private async Task Close()
     {

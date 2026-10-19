@@ -214,4 +214,36 @@ public class ReviewPageTests : BunitContext
         cut.WaitForState(() => cut.Markup.Contains("Task in Workspace 2"));
         Assert.Contains("Task in Workspace 2", cut.Markup);
     }
+
+    [Fact]
+    public async Task ReviewRoom_WhenApproveModalChangesMergeMode_UpdatesHeaderBadgeAndSnapshot()
+    {
+        var task = new ForgeTask
+        {
+            Id = 91,
+            WorkspaceId = 1,
+            Title = "Task with Review MergeMode",
+            Status = TaskOverallStatus.Ready,
+            MergeMode = MergeMode.ManualReviewRequired,
+            BaseBranch = "main",
+            PipelineDataJson = new PipelineDataBag().ToJson()
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<Review>(parameters => parameters
+            .Add(p => p.TaskId, 91));
+
+        Assert.Contains("Mode: ManualReviewRequired", cut.Find(".badge-mode").TextContent);
+
+        // Open Approve Modal
+        var approveBtn = cut.Find("#btn-approve-merge");
+        approveBtn.Click();
+
+        // Modal is open, switch to Automatic
+        var autoBtn = cut.Find("#btn-mergemode-auto");
+        autoBtn.Click();
+
+        // Header badge in Review room should update to Automatic
+        Assert.Contains("Mode: Automatic", cut.Find(".badge-mode").TextContent);
+    }
 }

@@ -456,6 +456,90 @@ public class DevQueueServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PromoteToUrgentAsync_ByTaskId_WhenQueuedInInference_PromotesJobAndEscalatesPriorityWithHistory()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 701,
+            WorkspaceId = 1,
+            Title = "Inference Queued Task",
+            Priority = TaskPriority.Normal,
+            Status = TaskOverallStatus.Open
+        });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var jobId = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(701, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var service = CreateService();
+
+        var result = await service.PromoteToUrgentAsync(701);
+
+        Assert.True(result);
+        var reloaded = await _taskRepo.GetByIdAsync(701);
+        Assert.NotNull(reloaded);
+        Assert.Equal(TaskPriority.Critical, reloaded.Priority);
+
+        var history = await _taskRepo.GetHistoryAsync(701);
+        Assert.NotEmpty(history);
+        Assert.Contains("Updated Priority from P3 to P1", history.Last().ChangeReason);
+
+        var monitoring = _jobStorage.GetMonitoringApi();
+        var urgentJobs = monitoring.EnqueuedJobs(HangfireQueues.LlmUrgent, 0, 10);
+        Assert.Contains(urgentJobs, j => j.Key == jobId);
+    }
+
+    [Fact]
+    public async Task PromoteToUrgentAsync_ByTaskId_WhenAlreadyInUrgent_DoesNotEnqueueDuplicate()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 702,
+            WorkspaceId = 1,
+            Title = "Already Urgent Task",
+            Priority = TaskPriority.Critical,
+            Status = TaskOverallStatus.Open
+        });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(702, default), new EnqueuedState(HangfireQueues.LlmUrgent));
+
+        var service = CreateService();
+
+        var result = await service.PromoteToUrgentAsync(702);
+
+        Assert.True(result);
+        Assert.Empty(_jobQueue.EnqueuedUrgentTaskIds);
+    }
+
+    [Fact]
+    public async Task PromoteToUrgentAsync_ByTaskId_WhenNotQueued_EscalatesPriorityWithHistoryWithoutEnqueueing()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 703,
+            WorkspaceId = 1,
+            Title = "Suggested Unqueued Task",
+            Priority = TaskPriority.Normal,
+            Status = TaskOverallStatus.Suggested
+        });
+
+        var service = CreateService();
+
+        var result = await service.PromoteToUrgentAsync(703);
+
+        Assert.False(result); // No queued Hangfire job was moved
+        Assert.Empty(_jobQueue.EnqueuedUrgentTaskIds); // Did NOT launch execution of unapproved task!
+
+        var reloaded = await _taskRepo.GetByIdAsync(703);
+        Assert.NotNull(reloaded);
+        Assert.Equal(TaskPriority.Critical, reloaded.Priority);
+
+        var history = await _taskRepo.GetHistoryAsync(703);
+        Assert.NotEmpty(history);
+        Assert.Contains("Updated Priority from P3 to P1", history.Last().ChangeReason);
+    }
+
+    [Fact]
     public async Task ReorderInferenceQueueByPriorityAsync_WhenQueueContainsDeletedJobs_IgnoresDeletedJobs()
     {
 

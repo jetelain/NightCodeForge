@@ -1,0 +1,614 @@
+@page "/tasks/new"
+@page "/tasks/create"
+@namespace NightCodeForge.Web.Components.Pages
+@using NightCodeForge.Core.Dependencies
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Services
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Components.Workspaces
+@using NightCodeForge.Web.Services
+@inject WorkspaceStateService WorkspaceState
+@inject ITaskRepository TaskRepository
+@inject IWorkflowRepository WorkflowRepository
+@inject ITaskJobQueue TaskJobQueue
+@inject ToastService ToastService
+@inject NavigationManager Navigation
+@inject IServiceProvider ServiceProvider
+@inject ILogger<CreateTask> Logger
+@implements IDisposable
+
+<PageTitle>Create New Task - NightCodeForge</PageTitle>
+
+<div class="create-task-page">
+    @if (WorkspaceState.ActiveWorkspace == null)
+    {
+        <div class="empty-workspace-notice card-glass" style="margin-bottom: 1.5rem; padding: 1.5rem; border-radius: var(--radius-lg); text-align: center;">
+            <h3>No Active Workspace Selected</h3>
+            <p class="text-secondary">Please select or onboard a workspace before authoring tasks.</p>
+        </div>
+        <WorkspaceEmptyStateHero />
+    }
+    else
+    {
+        <!-- Page Header & Breadcrumbs -->
+        <div class="create-task-header">
+            <div class="header-breadcrumb">
+                <a href="/backlog" class="text-secondary font-mono" style="text-decoration: none; font-size: 0.85rem;">
+                    ← Back to Backlog &amp; DAG
+                </a>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-top: 0.4rem; flex-wrap: wrap;">
+                <div>
+                    <h1 style="margin: 0; font-size: 1.6rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 0.6rem;">
+                        <span>📝</span> Create New Task
+                    </h1>
+                    <p style="margin: 0.3rem 0 0 0; font-size: 0.88rem; color: var(--text-secondary);">
+                        Author structured implementation tasks, configure priority queues, define DAG prerequisites, and choose delivery lifecycle for
+                        <strong style="color: var(--accent-indigo);">@WorkspaceState.ActiveWorkspace.Name</strong>
+                    </p>
+                </div>
+                <div class="workspace-pill font-mono" style="background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 0.35rem 0.8rem; border-radius: var(--radius-full); font-size: 0.8rem; color: var(--text-secondary);">
+                    Branch Target: <strong style="color: var(--text-primary);">@_baseBranch</strong>
+                </div>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_validationError))
+        {
+            <div class="forge-alert alert-error" style="background: rgba(239, 68, 68, 0.15); border: 1px solid var(--accent-crimson); border-radius: var(--radius-md); padding: 0.75rem 1rem; color: #fca5a5; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem;">
+                <span>⚠️</span>
+                <span>@_validationError</span>
+            </div>
+        }
+
+        <!-- Two Column Responsive Layout -->
+        <div class="create-task-grid">
+            <!-- Left Column: Primary Content & Description -->
+            <div class="grid-column-main">
+                <!-- Title Input -->
+                <div class="forge-card card-glass form-section">
+                    <label for="task-title-input" class="form-label" style="display: block; font-weight: 600; font-size: 0.95rem; margin-bottom: 0.5rem; color: var(--text-primary);">
+                        Task Title <span style="color: var(--accent-crimson);">*</span>
+                    </label>
+                    <input id="task-title-input"
+                           type="text"
+                           class="form-control-dark"
+                           placeholder="e.g., Implement OAuth2 token refresh and rotation endpoint"
+                           @bind="_title"
+                           @bind:event="oninput"
+                           disabled="@_isSubmitting"
+                           style="font-size: 1.05rem; padding: 0.75rem 1rem;" />
+                    <small class="text-secondary" style="display: block; margin-top: 0.4rem; font-size: 0.8rem;">
+                        A concise, action-oriented summary of the feature, fix, or refactoring.
+                    </small>
+                </div>
+
+                <!-- Description & Live Markdown Preview -->
+                <div class="forge-card card-glass form-section" style="margin-top: 1.25rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem;">
+                        <label for="task-desc-input" class="form-label" style="font-weight: 600; font-size: 0.95rem; margin: 0; color: var(--text-primary);">
+                            Description &amp; Technical Requirements
+                        </label>
+                        <div class="editor-tabs" style="display: flex; gap: 0.35rem; background: var(--bg-input); padding: 3px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+                            <button type="button"
+                                    class="forge-tab-btn @(!_previewMode ? "active" : "")"
+                                    @onclick="() => _previewMode = false"
+                                    style="padding: 0.25rem 0.65rem; font-size: 0.8rem; border-radius: var(--radius-sm); border: none; background: @(!_previewMode ? "var(--accent-indigo)" : "transparent"); color: @(!_previewMode ? "#fff" : "var(--text-secondary)"); cursor: pointer;">
+                                ✏️ Write
+                            </button>
+                            <button type="button"
+                                    class="forge-tab-btn @(_previewMode ? "active" : "")"
+                                    @onclick="() => _previewMode = true"
+                                    style="padding: 0.25rem 0.65rem; font-size: 0.8rem; border-radius: var(--radius-sm); border: none; background: @(_previewMode ? "var(--accent-indigo)" : "transparent"); color: @(_previewMode ? "#fff" : "var(--text-secondary)"); cursor: pointer;">
+                                👁️ Preview
+                            </button>
+                        </div>
+                    </div>
+
+                    @if (_previewMode)
+                    {
+                        <div class="markdown-preview-pane font-sans forge-markdown" style="min-height: 240px; max-height: 480px; overflow-y: auto; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem; color: var(--text-primary);">
+                            @if (string.IsNullOrWhiteSpace(_description))
+                            {
+                                <span class="text-muted" style="font-style: italic;">No description entered yet. Switch back to Write mode to add details.</span>
+                            }
+                            else
+                            {
+                                @MarkdownHelper.ToMarkupString(_description)
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <textarea id="task-desc-input"
+                                  class="form-control-dark font-mono"
+                                  rows="10"
+                                  placeholder="Specify functional requirements, affected files, edge cases, acceptance criteria, and expected test coverage... Supports GitHub-flavored Markdown."
+                                  @bind="_description"
+                                  @bind:event="oninput"
+                                  disabled="@_isSubmitting"
+                                  style="resize: vertical; font-size: 0.88rem; line-height: 1.5;"></textarea>
+                    }
+                    <small class="text-secondary" style="display: block; margin-top: 0.4rem; font-size: 0.8rem;">
+                        Markdown formatting is supported (tables, code blocks, lists, alerts).
+                    </small>
+                </div>
+
+                <!-- DAG Prerequisites Dependency Selector -->
+                <div class="forge-card card-glass form-section" style="margin-top: 1.25rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem;">
+                        <div>
+                            <h4 style="margin: 0; font-size: 0.95rem; font-weight: 600; color: var(--text-primary);">
+                                🕸️ Prerequisite Tasks (@_selectedPrereqIds.Count selected)
+                            </h4>
+                            <p style="margin: 0.2rem 0 0 0; font-size: 0.8rem; color: var(--text-secondary);">
+                                This task will remain blocked in the DAG until all selected prerequisites reach Closed.
+                            </p>
+                        </div>
+                    </div>
+
+                    @if (_selectedPrereqIds.Count > 0)
+                    {
+                        <div class="selected-prereqs-chips" style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.75rem;">
+                            @foreach (var prereqId in _selectedPrereqIds)
+                            {
+                                var prereq = _availableTasks.FirstOrDefault(t => t.Id == prereqId);
+                                <span class="forge-chip" style="background: rgba(99, 102, 241, 0.2); border: 1px solid var(--accent-indigo); color: var(--text-primary); border-radius: var(--radius-full); padding: 0.2rem 0.65rem; font-size: 0.8rem; display: inline-flex; align-items: center; gap: 0.4rem;">
+                                    <span class="font-mono text-secondary">#@prereqId</span>
+                                    <span>@(prereq?.Title ?? $"Task #{prereqId}")</span>
+                                    <button type="button" class="btn-chip-remove" @onclick="() => TogglePrerequisite(prereqId)" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 0; font-size: 0.85rem;" aria-label="Remove prerequisite">✕</button>
+                                </span>
+                            }
+                        </div>
+                    }
+
+                    <div class="prereq-search-box" style="margin-bottom: 0.6rem;">
+                        <input type="text"
+                               class="form-control-dark"
+                               placeholder="Search workspace tasks to add as prerequisites..."
+                               @bind="_prereqSearch"
+                               @bind:event="oninput"
+                               style="font-size: 0.85rem; padding: 0.5rem 0.8rem;" />
+                    </div>
+
+                    <div class="prereq-options-container" style="max-height: 180px; overflow-y: auto; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.4rem;">
+                        @{
+                            var filteredPrereqs = GetFilteredPrerequisiteTasks();
+                        }
+                        @if (filteredPrereqs.Count == 0)
+                        {
+                            <div class="text-muted" style="padding: 0.75rem; text-align: center; font-size: 0.82rem;">
+                                No matching open tasks found in this workspace.
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var opt in filteredPrereqs)
+                            {
+                                var isChecked = _selectedPrereqIds.Contains(opt.Id);
+                                <div class="prereq-option-item @(isChecked ? "selected" : "")"
+                                     @onclick="() => TogglePrerequisite(opt.Id)"
+                                     style="display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0.6rem; border-radius: var(--radius-sm); cursor: pointer; background: @(isChecked ? "rgba(99, 102, 241, 0.15)" : "transparent"); margin-bottom: 2px;">
+                                    <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
+                                        <input type="checkbox" checked="@isChecked" @onclick:stopPropagation="true" @onchange="() => TogglePrerequisite(opt.Id)" />
+                                        <span class="font-mono text-secondary" style="font-size: 0.8rem;">#@opt.Id</span>
+                                        <span style="font-size: 0.85rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@opt.Title</span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
+                                        <span class="forge-badge badge-priority-@opt.Priority" style="font-size: 0.72rem;">P@(opt.Priority)</span>
+                                        <span class="forge-badge badge-secondary" style="font-size: 0.72rem;">@opt.Status</span>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Priority, Workflow, Merge Mode & Submission -->
+            <div class="grid-column-sidebar">
+                <!-- Priority Selector (P1 to P5) -->
+                <div class="forge-card card-glass form-section">
+                    <label class="form-label" style="display: block; font-weight: 600; font-size: 0.95rem; margin-bottom: 0.35rem; color: var(--text-primary);">
+                        Priority Scheduling
+                    </label>
+                    <p class="text-secondary" style="font-size: 0.8rem; margin: 0 0 0.75rem 0;">
+                        Controls autonomous Hangfire dispatch queue and backlog execution sequence.
+                    </p>
+
+                    <div class="priority-chips-grid" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                        @foreach (var p in TaskPriority.All)
+                        {
+                            var isSelected = _selectedPriority == p;
+                            var color = TaskPriority.GetBadgeColor(p);
+                            <div class="priority-select-chip @(isSelected ? "selected" : "")"
+                                 @onclick="() => _selectedPriority = p"
+                                 style="display: flex; align-items: center; justify-content: space-between; padding: 0.6rem 0.85rem; border-radius: var(--radius-md); cursor: pointer; border: 1px solid @(isSelected ? color : "var(--border-subtle)"); background: @(isSelected ? "rgba(32, 36, 51, 0.9)" : "var(--bg-input)"); transition: all var(--transition-fast); box-shadow: @(isSelected ? $"0 0 8px {color}40" : "none");">
+                                <div style="display: flex; align-items: center; gap: 0.6rem;">
+                                    <span class="forge-badge badge-priority-@p" style="font-weight: 700; font-size: 0.78rem;">
+                                        P@(p)
+                                    </span>
+                                    <div>
+                                        <div style="font-weight: 600; font-size: 0.85rem; color: var(--text-primary);">
+                                            @TaskPriority.GetLabel(p)
+                                        </div>
+                                        <div style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.2;">
+                                            @TaskPriority.GetDescription(p)
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="priority-radio-indicator" style="width: 16px; height: 16px; border-radius: 50%; border: 2px solid @(isSelected ? color : "var(--border-subtle)"); background: @(isSelected ? color : "transparent"); flex-shrink: 0;"></div>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <!-- Execution Workflow Pipeline Selector -->
+                <div class="forge-card card-glass form-section" style="margin-top: 1.25rem;">
+                    <label for="workflow-select" class="form-label" style="display: block; font-weight: 600; font-size: 0.92rem; margin-bottom: 0.4rem; color: var(--text-primary);">
+                        Execution Workflow Pipeline
+                    </label>
+                    <select id="workflow-select"
+                            class="form-control-dark"
+                            @bind="_selectedWorkflowId"
+                            disabled="@_isSubmitting"
+                            style="font-size: 0.88rem;">
+                        @foreach (var w in _workflows)
+                        {
+                            <option value="@w.Id">
+                                @w.Icon @w.Name (@w.Stages.Count stages)@(w.IsDefault ? " [Default]" : "")
+                            </option>
+                        }
+                    </select>
+                    <small class="text-secondary" style="display: block; margin-top: 0.35rem; font-size: 0.8rem;">
+                        Stages, deterministic quality gates, and agent profiles applied.
+                    </small>
+                </div>
+
+                <!-- Branching Configuration -->
+                <div class="forge-card card-glass form-section" style="margin-top: 1.25rem;">
+                    <label for="base-branch-input" class="form-label" style="display: block; font-weight: 600; font-size: 0.92rem; margin-bottom: 0.4rem; color: var(--text-primary);">
+                        Target Base Branch
+                    </label>
+                    <input id="base-branch-input"
+                           type="text"
+                           class="form-control-dark font-mono"
+                           placeholder="main"
+                           @bind="_baseBranch"
+                           disabled="@_isSubmitting"
+                           style="font-size: 0.88rem; margin-bottom: 0.85rem;" />
+
+                    <label for="feature-branch-input" class="form-label" style="display: block; font-weight: 600; font-size: 0.92rem; margin-bottom: 0.4rem; color: var(--text-primary);">
+                        Feature Branch Override (Optional)
+                    </label>
+                    <input id="feature-branch-input"
+                           type="text"
+                           class="form-control-dark font-mono"
+                           placeholder="e.g. feature/oauth2-refresh (Auto-generated if empty)"
+                           @bind="_featureBranch"
+                           disabled="@_isSubmitting"
+                           style="font-size: 0.88rem;" />
+                </div>
+
+                <!-- MergeMode Selector -->
+                <div class="forge-card card-glass form-section" style="margin-top: 1.25rem;">
+                    <label class="form-label" style="display: block; font-weight: 600; font-size: 0.92rem; margin-bottom: 0.35rem; color: var(--text-primary);">
+                        Merge Lifecycle Mode
+                    </label>
+                    <p class="text-secondary" style="font-size: 0.8rem; margin: 0 0 0.75rem 0;">
+                        How the task delivers its code changes once all quality gates pass.
+                    </p>
+
+                    <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                        <!-- Option 1: Manual Review Required (Default) -->
+                        <div class="mergemode-card @(_selectedMergeMode == MergeMode.ManualReviewRequired ? "selected" : "")"
+                             @onclick="() => _selectedMergeMode = MergeMode.ManualReviewRequired"
+                             style="padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid @(_selectedMergeMode == MergeMode.ManualReviewRequired ? "var(--accent-indigo)" : "var(--border-subtle)"); background: @(_selectedMergeMode == MergeMode.ManualReviewRequired ? "rgba(99, 102, 241, 0.12)" : "var(--bg-input)"); cursor: pointer;">
+                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                <div style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.4rem;">
+                                    <span>🔍</span> Manual Review Required
+                                    <span class="forge-badge badge-indigo" style="font-size: 0.7rem;">Recommended</span>
+                                </div>
+                                <div class="priority-radio-indicator" style="width: 14px; height: 14px; border-radius: 50%; border: 2px solid @(_selectedMergeMode == MergeMode.ManualReviewRequired ? "var(--accent-indigo)" : "var(--border-subtle)"); background: @(_selectedMergeMode == MergeMode.ManualReviewRequired ? "var(--accent-indigo)" : "transparent");"></div>
+                            </div>
+                            <div style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.35rem; line-height: 1.3;">
+                                Pauses at Ready state for maintainer visual diff and test review in the Review Room before merging.
+                            </div>
+                        </div>
+
+                        <!-- Option 2: Automatic Merge -->
+                        <div class="mergemode-card @(_selectedMergeMode == MergeMode.Automatic ? "selected" : "")"
+                             @onclick="() => _selectedMergeMode = MergeMode.Automatic"
+                             style="padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid @(_selectedMergeMode == MergeMode.Automatic ? "var(--accent-teal)" : "var(--border-subtle)"); background: @(_selectedMergeMode == MergeMode.Automatic ? "rgba(20, 184, 166, 0.12)" : "var(--bg-input)"); cursor: pointer;">
+                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                <div style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.4rem;">
+                                    <span>⚡</span> Automatic Merge
+                                </div>
+                                <div class="priority-radio-indicator" style="width: 14px; height: 14px; border-radius: 50%; border: 2px solid @(_selectedMergeMode == MergeMode.Automatic ? "var(--accent-teal)" : "var(--border-subtle)"); background: @(_selectedMergeMode == MergeMode.Automatic ? "var(--accent-teal)" : "transparent");"></div>
+                            </div>
+                            <div style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.35rem; line-height: 1.3;">
+                                Automatically squashes and merges to target branch immediately when the final stage completes green.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Submission Actions Box -->
+                <div class="forge-card card-glass form-section submission-box" style="margin-top: 1.25rem;">
+                    <h4 style="margin: 0 0 0.85rem 0; font-size: 0.95rem; font-weight: 600; color: var(--text-primary);">
+                        Submission Targets
+                    </h4>
+
+                    <div style="display: flex; flex-direction: column; gap: 0.65rem;">
+                        <!-- Target 1: Save & Launch Immediately -->
+                        <button type="button"
+                                id="btn-save-and-launch"
+                                class="forge-btn forge-btn-primary"
+                                @onclick="SaveAndLaunchAsync"
+                                disabled="@_isSubmitting"
+                                style="justify-content: center; padding: 0.7rem 1rem; font-weight: 600; font-size: 0.9rem; background: linear-gradient(135deg, var(--accent-indigo) 0%, #4338ca 100%);">
+                            🚀 Save &amp; Launch Immediately
+                        </button>
+
+                        <!-- Target 2: Save as Open -->
+                        <button type="button"
+                                id="btn-save-as-open"
+                                class="forge-btn forge-btn-secondary"
+                                @onclick="SaveAsOpenAsync"
+                                disabled="@_isSubmitting"
+                                style="justify-content: center; padding: 0.65rem 1rem; font-weight: 500; font-size: 0.88rem;">
+                            📂 Save as Open (Backlog Queue)
+                        </button>
+
+                        <!-- Target 3: Save as Suggested -->
+                        <button type="button"
+                                id="btn-save-as-suggested"
+                                class="forge-btn forge-btn-secondary"
+                                @onclick="SaveAsSuggestedAsync"
+                                disabled="@_isSubmitting"
+                                style="justify-content: center; padding: 0.65rem 1rem; font-weight: 500; font-size: 0.88rem; color: var(--accent-amber);">
+                            💡 Save as Suggested (Triage Queue)
+                        </button>
+
+                        <a href="/backlog" class="forge-btn forge-btn-ghost" style="text-align: center; text-decoration: none; font-size: 0.82rem; margin-top: 0.25rem;">
+                            Cancel
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private string _title = string.Empty;
+    private string _description = string.Empty;
+    private int? _selectedWorkflowId;
+    private int _selectedPriority = TaskPriority.Normal;
+    private MergeMode _selectedMergeMode = MergeMode.ManualReviewRequired;
+    private string _baseBranch = "main";
+    private string _featureBranch = string.Empty;
+    private HashSet<int> _selectedPrereqIds = new();
+    private string _prereqSearch = string.Empty;
+    private bool _previewMode = false;
+    private bool _isSubmitting = false;
+    private string? _validationError;
+
+    private List<WorkflowDefinition> _workflows = new();
+    private List<ForgeTask> _availableTasks = new();
+    private bool _disposed;
+
+    private ITaskMarkdownSyncService? MarkdownSync => ServiceProvider.GetService<ITaskMarkdownSyncService>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        await LoadWorkspaceDataAsync();
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        if (_disposed) return;
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                if (_disposed) return;
+                await LoadWorkspaceDataAsync();
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to refresh CreateTask on workspace change.");
+            }
+        });
+    }
+
+    private async Task LoadWorkspaceDataAsync()
+    {
+        var active = WorkspaceState.ActiveWorkspace;
+        if (active == null)
+        {
+            _workflows.Clear();
+            _availableTasks.Clear();
+            _selectedPrereqIds.Clear();
+            return;
+        }
+
+        _selectedPrereqIds.Clear();
+        _baseBranch = string.IsNullOrWhiteSpace(active.DefaultBaseBranch) ? "main" : active.DefaultBaseBranch;
+
+        try
+        {
+            var workflowList = await WorkflowRepository.GetWorkflowsAsync(active.Id);
+            _workflows = workflowList.ToList();
+
+            if (active.DefaultWorkflowId.HasValue && _workflows.Any(w => w.Id == active.DefaultWorkflowId.Value))
+            {
+                _selectedWorkflowId = active.DefaultWorkflowId.Value;
+            }
+            else
+            {
+                var def = _workflows.FirstOrDefault(w => w.IsDefault) ?? _workflows.FirstOrDefault();
+                _selectedWorkflowId = def?.Id;
+            }
+
+            var tasks = await TaskRepository.GetByWorkspaceIdAsync(active.Id);
+            _availableTasks = tasks
+                .Where(t => t.Status != TaskOverallStatus.Rejected &&
+                            t.Status != TaskOverallStatus.Cancelled &&
+                            t.Status != TaskOverallStatus.Failed)
+                .OrderBy(t => t.Id)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load workflow or task data for workspace {WorkspaceId}", active.Id);
+        }
+    }
+
+    private void TogglePrerequisite(int taskId)
+    {
+        if (_selectedPrereqIds.Contains(taskId))
+        {
+            _selectedPrereqIds.Remove(taskId);
+        }
+        else
+        {
+            _selectedPrereqIds.Add(taskId);
+        }
+    }
+
+    private List<ForgeTask> GetFilteredPrerequisiteTasks()
+    {
+        var q = _availableTasks.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_prereqSearch))
+        {
+            var search = _prereqSearch.Trim();
+            if (int.TryParse(search.TrimStart('#'), out var searchId))
+            {
+                q = q.Where(t => t.Id == searchId || t.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
+            }
+            else
+            {
+                q = q.Where(t => t.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        return q.ToList();
+    }
+
+    private async Task SaveAsSuggestedAsync()
+    {
+        await CreateAndSubmitTaskAsync(TaskOverallStatus.Suggested, launchImmediately: false);
+    }
+
+    private async Task SaveAsOpenAsync()
+    {
+        await CreateAndSubmitTaskAsync(TaskOverallStatus.Open, launchImmediately: false);
+    }
+
+    private async Task SaveAndLaunchAsync()
+    {
+        await CreateAndSubmitTaskAsync(TaskOverallStatus.Open, launchImmediately: true);
+    }
+
+    private async Task CreateAndSubmitTaskAsync(TaskOverallStatus status, bool launchImmediately)
+    {
+        _validationError = null;
+        if (string.IsNullOrWhiteSpace(_title))
+        {
+            _validationError = "Please enter a task title.";
+            return;
+        }
+
+        var active = WorkspaceState.ActiveWorkspace;
+        if (active == null)
+        {
+            _validationError = "No active workspace is selected.";
+            return;
+        }
+
+        _isSubmitting = true;
+        try
+        {
+            var newTask = new ForgeTask
+            {
+                WorkspaceId = active.Id,
+                WorkflowId = _selectedWorkflowId,
+                Title = _title.Trim(),
+                Description = _description.Trim(),
+                Priority = _selectedPriority,
+                MergeMode = _selectedMergeMode,
+                BaseBranch = string.IsNullOrWhiteSpace(_baseBranch) ? "main" : _baseBranch.Trim(),
+                Status = status,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            var created = await TaskRepository.CreateAsync(newTask, dependsOn: _selectedPrereqIds);
+
+            var featureBranch = string.IsNullOrWhiteSpace(_featureBranch)
+                ? $"feature/task-{created.Id}"
+                : _featureBranch.Trim();
+            created.FeatureBranch = featureBranch;
+            await TaskRepository.UpdateAsync(created, dependsOn: _selectedPrereqIds);
+
+            // Sync markdown to repository path on disk if available
+            if (MarkdownSync != null && !string.IsNullOrWhiteSpace(active.RepositoryPath) && Directory.Exists(active.RepositoryPath))
+            {
+                try
+                {
+                    await MarkdownSync.SyncTaskToDiskAsync(created, active.RepositoryPath);
+                }
+                catch (Exception syncEx)
+                {
+                    Logger.LogWarning(syncEx, "Failed to sync created task markdown to disk for Task #{TaskId}", created.Id);
+                }
+            }
+
+            if (launchImmediately)
+            {
+                string jobId;
+                if (created.Priority == TaskPriority.Critical)
+                {
+                    jobId = TaskJobQueue.EnqueueUrgent(created.Id);
+                    Logger.LogInformation("Dispatched critical Task #{TaskId} to llm-urgent (JobId: {JobId})", created.Id, jobId);
+                }
+                else
+                {
+                    jobId = TaskJobQueue.EnqueueInference(created.Id);
+                    Logger.LogInformation("Dispatched Task #{TaskId} (P{Priority}) to llm-inference (JobId: {JobId})", created.Id, created.Priority, jobId);
+                }
+
+                created.LastHangfireJobId = jobId;
+                await TaskRepository.UpdateAsync(created, dependsOn: _selectedPrereqIds);
+
+                ToastService.Show("Task Launched", $"Task #{created.Id} created and dispatched to execution queue.", ToastLevel.Success);
+                Navigation.NavigateTo($"/inspector/{created.Id}");
+            }
+            else
+            {
+                var statusText = status == TaskOverallStatus.Suggested ? "Suggested (Triage)" : "Open (Backlog)";
+                ToastService.Show("Task Created", $"Task #{created.Id} saved as {statusText}.", ToastLevel.Success);
+                Navigation.NavigateTo("/backlog");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create task");
+            _validationError = $"Failed to create task: {ex.Message}";
+            ToastService.Show("Creation Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+    }
+}

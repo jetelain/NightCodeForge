@@ -170,6 +170,8 @@
         TaskId="_snapshot.TaskId"
         BaseBranch="_snapshot.BaseBranch"
         TaskTitle="_snapshot.Title"
+        CurrentMergeMode="_snapshot.MergeMode"
+        OnMergeModeChanged="(mode) => _snapshot = _snapshot with { MergeMode = mode }"
         OnApproved="HandleApprovedAsync"
         OnClosed="() => _showApproveModal = false" />
 }

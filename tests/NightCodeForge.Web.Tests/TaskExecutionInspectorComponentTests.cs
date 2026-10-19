@@ -642,6 +642,9 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         public Task<bool> PromoteToUrgentAsync(string jobId, int taskId, CancellationToken cancellationToken = default)
             => Task.FromResult(true);
 
+        public Task<bool> PromoteToUrgentAsync(int taskId, CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+
         public Task<bool> CancelJobAsync(string jobId, int? taskId = null, CancellationToken cancellationToken = default)
             => Task.FromResult(true);
 

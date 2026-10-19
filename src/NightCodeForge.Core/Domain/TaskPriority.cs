@@ -57,6 +57,24 @@ public static class TaskPriority
     };
 
     /// <summary>
+    /// All priority levels from Critical (1) to Trivial (5).
+    /// </summary>
+    public static readonly int[] All = [Critical, High, Normal, Low, Trivial];
+
+    /// <summary>
+    /// Returns the descriptive meaning and scheduling rule for a priority level.
+    /// </summary>
+    public static string GetDescription(int priority) => priority switch
+    {
+        Critical => "Immediate blocker or critical bug fix. Dispatched to llm-urgent queue.",
+        High => "Core architectural prerequisite or time-sensitive feature milestone.",
+        Normal => "Standard implementation task. Default for newly authored tasks.",
+        Low => "Minor refactoring, cosmetic polish, or secondary documentation.",
+        Trivial => "Non-essential cleanup, minor typos, or background experiments.",
+        _ => $"Priority {priority}"
+    };
+
+    /// <summary>
     /// Standard theme hex color for priority badge borders and highlights.
     /// </summary>
     public static string GetBadgeColor(int priority) => priority switch

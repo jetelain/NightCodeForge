@@ -3,7 +3,7 @@
 > **Phase 11 Implementation Step (Post-MVP - Top Priority)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Related Implementation:* [Step 11.15: Priority-Aware Task Queue Scheduling](STEP_11_15_PRIORITY_AWARE_TASK_QUEUE_SCHEDULING.md) *(Already Completed)*  
-> *Project Target:* `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Web/Services`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned
+> *Project Target:* `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Web/Services`, `tests/NightCodeForge.Web.Tests` | *Status:* Completed
 
 ---
 
@@ -142,30 +142,31 @@ flowchart TD
   - [x] Default priority set to `TaskPriority.Normal` (3) in [ForgeTask.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/ForgeTask.cs).
   - [x] DAG cascade unblocking dispatches P1 tasks to `llm-urgent` and P2–P5 in `Priority ASC` order.
   - [x] DevQueue priority reordering in [DevQueueService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Services/DevQueueService.cs).
-- [ ] **Domain Model & Helpers:**
-  - [ ] Ensure `MergeMode` (`Automatic` and `ManualReviewRequired`) display labels and helper methods exist in `NightCodeForge.Core` *(Note: `ExternalPullRequest = 2` is deferred to [Step 11.10](STEP_11_10_GITHUB_INTEGRATION_ISSUES_AND_PRS.md))*.
-  - [ ] Ensure `TaskPriority` helper methods and display labels are fully leveraged across all Web components.
-- [ ] **Dedicated Task Creation Page:**
-  - [ ] Create `CreateTask.razor` at `/tasks/new` and `/tasks/create` with responsive layout and live markdown preview.
-  - [ ] Implement priority picker (P1–P5 chips, default P3 Normal).
-  - [ ] Add prerequisite dependency selector querying existing workspace tasks.
-  - [ ] Implement submission modes (`Save as Suggested`, `Save as Open`, and `Save & Launch Immediately` dispatching to `llm-urgent`/`llm-inference`).
-  - [ ] Add `+ New Task` button in Top Navigation bar and Backlog header linking to `/tasks/new`.
-- [ ] **Editable Priority on Existing Tasks:**
-  - [ ] Add interactive priority dropdown/chips editor to [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor).
-  - [ ] Add inline priority popover/dropdown on [KanbanCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor) for one-click re-prioritization.
-  - [ ] Persist priority changes to database and record history snapshot in `TaskHistories`.
-  - [ ] Connect priority escalation to [IDevQueueService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Services/IDevQueueService.cs) (promote to `llm-urgent` when changed to P1).
-- [ ] **Backlog Sorting & Filtering:**
-  - [ ] Implement default priority sorting (`Priority ASC, CreatedAt ASC`) in [Backlog.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Backlog.razor).
-  - [ ] Add priority filter chip bar (`All`, `P1 Critical Only`, `P1-P2 High+`) to Backlog toolbar.
-- [ ] **MergeMode Editing:**
-  - [ ] Update `TaskDetailDrawer.razor` to display and allow editing `MergeMode` (`Automatic` vs `ManualReviewRequired`).
-  - [ ] Persist edits to database and record history snapshot in `TaskHistories`.
-- [ ] **Unit & Component Tests:**
-  - [ ] Test `CreateTask.razor` form validation, priority assignment, and dependency creation.
-  - [ ] Test priority editing in `TaskDetailDrawer` and `KanbanCard` with database persistence.
-  - [ ] Test priority sorting and filtering queries in Backlog view.
-  - [ ] Test `MergeMode` persistence and editing in `TaskDetailDrawer`.
+- [x] **Domain Model & Helpers:**
+  - [x] Ensure `MergeMode` (`Automatic` and `ManualReviewRequired`) display labels and helper methods exist in `NightCodeForge.Core` *(Note: `ExternalPullRequest = 2` is deferred to [Step 11.10](STEP_11_10_GITHUB_INTEGRATION_ISSUES_AND_PRS.md))*.
+  - [x] Ensure `TaskPriority` helper methods and display labels are fully leveraged across all Web components.
+- [x] **Dedicated Task Creation Page:**
+  - [x] Create `CreateTask.razor` at `/tasks/new` and `/tasks/create` with responsive layout and live markdown preview.
+  - [x] Implement priority picker (P1–P5 chips, default P3 Normal).
+  - [x] Add prerequisite dependency selector querying existing workspace tasks.
+  - [x] Implement submission modes (`Save as Suggested`, `Save as Open`, and `Save & Launch Immediately` dispatching to `llm-urgent`/`llm-inference`).
+  - [x] Add `+ New Task` button in Top Navigation bar and Backlog header linking to `/tasks/new`.
+- [x] **Editable Priority on Existing Tasks:**
+  - [x] Add interactive priority dropdown/chips editor to [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor).
+  - [x] Add inline priority popover/dropdown on [KanbanCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor) for one-click re-prioritization.
+  - [x] Persist priority changes to database and record history snapshot in `TaskHistories`.
+  - [x] Connect priority escalation to [IDevQueueService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Services/IDevQueueService.cs) (promote to `llm-urgent` when changed to P1).
+- [x] **Backlog Sorting & Filtering:**
+  - [x] Implement default priority sorting (`Priority ASC, CreatedAt ASC`) in [Backlog.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Backlog.razor).
+  - [x] Add priority filter chip bar (`All`, `P1 Critical Only`, `P1-P2 High+`) to Backlog toolbar.
+- [x] **MergeMode Editing:**
+  - [x] Update `TaskDetailDrawer.razor` to display and allow editing `MergeMode` (`Automatic` vs `ManualReviewRequired`).
+  - [x] Persist edits to database and record history snapshot in `TaskHistories`.
+- [x] **Unit & Component Tests:**
+  - [x] Test `CreateTask.razor` form validation, priority assignment, and dependency creation.
+  - [x] Test priority editing in `TaskDetailDrawer` and `KanbanCard` with database persistence.
+  - [x] Test priority sorting and filtering queries in Backlog view.
+  - [x] Test `MergeMode` persistence and editing in `TaskDetailDrawer`.
+
 
 

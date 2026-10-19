@@ -55,9 +55,9 @@
                     </button>
                 </div>
 
-                <button type="button" class="forge-btn forge-btn-primary" @onclick="() => _showCreateModal = true" id="btn-create-task">
+                <a href="/tasks/new" class="forge-btn forge-btn-primary" id="btn-create-task" style="text-decoration: none;">
                     ➕ New Task
-                </button>
+                </a>
 
                 <a href="/ideation" class="forge-btn forge-btn-secondary">
                     💡 Ideate / Propose Tasks
@@ -112,6 +112,43 @@
                 }
             </div>
 
+            <!-- Priority Filter Chips -->
+            <div class="priority-filter-chips" style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+                <button type="button"
+                        class="stat-chip priority-filter-btn @(_priorityFilter == PriorityFilterMode.All ? "active" : "")"
+                        @onclick="() => FilterByPriority(PriorityFilterMode.All)">
+                    All
+                </button>
+                <button type="button"
+                        class="stat-chip priority-filter-btn @(_priorityFilter == PriorityFilterMode.P1Critical ? "active" : "")"
+                        @onclick="() => FilterByPriority(PriorityFilterMode.P1Critical)"
+                        style="@(_priorityFilter == PriorityFilterMode.P1Critical ? "border-color: #ef4444; color: #fca5a5;" : "")">
+                    <span class="badge-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #ef4444; display: inline-block;"></span>
+                    P1 Critical
+                </button>
+                <button type="button"
+                        class="stat-chip priority-filter-btn @(_priorityFilter == PriorityFilterMode.P1P2HighPlus ? "active" : "")"
+                        @onclick="() => FilterByPriority(PriorityFilterMode.P1P2HighPlus)"
+                        style="@(_priorityFilter == PriorityFilterMode.P1P2HighPlus ? "border-color: #f97316; color: #fed7aa;" : "")">
+                    <span class="badge-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #f97316; display: inline-block;"></span>
+                    P1–P2 High+
+                </button>
+                <button type="button"
+                        class="stat-chip priority-filter-btn @(_priorityFilter == PriorityFilterMode.P3Normal ? "active" : "")"
+                        @onclick="() => FilterByPriority(PriorityFilterMode.P3Normal)"
+                        style="@(_priorityFilter == PriorityFilterMode.P3Normal ? "border-color: #3b82f6; color: #93c5fd;" : "")">
+                    <span class="badge-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #3b82f6; display: inline-block;"></span>
+                    P3 Normal
+                </button>
+                <button type="button"
+                        class="stat-chip priority-filter-btn @(_priorityFilter == PriorityFilterMode.P4P5Low ? "active" : "")"
+                        @onclick="() => FilterByPriority(PriorityFilterMode.P4P5Low)"
+                        style="@(_priorityFilter == PriorityFilterMode.P4P5Low ? "border-color: #64748b; color: #cbd5e1;" : "")">
+                    <span class="badge-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #64748b; display: inline-block;"></span>
+                    P4–P5 Low
+                </button>
+            </div>
+
             <div class="toolbar-right-filters">
                 <select class="form-control-dark toolbar-filter-select"
                         value="@(_statusFilter?.ToString() ?? "ALL")"
@@ -147,7 +184,8 @@
                              TaskDependencies="_dependenciesMap"
                              OnTaskSelected="OpenTaskDrawer"
                              OnPromoteTask="OpenPromoteModal"
-                             OnLinkDependencies="OpenDependencyModal" />
+                             OnLinkDependencies="OpenDependencyModal"
+                             OnPriorityChanged="HandlePriorityChanged" />
             }
             else
             {
@@ -186,12 +224,22 @@
                           DependentIds="GetDependentsForSelected()"
                           OnClose="CloseDrawer"
                           OnPromoteClicked="OpenPromoteModal"
-                          OnLinkDependenciesClicked="OpenDependencyModal" />
+                          OnLinkDependenciesClicked="OpenDependencyModal"
+                          OnTaskUpdated="ReloadTasksAsync" />
     }
 </div>
 
 @code {
     private enum BacklogViewMode { Kanban, Dag }
+
+    public enum PriorityFilterMode
+    {
+        All,
+        P1Critical,
+        P1P2HighPlus,
+        P3Normal,
+        P4P5Low
+    }
 
     private BacklogViewMode _currentView = BacklogViewMode.Kanban;
     private List<ForgeTask> _allTasks = new();
@@ -200,6 +248,7 @@
 
     private string _searchQuery = string.Empty;
     private TaskOverallStatus? _statusFilter;
+    private PriorityFilterMode _priorityFilter = PriorityFilterMode.All;
     private bool _isLoading = false;
     private bool _disposed;
 
@@ -331,7 +380,7 @@
         try
         {
             var tasks = await TaskRepository.GetByWorkspaceIdAsync(active.Id);
-            _allTasks = tasks.OrderBy(t => t.Priority).ThenBy(t => t.Id).ToList();
+            _allTasks = tasks.OrderBy(t => t.Priority).ThenBy(t => t.CreatedAt).ToList();
 
             var deps = await DependencyStore.GetDependenciesForWorkspaceAsync(active.Id);
             _allDependencies = deps.ToList();
@@ -379,6 +428,11 @@
         _statusFilter = status;
     }
 
+    private void FilterByPriority(PriorityFilterMode mode)
+    {
+        _priorityFilter = mode;
+    }
+
     private void OnStatusFilterSelectChanged(ChangeEventArgs e)
     {
         var str = e.Value?.ToString();
@@ -411,6 +465,23 @@
             {
                 query = query.Where(t => t.Status == _statusFilter.Value);
             }
+        }
+
+        if (_priorityFilter == PriorityFilterMode.P1Critical)
+        {
+            query = query.Where(t => t.Priority == TaskPriority.Critical);
+        }
+        else if (_priorityFilter == PriorityFilterMode.P1P2HighPlus)
+        {
+            query = query.Where(t => t.Priority <= TaskPriority.High);
+        }
+        else if (_priorityFilter == PriorityFilterMode.P3Normal)
+        {
+            query = query.Where(t => t.Priority == TaskPriority.Normal);
+        }
+        else if (_priorityFilter == PriorityFilterMode.P4P5Low)
+        {
+            query = query.Where(t => t.Priority >= TaskPriority.Low);
         }
 
         if (!string.IsNullOrWhiteSpace(_searchQuery))
@@ -478,6 +549,11 @@
     private void CloseDepModal()
     {
         _showDepModal = false;
+    }
+
+    private async Task HandlePriorityChanged((ForgeTask Task, int NewPriority) args)
+    {
+        await ReloadTasksAsync();
     }
 
     public void Dispose()
