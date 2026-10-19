@@ -108,7 +108,7 @@ flowchart TD
 When the agent proposes tasks during chat, `IdeationProposalCard.razor` renders three distinct buttons:
 1. **Approve (Promote to Open):**
    - Sets `Status = TaskOverallStatus.Open`.
-   - Allows maintainer to configure `MergeMode` (`Automatic`, `ManualReviewRequired`, `ExternalPullRequest`).
+   - Allows maintainer to configure `MergeMode` (`Automatic`, `ManualReviewRequired`; `ExternalPullRequest` deferred to Step 11.10).
    - Task enters the active Kanban backlog and execution queue.
 2. **Keep as Suggestion (`Draft` $\rightarrow$ `Suggested`):**
    - Sets `Status = TaskOverallStatus.Suggested`.
