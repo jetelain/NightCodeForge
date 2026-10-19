@@ -267,6 +267,41 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
                 var progressMsg = $"[{pipelineSw.Elapsed:mm\\:ss}] Autonomous pipeline progress: {cardStatus}";
                 _output.WriteLine(progressMsg);
                 Console.WriteLine(progressMsg);
+
+                // If agent requested human clarification via 'ask' tool, answer it via Question Inbox (/inbox)
+                if (cardStatus.Contains("Waiting for Human", StringComparison.OrdinalIgnoreCase))
+                {
+                    var msg = $"[{pipelineSw.Elapsed:mm\\:ss}] Agent paused awaiting human clarification. Navigating to /inbox to submit guidance...";
+                    _output.WriteLine(msg);
+                    Console.WriteLine(msg);
+
+                    await _page.GotoAsync($"{_baseUrl}/inbox", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
+                    await _page.WaitForSelectorAsync(".question-card, #inbox-empty-state", new PageWaitForSelectorOptions { Timeout = 15000 });
+
+                    var questionCards = _page.Locator(".question-card");
+                    if (await questionCards.CountAsync() > 0)
+                    {
+                        var textareas = _page.Locator("textarea.question-textarea");
+                        var textareaCount = await textareas.CountAsync();
+                        for (int i = 0; i < textareaCount; i++)
+                        {
+                            await textareas.Nth(i).FillAsync("Approved. Please proceed with standard Multiply(int a, int b) implementation, XML docs, and unit tests.");
+                        }
+
+                        var submitBtn = _page.Locator("button.submit-answer-btn:not([disabled])");
+                        if (await submitBtn.CountAsync() > 0)
+                        {
+                            await submitBtn.First.ClickAsync();
+                            var subMsg = $"[{pipelineSw.Elapsed:mm\\:ss}] Clarification submitted! Returning to /backlog to resume monitoring...";
+                            _output.WriteLine(subMsg);
+                            Console.WriteLine(subMsg);
+                            await _page.WaitForTimeoutAsync(2000);
+                        }
+                    }
+
+                    await _page.GotoAsync($"{_baseUrl}/backlog", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
+                    await _page.WaitForSelectorAsync(".kanban-board-container, .kanban-board", new PageWaitForSelectorOptions { Timeout = 15000 });
+                }
             }
 
             await Task.Delay(3000);

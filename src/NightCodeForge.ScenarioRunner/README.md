@@ -1,5 +1,10 @@
 # NightCodeForge Scenario Runner
 
+> **Assembly:** `NightCodeForge.ScenarioRunner` | **Layer:** CLI / Verification  
+> **Role:** Console application orchestrating synthetic end-to-end multi-agent workflow scenarios, quality gates, and infrastructure tests.
+
+---
+
 A specialized console application designed to test, validate, and demonstrate autonomous multi-agent workflows, quality gates, and backend infrastructure across realistic end-to-end scenarios.
 
 All environments are **synthetic and ephemeral** by default (clean teardown on completion), with a `--keep` / `-k` flag to retain SQLite databases and Git repositories for inspection.
