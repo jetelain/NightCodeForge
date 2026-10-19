@@ -8,10 +8,11 @@
 
 ## 1. Executive Summary & Objective
 
-As **NightCodeForge** approaches its first MVP release, this plan defines the final three essential preparation tracks before packaging and building v1:
+As **NightCodeForge** approaches its first MVP release, this plan defines the essential preparation tracks before packaging and building v1:
 1. **Turn on `dotnet ef migrations`:** Move from ad-hoc schema creation (`Database.EnsureCreatedAsync()`) to production-grade EF Core migrations applied automatically at startup and accessible via the `dotnet ef` CLI.
 2. **Namespace & Module `README.md` Documentation:** Establish a modular documentation architecture across every project and functional namespace in `src/` to guide both autonomous AI agents and human contributors without polluting LLM context windows.
 3. **Comprehensive Code Review & AGENTS.md Policy Remediation:** Execute a multi-stream audit across Core, Infrastructure, Agents, and Web to eliminate bare catch blocks, verify required constructor DI, prevent resource leaks, validate concurrency primitives, and resolve technical debt.
+4. **Crucible Interactive Ask Tool & Conversation Resumption:** Ensure that when an agent calls `ask`, structured pending questions appear directly in the chat history, conversation state reflects `WaitingForHuman`, and answering resumes the initial conversation seamlessly rather than spawning duplicate conversations.
 
 To ensure execution success under LLM context-window constraints, each track is decomposed into **atomic, self-contained subagent tasks** with explicit file boundaries, standardized templates, and concrete verification commands.
 
@@ -48,6 +49,14 @@ flowchart TD
         T3_4 --> T3_5
     end
 
+    subgraph Track4 ["Track 4: Crucible Interactive Ask Tool (Step 10.4)"]
+        T4_1["Action 4.1: Interruption Persistence & WaitingForHuman State"]
+        T4_2["Action 4.2: Initial Conversation Resumption & Answer Turn Pairing"]
+        T4_3["Action 4.3: Interactive Question Card & Answer UI in StageConversationViewer"]
+        T4_4["Action 4.4: Automated Unit, Integration & Component Tests"]
+        T4_1 --> T4_2 --> T4_3 --> T4_4
+    end
+
     T1_3 --> Ready["🎉 MVP v1 Build Ready"]
     T2_1 --> Ready
     T2_2 --> Ready
@@ -55,6 +64,7 @@ flowchart TD
     T2_3B --> Ready
     T2_4 --> Ready
     T3_5 --> Ready
+    T4_4 --> Ready
 ```
 
 ---
@@ -76,6 +86,10 @@ flowchart TD
 | | | **Action 3.3** | Agents deep audit: tool sandboxing, prompt caching stability, KV cache preservation, token estimation, streaming error propagation. | ~25k tokens | Completed |
 | | | **Action 3.4** | Web UI deep audit: Blazor component disposal, SignalR auto-reconnect & group retention, UI error boundaries, responsive layout. | ~25k tokens | Completed |
 | | | **Action 3.5** | Consolidated remediation: execute fixes for all High/Critical findings, run regression suites, verify 0 warnings. | ~30k tokens | Completed |
+| **10.4** | [STEP_10_4_CRUCIBLE_INTERACTIVE_ASK_TOOL.md](phase-10/STEP_10_4_CRUCIBLE_INTERACTIVE_ASK_TOOL.md) | **Action 4.1** | Interruption turn persistence in DB (`Tool` turn for `ask`), set conversation status `WaitingForHuman`, preserve `CompletedAt = null`, record `ActiveConversationId`. | ~20k tokens | Ready |
+| | | **Action 4.2** | Lossless conversation resumption in `CrucibleAgentHarness.RunStageAsync`, avoid duplicate conversation, pair `ToolResult` turn with human answers. | ~20k tokens | Ready |
+| | | **Action 4.3** | Interactive UI question card in `StageConversationViewer.razor`, option chips, direct answer submission, answered presentation, status badges. | ~25k tokens | Ready |
+| | | **Action 4.4** | Automated unit, integration, and BUnit component tests verifying question persistence, resumption without duplication, and UI presentation. | ~20k tokens | Ready |
 
 ---
 
