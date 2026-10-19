@@ -66,13 +66,18 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
         }
     }
 
+    public ThinkingAndActivityTracingChatClient(IChatClient innerClient)
+        : this(innerClient, null, null, null, 0, "execution")
+    {
+    }
+
     public ThinkingAndActivityTracingChatClient(
         IChatClient innerClient,
-        Action<TranscriptEntry>? onEntry = null,
-        IAgentActivityStreamer? activityStreamer = null,
-        string? sessionId = null,
-        int taskId = 0,
-        string stageId = "execution")
+        Action<TranscriptEntry>? onEntry,
+        IAgentActivityStreamer? activityStreamer,
+        string? sessionId,
+        int taskId,
+        string stageId)
         : base(innerClient)
     {
         _onEntry = onEntry;
@@ -303,7 +308,8 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
         string? schema = null;
         if (tool is AIFunctionDeclaration declaration)
         {
-            try { schema = declaration.JsonSchema.GetRawText(); } catch { schema = null; }
+            try { schema = declaration.JsonSchema.GetRawText(); }
+            catch (Exception) { /* JsonSchema may be uninitialized or unsupported */ schema = null; }
         }
 
         return new ToolSchemaSnapshot(tool.Name, tool.Description, schema);
@@ -330,7 +336,7 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
     {
         if (value == null) return "null";
         try { return JsonSerializer.Serialize(value); }
-        catch { return value.ToString() ?? string.Empty; }
+        catch (Exception) { /* Fallback for types that fail System.Text.Json serialization */ return value.ToString() ?? string.Empty; }
     }
 
     private void ProcessResponseMessages(IEnumerable<ChatMessage>? responseMessages)

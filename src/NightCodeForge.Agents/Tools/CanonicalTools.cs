@@ -114,12 +114,85 @@ public partial class CanonicalTools
         return _pathResolver.ResolveCruciblePath(_workspaceRoot, path, _taskId);
     }
 
+    private void ValidateWithinWorkspace(string fullPath, string requestedPath)
+    {
+        if (string.IsNullOrWhiteSpace(fullPath))
+        {
+            throw new UnauthorizedAccessException("Access denied: Empty path.");
+        }
+
+        var allowedRoots = new List<string>();
+        if (!string.IsNullOrWhiteSpace(_workspaceRoot))
+        {
+            allowedRoots.Add(_workspaceRoot);
+        }
+
+        if (_workspaceId.HasValue)
+        {
+            var crucibleRoot = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty, _taskId);
+            if (!string.IsNullOrWhiteSpace(crucibleRoot))
+            {
+                allowedRoots.Add(crucibleRoot);
+            }
+        }
+
+        var normFullPath = NormalizeForSandbox(fullPath);
+
+        bool isAllowed = false;
+        foreach (var root in allowedRoots)
+        {
+            var normRoot = NormalizeForSandbox(root);
+            if (normFullPath.Equals(normRoot, StringComparison.OrdinalIgnoreCase) ||
+                normFullPath.StartsWith(normRoot + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                isAllowed = true;
+                break;
+            }
+        }
+
+        if (!isAllowed)
+        {
+            _logger?.LogWarning("CanonicalTools: Path traversal outside workspace boundary detected: '{Path}' (resolved: '{FullPath}')", requestedPath, fullPath);
+            throw new UnauthorizedAccessException($"Access denied: Path '{requestedPath}' resolves outside the allowed workspace sandbox.");
+        }
+    }
+
+    private static string NormalizeForSandbox(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+        var normalized = path.Replace('\\', '/').TrimEnd('/');
+        if (Path.IsPathRooted(path) && !normalized.StartsWith("//") && !normalized.StartsWith(@"\\") &&
+            !normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("/clone", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                normalized = Path.GetFullPath(path).Replace('\\', '/').TrimEnd('/');
+            }
+            catch
+            {
+                // In case of non-standard path format, retain normalized string
+            }
+        }
+        return normalized;
+    }
+
     /// <summary>
     /// read: Read file contents with line slicing via 1-indexed offset and limit.
     /// </summary>
     public async Task<string> ReadAsync(string path, int? offset = null, int? limit = null, CancellationToken cancellationToken = default)
     {
-        var fullPath = ResolveFullPath(path);
+        string fullPath;
+        try
+        {
+            fullPath = ResolveFullPath(path);
+            ValidateWithinWorkspace(fullPath, path);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return $"Error: {ex.Message}";
+        }
+
         if (!File.Exists(fullPath))
         {
             _logger?.LogWarning("CanonicalTools.read: File not found '{Path}' (resolved: '{FullPath}')", path, fullPath);
@@ -158,7 +231,17 @@ public partial class CanonicalTools
             throw new InvalidOperationException("Write operations are not permitted in read-only mode.");
         }
 
-        var fullPath = ResolveFullPath(path);
+        string fullPath;
+        try
+        {
+            fullPath = ResolveFullPath(path);
+            ValidateWithinWorkspace(fullPath, path);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return $"Error: {ex.Message}";
+        }
+
         var dir = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {
@@ -188,7 +271,17 @@ public partial class CanonicalTools
             return "Error: At least one edit chunk must be provided.";
         }
 
-        var fullPath = ResolveFullPath(path);
+        string fullPath;
+        try
+        {
+            fullPath = ResolveFullPath(path);
+            ValidateWithinWorkspace(fullPath, path);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return $"Error: {ex.Message}";
+        }
+
         if (!File.Exists(fullPath))
         {
             _logger?.LogWarning("CanonicalTools.edit: File not found '{Path}' (resolved: '{FullPath}')", path, fullPath);
@@ -386,6 +479,14 @@ public partial class CanonicalTools
             else
             {
                 workDir = ResolveFullPath(workingDirectory);
+                try
+                {
+                    ValidateWithinWorkspace(workDir, workingDirectory);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    return $"Error: {ex.Message}";
+                }
             }
         }
         else if (_executionEnv == null || _executionEnv.Tier == ExecutionTier.BareHost)
@@ -422,10 +523,14 @@ public partial class CanonicalTools
                 _logger?.LogWarning("CanonicalTools.bash: Command timed out after {Timeout}s: '{Command}' in '{WorkDir}'", effectiveTimeout, command, workDir);
                 return $"Exit Code: {WorkflowDefaults.ProcessTimeoutExitCode}\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger?.LogError(ex, "CanonicalTools.bash: Execution failed for '{Command}' in '{WorkDir}'", command, workDir);
-                throw;
+                return $"Error: Command execution failed: {ex.Message}";
             }
 
             var output = string.IsNullOrWhiteSpace(res.StandardOutput) ? res.StandardError : res.StandardOutput;

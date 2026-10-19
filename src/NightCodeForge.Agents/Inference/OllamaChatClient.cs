@@ -26,16 +26,26 @@ public class OllamaChatClient : IChatClient
     public ChatClientMetadata Metadata { get; }
     public OllamaRoutingTarget RoutingTarget { get; set; } = OllamaRoutingTarget.Auto;
 
+    public OllamaChatClient(HttpClient httpClient)
+        : this(httpClient, "qwen2.5-coder:7b", null, Microsoft.Extensions.Logging.Abstractions.NullLogger<OllamaChatClient>.Instance, OllamaRoutingTarget.Auto)
+    {
+    }
+
+    public OllamaChatClient(HttpClient httpClient, string defaultModel, OllamaRoutingTarget routingTarget)
+        : this(httpClient, defaultModel, null, Microsoft.Extensions.Logging.Abstractions.NullLogger<OllamaChatClient>.Instance, routingTarget)
+    {
+    }
+
     public OllamaChatClient(
         HttpClient httpClient,
-        string defaultModel = "qwen2.5-coder:7b",
-        string? baseUrl = null,
-        ILogger<OllamaChatClient>? logger = null,
-        OllamaRoutingTarget routingTarget = OllamaRoutingTarget.Auto)
+        string defaultModel,
+        string? baseUrl,
+        ILogger<OllamaChatClient> logger,
+        OllamaRoutingTarget routingTarget)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        _defaultModel = defaultModel;
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<OllamaChatClient>.Instance;
+        _defaultModel = defaultModel ?? throw new ArgumentNullException(nameof(defaultModel));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         RoutingTarget = routingTarget;
 
         var host = baseUrl ?? "http://localhost:11434";

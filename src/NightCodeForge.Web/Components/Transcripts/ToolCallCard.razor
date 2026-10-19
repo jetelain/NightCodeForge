@@ -20,13 +20,13 @@
         <div style="display: flex; gap: 0.5rem;">
             @if (!string.IsNullOrWhiteSpace(Arguments))
             {
-                <button type="button" class="forge-btn-ghost" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" @onclick="CopyArgs">
+                <button type="button" class="forge-btn-ghost" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" title="Copy tool call arguments to clipboard" aria-label="Copy tool call arguments to clipboard" @onclick="CopyArgs">
                     @(_copiedArgs ? "✓ Args Copied" : "📋 Args")
                 </button>
             }
             @if (!string.IsNullOrWhiteSpace(Result))
             {
-                <button type="button" class="forge-btn-ghost" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" @onclick="CopyResult">
+                <button type="button" class="forge-btn-ghost" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" title="Copy tool execution result to clipboard" aria-label="Copy tool execution result to clipboard" @onclick="CopyResult">
                     @(_copiedResult ? "✓ Output Copied" : "📋 Output")
                 </button>
             }
@@ -75,7 +75,10 @@
             await Task.Delay(2000);
             _copiedArgs = false;
         }
-        catch { }
+        catch (Exception)
+        {
+            // Clipboard API may be denied by browser security permissions
+        }
     }
 
     private async Task CopyResult()
@@ -89,6 +92,9 @@
             await Task.Delay(2000);
             _copiedResult = false;
         }
-        catch { }
+        catch (Exception)
+        {
+            // Clipboard API may be denied by browser security permissions
+        }
     }
 }

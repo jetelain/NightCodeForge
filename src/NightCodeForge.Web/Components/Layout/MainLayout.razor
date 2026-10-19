@@ -6,7 +6,9 @@
     <TopNavBar />
 
     <main class="forge-main-content">
-        @Body
+        <ErrorBoundary>
+            @Body
+        </ErrorBoundary>
     </main>
 
     <ToastHost />

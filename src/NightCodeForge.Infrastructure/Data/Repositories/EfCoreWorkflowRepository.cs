@@ -47,6 +47,7 @@ public class EfCoreWorkflowRepository : IWorkflowRepository
     public async Task<IReadOnlyList<WorkflowDefinition>> GetWorkflowsAsync(int? workspaceId = null, CancellationToken cancellationToken = default)
     {
         IQueryable<WorkflowDefinition> query = _context.WorkflowDefinitions
+            .AsNoTracking()
             .Include(w => w.Stages.OrderBy(s => s.SequenceOrder));
 
         if (workspaceId.HasValue)

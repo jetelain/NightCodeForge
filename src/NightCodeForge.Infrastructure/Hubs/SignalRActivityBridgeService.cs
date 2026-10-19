@@ -66,94 +66,101 @@ public class SignalRActivityBridgeService : BackgroundService
     /// </summary>
     public async Task DispatchActivityEventAsync(AgentActivityEvent evt)
     {
-        var groupName = OrchestratorHub.GetTaskGroupName(evt.TaskId);
-
-        switch (evt.Kind)
+        try
         {
-            case AgentActivityKind.ThinkingDelta:
-                await _hubContext.Clients.Group(groupName)
-                    .ReceiveTokenDelta(evt.TaskId, evt.Content, isThinking: true);
-                break;
+            var groupName = OrchestratorHub.GetTaskGroupName(evt.TaskId);
 
-            case AgentActivityKind.MessageDelta:
-                await _hubContext.Clients.Group(groupName)
-                    .ReceiveTokenDelta(evt.TaskId, evt.Content, isThinking: false);
-                break;
+            switch (evt.Kind)
+            {
+                case AgentActivityKind.ThinkingDelta:
+                    await _hubContext.Clients.Group(groupName)
+                        .ReceiveTokenDelta(evt.TaskId, evt.Content, isThinking: true);
+                    break;
 
-            case AgentActivityKind.ToolStarted:
-                var toolName = evt.Metadata?.TryGetValue("ToolName", out var tn) == true && tn != null
-                    ? tn.ToString()!
-                    : (evt.Content.Contains(':') ? evt.Content.Split(':')[0].Trim() : "tool");
-                await _hubContext.Clients.Group(groupName)
-                    .ReceiveToolExecution(evt.TaskId, toolName, evt.Content, "Running", null);
-                break;
+                case AgentActivityKind.MessageDelta:
+                    await _hubContext.Clients.Group(groupName)
+                        .ReceiveTokenDelta(evt.TaskId, evt.Content, isThinking: false);
+                    break;
 
-            case AgentActivityKind.ToolCompleted:
-                var completedTool = evt.Metadata?.TryGetValue("ToolName", out var ctn) == true && ctn != null
-                    ? ctn.ToString()!
-                    : (evt.Content.Contains(':') ? evt.Content.Split(':')[0].Trim() : "tool");
-                int? durationMs = null;
-                if (evt.Metadata?.TryGetValue("DurationMs", out var dur) == true && dur != null)
-                {
-                    if (dur is int iVal)
+                case AgentActivityKind.ToolStarted:
+                    var toolName = evt.Metadata?.TryGetValue("ToolName", out var tn) == true && tn != null
+                        ? tn.ToString()!
+                        : (evt.Content.Contains(':') ? evt.Content.Split(':')[0].Trim() : "tool");
+                    await _hubContext.Clients.Group(groupName)
+                        .ReceiveToolExecution(evt.TaskId, toolName, evt.Content, "Running", null);
+                    break;
+
+                case AgentActivityKind.ToolCompleted:
+                    var completedTool = evt.Metadata?.TryGetValue("ToolName", out var ctn) == true && ctn != null
+                        ? ctn.ToString()!
+                        : (evt.Content.Contains(':') ? evt.Content.Split(':')[0].Trim() : "tool");
+                    int? durationMs = null;
+                    if (evt.Metadata?.TryGetValue("DurationMs", out var dur) == true && dur != null)
                     {
-                        durationMs = iVal;
+                        if (dur is int iVal)
+                        {
+                            durationMs = iVal;
+                        }
+                        else if (int.TryParse(dur.ToString(), out var parsedDur))
+                        {
+                            durationMs = parsedDur;
+                        }
                     }
-                    else if (int.TryParse(dur.ToString(), out var parsedDur))
+                    await _hubContext.Clients.Group(groupName)
+                        .ReceiveToolExecution(evt.TaskId, completedTool, evt.Content, "Completed", durationMs);
+                    break;
+
+                case AgentActivityKind.StageStarted:
+                case AgentActivityKind.StageCompleted:
+                    var status = evt.Kind == AgentActivityKind.StageStarted ? "Running" : "Completed";
+                    var kind = evt.Metadata?.TryGetValue("StageKind", out var sk) == true && sk != null
+                        ? sk.ToString()!
+                        : "Agentic";
+                    await _hubContext.Clients.All
+                        .ReceiveStageTransition(evt.TaskId, evt.StageId, kind, status);
+                    if (evt.Kind == AgentActivityKind.StageStarted)
                     {
-                        durationMs = parsedDur;
+                        await _hubContext.Clients.All
+                            .ReceiveWorkerStatus("Running", evt.TaskId, evt.StageId, kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU");
                     }
-                }
-                await _hubContext.Clients.Group(groupName)
-                    .ReceiveToolExecution(evt.TaskId, completedTool, evt.Content, "Completed", durationMs);
-                break;
+                    else if (string.Equals(evt.StageId, StandardStageIds.Merge, StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(evt.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
+                    {
+                        await _hubContext.Clients.All
+                            .ReceiveWorkerStatus("Idle", null, null, "Local GPU");
+                    }
+                    break;
 
-            case AgentActivityKind.StageStarted:
-            case AgentActivityKind.StageCompleted:
-                var status = evt.Kind == AgentActivityKind.StageStarted ? "Running" : "Completed";
-                var kind = evt.Metadata?.TryGetValue("StageKind", out var sk) == true && sk != null
-                    ? sk.ToString()!
-                    : "Agentic";
-                await _hubContext.Clients.All
-                    .ReceiveStageTransition(evt.TaskId, evt.StageId, kind, status);
-                if (evt.Kind == AgentActivityKind.StageStarted)
-                {
+                case AgentActivityKind.Interrupted:
                     await _hubContext.Clients.All
-                        .ReceiveWorkerStatus("Running", evt.TaskId, evt.StageId, kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU");
-                }
-                else if (string.Equals(evt.StageId, StandardStageIds.Merge, StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(evt.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
-                {
-                    await _hubContext.Clients.All
-                        .ReceiveWorkerStatus("Idle", null, null, "Local GPU");
-                }
-                break;
+                        .ReceiveWorkerStatus("WaitingForHuman", evt.TaskId, evt.StageId, "Local GPU");
+                    break;
 
-            case AgentActivityKind.Interrupted:
-                await _hubContext.Clients.All
-                    .ReceiveWorkerStatus("WaitingForHuman", evt.TaskId, evt.StageId, "Local GPU");
-                break;
+                case AgentActivityKind.Error:
+                    await _hubContext.Clients.Group(groupName)
+                        .ReceiveExecutionLog(evt.TaskId, evt.StageId, "Error", evt.Content, evt.Timestamp);
+                    break;
 
-            case AgentActivityKind.Error:
-                await _hubContext.Clients.Group(groupName)
-                    .ReceiveExecutionLog(evt.TaskId, evt.StageId, "Error", evt.Content, evt.Timestamp);
-                break;
+                case AgentActivityKind.TurnCompleted:
+                    await _hubContext.Clients.Group(groupName)
+                        .ReceiveExecutionLog(evt.TaskId, evt.StageId, "Info", $"Turn completed: {evt.Content}", evt.Timestamp);
+                    break;
 
-            case AgentActivityKind.TurnCompleted:
-                await _hubContext.Clients.Group(groupName)
-                    .ReceiveExecutionLog(evt.TaskId, evt.StageId, "Info", $"Turn completed: {evt.Content}", evt.Timestamp);
-                break;
-
-            case AgentActivityKind.OptimizationAction:
-                var actionType = evt.Metadata?.TryGetValue("ActionType", out var at) == true && at != null
-                    ? at.ToString()!
-                    : "Compaction";
-                var tokensSaved = evt.Metadata?.TryGetValue("TokensSaved", out var ts) == true && ts != null && int.TryParse(ts.ToString(), out var parsedTs)
-                    ? parsedTs
-                    : 0;
-                await _hubContext.Clients.Group(groupName)
-                    .ReceiveOptimizationAction(evt.TaskId, evt.StageId, actionType, evt.Content, tokensSaved, evt.Timestamp);
-                break;
+                case AgentActivityKind.OptimizationAction:
+                    var actionType = evt.Metadata?.TryGetValue("ActionType", out var at) == true && at != null
+                        ? at.ToString()!
+                        : "Compaction";
+                    var tokensSaved = evt.Metadata?.TryGetValue("TokensSaved", out var ts) == true && ts != null && int.TryParse(ts.ToString(), out var parsedTs)
+                        ? parsedTs
+                        : 0;
+                    await _hubContext.Clients.Group(groupName)
+                        .ReceiveOptimizationAction(evt.TaskId, evt.StageId, actionType, evt.Content, tokensSaved, evt.Timestamp);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to dispatch SignalR activity event {Kind} for task #{TaskId}; client may have disconnected.", evt.Kind, evt.TaskId);
         }
     }
 }

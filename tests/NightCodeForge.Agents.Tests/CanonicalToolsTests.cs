@@ -345,5 +345,97 @@ public class Service
             }
         }
     }
+
+    [Theory]
+    [InlineData("../../outside.txt")]
+    [InlineData("../../../etc/shadow")]
+    [InlineData("..\\..\\Windows\\win.ini")]
+    public async Task ReadAsync_PathOutsideWorkspaceSandbox_ReturnsAccessDeniedError(string invalidPath)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-sandbox-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
+            var result = await tools.ReadAsync(invalidPath);
+
+            Assert.StartsWith("Error: Access denied:", result);
+            Assert.Contains("outside the allowed workspace sandbox", result);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("../../outside.txt")]
+    [InlineData("../../../etc/shadow")]
+    [InlineData("..\\..\\Windows\\win.ini")]
+    public async Task WriteAsync_PathOutsideWorkspaceSandbox_ReturnsAccessDeniedError(string invalidPath)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-sandbox-test2-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
+            var result = await tools.WriteAsync(invalidPath, "malicious payload");
+
+            Assert.StartsWith("Error: Access denied:", result);
+            Assert.Contains("outside the allowed workspace sandbox", result);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("../../outside.txt")]
+    [InlineData("../../../etc/shadow")]
+    [InlineData("..\\..\\Windows\\win.ini")]
+    public async Task EditAsync_PathOutsideWorkspaceSandbox_ReturnsAccessDeniedError(string invalidPath)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-sandbox-test3-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
+            var edits = new List<EditChunk> { new("old", "new") };
+            var result = await tools.EditAsync(invalidPath, edits);
+
+            Assert.StartsWith("Error: Access denied:", result);
+            Assert.Contains("outside the allowed workspace sandbox", result);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("../../")]
+    [InlineData("..\\..\\")]
+    public async Task BashAsync_WorkingDirectoryOutsideWorkspaceSandbox_ReturnsAccessDeniedError(string invalidDir)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-sandbox-test4-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
+            var result = await tools.BashAsync("echo test", workingDirectory: invalidDir);
+
+            Assert.StartsWith("Error: Access denied:", result);
+            Assert.Contains("outside the allowed workspace sandbox", result);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
 }
 

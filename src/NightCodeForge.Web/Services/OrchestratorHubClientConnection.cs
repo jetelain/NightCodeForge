@@ -11,6 +11,7 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
 {
     private readonly NavigationManager? _navigationManager;
     private readonly string? _configuredHubUrl;
+    private readonly Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection>? _logger;
     private readonly HashSet<int> _activeTaskGroups = new();
     private readonly object _taskGroupsLock = new();
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
@@ -41,8 +42,14 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
     public event Action<HubConnectionState>? OnConnectionStateChanged;
 
     public OrchestratorHubClientConnection(NavigationManager navigationManager)
+        : this(navigationManager, null)
+    {
+    }
+
+    public OrchestratorHubClientConnection(NavigationManager navigationManager, Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection>? logger)
     {
         _navigationManager = navigationManager;
+        _logger = logger;
     }
 
     public OrchestratorHubClientConnection(string hubUrl)
@@ -68,10 +75,18 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
         await _connectionGate.WaitAsync();
         try
         {
-            if (_hubConnection != null && _hubConnection.State == HubConnectionState.Connected)
+            if (_hubConnection != null)
             {
-                await RejoinActiveTaskGroupsAsync();
-                return;
+                if (_hubConnection.State == HubConnectionState.Connected)
+                {
+                    await RejoinActiveTaskGroupsAsync();
+                    return;
+                }
+
+                if (_hubConnection.State == HubConnectionState.Connecting || _hubConnection.State == HubConnectionState.Reconnecting)
+                {
+                    return;
+                }
             }
 
             if (_hubConnection == null)
@@ -147,9 +162,10 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
             {
                 await _hubConnection.InvokeAsync("JoinTaskGroup", taskId);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Silently avoid breaking caller; will rejoin on reconnect
+                // Silently avoid breaking caller if hub connection is in flight; reconnect handler will catch it
+                _logger?.LogDebug(ex, "Failed to join task group {TaskId}; will retry on reconnect.", taskId);
             }
         }
     }
@@ -169,9 +185,10 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
             {
                 await _hubConnection.InvokeAsync("LeaveTaskGroup", taskId);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Best effort
+                // Best-effort cleanup
+                _logger?.LogDebug(ex, "Failed to leave task group {TaskId}", taskId);
             }
         }
     }
@@ -192,9 +209,10 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
             {
                 await _hubConnection.InvokeAsync("JoinTaskGroup", taskId);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Silently avoid breaking connection state change if one group join fails
+                // Non-fatal if one group join fails during batch reconnection
+                _logger?.LogDebug(ex, "Failed to rejoin task group {TaskId} on reconnect.", taskId);
             }
         }
     }

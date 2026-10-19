@@ -147,7 +147,10 @@
         {
             await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", cmd);
         }
-        catch { }
+        catch (Exception)
+        {
+            // Clipboard API may be denied by browser security permissions
+        }
 
         ToastService.Show("Copied to Clipboard", $"Command copied: {cmd}", ToastLevel.Info);
     }

@@ -10,15 +10,15 @@ namespace NightCodeForge.Agents.Crucible.ChatClients;
 public class PerServiceCallChatHistoryPersistingChatClient : DelegatingChatClient
 {
     private readonly Func<IReadOnlyList<ChatMessage>, Task> _onPersistAsync;
-    private readonly ILogger? _logger;
+    private readonly ILogger _logger;
 
     public PerServiceCallChatHistoryPersistingChatClient(
         IChatClient innerClient,
         Func<IReadOnlyList<ChatMessage>, Task> onPersistAsync,
-        ILogger? logger = null) : base(innerClient)
+        ILogger logger) : base(innerClient)
     {
         _onPersistAsync = onPersistAsync ?? throw new ArgumentNullException(nameof(onPersistAsync));
-        _logger = logger;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public override async Task<ChatResponse> GetResponseAsync(

@@ -87,10 +87,10 @@ public class DefaultOllamaChatClientFactory : IOllamaChatClientFactory
 
     public DefaultOllamaChatClientFactory(
         IOptions<LlmProviderOptions> options,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory loggerFactory)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
-        _loggerFactory = loggerFactory;
+        _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
     }
 
     public IChatClient CreateClient(string? modelId = null) =>

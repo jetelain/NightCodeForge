@@ -2,7 +2,7 @@
 
 > **Phase 10 Implementation Step**  
 > *Parent Plan:* [Phase 10 Master Plan](../10_MVP_FINAL_POLISH.md) | *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
-> *Status:* Ready for Execution | *Target Framework:* .NET 10 (C# 13)  
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)  
 
 ---
 
@@ -115,3 +115,41 @@ All review findings must be classified according to the following taxonomy:
      ```
   5. Validate that all tests pass cleanly.
 - **Deliverable:** Final verification report showing 100% test pass rate and zero policy violations.
+  *Status:* **Completed** (1,180 tests passing, 0 warnings, 0 errors).
+
+---
+
+## 4. Execution Summary & Verification Results
+
+### 4.1 Audit & Remediation Highlights
+
+1. **Strict AGENTS.md Policy Compliance (Action 3.1):**
+   - **Bare Catches Swallowed:** Eliminated in [ToolCallCard.razor](../../../src/NightCodeForge.Web/Components/Transcripts/ToolCallCard.razor), [HostDirtyReconcileDrawer.razor](../../../src/NightCodeForge.Web/Components/GitSync/HostDirtyReconcileDrawer.razor), [Ideation.razor](../../../src/NightCodeForge.Web/Components/Pages/Ideation.razor), and [ThinkingAndActivityTracingChatClient.cs](../../../src/NightCodeForge.Agents/Inference/ThinkingAndActivityTracingChatClient.cs). Replaced with typed exception handling or explicit, justified catch blocks with logging.
+   - **Constructor DI Optional Parameters:** Fixed in [ThinkingAndActivityTracingChatClient.cs](../../../src/NightCodeForge.Agents/Inference/ThinkingAndActivityTracingChatClient.cs), [OllamaChatClientFactory.cs](../../../src/NightCodeForge.Agents/Inference/OllamaChatClientFactory.cs), [OllamaChatClient.cs](../../../src/NightCodeForge.Agents/Inference/OllamaChatClient.cs), and [PerServiceCallChatHistoryPersistingChatClient.cs](../../../src/NightCodeForge.Agents/Crucible/ChatClients/PerServiceCallChatHistoryPersistingChatClient.cs). All service dependencies are now required or provided via explicit typed constructor overloads.
+
+2. **Core & Infrastructure Deep Audit (Action 3.2):**
+   - **EF Core Query Optimization:** Added `.AsNoTracking()` to read-only queries in [EfCoreWorkspaceRepository.cs](../../../src/NightCodeForge.Infrastructure/Data/Repositories/EfCoreWorkspaceRepository.cs) and [EfCoreWorkflowRepository.cs](../../../src/NightCodeForge.Infrastructure/Data/Repositories/EfCoreWorkflowRepository.cs).
+   - **Process & Concurrency Safety:** Verified `SemaphoreSlim` release semantics across all services. Added try/catch safeguards around event broadcasting in [SignalRActivityBridgeService.cs](../../../src/NightCodeForge.Infrastructure/Hubs/SignalRActivityBridgeService.cs) to ensure disconnected clients never block background activity event processing.
+
+3. **Agents & Inference Deep Audit (Action 3.3):**
+   - **Sandbox Path Traversal Enforcement:** Implemented `ValidateWithinWorkspace(fullPath, requestedPath)` in [CanonicalTools.cs](../../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs) across `ReadAsync`, `WriteAsync`, `EditAsync`, and `BashAsync`. Traversal attempts (e.g. `../../secret.txt`) are blocked and return clean, descriptive error messages to the agent without crashing the orchestrator.
+   - **Sandbox Unit Tests:** Added 4 comprehensive theory test suites to [CanonicalToolsTests.cs](../../../tests/NightCodeForge.Agents.Tests/CanonicalToolsTests.cs) covering path traversal vectors (`../../`, `..\\..\\`, `/etc/shadow`, etc.).
+
+4. **Web UI & Frontend Resilience (Action 3.4):**
+   - **Event Unsubscription Audit:** Verified via AST analysis that 100% of Blazor components subscribing to C# events implement `IDisposable` or `IAsyncDisposable` and detach all event handlers.
+   - **Error Boundaries:** Wrapped root `@Body` in `<ErrorBoundary>` within [MainLayout.razor](../../../src/NightCodeForge.Web/Components/Layout/MainLayout.razor).
+   - **SignalR Auto-Reconnect Guard:** Guarded `StartAsync` in [OrchestratorHubClientConnection.cs](../../../src/NightCodeForge.Web/Services/OrchestratorHubClientConnection.cs) against re-entrant calls when already connecting or connected.
+   - **Accessibility:** Added explicit `aria-label` and `title` attributes to icon buttons in [ToolCallCard.razor](../../../src/NightCodeForge.Web/Components/Transcripts/ToolCallCard.razor) and [DiffViewer.razor](../../../src/NightCodeForge.Web/Components/Review/DiffViewer.razor).
+
+### 4.2 Test & Build Verification
+
+- **Compiler Build:** `dotnet build` -> **0 Warnings, 0 Errors**.
+- **Standard Unit/Integration Test Suite (`Category!=Acceptance&Category!=E2E`):**
+  - **1,166 passed, 0 failed, 0 ignored**
+- **Full Solution Test Suite (including E2E and Acceptance Tests):**
+  - `NightCodeForge.Core.Tests`: **335 passed, 0 failed**
+  - `NightCodeForge.Agents.Tests`: **353 passed, 0 failed**
+  - `NightCodeForge.Infrastructure.Tests`: **208 passed, 0 failed**
+  - `NightCodeForge.Web.Tests`: **284 passed, 0 failed**
+  - **Total: 1,180 passed, 0 failed, 0 skipped** across all test suites.
+

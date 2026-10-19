@@ -50,7 +50,7 @@
 
                             <!-- Right: New Side with comment action -->
                             <td class="diff-action-cell">
-                                <button class="btn-add-comment" title="Add review comment on line @lineNum"
+                                <button class="btn-add-comment" title="Add review comment on line @lineNum" aria-label="Add review comment on line @lineNum"
                                         @onclick="() => ToggleCommentBox(lineNum, lineText)">
                                     ➕
                                 </button>
@@ -183,41 +183,49 @@
 
     protected override void OnParametersSet()
     {
-        var differ = new Differ();
-        var sbsBuilder = new SideBySideDiffBuilder(differ);
-        _sbsModel = sbsBuilder.BuildDiffModel(File.OldContent ?? string.Empty, File.NewContent ?? string.Empty);
-
-        var inlineBuilder = new InlineDiffBuilder(differ);
-        var inlineModel = inlineBuilder.BuildDiffModel(File.OldContent ?? string.Empty, File.NewContent ?? string.Empty);
-
-        int oldCounter = 1;
-        int newCounter = 1;
-        _unifiedLines = new List<UnifiedLine>();
-
-        foreach (var piece in inlineModel.Lines)
+        try
         {
-            int? oldNum = null;
-            int? newNum = null;
+            var differ = new Differ();
+            var sbsBuilder = new SideBySideDiffBuilder(differ);
+            _sbsModel = sbsBuilder.BuildDiffModel(File?.OldContent ?? string.Empty, File?.NewContent ?? string.Empty);
 
-            switch (piece.Type)
+            var inlineBuilder = new InlineDiffBuilder(differ);
+            var inlineModel = inlineBuilder.BuildDiffModel(File?.OldContent ?? string.Empty, File?.NewContent ?? string.Empty);
+
+            int oldCounter = 1;
+            int newCounter = 1;
+            _unifiedLines = new List<UnifiedLine>();
+
+            foreach (var piece in inlineModel.Lines)
             {
-                case ChangeType.Unchanged:
-                    oldNum = oldCounter++;
-                    newNum = newCounter++;
-                    break;
-                case ChangeType.Deleted:
-                    oldNum = oldCounter++;
-                    break;
-                case ChangeType.Inserted:
-                    newNum = newCounter++;
-                    break;
-                case ChangeType.Modified:
-                    oldNum = oldCounter++;
-                    newNum = newCounter++;
-                    break;
-            }
+                int? oldNum = null;
+                int? newNum = null;
 
-            _unifiedLines.Add(new UnifiedLine(oldNum, newNum, piece.Type, piece.Text ?? string.Empty));
+                switch (piece.Type)
+                {
+                    case ChangeType.Unchanged:
+                        oldNum = oldCounter++;
+                        newNum = newCounter++;
+                        break;
+                    case ChangeType.Deleted:
+                        oldNum = oldCounter++;
+                        break;
+                    case ChangeType.Inserted:
+                        newNum = newCounter++;
+                        break;
+                    case ChangeType.Modified:
+                        oldNum = oldCounter++;
+                        newNum = newCounter++;
+                        break;
+                }
+
+                _unifiedLines.Add(new UnifiedLine(oldNum, newNum, piece.Type, piece.Text ?? string.Empty));
+            }
+        }
+        catch (Exception)
+        {
+            _sbsModel = null;
+            _unifiedLines = new List<UnifiedLine>();
         }
     }
 

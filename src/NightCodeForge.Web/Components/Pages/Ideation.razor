@@ -1511,7 +1511,10 @@
                 if (root.TryGetProperty("prompt", out var prompt)) return $"(\"{TruncateString(prompt.GetString(), 35)}\")";
             }
         }
-        catch { }
+        catch (System.Text.Json.JsonException)
+        {
+            // If tool call arguments are incomplete or malformed JSON during streaming, return empty preview
+        }
         return string.Empty;
     }
 

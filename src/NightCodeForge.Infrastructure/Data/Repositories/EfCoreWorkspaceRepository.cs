@@ -28,6 +28,7 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
     public async Task<IReadOnlyList<Workspace>> GetAllAsync(CancellationToken cancellationToken = default)
     {
         return await _context.Workspaces
+            .AsNoTracking()
             .Include(w => w.AgentProfiles)
             .ToListAsync(cancellationToken);
     }
@@ -76,6 +77,7 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
         if (workspaceId.HasValue)
         {
             var dedicatedList = await _context.AgentProfiles
+                .AsNoTracking()
                 .Where(p => p.WorkspaceId == workspaceId.Value)
                 .ToListAsync(cancellationToken);
 
@@ -91,6 +93,7 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
         }
 
         var globalList = await _context.AgentProfiles
+            .AsNoTracking()
             .Where(p => p.WorkspaceId == null)
             .ToListAsync(cancellationToken);
 
@@ -102,6 +105,7 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
     public async Task<IReadOnlyList<AgentProfile>> GetGlobalAgentProfilesAsync(CancellationToken cancellationToken = default)
     {
         return await _context.AgentProfiles
+            .AsNoTracking()
             .Where(p => p.WorkspaceId == null)
             .ToListAsync(cancellationToken);
     }

@@ -71,11 +71,11 @@ flowchart TD
 | | | **Action 2.3A** | Document `NightCodeForge.Agents` Part A (Root + 7 namespaces: Crucible, Inference, Tools, Dispatcher, Context, Streaming, Transcripts). | ~25k tokens | Completed |
 | | | **Action 2.3B** | Document `NightCodeForge.Agents` Part B (7 namespaces: Acp, PiRpc, Mcp, Skills, Optimizations, Ideation, Triage). | ~25k tokens | Completed |
 | | | **Action 2.4** | Document `NightCodeForge.Web` (Components, Models, Services), update `ScenarioRunner/README.md`, create `tests/README.md`. | ~25k tokens | Completed |
-| **10.3** | [STEP_10_3_OVERALL_CODE_REVIEW_AND_REMEDIATION.md](phase-10/STEP_10_3_OVERALL_CODE_REVIEW_AND_REMEDIATION.md) | **Action 3.1** | AGENTS.md policy audit: bare `catch`, optional constructor DI (`= null`), hard errors on missing DB entities, magic strings/numbers. | ~20k tokens | Planned |
-| | | **Action 3.2** | Core & Infrastructure deep audit: DbContext concurrency/lifecycles, lock safety, process disposal, cancellation propagation. | ~25k tokens | Planned |
-| | | **Action 3.3** | Agents deep audit: tool sandboxing, prompt caching stability, KV cache preservation, token estimation, streaming error propagation. | ~25k tokens | Planned |
-| | | **Action 3.4** | Web UI deep audit: Blazor component disposal, SignalR auto-reconnect & group retention, UI error boundaries, responsive layout. | ~25k tokens | Planned |
-| | | **Action 3.5** | Consolidated remediation: execute fixes for all High/Critical findings, run regression suites, verify 0 warnings. | ~30k tokens | Planned |
+| **10.3** | [STEP_10_3_OVERALL_CODE_REVIEW_AND_REMEDIATION.md](phase-10/STEP_10_3_OVERALL_CODE_REVIEW_AND_REMEDIATION.md) | **Action 3.1** | AGENTS.md policy audit: bare `catch`, optional constructor DI (`= null`), hard errors on missing DB entities, magic strings/numbers. | ~20k tokens | Completed |
+| | | **Action 3.2** | Core & Infrastructure deep audit: DbContext concurrency/lifecycles, lock safety, process disposal, cancellation propagation. | ~25k tokens | Completed |
+| | | **Action 3.3** | Agents deep audit: tool sandboxing, prompt caching stability, KV cache preservation, token estimation, streaming error propagation. | ~25k tokens | Completed |
+| | | **Action 3.4** | Web UI deep audit: Blazor component disposal, SignalR auto-reconnect & group retention, UI error boundaries, responsive layout. | ~25k tokens | Completed |
+| | | **Action 3.5** | Consolidated remediation: execute fixes for all High/Critical findings, run regression suites, verify 0 warnings. | ~30k tokens | Completed |
 
 ---
 
