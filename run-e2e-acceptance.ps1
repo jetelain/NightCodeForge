@@ -10,11 +10,14 @@
     Base URL of the running NightCodeForge Web application (default: http://127.0.0.1:5272).
 .PARAMETER KeepArtifacts
     Preserves the ephemeral synthetic Git repository on disk for inspection.
+.PARAMETER WorkspaceIdSeed
+    Workspace ID seed for E2E tests to avoid ID collisions with real workspaces (default: 1000).
 #>
 param(
     [switch]$Headed,
     [string]$BaseUrl = "http://127.0.0.1:5272",
-    [switch]$KeepArtifacts
+    [switch]$KeepArtifacts,
+    [int]$WorkspaceIdSeed = 1000
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +40,11 @@ if ($KeepArtifacts) {
 
 $env:NCF_BASE_URL = $BaseUrl
 Write-Host "[Target URL] $BaseUrl" -ForegroundColor Gray
+
+if (-not $env:NCF_WORKSPACE_ID_SEED) {
+    $env:NCF_WORKSPACE_ID_SEED = $WorkspaceIdSeed.ToString()
+}
+Write-Host "[Workspace ID Seed] $env:NCF_WORKSPACE_ID_SEED" -ForegroundColor Gray
 
 Write-Host "`n[Prep] Cleaning any stale NightCodeForge processes and test databases..." -ForegroundColor Gray
 Get-Process -Name dotnet -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -match "NightCodeForge" } | Stop-Process -Force -ErrorAction SilentlyContinue

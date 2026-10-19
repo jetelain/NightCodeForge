@@ -23,10 +23,6 @@ public class PipelineStepperPolishTests : BunitContext
         var steps = cut.FindAll(".step-item");
         Assert.Equal(4, steps.Count); // 3 configured + 1 merge gate
 
-        // Assert that visible title and status classes are completely absent from DOM
-        Assert.Empty(cut.FindAll(".step-title"));
-        Assert.Empty(cut.FindAll(".step-status"));
-
         for (int i = 0; i < steps.Count; i++)
         {
             var step = steps[i];

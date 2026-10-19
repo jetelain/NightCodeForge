@@ -23,6 +23,8 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
     private SyntheticRepoFixture _repo = default!;
     private Process? _webServerProcess;
     private readonly string _baseUrl = Environment.GetEnvironmentVariable("NCF_BASE_URL") ?? "http://127.0.0.1:5272";
+    private readonly string _workspaceSeed = Environment.GetEnvironmentVariable(NightCodeForge.Infrastructure.Data.AppDbContext.WorkspaceIdSeedEnvironmentVariable) 
+        ?? NightCodeForge.Infrastructure.Data.AppDbContext.DefaultE2EWorkspaceIdSeed.ToString();
 
     public AutonomousFeatureLifecycleTests(ITestOutputHelper output)
     {
@@ -31,6 +33,12 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        // Ensure NCF_WORKSPACE_ID_SEED is set in the test runner environment
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(NightCodeForge.Infrastructure.Data.AppDbContext.WorkspaceIdSeedEnvironmentVariable)))
+        {
+            Environment.SetEnvironmentVariable(NightCodeForge.Infrastructure.Data.AppDbContext.WorkspaceIdSeedEnvironmentVariable, _workspaceSeed);
+        }
+
         // 1. Initialize synthetic repository fixture
         _repo = new SyntheticRepoFixture();
         await _repo.InitializeAsync();
@@ -127,6 +135,18 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
         await finishBtn.WaitForAsync(new LocatorWaitForOptions { Timeout = 45000 });
         await finishBtn.ClickAsync();
         await _page.WaitForTimeoutAsync(1000);
+
+        // Verify seeded workspace ID to ensure no collision with real workspaces
+        var wsDropdown = _page.Locator("select.workspace-dropdown");
+        if (await wsDropdown.CountAsync() > 0)
+        {
+            var activeWsVal = await wsDropdown.First.InputValueAsync();
+            if (int.TryParse(activeWsVal, out var activeWsId) && int.TryParse(_workspaceSeed, out var expectedMinId))
+            {
+                _output.WriteLine($"[E2E] Provisioned workspace ID: {activeWsId} (minimum expected seed: {expectedMinId})");
+                Assert.True(activeWsId >= expectedMinId, $"Workspace ID {activeWsId} should be >= seed {expectedMinId}");
+            }
+        }
 
         // =============================================================
         // Step 2: Use Ideation to Plan a Task
@@ -315,6 +335,7 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        psi.Environment[NightCodeForge.Infrastructure.Data.AppDbContext.WorkspaceIdSeedEnvironmentVariable] = _workspaceSeed;
 
         var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../.."));
         var logDir = Path.Combine(repoRoot, "artifacts");

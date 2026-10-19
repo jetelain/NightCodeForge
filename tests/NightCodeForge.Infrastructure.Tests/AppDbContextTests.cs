@@ -978,5 +978,145 @@ public class AppDbContextTests : IDisposable
             Assert.Equal(2, reloadedTask.Questions.Count);
         }
     }
+
+    [Fact]
+    public async Task SeedWorkspaceIdSequenceAsync_EmptyTable_SeedsSequenceAndNextInsertedWorkspaceUsesSeedId()
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var context = new AppDbContext(options);
+        await context.Database.EnsureCreatedAsync();
+
+        const int targetNextId = 1000;
+        await context.SeedWorkspaceIdSequenceAsync(targetNextId);
+
+        var ws = new Workspace { Name = "FirstWS", RepositoryPath = "/path/first" };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        Assert.Equal(targetNextId, ws.Id);
+
+        var ws2 = new Workspace { Name = "SecondWS", RepositoryPath = "/path/second" };
+        context.Workspaces.Add(ws2);
+        await context.SaveChangesAsync();
+
+        Assert.Equal(targetNextId + 1, ws2.Id);
+    }
+
+    [Fact]
+    public async Task SeedWorkspaceIdSequenceAsync_ExistingRowsWithLowerId_BumpsSequenceToSeed()
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var context = new AppDbContext(options);
+        await context.Database.EnsureCreatedAsync();
+
+        // Normal insert starts at 1
+        var ws1 = new Workspace { Name = "NormalWS", RepositoryPath = "/path/normal" };
+        context.Workspaces.Add(ws1);
+        await context.SaveChangesAsync();
+        Assert.Equal(1, ws1.Id);
+
+        // Bump sequence to 5000
+        const int targetNextId = 5000;
+        await context.SeedWorkspaceIdSequenceAsync(targetNextId);
+
+        var ws2 = new Workspace { Name = "SeededWS", RepositoryPath = "/path/seeded" };
+        context.Workspaces.Add(ws2);
+        await context.SaveChangesAsync();
+        Assert.Equal(targetNextId, ws2.Id);
+    }
+
+    [Fact]
+    public async Task SeedWorkspaceIdSequenceAsync_ExistingRowsWithHigherId_PreservesHigherSequence()
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var context = new AppDbContext(options);
+        await context.Database.EnsureCreatedAsync();
+
+        // Seed to 10000 first
+        await context.SeedWorkspaceIdSequenceAsync(10000);
+        var ws1 = new Workspace { Name = "HighWS", RepositoryPath = "/path/high" };
+        context.Workspaces.Add(ws1);
+        await context.SaveChangesAsync();
+        Assert.Equal(10000, ws1.Id);
+
+        // Seed with a lower value (e.g. 500) - must preserve existing sequence (>= 10000)
+        await context.SeedWorkspaceIdSequenceAsync(500);
+
+        var ws2 = new Workspace { Name = "NextWS", RepositoryPath = "/path/next" };
+        context.Workspaces.Add(ws2);
+        await context.SaveChangesAsync();
+        Assert.Equal(10001, ws2.Id);
+    }
+
+    [Fact]
+    public async Task SeedWorkspaceIdSequenceAsync_MultipleInvocations_DoesNotInsertDuplicateRows()
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var context = new AppDbContext(options);
+        await context.Database.EnsureCreatedAsync();
+
+        await context.SeedWorkspaceIdSequenceAsync(1000);
+        await context.SeedWorkspaceIdSequenceAsync(1000);
+        await context.SeedWorkspaceIdSequenceAsync(1000);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'Workspaces';";
+        var count = Convert.ToInt64(await cmd.ExecuteScalarAsync());
+        Assert.Equal(1, count);
+    }
+
+    [Fact]
+    public async Task EnsureDatabaseCreatedAndWalAsync_WhenEnvVarSet_AppliesSeedAutomatically()
+    {
+        var prevEnv = Environment.GetEnvironmentVariable(AppDbContext.WorkspaceIdSeedEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(AppDbContext.WorkspaceIdSeedEnvironmentVariable, "2500");
+
+            using var connection = new SqliteConnection("DataSource=:memory:");
+            await connection.OpenAsync();
+
+            var options = new DbContextOptionsBuilder<AppDbContext>()
+                .UseSqlite(connection)
+                .Options;
+
+            await using var context = new AppDbContext(options);
+            await context.EnsureDatabaseCreatedAndWalAsync();
+
+            var ws = new Workspace { Name = "EnvSeededWS", RepositoryPath = "/path/env" };
+            context.Workspaces.Add(ws);
+            await context.SaveChangesAsync();
+
+            Assert.Equal(2500, ws.Id);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AppDbContext.WorkspaceIdSeedEnvironmentVariable, prevEnv);
+        }
+    }
 }
 

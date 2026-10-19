@@ -125,9 +125,7 @@ public sealed class SyntheticEnvironment : IAsyncDisposable
             // 4. Seed sqlite_sequence so generated Workspace IDs start at 1,000,000
             // This prevents ID and path collisions with real NightCodeForge workspaces (~/.nightcodeforge/wks/{id})
             const int baseWorkspaceId = 1_000_000;
-            await db.Database.ExecuteSqlRawAsync(
-                $"INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES ('Workspaces', {baseWorkspaceId});",
-                cancellationToken);
+            await db.SeedWorkspaceIdSequenceAsync(baseWorkspaceId + 1, cancellationToken);
 
             Workspace = new Workspace
             {

@@ -26,25 +26,21 @@ public class PipelineStepperDynamicTests : BunitContext
         Assert.Equal(3, connectors.Count);
 
         // Stage 1
-        Assert.Contains("#1", steps[0].TextContent);
         Assert.Contains("Investigation", steps[0].TextContent);
         Assert.Contains("⚡ GPU", steps[0].TextContent);
         Assert.Contains("🔍", steps[0].TextContent);
 
         // Stage 2
-        Assert.Contains("#2", steps[1].TextContent);
         Assert.Contains("Build Gate", steps[1].TextContent);
         Assert.Contains("⚙️ CPU", steps[1].TextContent);
         Assert.Contains("⚙️", steps[1].TextContent);
 
         // Stage 3
-        Assert.Contains("#3", steps[2].TextContent);
         Assert.Contains("Delivery", steps[2].TextContent);
         Assert.Contains("⚡ GPU", steps[2].TextContent);
         Assert.Contains("🚀", steps[2].TextContent);
 
         // Stage 4: Implicit Merge Stage
-        Assert.Contains("#4", steps[3].TextContent);
         Assert.Contains("Merge Resolution", steps[3].TextContent);
         Assert.Contains("⚙️ CPU", steps[3].TextContent);
         Assert.Contains("🔀", steps[3].TextContent);

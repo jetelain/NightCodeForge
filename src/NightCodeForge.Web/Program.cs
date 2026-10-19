@@ -47,6 +47,13 @@ using (var scope = app.Services.CreateScope())
     var dbContext = scope.ServiceProvider.GetRequiredService<NightCodeForge.Infrastructure.Data.AppDbContext>();
     await dbContext.EnsureDatabaseCreatedAndWalAsync();
 
+    var configSeed = builder.Configuration[NightCodeForge.Infrastructure.Data.AppDbContext.WorkspaceIdSeedEnvironmentVariable]
+        ?? builder.Configuration["WorkspaceIdSeed"];
+    if (int.TryParse(configSeed, out var nextWsId) && nextWsId > 1)
+    {
+        await dbContext.SeedWorkspaceIdSequenceAsync(nextWsId);
+    }
+
     var defaultModel = builder.Configuration["LlmProvider:ModelId"] ?? "Qwen3.8-27B:latest";
     await dbContext.EnsureDefaultGlobalAgentProfilesAsync(defaultModel);
     await dbContext.EnsureDefaultWorkflowsAsync();

@@ -371,8 +371,18 @@ public class AppDbContext : DbContext
     }
 
     /// <summary>
+    /// Environment variable used to seed the SQLite autoincrement sequence for Workspaces (e.g. in E2E tests).
+    /// </summary>
+    public const string WorkspaceIdSeedEnvironmentVariable = "NCF_WORKSPACE_ID_SEED";
+
+    /// <summary>
+    /// Default workspace ID seed used in end-to-end tests to avoid colliding with user/production workspaces.
+    /// </summary>
+    public const int DefaultE2EWorkspaceIdSeed = 1_001_000;
+
+    /// <summary>
     /// Ensures the database schema is created and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
-    /// In early development, schema changes are handled via database recreation. EF Core migrations will be adopted for production releases.
+    /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
     public async Task EnsureDatabaseCreatedAndWalAsync(CancellationToken cancellationToken = default)
     {
@@ -382,6 +392,58 @@ public class AppDbContext : DbContext
             await Database.ExecuteSqlRawAsync("PRAGMA journal_mode = WAL;", cancellationToken);
             await Database.ExecuteSqlRawAsync("PRAGMA synchronous = NORMAL;", cancellationToken);
             await Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = ON;", cancellationToken);
+
+            await ApplyWorkspaceIdSeedIfConfiguredAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Reads the workspace ID seed from the environment variable (or fallback) if set, and seeds sqlite_sequence.
+    /// </summary>
+    public async Task ApplyWorkspaceIdSeedIfConfiguredAsync(CancellationToken cancellationToken = default)
+    {
+        var rawValue = Environment.GetEnvironmentVariable(WorkspaceIdSeedEnvironmentVariable);
+
+        if (!string.IsNullOrWhiteSpace(rawValue) && int.TryParse(rawValue, out var nextId) && nextId > 1)
+        {
+            await SeedWorkspaceIdSequenceAsync(nextId, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Seeds the SQLite autoincrement sequence for Workspaces so that the next generated Workspace ID is at least <paramref name="nextId"/>.
+    /// In SQLite, autoincrement sequence values are tracked in the internal table 'sqlite_sequence' as nextId - 1.
+    /// Handles both unseeded/empty tables (where no row exists in sqlite_sequence) and existing tables.
+    /// </summary>
+    public async Task SeedWorkspaceIdSequenceAsync(int nextId, CancellationToken cancellationToken = default)
+    {
+        if (!Database.IsSqlite())
+        {
+            return;
+        }
+
+        if (nextId <= 1)
+        {
+            return;
+        }
+
+        const string tableName = "Workspaces";
+        var sequenceValue = nextId - 1;
+
+        // Try updating existing sequence row if it is smaller than sequenceValue
+        var rowsUpdated = await Database.ExecuteSqlRawAsync(
+            "UPDATE sqlite_sequence SET seq = MAX(seq, {0}) WHERE name = {1};",
+            new object[] { sequenceValue, tableName },
+            cancellationToken);
+
+        if (rowsUpdated == 0)
+        {
+            // If the row does not exist yet (table is newly created or empty), insert it.
+            // Using NOT EXISTS ensures we don't insert a duplicate row if seq was already >= sequenceValue.
+            await Database.ExecuteSqlRawAsync(
+                "INSERT INTO sqlite_sequence (name, seq) SELECT {0}, {1} WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = {0});",
+                new object[] { tableName, sequenceValue },
+                cancellationToken);
         }
     }
 
