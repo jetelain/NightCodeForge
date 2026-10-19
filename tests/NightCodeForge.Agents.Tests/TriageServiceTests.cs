@@ -57,7 +57,15 @@ public class TriageServiceTests : IDisposable
     {
         if (Directory.Exists(_tempDir))
         {
-            try { Directory.Delete(_tempDir, true); } catch { }
+            try
+            {
+                Directory.Delete(_tempDir, true);
+            }
+            catch (Exception ex)
+            {
+                // Justification: Best-effort test temp directory cleanup
+                _ = ex.Message;
+            }
         }
     }
 
@@ -99,6 +107,7 @@ public class TriageServiceTests : IDisposable
         Assert.Equal(AgentMode.ReadOnly, capturedContext.RequiredMode);
         Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, capturedContext.Profile.SecurityTier);
         Assert.Equal("main", capturedContext.ForgeTask.BaseBranch);
+        Assert.Equal(TaskPriority.Critical, capturedContext.ForgeTask.Priority);
 
         Assert.Single(result);
         var created = result[0];

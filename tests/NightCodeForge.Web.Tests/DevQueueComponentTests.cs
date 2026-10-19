@@ -1,5 +1,6 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Web.Components.DevQueue;
@@ -138,6 +139,19 @@ public class DevQueueComponentTests : BunitContext
     }
 
     [Fact]
+    public void DevQueuePage_SortByPriority_CallsServiceAndShowsToast()
+    {
+        var cut = Render<DevQueue>();
+
+        var sortBtn = cut.Find("#sort-priority-btn");
+        Assert.NotNull(sortBtn);
+        sortBtn.Click();
+
+        Assert.Equal(1, _queueService.ReorderCallsCount);
+        Assert.Contains(_toastService.Toasts, t => t.Title == "Queue Reordered");
+    }
+
+    [Fact]
     public void DevQueuePage_AllowsCancellingJob()
     {
         _queueService.Snapshot = new DevQueueSnapshot(
@@ -206,6 +220,26 @@ public class DevQueueComponentTests : BunitContext
 
         Assert.Contains("No pending tasks in GPU queue", cut.Markup);
         Assert.Empty(cut.FindAll("#sequential-queue-table"));
+    }
+
+    [Fact]
+    public void DevQueueTable_WhenCriticalOrUrgentJob_RendersUrgentBadge_AndHidesPromoteButton()
+    {
+        var jobs = new List<QueuedJobItem>
+        {
+            new("job-urgent", "llm-urgent", 101, "Urgent Task", "Impl", DateTime.UtcNow, "Queued", TaskPriority.Critical),
+            new("job-inference", "llm-inference", 102, "Standard Task", "Review", DateTime.UtcNow, "Queued", TaskPriority.Normal)
+        };
+
+        var cut = Render<DevQueueTable>(p => p.Add(x => x.Jobs, jobs));
+
+        // Urgent job has P1 (URGENT) badge and NO promote button
+        Assert.Contains("🚨 P1 (URGENT)", cut.Markup);
+        Assert.Empty(cut.FindAll("#prioritize-btn-job-urgent"));
+
+        // Standard inference job has P3 (NORMAL) badge and HAS promote button
+        Assert.Contains("P3 (NORMAL)", cut.Markup);
+        Assert.NotEmpty(cut.FindAll("#prioritize-btn-job-inference"));
     }
 
     [Fact]
@@ -287,6 +321,15 @@ public class DevQueueComponentTests : BunitContext
             LastRescheduledTaskId = taskId;
             LastRescheduledRestartPipeline = restartPipeline;
             return Task.FromResult(true);
+        }
+
+        public int ReorderCallsCount { get; private set; }
+        public int ReorderReturnCount { get; set; } = 2;
+
+        public Task<int> ReorderInferenceQueueByPriorityAsync(CancellationToken cancellationToken = default)
+        {
+            ReorderCallsCount++;
+            return Task.FromResult(ReorderReturnCount);
         }
     }
 

@@ -72,7 +72,7 @@ public class TriageService : ITriageService
             FeatureBranch = baseBranch,
             CurrentStageId = StandardStageIds.Triage,
             Status = TaskOverallStatus.Suggested,
-            Priority = 1,
+            Priority = TaskPriority.Critical,
             MergeMode = MergeMode.ManualReviewRequired,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
@@ -129,7 +129,7 @@ public class TriageService : ITriageService
                     Status = TaskOverallStatus.Suggested,
                     MergeMode = MergeMode.ManualReviewRequired,
                     BaseBranch = baseBranch,
-                    Priority = 1,
+                    Priority = p.Priority > 0 ? p.Priority : TaskPriority.Normal,
                     CurrentStageId = StandardStageIds.TaskReview,
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow

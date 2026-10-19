@@ -17,11 +17,11 @@
                     @bind="Proposal.Priority" 
                     disabled="@Proposal.IsAdded"
                     aria-label="Task Priority">
-                <option value="1">1 - Critical</option>
-                <option value="2">2 - High</option>
-                <option value="3">3 - Medium</option>
-                <option value="4">4 - Normal</option>
-                <option value="5">5 - Low</option>
+                <option value="@TaskPriority.Critical">1 - Critical / Urgent (Highest)</option>
+                <option value="@TaskPriority.High">2 - High</option>
+                <option value="@TaskPriority.Normal">3 - Normal (Default)</option>
+                <option value="@TaskPriority.Low">4 - Low</option>
+                <option value="@TaskPriority.Trivial">5 - Lowest / Trivial</option>
             </select>
         </div>
     </div>

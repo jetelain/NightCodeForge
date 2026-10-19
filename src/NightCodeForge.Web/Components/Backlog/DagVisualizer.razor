@@ -449,19 +449,21 @@
 
     private static string GetPriorityBg(int priority) => priority switch
     {
-        5 => "rgba(239, 68, 68, 0.3)",
-        4 => "rgba(249, 115, 22, 0.3)",
-        3 => "rgba(245, 158, 11, 0.3)",
-        2 => "rgba(99, 102, 241, 0.3)",
+        TaskPriority.Critical => "rgba(239, 68, 68, 0.3)",
+        TaskPriority.High => "rgba(249, 115, 22, 0.3)",
+        TaskPriority.Normal => "rgba(59, 130, 246, 0.3)",
+        TaskPriority.Low => "rgba(100, 116, 139, 0.25)",
+        TaskPriority.Trivial => "rgba(71, 85, 105, 0.25)",
         _ => "rgba(100, 116, 139, 0.25)"
     };
 
     private static string GetPriorityText(int priority) => priority switch
     {
-        5 => "#fca5a5",
-        4 => "#fdba74",
-        3 => "#fde68a",
-        2 => "#c7d2fe",
+        TaskPriority.Critical => "#fca5a5",
+        TaskPriority.High => "#fed7aa",
+        TaskPriority.Normal => "#93c5fd",
+        TaskPriority.Low => "#cbd5e1",
+        TaskPriority.Trivial => "#94a3b8",
         _ => "#94a3b8"
     };
 

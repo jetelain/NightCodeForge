@@ -782,7 +782,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
                     proposals.Add(new IdeationProposal(
                         p.Title ?? "Untitled Proposal",
                         p.Description ?? string.Empty,
-                        p.Priority <= 0 ? 1 : p.Priority,
+                        p.Priority <= 0 ? TaskPriority.Normal : p.Priority,
                         deps));
                 }
             }

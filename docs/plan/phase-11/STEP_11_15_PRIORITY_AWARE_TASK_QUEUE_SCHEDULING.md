@@ -2,7 +2,7 @@
 
 > **Phase 11 Implementation Step (Post-MVP - Top Priority)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
-> *Project Target:* `src/NightCodeForge.Core/Workflow`, `src/NightCodeForge.Infrastructure/BackgroundJobs`, `src/NightCodeForge.Web/Services`, `src/NightCodeForge.Web/Components/DevQueue` | *Status:* Planned
+> *Project Target:* `src/NightCodeForge.Core/Workflow`, `src/NightCodeForge.Infrastructure/BackgroundJobs`, `src/NightCodeForge.Web/Services`, `src/NightCodeForge.Web/Components/DevQueue` | *Status:* Completed
 
 ---
 
@@ -114,19 +114,19 @@ In [DevQueueTable.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCode
 
 ## 4. Implementation Checklist & Deliverables
 
-- [ ] **Domain Defaults & Enums:**
+- [x] **Domain Defaults & Enums:**
   - Change default priority in [ForgeTask.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/ForgeTask.cs) and [TaskProposal](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/ForgeTask.cs) to `3` (Normal).
   - Add `TaskPriority` constants/helper class defining `1 = Critical`, `2 = High`, `3 = Normal`, `4 = Low`, `5 = Trivial`.
-- [ ] **DAG Orchestrator Cascade Ordering:**
+- [x] **DAG Orchestrator Cascade Ordering:**
   - Update `TaskOrchestrator.cs` cascade unblocking loop to sort unblocked tasks by `Priority ASC, CreatedAt ASC`.
   - Dispatch Priority 1 unblocked tasks directly to `llm-urgent`.
-- [ ] **UI Dropdowns & Badges:**
+- [x] **UI Dropdowns & Badges:**
   - Update priority dropdown options in `TaskCreationModal.razor` and `MaintainerPromotionModal.razor`.
   - Update priority badges in `KanbanCard.razor`, `TaskDetailDrawer.razor`, and `DevQueueTable.razor` matching the new colors.
-- [ ] **DevQueue Re-Ordering Service:**
+- [x] **DevQueue Re-Ordering Service:**
   - Add `ReorderInferenceQueueByPriorityAsync` in `DevQueueService`.
   - Add "Sort by Priority" button in `DevQueue.razor`.
-- [ ] **Tests:**
+- [x] **Tests:**
   - Unit test verifying unblocked DAG cascade schedules tasks in `Priority ASC` order.
   - Unit test verifying P1 tasks enqueue to `llm-urgent`.
   - Scenario test ensuring a P1 task executes ahead of previously queued P3 tasks.

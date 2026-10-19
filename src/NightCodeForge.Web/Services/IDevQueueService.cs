@@ -35,4 +35,11 @@ public interface IDevQueueService
     /// Reschedules a task to run again, either retrying the current stage or restarting the entire pipeline from scratch.
     /// </summary>
     Task<bool> RescheduleTaskAsync(int taskId, bool restartPipeline = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Re-sequences waiting jobs in the Hangfire inference queue strictly by Priority ASC (1 Highest -> 5 Lowest),
+    /// dispatching any Priority 1 tasks directly to the llm-urgent queue.
+    /// Returns the number of jobs reordered/rescheduled.
+    /// </summary>
+    Task<int> ReorderInferenceQueueByPriorityAsync(CancellationToken cancellationToken = default);
 }

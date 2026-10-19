@@ -657,6 +657,9 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             LastRescheduledRestartPipeline = restartPipeline;
             return Task.FromResult(true);
         }
+
+        public Task<int> ReorderInferenceQueueByPriorityAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(0);
     }
 
     private class FakeTaskReviewService : ITaskReviewService

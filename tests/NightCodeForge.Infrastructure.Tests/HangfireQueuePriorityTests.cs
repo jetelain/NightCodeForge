@@ -57,6 +57,37 @@ public class HangfireQueuePriorityTests
     }
 
     [Fact]
+    public async Task HangfireQueue_P1CriticalTask_ExecutesAheadOfPreviouslyQueuedP3Tasks()
+    {
+        var storage = new MemoryStorage();
+        var client = new BackgroundJobClient(storage);
+
+        TestJobTarget.ExecutionOrder.Clear();
+
+        // Enqueue standard P3 tasks first into inference queue
+        client.Create(() => TestJobTarget.RecordJob("P3-Task-101"), new EnqueuedState(HangfireQueues.LlmInference));
+        client.Create(() => TestJobTarget.RecordJob("P3-Task-102"), new EnqueuedState(HangfireQueues.LlmInference));
+
+        // Enqueue P1 Critical task later into urgent queue
+        client.Create(() => TestJobTarget.RecordJob("P1-Critical-Task-999"), new EnqueuedState(HangfireQueues.LlmUrgent));
+
+        var options = HangfireConfigurationExtensions.CreateLlmInferenceServerOptions();
+        using var server = new BackgroundJobServer(options, storage);
+
+        var timeout = DateTime.UtcNow.AddSeconds(10);
+        while (TestJobTarget.ExecutionOrder.Count < 3 && DateTime.UtcNow < timeout)
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.Equal(3, TestJobTarget.ExecutionOrder.Count);
+        // P1 Critical task MUST execute first even though it was enqueued after P3 tasks
+        Assert.Equal("P1-Critical-Task-999", TestJobTarget.ExecutionOrder[0]);
+        Assert.Contains("P3-Task-101", TestJobTarget.ExecutionOrder.Skip(1));
+        Assert.Contains("P3-Task-102", TestJobTarget.ExecutionOrder.Skip(1));
+    }
+
+    [Fact]
     public async Task HangfireQueue_StrictSingleWorkerConcurrency_NeverExecutesConcurrently()
     {
         var storage = new MemoryStorage();

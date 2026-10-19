@@ -345,7 +345,7 @@ public class TaskOrchestratorTests
         Assert.NotNull(proposal);
         Assert.Equal(TaskOverallStatus.Suggested, proposal.Status);
         Assert.Equal("Found memory leak in parser", proposal.Description);
-        Assert.Equal(1, proposal.Priority);
+        Assert.Equal(TaskPriority.Normal, proposal.Priority);
     }
 
     [Fact]

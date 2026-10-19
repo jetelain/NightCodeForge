@@ -15,7 +15,7 @@ public class ForgeTask
     public string? InterruptedAgentProfileId { get; set; }
     public string? InterruptedStageId { get; set; }
     public string CurrentStageId { get; set; } = string.Empty;
-    public int Priority { get; set; } = 1;
+    public int Priority { get; set; } = TaskPriority.Normal;
     public string BaseBranch { get; set; } = "main";
     public string FeatureBranch { get; set; } = string.Empty;
     public string? PipelineDataJson { get; set; }
@@ -50,7 +50,7 @@ public record TaskProposal
         string? type = "feature",
         IReadOnlyList<string>? affectedFiles = null,
         IReadOnlyList<string>? acceptanceCriteria = null,
-        int priority = 1,
+        int priority = TaskPriority.Normal,
         IReadOnlyList<string>? dependsOnTitles = null)
     {
         Title = title;
@@ -72,7 +72,7 @@ public record TaskProposal
     public string? Type { get; init; } = "feature";
     public IReadOnlyList<string>? AffectedFiles { get; init; }
     public IReadOnlyList<string>? AcceptanceCriteria { get; init; }
-    public int Priority { get; init; } = 1;
+    public int Priority { get; init; } = TaskPriority.Normal;
     public IReadOnlyList<string>? DependsOnTitles { get; init; }
 }
 

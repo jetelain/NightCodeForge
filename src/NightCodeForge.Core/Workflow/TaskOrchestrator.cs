@@ -667,7 +667,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     Status = TaskOverallStatus.Suggested,
                     MergeMode = MergeMode.ManualReviewRequired,
                     BaseBranch = workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch,
-                    Priority = 1,
+                    Priority = p.Priority > 0 ? p.Priority : TaskPriority.Normal,
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
                 };
@@ -993,8 +993,15 @@ public class TaskOrchestrator : ITaskOrchestrator
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
                 await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
 
-                // Enqueue next stage to standard inference queue
-                _jobQueue.EnqueueInference(task.Id);
+                // Enqueue next stage with priority routing (P1 to llm-urgent, others to llm-inference)
+                if (task.Priority == TaskPriority.Critical)
+                {
+                    _jobQueue.EnqueueUrgent(task.Id);
+                }
+                else
+                {
+                    _jobQueue.EnqueueInference(task.Id);
+                }
             }
             else
             {
@@ -1390,7 +1397,14 @@ public class TaskOrchestrator : ITaskOrchestrator
             var isReady = await _dependencyEngine.IsReadyForExecutionAsync(task.Id, cancellationToken);
             if (isReady)
             {
-                _jobQueue.EnqueueInference(task.Id);
+                if (task.Priority == TaskPriority.Critical)
+                {
+                    _jobQueue.EnqueueUrgent(task.Id);
+                }
+                else
+                {
+                    _jobQueue.EnqueueInference(task.Id);
+                }
             }
         }
         else if (targetStatus == TaskOverallStatus.Rejected)
@@ -1504,10 +1518,36 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         // 3. Cascade unblocking to dependent DAG tasks
         var unblocked = await _dependencyEngine.ResolveCascadeUnblockedTasksAsync(task.Id);
-        foreach (var unblockedId in unblocked)
+        if (unblocked.Count > 0)
         {
-            _logger.LogInformation("ForgeTask #{PrereqId} completed; unblocked dependent task #{UnblockedId}.", task.Id, unblockedId);
-            _jobQueue.EnqueueInference(unblockedId);
+            var unblockedTasks = await _taskRepository.GetByIdsAsync(unblocked, cancellationToken);
+            var orderedUnblocked = unblockedTasks
+                .OrderBy(t => t.Priority)     // 1 (Highest) first
+                .ThenBy(t => t.CreatedAt)    // Older tasks first on priority tie
+                .ToList();
+
+            foreach (var unblockedTask in orderedUnblocked)
+            {
+                _logger.LogInformation(
+                    "ForgeTask #{PrereqId} completed; unblocked dependent task #{UnblockedId} (Priority: {Priority}).",
+                    task.Id, unblockedTask.Id, unblockedTask.Priority);
+
+                if (unblockedTask.Priority == TaskPriority.Critical)
+                {
+                    _jobQueue.EnqueueUrgent(unblockedTask.Id);
+                }
+                else
+                {
+                    _jobQueue.EnqueueInference(unblockedTask.Id);
+                }
+            }
+
+            var foundIds = unblockedTasks.Select(t => t.Id).ToHashSet();
+            foreach (var missingId in unblocked.Where(id => !foundIds.Contains(id)))
+            {
+                _logger.LogWarning("ForgeTask #{PrereqId} completed; unblocked dependent task #{UnblockedId} was not found in task repository.", task.Id, missingId);
+                _jobQueue.EnqueueInference(missingId);
+            }
         }
 
         await SyncMarkdownTaskSafeAsync(workspace, task, cancellationToken);

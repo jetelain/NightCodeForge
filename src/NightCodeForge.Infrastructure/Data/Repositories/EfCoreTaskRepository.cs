@@ -43,6 +43,24 @@ public class EfCoreTaskRepository : ITaskRepository
             .FirstOrDefaultAsync(i => i.Id == id, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<ForgeTask>> GetByIdsAsync(IEnumerable<int> ids, CancellationToken cancellationToken = default)
+    {
+        var idList = ids.Distinct().ToList();
+        if (idList.Count == 0) return Array.Empty<ForgeTask>();
+
+        return await _context.Tasks
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Include(i => i.Workflow)
+            .Include(i => i.Dependencies)
+            .Include(i => i.DependentTasks)
+            .Include(i => i.Questions)
+            .Include(i => i.ExecutionRecords)
+            .Include(i => i.ExecutionLogs)
+            .Where(i => idList.Contains(i.Id))
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<ForgeTask>> GetByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default)
     {
         return await _context.Tasks

@@ -10,7 +10,7 @@ public static class TaskSyncConstants
     public const string MarkdownPattern = "*.md";
     public const string MarkdownExtension = ".md";
     public const string ArchiveSegment = "archive";
-    public const int DefaultPriority = 1;
+    public const int DefaultPriority = TaskPriority.Normal;
 
     public const string InitialTaskCreation = "Initial task creation";
     public const string TaskCreatedFromDisk = "Task created from disk markdown";

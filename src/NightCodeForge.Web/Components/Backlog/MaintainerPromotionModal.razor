@@ -23,14 +23,14 @@
 
                 <div class="form-group">
                     <label for="priority-select" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
-                        Priority (1 = Standard, 5 = Critical Urgent)
+                        Priority
                     </label>
                     <select id="priority-select" class="form-control-dark" @bind="_selectedPriority" disabled="@_isSubmitting">
-                        <option value="1">1 - Low / Standard</option>
-                        <option value="2">2 - Normal</option>
-                        <option value="3">3 - High</option>
-                        <option value="4">4 - Very High</option>
-                        <option value="5">5 - Critical / Urgent</option>
+                        <option value="1">1 - Critical / Urgent (Highest)</option>
+                        <option value="2">2 - High</option>
+                        <option value="3">3 - Normal (Default)</option>
+                        <option value="4">4 - Low</option>
+                        <option value="5">5 - Lowest / Trivial</option>
                     </select>
                 </div>
 
@@ -71,7 +71,7 @@
     [Parameter] public EventCallback OnClosed { get; set; }
     [Parameter] public EventCallback OnPromoted { get; set; }
 
-    private int _selectedPriority = 1;
+    private int _selectedPriority = TaskPriority.Normal;
     private MergeMode _selectedMergeMode = MergeMode.Automatic;
     private bool _isSubmitting;
 
@@ -79,7 +79,7 @@
     {
         if (TargetTask != null)
         {
-            _selectedPriority = TargetTask.Priority > 0 ? TargetTask.Priority : 1;
+            _selectedPriority = TargetTask.Priority > 0 ? TargetTask.Priority : TaskPriority.Normal;
             _selectedMergeMode = TargetTask.MergeMode;
         }
     }

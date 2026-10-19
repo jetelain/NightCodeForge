@@ -212,6 +212,9 @@ public class TaskInspectorPageTests : BunitContext
 
         public Task<bool> RescheduleTaskAsync(int taskId, bool restartPipeline = false, CancellationToken cancellationToken = default)
             => Task.FromResult(true);
+
+        public Task<int> ReorderInferenceQueueByPriorityAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(0);
     }
 
     private class FakeTaskReviewService : ITaskReviewService

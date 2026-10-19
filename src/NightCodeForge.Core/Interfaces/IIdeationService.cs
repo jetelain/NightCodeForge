@@ -5,7 +5,7 @@ namespace NightCodeForge.Core.Interfaces;
 public record IdeationProposal(
     string Title,
     string Description,
-    int Priority = 1,
+    int Priority = TaskPriority.Normal,
     IReadOnlyList<string>? DependsOnTitles = null);
 
 public record IdeationToolCallInfo(

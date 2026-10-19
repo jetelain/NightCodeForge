@@ -8,7 +8,9 @@
             <span class="task-id-badge font-mono">#@Task.Id</span>
         </div>
         <div class="task-proposal-actions">
-            <span class="badge-tag priority-badge">P@(Task.Priority)</span>
+            <span class="forge-badge badge-priority-@Task.Priority" title="@TaskPriority.GetLabel(Task.Priority)">
+                P@(Task.Priority)
+            </span>
             <a href="/backlog" class="forge-btn forge-btn-outline btn-xs" title="Open Backlog Kanban">
                 Open in Backlog ➔
             </a>

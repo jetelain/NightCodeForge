@@ -655,7 +655,7 @@ public partial class CanonicalTools
             var effectiveTitle = !string.IsNullOrWhiteSpace(title) && !string.Equals(title.Trim(), "Task", StringComparison.OrdinalIgnoreCase)
                 ? title.Trim()
                 : DeriveTitleFromDescription(description);
-            discovered.Add(new TaskProposal(effectiveTitle, description ?? string.Empty, priority ?? 1));
+            discovered.Add(new TaskProposal(effectiveTitle, description ?? string.Empty, priority ?? TaskPriority.Normal));
         }
 
         if (tasks != null)
@@ -783,7 +783,7 @@ public partial class CanonicalTools
             title = DeriveTitleFromDescription(desc);
         }
 
-        int priority = 1;
+        int priority = TaskPriority.Normal;
         if (item.TryGetProperty("priority", out var p) && p.TryGetInt32(out var pVal))
         {
             priority = pVal;

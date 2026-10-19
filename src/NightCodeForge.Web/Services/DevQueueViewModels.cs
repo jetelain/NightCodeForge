@@ -1,3 +1,4 @@
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Web.Services;
@@ -12,6 +13,7 @@ namespace NightCodeForge.Web.Services;
 /// <param name="StageId">Current workflow stage or job type.</param>
 /// <param name="EnqueuedAt">Timestamp when the job was enqueued.</param>
 /// <param name="Status">Display status ('Urgent', 'Queued', 'Running', 'Failed').</param>
+/// <param name="Priority">Task priority level (1 = Critical, 2 = High, 3 = Normal, 4 = Low, 5 = Trivial).</param>
 public record QueuedJobItem(
     string JobId,
     string QueueName,
@@ -19,7 +21,8 @@ public record QueuedJobItem(
     string TaskTitle,
     string StageId,
     DateTime EnqueuedAt,
-    string Status);
+    string Status,
+    int Priority = TaskPriority.Normal);
 
 /// <summary>
 /// Consolidated snapshot of all dev-queues, active jobs, and concurrency locks.

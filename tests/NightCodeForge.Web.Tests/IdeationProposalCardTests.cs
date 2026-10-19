@@ -184,4 +184,31 @@ public class IdeationProposalCardTests : BunitContext
         Assert.NotNull(dismissedProposal);
         Assert.Same(proposal, dismissedProposal);
     }
+
+    [Fact]
+    public void PrioritySelect_ContainsAllFiveStandardPriorityLevelsAndLabels()
+    {
+        var proposal = new IdeationProposalViewModel { Title = "Priority Test" };
+
+        var cut = Render<IdeationProposalCard>(parameters => parameters
+            .Add(p => p.Proposal, proposal));
+
+        var options = cut.FindAll("select.proposal-priority-select option");
+        Assert.Equal(5, options.Count);
+
+        Assert.Equal("1", options[0].GetAttribute("value"));
+        Assert.Contains("Critical / Urgent", options[0].TextContent);
+
+        Assert.Equal("2", options[1].GetAttribute("value"));
+        Assert.Contains("High", options[1].TextContent);
+
+        Assert.Equal("3", options[2].GetAttribute("value"));
+        Assert.Contains("Normal", options[2].TextContent);
+
+        Assert.Equal("4", options[3].GetAttribute("value"));
+        Assert.Contains("Low", options[3].TextContent);
+
+        Assert.Equal("5", options[4].GetAttribute("value"));
+        Assert.Contains("Lowest / Trivial", options[4].TextContent);
+    }
 }

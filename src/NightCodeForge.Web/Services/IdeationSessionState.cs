@@ -109,7 +109,7 @@ public class IdeationProposalViewModel
     public Guid ClientId { get; } = Guid.NewGuid();
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
-    public int Priority { get; set; } = 1;
+    public int Priority { get; set; } = TaskPriority.Normal;
     public List<int> SelectedDependencyIds { get; set; } = new();
     public List<string> DependsOnTitles { get; set; } = new();
     public bool IsAdded { get; set; }
@@ -122,7 +122,7 @@ public class IdeationProposalViewModel
         {
             Title = proposal.Title ?? string.Empty,
             Description = proposal.Description ?? string.Empty,
-            Priority = proposal.Priority > 0 ? proposal.Priority : 1
+            Priority = proposal.Priority > 0 ? proposal.Priority : TaskPriority.Normal
         };
 
         if (proposal.DependsOnTitles != null)

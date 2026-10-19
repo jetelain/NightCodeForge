@@ -146,11 +146,11 @@ flowchart TD
   - [ ] Ensure all mutation channels (`TaskDetailDrawer`, `IdeationService`, `TaskOrchestrator`, `TaskMarkdownSyncService`) provide explicit `ChangedBy` and `ChangeReason`.
   - [ ] Build `TaskHistoryTimeline.razor` revision viewer with DiffPlex text diff comparison and embed in `TaskDetailDrawer.razor` and `TaskInspector.razor`.
 
-- [ ] **Step 11.15 (Priority-Aware Task Queue Scheduling & Ordering):**
-  - [ ] Update `TaskOrchestrator` cascade unblocking to query and sort unblocked tasks by `Priority ASC (1 -> 5), CreatedAt ASC`.
-  - [ ] Route Priority 1 (Critical) unblocked tasks directly to `llm-urgent`.
-  - [ ] Set default priority to `3` (Normal) across `ForgeTask`, `TaskCreationModal`, `MaintainerPromotionModal`, and `CanonicalTools`.
-  - [ ] Add queue priority sorting and manual head promotion in `DevQueueService` and `DevQueueTable.razor`.
+- [x] **Step 11.15 (Priority-Aware Task Queue Scheduling & Ordering):**
+  - [x] Update `TaskOrchestrator` cascade unblocking to query and sort unblocked tasks by `Priority ASC (1 -> 5), CreatedAt ASC`.
+  - [x] Route Priority 1 (Critical) unblocked tasks directly to `llm-urgent`.
+  - [x] Set default priority to `3` (Normal) across `ForgeTask`, `TaskCreationModal`, `MaintainerPromotionModal`, and `CanonicalTools`.
+  - [x] Add queue priority sorting and manual head promotion in `DevQueueService` and `DevQueueTable.razor`.
 
 - [ ] **Step 11.12 (Backlog Migration & Ideation Skills):**
   - [ ] Create `.nightcodeforge/skills/ncf-backlog-migrator/SKILL.md` with PR-sizing and decomposition rules.

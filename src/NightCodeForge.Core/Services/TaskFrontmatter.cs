@@ -1,3 +1,4 @@
+using NightCodeForge.Core.Domain;
 using YamlDotNet.Serialization;
 
 namespace NightCodeForge.Core.Services;
@@ -21,7 +22,7 @@ public class TaskFrontmatter
     [YamlMember(Alias = "waiting_for_human")]
     public bool WaitingForHuman { get; set; } = false;
 
-    public int Priority { get; set; } = 1;
+    public int Priority { get; set; } = TaskPriority.Normal;
     
     [YamlMember(Alias = "base_branch")]
     public string BaseBranch { get; set; } = "main";

@@ -102,6 +102,30 @@ public class DevQueueService : IDevQueueService
     {
         try
         {
+            if (taskId > 0)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+                var task = await taskRepo.GetByIdAsync(taskId, cancellationToken);
+                if (task != null && task.Priority != TaskPriority.Critical)
+                {
+                    task.Priority = TaskPriority.Critical;
+                    await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);
+
+                    var workspaceRepo = scope.ServiceProvider.GetService<IWorkspaceRepository>();
+                    var markdownSync = scope.ServiceProvider.GetService<ITaskMarkdownSyncService>();
+                    if (workspaceRepo != null && markdownSync != null)
+                    {
+                        var workspace = await workspaceRepo.GetByIdAsync(task.WorkspaceId, cancellationToken);
+                        if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+                        {
+                            await markdownSync.SyncTaskToDiskAsync(task, workspace.RepositoryPath, cancellationToken: cancellationToken);
+                            _logger.LogInformation("Synced promoted task markdown to disk for Task #{TaskId}", taskId);
+                        }
+                    }
+                }
+            }
+
             if (!string.IsNullOrWhiteSpace(jobId))
             {
                 _backgroundJobClient.ChangeState(jobId, new EnqueuedState(HangfireQueues.LlmUrgent));
@@ -199,8 +223,19 @@ public class DevQueueService : IDevQueueService
 
             if (taskId.HasValue && taskId.Value > 0)
             {
-                _taskJobQueue.EnqueueInference(taskId.Value);
-                _logger.LogInformation("Re-enqueued Task #{TaskId} to llm-inference", taskId.Value);
+                using var scope = _scopeFactory.CreateScope();
+                var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+                var task = await taskRepo.GetByIdAsync(taskId.Value, cancellationToken);
+                if (task?.Priority == TaskPriority.Critical)
+                {
+                    _taskJobQueue.EnqueueUrgent(taskId.Value);
+                    _logger.LogInformation("Re-enqueued critical Task #{TaskId} to llm-urgent", taskId.Value);
+                }
+                else
+                {
+                    _taskJobQueue.EnqueueInference(taskId.Value);
+                    _logger.LogInformation("Re-enqueued Task #{TaskId} to llm-inference", taskId.Value);
+                }
                 return true;
             }
 
@@ -211,8 +246,26 @@ public class DevQueueService : IDevQueueService
             _logger.LogError(ex, "Failed to requeue job {JobId}", jobId);
             if (taskId.HasValue && taskId.Value > 0)
             {
-                _taskJobQueue.EnqueueInference(taskId.Value);
-                return true;
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+                    var task = await taskRepo.GetByIdAsync(taskId.Value, cancellationToken);
+                    if (task?.Priority == TaskPriority.Critical)
+                    {
+                        _taskJobQueue.EnqueueUrgent(taskId.Value);
+                    }
+                    else
+                    {
+                        _taskJobQueue.EnqueueInference(taskId.Value);
+                    }
+                    return true;
+                }
+                catch
+                {
+                    _taskJobQueue.EnqueueInference(taskId.Value);
+                    return true;
+                }
             }
             return false;
         }
@@ -294,6 +347,102 @@ public class DevQueueService : IDevQueueService
         }
     }
 
+    public async Task<int> ReorderInferenceQueueByPriorityAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var monitoring = _jobStorage.GetMonitoringApi();
+            var rawInference = monitoring.EnqueuedJobs(HangfireQueues.LlmInference, 0, 1000);
+            if (rawInference.Count == 0)
+            {
+                return 0;
+            }
+
+            var taskIds = new HashSet<int>();
+            ExtractTaskIds(rawInference, taskIds);
+            var tasks = await LoadTasksAsync(taskIds, cancellationToken);
+
+            var currentQueueOrder = new List<(string JobId, int TaskId, ForgeTask? Task, DateTime EnqueuedAt)>();
+            // Hangfire queue storage can return jobs in non-deterministic or hash-bucket order.
+            // We order by EnqueuedAt ascending to reconstruct the true FIFO execution sequence (head to tail).
+            foreach (var (key, dto) in rawInference.OrderBy(x => x.Value.EnqueuedAt ?? DateTime.MinValue))
+            {
+                if (string.Equals(dto.State, "Deleted", StringComparison.OrdinalIgnoreCase)) continue;
+                var (taskId, _, _) = ParseJobInfo(dto.Job);
+                if (taskId <= 0) continue; // Preserve non-task background jobs
+
+                tasks.TryGetValue(taskId, out var task);
+                currentQueueOrder.Add((key, taskId, task, dto.EnqueuedAt ?? DateTime.UtcNow));
+            }
+
+            // Priority ascending; preserve FIFO arrival sequence for equal priority
+            var ordered = currentQueueOrder
+                .OrderBy(j => j.Task?.Priority ?? TaskPriority.Normal)
+                .ThenBy(j => j.EnqueuedAt)
+                .ToList();
+
+
+            bool isAlreadySorted = true;
+            for (int i = 0; i < currentQueueOrder.Count; i++)
+            {
+                if (currentQueueOrder[i].JobId != ordered[i].JobId)
+                {
+                    isAlreadySorted = false;
+                    break;
+                }
+            }
+
+            bool hasCritical = currentQueueOrder.Any(j => j.Task?.Priority == TaskPriority.Critical);
+
+            if (isAlreadySorted && !hasCritical)
+            {
+                return 0;
+            }
+
+            using var scope = _scopeFactory.CreateScope();
+            var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+
+            foreach (var item in currentQueueOrder)
+            {
+                _backgroundJobClient.Delete(item.JobId);
+            }
+
+            int reorderedCount = 0;
+            foreach (var item in ordered)
+            {
+                if (item.TaskId > 0)
+                {
+                    string newJobId;
+                    if (item.Task?.Priority == TaskPriority.Critical)
+                    {
+                        newJobId = _taskJobQueue.EnqueueUrgent(item.TaskId);
+                        _logger.LogInformation("Promoted critical Task #{TaskId} from inference queue to llm-urgent (JobId: {JobId})", item.TaskId, newJobId);
+                    }
+                    else
+                    {
+                        newJobId = _taskJobQueue.EnqueueInference(item.TaskId);
+                        _logger.LogInformation("Re-enqueued Task #{TaskId} (Priority {Priority}) to llm-inference (JobId: {JobId})", item.TaskId, item.Task?.Priority ?? TaskPriority.Normal, newJobId);
+                    }
+
+                    if (item.Task != null)
+                    {
+                        item.Task.LastHangfireJobId = newJobId;
+                        await taskRepo.UpdateAsync(item.Task, cancellationToken: cancellationToken);
+                    }
+                    reorderedCount++;
+                }
+            }
+
+            _logger.LogInformation("Reordered {Count} inference queue jobs by priority.", reorderedCount);
+            return reorderedCount;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to reorder inference queue by priority: {Message}", ex.Message);
+            throw;
+        }
+    }
+
     private static (int TaskId, string FallbackTitle, string FallbackStage) ParseJobInfo(Job? job)
     {
         if (job == null) return (0, "Background Job", "System");
@@ -316,6 +465,7 @@ public class DevQueueService : IDevQueueService
     {
         foreach (var (_, jobDto) in jobs)
         {
+            if (string.Equals(jobDto.State, "Deleted", StringComparison.OrdinalIgnoreCase)) continue;
             var (taskId, _, _) = ParseJobInfo(jobDto.Job);
             if (taskId > 0) taskIds.Add(taskId);
         }
@@ -345,13 +495,10 @@ public class DevQueueService : IDevQueueService
         using var scope = _scopeFactory.CreateScope();
         var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
 
-        foreach (var id in taskIds)
+        var tasks = await taskRepo.GetByIdsAsync(taskIds, cancellationToken);
+        foreach (var task in tasks)
         {
-            var task = await taskRepo.GetByIdAsync(id, cancellationToken);
-            if (task != null)
-            {
-                result[id] = task;
-            }
+            result[task.Id] = task;
         }
 
         return result;
@@ -365,14 +512,21 @@ public class DevQueueService : IDevQueueService
     {
         foreach (var (key, dto) in jobs)
         {
+            if (string.Equals(dto.State, "Deleted", StringComparison.OrdinalIgnoreCase)) continue;
             var (taskId, fallbackTitle, fallbackStage) = ParseJobInfo(dto.Job);
             var title = fallbackTitle;
             var stage = fallbackStage;
+            var priority = TaskPriority.Normal;
 
             if (taskId > 0 && tasks.TryGetValue(taskId, out var task))
             {
                 title = task.Title;
                 stage = !string.IsNullOrWhiteSpace(task.CurrentStageId) ? task.CurrentStageId : "Queued";
+                priority = task.Priority;
+            }
+            else if (queueName == HangfireQueues.LlmUrgent)
+            {
+                priority = TaskPriority.Critical;
             }
 
             yield return new QueuedJobItem(
@@ -382,7 +536,8 @@ public class DevQueueService : IDevQueueService
                 title,
                 stage,
                 dto.EnqueuedAt ?? DateTime.UtcNow,
-                status);
+                status,
+                priority);
         }
     }
 
@@ -395,11 +550,13 @@ public class DevQueueService : IDevQueueService
             var (taskId, fallbackTitle, fallbackStage) = ParseJobInfo(dto.Job);
             var title = fallbackTitle;
             var stage = fallbackStage;
+            var priority = TaskPriority.Normal;
 
             if (taskId > 0 && tasks.TryGetValue(taskId, out var task))
             {
                 title = task.Title;
                 stage = !string.IsNullOrWhiteSpace(task.CurrentStageId) ? task.CurrentStageId : "Processing";
+                priority = task.Priority;
             }
 
             yield return new QueuedJobItem(
@@ -409,7 +566,8 @@ public class DevQueueService : IDevQueueService
                 title,
                 stage,
                 dto.StartedAt ?? DateTime.UtcNow,
-                "Running");
+                "Running",
+                priority);
         }
     }
 
@@ -422,11 +580,13 @@ public class DevQueueService : IDevQueueService
             var (taskId, fallbackTitle, fallbackStage) = ParseJobInfo(dto.Job);
             var title = fallbackTitle;
             var stage = fallbackStage;
+            var priority = TaskPriority.Normal;
 
             if (taskId > 0 && tasks.TryGetValue(taskId, out var task))
             {
                 title = task.Title;
                 stage = !string.IsNullOrWhiteSpace(task.CurrentStageId) ? task.CurrentStageId : "Failed";
+                priority = task.Priority;
             }
 
             yield return new QueuedJobItem(
@@ -436,7 +596,8 @@ public class DevQueueService : IDevQueueService
                 title,
                 stage,
                 dto.FailedAt ?? DateTime.UtcNow,
-                "Failed");
+                "Failed",
+                priority);
         }
     }
 }

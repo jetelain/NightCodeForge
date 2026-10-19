@@ -90,4 +90,140 @@ public class CascadeUnblockingTests
         // 4. ForgeTask 203 still waiting on 204
         Assert.DoesNotContain(203, _jobQueue.InferenceQueue);
     }
+
+    [Fact]
+    public async Task CompleteTaskAndCascadeAsync_OrdersCascadeUnblocking_ByPriorityAscendingThenCreatedAtAscending()
+    {
+        // DAG structure: Task 100 unblocks 101 (P4), 102 (P1), 103 (P2, newer), 104 (P2, older)
+        var baseTime = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+
+        var task100 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 100,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Ready,
+            BaseBranch = "main"
+        });
+
+        var task101 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 101,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            Priority = TaskPriority.Low, // P4
+            CreatedAt = baseTime.AddMinutes(1)
+        });
+
+        var task102 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 102,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            Priority = TaskPriority.Critical, // P1
+            CreatedAt = baseTime.AddMinutes(2)
+        });
+
+        var task103 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 103,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            Priority = TaskPriority.High, // P2
+            CreatedAt = baseTime.AddMinutes(10) // newer P2
+        });
+
+        var task104 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 104,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            Priority = TaskPriority.High, // P2
+            CreatedAt = baseTime.AddMinutes(5) // older P2
+        });
+
+        _depStore.AddTask(100, 1, TaskOverallStatus.Ready);
+        _depStore.AddTask(101, 1, TaskOverallStatus.Open);
+        _depStore.AddTask(102, 1, TaskOverallStatus.Open);
+        _depStore.AddTask(103, 1, TaskOverallStatus.Open);
+        _depStore.AddTask(104, 1, TaskOverallStatus.Open);
+
+        _depStore.AddDependency(1, 101, 100);
+        _depStore.AddDependency(1, 102, 100);
+        _depStore.AddDependency(1, 103, 100);
+        _depStore.AddDependency(1, 104, 100);
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore
+        }.Build();
+
+        await orchestrator.CompleteTaskAndCascadeAsync(100, "Merge task 100");
+
+        // P1 task 102 must be enqueued to llm-urgent
+        Assert.Single(_jobQueue.UrgentQueue);
+        Assert.Equal(102, _jobQueue.UrgentQueue[0]);
+
+        // P2 and P4 tasks must be enqueued to llm-inference ordered by Priority ASC, then CreatedAt ASC
+        // Expected order: 104 (P2, older), 103 (P2, newer), 101 (P4)
+        Assert.Equal(3, _jobQueue.InferenceQueue.Count);
+        Assert.Equal(104, _jobQueue.InferenceQueue[0]);
+        Assert.Equal(103, _jobQueue.InferenceQueue[1]);
+        Assert.Equal(101, _jobQueue.InferenceQueue[2]);
+    }
+
+    [Fact]
+    public async Task CompleteTaskAndCascadeAsync_WhenUnblockedTaskNotFoundInRepository_LogsWarningAndSkipsWithoutCrashing()
+    {
+        var task300 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 300,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Ready,
+            BaseBranch = "main"
+        });
+
+        var task301 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 301,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            Priority = TaskPriority.Normal
+        });
+
+        // 302 is in dependency store but deliberately omitted from _taskRepo
+        _depStore.AddTask(300, 1, TaskOverallStatus.Ready);
+        _depStore.AddTask(301, 1, TaskOverallStatus.Open);
+        _depStore.AddTask(302, 1, TaskOverallStatus.Open);
+
+        _depStore.AddDependency(1, 301, 300);
+        _depStore.AddDependency(1, 302, 300);
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore
+        }.Build();
+
+        // Must complete cleanly without throwing an unhandled exception
+        await orchestrator.CompleteTaskAndCascadeAsync(300, "Merge task 300");
+
+        // Existing task 301 and fallback unblocked task 302 are both enqueued to inference queue
+        Assert.Equal(2, _jobQueue.InferenceQueue.Count);
+        Assert.Contains(301, _jobQueue.InferenceQueue);
+        Assert.Contains(302, _jobQueue.InferenceQueue);
+
+        // Neither is enqueued to urgent queue
+        Assert.Empty(_jobQueue.UrgentQueue);
+    }
 }

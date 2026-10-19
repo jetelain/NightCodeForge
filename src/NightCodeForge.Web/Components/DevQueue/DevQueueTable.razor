@@ -1,4 +1,6 @@
 @namespace NightCodeForge.Web.Components.DevQueue
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Infrastructure.BackgroundJobs
 @using NightCodeForge.Web.Services
 
 <div class="card-surface p-4" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);" id="dev-queue-table-card">
@@ -35,16 +37,27 @@
                         {
                             <tr style="vertical-align: middle; border-bottom: 1px solid rgba(255,255,255,0.05);" id="job-row-@job.JobId">
                                 <td>
-                                    @if (job.QueueName == "llm-urgent")
+                                    @if (job.Priority == TaskPriority.Critical || job.QueueName == HangfireQueues.LlmUrgent)
                                     {
-                                        <span class="badge-status running" style="background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); padding: 0.25rem 0.6rem; border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: 700;">
-                                            🚨 URGENT
+                                        <span class="forge-badge badge-priority-1"
+                                              style="padding: 0.25rem 0.6rem; border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: 700;"
+                                              title="Critical / Urgent">
+                                            🚨 P1 (URGENT)
                                         </span>
                                     }
                                     else
                                     {
-                                        <span class="badge-tag" style="background: rgba(99, 102, 241, 0.15); color: #a5b4fc; padding: 0.25rem 0.6rem; border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: 600;">
-                                            NORMAL
+                                        <span class="forge-badge badge-priority-@job.Priority"
+                                              style="padding: 0.25rem 0.6rem; border-radius: var(--radius-sm); font-size: 0.78rem; font-weight: 700;"
+                                              title="@TaskPriority.GetLabel(job.Priority)">
+                                            @if (job.Priority == TaskPriority.Normal)
+                                            {
+                                                <span>P3 (NORMAL)</span>
+                                            }
+                                            else
+                                            {
+                                                <span>P@(job.Priority)</span>
+                                            }
                                         </span>
                                     }
                                 </td>
@@ -70,13 +83,14 @@
                                     @job.EnqueuedAt.ToString("HH:mm:ss")
                                 </td>
                                 <td class="text-end">
-                                    @if (job.QueueName != "llm-urgent")
+                                    @if (job.QueueName != HangfireQueues.LlmUrgent)
                                     {
-                                        <button class="btn btn-sm btn-outline-indigo me-2"
-                                                style="border: 1px solid var(--accent-indigo); color: var(--accent-indigo); background: transparent; font-size: 0.8rem; padding: 0.25rem 0.65rem; border-radius: var(--radius-sm);"
+                                        <button class="btn btn-sm btn-outline-danger me-2"
+                                                style="border: 1px solid #ef4444; color: #f87171; background: transparent; font-size: 0.8rem; padding: 0.25rem 0.65rem; border-radius: var(--radius-sm);"
                                                 @onclick="() => OnPrioritize.InvokeAsync(job)"
-                                                id="prioritize-btn-@job.JobId">
-                                            ⬆️ Prioritize
+                                                id="prioritize-btn-@job.JobId"
+                                                title="Promote to top urgent queue (llm-urgent)">
+                                            ⬆️ Promote to Urgent
                                         </button>
                                     }
                                     @if (job.TaskId > 0)

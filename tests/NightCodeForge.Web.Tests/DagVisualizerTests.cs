@@ -93,4 +93,26 @@ public class DagVisualizerTests : BunitContext
         Assert.NotNull(selected);
         Assert.Equal(5, selected.Id);
     }
+
+    [Fact]
+    public void WhenTasksRendered_PriorityPillHasCorrectColors()
+    {
+        var tasks = new List<ForgeTask>
+        {
+            new() { Id = 1, Title = "Critical Task", Priority = TaskPriority.Critical },
+            new() { Id = 2, Title = "High Task", Priority = TaskPriority.High },
+            new() { Id = 3, Title = "Normal Task", Priority = TaskPriority.Normal },
+            new() { Id = 4, Title = "Low Task", Priority = TaskPriority.Low },
+            new() { Id = 5, Title = "Trivial Task", Priority = TaskPriority.Trivial }
+        };
+
+        var cut = Render<DagVisualizer>(p => p.Add(v => v.Tasks, tasks));
+
+        var textElements = cut.FindAll("text");
+        Assert.Contains(textElements, t => t.TextContent == "P1" && t.GetAttribute("fill") == "#fca5a5");
+        Assert.Contains(textElements, t => t.TextContent == "P2" && t.GetAttribute("fill") == "#fed7aa");
+        Assert.Contains(textElements, t => t.TextContent == "P3" && t.GetAttribute("fill") == "#93c5fd");
+        Assert.Contains(textElements, t => t.TextContent == "P4" && t.GetAttribute("fill") == "#cbd5e1");
+        Assert.Contains(textElements, t => t.TextContent == "P5" && t.GetAttribute("fill") == "#94a3b8");
+    }
 }

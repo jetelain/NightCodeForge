@@ -3221,16 +3221,32 @@ code, kbd, samp, pre {
     border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-/* Priority Badges */
-.badge-priority-1 { background: rgba(100, 116, 139, 0.2); color: #94a3b8; border: 1px solid #475569; }
-.badge-priority-2 { background: rgba(99, 102, 241, 0.2); color: #c7d2fe; border: 1px solid #6366f1; }
-.badge-priority-3 { background: rgba(245, 158, 11, 0.2); color: #fde68a; border: 1px solid #f59e0b; }
-.badge-priority-4 { background: rgba(249, 115, 22, 0.2); color: #fed7aa; border: 1px solid #f97316; }
-.badge-priority-5 {
+/* Priority Badges (1 Highest / Critical -> 5 Lowest / Trivial) */
+.badge-priority-1 {
     background: rgba(239, 68, 68, 0.25);
     color: #fca5a5;
     border: 1px solid #ef4444;
     box-shadow: 0 0 6px rgba(239, 68, 68, 0.3);
+}
+.badge-priority-2 {
+    background: rgba(249, 115, 22, 0.2);
+    color: #fed7aa;
+    border: 1px solid #f97316;
+}
+.badge-priority-3 {
+    background: rgba(59, 130, 246, 0.2);
+    color: #93c5fd;
+    border: 1px solid #3b82f6;
+}
+.badge-priority-4 {
+    background: rgba(100, 116, 139, 0.2);
+    color: #cbd5e1;
+    border: 1px solid #64748b;
+}
+.badge-priority-5 {
+    background: rgba(71, 85, 105, 0.2);
+    color: #94a3b8;
+    border: 1px solid #475569;
 }
 
 /* Gating / Status Indicators */

@@ -21,6 +21,9 @@
             </p>
         </div>
         <div class="d-flex gap-2 align-items-center">
+            <button class="btn btn-secondary" style="border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-primary); font-size: 0.9rem; padding: 0.5rem 1rem;" @onclick="ReorderQueueByPriorityAsync" disabled="@(_isReordering || _isRefreshing)" id="sort-priority-btn">
+                @(_isReordering ? "⏳ Reordering..." : "⚡ Sort by Priority")
+            </button>
             <a href="/hangfire" target="_blank" class="btn btn-secondary" style="border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-primary); font-size: 0.9rem; padding: 0.5rem 1rem;" id="open-hangfire-link">
                 📊 Open Hangfire Dashboard ↗
             </a>
@@ -82,6 +85,7 @@
     private List<QueuedJobItem> _failedJobs = new();
     private List<ActiveLockSnapshot> _activeLocks = new();
     private bool _isRefreshing;
+    private bool _isReordering;
     private PeriodicTimer? _refreshTimer;
     private CancellationTokenSource _cts = new();
     private bool _disposed;
@@ -144,6 +148,34 @@
         finally
         {
             _isRefreshing = false;
+        }
+    }
+
+    private async Task ReorderQueueByPriorityAsync()
+    {
+        if (_isReordering) return;
+        _isReordering = true;
+
+        try
+        {
+            var count = await DevQueueService.ReorderInferenceQueueByPriorityAsync(_cts.Token);
+            if (count > 0)
+            {
+                ToastService.Show("Queue Reordered", $"Re-ordered {count} task(s) by priority.", ToastLevel.Success);
+            }
+            else
+            {
+                ToastService.Show("Queue Checked", "Queue is already sorted by priority.", ToastLevel.Info);
+            }
+            await RefreshQueueStateAsync();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Reorder Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isReordering = false;
         }
     }
 

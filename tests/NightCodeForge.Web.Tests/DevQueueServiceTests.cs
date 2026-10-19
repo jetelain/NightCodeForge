@@ -33,7 +33,7 @@ public class DevQueueServiceTests : IDisposable
     public DevQueueServiceTests()
     {
         _lockProvider = new MockLockProvider();
-        _jobClient = new MockBackgroundJobClient();
+        _jobClient = new MockBackgroundJobClient(_jobStorage);
         _jobQueue = new MockTaskJobQueue();
         _taskRepo = new InMemoryTaskRepository();
         _workspaceRepo = new InMemoryWorkspaceRepository();
@@ -49,6 +49,30 @@ public class DevQueueServiceTests : IDisposable
 
         _tempDir = Path.Combine(Path.GetTempPath(), "ncf-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
+
+        PurgeJobStorage();
+    }
+
+    private void PurgeJobStorage()
+    {
+        var monitoring = _jobStorage.GetMonitoringApi();
+        var client = new BackgroundJobClient(_jobStorage);
+        foreach (var q in new[] { HangfireQueues.LlmInference, HangfireQueues.LlmUrgent, HangfireQueues.Default })
+        {
+            var jobs = monitoring.EnqueuedJobs(q, 0, 1000);
+            foreach (var (jobId, _) in jobs)
+            {
+                try
+                {
+                    client.Delete(jobId);
+                }
+                catch (Exception ex)
+                {
+                    // Justification: Best-effort test cleanup if job was already removed
+                    _ = ex.Message;
+                }
+            }
+        }
     }
 
     private DevQueueService CreateService() => new(
@@ -332,12 +356,203 @@ public class DevQueueServiceTests : IDisposable
         Assert.Equal(302, _jobQueue.LastEnqueuedInferenceTaskId);
     }
 
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenQueueOutOfOrder_ReordersPriorityAscending()
+    {
+        var task401 = await _taskRepo.CreateAsync(new ForgeTask { Id = 401, WorkspaceId = 1, Title = "P4 Task", Priority = TaskPriority.Low });
+        var task402 = await _taskRepo.CreateAsync(new ForgeTask { Id = 402, WorkspaceId = 1, Title = "P2 Task", Priority = TaskPriority.High });
+        var task403 = await _taskRepo.CreateAsync(new ForgeTask { Id = 403, WorkspaceId = 1, Title = "P3 Task", Priority = TaskPriority.Normal });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var job1 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(401, default), new EnqueuedState(HangfireQueues.LlmInference));
+        var job2 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(402, default), new EnqueuedState(HangfireQueues.LlmInference));
+        var job3 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(403, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var service = CreateService();
+
+        var reorderedCount = await service.ReorderInferenceQueueByPriorityAsync();
+
+        Assert.Equal(3, reorderedCount);
+        Assert.Contains(job1, _jobClient.DeletedJobIds);
+        Assert.Contains(job2, _jobClient.DeletedJobIds);
+        Assert.Contains(job3, _jobClient.DeletedJobIds);
+
+        // Verification: tasks re-enqueued in Priority ASC order: 402 (P2), 403 (P3), 401 (P4)
+        Assert.Equal(new[] { 402, 403, 401 }, _jobQueue.EnqueuedInferenceTaskIds);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenCriticalTaskInInferenceQueue_DispatchesToUrgent()
+    {
+        var task501 = await _taskRepo.CreateAsync(new ForgeTask { Id = 501, WorkspaceId = 1, Title = "P1 Task", Priority = TaskPriority.Critical });
+        var task502 = await _taskRepo.CreateAsync(new ForgeTask { Id = 502, WorkspaceId = 1, Title = "P3 Task", Priority = TaskPriority.Normal });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var job1 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(501, default), new EnqueuedState(HangfireQueues.LlmInference));
+        var job2 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(502, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var service = CreateService();
+
+        var reorderedCount = await service.ReorderInferenceQueueByPriorityAsync();
+
+        Assert.Equal(2, reorderedCount);
+        Assert.Single(_jobQueue.EnqueuedUrgentTaskIds);
+        Assert.Equal(501, _jobQueue.EnqueuedUrgentTaskIds[0]);
+
+        Assert.Single(_jobQueue.EnqueuedInferenceTaskIds);
+        Assert.Equal(502, _jobQueue.EnqueuedInferenceTaskIds[0]);
+    }
+
+    [Fact]
+    public async Task PromoteToUrgentAsync_UpdatesTaskPriorityToCriticalInDatabase()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 601,
+            WorkspaceId = 1,
+            Title = "Task To Promote",
+            Priority = TaskPriority.Normal,
+            Status = TaskOverallStatus.Open
+        });
+
+        var service = CreateService();
+
+        var result = await service.PromoteToUrgentAsync("job-601", 601);
+
+        Assert.True(result);
+        var reloaded = await _taskRepo.GetByIdAsync(601);
+        Assert.NotNull(reloaded);
+        Assert.Equal(TaskPriority.Critical, reloaded.Priority);
+    }
+
+    [Fact]
+    public async Task PromoteToUrgentAsync_WhenWorkspaceConfigured_SyncsMarkdownToDisk()
+    {
+        await _workspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 1,
+            Name = "Test WS",
+            RepositoryPath = _tempDir
+        });
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 602,
+            WorkspaceId = 1,
+            Title = "Task To Promote With Disk",
+            Priority = TaskPriority.Normal,
+            Status = TaskOverallStatus.Open
+        });
+
+        var service = CreateService();
+
+        var result = await service.PromoteToUrgentAsync("job-602", 602);
+
+        Assert.True(result);
+        Assert.Single(_markdownSync.SyncedCalls);
+        Assert.Equal(602, _markdownSync.SyncedCalls[0].Task.Id);
+        Assert.Equal(TaskPriority.Critical, _markdownSync.SyncedCalls[0].Task.Priority);
+        Assert.Equal(_tempDir, _markdownSync.SyncedCalls[0].WorkspacePath);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenQueueContainsDeletedJobs_IgnoresDeletedJobs()
+    {
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var deletedJob = client.Create(() => TestUtilityJobTarget.Run(), new EnqueuedState(HangfireQueues.LlmInference));
+        client.Delete(deletedJob);
+
+        var activeJob = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(850, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var service = CreateService();
+
+        var reorderedCount = await service.ReorderInferenceQueueByPriorityAsync();
+
+        // Queue has only 1 active task job (850), so it is already sorted
+        Assert.Equal(0, reorderedCount);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenQueueAlreadySorted_ReturnsZeroAndDeletesNothing()
+    {
+        var task701 = await _taskRepo.CreateAsync(new ForgeTask { Id = 701, WorkspaceId = 1, Title = "P2 Task", Priority = TaskPriority.High });
+        var task702 = await _taskRepo.CreateAsync(new ForgeTask { Id = 702, WorkspaceId = 1, Title = "P3 Task", Priority = TaskPriority.Normal });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var job1 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(701, default), new EnqueuedState(HangfireQueues.LlmInference));
+        var job2 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(702, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var service = CreateService();
+
+        var reorderedCount = await service.ReorderInferenceQueueByPriorityAsync();
+
+        Assert.Equal(0, reorderedCount);
+        Assert.Empty(_jobClient.DeletedJobIds);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenNonTaskJobPresent_PreservesNonTaskJob()
+    {
+        var task801 = await _taskRepo.CreateAsync(new ForgeTask { Id = 801, WorkspaceId = 1, Title = "P4 Task", Priority = TaskPriority.Low });
+        var task802 = await _taskRepo.CreateAsync(new ForgeTask { Id = 802, WorkspaceId = 1, Title = "P2 Task", Priority = TaskPriority.High });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var jobNonTask = client.Create(() => TestUtilityJobTarget.Run(), new EnqueuedState(HangfireQueues.LlmInference));
+        var job1 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(801, default), new EnqueuedState(HangfireQueues.LlmInference));
+        var job2 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(802, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var service = CreateService();
+
+
+
+        var reorderedCount = await service.ReorderInferenceQueueByPriorityAsync();
+
+        Assert.Equal(2, reorderedCount);
+        // Non-task job should NOT be deleted
+        Assert.DoesNotContain(jobNonTask, _jobClient.DeletedJobIds);
+        Assert.Contains(job1, _jobClient.DeletedJobIds);
+        Assert.Contains(job2, _jobClient.DeletedJobIds);
+    }
+
+    [Fact]
+    public async Task RequeueJobAsync_WithoutJobId_WhenTaskIsCritical_EnqueuesToUrgentQueue()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 901,
+            WorkspaceId = 1,
+            Title = "Critical Failed Task",
+            Priority = TaskPriority.Critical,
+            Status = TaskOverallStatus.Failed
+        });
+
+        var service = CreateService();
+
+        var result = await service.RequeueJobAsync(string.Empty, taskId: 901);
+
+        Assert.True(result);
+        Assert.Single(_jobQueue.EnqueuedUrgentTaskIds);
+        Assert.Equal(901, _jobQueue.EnqueuedUrgentTaskIds[0]);
+    }
+
+
+
     public void Dispose()
     {
+        PurgeJobStorage();
         _serviceProvider.Dispose();
         if (Directory.Exists(_tempDir))
         {
-            try { Directory.Delete(_tempDir, true); } catch { }
+            try
+            {
+                Directory.Delete(_tempDir, true);
+            }
+            catch (Exception ex)
+            {
+                // Justification: Best-effort test temporary directory cleanup
+                _ = ex.Message;
+            }
         }
     }
 
@@ -390,10 +605,18 @@ public class DevQueueServiceTests : IDisposable
 
     private class MockBackgroundJobClient : IBackgroundJobClient
     {
+        private readonly JobStorage? _storage;
+
+        public MockBackgroundJobClient(JobStorage? storage = null)
+        {
+            _storage = storage;
+        }
+
         public string? LastChangedJobId { get; private set; }
         public string? LastChangedStateName { get; private set; }
         public string? LastDeletedJobId { get; private set; }
         public string? LastRequeuedJobId { get; private set; }
+        public List<string> DeletedJobIds { get; } = new();
 
         public bool ChangeState(string jobId, IState state, string? expectedState = null)
         {
@@ -407,6 +630,20 @@ public class DevQueueServiceTests : IDisposable
             if (state is DeletedState)
             {
                 LastDeletedJobId = jobId;
+                DeletedJobIds.Add(jobId);
+            }
+
+            if (_storage != null)
+            {
+                try
+                {
+                    new BackgroundJobClient(_storage).ChangeState(jobId, state, expectedState);
+                }
+                catch (Exception ex)
+                {
+                    // Justification: Mock job IDs may not exist in backing storage
+                    _ = ex.Message;
+                }
             }
             return true;
         }
@@ -418,16 +655,20 @@ public class DevQueueServiceTests : IDisposable
     {
         public int? LastEnqueuedUrgentTaskId { get; private set; }
         public int? LastEnqueuedInferenceTaskId { get; private set; }
+        public List<int> EnqueuedUrgentTaskIds { get; } = new();
+        public List<int> EnqueuedInferenceTaskIds { get; } = new();
 
         public string EnqueueUrgent(int taskId)
         {
             LastEnqueuedUrgentTaskId = taskId;
+            EnqueuedUrgentTaskIds.Add(taskId);
             return "urgent-job-id";
         }
 
         public string EnqueueInference(int taskId)
         {
             LastEnqueuedInferenceTaskId = taskId;
+            EnqueuedInferenceTaskIds.Add(taskId);
             return "inference-job-id";
         }
     }
@@ -435,6 +676,7 @@ public class DevQueueServiceTests : IDisposable
     private class TestDevQueueMarkdownSyncService : ITaskMarkdownSyncService
     {
         public List<(ForgeTask Task, string WorkspacePath, bool Archive)> ArchivedCalls { get; } = new();
+        public List<(ForgeTask Task, string WorkspacePath)> SyncedCalls { get; } = new();
 
         public Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive = true, CancellationToken cancellationToken = default)
         {
@@ -442,7 +684,11 @@ public class DevQueueServiceTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public Task<string> SyncTaskToDiskAsync(ForgeTask task, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default) => Task.FromResult(string.Empty);
+        public Task<string> SyncTaskToDiskAsync(ForgeTask task, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default)
+        {
+            SyncedCalls.Add((task, workspacePath));
+            return Task.FromResult(string.Empty);
+        }
         public string GenerateMarkdown(ForgeTask task, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null) => string.Empty;
         public (TaskFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent) => (new TaskFrontmatter(), string.Empty);
         public string ComputeContentHash(string content) => string.Empty;
@@ -455,5 +701,10 @@ public class DevQueueServiceTests : IDisposable
     }
 
     #endregion
+}
+
+public static class TestUtilityJobTarget
+{
+    public static void Run() { }
 }
 
