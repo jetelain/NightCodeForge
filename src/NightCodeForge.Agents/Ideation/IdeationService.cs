@@ -180,11 +180,9 @@ public partial class IdeationService : IIdeationService
                 profile = ResolveIdeationProfile(workspace, agentProfile);
             }
         }
-        var optFlags = profile.OptimizationFlags ?? _globalOptimizationSettings?.GetFlags() ?? new LocalOptimizationFlags();
 
         // Resolve client dynamically for the agent profile
-        var rawClient = _chatClientFactory.CreateClient(profile);
-        var client = new ThinkingTraceCompactionChatClient(rawClient, optFlags);
+        var client = _chatClientFactory.CreateClient(profile);
 
         var sessionId = $"ideation-{workspace.Id}-{Guid.NewGuid():N}";
         var metadata = new Dictionary<string, object?>

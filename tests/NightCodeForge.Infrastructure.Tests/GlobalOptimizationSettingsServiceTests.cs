@@ -47,13 +47,11 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
         var flags = service.GetFlags();
 
         Assert.NotNull(flags);
-        Assert.True(flags.ThinkingTraceCompaction);
-        Assert.True(flags.LoopCircuitBreaker);
         Assert.True(flags.GuidedGrammarDecoding);
-        Assert.Equal(100, flags.ThinkingKeepVerbatimCount);
-        Assert.Equal(100, flags.ToolKeepVerbatimCount);
-        Assert.Equal(2000, flags.ToolMaxResultLength);
-        Assert.Equal(1750, flags.ToolTruncateToLength);
+        Assert.True(flags.DeterministicSymbolMap);
+        Assert.True(flags.StructuredDiagnosticExtraction);
+        Assert.True(flags.PrefixStabilization);
+        Assert.True(flags.JitModelPreload);
     }
 
     [Fact]
@@ -72,33 +70,33 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
 
         var customFlags = new LocalOptimizationFlags
         {
-            ThinkingTraceCompaction = false,
-            ThinkingKeepVerbatimCount = 42,
-            ToolKeepVerbatimCount = 15,
-            ToolMaxResultLength = 5000,
-            ToolTruncateToLength = 4000
+            GuidedGrammarDecoding = false,
+            DeterministicSymbolMap = false,
+            StructuredDiagnosticExtraction = true,
+            PrefixStabilization = false,
+            JitModelPreload = true
         };
 
         await service.UpdateFlagsAsync(customFlags);
 
         // Verify cache updated
         var cached = service.GetFlags();
-        Assert.False(cached.ThinkingTraceCompaction);
-        Assert.Equal(42, cached.ThinkingKeepVerbatimCount);
-        Assert.Equal(15, cached.ToolKeepVerbatimCount);
-        Assert.Equal(5000, cached.ToolMaxResultLength);
-        Assert.Equal(4000, cached.ToolTruncateToLength);
+        Assert.False(cached.GuidedGrammarDecoding);
+        Assert.False(cached.DeterministicSymbolMap);
+        Assert.True(cached.StructuredDiagnosticExtraction);
+        Assert.False(cached.PrefixStabilization);
+        Assert.True(cached.JitModelPreload);
 
         // Verify event fired
         Assert.True(eventFired);
         Assert.NotNull(updatedFromEvent);
-        Assert.Equal(42, updatedFromEvent.ThinkingKeepVerbatimCount);
+        Assert.False(updatedFromEvent.GuidedGrammarDecoding);
 
         // Verify database persistence
         using var db = new AppDbContext(_dbOptions);
         var setting = await db.SystemSettings.FirstOrDefaultAsync(s => s.Key == GlobalOptimizationSettingsService.SettingKey);
         Assert.NotNull(setting);
-        Assert.Contains("\"ThinkingKeepVerbatimCount\":42", setting.Value);
+        Assert.Contains("\"GuidedGrammarDecoding\":false", setting.Value);
     }
 
     [Fact]
@@ -110,7 +108,7 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
             db.SystemSettings.Add(new SystemSetting
             {
                 Key = GlobalOptimizationSettingsService.SettingKey,
-                Value = "{\"ThinkingTraceCompaction\":false,\"ThinkingKeepVerbatimCount\":77,\"ToolKeepVerbatimCount\":50,\"ToolMaxResultLength\":1234,\"ToolTruncateToLength\":1000}",
+                Value = "{\"GuidedGrammarDecoding\":false,\"DeterministicSymbolMap\":false,\"StructuredDiagnosticExtraction\":true,\"PrefixStabilization\":false,\"JitModelPreload\":true}",
                 UpdatedAt = DateTimeOffset.UtcNow
             });
             await db.SaveChangesAsync();
@@ -122,14 +120,14 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
         var loaded = await service.LoadFlagsAsync();
 
         Assert.NotNull(loaded);
-        Assert.False(loaded.ThinkingTraceCompaction);
-        Assert.Equal(77, loaded.ThinkingKeepVerbatimCount);
-        Assert.Equal(50, loaded.ToolKeepVerbatimCount);
-        Assert.Equal(1234, loaded.ToolMaxResultLength);
-        Assert.Equal(1000, loaded.ToolTruncateToLength);
+        Assert.False(loaded.GuidedGrammarDecoding);
+        Assert.False(loaded.DeterministicSymbolMap);
+        Assert.True(loaded.StructuredDiagnosticExtraction);
+        Assert.False(loaded.PrefixStabilization);
+        Assert.True(loaded.JitModelPreload);
 
         // Check that GetFlags also reflects it
         var cached = service.GetFlags();
-        Assert.Equal(77, cached.ThinkingKeepVerbatimCount);
+        Assert.False(cached.GuidedGrammarDecoding);
     }
 }

@@ -203,14 +203,6 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
 
         switch (key.ToLowerInvariant())
         {
-            case "loopcircuitbreaker":
-            case "loop_circuit_breaker":
-                copy.LoopCircuitBreaker = value;
-                break;
-            case "thinkingtracecompaction":
-            case "thinking_trace_compaction":
-                copy.ThinkingTraceCompaction = value;
-                break;
             case "guidedgrammardecoding":
             case "guided_grammar_decoding":
                 copy.GuidedGrammarDecoding = value;
@@ -230,10 +222,6 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             case "jitmodelpreload":
             case "jit_model_preload":
                 copy.JitModelPreload = value;
-                break;
-            case "compactoldertoolresults":
-            case "compact_older_tool_results":
-                copy.CompactOlderToolResults = value;
                 break;
         }
 
@@ -270,17 +258,8 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         }
 
         // Map category to concrete remediation suggestion
-        if (diagnosis.RootCauseCategory.Contains("Loop", StringComparison.OrdinalIgnoreCase))
-        {
-            actions.Add(new RemediationSuggestion(
-                Title: "Enable Loop Circuit Breaker",
-                Description: "Prevents duplicate tool calls and interrupts runaway loops automatically.",
-                ActionType: "ToggleOptimizationFlag",
-                TargetKey: "LoopCircuitBreaker",
-                TargetValue: true));
-        }
-        else if (diagnosis.RootCauseCategory.Contains("Compilat", StringComparison.OrdinalIgnoreCase) ||
-                 diagnosis.RootCauseCategory.Contains("Syntax", StringComparison.OrdinalIgnoreCase))
+        if (diagnosis.RootCauseCategory.Contains("Compilat", StringComparison.OrdinalIgnoreCase) ||
+            diagnosis.RootCauseCategory.Contains("Syntax", StringComparison.OrdinalIgnoreCase))
         {
             actions.Add(new RemediationSuggestion(
                 Title: "Enable Deterministic Symbol Map",
@@ -292,10 +271,10 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         else
         {
             actions.Add(new RemediationSuggestion(
-                Title: "Enable Thinking Trace Compaction",
-                Description: "Prunes internal <think> deliberation from historical assistant turns to save tokens.",
+                Title: "Enable Prefix Stabilization",
+                Description: "Stabilizes KV cache across multi-turn dialogs to preserve context alignment.",
                 ActionType: "ToggleOptimizationFlag",
-                TargetKey: "ThinkingTraceCompaction",
+                TargetKey: "PrefixStabilization",
                 TargetValue: true));
         }
 
@@ -312,50 +291,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         var raw = detail.RawMarkdown;
         var turns = detail.Turns;
 
-        // 1. Detect runaway tool loop or repetition
-        var toolNames = turns.Where(t => t.IsTool && !string.IsNullOrEmpty(t.ToolName)).Select(t => t.ToolName!).ToList();
-        var hasRepetition = false;
-        if (toolNames.Count >= 3)
-        {
-            for (int i = 0; i < toolNames.Count - 2; i++)
-            {
-                if (toolNames[i] == toolNames[i + 1] && toolNames[i] == toolNames[i + 2])
-                {
-                    hasRepetition = true;
-                    break;
-                }
-            }
-        }
-
-        if (hasRepetition || (!detail.Metadata.Optimizations?.LoopCircuitBreaker ?? false))
-        {
-            return new DiagnosticReport(
-                RootCause: "Agent encountered a repeating compiler error and attempted multiple redundant tool calls without reading the full method context.",
-                FailureCategory: "Runaway Tool Loop / Incomplete Context",
-                CritiquePoints: new[]
-                {
-                    "The task description did not specify the target framework (net10.0), causing compiler assumption mismatch.",
-                    "LoopCircuitBreaker was disabled or not triggered early enough, allowing redundant edit attempts.",
-                    "The model repeated identical arguments across successive turns without modifying its strategy."
-                },
-                SuggestedActions: new[]
-                {
-                    new RemediationSuggestion(
-                        Title: "Enable Loop Circuit Breaker",
-                        Description: "Prevents duplicate tool calls and interrupts runaway loops automatically.",
-                        ActionType: "ToggleOptimizationFlag",
-                        TargetKey: "LoopCircuitBreaker",
-                        TargetValue: true),
-                    new RemediationSuggestion(
-                        Title: "Enable Thinking Trace Compaction",
-                        Description: "Prunes internal <think> reasoning from earlier turns to avoid context rot.",
-                        ActionType: "ToggleOptimizationFlag",
-                        TargetKey: "ThinkingTraceCompaction",
-                        TargetValue: true)
-                });
-        }
-
-        // 2. Detect Compiler / Syntax Failures
+        // 1. Detect Compiler / Syntax Failures
         if (raw.Contains("error CS", StringComparison.OrdinalIgnoreCase) ||
             raw.Contains("Compilation error", StringComparison.OrdinalIgnoreCase) ||
             raw.Contains("The type or namespace name", StringComparison.OrdinalIgnoreCase))
@@ -385,35 +321,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                 });
         }
 
-        // 3. Detect Context Window Bloat
-        if (detail.Metadata.TotalTokens > 15000 || raw.Length > 40000)
-        {
-            return new DiagnosticReport(
-                RootCause: "Quadratic context window inflation degraded attention mechanisms across multi-turn reasoning.",
-                FailureCategory: "Context Window Bloat / Attention Decay",
-                CritiquePoints: new[]
-                {
-                    "Historical thinking traces (<think>...</think>) were preserved verbatim across all turns.",
-                    "Older tool results retained full-fidelity outputs, inflating subsequent request payloads."
-                },
-                SuggestedActions: new[]
-                {
-                    new RemediationSuggestion(
-                        Title: "Enable Thinking Trace Compaction",
-                        Description: "Prunes internal deliberation traces outside the protected sliding window.",
-                        ActionType: "ToggleOptimizationFlag",
-                        TargetKey: "ThinkingTraceCompaction",
-                        TargetValue: true),
-                    new RemediationSuggestion(
-                        Title: "Compact Older Tool Results",
-                        Description: "Truncates historical file and bash tool results to reduce token count.",
-                        ActionType: "ToggleOptimizationFlag",
-                        TargetKey: "CompactOlderToolResults",
-                        TargetValue: true)
-                });
-        }
-
-        // 4. Default / Success / Waiting
+        // 2. Default / Success / Waiting
         if (string.Equals(detail.Metadata.Status, "Completed", StringComparison.OrdinalIgnoreCase))
         {
             return new DiagnosticReport(
@@ -451,12 +359,6 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             },
             SuggestedActions: new[]
             {
-                new RemediationSuggestion(
-                    Title: "Enable Loop Circuit Breaker",
-                    Description: "Prevents runaway tool loops automatically.",
-                    ActionType: "ToggleOptimizationFlag",
-                    TargetKey: "LoopCircuitBreaker",
-                    TargetValue: true),
                 new RemediationSuggestion(
                     Title: "Enable Prefix Stabilization",
                     Description: "Stabilizes KV cache across multi-turn dialogs.",
@@ -564,14 +466,11 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                         var boolVal = val.Equals("true", StringComparison.OrdinalIgnoreCase);
                         switch (key)
                         {
-                            case "thinking_trace_compaction": optimizations.ThinkingTraceCompaction = boolVal; break;
-                            case "loop_circuit_breaker": optimizations.LoopCircuitBreaker = boolVal; break;
                             case "guided_grammar_decoding": optimizations.GuidedGrammarDecoding = boolVal; break;
                             case "deterministic_symbol_map": optimizations.DeterministicSymbolMap = boolVal; break;
                             case "structured_diagnostic_extraction": optimizations.StructuredDiagnosticExtraction = boolVal; break;
                             case "prefix_stabilization": optimizations.PrefixStabilization = boolVal; break;
                             case "jit_model_preload": optimizations.JitModelPreload = boolVal; break;
-                            case "compact_older_tool_results": optimizations.CompactOlderToolResults = boolVal; break;
                         }
                     }
                     else

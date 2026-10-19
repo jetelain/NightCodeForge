@@ -275,7 +275,7 @@
 
     private static (string ActionType, string Description, int TokensSaved, string? Details) ParseOptimizationPayload(ConversationTurn turn)
     {
-        var actionType = "ToolResultCompaction";
+        var actionType = "ContextOptimization";
         var desc = turn.Content ?? "Optimized conversation memory";
         var tokensSaved = 0;
         string? details = null;

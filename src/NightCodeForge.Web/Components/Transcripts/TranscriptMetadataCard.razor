@@ -45,14 +45,6 @@
             {
                 <div style="display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.75rem; align-items: center;">
                     <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.25rem; font-weight: 600;">Optimizations:</span>
-                    @if (Summary.Optimizations.LoopCircuitBreaker)
-                    {
-                        <span class="forge-badge badge-teal" style="font-size: 0.7rem;">LoopBreaker</span>
-                    }
-                    @if (Summary.Optimizations.ThinkingTraceCompaction)
-                    {
-                        <span class="forge-badge badge-indigo" style="font-size: 0.7rem;">ThinkCompaction</span>
-                    }
                     @if (Summary.Optimizations.GuidedGrammarDecoding)
                     {
                         <span class="forge-badge badge-indigo" style="font-size: 0.7rem;">Grammar</span>
@@ -65,9 +57,9 @@
                     {
                         <span class="forge-badge badge-indigo" style="font-size: 0.7rem;">PrefixStable</span>
                     }
-                    @if (Summary.Optimizations.CompactOlderToolResults)
+                    @if (Summary.Optimizations.JitModelPreload)
                     {
-                        <span class="forge-badge badge-teal" style="font-size: 0.7rem;">ToolCompaction</span>
+                        <span class="forge-badge badge-teal" style="font-size: 0.7rem;">JitPreload</span>
                     }
                 </div>
             }

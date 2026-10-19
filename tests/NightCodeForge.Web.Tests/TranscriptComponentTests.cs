@@ -83,7 +83,7 @@ public class TranscriptComponentTests : BunitContext
             Status: "Failed",
             AgentProfile: "RefactorEngineer",
             KvCacheHitRate: 0.85,
-            Optimizations: new LocalOptimizationFlags { LoopCircuitBreaker = true, ThinkingTraceCompaction = true });
+            Optimizations: new LocalOptimizationFlags { GuidedGrammarDecoding = true, PrefixStabilization = true });
 
         bool diagnoseClicked = false;
         var cut = Render<TranscriptMetadataCard>(parameters => parameters
@@ -171,14 +171,14 @@ public class TranscriptComponentTests : BunitContext
         _browserService.CustomReport = new DiagnosticReport(
             RootCause: "**Agent failed** due to `CS0117` in *UserProfile.cs*.\n\n```csharp\npublic record User();\n```",
             FailureCategory: "Compilation Failure",
-            CritiquePoints: new[] { "The `LoopCircuitBreaker` flag was **disabled**." },
+            CritiquePoints: new[] { "The `PrefixStabilization` flag was **disabled**." },
             SuggestedActions: new[]
             {
                 new RemediationSuggestion(
-                    Title: "Enable `LoopCircuitBreaker`",
-                    Description: "Prevents runaway tool loops via `ToolLoopCircuitBreaker`.",
+                    Title: "Enable `PrefixStabilization`",
+                    Description: "Stabilizes KV cache across multi-turn runs.",
                     ActionType: "ToggleOptimizationFlag",
-                    TargetKey: "LoopCircuitBreaker",
+                    TargetKey: "PrefixStabilization",
                     TargetValue: true)
             });
 
@@ -195,7 +195,7 @@ public class TranscriptComponentTests : BunitContext
         Assert.Contains("<em>UserProfile.cs</em>", cut.Markup);
         Assert.Contains("<pre><code", cut.Markup);
         Assert.Contains("public record User();", cut.Markup);
-        Assert.Contains("<code>LoopCircuitBreaker</code>", cut.Markup);
+        Assert.Contains("<code>PrefixStabilization</code>", cut.Markup);
         Assert.Contains("<strong>disabled</strong>", cut.Markup);
     }
 
@@ -248,7 +248,7 @@ public class TranscriptComponentTests : BunitContext
             Status: "Failed",
             AgentProfile: "RefactorEngineer",
             KvCacheHitRate: 0.88,
-            Optimizations: new LocalOptimizationFlags { LoopCircuitBreaker = false, GuidedGrammarDecoding = true });
+            Optimizations: new LocalOptimizationFlags { PrefixStabilization = false, GuidedGrammarDecoding = true });
 
         public Task<IReadOnlyList<TranscriptSummary>> GetTranscriptsAsync(string? workspacePath = null, CancellationToken cancellationToken = default)
         {
@@ -292,14 +292,14 @@ public class TranscriptComponentTests : BunitContext
             var report = new DiagnosticReport(
                 RootCause: "Agent encountered repeating compiler error.",
                 FailureCategory: "Runaway Tool Loop / Incomplete Context",
-                CritiquePoints: new[] { "LoopCircuitBreaker was disabled.", "Task lacked net10.0 target specification." },
+                CritiquePoints: new[] { "PrefixStabilization was disabled.", "Task lacked net10.0 target specification." },
                 SuggestedActions: new[]
                 {
                     new RemediationSuggestion(
-                        Title: "Enable Loop Circuit Breaker",
-                        Description: "Interrupts redundant loops.",
+                        Title: "Enable Prefix Stabilization",
+                        Description: "Stabilizes prompt prefixes.",
                         ActionType: "ToggleOptimizationFlag",
-                        TargetKey: "LoopCircuitBreaker",
+                        TargetKey: "PrefixStabilization",
                         TargetValue: true)
                 });
 

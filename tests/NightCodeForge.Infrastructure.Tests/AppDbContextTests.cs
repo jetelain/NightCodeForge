@@ -63,8 +63,8 @@ public class AppDbContextTests : IDisposable
             ThinkingEffort = ThinkingEffort.Medium,
             OptimizationFlags = new LocalOptimizationFlags
             {
-                LoopCircuitBreaker = true,
-                ThinkingTraceCompaction = false
+                GuidedGrammarDecoding = true,
+                PrefixStabilization = false
             },
             PermittedTools = new[] { "read", "grep", "propose_tasks" },
             SecurityTier = SandboxSecurityTier.Standard
@@ -79,8 +79,8 @@ public class AppDbContextTests : IDisposable
 
         Assert.NotNull(loaded);
         Assert.NotNull(loaded.OptimizationFlags);
-        Assert.True(loaded.OptimizationFlags.LoopCircuitBreaker);
-        Assert.False(loaded.OptimizationFlags.ThinkingTraceCompaction);
+        Assert.True(loaded.OptimizationFlags.GuidedGrammarDecoding);
+        Assert.False(loaded.OptimizationFlags.PrefixStabilization);
 
         Assert.NotNull(loaded.PermittedTools);
         Assert.Equal(3, loaded.PermittedTools.Count);

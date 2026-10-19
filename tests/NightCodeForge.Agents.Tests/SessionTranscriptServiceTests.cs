@@ -73,7 +73,7 @@ public class SessionTranscriptServiceTests
                 Metrics: new AgentRunMetrics(1250, 450, 120, 570),
                 Optimizations: new LocalOptimizationFlags
                 {
-                    ThinkingTraceCompaction = true,
+                    GuidedGrammarDecoding = true,
                     PrefixStabilization = true
                 },
                 Status: AgentRunStatus.Completed,
@@ -101,7 +101,7 @@ public class SessionTranscriptServiceTests
             Assert.Contains("model: qwen2.5-coder:7b", content);
             Assert.Contains("prompt: 450", content);
             Assert.Contains("completion: 120", content);
-            Assert.Contains("thinking_trace_compaction: true", content);
+            Assert.Contains("guided_grammar_decoding: true", content);
             Assert.Contains("prefix_stabilization: true", content);
             Assert.Contains("kv_cache_hit_rate: 0.94", content);
             Assert.Contains("status: Completed", content);

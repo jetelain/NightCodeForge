@@ -87,14 +87,11 @@ public class SessionTranscriptService
         sb.AppendLine(CultureInfo.InvariantCulture, $"  completion: {metadata.Metrics.CompletionTokens}");
         sb.AppendLine(CultureInfo.InvariantCulture, $"  total: {metadata.Metrics.TotalTokens}");
         sb.AppendLine("optimizations:");
-        sb.AppendLine($"  thinking_trace_compaction: {metadata.Optimizations.ThinkingTraceCompaction.ToString().ToLowerInvariant()}");
-        sb.AppendLine($"  loop_circuit_breaker: {metadata.Optimizations.LoopCircuitBreaker.ToString().ToLowerInvariant()}");
         sb.AppendLine($"  guided_grammar_decoding: {metadata.Optimizations.GuidedGrammarDecoding.ToString().ToLowerInvariant()}");
         sb.AppendLine($"  deterministic_symbol_map: {metadata.Optimizations.DeterministicSymbolMap.ToString().ToLowerInvariant()}");
         sb.AppendLine($"  structured_diagnostic_extraction: {metadata.Optimizations.StructuredDiagnosticExtraction.ToString().ToLowerInvariant()}");
         sb.AppendLine($"  prefix_stabilization: {metadata.Optimizations.PrefixStabilization.ToString().ToLowerInvariant()}");
         sb.AppendLine($"  jit_model_preload: {metadata.Optimizations.JitModelPreload.ToString().ToLowerInvariant()}");
-        sb.AppendLine($"  compact_older_tool_results: {metadata.Optimizations.CompactOlderToolResults.ToString().ToLowerInvariant()}");
         if (metadata.KvCacheHitRate.HasValue)
         {
             sb.AppendLine(CultureInfo.InvariantCulture, $"kv_cache_hit_rate: {metadata.KvCacheHitRate.Value:F2}");

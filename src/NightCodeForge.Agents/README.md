@@ -7,7 +7,7 @@
 
 ## 1. Core Responsibility
 
-`NightCodeForge.Agents` provides the AI runtime execution engines for autonomous software engineering. It implements multiple agent harnesses (Crucible with Microsoft Agent Framework, ACP, PiRpc), provides canonical filesystem and terminal tools (`read`, `edit`, `write`, `bash`, `ask`), handles lenient JSON tool-call repair, streams real-time thinking and tool execution activity, and optimizes local SLM inference (prompt caching, circuit breaking, `<think>` compaction).
+`NightCodeForge.Agents` provides the AI runtime execution engines for autonomous software engineering. It implements multiple agent harnesses (Crucible with Microsoft Agent Framework, ACP, PiRpc), provides canonical filesystem and terminal tools (`read`, `edit`, `write`, `bash`, `ask`), handles lenient JSON tool-call repair, streams real-time thinking and tool execution activity, and optimizes local LLM inference (prompt caching, guided grammar decoding).
 
 ## 2. Key Types & Contracts
 
@@ -17,7 +17,6 @@
 | `CanonicalTools` | Class | Implementation of canonical agent tools (`read`, `edit`, `write`, `bash`, `ask`, `propose_tasks`). |
 | `LenientToolDispatcher` | Class | Normalizes tool arguments, repairs malformed JSON, and forgives parameter casing mismatches. |
 | `OllamaChatClient` | Class | High-throughput streaming chat client communicating directly with Ollama endpoints. |
-| `ToolLoopCircuitBreaker` | Class | Intercepts repetitive agent tool call loops to prevent token waste and stall conditions. |
 | `SessionTranscriptService` | Class | Records full agent turn histories and model call snapshots to disk in JSONL format. |
 
 ## 3. Dependencies & Interaction Graph

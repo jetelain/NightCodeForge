@@ -209,30 +209,9 @@
                             <!-- Section A: 8 Boolean Switches -->
                             <div style="margin-bottom: 1.5rem;">
                                 <label style="display: block; font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.85rem;">
-                                    Runtime Optimization &amp; Sampler Flags (8 Switches)
+                                    Runtime Optimization &amp; Sampler Flags (5 Switches)
                                 </label>
                                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.85rem;">
-                                    <label class="forge-checkbox-tile">
-                                        <input type="checkbox" @bind="profile.OptimizationFlags.ThinkingTraceCompaction" />
-                                        <div>
-                                            <strong style="display: block; font-size: 0.9rem; color: var(--text-primary);">Thinking Trace Compaction</strong>
-                                            <span style="font-size: 0.78rem; color: var(--text-muted);">Prunes &lt;think&gt; chains outside sliding window</span>
-                                        </div>
-                                    </label>
-                                    <label class="forge-checkbox-tile">
-                                        <input type="checkbox" @bind="profile.OptimizationFlags.CompactOlderToolResults" />
-                                        <div>
-                                            <strong style="display: block; font-size: 0.9rem; color: var(--text-primary);">Tool Result Compaction</strong>
-                                            <span style="font-size: 0.78rem; color: var(--text-muted);">Summarizes historical stdout and execution results</span>
-                                        </div>
-                                    </label>
-                                    <label class="forge-checkbox-tile">
-                                        <input type="checkbox" @bind="profile.OptimizationFlags.LoopCircuitBreaker" />
-                                        <div>
-                                            <strong style="display: block; font-size: 0.9rem; color: var(--text-primary);">Loop Circuit Breaker</strong>
-                                            <span style="font-size: 0.78rem; color: var(--text-muted);">Detects repeated identical tool calls or cycles</span>
-                                        </div>
-                                    </label>
                                     <label class="forge-checkbox-tile">
                                         <input type="checkbox" @bind="profile.OptimizationFlags.GuidedGrammarDecoding" />
                                         <div>
@@ -268,43 +247,6 @@
                                             <span style="font-size: 0.78rem; color: var(--text-muted);">Pre-warms weights in VRAM before turn starts</span>
                                         </div>
                                     </label>
-                                </div>
-                            </div>
-
-                            <!-- Section B: 4 Numeric Sliding-Window Compaction Inputs -->
-                            <div style="border-top: 1px dashed var(--border-subtle); padding-top: 1.25rem;">
-                                <label style="display: block; font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.85rem;">
-                                    Sliding-Window Compaction Thresholds (4 Parameters)
-                                </label>
-                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.25rem;">
-                                    <div>
-                                        <label class="forge-field-label">Verbatim Thought Turns</label>
-                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                                            <input type="number" min="1" max="500" step="5" class="forge-input font-mono" style="width: 100%;" @bind="profile.OptimizationFlags.ThinkingKeepVerbatimCount" />
-                                            <span style="font-size: 0.85rem; color: var(--text-muted); white-space: nowrap;">turns</span>
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label class="forge-field-label">Verbatim Tool Results</label>
-                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                                            <input type="number" min="1" max="500" step="5" class="forge-input font-mono" style="width: 100%;" @bind="profile.OptimizationFlags.ToolKeepVerbatimCount" />
-                                            <span style="font-size: 0.85rem; color: var(--text-muted); white-space: nowrap;">results</span>
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label class="forge-field-label">Tool Max Char Length</label>
-                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                                            <input type="number" min="200" max="20000" step="100" class="forge-input font-mono" style="width: 100%;" @bind="profile.OptimizationFlags.ToolMaxResultLength" />
-                                            <span style="font-size: 0.85rem; color: var(--text-muted); white-space: nowrap;">chars</span>
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label class="forge-field-label">Tool Truncate Char Length</label>
-                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                                            <input type="number" min="100" max="15000" step="50" class="forge-input font-mono" style="width: 100%;" @bind="profile.OptimizationFlags.ToolTruncateToLength" />
-                                            <span style="font-size: 0.85rem; color: var(--text-muted); white-space: nowrap;">chars</span>
-                                        </div>
-                                    </div>
                                 </div>
                             </div>
                         </div>

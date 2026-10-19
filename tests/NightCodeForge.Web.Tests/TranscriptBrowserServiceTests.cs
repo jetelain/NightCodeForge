@@ -72,14 +72,11 @@ tokens:
   completion: 450
   total: 1950
 optimizations:
-  thinking_trace_compaction: true
-  loop_circuit_breaker: true
   guided_grammar_decoding: false
   deterministic_symbol_map: true
   structured_diagnostic_extraction: false
   prefix_stabilization: true
   jit_model_preload: true
-  compact_older_tool_results: false
 kv_cache_hit_rate: 0.92
 status: Completed
 ---
@@ -101,11 +98,11 @@ Body text
         Assert.Equal("Completed", summary.Status);
         Assert.Equal(0.92, summary.KvCacheHitRate);
         Assert.NotNull(summary.Optimizations);
-        Assert.True(summary.Optimizations.ThinkingTraceCompaction);
-        Assert.True(summary.Optimizations.LoopCircuitBreaker);
         Assert.False(summary.Optimizations.GuidedGrammarDecoding);
         Assert.True(summary.Optimizations.DeterministicSymbolMap);
+        Assert.False(summary.Optimizations.StructuredDiagnosticExtraction);
         Assert.True(summary.Optimizations.PrefixStabilization);
+        Assert.True(summary.Optimizations.JitModelPreload);
     }
 
     [Fact]
@@ -222,37 +219,29 @@ Done refactoring.
     }
 
     [Fact]
-    public async Task RunDiagnosticsAsync_WhenRunawayLoopDetected_SuggestsLoopCircuitBreaker()
+    public async Task RunDiagnosticsAsync_WhenExecutionCompleted_SuggestsPrefixStabilization()
     {
         var service = CreateService();
 
         var summary = new TranscriptSummary(
-            FileName: "loop.md",
-            FilePath: "loop.md",
+            FileName: "clean.md",
+            FilePath: "clean.md",
             TaskId: 10,
-            StageId: "loop-stage",
+            StageId: "clean-stage",
             ModelName: "llama3",
             Timestamp: DateTime.UtcNow,
             PromptTokens: 200,
             CompletionTokens: 100,
             DurationMs: 5000,
-            Status: "Failed",
-            Optimizations: new LocalOptimizationFlags { LoopCircuitBreaker = false });
+            Status: "Completed");
 
-        var turns = new List<ParsedTranscriptTurn>
-        {
-            new("00:00", "TOOL", "", ToolName: "EditFile", IsTool: true),
-            new("00:02", "TOOL", "", ToolName: "EditFile", IsTool: true),
-            new("00:04", "TOOL", "", ToolName: "EditFile", IsTool: true)
-        };
+        var detail = new ParsedTranscriptDetail(summary, "All tests passed cleanly.", null, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<ParsedTranscriptTurn>());
 
-        var detail = new ParsedTranscriptDetail(summary, "raw content", null, Array.Empty<string>(), Array.Empty<string>(), turns);
-
-        var report = await service.RunDiagnosticsAsync(detail, "Cloud");
+        var report = await service.RunDiagnosticsAsync(detail, "Local");
 
         Assert.NotNull(report);
-        Assert.Contains("Loop", report.FailureCategory);
-        Assert.Contains(report.SuggestedActions, a => a.TargetKey == "LoopCircuitBreaker");
+        Assert.Contains("Clean", report.FailureCategory);
+        Assert.Contains(report.SuggestedActions, a => a.TargetKey == "PrefixStabilization");
     }
 
     [Fact]
@@ -271,7 +260,7 @@ Done refactoring.
             CompletionTokens: 100,
             DurationMs: 3000,
             Status: "Failed",
-            Optimizations: new LocalOptimizationFlags { LoopCircuitBreaker = true });
+            Optimizations: new LocalOptimizationFlags());
 
         var content = "Build output: error CS0117: 'Bar' does not contain a definition for 'Baz'.";
         var detail = new ParsedTranscriptDetail(summary, content, null, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<ParsedTranscriptTurn>());
@@ -327,19 +316,19 @@ Done refactoring.
         var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
         var service = CreateService();
 
-        _fakeGlobalOptService.Flags.LoopCircuitBreaker = false;
+        _fakeGlobalOptService.Flags.PrefixStabilization = false;
 
         var suggestion = new RemediationSuggestion(
-            Title: "Enable Loop Circuit Breaker",
-            Description: "Enables breaker",
+            Title: "Enable Prefix Stabilization",
+            Description: "Stabilizes KV cache",
             ActionType: "ToggleOptimizationFlag",
-            TargetKey: "LoopCircuitBreaker",
+            TargetKey: "PrefixStabilization",
             TargetValue: true);
 
         await service.ApplyRemediationAsync(suggestion);
 
         // Global flag updated
-        Assert.True(_fakeGlobalOptService.Flags.LoopCircuitBreaker);
+        Assert.True(_fakeGlobalOptService.Flags.PrefixStabilization);
 
         // Database agent profiles updated
         using var scope = scopeFactory.CreateScope();
@@ -348,7 +337,7 @@ Done refactoring.
         Assert.NotEmpty(profiles);
         foreach (var p in profiles)
         {
-            Assert.True(p.OptimizationFlags?.LoopCircuitBreaker ?? false);
+            Assert.True(p.OptimizationFlags?.PrefixStabilization ?? false);
         }
     }
 
@@ -399,14 +388,11 @@ Done refactoring.
 
         public Task UpdateFlagsAsync(LocalOptimizationFlags flags, CancellationToken cancellationToken = default)
         {
-            Flags.LoopCircuitBreaker = flags.LoopCircuitBreaker;
-            Flags.ThinkingTraceCompaction = flags.ThinkingTraceCompaction;
             Flags.GuidedGrammarDecoding = flags.GuidedGrammarDecoding;
             Flags.DeterministicSymbolMap = flags.DeterministicSymbolMap;
             Flags.StructuredDiagnosticExtraction = flags.StructuredDiagnosticExtraction;
             Flags.PrefixStabilization = flags.PrefixStabilization;
             Flags.JitModelPreload = flags.JitModelPreload;
-            Flags.CompactOlderToolResults = flags.CompactOlderToolResults;
             OnFlagsChanged?.Invoke(Flags);
             return Task.CompletedTask;
         }

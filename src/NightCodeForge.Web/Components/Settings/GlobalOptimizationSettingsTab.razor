@@ -34,118 +34,7 @@
         </div>
     </div>
 
-    <!-- Section 1: Memory Compaction & Token Preservation Tuning -->
-    <div style="background: var(--bg-surface-elevated, rgba(255,255,255,0.03)); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 1.5rem;">
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
-            <div>
-                <h4 style="font-size: 1rem; font-weight: 600; margin: 0 0 0.25rem 0; color: var(--text-primary);">
-                    🧠 Context Window Compaction &amp; Sliding Window Tuning
-                </h4>
-                <p style="margin: 0; font-size: 0.8rem; color: var(--text-secondary);">
-                    Mitigate quadratic context inflation on local SLMs (DeepSeek-R1, QwQ, Qwen2.5-Coder) without losing critical recent reasoning or function results.
-                </p>
-            </div>
-            <span class="forge-badge badge-indigo">Token Savers</span>
-        </div>
 
-        <!-- 1.1 Thinking Trace Compaction -->
-        <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.25rem; padding-bottom: 1.25rem; border-bottom: 1px dashed var(--border-subtle);">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
-                <div style="flex: 1;">
-                    <label style="font-weight: 600; font-size: 0.9rem; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 0.5rem;" for="chkThinkingCompaction">
-                        <input id="chkThinkingCompaction" type="checkbox" @bind="_flags.ThinkingTraceCompaction" style="width: 1.1rem; height: 1.1rem; cursor: pointer;" />
-                        Thinking Trace Compaction (<span class="font-mono" style="font-size: 0.8rem; color: var(--accent-indigo);">&lt;think&gt;...&lt;/think&gt;</span>)
-                    </label>
-                    <p style="margin: 0.25rem 0 0 1.6rem; font-size: 0.8rem; color: var(--text-secondary);">
-                        Prunes verbose internal reasoning traces from historical assistant turns outside the protected sliding window, cutting multi-turn token re-ingestion by 60%–80%.
-                    </p>
-                </div>
-                <span class="forge-badge @(_flags.ThinkingTraceCompaction ? "badge-teal" : "badge-gray")">
-                    @(_flags.ThinkingTraceCompaction ? "Enabled" : "Disabled")
-                </span>
-            </div>
-
-            @if (_flags.ThinkingTraceCompaction)
-            {
-                <div style="margin-left: 1.6rem; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.85rem; display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
-                    <div style="flex: 1; min-width: 250px;">
-                        <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">
-                            Protected Verbatim Turns Window (<span class="font-mono">ThinkingKeepVerbatimCount</span>)
-                        </label>
-                        <span style="font-size: 0.75rem; color: var(--text-muted); display: block;">
-                            Retains full verbatim &lt;think&gt; chains for this many recent assistant turns before summarizing older turns into single-line stubs.
-                        </span>
-                    </div>
-                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                        <input type="number" min="1" max="1000" step="5" class="forge-input" style="width: 110px; text-align: right;" @bind="_flags.ThinkingKeepVerbatimCount" />
-                        <span style="font-size: 0.8rem; color: var(--text-secondary);">turns</span>
-                    </div>
-                </div>
-            }
-        </div>
-
-        <!-- 1.2 Tool Result Compactor -->
-        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
-                <div style="flex: 1;">
-                    <label style="font-weight: 600; font-size: 0.9rem; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 0.5rem;" for="chkToolCompaction">
-                        <input id="chkToolCompaction" type="checkbox" @bind="_flags.CompactOlderToolResults" style="width: 1.1rem; height: 1.1rem; cursor: pointer;" />
-                        Older Tool Result Compaction (<span class="font-mono" style="font-size: 0.8rem; color: var(--accent-indigo);">ToolResultCompactor</span>)
-                    </label>
-                    <p style="margin: 0.25rem 0 0 1.6rem; font-size: 0.8rem; color: var(--text-secondary);">
-                        Replaces bulky tool outputs outside the recent sliding window with concise summaries, eliminating redundant build stdout and large file contents from prompt history.
-                    </p>
-                </div>
-                <span class="forge-badge @(_flags.CompactOlderToolResults ? "badge-teal" : "badge-gray")">
-                    @(_flags.CompactOlderToolResults ? "Enabled" : "Disabled")
-                </span>
-            </div>
-
-            @if (_flags.CompactOlderToolResults)
-            {
-                <div style="margin-left: 1.6rem; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.85rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem;">
-                    <div>
-                        <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">
-                            Protected Recent Tool Window (<span class="font-mono">ToolKeepVerbatimCount</span>)
-                        </label>
-                        <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.5rem;">
-                            Number of recent tool executions kept completely verbatim.
-                        </span>
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <input type="number" min="1" max="500" step="5" class="forge-input" style="width: 110px; text-align: right;" @bind="_flags.ToolKeepVerbatimCount" />
-                            <span style="font-size: 0.8rem; color: var(--text-secondary);">results</span>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">
-                            Compaction Threshold (<span class="font-mono">ToolMaxResultLength</span>)
-                        </label>
-                        <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.5rem;">
-                            Outputs exceeding this length outside the window become eligible for truncation.
-                        </span>
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <input type="number" min="200" max="50000" step="100" class="forge-input" style="width: 110px; text-align: right;" @bind="_flags.ToolMaxResultLength" />
-                            <span style="font-size: 0.8rem; color: var(--text-secondary);">chars</span>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">
-                            Truncated Head Retention (<span class="font-mono">ToolTruncateToLength</span>)
-                        </label>
-                        <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.5rem;">
-                            Number of characters retained in the summary prefix before appending truncation notice.
-                        </span>
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <input type="number" min="100" max="40000" step="50" class="forge-input" style="width: 110px; text-align: right;" @bind="_flags.ToolTruncateToLength" />
-                            <span style="font-size: 0.8rem; color: var(--text-secondary);">chars</span>
-                        </div>
-                    </div>
-                </div>
-            }
-        </div>
-    </div>
 
     <!-- Section 2: Deterministic & Grammar Optimizations -->
     <div style="background: var(--bg-surface-elevated, rgba(255,255,255,0.03)); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem;">
@@ -162,23 +51,7 @@
         </div>
 
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem;">
-            <!-- Loop Circuit Breaker -->
-            <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem; display: flex; flex-direction: column; justify-content: space-between;">
-                <div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                        <label style="font-weight: 600; font-size: 0.9rem; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 0.5rem;" for="chkCircuitBreaker">
-                            <input id="chkCircuitBreaker" type="checkbox" @bind="_flags.LoopCircuitBreaker" style="width: 1.1rem; height: 1.1rem; cursor: pointer;" />
-                            Loop Circuit Breaker
-                        </label>
-                        <span class="forge-badge @(_flags.LoopCircuitBreaker ? "badge-teal" : "badge-gray")">
-                            @(_flags.LoopCircuitBreaker ? "Active" : "Off")
-                        </span>
-                    </div>
-                    <p style="margin: 0; font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4;">
-                        Monitors live token generation for degenerate n-gram repetition loops and intercepts runaway duplicate tool calls before token limits expire.
-                    </p>
-                </div>
-            </div>
+
 
             <!-- Guided Grammar Decoding -->
             <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem; display: flex; flex-direction: column; justify-content: space-between;">
@@ -289,15 +162,7 @@
 
         try
         {
-            // Sanitize inputs
-            if (_flags.ThinkingKeepVerbatimCount < 1) _flags.ThinkingKeepVerbatimCount = 1;
-            if (_flags.ToolKeepVerbatimCount < 1) _flags.ToolKeepVerbatimCount = 1;
-            if (_flags.ToolMaxResultLength < 100) _flags.ToolMaxResultLength = 100;
-            if (_flags.ToolTruncateToLength < 50) _flags.ToolTruncateToLength = 50;
-            if (_flags.ToolTruncateToLength > _flags.ToolMaxResultLength)
-            {
-                _flags.ToolTruncateToLength = _flags.ToolMaxResultLength - 50;
-            }
+
 
             await GlobalOptService.UpdateFlagsAsync(_flags);
             ToastService.Show("Global Optimizations Saved", "Optimization flags and tuning parameters updated successfully.", ToastLevel.Success);

@@ -222,8 +222,6 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
         }
 
-        var circuitBreaker = new ToolLoopCircuitBreaker(context.OptimizationFlags);
-        var toolResultCompactor = new ToolResultCompactor(context.OptimizationFlags);
 
         // 3. Discover context: AGENTS.md, Skills (Microsoft Agent Framework), Symbols
         var agentsMdRules = await _agentsMdService.IngestRulesAsync(workspacePath, cancellationToken);
@@ -422,48 +420,16 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         var persistingClient = new PerServiceCallChatHistoryPersistingChatClient(
             tracingClient,
-            async history =>
+            history =>
             {
                 chatHistory.Clear();
                 chatHistory.AddRange(history);
-                var compResult = toolResultCompactor.Compact(chatHistory);
-                if (compResult.ItemsCompacted > 0)
-                {
-                    var optText = $"Truncated {compResult.ItemsCompacted} older tool result(s), saving approx ~{compResult.CharactersSaved / 4} tokens.";
-                    await BroadcastAsync(
-                        sessionId,
-                        context.ForgeTask.Id,
-                        context.StageId,
-                        AgentActivityKind.OptimizationAction,
-                        optText,
-                        cancellationToken,
-                        metadata: new Dictionary<string, object?>
-                        {
-                            ["ActionType"] = "ToolResultCompaction",
-                            ["TokensSaved"] = compResult.CharactersSaved / 4
-                        });
-
-                    if (conversation != null && _taskRepository != null)
-                    {
-                        var repository = _taskRepository;
-                        var conversationId = conversation.Id;
-                        var metadataJson = System.Text.Json.JsonSerializer.Serialize(new { ActionType = "ToolResultCompaction", TokensSaved = compResult.CharactersSaved / 4 });
-                        turnWriter.Enqueue(
-                            () => repository.AddConversationTurnAsync(
-                                conversationId,
-                                StageTurnRole.Optimization,
-                                content: optText,
-                                metadataJson: metadataJson,
-                                cancellationToken: cancellationToken),
-                            $"Failed to record optimization turn for conversation #{conversationId}");
-                    }
-                }
                 latestSerializedState = SerializeSession(chatHistory);
+                return Task.CompletedTask;
             },
             _logger);
 
-        var compactedClient = new ThinkingTraceCompactionChatClient(persistingClient, context.OptimizationFlags);
-        var activeClient = new LenientToolCallChatClient(compactedClient);
+        var activeClient = new LenientToolCallChatClient(persistingClient);
 
         // 10. Main Agentic Reasoning Loop with HarnessAgent & Real-Time Streaming
         int maxTurns = ResolveMaxTurns(harnessConfig, context.Profile);
@@ -764,11 +730,6 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.MessageDelta, update.Text, cancellationToken);
                 }
 
-                if (streaming && context.OptimizationFlags?.LoopCircuitBreaker == true && circuitBreaker.DetectStreamingRepetition(accumulatedText.ToString()))
-                {
-                    _logger.LogWarning("Circuit breaker detected repeating n-gram monologue in streaming output. Aborting turn.");
-                    return true;
-                }
             }
 
             return false;
@@ -1407,10 +1368,6 @@ public partial class CrucibleAgentHarness : IAgentHarness
         return result;
     }
 
-    public static void CompactOlderToolResults(IList<ChatMessage> messages, int? keepVerbatimCount = null, LocalOptimizationFlags? flags = null)
-    {
-        ToolResultCompactor.Compact(messages, flags, keepVerbatimCount);
-    }
 
     /// <summary>
     /// Resolves the maximum iterations per request, giving absolute precedence to profile.MaxTurns

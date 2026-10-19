@@ -208,7 +208,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
     }
 
     [Fact]
-    public void AgentProfilesTab_OverridesOptimizationFlags_ExposesComplete12Parameters()
+    public void AgentProfilesTab_OverridesOptimizationFlags_ExposesComplete5Parameters()
     {
         var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
 
@@ -216,20 +216,13 @@ public class SettingsComponentTests : BunitContext, IDisposable
         var overrideBtn = cut.FindAll("button.forge-btn-outline").First(b => b.TextContent.Contains("Override"));
         overrideBtn.Click();
 
-        // Verify all 8 boolean switches and 4 numeric fields appear
+        // Verify all 5 boolean switches appear
         Assert.Contains("Complete Profile Optimization Overrides", cut.Markup);
-        Assert.Contains("Thinking Trace Compaction", cut.Markup);
-        Assert.Contains("Tool Result Compaction", cut.Markup);
-        Assert.Contains("Loop Circuit Breaker", cut.Markup);
         Assert.Contains("Guided Grammar Decoding", cut.Markup);
         Assert.Contains("Deterministic Symbol Map", cut.Markup);
         Assert.Contains("Structured Diagnostics", cut.Markup);
         Assert.Contains("Prefix Stabilization", cut.Markup);
         Assert.Contains("JIT Model Preload", cut.Markup);
-        Assert.Contains("Verbatim Thought Turns", cut.Markup);
-        Assert.Contains("Verbatim Tool Results", cut.Markup);
-        Assert.Contains("Tool Max Char Length", cut.Markup);
-        Assert.Contains("Tool Truncate Char Length", cut.Markup);
     }
 
     [Fact]
