@@ -9,11 +9,24 @@
             var isClickable = OnStageSelected.HasDelegate;
             var isLast = i == Stages.Count - 1;
             var isMergeStage = stage.StageId.Equals(MergeStageId, StringComparison.OrdinalIgnoreCase);
+            var accessibleDescription = $"{stage.DisplayName} - {stage.StatusText}";
+            var tooltipText = isClickable
+                ? $"Select {stage.DisplayName} ({stage.StatusText})"
+                : accessibleDescription;
+
             <div class="step-item @GetStepClass(stage) @(isClickable ? "step-clickable" : "")"
                  id="stage-step-@stage.SequenceOrder"
+                 role="@(isClickable ? "button" : null)"
+                 tabindex="@(isClickable ? 0 : null)"
                  style="@(isClickable ? "cursor: pointer;" : "")"
+                 aria-label="@accessibleDescription"
+                 title="@tooltipText"
                  @onclick="() => HandleStageClick(stage.StageId)"
-                 title="@(isClickable ? $"Select {stage.DisplayName} conversation" : stage.DisplayName)">
+                 @onkeydown="e => HandleKeyDown(e, stage.StageId)"
+                 @onkeydown:preventDefault="_preventSpaceDefault"
+                 @onkeyup="HandleKeyUp">
+                @* Note: native tooltips do not cover touch devices; status remains conveyed on touch by icon overlays (not color alone). *@
+                <span class="visually-hidden" aria-hidden="true">@accessibleDescription</span>
                 <div class="step-header">
                     <span class="step-badge @(stage.IsAgentic ? "badge-gpu" : "badge-cpu")">
                         @(stage.IsAgentic ? "⚡ GPU" : "⚙️ CPU")
@@ -46,8 +59,6 @@
                         <span class="stage-icon-text">@stage.Icon</span>
                     }
                 </div>
-                <div class="step-title">@stage.DisplayName</div>
-                <div class="step-status">@stage.StatusText</div>
                 @if (!string.IsNullOrEmpty(stage.MetricsSummary))
                 {
                     <div class="step-metrics-badge">@stage.MetricsSummary</div>
@@ -205,11 +216,41 @@
         }
     }
 
+    private bool _preventSpaceDefault;
+
     private async Task HandleStageClick(string stageId)
     {
         if (OnStageSelected.HasDelegate)
         {
             await OnStageSelected.InvokeAsync(stageId);
+        }
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e, string stageId)
+    {
+        if (!OnStageSelected.HasDelegate) return;
+
+        if (e.Key is " " or "Spacebar")
+        {
+            _preventSpaceDefault = true;
+            await HandleStageClick(stageId);
+        }
+        else if (e.Key == "Enter")
+        {
+            _preventSpaceDefault = false;
+            await HandleStageClick(stageId);
+        }
+        else
+        {
+            _preventSpaceDefault = false;
+        }
+    }
+
+    private void HandleKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key is " " or "Spacebar")
+        {
+            _preventSpaceDefault = false;
         }
     }
 

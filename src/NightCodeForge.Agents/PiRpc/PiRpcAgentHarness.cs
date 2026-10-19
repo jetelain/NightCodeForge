@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -280,7 +281,21 @@ public class PiRpcAgentHarness : IAgentHarness
             });
             await stdin.WriteLineAsync(promptCmd.AsMemory(), cancellationToken);
 
-            string? lastAgentSummary = null;
+            var currentTurnText = new StringBuilder();
+            string? lastTurnConcludingText = null;
+
+            void FlushTurn()
+            {
+                if (currentTurnText.Length > 0)
+                {
+                    var text = currentTurnText.ToString();
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        lastTurnConcludingText = text;
+                    }
+                    currentTurnText.Clear();
+                }
+            }
 
             // 3. Read JSONL events from stdout
             while (!cancellationToken.IsCancellationRequested)
@@ -297,6 +312,7 @@ public class PiRpcAgentHarness : IAgentHarness
                     // Intercept human-in-the-loop interruption from Pi
                     if (type == "extension_ui_request")
                     {
+                        FlushTurn();
                         var title = node?["title"]?.ToString();
                         var msg = node?["message"]?.ToString();
                         var prompt = !string.IsNullOrWhiteSpace(title)
@@ -313,7 +329,7 @@ public class PiRpcAgentHarness : IAgentHarness
                         sw.Stop();
                         await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, prompt, cancellationToken);
 
-                        await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, lastAgentSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
+                        await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, lastTurnConcludingText, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
 
                         var question = new Question
                         {
@@ -357,12 +373,13 @@ public class PiRpcAgentHarness : IAgentHarness
                             var text = ame?["delta"]?.ToString();
                             if (!string.IsNullOrEmpty(text))
                             {
-                                lastAgentSummary = (lastAgentSummary ?? "") + text;
+                                currentTurnText.Append(text);
                                 await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.MessageDelta, text, cancellationToken);
                             }
                         }
                         else if (ameType == "toolcall_start")
                         {
+                            FlushTurn();
                             var toolName = ame?["toolName"]?.ToString() ?? ame?["id"]?.ToString() ?? "tool";
                             await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, toolName, cancellationToken);
                         }
@@ -371,19 +388,24 @@ public class PiRpcAgentHarness : IAgentHarness
                             var callId = ame?["id"]?.ToString() ?? "tool";
                             await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, callId, cancellationToken);
                         }
+                        else if (ameType is "turn_end" or "message_end")
+                        {
+                            FlushTurn();
+                        }
                         else
                         {
                             // Flat delta fallback
                             var delta = node?["delta"]?.ToString();
                             if (!string.IsNullOrEmpty(delta))
                             {
-                                lastAgentSummary = (lastAgentSummary ?? "") + delta;
+                                currentTurnText.Append(delta);
                                 await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.MessageDelta, delta, cancellationToken);
                             }
                         }
                     }
                     else if (type == "tool_execution_start")
                     {
+                        FlushTurn();
                         var tool = node?["toolName"]?.ToString() ?? node?["tool"]?.ToString() ?? "tool";
                         var args = node?["args"]?.ToString() ?? node?["arguments"]?.ToString() ?? "";
                         await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{tool}: {args}", cancellationToken);
@@ -393,6 +415,10 @@ public class PiRpcAgentHarness : IAgentHarness
                         var tool = node?["toolName"]?.ToString() ?? node?["tool"]?.ToString() ?? "tool";
                         var result = node?["result"]?.ToString() ?? node?["output"]?.ToString() ?? "";
                         await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, $"{tool}: {result}", cancellationToken);
+                    }
+                    else if (type is "turn_end" or "message_end")
+                    {
+                        FlushTurn();
                     }
                     else if (type == "usage")
                     {
@@ -406,6 +432,7 @@ public class PiRpcAgentHarness : IAgentHarness
                     }
                     else if (type == "agent_settled" || type == "completed")
                     {
+                        FlushTurn();
                         break;
                     }
                 }
@@ -415,28 +442,20 @@ public class PiRpcAgentHarness : IAgentHarness
                 }
             }
 
+            FlushTurn();
             sw.Stop();
-            var finalSummary = lastAgentSummary ?? "Pi agent completed successfully.";
+            var extraction = StageSummaryExtractor.Extract(lastTurnConcludingText, fallbackSummary: "Pi agent completed successfully.");
 
-            string? targetRouting = null;
-            string? reviewerFeedback = null;
-            var match = Regex.Match(finalSummary, @"<request_changes>(.*?)</request_changes>", RegexOptions.Singleline);
-            if (match.Success)
-            {
-                reviewerFeedback = match.Groups[1].Value.Trim();
-                targetRouting = StandardStageIds.Implementation;
-            }
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, extraction.Summary, cancellationToken);
 
-            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, finalSummary, cancellationToken);
-
-            await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, finalSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
+            await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, extraction.Summary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
 
             return AgentRunResult.Completed(
                 new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
                 updatedState: sessionId,
-                summary: finalSummary,
-                targetRouting: targetRouting,
-                reviewerFeedback: reviewerFeedback);
+                summary: extraction.Summary,
+                targetRouting: extraction.TargetRouting,
+                reviewerFeedback: extraction.ReviewerFeedback);
         }
         catch (OperationCanceledException)
         {

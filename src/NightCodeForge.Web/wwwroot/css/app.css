@@ -3584,6 +3584,7 @@ code, kbd, samp, pre {
    ========================================================================== */
 
 /* Pipeline Stepper */
+/* Pipeline Stepper */
 .pipeline-stepper-container {
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
@@ -3595,10 +3596,16 @@ code, kbd, samp, pre {
 }
 
 .pipeline-stepper {
+    --step-circle-size: 38px;
+    --step-header-height: 1.25rem;
+    --step-header-gap: 0.45rem;
+    --step-padding-top: 0.5rem;
+    --connector-height: 3px;
+    --connector-top-offset: calc(var(--step-padding-top) + var(--step-header-height) + var(--step-header-gap) + (var(--step-circle-size) / 2) - (var(--connector-height) / 2));
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
-    min-width: 900px;
+    min-width: 0;
     gap: 0.5rem;
 }
 
@@ -3609,8 +3616,8 @@ code, kbd, samp, pre {
     text-align: center;
     position: relative;
     flex: 1;
-    min-width: 110px;
-    padding: 0.5rem 0.25rem;
+    min-width: 60px;
+    padding: var(--step-padding-top) 0.25rem 0.5rem 0.25rem;
     border-radius: var(--radius-md);
     transition: all var(--transition-normal);
 }
@@ -3619,7 +3626,8 @@ code, kbd, samp, pre {
     display: flex;
     align-items: center;
     gap: 0.35rem;
-    margin-bottom: 0.45rem;
+    margin-bottom: var(--step-header-gap);
+    height: var(--step-header-height);
 }
 
 .step-badge {
@@ -3658,15 +3666,14 @@ code, kbd, samp, pre {
 }
 
 .step-icon-circle {
-    width: 38px;
-    height: 38px;
+    width: var(--step-circle-size);
+    height: var(--step-circle-size);
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
     font-weight: 700;
     font-size: 0.88rem;
-    margin-bottom: 0.45rem;
     position: relative;
     transition: all var(--transition-normal);
     background: var(--bg-surface);
@@ -3768,24 +3775,6 @@ code, kbd, samp, pre {
     color: #ffffff;
 }
 
-.step-title {
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 0.2rem;
-    line-height: 1.25;
-}
-
-.step-status {
-    font-size: 0.72rem;
-    color: var(--text-secondary);
-}
-
-.step-active .step-status {
-    color: #a5b4fc;
-    font-weight: 600;
-}
-
 .step-metrics-badge {
     font-size: 0.7rem;
     font-family: var(--font-mono);
@@ -3794,17 +3783,18 @@ code, kbd, samp, pre {
     color: #34d399;
     padding: 0.15rem 0.4rem;
     border-radius: var(--radius-sm);
-    margin-top: 0.3rem;
+    margin-top: 0.45rem;
     white-space: nowrap;
 }
 
 .step-connector {
     flex: 1;
-    height: 3px;
+    height: var(--connector-height);
     background: var(--border-subtle);
-    margin: 0 0.4rem;
+    margin-top: var(--connector-top-offset);
+    margin-left: 0.4rem;
+    margin-right: 0.4rem;
     position: relative;
-    top: -12px;
     transition: background 0.4s ease;
 }
 
@@ -4875,6 +4865,18 @@ code, kbd, samp, pre {
 /* ==========================================================================
    Common Utility Classes
    ========================================================================== */
+.visually-hidden {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
 .card-surface {
     background-color: var(--bg-card);
     border: 1px solid var(--border-subtle);

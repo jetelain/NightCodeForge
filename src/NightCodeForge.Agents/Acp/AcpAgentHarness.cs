@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -327,7 +328,21 @@ public class AcpAgentHarness : IAgentHarness
             });
             await stdin.WriteLineAsync(promptReq.AsMemory(), cancellationToken);
 
-            string? lastAgentSummary = null;
+            var currentTurnText = new StringBuilder();
+            string? lastTurnConcludingText = null;
+
+            void FlushTurn()
+            {
+                if (currentTurnText.Length > 0)
+                {
+                    var text = currentTurnText.ToString();
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        lastTurnConcludingText = text;
+                    }
+                    currentTurnText.Clear();
+                }
+            }
 
             // 4. Message Handling Loop
             while (!cancellationToken.IsCancellationRequested)
@@ -361,12 +376,13 @@ public class AcpAgentHarness : IAgentHarness
                             var text = update?["content"]?["text"]?.ToString() ?? update?["text"]?.ToString();
                             if (!string.IsNullOrEmpty(text))
                             {
-                                lastAgentSummary = (lastAgentSummary ?? "") + text;
+                                currentTurnText.Append(text);
                                 await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.MessageDelta, text, cancellationToken);
                             }
                         }
                         else if (updateType == "tool_call")
                         {
+                            FlushTurn();
                             var title = update?["title"]?.ToString() ?? update?["toolCallId"]?.ToString() ?? "tool";
                             var rawInput = update?["rawInput"]?.ToString() ?? "";
                             await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{title}: {rawInput}", cancellationToken);
@@ -377,12 +393,17 @@ public class AcpAgentHarness : IAgentHarness
                             var rawOutput = update?["rawOutput"]?.ToString() ?? "";
                             await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, $"{status}: {rawOutput}", cancellationToken);
                         }
+                        else if (updateType is "turn_end" or "message_end")
+                        {
+                            FlushTurn();
+                        }
                         continue;
                     }
 
                     // 4.2 Terminal Execution (terminal/create or terminal/run)
                     if (method == "terminal/create" || method == "terminal/run")
                     {
+                        FlushTurn();
                         var cmd = node?["params"]?["command"]?.ToString() ?? "";
                         var rawCwd = node?["params"]?["cwd"]?.ToString();
                         string cwd;
@@ -483,6 +504,7 @@ public class AcpAgentHarness : IAgentHarness
                     // 4.4 Filesystem Operations (fs/read_text_file & fs/write_text_file)
                     if (method == "fs/read_text_file")
                     {
+                        FlushTurn();
                         var filePath = node?["params"]?["path"]?.ToString() ?? "";
                         int? offset = node?["params"]?["offset"]?.GetValue<int?>();
                         int? limit = node?["params"]?["limit"]?.GetValue<int?>();
@@ -502,6 +524,7 @@ public class AcpAgentHarness : IAgentHarness
                     }
                     if (method == "fs/write_text_file")
                     {
+                        FlushTurn();
                         var filePath = node?["params"]?["path"]?.ToString() ?? "";
                         var content = node?["params"]?["content"]?.ToString() ?? "";
 
@@ -522,6 +545,7 @@ public class AcpAgentHarness : IAgentHarness
                     // 4.5 Permission Request (Human-in-the-loop interruption)
                     if (method == "session/request_permission")
                     {
+                        FlushTurn();
                         var prompt = node?["params"]?["prompt"]?.ToString();
                         var toolCall = node?["params"]?["toolCall"]?.ToString();
                         var rationale = node?["params"]?["rationale"]?.ToString();
@@ -542,7 +566,7 @@ public class AcpAgentHarness : IAgentHarness
                         sw.Stop();
                         await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, finalPrompt, cancellationToken);
 
-                        await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, lastAgentSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
+                        await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, lastTurnConcludingText, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
 
                         var question = new Question
                         {
@@ -565,8 +589,7 @@ public class AcpAgentHarness : IAgentHarness
                     // 4.6 Prompt Response Completion
                     if (node?["result"] != null && (id == "prompt-1" || node["result"]?["stopReason"] != null))
                     {
-                        var stopReason = node["result"]?["stopReason"]?.ToString() ?? "completed";
-                        lastAgentSummary = lastAgentSummary ?? $"ACP agent finished: {stopReason}";
+                        FlushTurn();
                         break;
                     }
                 }
@@ -576,28 +599,20 @@ public class AcpAgentHarness : IAgentHarness
                 }
             }
 
+            FlushTurn();
             sw.Stop();
-            var finalSummary = lastAgentSummary ?? "ACP agent completed successfully.";
+            var extraction = StageSummaryExtractor.Extract(lastTurnConcludingText, fallbackSummary: "ACP agent completed successfully.");
 
-            string? targetRouting = null;
-            string? reviewerFeedback = null;
-            var match = Regex.Match(finalSummary, @"<request_changes>(.*?)</request_changes>", RegexOptions.Singleline);
-            if (match.Success)
-            {
-                reviewerFeedback = match.Groups[1].Value.Trim();
-                targetRouting = StandardStageIds.Implementation;
-            }
+            await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, extraction.Summary, cancellationToken);
 
-            await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, finalSummary, cancellationToken);
-
-            await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, finalSummary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
+            await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, extraction.Summary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
 
             return AgentRunResult.Completed(
                 new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
                 updatedState: activeSessionId,
-                summary: finalSummary,
-                targetRouting: targetRouting,
-                reviewerFeedback: reviewerFeedback);
+                summary: extraction.Summary,
+                targetRouting: extraction.TargetRouting,
+                reviewerFeedback: extraction.ReviewerFeedback);
         }
         catch (OperationCanceledException)
         {

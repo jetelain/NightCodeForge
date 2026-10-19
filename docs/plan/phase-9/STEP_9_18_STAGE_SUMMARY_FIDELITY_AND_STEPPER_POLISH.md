@@ -4,7 +4,7 @@
 > *Parent Plan:* [Phase 9 Master Plan](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Agents`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Web.Tests`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Complete | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations.
 
@@ -52,15 +52,15 @@
 
 ## 4. Implementation Checklist & Deliverables
 
-- [ ] **Shared summary extractor:** concluding-text selection, routing-tag parsing (request-changes, approved), tag-only stripping, constants; used by all harnesses.
-- [ ] **Crucible harness:** per-turn flush at tool boundaries (text and reasoning preserved in history), final-turn recording, summary from last non-empty assistant message.
-- [ ] **ACP and Pi RPC harnesses:** remove unbounded concatenation; protocol-based turn tracking; thought chunks excluded; shared extractor.
-- [ ] **Stepper markup:** remove visible title/status; accessible name and hidden text without duplication; conditional role/tabindex/keyboard handling.
-- [ ] **Stepper CSS:** variable-based geometry including header offset, `min-width` handling, removal of obsolete rules, no duplicate visually-hidden definition.
-- [ ] **Tests**
-  - [ ] Crucible multi-turn tool-calling: summary equals the concluding message; intermediate messages preserved in history; reasoning kept with its tool-call turn.
-  - [ ] ACP and Pi RPC multi-turn: concluding message only; thought chunks excluded.
-  - [ ] Extractor: generics/code preserved; request-changes and approved parsed; both tags stripped; empty text falls back to the default.
-  - [ ] Stepper (bUnit): accessible name/label, hidden text present, no visible title/status elements, non-clickable steps not focusable, Enter/Space activation, existing tests still pass.
-  - [ ] Review any E2E tests that match visible stage text and update them.
-- [ ] Run the full test suite including E2E, per AGENTS.md.
+- [x] **Shared summary extractor:** concluding-text selection, routing-tag parsing (request-changes, approved), tag-only stripping, constants; used by all harnesses.
+- [x] **Crucible harness:** per-turn flush at tool boundaries (text and reasoning preserved in history), final-turn recording, summary from last non-empty assistant message.
+- [x] **ACP and Pi RPC harnesses:** remove unbounded concatenation; protocol-based turn tracking; thought chunks excluded; shared extractor.
+- [x] **Stepper markup:** remove visible title/status; accessible name and hidden text without duplication; conditional role/tabindex/keyboard handling.
+- [x] **Stepper CSS:** variable-based geometry including header offset, `min-width` handling, removal of obsolete rules, no duplicate visually-hidden definition.
+- [x] **Tests**
+  - [x] Crucible multi-turn tool-calling: summary equals the concluding message; intermediate messages preserved in history; reasoning kept with its tool-call turn.
+  - [x] ACP and Pi RPC multi-turn: concluding message only; thought chunks excluded.
+  - [x] Extractor: generics/code preserved; request-changes and approved parsed; both tags stripped; empty text falls back to the default.
+  - [x] Stepper (bUnit): accessible name/label, hidden text present, no visible title/status elements, non-clickable steps not focusable, Enter/Space activation, existing tests still pass.
+  - [x] Review any E2E tests that match visible stage text and update them.
+- [x] Run the full test suite including E2E, per AGENTS.md.

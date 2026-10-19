@@ -593,6 +593,41 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         var toolNamesByCallId = new Dictionary<string, string>(StringComparer.Ordinal);
 
+        void FlushTurnToHistory()
+        {
+            if (accumulatedText.Length > 0 || accumulatedReasoning.Length > 0)
+            {
+                var text = accumulatedText.ToString();
+                var reasoning = accumulatedReasoning.ToString();
+
+                var lastMsg = chatHistory.LastOrDefault();
+                if (lastMsg == null || lastMsg.Role != ChatRole.Assistant)
+                {
+                    var assistantMsg = new ChatMessage(ChatRole.Assistant, text);
+                    if (!string.IsNullOrEmpty(reasoning))
+                    {
+                        assistantMsg.Contents.Add(new TextReasoningContent(reasoning));
+                    }
+                    chatHistory.Add(assistantMsg);
+                }
+                else
+                {
+                    if (string.IsNullOrEmpty(lastMsg.Text) && !string.IsNullOrEmpty(text))
+                    {
+                        lastMsg.Contents.Insert(0, new TextContent(text));
+                    }
+                    if (!string.IsNullOrEmpty(reasoning) && !lastMsg.Contents.OfType<TextReasoningContent>().Any())
+                    {
+                        lastMsg.Contents.Add(new TextReasoningContent(reasoning));
+                    }
+                }
+
+                accumulatedText.Clear();
+                accumulatedReasoning.Clear();
+                latestSerializedState = SerializeSession(chatHistory);
+            }
+        }
+
         // Returns true when the loop circuit breaker asks to abort the current turn.
         async Task<bool> ProcessUpdateAsync(AgentResponseUpdate update, bool streaming)
         {
@@ -607,6 +642,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 {
                     if (content is FunctionCallContent fc)
                     {
+                        FlushTurnToHistory();
                         var canonicalName = dispatcher.ResolveToolName(fc.Name);
                         if (!string.IsNullOrEmpty(fc.CallId))
                         {
@@ -855,46 +891,27 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
         }
 
-        if (accumulatedText.Length > 0 && chatHistory.LastOrDefault()?.Role != ChatRole.Assistant)
-        {
-            var assistantMsg = new ChatMessage(ChatRole.Assistant, accumulatedText.ToString());
-            if (accumulatedReasoning.Length > 0)
-            {
-                assistantMsg.Contents.Add(new TextReasoningContent(accumulatedReasoning.ToString()));
-            }
-            chatHistory.Add(assistantMsg);
-            latestSerializedState = SerializeSession(chatHistory);
-        }
+        FlushTurnToHistory();
 
         stopwatch.Stop();
-        var lastAssistantMessage = chatHistory.LastOrDefault(m => m.Role == ChatRole.Assistant)?.Text;
-        string? reviewerFeedback = null;
-
-        if (string.IsNullOrEmpty(targetRouting) && !string.IsNullOrEmpty(lastAssistantMessage))
-        {
-            var match = Regex.Match(lastAssistantMessage, @"<request_changes>(.*?)</request_changes>", RegexOptions.Singleline);
-            if (match.Success)
-            {
-                reviewerFeedback = match.Groups[1].Value.Trim();
-                targetRouting = StandardStageIds.Implementation;
-            }
-        }
+        var concludingText = StageSummaryExtractor.GetConcludingText(chatHistory);
+        var extraction = StageSummaryExtractor.Extract(concludingText, fallbackSummary: "Stage completed successfully.", explicitTargetRouting: targetRouting);
 
         var proposals = canonicalTools.PendingProposals.Count > 0
             ? (IReadOnlyList<TaskProposal>)canonicalTools.PendingProposals.ToList()
             : null;
 
-        await SaveAsync(AgentRunStatus.Completed, lastAssistantMessage ?? "Stage completed successfully.", cancellationToken);
+        await SaveAsync(AgentRunStatus.Completed, extraction.Summary, cancellationToken);
 
-        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, lastAssistantMessage ?? "Stage finished", cancellationToken);
+        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, extraction.Summary, cancellationToken);
 
         return AgentRunResult.Completed(
             new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
             commitHash: null,
             updatedState: latestSerializedState,
-            summary: lastAssistantMessage ?? "Stage completed successfully.",
-            targetRouting: targetRouting,
-            reviewerFeedback: reviewerFeedback,
+            summary: extraction.Summary,
+            targetRouting: extraction.TargetRouting,
+            reviewerFeedback: extraction.ReviewerFeedback,
             proposals: proposals);
     }
 
