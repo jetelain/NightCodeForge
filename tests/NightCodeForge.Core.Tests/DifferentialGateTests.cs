@@ -105,4 +105,16 @@ public class DifferentialGateTests
 
         Assert.True(result.IsSuccess);
     }
+
+    [Fact]
+    public void WarningRatchet_Constructors_InitializeProperties()
+    {
+        var defaultRatchet = new DeterministicWarningRatchetStage();
+        Assert.Equal(DeterministicWarningRatchetStage.DefaultStageId, defaultRatchet.StageId);
+        Assert.Equal(DeterministicWarningRatchetStage.DefaultDisplayName, defaultRatchet.DisplayName);
+
+        var customRatchet = new DeterministicWarningRatchetStage("custom-ratchet", "Custom Display");
+        Assert.Equal("custom-ratchet", customRatchet.StageId);
+        Assert.Equal("Custom Display", customRatchet.DisplayName);
+    }
 }

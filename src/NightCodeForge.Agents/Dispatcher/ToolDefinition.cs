@@ -19,9 +19,26 @@ public class ToolDefinition
     public ToolDefinition(
         string name,
         string description,
+        Func<Dictionary<string, object?>, CancellationToken, Task<string>> handler)
+        : this(name, description, handler, null, null)
+    {
+    }
+
+    public ToolDefinition(
+        string name,
+        string description,
         Func<Dictionary<string, object?>, CancellationToken, Task<string>> handler,
-        IEnumerable<string>? aliases = null,
-        IDictionary<string, string>? parameterAliases = null)
+        IEnumerable<string>? aliases)
+        : this(name, description, handler, aliases, null)
+    {
+    }
+
+    public ToolDefinition(
+        string name,
+        string description,
+        Func<Dictionary<string, object?>, CancellationToken, Task<string>> handler,
+        IEnumerable<string>? aliases,
+        IDictionary<string, string>? parameterAliases)
     {
         Name = name;
         Description = description;

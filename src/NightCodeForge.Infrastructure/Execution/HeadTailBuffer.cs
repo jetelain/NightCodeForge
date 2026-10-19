@@ -14,7 +14,11 @@ public class HeadTailBuffer
 
     public const int DefaultMaxBytes = 32 * 1024; // 32 KB
 
-    public HeadTailBuffer(int maxBytes = DefaultMaxBytes)
+    public HeadTailBuffer() : this(DefaultMaxBytes)
+    {
+    }
+
+    public HeadTailBuffer(int maxBytes)
     {
         _maxBytes = Math.Max(1024, maxBytes);
     }

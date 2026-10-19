@@ -76,4 +76,23 @@ public class PipelineDataBagTests
         Assert.True(context2.DataBag.TryGet<int>("warnings.baseline", out var baseline));
         Assert.Equal(5, baseline);
     }
+
+    [Fact]
+    public void PipelineContext_Constructors_InitializeCorrectly()
+    {
+        var task = new ForgeTask { Id = 1, WorkspaceId = 10, Title = "Test" };
+        var workspace = new Workspace { Id = 10, Name = "MainWS" };
+
+        var context2Params = new PipelineContext(task, workspace);
+        Assert.NotNull(context2Params.DataBag);
+        Assert.Same(task, context2Params.ForgeTask);
+        Assert.Same(workspace, context2Params.Workspace);
+
+        var customBag = new PipelineDataBag();
+        customBag.Set("custom.key", 42);
+        var context3Params = new PipelineContext(task, workspace, customBag);
+        Assert.Same(customBag, context3Params.DataBag);
+        Assert.True(context3Params.DataBag.TryGet<int>("custom.key", out var val));
+        Assert.Equal(42, val);
+    }
 }

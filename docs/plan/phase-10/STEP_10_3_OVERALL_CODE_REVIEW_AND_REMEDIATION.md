@@ -141,15 +141,38 @@ All review findings must be classified according to the following taxonomy:
    - **SignalR Auto-Reconnect Guard:** Guarded `StartAsync` in [OrchestratorHubClientConnection.cs](../../../src/NightCodeForge.Web/Services/OrchestratorHubClientConnection.cs) against re-entrant calls when already connecting or connected.
    - **Accessibility:** Added explicit `aria-label` and `title` attributes to icon buttons in [ToolCallCard.razor](../../../src/NightCodeForge.Web/Components/Transcripts/ToolCallCard.razor) and [DiffViewer.razor](../../../src/NightCodeForge.Web/Components/Review/DiffViewer.razor).
 
-### 4.2 Test & Build Verification
+### 4.2 Pass 2: Deep Audit & Final Remediation Highlights
+
+1. **Strict AGENTS.md Exception Handling Justification:**
+   - Added explicit justification comments to expected `OperationCanceledException` and `ObjectDisposedException` blocks in [SystemProcessRunner.cs](../../../src/NightCodeForge.Core/Execution/SystemProcessRunner.cs), [UntrustedTriageScenario.cs](../../../src/NightCodeForge.ScenarioRunner/Scenarios/UntrustedTriageScenario.cs), and [AgentReasoningScenario.cs](../../../src/NightCodeForge.ScenarioRunner/Scenarios/AgentReasoningScenario.cs). Zero unjustified bare catch blocks remain in the codebase.
+
+2. **Constructor Optional Parameter Elimination & Fail-Fast DI:**
+   - **DeterministicWarningRatchetStage:** Replaced optional parameters with explicit parameterless constructor annotated with `[ActivatorUtilitiesConstructor]` and explicit 2-parameter constructor `(string stageId, string displayName)`. Updated [WorkflowStageRegistry.cs](../../../src/NightCodeForge.Core/Workflow/WorkflowStageRegistry.cs) to pass stage metadata directly.
+   - **PipelineContext:** Replaced `= null` with explicit `(task, workspace)` and `(task, workspace, dataBag)` constructors in [PipelineContext.cs](../../../src/NightCodeForge.Core/Workflow/PipelineContext.cs).
+   - **HeadTailBuffer:** Replaced default parameter with explicit `HeadTailBuffer()` and `HeadTailBuffer(int maxBytes)` in [HeadTailBuffer.cs](../../../src/NightCodeForge.Infrastructure/Execution/HeadTailBuffer.cs).
+   - **ToolDefinition:** Replaced optional parameters with explicit 3-, 4-, and 5-parameter overloads in [ToolDefinition.cs](../../../src/NightCodeForge.Agents/Dispatcher/ToolDefinition.cs).
+   - **OrchestratorHubClientConnection:** Enforced non-null `ILogger<OrchestratorHubClientConnection>` requirement on the primary constructor in [OrchestratorHubClientConnection.cs](../../../src/NightCodeForge.Web/Services/OrchestratorHubClientConnection.cs), with `NullLogger` fallback for standalone navigation callers.
+
+3. **EF Core Query Optimizations (`AsNoTracking`):**
+   - Added `.AsNoTracking()` to read-only queries in [EfCoreWorkspaceRepository.cs](../../../src/NightCodeForge.Infrastructure/Data/Repositories/EfCoreWorkspaceRepository.cs) (`GetByIdAsync`), [EfCoreTaskRepository.cs](../../../src/NightCodeForge.Infrastructure/Data/Repositories/EfCoreTaskRepository.cs) (`GetDependenciesAsync`), and [EfCoreTaskDependencyStore.cs](../../../src/NightCodeForge.Infrastructure/Data/Repositories/EfCoreTaskDependencyStore.cs) (`GetDependenciesForWorkspaceAsync`, `GetPrerequisiteTaskIdsAsync`, `GetDependentTaskIdsAsync`).
+   - Verified question update semantics in `EfCoreTaskRepository` ensuring `GetQuestionsByStatusAsync` preserves change tracking for mutation workflows.
+
+4. **Web UI Resilience & In-Place View Recovery:**
+   - Enhanced `<ErrorBoundary>` in [MainLayout.razor](../../../src/NightCodeForge.Web/Components/Layout/MainLayout.razor) with a custom `<ErrorContent Context="ex">` banner and a "Try to recover" button bound to `_errorBoundary?.Recover()`, allowing seamless in-place view recovery without browser hard-reload.
+
+5. **Regression Test Additions:**
+   - Added constructor and behavioral unit tests across [DifferentialGateTests.cs](../../../tests/NightCodeForge.Core.Tests/DifferentialGateTests.cs), [PipelineDataBagTests.cs](../../../tests/NightCodeForge.Core.Tests/PipelineDataBagTests.cs), [ContainerReplExecutorTests.cs](../../../tests/NightCodeForge.Agents.Tests/ContainerReplExecutorTests.cs), [LenientToolDispatcherTests.cs](../../../tests/NightCodeForge.Agents.Tests/LenientToolDispatcherTests.cs), and [OrchestratorHubClientConnectionTests.cs](../../../tests/NightCodeForge.Web.Tests/OrchestratorHubClientConnectionTests.cs).
+
+### 4.3 Final Test & Build Verification
 
 - **Compiler Build:** `dotnet build` -> **0 Warnings, 0 Errors**.
 - **Standard Unit/Integration Test Suite (`Category!=Acceptance&Category!=E2E`):**
-  - **1,166 passed, 0 failed, 0 ignored**
+  - **1,182 passed, 0 failed, 0 ignored**
 - **Full Solution Test Suite (including E2E and Acceptance Tests):**
-  - `NightCodeForge.Core.Tests`: **335 passed, 0 failed**
-  - `NightCodeForge.Agents.Tests`: **353 passed, 0 failed**
+  - `NightCodeForge.Core.Tests`: **337 passed, 0 failed**
+  - `NightCodeForge.Agents.Tests`: **355 passed, 0 failed**
   - `NightCodeForge.Infrastructure.Tests`: **208 passed, 0 failed**
-  - `NightCodeForge.Web.Tests`: **284 passed, 0 failed**
-  - **Total: 1,180 passed, 0 failed, 0 skipped** across all test suites.
+  - `NightCodeForge.Web.Tests`: **285 passed, 0 failed**
+  - **Total: 1,185 passed, 0 failed, 0 skipped** across all test suites.
+
 

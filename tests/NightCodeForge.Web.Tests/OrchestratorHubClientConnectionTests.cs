@@ -279,4 +279,26 @@ public class OrchestratorHubClientConnectionTests
         var ex = await Record.ExceptionAsync(async () => await connection.DisposeAsync());
         Assert.Null(ex);
     }
+
+    [Fact]
+    public void Constructor_EnforcesDependencies_FailsFastOnNull()
+    {
+        var nav = new TestNavManager();
+        Assert.Throws<ArgumentNullException>(() => new OrchestratorHubClientConnection(null!, Moq.Mock.Of<Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection>>()));
+        Assert.Throws<ArgumentNullException>(() => new OrchestratorHubClientConnection(nav, null!));
+
+        var valid = new OrchestratorHubClientConnection(nav, Moq.Mock.Of<Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection>>());
+        Assert.NotNull(valid);
+
+        var singleParam = new OrchestratorHubClientConnection(nav);
+        Assert.NotNull(singleParam);
+    }
+
+    private sealed class TestNavManager : Microsoft.AspNetCore.Components.NavigationManager
+    {
+        public TestNavManager()
+        {
+            Initialize("http://localhost/", "http://localhost/");
+        }
+    }
 }

@@ -19,6 +19,7 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
     public async Task<Workspace?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         return await _context.Workspaces
+            .AsNoTracking()
             .AsSplitQuery()
             .Include(w => w.AgentProfiles)
             .Include(w => w.Tasks)

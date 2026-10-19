@@ -130,7 +130,10 @@ public class SystemProcessRunner : IProcessRunner
             {
                 await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                // Expected when process times out or is cancelled; readers are aborted cleanly.
+            }
 
             var stdout = Sanitize(await stdoutTask);
             var stderr = Sanitize(await stderrTask);
@@ -266,7 +269,10 @@ public class SystemProcessRunner : IProcessRunner
                 callback?.Invoke(line);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // Expected when process execution is cancelled by the caller.
+        }
 
         return sb.ToString();
     }
@@ -339,7 +345,10 @@ public class SystemProcessRunner : IProcessRunner
                     }
                 }
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                // Expected when stream reading completes or process terminates.
+            }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Exception while pumping process stream {Kind}", kind);
@@ -443,7 +452,14 @@ public class SystemProcessRunner : IProcessRunner
             if (_isDisposed) return;
             _isDisposed = true;
 
-            try { _cts.Cancel(); } catch (ObjectDisposedException) { }
+            try
+            {
+                _cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // CTS may already be disposed during concurrent or multi-pass teardown.
+            }
             Kill();
             _cts.Dispose();
             _process.Dispose();

@@ -35,6 +35,14 @@ public class ContainerReplExecutorTests
     }
 
     [Fact]
+    public void HeadTailBuffer_ParameterlessConstructor_UsesDefaultMaxBytes()
+    {
+        var buffer = new HeadTailBuffer();
+        Assert.Equal(HeadTailBuffer.DefaultMaxBytes, buffer.MaxBytes);
+        Assert.False(buffer.IsTruncated);
+    }
+
+    [Fact]
     public async Task ContainerExecutor_SentinelExecution_EvaluatesSuccess()
     {
         // Spawns interactive cmd.exe or powershell that responds with sentinels

@@ -95,7 +95,7 @@ public class WorkflowStageRegistry : IWorkflowStageRegistry
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicSastStage>.Instance;
             return new DeterministicSastStage(env, logger, null, def.StageId, def.DisplayName);
         });
-        RegisterHandler(StageImplementationTypes.DeterministicRatchet, (sp, def) => ActivatorUtilities.CreateInstance<DeterministicWarningRatchetStage>(sp));
+        RegisterHandler(StageImplementationTypes.DeterministicRatchet, (sp, def) => new DeterministicWarningRatchetStage(def.StageId, def.DisplayName));
         RegisterHandler(StageImplementationTypes.DeterministicComposite, (sp, def) => new CompositeDeterministicStage(def, sp, this));
         RegisterHandler(StageImplementationTypes.DeterministicScript, (sp, def) => new DeterministicScriptStage(def, sp));
     }

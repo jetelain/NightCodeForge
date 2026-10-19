@@ -6,8 +6,22 @@
     <TopNavBar />
 
     <main class="forge-main-content">
-        <ErrorBoundary>
-            @Body
+        <ErrorBoundary @ref="_errorBoundary">
+            <ChildContent>
+                @Body
+            </ChildContent>
+            <ErrorContent Context="ex">
+                <div class="forge-card" style="margin: 2rem; border-color: var(--forge-border-danger, #ef4444); background: rgba(239, 68, 68, 0.08);">
+                    <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; color: #ef4444; font-weight: 600;">
+                        <span class="bi bi-exclamation-triangle-fill"></span>
+                        <span>An unexpected error occurred in this view</span>
+                    </div>
+                    <p style="margin: 0 0 1rem 0; font-size: 0.875rem; color: var(--forge-text-muted, #94a3b8);">@ex.Message</p>
+                    <button class="forge-button forge-button-secondary" style="font-size: 0.8rem;" @onclick="() => _errorBoundary?.Recover()">
+                        Try to recover
+                    </button>
+                </div>
+            </ErrorContent>
         </ErrorBoundary>
     </main>
 
@@ -23,6 +37,7 @@
 
 @code {
     private bool _isSidebarCollapsed = false;
+    private ErrorBoundary? _errorBoundary;
 
     private void ToggleSidebar()
     {

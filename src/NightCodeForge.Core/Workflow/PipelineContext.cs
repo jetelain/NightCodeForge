@@ -16,11 +16,16 @@ public class PipelineContext
     public int RetryCount { get; set; }
     public Dictionary<string, int> StageRetries { get; } = new();
 
-    public PipelineContext(ForgeTask task, Workspace workspace, PipelineDataBag? dataBag = null)
+    public PipelineContext(ForgeTask task, Workspace workspace)
+        : this(task, workspace, PipelineDataBag.FromJson(task?.PipelineDataJson))
+    {
+    }
+
+    public PipelineContext(ForgeTask task, Workspace workspace, PipelineDataBag dataBag)
     {
         ForgeTask = task ?? throw new ArgumentNullException(nameof(task));
         Workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
-        DataBag = dataBag ?? PipelineDataBag.FromJson(task.PipelineDataJson);
+        DataBag = dataBag ?? throw new ArgumentNullException(nameof(dataBag));
         RetryCount = DataBag.Get<int?>(PipelineDataBagKeys.RetryCount) ?? 0;
         var savedRetries = DataBag.Get<Dictionary<string, int>>(PipelineDataBagKeys.StageRetries);
         if (savedRetries != null)

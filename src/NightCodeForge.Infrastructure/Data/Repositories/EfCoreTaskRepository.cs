@@ -334,6 +334,7 @@ public class EfCoreTaskRepository : ITaskRepository
     public async Task<IReadOnlyList<int>> GetDependenciesAsync(int taskId, CancellationToken cancellationToken = default)
     {
         return await _context.TaskDependencies
+            .AsNoTracking()
             .Where(d => d.TaskId == taskId)
             .Select(d => d.DependsOnTaskId)
             .ToListAsync(cancellationToken);

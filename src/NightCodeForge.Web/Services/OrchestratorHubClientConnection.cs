@@ -41,15 +41,17 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
     public event Action<int, string, string, string, int, DateTime>? OnOptimizationActionReceived;
     public event Action<HubConnectionState>? OnConnectionStateChanged;
 
-    public OrchestratorHubClientConnection(NavigationManager navigationManager)
-        : this(navigationManager, null)
+    public OrchestratorHubClientConnection(
+        NavigationManager navigationManager,
+        Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection> logger)
     {
+        _navigationManager = navigationManager ?? throw new ArgumentNullException(nameof(navigationManager));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public OrchestratorHubClientConnection(NavigationManager navigationManager, Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection>? logger)
+    public OrchestratorHubClientConnection(NavigationManager navigationManager)
+        : this(navigationManager, Microsoft.Extensions.Logging.Abstractions.NullLogger<OrchestratorHubClientConnection>.Instance)
     {
-        _navigationManager = navigationManager;
-        _logger = logger;
     }
 
     public OrchestratorHubClientConnection(string hubUrl)

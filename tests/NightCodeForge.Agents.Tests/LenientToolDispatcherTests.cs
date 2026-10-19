@@ -119,6 +119,26 @@ public class LenientToolDispatcherTests
     }
 
     [Fact]
+    public void ToolDefinition_Constructors_InitializeCorrectly()
+    {
+        var def3 = new ToolDefinition("t1", "desc1", (args, ct) => Task.FromResult("ok"));
+        Assert.Equal("t1", def3.Name);
+        Assert.Equal("desc1", def3.Description);
+        Assert.Empty(def3.Aliases);
+        Assert.Empty(def3.ParameterAliases);
+
+        var def4 = new ToolDefinition("t2", "desc2", (args, ct) => Task.FromResult("ok"), new[] { "alias1" });
+        Assert.Single(def4.Aliases);
+        Assert.Equal("alias1", def4.Aliases[0]);
+
+        var paramAliases = new Dictionary<string, string> { ["src"] = "source" };
+        var def5 = new ToolDefinition("t3", "desc3", (args, ct) => Task.FromResult("ok"), new[] { "a1", "a2" }, paramAliases);
+        Assert.Equal(2, def5.Aliases.Count);
+        Assert.True(def5.ParameterAliases.ContainsKey("src"));
+        Assert.Equal("source", def5.ParameterAliases["src"]);
+    }
+
+    [Fact]
     public void RegisterTranslation_CustomRule_TranslatesArguments()
     {
         _dispatcher.RegisterTranslation(new ToolTranslationRule(

@@ -15,7 +15,15 @@ public class DeterministicWarningRatchetStage : IWorkflowStage
     public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;
     public string LoopBackStageId { get; set; } = FallbackLoopBackStageId;
 
-    public DeterministicWarningRatchetStage(string stageId = DefaultStageId, string displayName = "Compiler & Linter Warning Ratchet")
+    public const string DefaultDisplayName = "Compiler & Linter Warning Ratchet";
+
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
+    public DeterministicWarningRatchetStage()
+        : this(DefaultStageId, DefaultDisplayName)
+    {
+    }
+
+    public DeterministicWarningRatchetStage(string stageId, string displayName)
     {
         StageId = stageId;
         DisplayName = displayName;

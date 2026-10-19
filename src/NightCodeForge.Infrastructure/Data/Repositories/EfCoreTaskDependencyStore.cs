@@ -19,6 +19,7 @@ public class EfCoreTaskDependencyStore : ITaskDependencyStore
     public async Task<IReadOnlyList<(int TaskId, int DependsOnTaskId)>> GetDependenciesForWorkspaceAsync(int workspaceId, CancellationToken cancellationToken = default)
     {
         var items = await _context.TaskDependencies
+            .AsNoTracking()
             .Where(d => d.ForgeTask != null && d.ForgeTask.WorkspaceId == workspaceId)
             .Select(d => new { d.TaskId, d.DependsOnTaskId })
             .ToListAsync(cancellationToken);
@@ -29,6 +30,7 @@ public class EfCoreTaskDependencyStore : ITaskDependencyStore
     public async Task<IReadOnlyList<int>> GetPrerequisiteTaskIdsAsync(int taskId, CancellationToken cancellationToken = default)
     {
         return await _context.TaskDependencies
+            .AsNoTracking()
             .Where(d => d.TaskId == taskId)
             .Select(d => d.DependsOnTaskId)
             .ToListAsync(cancellationToken);
@@ -37,6 +39,7 @@ public class EfCoreTaskDependencyStore : ITaskDependencyStore
     public async Task<IReadOnlyList<int>> GetDependentTaskIdsAsync(int prerequisiteTaskId, CancellationToken cancellationToken = default)
     {
         return await _context.TaskDependencies
+            .AsNoTracking()
             .Where(d => d.DependsOnTaskId == prerequisiteTaskId)
             .Select(d => d.TaskId)
             .ToListAsync(cancellationToken);

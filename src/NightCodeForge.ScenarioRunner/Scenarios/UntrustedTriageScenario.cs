@@ -77,7 +77,10 @@ public class UntrustedTriageScenario : IScenario
                     }
                 }
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                // Expected when streamCts is cancelled upon scenario completion.
+            }
             finally
             {
                 Console.WriteLine();
