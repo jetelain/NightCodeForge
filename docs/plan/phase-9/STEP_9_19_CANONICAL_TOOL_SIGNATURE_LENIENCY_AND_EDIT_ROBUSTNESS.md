@@ -4,7 +4,7 @@
 > *Parent Plan:* [Phase 9 Master Plan](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Agents`, `src/NightCodeForge.Core`, `tests/NightCodeForge.Agents.Tests`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Complete | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 

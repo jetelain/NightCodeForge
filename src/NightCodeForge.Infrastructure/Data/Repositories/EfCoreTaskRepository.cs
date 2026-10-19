@@ -158,7 +158,7 @@ public class EfCoreTaskRepository : ITaskRepository
             }
         }
 
-        SyncQuestions(task);
+        await SyncQuestionsAsync(task, existing ?? task, cancellationToken);
 
         await _context.SaveChangesAsync(cancellationToken);
     }
@@ -233,15 +233,27 @@ public class EfCoreTaskRepository : ITaskRepository
         };
 
         _context.TaskHistories.Add(history);
-        SyncQuestions(task);
+        await SyncQuestionsAsync(task, existing ?? task, cancellationToken);
         await _context.SaveChangesAsync(cancellationToken);
     }
 
-    private void SyncQuestions(ForgeTask task)
+    private async Task SyncQuestionsAsync(ForgeTask task, ForgeTask trackedTask, CancellationToken cancellationToken = default)
     {
         if (task.Questions == null || task.Questions.Count == 0) return;
 
-        foreach (var q in task.Questions)
+        var existingIds = task.Questions.Where(q => q.Id > 0).Select(q => q.Id).Distinct().ToList();
+        if (existingIds.Count > 0)
+        {
+            var missingIds = existingIds.Where(id => _context.Questions.Local.All(x => x.Id != id)).ToList();
+            if (missingIds.Count > 0)
+            {
+                await _context.Questions
+                    .Where(q => missingIds.Contains(q.Id))
+                    .ToListAsync(cancellationToken);
+            }
+        }
+
+        foreach (var q in task.Questions.ToList())
         {
             if (q.Id <= 0)
             {
@@ -249,6 +261,7 @@ public class EfCoreTaskRepository : ITaskRepository
                 {
                     q.TaskId = task.Id;
                 }
+                q.ForgeTask = trackedTask;
                 var tracked = _context.Questions.Local.FirstOrDefault(x => ReferenceEquals(x, q));
                 if (tracked == null)
                 {
@@ -258,14 +271,19 @@ public class EfCoreTaskRepository : ITaskRepository
             else
             {
                 var existingQ = _context.Questions.Local.FirstOrDefault(x => x.Id == q.Id);
-                if (existingQ == null)
+                if (existingQ != null)
                 {
+                    if (!ReferenceEquals(existingQ, q))
+                    {
+                        _context.Entry(existingQ).CurrentValues.SetValues(q);
+                    }
+                    existingQ.ForgeTask = trackedTask;
+                }
+                else
+                {
+                    q.ForgeTask = trackedTask;
                     _context.Questions.Attach(q);
                     _context.Entry(q).State = EntityState.Modified;
-                }
-                else if (!ReferenceEquals(existingQ, q))
-                {
-                    _context.Entry(existingQ).CurrentValues.SetValues(q);
                 }
             }
         }

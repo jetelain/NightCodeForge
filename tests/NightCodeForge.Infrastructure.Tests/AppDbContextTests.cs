@@ -866,4 +866,117 @@ public class AppDbContextTests : IDisposable
             Assert.Equal("PostgreSQL", answered[0].Answer);
         }
     }
+
+    [Fact]
+    public async Task EfCoreTaskRepository_UpdateAsync_DisconnectedTaskWithQuestions_DoesNotThrowIdentityConflict()
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        int taskId;
+        await using (var context = new AppDbContext(options))
+        {
+            await context.Database.EnsureCreatedAsync();
+
+            var ws = new Workspace { Name = "InboxWS", RepositoryPath = "/ws" };
+            context.Workspaces.Add(ws);
+            await context.SaveChangesAsync();
+
+            var repo = new EfCoreTaskRepository(context);
+            var task = await repo.CreateAsync(new ForgeTask
+            {
+                WorkspaceId = ws.Id,
+                Title = "Question Task",
+                Description = "Task Desc",
+                Status = TaskOverallStatus.Open
+            });
+            taskId = task.Id;
+
+            task.Questions.Add(new Question
+            {
+                TaskId = task.Id,
+                StageId = "task-review",
+                Prompt = "Should we use PostgreSQL or SQLite?",
+                Rationale = "Database choice needed",
+                Status = QuestionStatus.Pending,
+                BatchId = "batch-123",
+                AskedAt = DateTime.UtcNow
+            });
+
+            await repo.UpdateAsync(task);
+        }
+
+        // Simulate a new scope / background execution worker (e.g. TaskOrchestrator.ProcessTaskAsync):
+        // Load disconnected task with AsNoTracking (GetByIdAsync), then update in a fresh DbContext.
+        await using (var workerContext = new AppDbContext(options))
+        {
+            var workerRepo = new EfCoreTaskRepository(workerContext);
+            var loadedTask = await workerRepo.GetByIdAsync(taskId);
+            Assert.NotNull(loadedTask);
+            Assert.Single(loadedTask.Questions);
+            Assert.NotNull(loadedTask.Questions.First().ForgeTask);
+
+            // Update stage on the loaded task (similar to ProcessTaskAsync line 234)
+            loadedTask.CurrentStageId = "implementation";
+
+            // Before the fix, this throws InvalidOperationException due to identity conflict on ForgeTask
+            await workerRepo.UpdateAsync(loadedTask);
+
+            var reloadedTask = await workerRepo.GetByIdAsync(taskId);
+            Assert.NotNull(reloadedTask);
+            Assert.Equal("implementation", reloadedTask.CurrentStageId);
+            Assert.Single(reloadedTask.Questions);
+        }
+
+        // Simulate inbox answering the question in a fresh scope:
+        await using (var answerContext = new AppDbContext(options))
+        {
+            var answerRepo = new EfCoreTaskRepository(answerContext);
+            var loadedTask = await answerRepo.GetByIdAsync(taskId);
+            Assert.NotNull(loadedTask);
+            var q = loadedTask.Questions.First();
+            q.Answer = "SQLite";
+            q.Status = QuestionStatus.Answered;
+            q.AnsweredAt = DateTime.UtcNow;
+
+            await answerRepo.UpdateAsync(loadedTask);
+
+            var reloadedTask = await answerRepo.GetByIdAsync(taskId);
+            Assert.NotNull(reloadedTask);
+            var answeredQ = reloadedTask.Questions.First();
+            Assert.Equal(QuestionStatus.Answered, answeredQ.Status);
+            Assert.Equal("SQLite", answeredQ.Answer);
+        }
+
+        // Simulate agent adding a new question and calling UpdateWithHistoryAsync on a disconnected task:
+        await using (var historyContext = new AppDbContext(options))
+        {
+            var historyRepo = new EfCoreTaskRepository(historyContext);
+            var loadedTask = await historyRepo.GetByIdAsync(taskId);
+            Assert.NotNull(loadedTask);
+
+            loadedTask.Questions.Add(new Question
+            {
+                TaskId = loadedTask.Id,
+                StageId = "implementation",
+                Prompt = "Which test framework?",
+                Rationale = "Need testing stack",
+                Status = QuestionStatus.Pending,
+                BatchId = "batch-456",
+                AskedAt = DateTime.UtcNow,
+                ForgeTask = loadedTask
+            });
+
+            await historyRepo.UpdateWithHistoryAsync(loadedTask, null, "Agent", "Added follow-up question");
+
+            var reloadedTask = await historyRepo.GetByIdAsync(taskId);
+            Assert.NotNull(reloadedTask);
+            Assert.Equal(2, reloadedTask.Questions.Count);
+        }
+    }
 }
+
