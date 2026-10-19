@@ -56,58 +56,74 @@ The agent responded in confusion:
 
 ## 3. Behavioral Specifications
 
-### 3.1 `edit` Tool Signature & Argument Resolution
-1. **Dual-Casing Parameter Acceptance:**
-   The `edit` tool delegate in [CanonicalAIFunctionFactory](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Tools/CanonicalAIFunctionFactory.cs) must accept both camelCase (`oldText`, `newText`) and snake_case (`old_text`, `new_text`) parameters:
-   - Effective old text resolved as: `oldText ?? old_text`
-   - Effective new text resolved as: `newText ?? new_text`
-2. **Chunk Ingestion Leniency:**
-   If `edits` is provided as an array of objects, the tool must accept chunks whether individual items provide `{ oldText, newText }` or `{ old_text, new_text }`.
-3. **Deterministic Precedence:**
+### 3.1 Consistent Naming Scheme with Dynamic Leniency
+1. **Single, Clean Canonical Signatures:**
+   Canonical tool delegates maintain a single, clean, consistent `snake_case` naming scheme (e.g. `path`, `edits`, `old_text`, `new_text`, `working_directory`, `skill_name`, `max_results`). Delegate parameters are NOT duplicated to avoid bloating the tool schema exposed to the LLM.
+2. **Simplified `EditChunk` Model:**
+   Instead of polluting the domain model with duplicate properties (`old_text`, `new_text`, `oldText`, `newText`) and complex deserialization constructors, `EditChunk` remains an idiomatic, clean C# positional record:
+   ```csharp
+   public record EditChunk(string OldText, string NewText);
+   ```
+   No serialization aliases or synthetic attributes reside on the record itself, keeping the reflection schema minimal and clean.
+3. **Centralized Leniency via LenientToolDispatcher:**
+   All leniency, alias mapping, and payload shape conversions are centralized exclusively in [LenientToolDispatcher](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Dispatcher/LenientToolDispatcher.cs). When an LLM invokes tools using camelCase (`oldText`, `newText`, `workingDirectory`, `skillName`, `maxResults`), legacy names (`search`, `replace`, `filepath`, `code`), alternative line slicing (`start_line`, `end_line`), or JSON array string payloads, the dispatcher normalizes arguments before execution.
+4. **`EditChunk` Ingestion Strategy in Dispatcher:**
+   `LenientToolDispatcher.ExtractEdits` handles all payload representations:
+   - Typed collections: `IEnumerable<EditChunk>`
+   - JSON array strings: `"[{\"oldText\": \"...\", \"newText\": \"...\"}]"`
+   - Dictionaries and `JsonObject` instances: mapped via `ExtractChunkFromDictionary` recognizing `oldText`, `old_text`, `targetContent`, `search`, etc.
+   - `JsonElement` objects: parsed via `ExtractChunkFromJsonElement`
+   - Blank chunk fallback: if `edits` contains empty items (`[{}]`), the dispatcher transparently falls back to single-edit parameters (`old_text` / `new_text`).
+5. **Deterministic Precedence:**
    - If `edits` contains one or more non-empty items, execute chunk edits via `tools.EditAsync(path, edits, ct)`.
    - Else if effective old text and effective new text are non-null, execute single edit via `tools.EditAsync(path, effectiveOld, effectiveNew, ct)`.
    - Else, return a clear, unambiguous error string stating:
      `"Error: provide 'edits' (array of { oldText, newText }) or single-edit replacement ('oldText'/'newText' or 'old_text'/'new_text')."`
-4. **Description Polish:**
-   Update the descriptions of `oldText` / `old_text` and `newText` / `new_text` to clearly indicate they are aliases for single text replacement.
 
-### 3.2 Systemic Audit of Canonical Tools
-Audit and apply dual-casing support to all canonical tools in [CanonicalAIFunctionFactory](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Tools/CanonicalAIFunctionFactory.cs):
+### 3.2 Canonical Tools Naming Reference
 
-| Tool | Parameters | Required Support |
+| Tool | Canonical Parameters | Leniently Accepted Aliases (via Dispatcher) |
 | :--- | :--- | :--- |
-| `read` | `path`, `offset`, `limit` | Accept `offset` / `start_line` / `startLine`, `limit` / `end_line` / `endLine` |
-| `write` | `path`, `content` | Accept `path` / `file_path` / `filePath`, `content` / `text` |
-| `edit` | `path`, `edits`, `old_text`, `new_text`, `oldText`, `newText` | Accept `oldText` $\leftrightarrow$ `old_text`, `newText` $\leftrightarrow$ `new_text` |
-| `bash` | `command`, `timeout`, `working_directory`, `workingDirectory` | Accept `working_directory` $\leftrightarrow$ `workingDirectory` |
-| `load_skill` | `skill_name`, `skillName` | Accept `skill_name` $\leftrightarrow$ `skillName` |
-| `ask` | `questions` | Structured list per Step 9.17 |
-| `propose_tasks` | `tasks`, `title`, `description`, `priority` | Retain flexible object mapping |
-| `request_changes` | `feedback`, `reason` | Accept `feedback`, `reason` |
-| `web_search` | `query`, `max_results`, `maxResults` | Accept `max_results` $\leftrightarrow$ `maxResults` |
-
-### 3.3 LenientToolDispatcher Alignment
-Ensure [LenientToolDispatcher](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Dispatcher/LenientToolDispatcher.cs) argument extraction and alias dictionaries remain fully aligned with these canonical mappings so non-canonical invocations and MCP proxy bridges behave identically.
+| `read` | `path`, `offset`, `limit` | `file_path`, `filePath`, `start_line`, `startLine`, `from_line`, `end_line`, `endLine`, `to_line` |
+| `write` | `path`, `content` | `file_path`, `filePath`, `text`, `code` |
+| `edit` | `path`, `edits`, `old_text`, `new_text` | `oldText`, `newText`, `targetContent`, `replacementContent`, `search`, `replace` |
+| `bash` | `command`, `timeout`, `working_directory` | `workingDirectory`, `cwd`, `workdir` |
+| `load_skill` | `skill_name` | `skillName`, `skill`, `name` |
+| `ask` | `questions` | `question_items`, `items` |
+| `propose_tasks` | `tasks`, `title`, `description`, `priority` | `task`, single-task parameters |
+| `request_changes` | `feedback`, `reason` | `critique`, `comment` |
+| `web_search` | `query`, `max_results` | `maxResults`, `q`, `limit`, `count` |
 
 ---
 
 ## 4. Implementation Checklist & Deliverables
 
-- [ ] **CanonicalAIFunctionFactory:**
-  - [ ] Add `oldText` and `newText` shortcut parameters alongside `old_text` and `new_text` in the `edit` tool delegate.
-  - [ ] Support `old_text` / `new_text` key variants inside `EditChunk` deserialization if passed as raw dictionaries.
-  - [ ] Add `workingDirectory` alias to `bash` tool.
-  - [ ] Add `skillName` alias to `load_skill` tool.
-  - [ ] Add `maxResults` alias to `web_search` tool.
-  - [ ] Unify and clarify error feedback message when `edit` arguments are missing.
-- [ ] **LenientToolDispatcher:**
-  - [ ] Ensure `ExtractEdits` gracefully handles both camelCase and snake_case properties within JSON arrays and dictionary objects.
-- [ ] **Automated Tests:**
-  - [ ] Test `edit` tool with `{ path, oldText, newText }` (camelCase shortcut).
-  - [ ] Test `edit` tool with `{ path, old_text, new_text }` (snake_case shortcut).
-  - [ ] Test `edit` tool with `{ path, edits: [{ oldText, newText }] }`.
-  - [ ] Test `edit` tool with `{ path, edits: [{ old_text, new_text }] }`.
-  - [ ] Test `edit` tool missing all edit parameters returns unified, non-confusing error message.
-  - [ ] Test `bash` tool with `workingDirectory` camelCase parameter.
-  - [ ] Test `load_skill` tool with `skillName` camelCase parameter.
-  - [ ] Run full test suite: `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] **Clean Model & Consistent Signatures:**
+  - [x] Preserve clean `public record EditChunk(string OldText, string NewText);` without property duplication or custom serialization attributes.
+  - [x] Establish consistent `snake_case` naming on all canonical tool delegates without parameter duplication.
+  - [x] Implement `LenientAIFunction` wrapper in [CanonicalAIFunctionFactory](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Tools/CanonicalAIFunctionFactory.cs) to delegate call normalization to [LenientToolDispatcher](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Dispatcher/LenientToolDispatcher.cs).
+  - [x] Wire `LenientToolDispatcher` in [CrucibleAgentHarness](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs).
+  - [x] Unify and clarify error feedback message when `edit` arguments are missing.
+- [x] **Centralized LenientToolDispatcher Normalization:**
+  - [x] Ingest `EditChunk` from `IEnumerable<EditChunk>`, JSON strings, `IDictionary`, `JsonObject`, and `JsonElement` via `ExtractChunkFromDictionary` and `ExtractChunkFromJsonElement`.
+  - [x] Support blank chunk fallback (`edits: [{}]`) with single-edit shortcut parameters.
+  - [x] Normalize `offset` / `limit` including computing line count from `end_line` - `start_line` + 1.
+  - [x] Forward single-task arguments (`title`, `description`, `priority`) directly to `ProposeTasks`.
+  - [x] Normalize aliases for all tools (`code`, `cwd`, `skill`, `q`, `count`, `critique`, `comment`, `question_items`, `items`).
+- [x] **Automated Tests:**
+  - [x] Test `edit` tool with `{ path, oldText, newText }` (camelCase shortcut).
+  - [x] Test `edit` tool with `{ path, old_text, new_text }` (snake_case shortcut).
+  - [x] Test `edit` tool with `{ path, edits: [{ oldText, newText }] }`.
+  - [x] Test `edit` tool with `{ path, edits: [{ old_text, new_text }] }`.
+  - [x] Test `edit` tool with string JSON `edits`.
+  - [x] Test `edit` tool missing all edit parameters returns unified, non-confusing error message.
+  - [x] Verify `edit` tool JSON Schema exposes clean, non-duplicated properties.
+  - [x] Test `bash` tool with `workingDirectory` and `cwd` aliases.
+  - [x] Test `load_skill` tool with `skillName` and `skill` aliases.
+  - [x] Test `web_search` tool with `maxResults`, `q`, and `count` aliases.
+  - [x] Test `read` tool with `start_line` and `end_line` slice parameters.
+  - [x] Test `write` tool with `filePath`, `text`, and `code` aliases.
+  - [x] Test `ask` tool with `question_items` and `items` aliases.
+  - [x] Test `request_changes` tool with `critique` and `comment` aliases.
+  - [x] Run full test suite: `dotnet test`.
+

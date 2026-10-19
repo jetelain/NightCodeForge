@@ -134,13 +134,10 @@ public partial class LenientToolDispatcher
     }
 
     /// <summary>
-    /// Parses a raw tool invocation name and payload string into a normalized canonical call.
+    /// Normalizes a tool name and argument dictionary into a canonical call.
     /// </summary>
-    public DispatchedToolCall NormalizeCall(string rawToolName, string rawArgumentsJson)
+    public DispatchedToolCall NormalizeCall(string rawToolName, Dictionary<string, object?> parsedArgs)
     {
-        var sanitizedJson = SanitizeJsonPayload(rawArgumentsJson);
-        var parsedArgs = ParseAndCoerceArguments(sanitizedJson);
-
         var canonicalName = ResolveToolName(rawToolName);
 
         // Check if there is a translation rule (e.g. dropped tools -> bash)
@@ -153,6 +150,16 @@ public partial class LenientToolDispatcher
 
         var normalizedArgs = NormalizeParameters(canonicalName, parsedArgs);
         return new DispatchedToolCall(canonicalName, normalizedArgs);
+    }
+
+    /// <summary>
+    /// Parses a raw tool invocation name and payload string into a normalized canonical call.
+    /// </summary>
+    public DispatchedToolCall NormalizeCall(string rawToolName, string rawArgumentsJson)
+    {
+        var sanitizedJson = SanitizeJsonPayload(rawArgumentsJson);
+        var parsedArgs = ParseAndCoerceArguments(sanitizedJson);
+        return NormalizeCall(rawToolName, parsedArgs);
     }
 
     /// <summary>
@@ -337,7 +344,7 @@ public partial class LenientToolDispatcher
             }
         }
 
-        var contentKeys = new[] { "content", "file_content", "text", "CodeContent", "code_content" };
+        var contentKeys = new[] { "content", "file_content", "text", "code", "CodeContent", "code_content" };
         foreach (var ck in contentKeys)
         {
             if (!norm.ContainsKey("content") && raw.TryGetValue(ck, out var val) && val != null)
@@ -347,23 +354,40 @@ public partial class LenientToolDispatcher
             }
         }
 
+        int? resolvedOffset = null;
         var offsetKeys = new[] { "offset", "start_line", "startLine", "from_line", "line_start", "start", "StartLine" };
         foreach (var ok in offsetKeys)
         {
-            if (!norm.ContainsKey("offset") && raw.TryGetValue(ok, out var val) && val != null)
+            if (raw.TryGetValue(ok, out var val) && val != null)
             {
-                norm["offset"] = CoerceToInt(val);
-                break;
+                resolvedOffset = CoerceToInt(val);
+                if (resolvedOffset != null)
+                {
+                    norm["offset"] = resolvedOffset;
+                    break;
+                }
             }
         }
 
-        var limitKeys = new[] { "limit", "end_line", "endLine", "to_line", "line_end", "end", "EndLine" };
-        foreach (var lk in limitKeys)
+        if (raw.TryGetValue("limit", out var limVal) && limVal != null)
         {
-            if (!norm.ContainsKey("limit") && raw.TryGetValue(lk, out var val) && val != null)
+            norm["limit"] = CoerceToInt(limVal);
+        }
+        else
+        {
+            var endLineKeys = new[] { "end_line", "endLine", "to_line", "line_end", "end", "EndLine" };
+            foreach (var elk in endLineKeys)
             {
-                norm["limit"] = CoerceToInt(val);
-                break;
+                if (raw.TryGetValue(elk, out var val) && val != null)
+                {
+                    var endLine = CoerceToInt(val);
+                    if (endLine != null)
+                    {
+                        var start = resolvedOffset ?? 1;
+                        norm["limit"] = Math.Max(1, endLine.Value - start + 1);
+                        break;
+                    }
+                }
             }
         }
 
@@ -373,6 +397,71 @@ public partial class LenientToolDispatcher
             if (!norm.ContainsKey("query") && raw.TryGetValue(qk, out var val) && val != null)
             {
                 norm["query"] = val;
+                break;
+            }
+        }
+
+        var workDirKeys = new[] { "working_directory", "workingDirectory", "workdir", "work_dir", "cwd" };
+        foreach (var wdk in workDirKeys)
+        {
+            if (!norm.ContainsKey("working_directory") && raw.TryGetValue(wdk, out var val) && val != null)
+            {
+                norm["working_directory"] = val;
+                break;
+            }
+        }
+
+        var skillKeys = new[] { "skill_name", "skillName", "skill", "name" };
+        foreach (var sk in skillKeys)
+        {
+            if (!norm.ContainsKey("skill_name") && raw.TryGetValue(sk, out var val) && val != null)
+            {
+                norm["skill_name"] = val;
+                break;
+            }
+        }
+
+        var maxResultsKeys = new[] { "max_results", "maxResults", "limit", "count" };
+        foreach (var mrk in maxResultsKeys)
+        {
+            if (!norm.ContainsKey("max_results") && raw.TryGetValue(mrk, out var val) && val != null)
+            {
+                norm["max_results"] = CoerceToInt(val);
+                break;
+            }
+        }
+
+        if (!norm.ContainsKey("tasks") && raw.TryGetValue("task", out var taskVal) && taskVal != null)
+        {
+            norm["tasks"] = taskVal;
+        }
+
+        var questionKeys = new[] { "questions", "question_items", "questionItems", "items" };
+        foreach (var qk in questionKeys)
+        {
+            if (!norm.ContainsKey("questions") && raw.TryGetValue(qk, out var qVal) && qVal != null)
+            {
+                norm["questions"] = qVal;
+                break;
+            }
+        }
+
+        var feedbackKeys = new[] { "feedback", "critique", "message", "comments" };
+        foreach (var fk in feedbackKeys)
+        {
+            if (!norm.ContainsKey("feedback") && raw.TryGetValue(fk, out var fVal) && fVal != null)
+            {
+                norm["feedback"] = fVal;
+                break;
+            }
+        }
+
+        var reasonKeys = new[] { "reason", "comment", "summary" };
+        foreach (var rk in reasonKeys)
+        {
+            if (!norm.ContainsKey("reason") && raw.TryGetValue(rk, out var rVal) && rVal != null)
+            {
+                norm["reason"] = rVal;
                 break;
             }
         }
@@ -394,6 +483,8 @@ public partial class LenientToolDispatcher
 
             if (oldVal != null && newVal != null)
             {
+                norm["old_text"] = oldVal;
+                norm["new_text"] = newVal;
                 norm["edits"] = new List<object?>
                 {
                     new Dictionary<string, object?> { ["oldText"] = oldVal, ["newText"] = newVal }
@@ -421,8 +512,17 @@ public partial class LenientToolDispatcher
             async (args, ct) =>
             {
                 var path = GetRequiredString(args, "path");
-                var offset = GetOptionalInt(args, "offset");
+                var offset = GetOptionalInt(args, "offset") ?? GetOptionalInt(args, "start_line") ?? GetOptionalInt(args, "startLine");
                 var limit = GetOptionalInt(args, "limit");
+                if (!limit.HasValue)
+                {
+                    var endLine = GetOptionalInt(args, "end_line") ?? GetOptionalInt(args, "endLine");
+                    if (endLine.HasValue)
+                    {
+                        var start = offset ?? 1;
+                        limit = Math.Max(1, endLine.Value - start + 1);
+                    }
+                }
                 return await tools.ReadAsync(path, offset, limit, ct);
             },
             aliases: ["read_file", "readfile", "read_file_content", "cat", "view_file"]));
@@ -434,7 +534,24 @@ public partial class LenientToolDispatcher
             {
                 var path = GetRequiredString(args, "path");
                 var edits = ExtractEdits(args);
-                return await tools.EditAsync(path, edits, ct);
+                if (edits.Count > 0 && edits.Any(c => !string.IsNullOrEmpty(c.OldText) || !string.IsNullOrEmpty(c.NewText)))
+                {
+                    return await tools.EditAsync(path, edits, ct);
+                }
+
+                string? effectiveOld = null;
+                string? effectiveNew = null;
+                var oldKeys = new[] { "oldText", "old_text", "targetContent", "target_content", "old_str", "search" };
+                var newKeys = new[] { "newText", "new_text", "replacementContent", "replacement_content", "new_str", "replace" };
+                foreach (var k in oldKeys) { if (args.TryGetValue(k, out var ot) && ot != null) { effectiveOld = ot.ToString(); break; } }
+                foreach (var k in newKeys) { if (args.TryGetValue(k, out var nt) && nt != null) { effectiveNew = nt.ToString(); break; } }
+
+                if (effectiveOld != null && effectiveNew != null)
+                {
+                    return await tools.EditAsync(path, effectiveOld, effectiveNew, ct);
+                }
+
+                return "Error: provide 'edits' (array of { oldText, newText }) or single-edit replacement ('oldText'/'newText' or 'old_text'/'new_text').";
             },
             aliases: ["replace_file_content", "replacefilecontent", "replace_content", "replacecontent", "edit_file", "str_replace", "patch_file", "editfile"]));
 
@@ -444,7 +561,9 @@ public partial class LenientToolDispatcher
             async (args, ct) =>
             {
                 var path = GetRequiredString(args, "path");
-                var content = GetRequiredString(args, "content");
+                var content = args.TryGetValue("content", out var c) && c != null
+                    ? c.ToString()!
+                    : (args.TryGetValue("code", out var cd) && cd != null ? cd.ToString()! : GetRequiredString(args, "content"));
                 return await tools.WriteAsync(path, content, ct);
             },
             aliases: ["write_file", "writefile", "create_file", "new_file"]));
@@ -456,10 +575,38 @@ public partial class LenientToolDispatcher
             {
                 var command = GetRequiredString(args, "command");
                 var timeout = GetOptionalInt(args, "timeout");
-                var workDir = args.TryGetValue("working_directory", out var wd) ? wd?.ToString() : null;
+                var workDir = args.TryGetValue("working_directory", out var wd) && wd != null
+                    ? wd.ToString()
+                    : (args.TryGetValue("workingDirectory", out var wdCamel) && wdCamel != null
+                        ? wdCamel.ToString()
+                        : (args.TryGetValue("cwd", out var cwd) && cwd != null
+                            ? cwd.ToString()
+                            : (args.TryGetValue("workdir", out var wrk) && wrk != null ? wrk.ToString() : null)));
                 return await tools.BashAsync(command, timeout, workDir, ct);
             },
             aliases: ["run_command", "runcommand", "run_cmd", "exec", "execute", "cmd", "terminal", "powershell", "sh"]));
+
+        RegisterTool(new ToolDefinition(
+            CanonicalToolNames.LoadSkill,
+            "Loads full instructions and reference documentation for a modular skill on demand (skill_name)",
+            async (args, ct) =>
+            {
+                var skillName = args.TryGetValue("skill_name", out var s) && s != null
+                    ? s.ToString()!
+                    : (args.TryGetValue("skillName", out var sn) && sn != null
+                        ? sn.ToString()!
+                        : (args.TryGetValue("skill", out var sk) && sk != null
+                            ? sk.ToString()!
+                            : (args.TryGetValue("name", out var n) && n != null ? n.ToString()! : null)));
+
+                if (string.IsNullOrWhiteSpace(skillName))
+                {
+                    return "Error: skill_name parameter is required.";
+                }
+
+                return await tools.LoadSkillAsync(skillName, ct);
+            },
+            aliases: ["loadskill", "use_skill", "useskill", "get_skill"]));
 
         RegisterTool(new ToolDefinition(
             CanonicalToolNames.Ask,
@@ -476,19 +623,27 @@ public partial class LenientToolDispatcher
             "Search technical web documentation for APIs, errors, or libraries (query, max_results)",
             async (args, ct) =>
             {
-                var query = GetRequiredString(args, "query");
-                var maxResults = GetOptionalInt(args, "max_results");
+                var query = args.TryGetValue("query", out var q) && q != null
+                    ? q.ToString()!
+                    : (args.TryGetValue("q", out var qShort) && qShort != null ? qShort.ToString()! : GetRequiredString(args, "query"));
+                var maxResults = GetOptionalInt(args, "max_results")
+                    ?? GetOptionalInt(args, "maxResults")
+                    ?? GetOptionalInt(args, "limit")
+                    ?? GetOptionalInt(args, "count");
                 return await tools.WebSearchAsync(query, maxResults, ct);
             },
             aliases: ["search_web", "google_search", "bing_search", "brave_search", "websearch", "internet_search", "search"]));
 
         RegisterTool(new ToolDefinition(
             CanonicalToolNames.ProposeTasks,
-            "Propose structured backlog items (tasks: [{ title, description, type }])",
+            "Propose structured backlog items (tasks: [{ title, description, priority }])",
             (args, _) =>
             {
-                var tasks = ExtractTasks(args);
-                return Task.FromResult(tools.ProposeTasks(tasks));
+                args.TryGetValue("tasks", out var tasks);
+                var title = args.TryGetValue("title", out var t) ? t?.ToString() : null;
+                var description = args.TryGetValue("description", out var d) ? d?.ToString() : null;
+                var priority = GetOptionalInt(args, "priority");
+                return Task.FromResult(tools.ProposeTasks(tasks, title, description, priority));
             },
             aliases: ["propose_task", "proposetasks"]));
 
@@ -497,8 +652,12 @@ public partial class LenientToolDispatcher
             "Reject implementation and send task back to the implementation agent for rework (feedback, reason)",
             (args, _) =>
             {
-                var feedback = GetRequiredString(args, "feedback");
-                var reason = args.TryGetValue("reason", out var r) ? r?.ToString() : null;
+                var feedback = args.TryGetValue("feedback", out var fb) && fb != null
+                    ? fb.ToString()!
+                    : (args.TryGetValue("critique", out var cr) && cr != null ? cr.ToString()! : GetRequiredString(args, "feedback"));
+                var reason = args.TryGetValue("reason", out var r) && r != null
+                    ? r.ToString()
+                    : (args.TryGetValue("comment", out var cm) ? cm?.ToString() : null);
                 return Task.FromResult(tools.RequestChanges(feedback, reason));
             },
             aliases: ["reject_implementation", "requestchanges", "rejectimplementation", "send_back", "sendback"]));
@@ -549,15 +708,24 @@ public partial class LenientToolDispatcher
         if (val == null) return null;
         if (val is int i) return i;
         if (val is long l) return (int)l;
+        if (val is JsonElement je && je.TryGetInt32(out var jeInt)) return jeInt;
         if (int.TryParse(val.ToString(), out var parsed)) return parsed;
         return null;
     }
 
     private static string GetRequiredString(Dictionary<string, object?> args, string key)
     {
-        if (args.TryGetValue(key, out var val) && val != null && !string.IsNullOrWhiteSpace(val.ToString()))
+        if (args.TryGetValue(key, out var val) && val != null)
         {
-            return val.ToString()!;
+            if (val is JsonElement je && je.ValueKind == JsonValueKind.String)
+            {
+                var s = je.GetString();
+                if (!string.IsNullOrWhiteSpace(s)) return s;
+            }
+            else if (!string.IsNullOrWhiteSpace(val.ToString()))
+            {
+                return val.ToString()!;
+            }
         }
         throw new ArgumentException($"Missing required parameter: '{key}'");
     }
@@ -574,30 +742,141 @@ public partial class LenientToolDispatcher
     private static IReadOnlyList<EditChunk> ExtractEdits(Dictionary<string, object?> args)
     {
         var chunks = new List<EditChunk>();
-        if (args.TryGetValue("edits", out var editsObj) && editsObj is IEnumerable<object?> list)
+        if (!args.TryGetValue("edits", out var editsObj) || editsObj == null)
+        {
+            return chunks;
+        }
+
+        if (editsObj is string str && !string.IsNullOrWhiteSpace(str) && str.TrimStart().StartsWith("["))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(str);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var el in doc.RootElement.EnumerateArray())
+                    {
+                        if (el.ValueKind == JsonValueKind.Object)
+                        {
+                            chunks.Add(ExtractChunkFromJsonElement(el));
+                        }
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // Fallback
+            }
+            return chunks;
+        }
+
+        if (editsObj is IEnumerable<EditChunk> typedChunks)
+        {
+            return typedChunks.ToList();
+        }
+
+        if (editsObj is JsonElement je)
+        {
+            if (je.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in je.EnumerateArray())
+                {
+                    if (el.ValueKind == JsonValueKind.Object)
+                    {
+                        chunks.Add(ExtractChunkFromJsonElement(el));
+                    }
+                }
+            }
+            return chunks;
+        }
+
+        if (editsObj is IEnumerable<object?> list)
         {
             foreach (var item in list)
             {
-                if (item is Dictionary<string, object?> d)
+                if (item is EditChunk chunk)
                 {
-                    string oldText = string.Empty;
-                    string newText = string.Empty;
-
-                    foreach (var k in new[] { "oldText", "old_text", "targetContent", "target_content" })
+                    chunks.Add(chunk);
+                }
+                else if (item is IDictionary<string, object?> d)
+                {
+                    chunks.Add(ExtractChunkFromDictionary(d));
+                }
+                else if (item is JsonElement el && el.ValueKind == JsonValueKind.Object)
+                {
+                    chunks.Add(ExtractChunkFromJsonElement(el));
+                }
+                else if (item is JsonObject jo)
+                {
+                    var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var (k, v) in jo)
                     {
-                        if (d.TryGetValue(k, out var ot) && ot != null) { oldText = ot.ToString()!; break; }
+                        dict[k] = v?.ToString();
                     }
-                    foreach (var k in new[] { "newText", "new_text", "replacementContent", "replacement_content" })
-                    {
-                        if (d.TryGetValue(k, out var nt) && nt != null) { newText = nt.ToString()!; break; }
-                    }
-
-                    chunks.Add(new EditChunk(oldText, newText));
+                    chunks.Add(ExtractChunkFromDictionary(dict));
                 }
             }
         }
 
         return chunks;
+    }
+
+    private static EditChunk ExtractChunkFromDictionary(IDictionary<string, object?> dict)
+    {
+        string old = string.Empty;
+        string @new = string.Empty;
+
+        var oldKeys = new[] { "oldText", "old_text", "targetContent", "target_content", "target_string", "search", "old_str", "old" };
+        var newKeys = new[] { "newText", "new_text", "replacementContent", "replacement_content", "replacement_string", "replace", "new_str", "new" };
+
+        foreach (var k in oldKeys)
+        {
+            if (dict.TryGetValue(k, out var ot) && ot != null)
+            {
+                old = ot.ToString()!;
+                break;
+            }
+        }
+
+        foreach (var k in newKeys)
+        {
+            if (dict.TryGetValue(k, out var nt) && nt != null)
+            {
+                @new = nt.ToString()!;
+                break;
+            }
+        }
+
+        return new EditChunk(old, @new);
+    }
+
+    private static EditChunk ExtractChunkFromJsonElement(JsonElement el)
+    {
+        string old = string.Empty;
+        string @new = string.Empty;
+
+        var oldKeys = new[] { "oldText", "old_text", "targetContent", "target_content", "target_string", "search", "old_str", "old" };
+        var newKeys = new[] { "newText", "new_text", "replacementContent", "replacement_content", "replacement_string", "replace", "new_str", "new" };
+
+        foreach (var k in oldKeys)
+        {
+            if (el.TryGetProperty(k, out var p) && p.ValueKind == JsonValueKind.String)
+            {
+                old = p.GetString() ?? string.Empty;
+                break;
+            }
+        }
+
+        foreach (var k in newKeys)
+        {
+            if (el.TryGetProperty(k, out var p) && p.ValueKind == JsonValueKind.String)
+            {
+                @new = p.GetString() ?? string.Empty;
+                break;
+            }
+        }
+
+        return new EditChunk(old, @new);
     }
 
     private static IReadOnlyList<string>? ExtractStringList(Dictionary<string, object?> args, string key)
@@ -611,130 +890,131 @@ public partial class LenientToolDispatcher
 
     private static IReadOnlyList<QuestionItem>? ExtractQuestionItems(Dictionary<string, object?> args)
     {
-        if (args.TryGetValue("questions", out var qObj) && qObj != null)
+        object? qObj = null;
+        var questionKeys = new[] { "questions", "question_items", "questionItems", "items" };
+        foreach (var qk in questionKeys)
         {
-            if (qObj is IReadOnlyList<QuestionItem> typedList)
+            if (args.TryGetValue(qk, out qObj) && qObj != null) break;
+        }
+
+        if (qObj == null)
+        {
+            return null;
+        }
+
+        if (qObj is string str && !string.IsNullOrWhiteSpace(str) && str.TrimStart().StartsWith("["))
+        {
+            try
             {
-                return typedList;
+                using var doc = JsonDocument.Parse(str);
+                return ParseQuestionItemsFromJsonElement(doc.RootElement);
             }
-            if (qObj is IEnumerable<QuestionItem> typedEnum)
+            catch (JsonException)
             {
-                return typedEnum.ToList();
+                // Fallback
             }
-            if (qObj is JsonElement je)
+        }
+
+        if (qObj is IReadOnlyList<QuestionItem> typedList)
+        {
+            return typedList;
+        }
+        if (qObj is IEnumerable<QuestionItem> typedEnum)
+        {
+            return typedEnum.ToList();
+        }
+        if (qObj is JsonElement je)
+        {
+            return ParseQuestionItemsFromJsonElement(je);
+        }
+        if (qObj is Dictionary<string, object?> singleDict)
+        {
+            string prompt = GetQuestionPrompt(singleDict);
+            string? rationale = (singleDict.TryGetValue("rationale", out var r) || singleDict.TryGetValue("Rationale", out r)) ? r?.ToString() : null;
+            List<string>? options = null;
+            if ((singleDict.TryGetValue("options", out var opts) || singleDict.TryGetValue("Options", out opts)) && opts is IEnumerable<object?> optList)
             {
-                if (je.ValueKind == JsonValueKind.Array)
+                options = optList.Select(o => o?.ToString() ?? "").ToList();
+            }
+            return new List<QuestionItem> { new(prompt, rationale, options) };
+        }
+        if (qObj is IEnumerable<object?> items)
+        {
+            var result = new List<QuestionItem>();
+            foreach (var item in items)
+            {
+                if (item is QuestionItem qi)
                 {
-                    var list = new List<QuestionItem>();
-                    foreach (var el in je.EnumerateArray())
-                    {
-                        string prompt = (el.TryGetProperty("prompt", out var pProp) || el.TryGetProperty("Prompt", out pProp))
-                            ? pProp.GetString() ?? "" : "";
-                        string? rationale = (el.TryGetProperty("rationale", out var rProp) || el.TryGetProperty("Rationale", out rProp))
-                            ? rProp.GetString() : null;
-                        List<string>? options = null;
-                        if ((el.TryGetProperty("options", out var oProp) || el.TryGetProperty("Options", out oProp)) && oProp.ValueKind == JsonValueKind.Array)
-                        {
-                            options = oProp.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
-                        }
-                        list.Add(new QuestionItem(prompt, rationale, options));
-                    }
-                    return list;
+                    result.Add(qi);
                 }
-                if (je.ValueKind == JsonValueKind.Object)
+                else if (item is Dictionary<string, object?> d)
                 {
-                    string prompt = (je.TryGetProperty("prompt", out var pProp) || je.TryGetProperty("Prompt", out pProp))
-                        ? pProp.GetString() ?? "" : "";
-                    string? rationale = (je.TryGetProperty("rationale", out var rProp) || je.TryGetProperty("Rationale", out rProp))
-                        ? rProp.GetString() : null;
+                    string prompt = GetQuestionPrompt(d);
+                    string? rationale = (d.TryGetValue("rationale", out var r) || d.TryGetValue("Rationale", out r)) ? r?.ToString() : null;
                     List<string>? options = null;
-                    if ((je.TryGetProperty("options", out var oProp) || je.TryGetProperty("Options", out oProp)) && oProp.ValueKind == JsonValueKind.Array)
+                    if ((d.TryGetValue("options", out var opts) || d.TryGetValue("Options", out opts)) && opts is IEnumerable<object?> optList)
                     {
-                        options = oProp.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
+                        options = optList.Select(o => o?.ToString() ?? "").ToList();
                     }
-                    return new List<QuestionItem> { new(prompt, rationale, options) };
+                    result.Add(new QuestionItem(prompt, rationale, options));
                 }
             }
-            if (qObj is Dictionary<string, object?> singleDict)
-            {
-                string prompt = (singleDict.TryGetValue("prompt", out var p) || singleDict.TryGetValue("Prompt", out p)) ? p?.ToString() ?? "" : "";
-                string? rationale = (singleDict.TryGetValue("rationale", out var r) || singleDict.TryGetValue("Rationale", out r)) ? r?.ToString() : null;
-                List<string>? options = null;
-                if ((singleDict.TryGetValue("options", out var opts) || singleDict.TryGetValue("Options", out opts)) && opts is IEnumerable<object?> optList)
-                {
-                    options = optList.Select(o => o?.ToString() ?? "").ToList();
-                }
-                return new List<QuestionItem> { new(prompt, rationale, options) };
-            }
-            if (qObj is IEnumerable<object?> items)
-            {
-                var result = new List<QuestionItem>();
-                foreach (var item in items)
-                {
-                    if (item is QuestionItem qi)
-                    {
-                        result.Add(qi);
-                    }
-                    else if (item is Dictionary<string, object?> d)
-                    {
-                        string prompt = (d.TryGetValue("prompt", out var p) || d.TryGetValue("Prompt", out p)) ? p?.ToString() ?? "" : "";
-                        string? rationale = (d.TryGetValue("rationale", out var r) || d.TryGetValue("Rationale", out r)) ? r?.ToString() : null;
-                        List<string>? options = null;
-                        if ((d.TryGetValue("options", out var opts) || d.TryGetValue("Options", out opts)) && opts is IEnumerable<object?> optList)
-                        {
-                            options = optList.Select(o => o?.ToString() ?? "").ToList();
-                        }
-                        result.Add(new QuestionItem(prompt, rationale, options));
-                    }
-                }
-                return result;
-            }
+            return result;
         }
         return null;
     }
 
-    private static IReadOnlyList<TaskProposal> ExtractTasks(Dictionary<string, object?> args)
+    private static string GetQuestionPrompt(Dictionary<string, object?> dict)
     {
-        var tasks = new List<TaskProposal>();
-        if (args.TryGetValue("tasks", out var obj) && obj != null)
+        var keys = new[] { "prompt", "Prompt", "question", "Question" };
+        foreach (var k in keys)
         {
-            if (obj is string str && str.TrimStart().StartsWith("["))
+            if (dict.TryGetValue(k, out var p) && p != null)
             {
-                try
-                {
-                    var parsedNode = JsonNode.Parse(str);
-                    if (parsedNode is JsonArray arr)
-                    {
-                        obj = arr.Select(ConvertJsonNode).ToList();
-                    }
-                }
-                catch (JsonException)
-                {
-                    // Malformed JSON array string; ignore and continue
-                }
-            }
-
-            if (obj is IEnumerable<object?> list)
-            {
-                foreach (var item in list)
-                {
-                    if (item is Dictionary<string, object?> d)
-                    {
-                        var title = d.TryGetValue("title", out var t) ? t?.ToString() ?? "" : "";
-                        var desc = d.TryGetValue("description", out var ds) ? ds?.ToString() ?? "" : "";
-                        var type = d.TryGetValue("type", out var tp) ? tp?.ToString() ?? "feature" : "feature";
-                        tasks.Add(new TaskProposal(title, desc, type));
-                    }
-                    else if (item is JsonElement elem && elem.ValueKind == JsonValueKind.Object)
-                    {
-                        var title = elem.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
-                        var desc = elem.TryGetProperty("description", out var ds) ? ds.GetString() ?? "" : "";
-                        var type = elem.TryGetProperty("type", out var tp) ? tp.GetString() ?? "feature" : "feature";
-                        tasks.Add(new TaskProposal(title, desc, type));
-                    }
-                }
+                return p.ToString() ?? "";
             }
         }
-        return tasks;
+        return "";
     }
+
+    private static List<QuestionItem> ParseQuestionItemsFromJsonElement(JsonElement je)
+    {
+        var list = new List<QuestionItem>();
+        if (je.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var el in je.EnumerateArray())
+            {
+                list.Add(ParseSingleQuestionElement(el));
+            }
+        }
+        else if (je.ValueKind == JsonValueKind.Object)
+        {
+            list.Add(ParseSingleQuestionElement(je));
+        }
+        return list;
+    }
+
+    private static QuestionItem ParseSingleQuestionElement(JsonElement el)
+    {
+        string prompt = "";
+        var promptKeys = new[] { "prompt", "Prompt", "question", "Question" };
+        foreach (var pk in promptKeys)
+        {
+            if (el.TryGetProperty(pk, out var pProp) && pProp.ValueKind == JsonValueKind.String)
+            {
+                prompt = pProp.GetString() ?? "";
+                break;
+            }
+        }
+
+        string? rationale = (el.TryGetProperty("rationale", out var rProp) || el.TryGetProperty("Rationale", out rProp))
+            ? rProp.GetString() : null;
+        List<string>? options = null;
+        if ((el.TryGetProperty("options", out var oProp) || el.TryGetProperty("Options", out oProp)) && oProp.ValueKind == JsonValueKind.Array)
+        {
+            options = oProp.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
+        }
+        return new QuestionItem(prompt, rationale, options);
+    }
+
 }

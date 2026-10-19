@@ -215,7 +215,14 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
                 var refreshBtn = _page.Locator("button:has-text('Refresh')");
                 if (await refreshBtn.CountAsync() > 0 && await refreshBtn.First.IsVisibleAsync())
                 {
-                    await refreshBtn.First.ClickAsync();
+                    try
+                    {
+                        await refreshBtn.First.ClickAsync(new LocatorClickOptions { Timeout = 5000 });
+                    }
+                    catch
+                    {
+                        // Ignore collision if Blazor circuit is reconnecting
+                    }
                 }
 
                 // Periodic page reload to ensure fresh circuit and clear any dropped connections

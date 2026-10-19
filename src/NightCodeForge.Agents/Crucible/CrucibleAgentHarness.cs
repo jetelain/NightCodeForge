@@ -1212,7 +1212,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         List<CustomToolConfig>? customTools = null,
         IReadOnlyDictionary<string, string>? toolDirectives = null)
     {
-        var aiFunctions = CanonicalAIFunctionFactory.CreateTools(tools, permittedTools).Cast<AIFunction>().ToList();
+        var aiFunctions = CanonicalAIFunctionFactory.CreateTools(tools, permittedTools, dispatcher).Cast<AIFunction>().ToList();
         var knownNames = new HashSet<string>(aiFunctions.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
         foreach (var tool in permittedTools)
         {
