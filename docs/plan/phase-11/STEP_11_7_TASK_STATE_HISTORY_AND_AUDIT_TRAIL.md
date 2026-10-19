@@ -1,152 +1,109 @@
 # 🕰️ Step 11.7: Task State History & Temporal Snapshot Audit Trail
 
-> **Phase 11 Implementation Step (Post-MVP)**  
+> **Phase 11 Implementation Step (Post-MVP - Top Priority)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
-> *Project Target:* `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Infrastructure/Data`, `src/NightCodeForge.Web/Components/Backlog`, `tests/NightCodeForge.Infrastructure.Tests` | *Status:* Planned
+> *Project Target:* `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Infrastructure/Data`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned (Backend Implemented, UI & Timeline In Progress)
 
 ---
 
 ## 1. Executive Objective
 
-Provide a robust, temporal audit history for all [ForgeTask](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/ForgeTask.cs) entities:
-1. **Up-to-Date Entity Storage (`ForgeTask`):**
-   - The primary `Tasks` table holds the single source of truth for current state (enabling optimal query performance, straightforward indices, and existing foreign key relationships).
-2. **Historical State Capture (`ForgeTaskHistory`):**
-   - A dedicated secondary table (`TaskHistories`) stores immutable point-in-time snapshots whenever a task is created, modified, or transitioned.
-   - Captures changes across all mutation channels: interactive ideation agent edits (`edit_task`), manual developer edits in the UI drawer, stage lifecycle transitions, triage proposals, and markdown disk synchronizations.
-3. **Change Attribution & Diffs:**
-   - Tracks `Version` (monotonically increasing integer per task), `ChangedAt`, `ChangedBy` (e.g. `"User"`, `"IdeationAgent"`, `"TriageAgent"`, `"TaskOrchestrator"`), and an optional `ChangeReason`.
-   - Enables visual side-by-side or unified text diffs between task revisions in the Blazor Web dashboard.
+As developers onboard active real-world projects (**OllamaRouter** and **ComicGenCLI**) and iteratively refine backlogs with both human and agent edits, having full transparency into what changed, who changed it, and why is vital.
+
+This step delivers a complete, temporal audit history for all [ForgeTask](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/ForgeTask.cs) entities:
+1. **Historical Snapshot Storage (`TaskHistories` table):**
+   - *Status: Backend Implemented.* The [ForgeTaskHistory](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/ForgeTaskHistory.cs) domain entity and EF Core `TaskHistories` table store immutable point-in-time snapshots with monotonically increasing `Version` numbers.
+2. **Comprehensive Mutation Attribution:**
+   - Every modification channel—manual maintainer edits in the Web UI, agent updates in Ideation (`edit_task`), stage lifecycle transitions in [TaskOrchestrator](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs), triage proposals, and markdown disk synchronizations—records explicit attribution (`ChangedBy`, `ChangeReason`).
+3. **Interactive Revision Timeline & Diff View (UI):**
+   - Provide a dedicated `TaskHistoryTimeline.razor` component embedded in [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) and [TaskInspector.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/TaskInspector.razor).
+   - Display a vertical visual timeline of task revisions with side-by-side or inline text diffs using `DiffPlex` showing changes to Title, Description, Acceptance Criteria, Priority, Status, and Dependencies.
 
 ---
 
-## 2. Domain & Database Schema
-
-### 2.1 Entity Model: `ForgeTaskHistory`
-
-```csharp
-namespace NightCodeForge.Core.Domain;
-
-/// <summary>
-/// Immutable point-in-time snapshot of a ForgeTask state revision.
-/// </summary>
-public class ForgeTaskHistory
-{
-    public int Id { get; set; }
-    public int TaskId { get; set; }
-    public int Version { get; set; }
-
-    public string Title { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
-    public TaskOverallStatus Status { get; set; }
-    public int Priority { get; set; }
-    public MergeMode MergeMode { get; set; }
-    public string BaseBranch { get; set; } = "main";
-    public string FeatureBranch { get; set; } = string.Empty;
-    public string? CurrentStageId { get; set; }
-    public string? DependenciesJson { get; set; } // JSON array of DependsOnTaskIds at this revision
-
-    public DateTime ChangedAt { get; set; } = DateTime.UtcNow;
-    public string ChangedBy { get; set; } = "System"; // "User", "IdeationAgent", "TriageAgent", "Orchestrator", "TaskMarkdownSync"
-    public string? ChangeReason { get; set; }
-
-    // Navigation
-    public ForgeTask? Task { get; set; }
-}
-```
-
-### 2.2 Entity Framework Core Configuration
-In `AppDbContext.cs`:
-```csharp
-modelBuilder.Entity<ForgeTaskHistory>(entity =>
-{
-    entity.ToTable("TaskHistories");
-    entity.HasKey(h => h.Id);
-    entity.HasIndex(h => new { h.TaskId, h.Version }).IsUnique();
-    entity.HasIndex(h => h.ChangedAt);
-
-    entity.HasOne(h => h.Task)
-          .WithMany(t => t.History)
-          .HasForeignKey(h => h.TaskId)
-          .OnDelete(DeleteBehavior.Cascade);
-});
-```
-
----
-
-## 3. Snapshot Generation Strategy
+## 2. Architecture & Data Flow
 
 ```mermaid
 flowchart TD
-    subgraph Triggers ["Mutation Triggers"]
-        IdeationEdit["Ideation edit_task Tool"]
-        UIEdit["Maintainer Edit in Task Drawer"]
-        StageAdvance["Orchestrator AdvanceStageAsync"]
-        TriageCreate["Triage/Ideation propose_tasks"]
-        MarkdownSync["TaskMarkdownSyncService"]
+    subgraph Triggers ["Task Mutation Channels"]
+        UIEdit["Maintainer Edit in Task Drawer<br/>(Priority, Description, MergeMode)"]
+        IdeationEdit["Ideation edit_task Tool Call"]
+        StageAdvance["Orchestrator AdvanceStageAsync<br/>(Draft -> Suggested -> Open -> Reviewed -> Implemented -> Ready)"]
+        DiskSync["TaskMarkdownSyncService<br/>(Git edits pulled from disk)"]
     end
 
-    subgraph Service ["TaskHistoryService / Repository Interceptor"]
-        Detect["Detect Changed Properties<br/>(Title, Description, Status, Priority, Deps)"]
-        NextVer["Fetch Max(Version) + 1 for TaskId"]
-        CreateSnap["Instantiate ForgeTaskHistory Record"]
+    subgraph Repo ["EfCoreTaskRepository"]
+        UpdateTask["UpdateAsync(task, changedBy, reason)"]
+        FetchHist["GetHistoryByTaskIdAsync(taskId)"]
     end
 
-    subgraph Storage ["SQLite Database"]
-        TaskTable[("Tasks (Latest State)")]
+    subgraph DB ["SQLite Database"]
+        TaskTable[("Tasks (Current State)")]
         HistoryTable[("TaskHistories (Immutable Revisions)")]
     end
 
-    Triggers --> Detect
-    Detect --> NextVer --> CreateSnap
-    CreateSnap --> HistoryTable
-    Triggers --> TaskTable
+    subgraph UI ["Blazor Web Presentation"]
+        Drawer["TaskDetailDrawer.razor<br/>(History Tab)"]
+        Timeline["TaskHistoryTimeline.razor"]
+        DiffView["DiffPlex Text Comparator<br/>(Highlights additions/deletions)"]
+    end
+
+    UIEdit --> UpdateTask
+    IdeationEdit --> UpdateTask
+    StageAdvance --> UpdateTask
+    DiskSync --> UpdateTask
+
+    UpdateTask --> TaskTable
+    UpdateTask --> HistoryTable
+    HistoryTable --> FetchHist --> Timeline --> Drawer
+    Timeline --> DiffView
 ```
 
-### Automatic Snapshot Triggers
-1. **Task Creation (`Version = 1`):**
-   - Automatically created with `ChangedBy = "Creator"`, `ChangeReason = "Initial Task Creation"`.
-2. **Field Modifications (`Title`, `Description`, `Priority`, `Dependencies`):**
-   - Evaluated during `UpdateAsync`: if core content fields changed, persist a new history row with incremented `Version`.
-3. **Status Transitions:**
-   - When status advances (e.g. `Draft` $\rightarrow$ `Suggested` $\rightarrow$ `Open` $\rightarrow$ `Reviewed` $\rightarrow$ `Implemented` $\rightarrow$ `Ready` $\rightarrow$ `Closed`), record the transition milestone with stage identification.
+---
+
+## 3. UI Component: `TaskHistoryTimeline.razor`
+
+### 3.1 Visual Design & Interactions
+Embedded as a dedicated "Revisions / History" tab inside [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor):
+
+```
+● Version 3 (2 minutes ago) by User
+  Reason: "Updated Priority to Critical and clarified acceptance criteria"
+  Changes: Priority: Normal -> Critical | Description modified (+24 lines, -8 lines)
+  [Toggle Diff]
+  -------------------------------------------------------------
+  [DiffPlex Inline Diff View: Red deletions, Green additions]
+  -------------------------------------------------------------
+
+● Version 2 (15 minutes ago) by IdeationAgent
+  Reason: "Decomposed task into sub-tasks and linked prerequisite #101"
+  Changes: Status: Draft -> Suggested | Dependencies: None -> [#101]
+
+● Version 1 (30 minutes ago) by Creator (User)
+  Reason: "Initial Task Creation"
+```
+
+### 3.2 Diff Comparison Capabilities
+- **Field-level change badges:** Highlights changes to `Status`, `Priority`, `MergeMode`, or `BaseBranch` in compact pill badges.
+- **Rich Markdown diff:** Compares `Description` across adjacent versions using `DiffPlex` inline character/word-level diff highlighting.
 
 ---
 
-## 4. UI Presentation: Revision Timeline & Diff View
+## 4. Implementation Checklist & Deliverables
 
-### 4.1 Task Detail Drawer / Inspector Tab (`TaskHistoryTab.razor`)
-- Displays an interactive vertical timeline of revisions:
-  ```
-  ● Version 3 (2 minutes ago) by User
-    "Approved draft into Suggested backlog"
-    Status: Draft -> Suggested
-  ● Version 2 (10 minutes ago) by IdeationAgent
-    "Refined acceptance criteria and dependencies based on user chat"
-    [View Diff] (DiffPlex side-by-side or inline text diff of Description)
-  ● Version 1 (15 minutes ago) by IdeationAgent
-    "Initial proposal created during ideation"
-  ```
-- Uses existing `DiffPlex` integration to highlight additions/deletions in task descriptions and acceptance criteria across versions.
-
----
-
-## 5. Implementation Checklist & Deliverables
-
-- [ ] **Domain Entity & Database Schema:**
-  - Create `ForgeTaskHistory` entity and add `ICollection<ForgeTaskHistory> History` to `ForgeTask`.
-  - Add `DbSet<ForgeTaskHistory> TaskHistories` in `AppDbContext` with indexes on `(TaskId, Version)` and `ChangedAt`.
-  - Add EF Core migration.
-- [ ] **History Recording Pipeline:**
-  - Implement `ITaskHistoryService` (or EF Core SaveChanges interceptor) to automatically capture history snapshots on task insert/update.
-  - Wire change attribution (`ChangedBy`, `ChangeReason`) from Ideation tools, Web UI, Orchestrator, and Markdown sync.
-- [ ] **Repository Queries:**
-  - Add `GetHistoryByTaskIdAsync(int taskId)` to `ITaskRepository`.
+- [x] **Domain Entity & EF Core Migration:** *(Completed)*
+  - `ForgeTaskHistory` entity defined with `Version`, `ChangedBy`, `ChangeReason`.
+  - EF Core table `TaskHistories` configured with unique index on `(TaskId, Version)`.
+- [x] **Repository Data Access:** *(Completed)*
+  - `ITaskRepository.GetHistoryByTaskIdAsync` and `EfCoreTaskRepository` snapshot capture logic.
+- [ ] **Change Attribution Wiring:**
+  - Verify that `TaskDetailDrawer.razor` supplies `changedBy: "User"` and descriptive `changeReason` when saving edits.
+  - Verify that `IdeationService` passes `changedBy: "IdeationAgent"` on `edit_task` tool execution.
+  - Verify that `TaskOrchestrator` logs stage advance transitions with `changedBy: "TaskOrchestrator"`.
 - [ ] **Blazor UI Components:**
-  - Build `TaskHistoryTimeline.razor` embedded into `TaskDetailDrawer.razor` and `TaskInspector.razor`.
-  - Provide text diff comparator for task description revisions.
-- [ ] **Unit & Integration Tests:**
-  - Test initial version creation on task insert.
-  - Test version incrementation on task update.
-  - Test cascade deletion when task is purged or discarded.
-  - Test description diff rendering.
+  - Build `TaskHistoryTimeline.razor` with vertical timeline styling and collapsible diff sections.
+  - Embed into [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) and [TaskInspector.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/TaskInspector.razor).
+  - Integrate `DiffPlex` rendering for description diffs.
+- [ ] **Tests:**
+  - bUnit tests for `TaskHistoryTimeline.razor` rendering versions and diff toggles.
+  - Integration tests verifying history snapshots on manual drawer edits and status transitions.
