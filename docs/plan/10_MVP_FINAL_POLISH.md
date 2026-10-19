@@ -63,9 +63,9 @@ flowchart TD
 
 | Step | Specification Document | Subagent Action | Focus & Deliverables | Est. Context | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **10.1** | [STEP_10_1_EF_MIGRATIONS.md](phase-10/STEP_10_1_EF_MIGRATIONS.md) | **Action 1.1** | Add `Microsoft.EntityFrameworkCore.Design` to `NightCodeForge.Web.csproj`, verify `dotnet ef` CLI works seamlessly with both projects. | ~10k tokens | Planned |
-| | | **Action 1.2** | Switch `EnsureDatabaseCreatedAndWalAsync` to `Database.MigrateAsync()`, preserve SQLite WAL pragmas and sequence seeding. | ~15k tokens | Planned |
-| | | **Action 1.3** | Implement automated migration test in `NightCodeForge.Infrastructure.Tests` verifying `__EFMigrationsHistory` and schema integrity. | ~12k tokens | Planned |
+| **10.1** | [STEP_10_1_EF_MIGRATIONS.md](phase-10/STEP_10_1_EF_MIGRATIONS.md) | **Action 1.1** | Add `Microsoft.EntityFrameworkCore.Design` to `NightCodeForge.Web.csproj`, verify `dotnet ef` CLI works seamlessly with both projects. | ~10k tokens | Completed |
+| | | **Action 1.2** | Switch `EnsureDatabaseCreatedAndWalAsync` to `Database.MigrateAsync()`, preserve SQLite WAL pragmas and sequence seeding. | ~15k tokens | Completed |
+| | | **Action 1.3** | Implement automated migration test in `NightCodeForge.Infrastructure.Tests` verifying `__EFMigrationsHistory` and schema integrity. | ~12k tokens | Completed |
 | **10.2** | [STEP_10_2_NAMESPACE_DOCUMENTATION.md](phase-10/STEP_10_2_NAMESPACE_DOCUMENTATION.md) | **Action 2.1** | Document `NightCodeForge.Core` (Project root + 10 namespaces: Concurrency, Dependencies, Domain, Exceptions, Execution, Interfaces, Repositories, Services, Streaming, Workflow). | ~25k tokens | Planned |
 | | | **Action 2.2** | Document `NightCodeForge.Infrastructure` (Project root + 7 namespaces: BackgroundJobs, Data, Execution, Git, Hubs, Inference, Migrations). | ~20k tokens | Planned |
 | | | **Action 2.3A** | Document `NightCodeForge.Agents` Part A (Root + 7 namespaces: Crucible, Inference, Tools, Dispatcher, Context, Streaming, Transcripts). | ~25k tokens | Planned |

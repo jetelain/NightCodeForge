@@ -25,6 +25,8 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
     private readonly string _baseUrl = Environment.GetEnvironmentVariable("NCF_BASE_URL") ?? "http://127.0.0.1:5272";
     private readonly string _workspaceSeed = Environment.GetEnvironmentVariable(NightCodeForge.Infrastructure.Data.AppDbContext.WorkspaceIdSeedEnvironmentVariable) 
         ?? NightCodeForge.Infrastructure.Data.AppDbContext.DefaultE2EWorkspaceIdSeed.ToString();
+    private readonly string _tempDbPath = Path.Combine(Path.GetTempPath(), $"nightcodeforge_e2e_{Guid.NewGuid():N}.db");
+    private readonly string _tempHangfireDbPath = Path.Combine(Path.GetTempPath(), $"nightcodeforge_e2e_hangfire_{Guid.NewGuid():N}.db");
 
     public AutonomousFeatureLifecycleTests(ITestOutputHelper output)
     {
@@ -336,6 +338,8 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
             CreateNoWindow = true
         };
         psi.Environment[NightCodeForge.Infrastructure.Data.AppDbContext.WorkspaceIdSeedEnvironmentVariable] = _workspaceSeed;
+        psi.Environment["ConnectionStrings__DefaultConnection"] = $"Data Source={_tempDbPath};";
+        psi.Environment["ConnectionStrings__HangfireConnection"] = $"Data Source={_tempHangfireDbPath};";
 
         var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../.."));
         var logDir = Path.Combine(repoRoot, "artifacts");
@@ -441,5 +445,20 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
         {
             await _repo.DisposeAsync();
         }
+
+        try
+        {
+            var prefix = Path.GetFileNameWithoutExtension(_tempDbPath);
+            foreach (var f in Directory.GetFiles(Path.GetTempPath(), $"{prefix}*"))
+            {
+                File.Delete(f);
+            }
+            var hgPrefix = Path.GetFileNameWithoutExtension(_tempHangfireDbPath);
+            foreach (var f in Directory.GetFiles(Path.GetTempPath(), $"{hgPrefix}*"))
+            {
+                File.Delete(f);
+            }
+        }
+        catch { }
     }
 }

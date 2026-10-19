@@ -45,6 +45,7 @@ public class AppDbContextTests : IDisposable
         await context.SaveChangesAsync();
 
         Assert.True(workspace.Id > 0);
+        Assert.Contains("20261019025958_InitialCreate", await context.Database.GetAppliedMigrationsAsync());
     }
 
     [Fact]

@@ -381,12 +381,23 @@ public class AppDbContext : DbContext
     public const int DefaultE2EWorkspaceIdSeed = 1_001_000;
 
     /// <summary>
-    /// Ensures the database schema is created and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
+    /// Migration identifier for the initial schema creation.
+    /// </summary>
+    public const string InitialCreateMigrationId = "20261019025958_InitialCreate";
+
+    /// <summary>
+    /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
     /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
     public async Task EnsureDatabaseCreatedAndWalAsync(CancellationToken cancellationToken = default)
     {
-        await Database.EnsureCreatedAsync(cancellationToken);
+        if (Database.IsSqlite())
+        {
+            await BaselineExistingPreMigrationDatabaseAsync(cancellationToken);
+        }
+
+        await Database.MigrateAsync(cancellationToken);
+
         if (Database.IsSqlite())
         {
             await Database.ExecuteSqlRawAsync("PRAGMA journal_mode = WAL;", cancellationToken);
@@ -394,6 +405,66 @@ public class AppDbContext : DbContext
             await Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = ON;", cancellationToken);
 
             await ApplyWorkspaceIdSeedIfConfiguredAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// For pre-existing SQLite databases created prior to EF Core Migrations (via EnsureCreated),
+    /// records the InitialCreate migration into __EFMigrationsHistory if the baseline schema already exists.
+    /// This prevents 'table already exists' errors and transitions smoothly to the migration pipeline.
+    /// </summary>
+    private async Task BaselineExistingPreMigrationDatabaseAsync(CancellationToken cancellationToken)
+    {
+        var connection = Database.GetDbConnection();
+        var shouldClose = false;
+        if (connection.State != System.Data.ConnectionState.Open)
+        {
+            await connection.OpenAsync(cancellationToken);
+            shouldClose = true;
+        }
+
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'Workspaces';";
+            var hasWorkspacesTable = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+            if (hasWorkspacesTable)
+            {
+                cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '__EFMigrationsHistory';";
+                var hasHistoryTable = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                var isInitialMigrationRecorded = false;
+                if (hasHistoryTable)
+                {
+                    cmd.CommandText = "SELECT COUNT(*) FROM __EFMigrationsHistory WHERE MigrationId = @migId;";
+                    var p = cmd.CreateParameter();
+                    p.ParameterName = "@migId";
+                    p.Value = InitialCreateMigrationId;
+                    cmd.Parameters.Add(p);
+                    isInitialMigrationRecorded = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+                }
+
+                if (!isInitialMigrationRecorded)
+                {
+                    cmd.Parameters.Clear();
+                    cmd.CommandText = @"
+CREATE TABLE IF NOT EXISTS ""__EFMigrationsHistory"" (
+    ""MigrationId"" TEXT NOT NULL CONSTRAINT ""PK___EFMigrationsHistory"" PRIMARY KEY,
+    ""ProductVersion"" TEXT NOT NULL
+);
+INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + InitialCreateMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+            }
+        }
+        finally
+        {
+            if (shouldClose)
+            {
+                await connection.CloseAsync();
+            }
         }
     }
 
