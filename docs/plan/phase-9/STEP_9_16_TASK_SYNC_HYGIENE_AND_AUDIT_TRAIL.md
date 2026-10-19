@@ -2,7 +2,7 @@
 
 > **Phase 9 Implementation Step**  
 > *Parent Plan:* [Phase 9 Master Plan](../09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md)  
-> *Anticipates:* [Step 10.7: Task State History & Audit Trail](../../plan/phase-10/STEP_10_7_TASK_STATE_HISTORY_AND_AUDIT_TRAIL.md)  
+> *Anticipates:* [Step 11.7: Task State History & Audit Trail](../../plan/phase-11/STEP_11_7_TASK_STATE_HISTORY_AND_AUDIT_TRAIL.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Infrastructure.Tests`  
 > *Status:* Completed | *Target Framework:* .NET 10 (C# 13)

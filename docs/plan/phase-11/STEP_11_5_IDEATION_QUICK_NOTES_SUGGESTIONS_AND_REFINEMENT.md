@@ -1,7 +1,7 @@
-# 💡 Step 10.5: Ideation Quick Notes, Suggestions & Conversational Refinement
+# 💡 Step 11.5: Ideation Quick Notes, Suggestions & Conversational Refinement
 
-> **Phase 10 Implementation Step**  
-> *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  
+> **Phase 11 Implementation Step (Post-MVP)**  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Tools`, `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Web/Components/Ideation`, `src/NightCodeForge.Web/Components/Pages`, `tests/NightCodeForge.Agents.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.

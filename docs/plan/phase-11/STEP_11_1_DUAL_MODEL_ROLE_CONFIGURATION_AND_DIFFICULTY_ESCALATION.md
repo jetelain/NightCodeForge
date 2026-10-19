@@ -1,7 +1,7 @@
-# 🧠 Step 10.1: Dual Model Role Configuration & Difficulty-Aware Escalation
+# 🧠 Step 11.1: Dual Model Role Configuration & Difficulty-Aware Escalation
 
-> **Phase 10 Implementation Step**  
-> *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  
+> **Phase 11 Implementation Step (Post-MVP)**  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Web.Tests`  
 > *Status:* Planned | *Target Framework:* .NET 10 (C# 13)

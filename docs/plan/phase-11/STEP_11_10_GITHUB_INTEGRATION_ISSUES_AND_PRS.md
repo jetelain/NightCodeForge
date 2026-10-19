@@ -1,7 +1,7 @@
-# 🐙 Step 10.10: GitHub Integration (Untrusted Intake Triage, PR Delivery & Task Mirroring)
+# 🐙 Step 11.10: GitHub Integration (Untrusted Intake Triage, PR Delivery & Task Mirroring)
 
-> **Phase 10 Implementation Step**  
-> *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  
+> **Phase 11 Implementation Step (Post-MVP)**  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Infrastructure/GitHub`, `src/NightCodeForge.Agents/Triage`, `src/NightCodeForge.Core/Workflow`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests` | *Status:* Planned
 
 ---

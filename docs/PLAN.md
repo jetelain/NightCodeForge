@@ -25,7 +25,8 @@ NightCodeForge/
 │       ├── 07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md
 │       ├── 08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md
 │       ├── 09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md
-│       └── 10_EXTEND_FEATURES.md
+│       ├── 10_EXTEND_FEATURES.md
+│       └── 11_MVP_FINAL_POLISH.md
 ├── src/
 │   ├── NightCodeForge.Core/
 │   │   ├── Domain/              # Entities: ForgeTask, TaskDependency, Question, StageCheckpoint, ExecutionLog
@@ -108,7 +109,8 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 | **Phase 7** | [docs/plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md](plan/07_PLAYWRIGHT_END_TO_END_ACCEPTANCE_TEST_PLAN.md) | Playwright automated browser test suite driving workspace creation, task ideation, promotion, execution, deterministic gates, and diff review. |
 | **Phase 8** | [docs/plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md](plan/08_DATABASE_DRIVEN_WORKFLOWS_AND_STAGES.md) | Database-persisted `WorkflowDefinition` & `StageDefinition`, dynamic C# stage dispatcher, default 6-stage seeding, and permanent ideation chat persistence in SQLite. |
 | **Phase 9** | [docs/plan/09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md](plan/09_CODEBASE_REMEDIATION_AND_ROBUSTNESS.md) | Architectural cleanup aligning with `AGENTS.md`: elimination of optional constructor parameters, hard errors on missing database records, constants/enums, and clean-break pruning. |
-| **Phase 10** | [docs/plan/10_EXTEND_FEATURES.md](plan/10_EXTEND_FEATURES.md) | Extensible capabilities: MCP client integration (HTTP & container stdio), custom scripts (.sh, .py, .ps1), optional GitHub integration (triage, PRs, mirroring), smart CLI filtering, ideation database tasks with draft lifecycle, task state history, and dedicated task creation with merge strategy management. |
+| **Phase 10** | [docs/plan/10_MVP_FINAL_POLISH.md](plan/10_MVP_FINAL_POLISH.md) | MVP Final Polish: enable EF Core migrations, build comprehensive namespace and module README.md documentation hierarchy, and execute an overall 360° code review and AGENTS.md policy hardening. |
+| **Phase 11** *(Post-MVP)* | [docs/plan/11_EXTEND_FEATURES.md](plan/11_EXTEND_FEATURES.md) | Post-MVP Extensible capabilities: MCP client integration (HTTP & container stdio), custom scripts (.sh, .py, .ps1), optional GitHub integration (triage, PRs, mirroring), smart CLI filtering, ideation database tasks with draft lifecycle, task state history, and dedicated task creation with merge strategy management. |
 
 ---
 
@@ -472,23 +474,36 @@ To ensure thorough, battle-tested execution without ambiguity, each phase is dec
 
 ---
 
-### Phase 10: Extend Features & Integrations
-> 📖 **Detailed Implementation Guide:** [docs/plan/10_EXTEND_FEATURES.md](plan/10_EXTEND_FEATURES.md)  
+### Phase 10: MVP Final Polish, EF Migrations & Codebase Hardening
+> 📖 **Detailed Implementation Guide:** [docs/plan/10_MVP_FINAL_POLISH.md](plan/10_MVP_FINAL_POLISH.md)  
 > 📂 **Step Specifications:** [docs/plan/phase-10/](plan/phase-10/)
-* **Objective:** Expand NightCodeForge beyond core lifecycle orchestration with modular extensions, external integrations, custom repository deterministic scripts, and advanced protocols.
+* **Objective:** Complete the final three hardening tracks before building the initial v1 MVP release: transition schema lifecycle to EF Core migrations, establish namespace-level documentation for subagents and developers, and execute a comprehensive 360° code review enforcing AGENTS.md policies.
 * **Tasks:**
-  1. **MCP Integration (Step 10.1):** First-class Model Context Protocol (MCP) discovery and execution via official Microsoft Agent Framework packages (`ModelContextProtocol`), supporting streamable HTTP/SSE remote servers (Phase 1) and isolated stdio servers running inside `ContainerSandbox` via `docker exec -i` (Phase 2).
-  2. **Custom Deterministic Repository Scripts (Step 10.2):** Run Bash (`.sh`), Python (`.py`), or PowerShell (`.ps1`) scripts located in workspace repositories under `.nightcodeforge/scripts/` during deterministic stages. Expose cross-stage `PipelineDataBag` state as environment variables (`NCF_DATABAG_<KEY>`) and intercept special stdout directives (`::set-databag name=<key>::<value>` or `NCF_SET_DATA_<KEY>=<VALUE>`) to update string properties back into the data bag.
-  3. **GitHub Integration (Step 10.3 - Optional Sub-Features):**
+  1. **Production EF Core Migrations (Step 10.1):** Add `Microsoft.EntityFrameworkCore.Design` to startup project, replace `Database.EnsureCreatedAsync()` with `Database.MigrateAsync()`, preserve SQLite WAL pragmas and sequence seeds, and automate migration integration tests.
+  2. **Namespace Documentation Architecture (Step 10.2):** Generate structured, concise `README.md` files across all functional namespaces in Core, Infrastructure, Agents, Web, and Tests following a standard 5-section template.
+  3. **Comprehensive Code Review & Policy Hardening (Step 10.3):** Execute multi-stream audits for bare catch blocks, required constructor DI, missing entity hard errors, DbContext thread lifetimes, process/resource cleanup, prompt cache stability, and Blazor component disposal. Remediate all High/Critical findings and verify zero warnings.
+* **Deliverables:** Operational EF Core migration tooling, comprehensive namespace documentation hierarchy, zero AGENTS.md policy violations, zero compiler warnings, and 100% green test suites.
+
+---
+
+### Phase 11: Extend Features & Integrations (Post-MVP)
+> 📖 **Detailed Implementation Guide:** [docs/plan/11_EXTEND_FEATURES.md](plan/11_EXTEND_FEATURES.md)  
+> 📂 **Step Specifications:** [docs/plan/phase-11/](plan/phase-11/)
+* **Objective:** Expand NightCodeForge beyond the initial MVP release with modular extensions, external integrations, custom repository deterministic scripts, and advanced protocols.
+* **Tasks:**
+  1. **MCP Integration (Step 11.1):** First-class Model Context Protocol (MCP) discovery and execution via official Microsoft Agent Framework packages (`ModelContextProtocol`), supporting streamable HTTP/SSE remote servers (Phase 1) and isolated stdio servers running inside `ContainerSandbox` via `docker exec -i` (Phase 2).
+  2. **Custom Deterministic Repository Scripts (Step 11.2):** Run Bash (`.sh`), Python (`.py`), or PowerShell (`.ps1`) scripts located in workspace repositories under `.nightcodeforge/scripts/` during deterministic stages. Expose cross-stage `PipelineDataBag` state as environment variables (`NCF_DATABAG_<KEY>`) and intercept special stdout directives (`::set-databag name=<key>::<value>` or `NCF_SET_DATA_<KEY>=<VALUE>`) to update string properties back into the data bag.
+  3. **GitHub Integration (Step 11.3 - Optional Sub-Features):**
      * **Untrusted Issue Intake & Triage:** Discovered issues are ingested as external untrusted reports into the sandboxed `ITriageService` (`RestrictedReadOnly` / `AgentMode.ReadOnly`) to reproduce, verify context, and propose vetted `Suggested` backlog tasks.
      * **Pull Request Delivery Mode:** Alternate delivery flow pushing feature branches to GitHub and opening rich pull requests with stage history and quality gate metrics instead of direct workspace merges.
      * **Task Mirroring:** Bi-directional lifecycle synchronization mirroring task states to GitHub Issues via progress labels (`ncf:in-progress`, `ncf:ready`) and milestone comments.
-  4. **Smart CLI & Build Tool Output Filtering (Step 10.4):** Semantic output filtering for verbose CLI tools (`dotnet build`, `msbuild`, `dotnet test`, `tsc`, `npm`) executed via `bash` or deterministic stages. Relativizes paths to workspace root, suppresses internal SDK boilerplate, drops non-fatal warnings when errors exist, and caps warning bursts while preserving raw audit logs in disk transcripts, with an optional agent parameter (`disable_filter`) to bypass filtering on demand.
-  5. **Ideation Database Tasks & Lifecycle Management (Step 10.5):** Immediately writes proposed tasks to the database with `TaskOverallStatus.Draft` so numeric task IDs are returned to the agent for concrete DAG dependencies (`depends_on`). Strictly excludes drafts from Backlog and Visual DAG. Provides scoped `edit_task` and `remove_task` tools for read-only ideation agents, instant user Discard action, and automated Hangfire TTL pruning of unapproved drafts after 24 hours.
-  6. **Task State History & Audit Trail (Step 10.6):** Temporal snapshot history for tasks: `ForgeTask` keeps the single source of truth for latest state, while secondary table `TaskHistories` stores immutable point-in-time snapshots with monotonic versioning, change attribution (`ChangedBy`, `ChangeReason`), and visual text diffing across revisions.
-  7. **Dedicated Task Creation Page & MergeMode Management (Step 10.7):** Dedicated direct task authoring page (`/tasks/new`) bypassing the AI ideation chat, expanding `MergeMode` (`Automatic`, `ManualReviewRequired`, `ExternalPullRequest` when GitHub is enabled), and enabling maintainers to choose or edit the delivery mode in the Task Detail Drawer, Backlog, and Review Room.
+  4. **Smart CLI & Build Tool Output Filtering (Step 11.4):** Semantic output filtering for verbose CLI tools (`dotnet build`, `msbuild`, `dotnet test`, `tsc`, `npm`) executed via `bash` or deterministic stages. Relativizes paths to workspace root, suppresses internal SDK boilerplate, drops non-fatal warnings when errors exist, and caps warning bursts while preserving raw audit logs in disk transcripts, with an optional agent parameter (`disable_filter`) to bypass filtering on demand.
+  5. **Ideation Database Tasks & Lifecycle Management (Step 11.5):** Immediately writes proposed tasks to the database with `TaskOverallStatus.Draft` so numeric task IDs are returned to the agent for concrete DAG dependencies (`depends_on`). Strictly excludes drafts from Backlog and Visual DAG. Provides scoped `edit_task` and `remove_task` tools for read-only ideation agents, instant user Discard action, and automated Hangfire TTL pruning of unapproved drafts after 24 hours.
+  6. **Task State History & Audit Trail (Step 11.6):** Temporal snapshot history for tasks: `ForgeTask` keeps the single source of truth for latest state, while secondary table `TaskHistories` stores immutable point-in-time snapshots with monotonic versioning, change attribution (`ChangedBy`, `ChangeReason`), and visual text diffing across revisions.
+  7. **Dedicated Task Creation Page & MergeMode Management (Step 11.7):** Dedicated direct task authoring page (`/tasks/new`) bypassing the AI ideation chat, expanding `MergeMode` (`Automatic`, `ManualReviewRequired`, `ExternalPullRequest` when GitHub is enabled), and enabling maintainers to choose or edit the delivery mode in the Task Detail Drawer, Backlog, and Review Room.
   8. **Future Extended Features:** Modular additions, external integrations, and specialized tooling to be specified and incorporated incrementally.
 * **Deliverables:** Operational MCP client integration, repository custom deterministic script runner with data bag interop, optional GitHub integration suite, smart CLI output filter pipeline, interactive ideation database task lifecycle management, task state history temporal snapshots, and dedicated task authoring with comprehensive MergeMode management.
+
 
 
 

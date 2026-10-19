@@ -1,7 +1,7 @@
-# 📄 Step 10.2: Dedicated Task Creation Page & MergeMode Management
+# 📄 Step 11.2: Dedicated Task Creation Page & MergeMode Management
 
-> **Phase 10 Implementation Step**  
-> *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  
+> **Phase 11 Implementation Step (Post-MVP)**  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Web/Components/Pages/Tasks`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Core/Domain`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned
 
 ---
@@ -21,7 +21,7 @@ Provide a dedicated task authoring interface outside of the AI conversational lo
    - Formalize the complete set of delivery modes in [MergeMode](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/Enums.cs):
      - **`Automatic`:** Auto-squashes and merges to `BaseBranch` in the local workspace once status reaches `Ready`.
      - **`ManualReviewRequired` (Default):** Pauses at `Ready`; maintainer reviews diffs/tests in the Review Room before triggering merge.
-     - **`ExternalPullRequest`:** Pushes feature branch to remote origin and opens a GitHub Pull Request (available when GitHub integration is enabled in Step 10.3).
+     - **`ExternalPullRequest`:** Pushes feature branch to remote origin and opens a GitHub Pull Request (available when GitHub integration is enabled in Step 11.3).
 
 3. **Editable `MergeMode` on Existing Tasks:**
    - Fix the gap where maintainers cannot choose or modify the merge mode of an existing task.
@@ -29,7 +29,7 @@ Provide a dedicated task authoring interface outside of the AI conversational lo
      - The **Task Detail Drawer** ([TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor)).
      - The **Backlog Promotion Modal** ([MaintainerPromotionModal.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/MaintainerPromotionModal.razor)).
      - The **Review Room** ([Review.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Review.razor)).
-   - Edits are audited in `ForgeTaskHistory` (Step 10.6).
+   - Edits are audited in `ForgeTaskHistory` (Step 11.6).
 
 ---
 

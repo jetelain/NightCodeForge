@@ -1,7 +1,7 @@
-# 🕰️ Step 10.7: Task State History & Temporal Snapshot Audit Trail
+# 🕰️ Step 11.7: Task State History & Temporal Snapshot Audit Trail
 
-> **Phase 10 Implementation Step**  
-> *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  
+> **Phase 11 Implementation Step (Post-MVP)**  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Infrastructure/Data`, `src/NightCodeForge.Web/Components/Backlog`, `tests/NightCodeForge.Infrastructure.Tests` | *Status:* Planned
 
 ---

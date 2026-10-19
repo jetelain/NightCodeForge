@@ -1,7 +1,7 @@
-# 🧹 Step 10.3: Smart CLI & Build Tool Output Filtering (Context Compression & Noise Reduction)
+# 🧹 Step 11.3: Smart CLI & Build Tool Output Filtering (Context Compression & Noise Reduction)
 
-> **Phase 10 Implementation Step**  
-> *Parent Plan:* [Phase 10 Master Plan](../10_EXTEND_FEATURES.md)  
+> **Phase 11 Implementation Step (Post-MVP)**  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Agents/Tools/Filtering`, `src/NightCodeForge.Agents/Optimizations`, `src/NightCodeForge.Agents/Tools`, `tests/NightCodeForge.Agents.Tests` | *Status:* Planned
 
 ---
