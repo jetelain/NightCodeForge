@@ -2,7 +2,7 @@
 
 > **Phase 11 Implementation Step (Post-MVP - Top Priority)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
-> *Project Target:* `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Infrastructure/Data`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned (Backend Implemented, UI & Timeline In Progress)
+> *Project Target:* `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Infrastructure/Data`, `tests/NightCodeForge.Web.Tests` | *Status:* Completed
 
 ---
 
@@ -16,7 +16,7 @@ This step delivers a complete, temporal audit history for all [ForgeTask](file:/
 2. **Comprehensive Mutation Attribution:**
    - Every modification channel—manual maintainer edits in the Web UI, agent updates in Ideation (`edit_task`), stage lifecycle transitions in [TaskOrchestrator](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs), triage proposals, and markdown disk synchronizations—records explicit attribution (`ChangedBy`, `ChangeReason`).
 3. **Interactive Revision Timeline & Diff View (UI):**
-   - Provide a dedicated `TaskHistoryTimeline.razor` component embedded in [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) and [TaskInspector.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/TaskInspector.razor).
+   - Provide a dedicated `TaskHistoryTimeline.razor` component embedded in [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) and [TaskExecutionInspector.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Monitoring/TaskExecutionInspector.razor).
    - Display a vertical visual timeline of task revisions with side-by-side or inline text diffs using `DiffPlex` showing changes to Title, Description, Acceptance Criteria, Priority, Status, and Dependencies.
 
 ---
@@ -96,14 +96,14 @@ Embedded as a dedicated "Revisions / History" tab inside [TaskDetailDrawer.razor
   - EF Core table `TaskHistories` configured with unique index on `(TaskId, Version)`.
 - [x] **Repository Data Access:** *(Completed)*
   - `ITaskRepository.GetHistoryByTaskIdAsync` and `EfCoreTaskRepository` snapshot capture logic.
-- [ ] **Change Attribution Wiring:**
-  - Verify that `TaskDetailDrawer.razor` supplies `changedBy: "User"` and descriptive `changeReason` when saving edits.
-  - Verify that `IdeationService` passes `changedBy: "IdeationAgent"` on `edit_task` tool execution.
-  - Verify that `TaskOrchestrator` logs stage advance transitions with `changedBy: "TaskOrchestrator"`.
-- [ ] **Blazor UI Components:**
+- [x] **Change Attribution Wiring:** *(Completed)*
+  - Verify that `TaskDetailDrawer.razor` supplies `AuditActors.User` and descriptive `changeReason` when saving title, description, priority, and merge mode edits.
+  - Verify that Ideation task proposals pass `AuditActors.IdeationAgent` (and future `edit_task` tool will pass `AuditActors.IdeationAgent`).
+  - Verify that `TaskOrchestrator` logs stage transitions, failures, and cancellations with `AuditActors.TaskOrchestrator` or `AuditActors.User`.
+- [x] **Blazor UI Components:** *(Completed)*
   - Build `TaskHistoryTimeline.razor` with vertical timeline styling and collapsible diff sections.
-  - Embed into [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) and [TaskInspector.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/TaskInspector.razor).
+  - Embed into [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) and [TaskExecutionInspector.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Monitoring/TaskExecutionInspector.razor).
   - Integrate `DiffPlex` rendering for description diffs.
-- [ ] **Tests:**
+- [x] **Tests:** *(Completed)*
   - bUnit tests for `TaskHistoryTimeline.razor` rendering versions and diff toggles.
   - Integration tests verifying history snapshots on manual drawer edits and status transitions.

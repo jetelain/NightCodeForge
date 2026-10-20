@@ -23,6 +23,12 @@ public class TaskDetailDrawerPriorityAndMergeModeTests : BunitContext
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<IDevQueueService>(_devQueueService);
         Services.AddSingleton(_toastService);
+        Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
+        Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
+            _taskRepository,
+            new InMemoryWorkspaceRepository(),
+            new MockTaskMarkdownSyncService(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
     }
 
     [Fact]

@@ -326,6 +326,12 @@ public class DevQueueServiceTests : IDisposable
         Assert.Equal(string.Empty, reloaded.CurrentStageId);
         Assert.Equal(TaskOverallStatus.Open, reloaded.Status);
         Assert.Equal(301, _jobQueue.LastEnqueuedInferenceTaskId);
+
+        var history = await _taskRepo.GetHistoryAsync(301);
+        Assert.Equal(2, history.Count);
+        Assert.Equal(2, history[1].Version);
+        Assert.Equal(AuditActors.User, history[1].ChangedBy);
+        Assert.Contains("Pipeline restarted from beginning via DevQueue", history[1].ChangeReason);
     }
 
     [Fact]
@@ -354,6 +360,12 @@ public class DevQueueServiceTests : IDisposable
         Assert.Equal("deterministic-post-impl", reloaded.CurrentStageId);
         Assert.Equal(TaskOverallStatus.Open, reloaded.Status);
         Assert.Equal(302, _jobQueue.LastEnqueuedInferenceTaskId);
+
+        var history = await _taskRepo.GetHistoryAsync(302);
+        Assert.Equal(2, history.Count);
+        Assert.Equal(2, history[1].Version);
+        Assert.Equal(AuditActors.User, history[1].ChangedBy);
+        Assert.Contains("Rescheduled task execution via DevQueue", history[1].ChangeReason);
     }
 
     [Fact]

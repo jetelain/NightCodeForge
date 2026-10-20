@@ -158,6 +158,7 @@ public class TestWorkflowStage : IWorkflowStage
     public WorkflowStageKind Kind { get; set; } = WorkflowStageKind.Agentic;
     public AgentMode RequiredMode { get; set; } = AgentMode.Full;
     public string? PromptTemplate { get; set; }
+    public string? LoopBackStageId { get; set; }
     public Func<PipelineContext, CancellationToken, Task<StageExecutionResult>>? Handler { get; set; }
 
     public TestWorkflowStage(

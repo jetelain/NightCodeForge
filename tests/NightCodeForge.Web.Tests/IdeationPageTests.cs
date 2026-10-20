@@ -568,10 +568,12 @@ public class MockIdeationService : IIdeationService
 public class MockTaskMarkdownSyncService : ITaskMarkdownSyncService
 {
     public List<ForgeTask> SyncedTasks { get; } = new();
+    public List<(ForgeTask Task, string WorkspacePath, IReadOnlyList<int>? Dependencies)> SyncTaskCalls { get; } = new();
 
     public Task<string> SyncTaskToDiskAsync(ForgeTask task, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default)
     {
         SyncedTasks.Add(task);
+        SyncTaskCalls.Add((task, workspacePath, dependencies));
         return Task.FromResult(Path.Combine(workspacePath, $"task-{task.Id}.md"));
     }
 

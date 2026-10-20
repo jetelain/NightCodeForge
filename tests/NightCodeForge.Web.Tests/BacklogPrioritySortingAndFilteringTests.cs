@@ -43,6 +43,12 @@ public class BacklogPrioritySortingAndFilteringTests : BunitContext
         Services.AddSingleton<IDevQueueService>(new MockDevQueueService());
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton(_toastService);
+        Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
+        Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
+            _taskRepository,
+            new InMemoryWorkspaceRepository(),
+            _markdownSync,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
     }
 
     [Fact]

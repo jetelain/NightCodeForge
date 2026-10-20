@@ -23,6 +23,8 @@ builder.Services.AddScoped<ITaskReviewService, TaskReviewService>();
 builder.Services.AddScoped<ITranscriptBrowserService, TranscriptBrowserService>();
 builder.Services.AddScoped<IGitSyncService, GitSyncService>();
 builder.Services.AddScoped<IDevQueueService, DevQueueService>();
+builder.Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
+builder.Services.AddScoped<ITaskMutationService, TaskMutationService>();
 
 // Register NightCodeForge domain and infrastructure services
 var dbConnection = builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=nightcodeforge.db;";

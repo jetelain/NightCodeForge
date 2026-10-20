@@ -6,9 +6,11 @@
 @using NightCodeForge.Web.Services
 @inject IDependencyResolutionEngine DependencyEngine
 @inject ITaskRepository TaskRepository
+@inject ITaskMutationService TaskMutationService
 @inject ITaskMarkdownSyncService MarkdownSyncService
 @inject WorkspaceStateService WorkspaceState
 @inject ToastService ToastService
+@inject ILogger<DependencyLinkingModal> Logger
 
 @if (IsOpen && TargetTask != null)
 {
@@ -192,21 +194,7 @@
         _isSaving = true;
         try
         {
-            await TaskRepository.UpdateAsync(TargetTask, _selectedPrereqIds);
-
-            var workspace = WorkspaceState.ActiveWorkspace;
-            if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
-            {
-                try
-                {
-                    await MarkdownSyncService.SyncTaskToDiskAsync(TargetTask, workspace.RepositoryPath, _selectedPrereqIds.ToList());
-                }
-                catch (Exception ex)
-                {
-                    // Non-fatal disk sync error
-                    Console.WriteLine($"Markdown sync warning: {ex.Message}");
-                }
-            }
+            await TaskMutationService.UpdateDependenciesAsync(TargetTask, _selectedPrereqIds);
 
             ToastService.Show("Dependencies Updated", $"Dependencies updated for ForgeTask #{TargetTask.Id}.", ToastLevel.Success);
             await OnSaved.InvokeAsync();

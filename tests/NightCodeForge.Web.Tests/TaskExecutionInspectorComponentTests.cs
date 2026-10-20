@@ -35,6 +35,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         Services.AddSingleton<IDevQueueService>(_devQueueService);
         Services.AddSingleton<ITaskReviewService>(_taskReviewService);
         Services.AddSingleton<ReviewCommentStateService>();
+        Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
     }
 
     [Fact]
@@ -623,6 +624,32 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         cut.Instance.Dispose();
 
         Assert.DoesNotContain(104, _hubConnection.ActiveTaskGroups);
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_SwitchingToHistoryTab_RendersTaskHistoryTimeline()
+    {
+        var task = new ForgeTask
+        {
+            Id = 105,
+            WorkspaceId = 1,
+            Title = "Task with history tab in inspector",
+            Status = TaskOverallStatus.Open
+        };
+        await _taskRepository.CreateWithBaselineAsync(task, null, AuditActors.User, "Created baseline");
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 105));
+
+        // Switch to Revisions & History tab
+        var historyTabBtn = cut.FindAll("button").First(b => b.TextContent.Contains("History") || b.TextContent.Contains("Revisions"));
+        historyTabBtn.Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Revision History", cut.Markup);
+            Assert.Contains("Version 1", cut.Markup);
+            Assert.Contains("Created baseline", cut.Markup);
+        });
     }
 
     #region Fakes

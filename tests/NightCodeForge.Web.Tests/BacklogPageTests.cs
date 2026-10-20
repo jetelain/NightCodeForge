@@ -43,6 +43,12 @@ public class BacklogPageTests : BunitContext
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton(_toastService);
         Services.AddSingleton<IDevQueueService>(new MockDevQueueService());
+        Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
+        Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
+            _taskRepository,
+            new InMemoryWorkspaceRepository(),
+            _markdownSync,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
     }
 
     [Fact]

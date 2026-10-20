@@ -185,7 +185,7 @@
                 await taskRepo.UpdateWithHistoryAsync(
                     Task,
                     dependsOn: PrerequisiteIds,
-                    changedBy: "User",
+                    changedBy: AuditActors.User,
                     reason: $"Updated Priority from P{oldPriority} to P{newPriority}");
 
                 var workspaceRepo = ServiceProvider.GetService<IWorkspaceRepository>();

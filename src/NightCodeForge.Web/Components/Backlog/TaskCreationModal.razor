@@ -6,6 +6,7 @@
 @inject IWorkflowRepository WorkflowRepository
 @inject ToastService ToastService
 @inject IServiceProvider ServiceProvider
+@inject ILogger<TaskCreationModal> Logger
 
 @if (IsOpen)
 {
@@ -200,9 +201,11 @@
                 UpdatedAt = DateTime.UtcNow
             };
 
-            var created = await TaskRepository.CreateAsync(task);
-            created.FeatureBranch = $"feature/task-{created.Id}";
-            await TaskRepository.UpdateAsync(created);
+            var created = await TaskRepository.CreateWithBaselineAsync(
+                task,
+                dependsOn: null,
+                createdBy: AuditActors.User,
+                reason: "Initial task creation via modal");
 
             if (MarkdownSync != null && !string.IsNullOrWhiteSpace(RepositoryPath) && Directory.Exists(RepositoryPath))
             {
@@ -212,7 +215,7 @@
                 }
                 catch (Exception syncEx)
                 {
-                    Console.WriteLine($"Markdown sync warning: {syncEx.Message}");
+                    Logger.LogWarning(syncEx, "Failed to sync created task markdown to disk for Task #{TaskId}", created.Id);
                 }
             }
 

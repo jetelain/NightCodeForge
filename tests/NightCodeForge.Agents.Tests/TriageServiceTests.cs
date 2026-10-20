@@ -120,6 +120,14 @@ public class TriageServiceTests : IDisposable
         var inRepo = await _taskRepo.GetByIdAsync(created.Id);
         Assert.NotNull(inRepo);
         Assert.Equal(TaskOverallStatus.Suggested, inRepo.Status);
+
+        // Verify baseline history attribution
+        var history = await _taskRepo.GetHistoryAsync(created.Id);
+        Assert.Single(history);
+        var baseline = history[0];
+        Assert.Equal(1, baseline.Version);
+        Assert.Equal(AuditActors.TaskReviewAgent, baseline.ChangedBy);
+        Assert.Equal("Created task proposal from backlog triage", baseline.ChangeReason);
     }
 
     [Fact]

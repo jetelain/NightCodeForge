@@ -135,7 +135,12 @@ public class TriageService : ITriageService
                     UpdatedAt = DateTime.UtcNow
                 };
 
-                var created = await _taskRepository.CreateAsync(newTask, cancellationToken: cancellationToken);
+                var created = await _taskRepository.CreateWithBaselineAsync(
+                    newTask,
+                    dependsOn: null,
+                    createdBy: AuditActors.TaskReviewAgent,
+                    reason: "Created task proposal from backlog triage",
+                    cancellationToken: cancellationToken);
                 createdTasks.Add(created);
                 _logger.LogInformation("Triage generated suggested task #{NewTaskId}: '{Title}'", created.Id, created.Title);
 

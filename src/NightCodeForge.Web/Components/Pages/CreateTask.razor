@@ -541,18 +541,17 @@
                 Priority = _selectedPriority,
                 MergeMode = _selectedMergeMode,
                 BaseBranch = string.IsNullOrWhiteSpace(_baseBranch) ? "main" : _baseBranch.Trim(),
+                FeatureBranch = string.IsNullOrWhiteSpace(_featureBranch) ? string.Empty : _featureBranch.Trim(),
                 Status = status,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
 
-            var created = await TaskRepository.CreateAsync(newTask, dependsOn: _selectedPrereqIds);
-
-            var featureBranch = string.IsNullOrWhiteSpace(_featureBranch)
-                ? $"feature/task-{created.Id}"
-                : _featureBranch.Trim();
-            created.FeatureBranch = featureBranch;
-            await TaskRepository.UpdateAsync(created, dependsOn: _selectedPrereqIds);
+            var created = await TaskRepository.CreateWithBaselineAsync(
+                newTask,
+                dependsOn: _selectedPrereqIds,
+                createdBy: AuditActors.User,
+                reason: "Initial task creation via UI");
 
             // Sync markdown to repository path on disk if available
             if (MarkdownSync != null && !string.IsNullOrWhiteSpace(active.RepositoryPath) && Directory.Exists(active.RepositoryPath))

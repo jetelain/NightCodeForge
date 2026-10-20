@@ -127,6 +127,103 @@ public class TaskOrchestratorTests
     }
 
     [Fact]
+    public async Task ProcessTaskAsync_StageAdvanceTransition_LogsHistoryWithTaskOrchestratorAttribution()
+    {
+        var task = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            Id = 25,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "stage-1"
+        }, null, AuditActors.User, "Created baseline");
+        _depStore.AddTask(25, 1, TaskOverallStatus.Open);
+
+        var stage1 = new TestWorkflowStage("stage-1") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
+        var stage2 = new TestWorkflowStage("stage-2") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2 });
+
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var history = await _taskRepo.GetHistoryAsync(25);
+        Assert.True(history.Count >= 2);
+
+        var last = history.Last();
+        Assert.Equal(AuditActors.TaskOrchestrator, last.ChangedBy);
+        Assert.Contains("Advanced to 'stage-2'", last.ChangeReason);
+    }
+
+    [Fact]
+    public async Task RequestChangesAsync_AppendsHistorySnapshotWithUserAttributionAndTargetStage()
+    {
+        var task = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            Id = 35,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Ready,
+            CurrentStageId = "stage-review"
+        }, null, AuditActors.User, "Created baseline");
+
+        var stageImpl = new TestWorkflowStage("implementation");
+        var stageReview = new TestWorkflowStage("stage-review") { LoopBackStageId = "implementation" };
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stageImpl, stageReview });
+
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
+
+        await orchestrator.RequestChangesAsync(task.Id, "Need unit tests for edge cases");
+
+        var updated = await _taskRepo.GetByIdAsync(35);
+        Assert.NotNull(updated);
+        Assert.Equal(TaskOverallStatus.Reviewed, updated.Status);
+        Assert.Equal("implementation", updated.CurrentStageId);
+
+        var history = await _taskRepo.GetHistoryAsync(35);
+        Assert.Equal(2, history.Count);
+
+        var latest = history.Last();
+        Assert.Equal(AuditActors.User, latest.ChangedBy);
+        Assert.Contains("Reviewer requested changes", latest.ChangeReason);
+        Assert.Contains("Need unit tests for edge cases", latest.ChangeReason);
+        Assert.Equal(TaskOverallStatus.Reviewed, latest.Status);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenStageFailsPermanently_RecordsHistorySnapshotWithOrchestratorAttribution()
+    {
+        var task = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            Id = 36,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "failing-stage"
+        }, null, AuditActors.User, "Created baseline");
+        _depStore.AddTask(36, 1, TaskOverallStatus.Open);
+
+        var failingStage = new TestWorkflowStage("failing-stage")
+        {
+            Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Failure("Compilation broken"))
+        };
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { failingStage });
+
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var updated = await _taskRepo.GetByIdAsync(36);
+        Assert.NotNull(updated);
+        Assert.Equal(TaskOverallStatus.Failed, updated.Status);
+
+        var history = await _taskRepo.GetHistoryAsync(36);
+        Assert.True(history.Count >= 2);
+
+        var latest = history.Last();
+        Assert.Equal(AuditActors.TaskOrchestrator, latest.ChangedBy);
+        Assert.Contains("Pipeline failed at stage 'failing-stage'", latest.ChangeReason);
+        Assert.Equal(TaskOverallStatus.Failed, latest.Status);
+    }
+
+    [Fact]
     public async Task ProcessTaskAsync_WhenFinalStageCompletes_TransitionsToReadyAndGeneratesDiff()
     {
         var task = await _taskRepo.CreateAsync(new ForgeTask
@@ -346,6 +443,12 @@ public class TaskOrchestratorTests
         Assert.Equal(TaskOverallStatus.Suggested, proposal.Status);
         Assert.Equal("Found memory leak in parser", proposal.Description);
         Assert.Equal(TaskPriority.Normal, proposal.Priority);
+
+        var history = await _taskRepo.GetHistoryAsync(proposal.Id);
+        Assert.Single(history);
+        Assert.Equal(1, history[0].Version);
+        Assert.Equal(AuditActors.GetActorForStage("triage-stage"), history[0].ChangedBy);
+        Assert.Contains("triage-stage", history[0].ChangeReason);
     }
 
     [Fact]

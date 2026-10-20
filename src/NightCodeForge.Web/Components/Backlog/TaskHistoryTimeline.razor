@@ -1,0 +1,311 @@
+@namespace NightCodeForge.Web.Components.Backlog
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Web.Services
+@using DiffPlex.DiffBuilder.Model
+@inject ITaskRepository TaskRepository
+@inject ITaskHistoryDiffService DiffService
+@inject ILogger<TaskHistoryTimeline> Logger
+
+<div class="task-history-timeline-container" id="task-history-timeline-@(TaskId)">
+    <!-- Header / Toolbar -->
+    <div class="timeline-toolbar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem;">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span style="font-size: 1.2rem;">🕰️</span>
+            <h4 style="margin: 0; font-size: 1rem; font-weight: 700; color: var(--text-primary);">
+                Revision History &amp; Audit Trail
+            </h4>
+            @if (_timeline.Count > 0)
+            {
+                <span class="forge-badge badge-indigo" style="font-size: 0.75rem;">
+                    @_timeline.Count @(_timeline.Count == 1 ? "revision" : "revisions")
+                </span>
+            }
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            @if (_timeline.Any(t => t.HasDescriptionDiff))
+            {
+                <button type="button"
+                        class="forge-btn forge-btn-secondary btn-xs"
+                        style="padding: 0.25rem 0.6rem; font-size: 0.76rem;"
+                        @onclick="ToggleAllDiffs">
+                    @(_areAllDiffsExpanded ? "▲ Collapse All Diffs" : "▼ Expand All Diffs")
+                </button>
+            }
+
+            <button type="button"
+                    class="forge-btn forge-btn-secondary btn-xs"
+                    style="padding: 0.25rem 0.6rem; font-size: 0.76rem;"
+                    @onclick="ReloadAsync"
+                    disabled="@_isLoading"
+                    title="Reload revision history">
+                🔄 Refresh
+            </button>
+        </div>
+    </div>
+
+    @if (_isLoading)
+    {
+        <div style="text-align: center; padding: 2.5rem 0; color: var(--text-muted);">
+            <div style="font-size: 1.75rem; margin-bottom: 0.5rem;">⏳</div>
+            <span>Loading revision history...</span>
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(_errorMessage))
+    {
+        <div class="card-surface" style="padding: 1rem; border: 1px solid var(--accent-crimson); background: rgba(239, 68, 68, 0.1); border-radius: var(--radius-sm); color: #fca5a5; font-size: 0.85rem;">
+            ❌ @_errorMessage
+        </div>
+    }
+    else if (_timeline.Count == 0)
+    {
+        <div class="card-surface" style="text-align: center; padding: 2.5rem 1.5rem; background: var(--bg-card); border: 1px dashed var(--border-subtle); border-radius: var(--radius-md); color: var(--text-muted);">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📜</div>
+            <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 0.25rem;">No History Recorded</div>
+            <p style="font-size: 0.82rem; margin: 0 auto; max-width: 380px;">
+                Point-in-time revision snapshots will be recorded automatically when this task is created, updated, or advanced across stages.
+            </p>
+        </div>
+    }
+    else
+    {
+        <!-- Vertical Timeline Tree -->
+        <div class="timeline-tree" style="position: relative; padding-left: 2rem;">
+            <!-- Continuous vertical line -->
+            <div class="timeline-vertical-guide" style="position: absolute; left: 0.65rem; top: 0.75rem; bottom: 0.75rem; width: 2px; background: linear-gradient(to bottom, var(--accent-indigo, #6366f1) 0%, var(--border-subtle, #2e384d) 100%);"></div>
+
+            @for (int idx = 0; idx < _timeline.Count; idx++)
+            {
+                var rev = _timeline[idx];
+                var isLatest = idx == 0;
+                var isExpanded = _expandedDiffVersions.Contains(rev.Version);
+
+                <div class="timeline-node @(isLatest ? "is-latest" : "")" style="position: relative; margin-bottom: 1.5rem;">
+                    <!-- Timeline Dot / Badge on track -->
+                    <div class="timeline-node-dot @(isLatest ? "pulse" : "")"
+                         style="position: absolute; left: -2rem; top: 0.25rem; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: @(isLatest ? "var(--accent-indigo, #6366f1)" : "var(--bg-canvas, #0f121d)"); border: 2px solid @(isLatest ? "#818cf8" : "var(--border-subtle, #3b4252)"); display: flex; align-items: center; justify-content: center; font-size: 0.68rem; font-weight: 700; color: #fff; box-shadow: @(isLatest ? "0 0 10px rgba(99, 102, 241, 0.5)" : "none"); z-index: 2;"
+                         title="Revision Version @rev.Version">
+                        @rev.Version
+                    </div>
+
+                    <!-- Revision Content Card -->
+                    <div class="timeline-card card-glass" style="background: rgba(18, 22, 34, 0.85); border: 1px solid @(isLatest ? "rgba(99, 102, 241, 0.35)" : "var(--border-subtle, #2e384d)"); border-radius: var(--radius-md); padding: 1rem; backdrop-filter: blur(8px); transition: border-color 0.2s ease, box-shadow 0.2s ease;">
+                        <!-- Node Header -->
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                                <span style="font-weight: 700; font-size: 0.95rem; color: var(--text-primary);">
+                                    Version @rev.Version
+                                </span>
+                                @if (isLatest)
+                                {
+                                    <span class="forge-badge badge-teal" style="font-size: 0.7rem; font-weight: 700;">
+                                        Current State
+                                    </span>
+                                }
+                                <span class="forge-badge @rev.ActorBadgeClass" style="font-size: 0.74rem;">
+                                    @rev.ActorDisplay
+                                </span>
+                            </div>
+
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <span class="text-secondary" style="font-size: 0.78rem;" title="@rev.ChangedAt.ToLocalTime().ToString("F")">
+                                    🕒 @rev.TimeAgo
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Change Reason -->
+                        @if (!string.IsNullOrWhiteSpace(rev.ChangeReason))
+                        {
+                            <div class="change-reason-box" style="margin-bottom: 0.65rem; background: rgba(30, 37, 56, 0.6); border-left: 3px solid var(--accent-indigo, #6366f1); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; padding: 0.4rem 0.7rem; font-size: 0.82rem; color: #e2e8f0;">
+                                <strong>Reason:</strong> <span style="font-style: italic;">"@rev.ChangeReason"</span>
+                            </div>
+                        }
+
+                        <!-- Field Changes Badges -->
+                        @if (rev.FieldChanges.Count > 0 || rev.HasDescriptionDiff)
+                        {
+                            <div class="field-changes-row" style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.4rem;">
+                                <span style="font-size: 0.75rem; text-transform: uppercase; font-weight: 700; color: var(--text-muted); margin-right: 0.2rem;">
+                                    Changes:
+                                </span>
+
+                                @foreach (var chg in rev.FieldChanges)
+                                {
+                                    <span class="forge-badge @chg.BadgeClass" style="font-size: 0.76rem; display: inline-flex; align-items: center; gap: 0.3rem;">
+                                        <strong>@chg.FieldName:</strong>
+                                        <span style="opacity: 0.85;">@chg.OldValue</span>
+                                        <span style="opacity: 0.5;">→</span>
+                                        <span style="font-weight: 700;">@chg.NewValue</span>
+                                    </span>
+                                }
+
+                                @if (rev.HasDescriptionDiff)
+                                {
+                                    <span class="forge-badge badge-gray" style="font-size: 0.76rem; display: inline-flex; align-items: center; gap: 0.35rem;">
+                                        <span>Description:</span>
+                                        @if (rev.DescriptionLinesAdded > 0)
+                                        {
+                                            <span style="color: #34d399; font-weight: 700;">+@rev.DescriptionLinesAdded</span>
+                                        }
+                                        @if (rev.DescriptionLinesDeleted > 0)
+                                        {
+                                            <span style="color: #f87171; font-weight: 700;">-@rev.DescriptionLinesDeleted</span>
+                                        }
+                                        <span style="font-size: 0.72rem; opacity: 0.7;">lines</span>
+                                    </span>
+
+                                    <button type="button"
+                                            class="forge-btn forge-btn-secondary btn-xs toggle-diff-btn"
+                                            style="padding: 0.2rem 0.55rem; font-size: 0.74rem; font-weight: 600;"
+                                            @onclick="() => ToggleDiff(rev.Version)"
+                                            title="Toggle inline markdown description diff">
+                                        @(isExpanded ? "▲ Hide Diff" : "🔍 Toggle Diff")
+                                    </button>
+                                }
+                            </div>
+                        }
+                        else if (rev.Version == 1)
+                        {
+                            <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem;">
+                                <span>Initial baseline snapshot created.</span>
+                            </div>
+                        }
+
+                        <!-- Collapsible Inline Diff View -->
+                        @if (isExpanded && rev.HasDescriptionDiff)
+                        {
+                            <div class="revision-diff-pane font-mono" style="margin-top: 0.85rem; background: #0b0e17; border: 1px solid var(--border-subtle, #2e384d); border-radius: var(--radius-sm); overflow: hidden;">
+                                <div class="diff-pane-header" style="background: rgba(30, 37, 56, 0.7); padding: 0.4rem 0.75rem; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; font-size: 0.76rem; font-family: var(--font-sans);">
+                                    <div style="display: flex; align-items: center; gap: 0.4rem; color: var(--text-secondary);">
+                                        <span>📝</span>
+                                        <span>Description Diff: Version @(rev.PreviousVersion > 0 ? rev.PreviousVersion : rev.Version - 1) → Version @rev.Version</span>
+                                    </div>
+                                    <div style="display: flex; gap: 0.6rem; font-size: 0.72rem;">
+                                        <span style="color: #34d399;">+@rev.DescriptionLinesAdded lines</span>
+                                        <span style="color: #f87171;">-@rev.DescriptionLinesDeleted lines</span>
+                                    </div>
+                                </div>
+
+                                <div class="diff-table-container" style="max-height: 340px; overflow-y: auto; overflow-x: auto;">
+                                    <table class="diff-inline-table" style="width: 100%; border-collapse: collapse; font-size: 0.78rem; line-height: 1.45;">
+                                        <tbody>
+                                            @foreach (var line in rev.DiffLines)
+                                            {
+                                                <tr style="background: @line.BackgroundStyle; font-family: var(--font-mono, monospace);">
+                                                    <td class="diff-num old-num" style="width: 40px; text-align: right; padding: 0.15rem 0.4rem; color: #4b5563; user-select: none; border-right: 1px solid rgba(255, 255, 255, 0.05); font-size: 0.72rem;">
+                                                        @(line.OldLineNumber?.ToString() ?? "")
+                                                    </td>
+                                                    <td class="diff-num new-num" style="width: 40px; text-align: right; padding: 0.15rem 0.4rem; color: #4b5563; user-select: none; border-right: 1px solid rgba(255, 255, 255, 0.05); font-size: 0.72rem;">
+                                                        @(line.NewLineNumber?.ToString() ?? "")
+                                                    </td>
+                                                    <td class="diff-prefix" style="width: 20px; text-align: center; padding: 0.15rem 0.25rem; font-weight: 700; color: @line.TextColor; user-select: none;">
+                                                        @line.Prefix
+                                                    </td>
+                                                    <td class="diff-text" style="padding: 0.15rem 0.6rem; color: @line.TextColor; white-space: pre-wrap; word-break: break-word;">
+                                                        @line.Text
+                                                    </td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public int TaskId { get; set; }
+    [Parameter] public IReadOnlyList<ForgeTaskHistory>? History { get; set; }
+
+    private IReadOnlyList<TaskHistoryRevisionModel> _timeline = Array.Empty<TaskHistoryRevisionModel>();
+    private HashSet<int> _expandedDiffVersions = new();
+    private bool _areAllDiffsExpanded;
+    private bool _isLoading;
+    private string? _errorMessage;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadTimelineAsync();
+    }
+
+    public async Task ReloadAsync()
+    {
+        await LoadTimelineAsync();
+    }
+
+    private async Task LoadTimelineAsync()
+    {
+        _isLoading = true;
+        _errorMessage = null;
+
+        try
+        {
+            IReadOnlyList<ForgeTaskHistory> historyData;
+
+            if (History != null)
+            {
+                historyData = History;
+            }
+            else if (TaskId > 0)
+            {
+                historyData = await TaskRepository.GetHistoryAsync(TaskId);
+            }
+            else
+            {
+                historyData = Array.Empty<ForgeTaskHistory>();
+            }
+
+            _timeline = DiffService.BuildTimeline(historyData);
+
+            // Automatically expand the newest diff if only one diff exists
+            var diffVersions = _timeline.Where(t => t.HasDescriptionDiff).Select(t => t.Version).ToList();
+            if (diffVersions.Count == 1 && !_expandedDiffVersions.Any())
+            {
+                _expandedDiffVersions.Add(diffVersions[0]);
+                _areAllDiffsExpanded = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load task history timeline for task #{TaskId}", TaskId);
+            _errorMessage = $"Failed to load task history: {ex.Message}";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void ToggleDiff(int version)
+    {
+        if (!_expandedDiffVersions.Add(version))
+        {
+            _expandedDiffVersions.Remove(version);
+        }
+        _areAllDiffsExpanded = _timeline.Where(t => t.HasDescriptionDiff).All(t => _expandedDiffVersions.Contains(t.Version));
+    }
+
+    private void ToggleAllDiffs()
+    {
+        if (_areAllDiffsExpanded)
+        {
+            _expandedDiffVersions.Clear();
+            _areAllDiffsExpanded = false;
+        }
+        else
+        {
+            foreach (var rev in _timeline.Where(t => t.HasDescriptionDiff))
+            {
+                _expandedDiffVersions.Add(rev.Version);
+            }
+            _areAllDiffsExpanded = true;
+        }
+    }
+}

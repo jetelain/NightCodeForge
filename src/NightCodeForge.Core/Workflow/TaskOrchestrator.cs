@@ -124,7 +124,12 @@ public class TaskOrchestrator : ITaskOrchestrator
             var err = $"Workspace #{task.WorkspaceId} not found for task #{taskId}.";
             _logger.LogError(err);
             task.Status = TaskOverallStatus.Failed;
-            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            await _taskRepository.UpdateWithHistoryAsync(
+                task,
+                dependsOn: null,
+                changedBy: AuditActors.TaskOrchestrator,
+                reason: err,
+                cancellationToken: cancellationToken);
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {
@@ -184,7 +189,12 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             _logger.LogError(ex, "Failed checking out feature branch for task #{TaskId}", taskId);
             task.Status = TaskOverallStatus.Failed;
-            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            await _taskRepository.UpdateWithHistoryAsync(
+                task,
+                dependsOn: null,
+                changedBy: AuditActors.TaskOrchestrator,
+                reason: $"Failed checkout branch: {ex.Message}",
+                cancellationToken: cancellationToken);
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {
@@ -218,7 +228,12 @@ public class TaskOrchestrator : ITaskOrchestrator
             var err = $"Stage '{task.CurrentStageId}' not found in pipeline for task #{taskId}.";
             _logger.LogError(err);
             task.Status = TaskOverallStatus.Failed;
-            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            await _taskRepository.UpdateWithHistoryAsync(
+                task,
+                dependsOn: null,
+                changedBy: AuditActors.TaskOrchestrator,
+                reason: err,
+                cancellationToken: cancellationToken);
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {
@@ -277,7 +292,12 @@ public class TaskOrchestrator : ITaskOrchestrator
                 var notFoundEx = new AgentProfileNotFoundException(stage.StageId, workspace.Id);
                 _logger.LogError(notFoundEx, "Agent profile not found for stage '{StageId}' in workspace #{WorkspaceId}", stage.StageId, workspace.Id);
                 task.Status = TaskOverallStatus.Failed;
-                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                await _taskRepository.UpdateWithHistoryAsync(
+                    task,
+                    dependsOn: null,
+                    changedBy: AuditActors.TaskOrchestrator,
+                    reason: notFoundEx.Message,
+                    cancellationToken: cancellationToken);
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
                 await _taskRepository.AddExecutionLogAsync(new ExecutionLog
                 {
@@ -672,7 +692,12 @@ public class TaskOrchestrator : ITaskOrchestrator
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
                 };
-                await _taskRepository.CreateAsync(suggestedTask, cancellationToken: cancellationToken);
+                await _taskRepository.CreateWithBaselineAsync(
+                    suggestedTask,
+                    dependsOn: null,
+                    createdBy: AuditActors.GetActorForStage(stage.StageId),
+                    reason: $"Proposed by stage '{stage.StageId}' during execution of task #{task.Id}",
+                    cancellationToken: cancellationToken);
                 _logger.LogInformation("Triage/Discovery created suggested task #{NewTaskId}: {Title}", suggestedTask.Id, suggestedTask.Title);
                 await SyncMarkdownTaskSafeAsync(workspace, suggestedTask, cancellationToken);
             }
@@ -785,9 +810,19 @@ public class TaskOrchestrator : ITaskOrchestrator
             {
                 task.Status = TaskOverallStatus.Cancelled;
                 task.IsWaitingForHuman = false;
+                pipelineContext.SyncDataBagToTask();
+                await _taskRepository.UpdateWithHistoryAsync(
+                    task,
+                    dependsOn: null,
+                    changedBy: AuditActors.User,
+                    reason: $"Stage '{stage.StageId}' was cancelled.",
+                    cancellationToken: ct);
             }
-            pipelineContext.SyncDataBagToTask();
-            await _taskRepository.UpdateAsync(task, cancellationToken: ct);
+            else
+            {
+                pipelineContext.SyncDataBagToTask();
+                await _taskRepository.UpdateAsync(task, cancellationToken: ct);
+            }
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, ct);
 
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
@@ -877,7 +912,12 @@ public class TaskOrchestrator : ITaskOrchestrator
             {
                 task.Status = TaskOverallStatus.Cancelled;
                 task.IsWaitingForHuman = false;
-                await _taskRepository.UpdateAsync(task, cancellationToken: CancellationToken.None);
+                await _taskRepository.UpdateWithHistoryAsync(
+                    task,
+                    dependsOn: null,
+                    changedBy: AuditActors.User,
+                    reason: $"Execution cancelled after stage '{stage.StageId}'.",
+                    cancellationToken: CancellationToken.None);
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
                 return;
             }
@@ -993,7 +1033,12 @@ public class TaskOrchestrator : ITaskOrchestrator
                 }
 
                 pipelineContext.SyncDataBagToTask();
-                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                await _taskRepository.UpdateWithHistoryAsync(
+                    task,
+                    dependsOn: null,
+                    changedBy: AuditActors.TaskOrchestrator,
+                    reason: $"Stage '{stage.StageId}' completed. Advanced to '{nextStage.StageId}'. Status: {task.Status}",
+                    cancellationToken: cancellationToken);
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
                 await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
 
@@ -1024,7 +1069,12 @@ public class TaskOrchestrator : ITaskOrchestrator
 
                 pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, diffStat);
                 pipelineContext.SyncDataBagToTask();
-                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                await _taskRepository.UpdateWithHistoryAsync(
+                    task,
+                    dependsOn: null,
+                    changedBy: AuditActors.TaskOrchestrator,
+                    reason: $"Pipeline completed all stages at '{stage.StageId}'. Status: {task.Status}",
+                    cancellationToken: cancellationToken);
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Ready, cancellationToken);
 
                 if (task.MergeMode == MergeMode.Automatic)
@@ -1077,7 +1127,12 @@ public class TaskOrchestrator : ITaskOrchestrator
 
                 task.CurrentStageId = targetLoopBackId;
                 pipelineContext.SyncDataBagToTask();
-                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                await _taskRepository.UpdateWithHistoryAsync(
+                    task,
+                    dependsOn: null,
+                    changedBy: AuditActors.TaskOrchestrator,
+                    reason: $"Quality gate '{stage.StageId}' failed. Looping back to '{targetLoopBackId}' (attempt {retries}/{effectiveMaxRetries}).",
+                    cancellationToken: cancellationToken);
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
                 await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
 
@@ -1097,7 +1152,12 @@ public class TaskOrchestrator : ITaskOrchestrator
         // Case C: Permanent Failure
         task.Status = TaskOverallStatus.Failed;
         pipelineContext.SyncDataBagToTask();
-        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.TaskOrchestrator,
+            reason: $"Pipeline failed at stage '{stage.StageId}'. Error: {result.ErrorMessage ?? "Unknown failure"}",
+            cancellationToken: cancellationToken);
         await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
         await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
@@ -1135,7 +1195,12 @@ public class TaskOrchestrator : ITaskOrchestrator
                     {
                         currentTask.Status = TaskOverallStatus.Cancelled;
                         currentTask.IsWaitingForHuman = false;
-                        await _taskRepository.UpdateAsync(currentTask, cancellationToken: ct);
+                        await _taskRepository.UpdateWithHistoryAsync(
+                            currentTask,
+                            dependsOn: null,
+                            changedBy: AuditActors.User,
+                            reason: "Execution was cancelled.",
+                            cancellationToken: ct);
                         await _dependencyStore.UpdateTaskStatusAsync(taskId, TaskOverallStatus.Cancelled, ct);
                     }
                 }
@@ -1404,7 +1469,12 @@ public class TaskOrchestrator : ITaskOrchestrator
         bag.Set(PipelineDataBagKeys.ReviewerFeedback, revisionNotes);
         task.PipelineDataJson = bag.ToJson();
 
-        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.User,
+            reason: $"Reviewer requested changes (routing back to '{targetStageId}'): {revisionNotes}",
+            cancellationToken: cancellationToken);
         await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Reviewed, cancellationToken);
 
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
@@ -1439,7 +1509,12 @@ public class TaskOrchestrator : ITaskOrchestrator
             task.MergeMode = mergeMode;
             task.UpdatedAt = DateTime.UtcNow;
 
-            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            await _taskRepository.UpdateWithHistoryAsync(
+                task,
+                dependsOn: null,
+                changedBy: AuditActors.User,
+                reason: $"Promoted task from Suggested to Open with Priority P{priority} and {mergeMode}.",
+                cancellationToken: cancellationToken);
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
 
             var isReady = await _dependencyEngine.IsReadyForExecutionAsync(task.Id, cancellationToken);
@@ -1460,7 +1535,12 @@ public class TaskOrchestrator : ITaskOrchestrator
             task.Status = TaskOverallStatus.Rejected;
             task.UpdatedAt = DateTime.UtcNow;
 
-            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            await _taskRepository.UpdateWithHistoryAsync(
+                task,
+                dependsOn: null,
+                changedBy: AuditActors.User,
+                reason: "Rejected suggested task.",
+                cancellationToken: cancellationToken);
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Rejected, cancellationToken);
         }
         else
@@ -1537,7 +1617,12 @@ public class TaskOrchestrator : ITaskOrchestrator
         // 2. Mark task as completed (Closed)
         task.Status = TaskOverallStatus.Closed;
         task.CurrentStageId = string.Empty;
-        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.TaskOrchestrator,
+            reason: $"ForgeTask #{task.Id} completed and squash-merged to {task.BaseBranch}.",
+            cancellationToken: cancellationToken);
         await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Closed, cancellationToken);
 
         try

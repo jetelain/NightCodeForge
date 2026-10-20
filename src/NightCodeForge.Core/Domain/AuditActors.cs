@@ -6,8 +6,10 @@ namespace NightCodeForge.Core.Domain;
 public static class AuditActors
 {
     public const string System = "system";
-    public const string User = "user";
-    public const string Orchestrator = "orchestrator";
+    public const string User = "User";
+    public const string TaskOrchestrator = "TaskOrchestrator";
+    public const string IdeationAgent = "IdeationAgent";
+    public const string Orchestrator = "TaskOrchestrator";
     public const string TaskReviewAgent = "agent:task-review";
     public const string FileWatcher = "file-watcher";
 
@@ -18,7 +20,7 @@ public static class AuditActors
     {
         if (string.IsNullOrWhiteSpace(stageId))
         {
-            return Orchestrator;
+            return TaskOrchestrator;
         }
 
         return $"agent:{stageId.Trim()}";

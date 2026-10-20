@@ -138,6 +138,12 @@
                     @onclick='() => _activeTab = "terminal"'>
                 🖥 Terminal &amp; Logs
             </button>
+            <button type="button"
+                    class="forge-btn @(_activeTab == "history" ? "forge-btn-primary" : "forge-btn-secondary")"
+                    style="font-size: 0.84rem; padding: 0.4rem 0.9rem;"
+                    @onclick='() => _activeTab = "history"'>
+                🕰️ Revisions &amp; History
+            </button>
         </div>
 
         <!-- TAB CONTENT -->
@@ -320,6 +326,14 @@
         <div style="display: @(_activeTab == "terminal" ? "block" : "none");">
             <TerminalConsole @ref="_terminalRef" FilterTaskId="@(_task?.Id ?? TaskId)" />
         </div>
+
+        <!-- Tab 5: Revisions & Audit Trail -->
+        @if (_activeTab == "history")
+        {
+            <div class="task-history-tab">
+                <NightCodeForge.Web.Components.Backlog.TaskHistoryTimeline TaskId="_task!.Id" />
+            </div>
+        }
     }
 </div>
 

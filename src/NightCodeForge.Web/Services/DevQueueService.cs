@@ -191,7 +191,7 @@ public class DevQueueService : IDevQueueService
             await taskRepo.UpdateWithHistoryAsync(
                 task,
                 dependsOn: null,
-                changedBy: "User",
+                changedBy: AuditActors.User,
                 reason: $"Updated Priority from P{oldPriority} to P{TaskPriority.Critical} (llm-urgent promotion)",
                 cancellationToken: cancellationToken);
 
@@ -202,7 +202,8 @@ public class DevQueueService : IDevQueueService
                 var workspace = await workspaceRepo.GetByIdAsync(task.WorkspaceId, cancellationToken);
                 if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
                 {
-                    await markdownSync.SyncTaskToDiskAsync(task, workspace.RepositoryPath, cancellationToken: cancellationToken);
+                    var deps = await taskRepo.GetDependenciesAsync(task.Id, cancellationToken);
+                    await markdownSync.SyncTaskToDiskAsync(task, workspace.RepositoryPath, deps, cancellationToken: cancellationToken);
                     _logger.LogInformation("Synced promoted task markdown to disk for Task #{TaskId}", taskId);
                 }
             }
@@ -233,7 +234,12 @@ public class DevQueueService : IDevQueueService
                 {
                     task.Status = TaskOverallStatus.Cancelled;
                     task.IsWaitingForHuman = false;
-                    await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);
+                    await taskRepo.UpdateWithHistoryAsync(
+                        task,
+                        dependsOn: null,
+                        changedBy: AuditActors.User,
+                        reason: "Job cancelled via DevQueue",
+                        cancellationToken: cancellationToken);
                     _logger.LogInformation("Marked Task #{TaskId} status as Cancelled after job cancellation", taskId.Value);
 
                     var convs = await taskRepo.GetConversationsAsync(task.Id, cancellationToken);
@@ -389,7 +395,16 @@ public class DevQueueService : IDevQueueService
             task.InterruptedStageId = null;
             task.UpdatedAt = DateTime.UtcNow;
 
-            await taskRepo.UpdateAsync(task, dependsOn: null, cancellationToken);
+            var rescheduleReason = restartPipeline
+                ? "Pipeline restarted from beginning via DevQueue"
+                : $"Rescheduled task execution via DevQueue (Status: {task.Status})";
+
+            await taskRepo.UpdateWithHistoryAsync(
+                task,
+                dependsOn: null,
+                changedBy: AuditActors.User,
+                reason: rescheduleReason,
+                cancellationToken: cancellationToken);
 
             var jobId = _taskJobQueue.EnqueueInference(taskId);
             _logger.LogInformation("Rescheduled Task #{TaskId} (RestartPipeline={RestartPipeline}, JobId={JobId})", taskId, restartPipeline, jobId);

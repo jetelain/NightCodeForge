@@ -63,5 +63,12 @@ public class ApproveMergeModalMergeModeTests : BunitContext
         // UI updates to reflect new mode
         Assert.Contains("forge-btn-primary", autoBtn.ClassName);
         Assert.Contains("forge-btn-secondary", manualBtn.ClassName);
+
+        // Verify history snapshot records AuditActors.User
+        var history = await _taskRepository.GetHistoryAsync(99);
+        Assert.NotEmpty(history);
+        var lastRev = history.Last();
+        Assert.Equal(AuditActors.User, lastRev.ChangedBy);
+        Assert.Contains("Updated MergeMode to Automatic via ApproveMergeModal", lastRev.ChangeReason);
     }
 }

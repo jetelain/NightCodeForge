@@ -105,7 +105,7 @@
                 {
                     task.MergeMode = mode;
                     task.UpdatedAt = DateTime.UtcNow;
-                    await taskRepo.UpdateWithHistoryAsync(task, null, "User", $"Updated MergeMode to {mode} via ApproveMergeModal");
+                    await taskRepo.UpdateWithHistoryAsync(task, null, AuditActors.User, $"Updated MergeMode to {mode} via ApproveMergeModal");
                 }
             }
             catch (Exception ex)

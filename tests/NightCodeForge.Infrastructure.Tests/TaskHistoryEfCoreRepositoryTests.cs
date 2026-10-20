@@ -68,6 +68,7 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
 
         Assert.True(created.Id > 0);
         Assert.Equal(1, created.Version);
+        Assert.Equal($"feature/task-{created.Id}", created.FeatureBranch);
 
         // Verify history baseline
         var history = await repo.GetHistoryAsync(created.Id, CancellationToken.None);
@@ -76,11 +77,17 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
         Assert.Equal(1, baseline.Version);
         Assert.Equal("Feature Implementation", baseline.Title);
         Assert.Equal("Initial requirement", baseline.Description);
+        Assert.Equal($"feature/task-{created.Id}", baseline.FeatureBranch);
         Assert.Equal(AuditActors.User, baseline.ChangedBy);
         Assert.Equal("Initial task creation", baseline.ChangeReason);
         Assert.NotNull(baseline.SerializedDependencies);
         Assert.Contains(dep1.Id.ToString(), baseline.SerializedDependencies);
         Assert.Contains(dep2.Id.ToString(), baseline.SerializedDependencies);
+
+        // Verify GetHistoryByTaskIdAsync alias returns identical result
+        var aliasHistory = await repo.GetHistoryByTaskIdAsync(created.Id, CancellationToken.None);
+        Assert.Single(aliasHistory);
+        Assert.Equal(baseline.Id, aliasHistory[0].Id);
 
         // Verify max version
         var maxVer = await repo.GetMaxHistoryVersionAsync(created.Id, CancellationToken.None);
@@ -194,5 +201,118 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
         Assert.Equal(2, wksDeps[t3.Id].Count);
         Assert.Contains(t1.Id, wksDeps[t3.Id]);
         Assert.Contains(t2.Id, wksDeps[t3.Id]);
+    }
+
+    [Fact]
+    public async Task CreateWithBaselineAsync_PopulatesTaskDependenciesOnEntity()
+    {
+        using var context = new AppDbContext(_options);
+        var repo = new EfCoreTaskRepository(context);
+
+        var workspace = new Workspace
+        {
+            Name = "DepSyncRepo",
+            RepositoryPath = "/test/repo-depsync",
+            DefaultBaseBranch = "main"
+        };
+        context.Workspaces.Add(workspace);
+        await context.SaveChangesAsync();
+
+        var depTask = new ForgeTask { WorkspaceId = workspace.Id, Title = "Prereq", Status = TaskOverallStatus.Open };
+        context.Tasks.Add(depTask);
+        await context.SaveChangesAsync();
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Task with Deps",
+            Status = TaskOverallStatus.Open
+        };
+
+        var created = await repo.CreateWithBaselineAsync(task, new[] { depTask.Id }, AuditActors.User, "Created with deps", CancellationToken.None);
+
+        Assert.NotNull(created.Dependencies);
+        Assert.Single(created.Dependencies);
+        Assert.Equal(depTask.Id, created.Dependencies.First().DependsOnTaskId);
+    }
+
+    [Fact]
+    public async Task UpdateWithHistoryAsync_WhenDependsOnNull_PreservesExistingDependenciesAndSetsOnEntity()
+    {
+        using var context = new AppDbContext(_options);
+        var repo = new EfCoreTaskRepository(context);
+
+        var workspace = new Workspace
+        {
+            Name = "PreserveDepRepo",
+            RepositoryPath = "/test/repo-preserve",
+            DefaultBaseBranch = "main"
+        };
+        context.Workspaces.Add(workspace);
+        await context.SaveChangesAsync();
+
+        var depTask = new ForgeTask { WorkspaceId = workspace.Id, Title = "Prereq 1", Status = TaskOverallStatus.Open };
+        context.Tasks.Add(depTask);
+        await context.SaveChangesAsync();
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Original",
+            Status = TaskOverallStatus.Open
+        };
+        var created = await repo.CreateWithBaselineAsync(task, new[] { depTask.Id }, AuditActors.User, "Created", CancellationToken.None);
+
+        // Update with dependsOn = null
+        created.Title = "Updated Title";
+        await repo.UpdateWithHistoryAsync(created, null, AuditActors.User, "Title update", CancellationToken.None);
+
+        Assert.NotNull(created.Dependencies);
+        Assert.Single(created.Dependencies);
+        Assert.Equal(depTask.Id, created.Dependencies.First().DependsOnTaskId);
+
+        var history = await repo.GetHistoryAsync(created.Id, CancellationToken.None);
+        Assert.Equal(2, history.Count);
+        Assert.Contains(depTask.Id.ToString(), history[1].SerializedDependencies ?? "");
+    }
+
+    [Fact]
+    public async Task UpdateWithHistoryAsync_WhenDependsOnProvided_UpdatesDependenciesAndSetsOnEntity()
+    {
+        using var context = new AppDbContext(_options);
+        var repo = new EfCoreTaskRepository(context);
+
+        var workspace = new Workspace
+        {
+            Name = "UpdateDepRepo",
+            RepositoryPath = "/test/repo-updatedep",
+            DefaultBaseBranch = "main"
+        };
+        context.Workspaces.Add(workspace);
+        await context.SaveChangesAsync();
+
+        var dep1 = new ForgeTask { WorkspaceId = workspace.Id, Title = "D1", Status = TaskOverallStatus.Open };
+        var dep2 = new ForgeTask { WorkspaceId = workspace.Id, Title = "D2", Status = TaskOverallStatus.Open };
+        context.Tasks.AddRange(dep1, dep2);
+        await context.SaveChangesAsync();
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Target Task",
+            Status = TaskOverallStatus.Open
+        };
+        var created = await repo.CreateWithBaselineAsync(task, new[] { dep1.Id }, AuditActors.User, "Created", CancellationToken.None);
+
+        // Now replace with dep2
+        await repo.UpdateWithHistoryAsync(created, new[] { dep2.Id }, AuditActors.User, "Swapped dependency", CancellationToken.None);
+
+        Assert.NotNull(created.Dependencies);
+        Assert.Single(created.Dependencies);
+        Assert.Equal(dep2.Id, created.Dependencies.First().DependsOnTaskId);
+
+        var dbDeps = await repo.GetDependenciesAsync(created.Id, CancellationToken.None);
+        Assert.Single(dbDeps);
+        Assert.Equal(dep2.Id, dbDeps[0]);
     }
 }

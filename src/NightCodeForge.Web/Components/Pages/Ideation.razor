@@ -1410,9 +1410,11 @@
                 UpdatedAt = DateTime.UtcNow
             };
 
-            var created = await TaskRepository.CreateAsync(newTask, proposal.SelectedDependencyIds);
-            created.FeatureBranch = $"feature/task-{created.Id}";
-            await TaskRepository.UpdateAsync(created, proposal.SelectedDependencyIds);
+            var created = await TaskRepository.CreateWithBaselineAsync(
+                newTask,
+                proposal.SelectedDependencyIds,
+                AuditActors.IdeationAgent,
+                "Created task proposal from Ideation");
 
             // Sync markdown task file to docs/tasks/
             if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))

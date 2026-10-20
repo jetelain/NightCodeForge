@@ -33,6 +33,11 @@ public class DependencyLinkingModalTests : BunitContext
         Services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton(_toastService);
+        Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
+            _taskRepository,
+            new InMemoryWorkspaceRepository(),
+            _markdownSync,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
     }
 
     [Fact]

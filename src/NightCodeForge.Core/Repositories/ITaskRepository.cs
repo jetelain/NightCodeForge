@@ -24,6 +24,8 @@ public interface ITaskRepository
     Task<IReadOnlyList<int>> GetDependenciesAsync(int taskId, CancellationToken cancellationToken = default);
     Task<IReadOnlyDictionary<int, IReadOnlyList<int>>> GetWorkspaceDependenciesAsync(int workspaceId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ForgeTaskHistory>> GetHistoryAsync(int taskId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ForgeTaskHistory>> GetHistoryByTaskIdAsync(int taskId, CancellationToken cancellationToken = default)
+        => GetHistoryAsync(taskId, cancellationToken);
     Task<int> GetMaxHistoryVersionAsync(int taskId, CancellationToken cancellationToken = default);
     Task DeleteAsync(int id, CancellationToken cancellationToken = default);
     Task<Question?> GetQuestionByIdAsync(int questionId, CancellationToken cancellationToken = default);
@@ -199,6 +201,11 @@ public class InMemoryTaskRepository : ITaskRepository
                 task.Version = 1;
             }
 
+            if (string.IsNullOrWhiteSpace(task.FeatureBranch))
+            {
+                task.FeatureBranch = $"feature/task-{task.Id}";
+            }
+
             var depList = dependsOn != null
                 ? dependsOn.Distinct().ToList()
                 : (task.Dependencies?.Select(d => d.DependsOnTaskId).Distinct().ToList() ?? new List<int>());
@@ -339,6 +346,9 @@ public class InMemoryTaskRepository : ITaskRepository
             return Task.FromResult<IReadOnlyList<ForgeTaskHistory>>(Array.Empty<ForgeTaskHistory>());
         }
     }
+
+    public Task<IReadOnlyList<ForgeTaskHistory>> GetHistoryByTaskIdAsync(int taskId, CancellationToken cancellationToken = default)
+        => GetHistoryAsync(taskId, cancellationToken);
 
     public Task<int> GetMaxHistoryVersionAsync(int taskId, CancellationToken cancellationToken = default)
     {

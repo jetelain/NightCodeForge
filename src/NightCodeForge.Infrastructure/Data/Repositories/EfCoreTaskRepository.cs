@@ -96,6 +96,11 @@ public class EfCoreTaskRepository : ITaskRepository
         _context.Tasks.Add(task);
         await _context.SaveChangesAsync(cancellationToken);
 
+        if (string.IsNullOrWhiteSpace(task.FeatureBranch))
+        {
+            task.FeatureBranch = $"feature/task-{task.Id}";
+        }
+
         var depList = dependsOn != null
             ? dependsOn.Distinct().ToList()
             : (task.Dependencies?.Select(d => d.DependsOnTaskId).Distinct().ToList() ?? new List<int>());
@@ -112,6 +117,8 @@ public class EfCoreTaskRepository : ITaskRepository
             }
             await _context.SaveChangesAsync(cancellationToken);
         }
+
+        task.Dependencies = depList.Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
 
         var baselineHistory = new ForgeTaskHistory
         {
@@ -132,6 +139,7 @@ public class EfCoreTaskRepository : ITaskRepository
         };
 
         _context.TaskHistories.Add(baselineHistory);
+        task.History?.Add(baselineHistory);
         await _context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -173,6 +181,12 @@ public class EfCoreTaskRepository : ITaskRepository
                     TaskId = task.Id,
                     DependsOnTaskId = depId
                 });
+            }
+
+            task.Dependencies = dependsOn.Distinct().Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
+            if (existing != null && !ReferenceEquals(existing, task))
+            {
+                existing.Dependencies = task.Dependencies;
             }
         }
 
@@ -232,6 +246,12 @@ public class EfCoreTaskRepository : ITaskRepository
                 .ToListAsync(cancellationToken);
         }
 
+        task.Dependencies = depList.Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
+        if (existing != null && !ReferenceEquals(existing, task))
+        {
+            existing.Dependencies = task.Dependencies;
+        }
+
         var history = new ForgeTaskHistory
         {
             TaskId = task.Id,
@@ -251,6 +271,11 @@ public class EfCoreTaskRepository : ITaskRepository
         };
 
         _context.TaskHistories.Add(history);
+        task.History?.Add(history);
+        if (existing != null && !ReferenceEquals(existing, task))
+        {
+            existing.History?.Add(history);
+        }
         await SyncQuestionsAsync(task, existing ?? task, cancellationToken);
         await _context.SaveChangesAsync(cancellationToken);
     }
@@ -314,6 +339,11 @@ public class EfCoreTaskRepository : ITaskRepository
             .Where(h => h.TaskId == taskId)
             .OrderBy(h => h.Version)
             .ToListAsync(cancellationToken);
+    }
+
+    public Task<IReadOnlyList<ForgeTaskHistory>> GetHistoryByTaskIdAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        return GetHistoryAsync(taskId, cancellationToken);
     }
 
     public async Task<int> GetMaxHistoryVersionAsync(int taskId, CancellationToken cancellationToken = default)
