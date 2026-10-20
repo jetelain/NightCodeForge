@@ -31,7 +31,7 @@ public class TaskFrontmatter
     public string? FeatureBranch { get; set; }
     
     [YamlMember(Alias = "depends_on")]
-    public List<int>? DependsOn { get; set; } = null;
+    public TaskDependencyReferenceList? DependsOn { get; set; } = null;
     
     [YamlMember(Alias = "agent_profile")]
     public string? AgentProfile { get; set; }

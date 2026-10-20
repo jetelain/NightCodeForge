@@ -22,6 +22,9 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     [GeneratedRegex(@"[^a-z0-9]+")]
     private static partial Regex NonAlphaNumericRegex();
 
+    [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}-")]
+    private static partial Regex DatePrefixRegex();
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IDeserializer _yamlDeserializer;
     private readonly ISerializer _yamlSerializer;
@@ -41,12 +44,14 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     private static IDeserializer CreateYamlDeserializer() =>
         new DeserializerBuilder()
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
+            .WithTypeConverter(new TaskDependencyReferenceListYamlConverter())
             .IgnoreUnmatchedProperties()
             .Build();
 
     private static ISerializer CreateYamlSerializer() =>
         new SerializerBuilder()
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
+            .WithTypeConverter(new TaskDependencyReferenceListYamlConverter())
             .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
             .Build();
 
@@ -165,6 +170,21 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         return string.IsNullOrWhiteSpace(slug) ? "task" : slug;
     }
 
+    public static string NormalizeDependencyKey(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+        var trimmed = input.Trim();
+        if (trimmed.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed = trimmed[..^3];
+        }
+        if (DatePrefixRegex().IsMatch(trimmed))
+        {
+            trimmed = trimmed.Substring(11);
+        }
+        return GenerateSlug(trimmed);
+    }
+
     public async Task<string> SyncTaskToDiskAsync(
         ForgeTask task,
         string workspacePath,
@@ -274,6 +294,30 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     /// </summary>
     private async Task<string> ResolveTargetFilePathAsync(string tasksDir, ForgeTask task, CancellationToken cancellationToken)
     {
+        // First check if an existing file already holds this task's ID
+        if (Directory.Exists(tasksDir))
+        {
+            var files = Directory.GetFiles(tasksDir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly);
+            foreach (var file in files)
+            {
+                string existingContent;
+                try
+                {
+                    existingContent = await File.ReadAllTextAsync(file, cancellationToken);
+                }
+                catch (IOException ex)
+                {
+                    throw new TaskMarkdownSyncException($"Failed to read task markdown file '{file}': {ex.Message}", ex, file);
+                }
+
+                var (existingFm, _) = ParseMarkdown(existingContent, file);
+                if (existingFm.Id == task.Id)
+                {
+                    return file;
+                }
+            }
+        }
+
         var datePrefix = (task.CreatedAt != default ? task.CreatedAt : DateTime.UtcNow).ToString("yyyy-MM-dd");
         var slug = GenerateSlug(task.Title);
         var targetFile = Path.Combine(tasksDir, $"{datePrefix}-{slug}{TaskSyncConstants.MarkdownExtension}");
@@ -430,209 +474,418 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             }
 
             // 2. Validate Dependencies & Detect Cycles across the combined graph
-            var combinedDeps = new Dictionary<int, List<int>>();
-            foreach (var kvp in dbTasks)
+            // Build lookup index for existing tasks in workspace
+            var existingTaskLookup = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (dbId, dbTask) in dbTasks)
             {
-                combinedDeps[kvp.Key] = kvp.Value.Dependencies.Select(d => d.DependsOnTaskId).ToList();
-            }
-
-            // Overlay disk changes (missing depends_on leaves deps unchanged; explicit empty removes)
-            foreach (var item in parsedFiles)
-            {
-                if (item.Frontmatter.Id.HasValue && item.Frontmatter.Id.Value > 0)
+                existingTaskLookup[dbId.ToString()] = dbId;
+                if (!string.IsNullOrWhiteSpace(dbTask.Title))
                 {
-                    if (item.Frontmatter.DependsOn != null)
+                    existingTaskLookup[dbTask.Title.Trim()] = dbId;
+                    var slug = NormalizeDependencyKey(dbTask.Title);
+                    if (!string.IsNullOrEmpty(slug))
                     {
-                        combinedDeps[item.Frontmatter.Id.Value] = item.Frontmatter.DependsOn.Distinct().ToList();
+                        existingTaskLookup[slug] = dbId;
                     }
                 }
             }
 
-            // Verify dependency targets exist in workspace and are not self-referential
-            foreach (var (taskId, depList) in combinedDeps)
-            {
-                foreach (var depId in depList)
-                {
-                    if (depId == taskId)
-                    {
-                        var matchingFile = parsedFiles.FirstOrDefault(p => p.Frontmatter.Id == taskId).FilePath;
-                        throw new TaskMarkdownSyncException($"Task #{taskId} cannot depend on itself.", matchingFile, taskId);
-                    }
+            var existingFiles = parsedFiles
+                .Where(p => p.Frontmatter.Id.HasValue && p.Frontmatter.Id.Value > 0)
+                .ToList();
 
-                    if (!dbTasks.ContainsKey(depId))
+            // Also map existing files on disk to their task IDs
+            foreach (var p in existingFiles)
+            {
+                var id = p.Frontmatter.Id!.Value;
+                var fileName = Path.GetFileName(p.FilePath);
+                existingTaskLookup[fileName] = id;
+                existingTaskLookup[Path.GetFileNameWithoutExtension(p.FilePath)] = id;
+                var fileSlug = NormalizeDependencyKey(fileName);
+                if (!string.IsNullOrEmpty(fileSlug))
+                {
+                    existingTaskLookup[fileSlug] = id;
+                }
+            }
+
+            // Index new tasks in current batch
+            var newTasks = parsedFiles
+                .Where(p => !p.Frontmatter.Id.HasValue || p.Frontmatter.Id.Value <= 0)
+                .Select((item, idx) => (Index: idx, Item: item))
+                .ToList();
+
+            var newTasksLookup = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var nt in newTasks)
+            {
+                var fileName = Path.GetFileName(nt.Item.FilePath);
+                newTasksLookup[fileName] = nt.Index;
+                newTasksLookup[Path.GetFileNameWithoutExtension(nt.Item.FilePath)] = nt.Index;
+                var fileSlug = NormalizeDependencyKey(fileName);
+                if (!string.IsNullOrEmpty(fileSlug))
+                {
+                    newTasksLookup[fileSlug] = nt.Index;
+                }
+                if (!string.IsNullOrWhiteSpace(nt.Item.Frontmatter.Title))
+                {
+                    newTasksLookup[nt.Item.Frontmatter.Title.Trim()] = nt.Index;
+                    var titleSlug = NormalizeDependencyKey(nt.Item.Frontmatter.Title);
+                    if (!string.IsNullOrEmpty(titleSlug))
                     {
-                        var matchingFile = parsedFiles.FirstOrDefault(p => p.Frontmatter.Id == taskId).FilePath;
-                        throw new TaskMarkdownSyncException(
-                            $"Task #{taskId} depends on #{depId}, which does not exist in workspace #{workspace.Id}.",
-                            matchingFile,
-                            taskId);
+                        newTasksLookup[titleSlug] = nt.Index;
                     }
                 }
             }
 
-            // Validate new tasks' dependencies
-            foreach (var item in parsedFiles.Where(p => !p.Frontmatter.Id.HasValue || p.Frontmatter.Id.Value <= 0))
+            (int? ExistingTaskId, int? NewTaskIndex) ResolveBatchReference(object rawRef, string taskTitle, string filePath)
             {
+                if (rawRef == null) return (null, null);
+
+                if (rawRef is int intId)
+                {
+                    if (dbTasks.ContainsKey(intId)) return (intId, null);
+                    if (existingTaskLookup.TryGetValue(intId.ToString(), out var mappedId)) return (mappedId, null);
+                    throw new TaskMarkdownSyncException(
+                        $"Task '{taskTitle}' in '{filePath}' depends on #{intId}, which does not exist in workspace #{workspace.Id}.",
+                        filePath,
+                        intId);
+                }
+
+                var str = rawRef.ToString()?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(str)) return (null, null);
+
+                if (int.TryParse(str, out var parsedId))
+                {
+                    if (dbTasks.ContainsKey(parsedId)) return (parsedId, null);
+                    if (existingTaskLookup.TryGetValue(str, out var mappedId)) return (mappedId, null);
+                    throw new TaskMarkdownSyncException(
+                        $"Task '{taskTitle}' in '{filePath}' depends on #{parsedId}, which does not exist in workspace #{workspace.Id}.",
+                        filePath,
+                        parsedId);
+                }
+
+                if (existingTaskLookup.TryGetValue(str, out var matchedExistingId) ||
+                    existingTaskLookup.TryGetValue(NormalizeDependencyKey(str), out matchedExistingId))
+                {
+                    return (matchedExistingId, null);
+                }
+
+                if (newTasksLookup.TryGetValue(str, out var matchedNewIndex) ||
+                    newTasksLookup.TryGetValue(NormalizeDependencyKey(str), out matchedNewIndex))
+                {
+                    return (null, matchedNewIndex);
+                }
+
+                throw new TaskMarkdownSyncException(
+                    $"Task '{taskTitle}' in '{filePath}' depends on '{str}', which could not be resolved to any existing or pending task in workspace #{workspace.Id}.",
+                    filePath);
+            }
+
+            var combinedGraph = new Dictionary<int, List<int>>();
+            foreach (var (dbId, dbTask) in dbTasks)
+            {
+                combinedGraph[dbId] = dbTask.Dependencies.Select(d => d.DependsOnTaskId).ToList();
+            }
+
+            var resolvedExistingDeps = new Dictionary<int, (List<int> ExistingDepIds, List<int> NewDepIndices)>();
+            foreach (var item in existingFiles)
+            {
+                var taskId = item.Frontmatter.Id!.Value;
                 if (item.Frontmatter.DependsOn != null)
                 {
-                    foreach (var depId in item.Frontmatter.DependsOn)
+                    var existingDepIds = new List<int>();
+                    var newDepIndices = new List<int>();
+                    var graphEdges = new List<int>();
+
+                    foreach (var rawRef in item.Frontmatter.DependsOn)
                     {
-                        if (!dbTasks.ContainsKey(depId))
+                        var (resId, resNewIdx) = ResolveBatchReference(rawRef, item.Frontmatter.Title, item.FilePath);
+                        if (resId.HasValue)
                         {
-                            throw new TaskMarkdownSyncException(
-                                $"New task in '{item.FilePath}' depends on #{depId}, which does not exist in workspace #{workspace.Id}.",
-                                item.FilePath);
+                            if (resId.Value == taskId)
+                            {
+                                throw new TaskMarkdownSyncException($"Task #{taskId} cannot depend on itself.", item.FilePath, taskId);
+                            }
+                            existingDepIds.Add(resId.Value);
+                            graphEdges.Add(resId.Value);
+                        }
+                        else if (resNewIdx.HasValue)
+                        {
+                            newDepIndices.Add(resNewIdx.Value);
+                            graphEdges.Add(-(resNewIdx.Value + 1));
+                        }
+                    }
+
+                    resolvedExistingDeps[taskId] = (existingDepIds.Distinct().ToList(), newDepIndices.Distinct().ToList());
+                    combinedGraph[taskId] = graphEdges.Distinct().ToList();
+                }
+            }
+
+            var resolvedNewDeps = new Dictionary<int, (List<int> ExistingDepIds, List<int> NewDepIndices)>();
+            foreach (var nt in newTasks)
+            {
+                var myNodeId = -(nt.Index + 1);
+                var existingDepIds = new List<int>();
+                var newDepIndices = new List<int>();
+                var graphEdges = new List<int>();
+
+                if (nt.Item.Frontmatter.DependsOn != null)
+                {
+                    foreach (var rawRef in nt.Item.Frontmatter.DependsOn)
+                    {
+                        var (resId, resNewIdx) = ResolveBatchReference(rawRef, nt.Item.Frontmatter.Title, nt.Item.FilePath);
+                        if (resId.HasValue)
+                        {
+                            existingDepIds.Add(resId.Value);
+                            graphEdges.Add(resId.Value);
+                        }
+                        else if (resNewIdx.HasValue)
+                        {
+                            if (resNewIdx.Value == nt.Index)
+                            {
+                                throw new TaskMarkdownSyncException(
+                                    $"New task '{nt.Item.Frontmatter.Title}' in '{nt.Item.FilePath}' cannot depend on itself.",
+                                    nt.Item.FilePath);
+                            }
+                            newDepIndices.Add(resNewIdx.Value);
+                            graphEdges.Add(-(resNewIdx.Value + 1));
                         }
                     }
                 }
+
+                resolvedNewDeps[nt.Index] = (existingDepIds.Distinct().ToList(), newDepIndices.Distinct().ToList());
+                combinedGraph[myNodeId] = graphEdges.Distinct().ToList();
             }
 
-            // Combined acyclicity check
-            var visited = new Dictionary<int, int>(); // 0: unvisited, 1: visiting (in current DFS stack), 2: visited
-            foreach (var taskId in combinedDeps.Keys)
+            // Cycle detection across the unified graph
+            var visited = new Dictionary<int, int>();
+            foreach (var nodeId in combinedGraph.Keys)
             {
-                if (!visited.TryGetValue(taskId, out var state) || state == 0)
+                if (!visited.TryGetValue(nodeId, out var state) || state == 0)
                 {
                     var stack = new List<int>();
-                    if (HasCycleDfs(taskId, combinedDeps, visited, stack))
+                    if (HasCycleDfs(nodeId, combinedGraph, visited, stack))
                     {
-                        var cyclePath = string.Join(" -> ", stack);
-                        var matchingFile = parsedFiles.FirstOrDefault(p => p.Frontmatter.Id == taskId).FilePath;
+                        string FormatNodeName(int nId)
+                        {
+                            if (nId > 0)
+                            {
+                                return dbTasks.TryGetValue(nId, out var t) ? $"#{nId} ('{t.Title}')" : $"#{nId}";
+                            }
+                            var idx = -(nId + 1);
+                            return $"'{newTasks[idx].Item.Frontmatter.Title}'";
+                        }
+
+                        var cyclePath = string.Join(" -> ", stack.Select(FormatNodeName));
+                        string? matchingFile = null;
+                        int? cycleTaskId = null;
+                        if (nodeId > 0)
+                        {
+                            cycleTaskId = nodeId;
+                            matchingFile = parsedFiles.FirstOrDefault(p => p.Frontmatter.Id == nodeId).FilePath;
+                        }
+                        else
+                        {
+                            var newIdx = -(nodeId + 1);
+                            matchingFile = newTasks[newIdx].Item.FilePath;
+                        }
+
                         throw new TaskMarkdownSyncException(
                             $"Circular dependency detected in workspace #{workspace.Id}: {cyclePath}",
                             matchingFile,
-                            taskId);
+                            cycleTaskId);
                     }
                 }
             }
 
-            // 3. Apply updates and creations
-            var refreshedTasks = new List<ForgeTask>();
+            // 3. Topological ordering for new tasks
+            var orderedNewTaskIndices = new List<int>();
+            var newVisited = new HashSet<int>();
 
-            foreach (var item in parsedFiles)
+            void VisitNewTask(int idx)
             {
-                if (item.Frontmatter.Id.HasValue && item.Frontmatter.Id.Value > 0)
+                if (newVisited.Contains(idx)) return;
+                newVisited.Add(idx);
+
+                var prereqIndices = resolvedNewDeps[idx].NewDepIndices;
+                foreach (var pIdx in prereqIndices)
                 {
-                    var taskId = item.Frontmatter.Id.Value;
-                    var task = dbTasks[taskId];
-
-                    var newTitle = !string.IsNullOrWhiteSpace(item.Frontmatter.Title) ? item.Frontmatter.Title.Trim() : task.Title;
-                    var newDesc = !string.IsNullOrWhiteSpace(item.Description) ? item.Description : task.Description;
-                    var newPriority = item.Frontmatter.Priority > 0 ? item.Frontmatter.Priority : task.Priority;
-                    var newDeps = item.Frontmatter.DependsOn?.Distinct().ToList();
-
-                    bool titleChanged = !string.Equals(newTitle, task.Title, StringComparison.Ordinal);
-                    bool descChanged = !string.Equals(newDesc, task.Description, StringComparison.Ordinal);
-                    bool priorityChanged = newPriority != task.Priority;
-
-                    var currentDeps = task.Dependencies.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList();
-                    bool depsChanged = newDeps != null && !newDeps.OrderBy(x => x).SequenceEqual(currentDeps);
-
-                    if (titleChanged || descChanged || priorityChanged || depsChanged)
-                    {
-                        task.Title = newTitle;
-                        task.Description = newDesc;
-                        task.Priority = newPriority;
-                        task.UpdatedAt = DateTime.UtcNow;
-
-                        await taskRepo.UpdateWithHistoryAsync(
-                            task,
-                            newDeps,
-                            changeActor,
-                            changeReason ?? TaskSyncConstants.DiskModificationsSync,
-                            cancellationToken);
-                    }
-
-                    // Mirror to host if needed
-                    if (hostTasksDir != null)
-                    {
-                        var hostFile = Path.Combine(hostTasksDir, Path.GetFileName(item.FilePath));
-                        _suppressedHashes[item.Hash] = 1;
-                        await File.WriteAllTextAsync(hostFile, item.Content.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
-                    }
-
-                    refreshedTasks.Add(task);
+                    VisitNewTask(pIdx);
                 }
-                else
+                orderedNewTaskIndices.Add(idx);
+            }
+
+            for (int i = 0; i < newTasks.Count; i++)
+            {
+                VisitNewTask(i);
+            }
+
+            var refreshedTasks = new List<ForgeTask>();
+            var newTaskIdMap = new Dictionary<int, int>();
+
+            // 4. Create new tasks in topological order
+            foreach (var newIdx in orderedNewTaskIndices)
+            {
+                var nt = newTasks[newIdx];
+                var (existingDepIds, newDepIndices) = resolvedNewDeps[newIdx];
+                var finalDepIds = new List<int>(existingDepIds);
+                foreach (var prereqNewIdx in newDepIndices)
                 {
-                    // New Task
-                    var mergeMode = string.Equals(item.Frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
-                        ? Domain.MergeMode.Automatic
-                        : Domain.MergeMode.ManualReviewRequired;
+                    finalDepIds.Add(newTaskIdMap[prereqNewIdx]);
+                }
+                finalDepIds = finalDepIds.Distinct().ToList();
 
-                    var newTask = new ForgeTask
+                var mergeMode = string.Equals(nt.Item.Frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
+                    ? Domain.MergeMode.Automatic
+                    : Domain.MergeMode.ManualReviewRequired;
+
+                var newTask = new ForgeTask
+                {
+                    WorkspaceId = workspace.Id,
+                    Title = nt.Item.Frontmatter.Title.Trim(),
+                    Description = !string.IsNullOrWhiteSpace(nt.Item.Description) ? nt.Item.Description : nt.Item.Body,
+                    Priority = nt.Item.Frontmatter.Priority > 0 ? nt.Item.Frontmatter.Priority : TaskSyncConstants.DefaultPriority,
+                    MergeMode = mergeMode,
+                    IsWaitingForHuman = nt.Item.Frontmatter.WaitingForHuman,
+                    BaseBranch = !string.IsNullOrWhiteSpace(nt.Item.Frontmatter.BaseBranch) ? nt.Item.Frontmatter.BaseBranch : (workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch),
+                    FeatureBranch = nt.Item.Frontmatter.FeatureBranch ?? string.Empty,
+                    Status = TaskOverallStatus.Suggested,
+                    CurrentStageId = StandardStageIds.TaskReview,
+                    CreatedAt = nt.Item.Frontmatter.CreatedAt ?? DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow,
+                    Version = 1
+                };
+
+                var created = await taskRepo.CreateWithBaselineAsync(
+                    newTask,
+                    finalDepIds,
+                    changeActor,
+                    changeReason ?? TaskSyncConstants.TaskCreatedFromDisk,
+                    cancellationToken);
+
+                newTaskIdMap[newIdx] = created.Id;
+
+                nt.Item.Frontmatter.Id = created.Id;
+                nt.Item.Frontmatter.CreatedAt = created.CreatedAt;
+                nt.Item.Frontmatter.Status = created.Status.ToString();
+                nt.Item.Frontmatter.MergeMode = created.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required";
+                nt.Item.Frontmatter.WaitingForHuman = created.IsWaitingForHuman;
+                nt.Item.Frontmatter.CurrentStage = created.CurrentStageId;
+                nt.Item.Frontmatter.DependsOn = new TaskDependencyReferenceList(finalDepIds);
+
+                var rewrittenMarkdown = GenerateMarkdown(created, finalDepIds, nt.Item.Frontmatter.AgentProfile);
+                var rewrittenHash = ComputeContentHash(rewrittenMarkdown);
+                _suppressedHashes[rewrittenHash] = 1;
+
+                var datePrefix = (created.CreatedAt != default ? created.CreatedAt : DateTime.UtcNow).ToString("yyyy-MM-dd");
+                var slug = GenerateSlug(created.Title);
+                var newFileName = $"{datePrefix}-{slug}{TaskSyncConstants.MarkdownExtension}";
+                var newFilePath = Path.Combine(tasksDir, newFileName);
+
+                int suffix = 2;
+                while (File.Exists(newFilePath) && !string.Equals(newFilePath, nt.Item.FilePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    newFilePath = Path.Combine(tasksDir, $"{datePrefix}-{slug}-{suffix++}{TaskSyncConstants.MarkdownExtension}");
+                }
+
+                if (!string.Equals(newFilePath, nt.Item.FilePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (File.Exists(nt.Item.FilePath))
                     {
-                        WorkspaceId = workspace.Id,
-                        Title = item.Frontmatter.Title.Trim(),
-                        Description = !string.IsNullOrWhiteSpace(item.Description) ? item.Description : item.Body,
-                        Priority = item.Frontmatter.Priority > 0 ? item.Frontmatter.Priority : TaskSyncConstants.DefaultPriority,
-                        MergeMode = mergeMode,
-                        IsWaitingForHuman = item.Frontmatter.WaitingForHuman,
-                        BaseBranch = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) ? item.Frontmatter.BaseBranch : (workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch),
-                        FeatureBranch = item.Frontmatter.FeatureBranch ?? string.Empty,
-                        Status = TaskOverallStatus.Suggested,
-                        CurrentStageId = StandardStageIds.TaskReview,
-                        CreatedAt = item.Frontmatter.CreatedAt ?? DateTime.UtcNow,
-                        UpdatedAt = DateTime.UtcNow,
-                        Version = 1
-                    };
+                        File.Delete(nt.Item.FilePath);
+                    }
+                }
 
-                    var created = await taskRepo.CreateWithBaselineAsync(
-                        newTask,
-                        item.Frontmatter.DependsOn,
-                        changeActor,
-                        changeReason ?? TaskSyncConstants.TaskCreatedFromDisk,
-                        cancellationToken);
+                await File.WriteAllTextAsync(newFilePath, rewrittenMarkdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
 
-                    // Update frontmatter and rewrite file in-place with allocated ID
-                    item.Frontmatter.Id = created.Id;
-                    item.Frontmatter.CreatedAt = created.CreatedAt;
-                    item.Frontmatter.Status = created.Status.ToString();
-                    item.Frontmatter.MergeMode = created.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required";
-                    item.Frontmatter.WaitingForHuman = created.IsWaitingForHuman;
-                    item.Frontmatter.CurrentStage = created.CurrentStageId;
+                if (hostTasksDir != null)
+                {
+                    var oldHostFile = Path.Combine(hostTasksDir, Path.GetFileName(nt.Item.FilePath));
+                    if (File.Exists(oldHostFile) && !string.Equals(oldHostFile, Path.Combine(hostTasksDir, Path.GetFileName(newFilePath)), StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Delete(oldHostFile);
+                    }
 
-                    var rewrittenMarkdown = GenerateMarkdown(created, item.Frontmatter.DependsOn, item.Frontmatter.AgentProfile);
-                    var rewrittenHash = ComputeContentHash(rewrittenMarkdown);
+                    var newHostFile = Path.Combine(hostTasksDir, Path.GetFileName(newFilePath));
                     _suppressedHashes[rewrittenHash] = 1;
-
-                    var datePrefix = (created.CreatedAt != default ? created.CreatedAt : DateTime.UtcNow).ToString("yyyy-MM-dd");
-                    var slug = GenerateSlug(created.Title);
-                    var newFileName = $"{datePrefix}-{slug}{TaskSyncConstants.MarkdownExtension}";
-                    var newFilePath = Path.Combine(tasksDir, newFileName);
-
-                    int suffix = 2;
-                    while (File.Exists(newFilePath) && !string.Equals(newFilePath, item.FilePath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        newFilePath = Path.Combine(tasksDir, $"{datePrefix}-{slug}-{suffix++}{TaskSyncConstants.MarkdownExtension}");
-                    }
-
-                    if (!string.Equals(newFilePath, item.FilePath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (File.Exists(item.FilePath))
-                        {
-                            File.Delete(item.FilePath);
-                        }
-                    }
-
-                    await File.WriteAllTextAsync(newFilePath, rewrittenMarkdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
-
-                    // Mirror to host repository using new path and clean up stale old name
-                    if (hostTasksDir != null)
-                    {
-                        var oldHostFile = Path.Combine(hostTasksDir, Path.GetFileName(item.FilePath));
-                        if (File.Exists(oldHostFile) && !string.Equals(oldHostFile, Path.Combine(hostTasksDir, Path.GetFileName(newFilePath)), StringComparison.OrdinalIgnoreCase))
-                        {
-                            File.Delete(oldHostFile);
-                        }
-
-                        var newHostFile = Path.Combine(hostTasksDir, Path.GetFileName(newFilePath));
-                        _suppressedHashes[rewrittenHash] = 1;
-                        await File.WriteAllTextAsync(newHostFile, rewrittenMarkdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
-                    }
-
-                    refreshedTasks.Add(created);
+                    await File.WriteAllTextAsync(newHostFile, rewrittenMarkdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
                 }
+
+                refreshedTasks.Add(created);
+            }
+
+            // 5. Update existing tasks
+            foreach (var item in existingFiles)
+            {
+                var taskId = item.Frontmatter.Id!.Value;
+                var task = dbTasks[taskId];
+
+                var newTitle = !string.IsNullOrWhiteSpace(item.Frontmatter.Title) ? item.Frontmatter.Title.Trim() : task.Title;
+                var newDesc = !string.IsNullOrWhiteSpace(item.Description) ? item.Description : task.Description;
+                var newPriority = item.Frontmatter.Priority > 0 ? item.Frontmatter.Priority : task.Priority;
+
+                List<int>? finalDepIds = null;
+                if (resolvedExistingDeps.TryGetValue(taskId, out var resolved))
+                {
+                    finalDepIds = new List<int>(resolved.ExistingDepIds);
+                    foreach (var newIdx in resolved.NewDepIndices)
+                    {
+                        finalDepIds.Add(newTaskIdMap[newIdx]);
+                    }
+                    finalDepIds = finalDepIds.Distinct().ToList();
+                }
+
+                var newMergeMode = string.Equals(item.Frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
+                    ? Domain.MergeMode.Automatic
+                    : Domain.MergeMode.ManualReviewRequired;
+                var newBaseBranch = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) ? item.Frontmatter.BaseBranch.Trim() : task.BaseBranch;
+
+                bool titleChanged = !string.Equals(newTitle, task.Title, StringComparison.Ordinal);
+                bool descChanged = !string.Equals(newDesc, task.Description, StringComparison.Ordinal);
+                bool priorityChanged = newPriority != task.Priority;
+                bool mergeModeChanged = newMergeMode != task.MergeMode;
+                bool baseBranchChanged = !string.Equals(newBaseBranch, task.BaseBranch, StringComparison.Ordinal);
+
+                var currentDeps = task.Dependencies.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList();
+                bool depsChanged = finalDepIds != null && !finalDepIds.OrderBy(x => x).SequenceEqual(currentDeps);
+
+                if (titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged)
+                {
+                    task.Title = newTitle;
+                    task.Description = newDesc;
+                    task.Priority = newPriority;
+                    task.MergeMode = newMergeMode;
+                    task.BaseBranch = newBaseBranch;
+                    if (!string.IsNullOrWhiteSpace(item.Frontmatter.FeatureBranch))
+                    {
+                        task.FeatureBranch = item.Frontmatter.FeatureBranch;
+                    }
+                    task.UpdatedAt = DateTime.UtcNow;
+
+                    await taskRepo.UpdateWithHistoryAsync(
+                        task,
+                        finalDepIds,
+                        changeActor,
+                        changeReason ?? TaskSyncConstants.DiskModificationsSync,
+                        cancellationToken);
+                }
+
+                // In-place normalization for existing files if depends_on changed
+                if (finalDepIds != null)
+                {
+                    item.Frontmatter.DependsOn = new TaskDependencyReferenceList(finalDepIds);
+                    var normalizedMarkdown = GenerateMarkdown(task, finalDepIds, item.Frontmatter.AgentProfile);
+                    var normHash = ComputeContentHash(normalizedMarkdown);
+                    _suppressedHashes[normHash] = 1;
+                    await File.WriteAllTextAsync(item.FilePath, normalizedMarkdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
+                }
+                else if (hostTasksDir != null)
+                {
+                    var hostFile = Path.Combine(hostTasksDir, Path.GetFileName(item.FilePath));
+                    _suppressedHashes[item.Hash] = 1;
+                    await File.WriteAllTextAsync(hostFile, item.Content.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
+                }
+
+                refreshedTasks.Add(task);
             }
 
             return refreshedTasks;
@@ -701,6 +954,168 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     public Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default)
         => ProcessFileContentAsync(filePath, content, workspaceId, expectedTaskId: null, cancellationToken: cancellationToken);
 
+    private async Task<List<int>> ResolveDependencyReferencesAsync(
+        ITaskRepository taskRepo,
+        int workspaceId,
+        IEnumerable<object> dependsOn,
+        string taskTitle,
+        string filePath,
+        int? currentTaskId,
+        CancellationToken cancellationToken)
+    {
+        var dbTasksList = await taskRepo.GetByWorkspaceIdAsync(workspaceId, cancellationToken);
+        var dbTasks = dbTasksList.ToDictionary(t => t.Id);
+
+        var lookup = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (dbId, dbTask) in dbTasks)
+        {
+            lookup[dbId.ToString()] = dbId;
+            if (!string.IsNullOrWhiteSpace(dbTask.Title))
+            {
+                lookup[dbTask.Title.Trim()] = dbId;
+                var slug = NormalizeDependencyKey(dbTask.Title);
+                if (!string.IsNullOrEmpty(slug))
+                {
+                    lookup[slug] = dbId;
+                }
+            }
+        }
+
+        // If filePath is provided and in a directory, index existing files in the same directory
+        if (!string.IsNullOrWhiteSpace(filePath))
+        {
+            var dir = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
+            {
+                var files = Directory.GetFiles(dir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly);
+                foreach (var file in files)
+                {
+                    if (string.Equals(file, filePath, StringComparison.OrdinalIgnoreCase)) continue;
+                    try
+                    {
+                        var content = await File.ReadAllTextAsync(file, cancellationToken);
+                        var (fm, _) = ParseMarkdown(content, file);
+                        if (fm.Id.HasValue && fm.Id.Value > 0 && dbTasks.ContainsKey(fm.Id.Value))
+                        {
+                            var id = fm.Id.Value;
+                            var fileName = Path.GetFileName(file);
+                            lookup[fileName] = id;
+                            lookup[Path.GetFileNameWithoutExtension(file)] = id;
+                            var fileSlug = NormalizeDependencyKey(fileName);
+                            if (!string.IsNullOrEmpty(fileSlug))
+                            {
+                                lookup[fileSlug] = id;
+                            }
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // Ignore unreadable sibling files during resolution
+                    }
+                }
+            }
+        }
+
+        var resolvedIds = new List<int>();
+        foreach (var rawRef in dependsOn)
+        {
+            if (rawRef == null) continue;
+
+            if (rawRef is int intId)
+            {
+                if (currentTaskId.HasValue && intId == currentTaskId.Value)
+                {
+                    throw new TaskMarkdownSyncException($"Task #{currentTaskId.Value} cannot depend on itself.", filePath, currentTaskId.Value);
+                }
+                if (dbTasks.ContainsKey(intId))
+                {
+                    resolvedIds.Add(intId);
+                    continue;
+                }
+                if (lookup.TryGetValue(intId.ToString(), out var mappedId))
+                {
+                    if (currentTaskId.HasValue && mappedId == currentTaskId.Value)
+                    {
+                        throw new TaskMarkdownSyncException($"Task #{currentTaskId.Value} cannot depend on itself.", filePath, currentTaskId.Value);
+                    }
+                    resolvedIds.Add(mappedId);
+                    continue;
+                }
+                throw new TaskMarkdownSyncException(
+                    $"Task '{taskTitle}' in '{filePath}' depends on #{intId}, which does not exist in workspace #{workspaceId}.",
+                    filePath,
+                    intId);
+            }
+
+            var str = rawRef.ToString()?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(str)) continue;
+
+            // Check self-dependency by title or filename
+            if (!string.IsNullOrWhiteSpace(taskTitle) &&
+                (string.Equals(str, taskTitle, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(NormalizeDependencyKey(str), NormalizeDependencyKey(taskTitle), StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new TaskMarkdownSyncException(
+                    currentTaskId.HasValue ? $"Task #{currentTaskId.Value} cannot depend on itself." : $"New task '{taskTitle}' in '{filePath}' cannot depend on itself.",
+                    filePath,
+                    currentTaskId);
+            }
+            if (!string.IsNullOrWhiteSpace(filePath) &&
+                (string.Equals(str, Path.GetFileName(filePath), StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(str, Path.GetFileNameWithoutExtension(filePath), StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(NormalizeDependencyKey(str), NormalizeDependencyKey(Path.GetFileName(filePath)), StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new TaskMarkdownSyncException(
+                    currentTaskId.HasValue ? $"Task #{currentTaskId.Value} cannot depend on itself." : $"New task '{taskTitle}' in '{filePath}' cannot depend on itself.",
+                    filePath,
+                    currentTaskId);
+            }
+
+            if (int.TryParse(str, out var parsedId))
+            {
+                if (currentTaskId.HasValue && parsedId == currentTaskId.Value)
+                {
+                    throw new TaskMarkdownSyncException($"Task #{currentTaskId.Value} cannot depend on itself.", filePath, currentTaskId.Value);
+                }
+                if (dbTasks.ContainsKey(parsedId))
+                {
+                    resolvedIds.Add(parsedId);
+                    continue;
+                }
+                if (lookup.TryGetValue(str, out var mappedId))
+                {
+                    if (currentTaskId.HasValue && mappedId == currentTaskId.Value)
+                    {
+                        throw new TaskMarkdownSyncException($"Task #{currentTaskId.Value} cannot depend on itself.", filePath, currentTaskId.Value);
+                    }
+                    resolvedIds.Add(mappedId);
+                    continue;
+                }
+                throw new TaskMarkdownSyncException(
+                    $"Task '{taskTitle}' in '{filePath}' depends on #{parsedId}, which does not exist in workspace #{workspaceId}.",
+                    filePath,
+                    parsedId);
+            }
+
+            if (lookup.TryGetValue(str, out var matchedId) ||
+                lookup.TryGetValue(NormalizeDependencyKey(str), out matchedId))
+            {
+                if (currentTaskId.HasValue && matchedId == currentTaskId.Value)
+                {
+                    throw new TaskMarkdownSyncException($"Task #{currentTaskId.Value} cannot depend on itself.", filePath, currentTaskId.Value);
+                }
+                resolvedIds.Add(matchedId);
+                continue;
+            }
+
+            throw new TaskMarkdownSyncException(
+                $"Task '{taskTitle}' in '{filePath}' depends on '{str}', which could not be resolved to any existing task in workspace #{workspaceId}.",
+                filePath);
+        }
+
+        return resolvedIds.Distinct().ToList();
+    }
+
     public async Task ProcessFileContentAsync(string filePath, string content, int workspaceId, int? expectedTaskId, CancellationToken cancellationToken = default)
     {
         var hash = ComputeContentHash(content);
@@ -745,12 +1160,38 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     var newTitle = !string.IsNullOrWhiteSpace(frontmatter.Title) ? frontmatter.Title.Trim() : task.Title;
                     var newDesc = !string.IsNullOrWhiteSpace(description) ? description : task.Description;
                     var newPriority = frontmatter.Priority > 0 ? frontmatter.Priority : task.Priority;
-                    var newDeps = frontmatter.DependsOn?.Distinct().ToList();
 
-                    if (depEngine != null && newDeps != null)
+                    List<int>? resolvedDeps = null;
+                    if (frontmatter.DependsOn != null)
                     {
-                        var testDeps = newDeps.Select(d => (task.Id, d));
-                        if (depEngine.HasCycle(workspaceId, testDeps))
+                        resolvedDeps = await ResolveDependencyReferencesAsync(
+                            taskRepo,
+                            workspaceId,
+                            frontmatter.DependsOn,
+                            newTitle,
+                            filePath,
+                            currentTaskId: task.Id,
+                            cancellationToken);
+                    }
+
+                    if (depEngine != null && resolvedDeps != null)
+                    {
+                        var workspaceDeps = await taskRepo.GetWorkspaceDependenciesAsync(workspaceId, cancellationToken);
+                        var candidatePairs = new List<(int TaskId, int DependsOnTaskId)>();
+                        foreach (var (tId, dIds) in workspaceDeps)
+                        {
+                            if (tId == task.Id) continue;
+                            foreach (var d in dIds)
+                            {
+                                candidatePairs.Add((tId, d));
+                            }
+                        }
+                        foreach (var d in resolvedDeps)
+                        {
+                            candidatePairs.Add((task.Id, d));
+                        }
+
+                        if (depEngine.HasCycle(workspaceId, candidatePairs))
                         {
                             throw new TaskMarkdownSyncException(
                                 $"Circular dependency detected when updating task #{task.Id}.",
@@ -759,22 +1200,50 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         }
                     }
 
-                    task.Title = newTitle;
-                    task.Description = newDesc;
-                    task.Priority = newPriority;
-                    task.BaseBranch = !string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? frontmatter.BaseBranch : task.BaseBranch;
-                    if (!string.IsNullOrWhiteSpace(frontmatter.FeatureBranch))
-                    {
-                        task.FeatureBranch = frontmatter.FeatureBranch;
-                    }
-                    task.UpdatedAt = DateTime.UtcNow;
+                    var newMergeMode = string.Equals(frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
+                        ? Domain.MergeMode.Automatic
+                        : Domain.MergeMode.ManualReviewRequired;
+                    var newBaseBranch = !string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? frontmatter.BaseBranch.Trim() : task.BaseBranch;
 
-                    await taskRepo.UpdateWithHistoryAsync(
-                        task,
-                        newDeps,
-                        AuditActors.User,
-                        TaskSyncConstants.DiskModificationsSync,
-                        cancellationToken);
+                    var currentDeps = task.Dependencies.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList();
+                    bool depsChanged = resolvedDeps != null && !resolvedDeps.OrderBy(x => x).SequenceEqual(currentDeps);
+
+                    bool titleChanged = !string.Equals(newTitle, task.Title, StringComparison.Ordinal);
+                    bool descChanged = !string.Equals(newDesc, task.Description, StringComparison.Ordinal);
+                    bool priorityChanged = newPriority != task.Priority;
+                    bool mergeModeChanged = newMergeMode != task.MergeMode;
+                    bool baseBranchChanged = !string.Equals(newBaseBranch, task.BaseBranch, StringComparison.Ordinal);
+
+                    if (titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged)
+                    {
+                        task.Title = newTitle;
+                        task.Description = newDesc;
+                        task.Priority = newPriority;
+                        task.MergeMode = newMergeMode;
+                        task.BaseBranch = newBaseBranch;
+                        if (!string.IsNullOrWhiteSpace(frontmatter.FeatureBranch))
+                        {
+                            task.FeatureBranch = frontmatter.FeatureBranch;
+                        }
+                        task.UpdatedAt = DateTime.UtcNow;
+
+                        await taskRepo.UpdateWithHistoryAsync(
+                            task,
+                            resolvedDeps,
+                            AuditActors.User,
+                            TaskSyncConstants.DiskModificationsSync,
+                            cancellationToken);
+                    }
+
+                    // In-place normalization for existing files if depends_on changed or had string references
+                    if (resolvedDeps != null && File.Exists(filePath))
+                    {
+                        frontmatter.DependsOn = new TaskDependencyReferenceList(resolvedDeps);
+                        var normalizedMarkdown = GenerateMarkdown(task, resolvedDeps, frontmatter.AgentProfile);
+                        var normHash = ComputeContentHash(normalizedMarkdown);
+                        _suppressedHashes[normHash] = 1;
+                        await File.WriteAllTextAsync(filePath, normalizedMarkdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
+                    }
 
                     return;
                 }
@@ -786,6 +1255,19 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 throw new TaskMarkdownSyncException(
                     $"New task in '{filePath}' must specify a non-blank title in YAML frontmatter.",
                     filePath);
+            }
+
+            List<int>? newResolvedDeps = null;
+            if (frontmatter.DependsOn != null)
+            {
+                newResolvedDeps = await ResolveDependencyReferencesAsync(
+                    taskRepo,
+                    workspaceId,
+                    frontmatter.DependsOn,
+                    frontmatter.Title,
+                    filePath,
+                    currentTaskId: null,
+                    cancellationToken);
             }
 
             var mergeMode = string.Equals(frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
@@ -810,7 +1292,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
             var created = await taskRepo.CreateWithBaselineAsync(
                 newTask,
-                frontmatter.DependsOn,
+                newResolvedDeps,
                 AuditActors.User,
                 TaskSyncConstants.TaskCreatedFromDisk,
                 cancellationToken);
@@ -821,8 +1303,9 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             frontmatter.MergeMode = created.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required";
             frontmatter.WaitingForHuman = created.IsWaitingForHuman;
             frontmatter.CurrentStage = created.CurrentStageId;
+            frontmatter.DependsOn = newResolvedDeps != null ? new TaskDependencyReferenceList(newResolvedDeps) : null;
 
-            var inPlaceMarkdown = GenerateMarkdown(created, frontmatter.DependsOn, frontmatter.AgentProfile);
+            var inPlaceMarkdown = GenerateMarkdown(created, newResolvedDeps, frontmatter.AgentProfile);
             var inPlaceHash = ComputeContentHash(inPlaceMarkdown);
             _suppressedHashes[inPlaceHash] = 1;
 
