@@ -5,8 +5,33 @@ using NightCodeForge.Infrastructure;
 using NightCodeForge.Infrastructure.BackgroundJobs;
 using NightCodeForge.Web.Components;
 using NightCodeForge.Web.Services;
+using Serilog;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory
+});
+
+// Configure Serilog file & console logging
+var rawLogsDir = builder.Configuration["Logging:LogsDirectory"] ?? "logs";
+var logsDirectory = Path.IsPathRooted(rawLogsDir)
+    ? rawLogsDir
+    : Path.Combine(AppContext.BaseDirectory, rawLogsDir);
+Directory.CreateDirectory(logsDirectory);
+var logFilePath = Path.Combine(logsDirectory, "nightcodeforge-.log");
+
+builder.Services.AddSerilog((services, lc) => lc
+    .ReadFrom.Configuration(builder.Configuration)
+    .ReadFrom.Services(services)
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .WriteTo.File(
+        path: logFilePath,
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 31,
+        shared: true,
+        outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} {Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}"));
 
 // Add services to the container.
 builder.Services.AddRazorComponents()
@@ -27,8 +52,14 @@ builder.Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>()
 builder.Services.AddScoped<ITaskMutationService, TaskMutationService>();
 
 // Register NightCodeForge domain and infrastructure services
-var dbConnection = builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=nightcodeforge.db;";
-var hangfireConnection = builder.Configuration.GetConnectionString("HangfireConnection") ?? "Data Source=nightcodeforge_hangfire.db;";
+var defaultConnStr = builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=nightcodeforge.db;";
+var hangfireConnStr = builder.Configuration.GetConnectionString("HangfireConnection") ?? "Data Source=nightcodeforge_hangfire.db;";
+
+var dbConnection = NormalizeSqliteConnectionString(defaultConnStr, AppContext.BaseDirectory);
+var hangfireConnection = NormalizeSqliteConnectionString(hangfireConnStr, AppContext.BaseDirectory);
+
+EnsureSqliteDirectoryExists(dbConnection);
+EnsureSqliteDirectoryExists(hangfireConnection);
 
 builder.Services.AddNightCodeForgeCoreAndInfrastructure(dbConnection);
 builder.Services.Configure<NightCodeForge.Agents.Inference.LlmProviderOptions>(builder.Configuration.GetSection(NightCodeForge.Agents.Inference.LlmProviderOptions.SectionName));
@@ -108,3 +139,51 @@ app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
 app.Run();
+
+static void EnsureSqliteDirectoryExists(string? connectionString)
+{
+    if (string.IsNullOrWhiteSpace(connectionString)) return;
+    var parts = connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries);
+    foreach (var part in parts)
+    {
+        var trimmed = part.Trim();
+        if (trimmed.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+        {
+            var filePath = trimmed["Data Source=".Length..].Trim();
+            if (!string.IsNullOrWhiteSpace(filePath) && filePath != ":memory:")
+            {
+                var dir = Path.GetDirectoryName(filePath);
+                if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+            }
+            break;
+        }
+    }
+}
+
+static string NormalizeSqliteConnectionString(string? connectionString, string baseDirectory)
+{
+    if (string.IsNullOrWhiteSpace(connectionString)) return connectionString ?? string.Empty;
+    var parts = connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries);
+    var modified = false;
+    for (int i = 0; i < parts.Length; i++)
+    {
+        var trimmed = parts[i].Trim();
+        if (trimmed.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+        {
+            var filePath = trimmed["Data Source=".Length..].Trim();
+            if (!string.IsNullOrWhiteSpace(filePath) && filePath != ":memory:" && !Path.IsPathRooted(filePath))
+            {
+                var fullPath = Path.Combine(baseDirectory, filePath);
+                parts[i] = $"Data Source={fullPath}";
+                modified = true;
+            }
+            break;
+        }
+    }
+    return modified ? string.Join(";", parts) + ";" : connectionString;
+}
+
+

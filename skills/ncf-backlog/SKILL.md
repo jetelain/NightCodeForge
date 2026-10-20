@@ -1,17 +1,21 @@
 ---
-name: ncf-ideation
+name: ncf-backlog
 version: 1
-description: Guided interactive brainstorming and architectural decomposition for new features into docs/tasks with YAML frontmatter and database sync.
+description: Backlog management (ideation, planning, and non-blocking follow-up task creation) for docs/tasks with YAML frontmatter and database sync.
 ---
 
-# Ideation & Architecture Skill (`ncf-ideation`)
+# Backlog Management Skill (`ncf-backlog`)
+*Ideation, Planning, and Follow-up Task Management for NightCodeForge*
 
 ## 1. Executive Role & Objective
-This skill guides developers through interactive brainstorming, technical discovery, and architectural decomposition for new features, subsystems, or refactorings in a repository.
+This skill provides comprehensive backlog management for **NightCodeForge** repositories. It is designed for **external AI harnesses** (Antigravity IDE, Claude Code, Cursor, or CLI agents) operating directly on the workspace repository.
 
-It is designed for **external AI harnesses** (Antigravity IDE, Claude Code, Cursor, or terminal assistants) operating directly on the workspace repository.
+It covers three core modes of operation:
+1. **Ideation & Architecture:** Guided interactive brainstorming, technical discovery, and architectural decomposition for new features, subsystems, or refactorings.
+2. **Planning & Sequencing:** Structuring execution DAGs, establishing milestone priorities (P1–P5), and linking prerequisite dependencies (`depends_on`).
+3. **Non-Blocking Follow-up Creation:** Enabling agents and developers actively working on a task to capture non-blocking improvements, deferred technical debt, secondary edge cases, or optimizations without derailing current task scope.
 
-It translates developer intent and architectural concepts into well-scoped, PR-sized **NightCodeForge** task markdown files stored in `docs/tasks/`, where they are automatically synchronized into the NightCodeForge database.
+All backlog items are authored as well-scoped, PR-sized **NightCodeForge** markdown task files stored under `docs/tasks/`, where they are automatically synchronized into the NightCodeForge database.
 
 ---
 
@@ -51,11 +55,11 @@ depends_on: []
 #### Schema Field Definitions:
 - `title` *(string, required)*: Clear, imperative capability title (e.g. `Implement ModelLatencyTracker in OllamaRouter`).
 - `priority` *(integer, optional, default: 3)*: Priority level from 1 to 5:
-  - `1`: **Critical / Urgent (P1)** — Blockers, hotfixes, critical bugs.
-  - `2`: **High (P2)** — Architectural prerequisites and foundational milestones.
-  - `3`: **Normal (P3)** — Standard feature development (default).
-  - `4`: **Low (P4)** — Minor enhancements, non-critical polish.
-  - `5`: **Lowest / Trivial (P5)** — Cosmetic cleanup, typos.
+  - `1`: **Critical / Urgent (P1)** — Blockers, hotfixes, critical security bugs.
+  - `2`: **High (P2)** — Foundational architectural prerequisites and core milestones.
+  - `3`: **Normal (P3)** — Standard feature development and planned capabilities (default).
+  - `4`: **Low (P4)** — Minor enhancements, non-critical polish, follow-up optimizations.
+  - `5`: **Lowest / Trivial (P5)** — Cosmetic cleanup, typos, secondary maintenance.
 - `merge_mode` *(string, optional, default: "manual_review_required")*:
   - `"manual_review_required"`: Requires maintainer sign-off in NightCodeForge Review Room before merging.
   - `"automatic"`: Automatically merges to base branch once pipeline stages, unit tests, and SAST checks pass.
@@ -110,7 +114,7 @@ NightCodeForge maintains continuous bidirectional synchronization between markdo
 
 ---
 
-## 5. Managing Dependencies
+## 5. Managing Dependencies & Execution DAG
 
 Dependencies define the execution DAG (Directed Acyclic Graph):
 
@@ -120,7 +124,7 @@ Dependencies define the execution DAG (Directed Acyclic Graph):
    - Use numeric database IDs: `depends_on: [ 101, 102 ]`.
    - Or reference existing tasks by file slug or title: `depends_on: [ "core-database-setup", "OAuth Authentication" ]`.
 3. **Flexible Batch Authoring:**
-   - When decomposing a feature into a batch of interdependent tasks, external harnesses and human developers do **not** need to wait for database IDs to be assigned.
+   - When decomposing a feature or planning a sequence of interdependent tasks, external harnesses and human developers do **not** need to wait for database IDs to be assigned.
    - Simply reference prerequisite tasks by filename (`"task-alpha.md"`), slug (`"task-alpha"`), or title (`"Task Alpha"`).
    - NightCodeForge analyzes the batch, orders task creation topologically so prerequisites receive IDs first, links the relationships in the database, and rewrites the markdown files in-place with normalized numeric IDs.
 4. **Validation & Cycle Prevention:**
@@ -140,7 +144,9 @@ Dependencies define the execution DAG (Directed Acyclic Graph):
 
 ---
 
-## 7. Interactive Ideation Workflow
+## 7. Workflow Mode A: Interactive Ideation & Architecture
+
+Use this mode when a developer wants to brainstorm, design, or decompose a brand new capability or major refactoring:
 
 ### Step 1: Codebase Exploration
 - Examine repository layout, project manifests (`.csproj`, `package.json`, etc.), and `.nightcodeforge/config.json`.
@@ -159,3 +165,64 @@ Synthesize the requirements into sequential, PR-sized tasks following the contra
 
 ### Step 4: Write Task Markdown Files
 Create the markdown files directly in `docs/tasks/` with YAML frontmatter. NightCodeForge will immediately synchronize them into the database and assign task IDs.
+
+---
+
+## 8. Workflow Mode B: Planning & Dependency Structuring
+
+Use this mode when organizing a multi-stage initiative or sequencing complex milestones:
+
+1. **Layered Milestone Decomposition:**
+   - **Milestone 1 (Base Domain/Contracts):** Domain models, value objects, core interfaces, domain exceptions, and unit tests (`priority: 2`).
+   - **Milestone 2 (Infrastructure/Persistence):** Repositories, adapters, external service clients, data access, and contract unit tests (`priority: 2` or `3`, `depends_on: [ "Milestone 1" ]`).
+   - **Milestone 3 (Presentation/API/CLI):** Endpoints, controllers, Blazor components, or CLI commands (`priority: 3`, `depends_on: [ "Milestone 2" ]`).
+2. **Cross-Cutting Follow-ups:**
+   - Non-critical optimizations, telemetry dashboards, or extended test suites can be scheduled with `priority: 4` and appropriate dependencies.
+
+---
+
+## 9. Workflow Mode C: Creating Non-Blocking Follow-up Tasks (Agent In-Flight Workflow)
+
+This mode is designed for **agents and developers currently executing or reviewing a task** who uncover adjacent improvements, secondary edge cases, or technical debt.
+
+### Scope Discipline: The "Do It Now vs File Follow-up" Matrix
+
+Agents must avoid scope creep. When working on Task A, you will often spot other things that could be improved. Apply this strict decision matrix:
+
+| Situation | Action | Rationale |
+| :--- | :--- | :--- |
+| **Direct Acceptance Criterion** | **Do It Now** | Required to satisfy the current task contract. |
+| **Regression Caused by Current Task** | **Do It Now** | The current PR must leave tests passing and the codebase clean. |
+| **Trivial 1–2 Line Fix in Touched File** | **Do It Now** | Extremely low risk and directly adjacent to modified code. |
+| **Non-blocking Edge Case or Secondary Validation** | **File Follow-up Task** | Expands scope; deserve its own test suite and isolated review. |
+| **Refactoring Adjacent Existing Code** | **File Follow-up Task** | Conflating refactoring with feature code complicates PR reviews and git bisect. |
+| **Performance Optimization / Caching** | **File Follow-up Task** | Unless the current task explicitly has a latency SLA, optimize in a follow-up. |
+| **Missing Test Coverage in Unrelated Areas** | **File Follow-up Task** | Captures testing debt without bloating the active PR. |
+| **UI/UX Polish or Secondary Tooling** | **File Follow-up Task** | Nice-to-have items should not delay merging core capabilities. |
+
+### Step-by-Step: How an Agent Files a Non-Blocking Follow-up Task
+
+When you identify a non-blocking follow-up item while working on an active task:
+
+1. **Formulate a Clear Capability Title:**
+   - Use an imperative title: e.g., `Add sliding window percentile calculation to ModelLatencyTracker` or `Refactor OllamaProcessManager to use asynchronous process exit`.
+2. **Determine Dependency Relationship:**
+   - **Dependent Follow-up:** If the follow-up directly builds on top of the code being written in the current task, specify the current task as a prerequisite in `depends_on`:
+     ```yaml
+     depends_on: [ "2026-10-20-implement-model-latency-tracker.md" ]
+     ```
+   - **Independent Follow-up:** If the follow-up touches an adjacent subsystem and does not require the current task to merge first, keep `depends_on: []`.
+3. **Assign Appropriate Priority:**
+   - `priority: 3` (Normal): If it is a valuable planned follow-up or secondary feature.
+   - `priority: 4` (Low): If it is an optional optimization, minor refactoring, or secondary polish item.
+   - `priority: 5` (Lowest): If it is trivial cosmetic cleanup or comment clarification.
+4. **Author the Markdown File Directly:**
+   - Create `docs/tasks/{yyyy-MM-dd}-{slug}.md` (e.g. `docs/tasks/2026-10-20-add-sliding-window-percentiles.md`).
+   - Populate the YAML frontmatter and all sections:
+     - **Summary:** State clearly that this was identified during the execution of the parent task, explaining the rationale and technical value.
+     - **Implementation Checklist:** Specific, actionable technical steps.
+     - **Affected Files:** Paths expected to be modified or created.
+     - **Acceptance Criteria:** Verifiable conditions and test requirements.
+5. **Report to Maintainer / Task Transcript:**
+   - In your task completion summary or review notes, mention the follow-up task you created:
+     > *"Identified non-blocking improvement: Filed follow-up task [2026-10-20-add-sliding-window-percentiles.md](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/tasks/2026-10-20-add-sliding-window-percentiles.md) with priority 4."*

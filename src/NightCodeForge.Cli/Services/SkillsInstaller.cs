@@ -7,7 +7,7 @@ using NightCodeForge.Cli.Common;
 public class SkillsInstaller
 {
     private static readonly Assembly Assembly = typeof(SkillsInstaller).Assembly;
-    public static readonly string[] RequiredSkills = ["ncf-backlog-migrator", "ncf-ideation", "ncf-project-readiness"];
+    public static readonly string[] RequiredSkills = ["ncf-backlog", "ncf-backlog-migrator", "ncf-project-readiness"];
 
     public static IReadOnlyList<string> GetRequiredSkillNames() => RequiredSkills;
 

@@ -25,7 +25,7 @@ ncf audit       # readiness scorecard (🟢 / 🟡 / 🔴)
 2. **`.editorconfig` update/creation** — ensures `root = true`, `end_of_line = lf`, and per-language indent/charset sections, aligned with `EditorConfigFileApplier` behavior (Phase 2 / Phase 4 LF enforcement) so agent edits produce zero phantom diffs.
 3. **Stack detection** — detects the project stack (`.sln`/`.csproj`, `package.json`, `pyproject.toml`/`setup.py`, `Cargo.toml`, `go.mod`) and resolves the matching preset from the **shared** [`CodeStackPresets`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/CodeStack.cs) table (dotnet, node, python, rust, go) — the exact same table the workflow engine uses, so CLI and pipeline can never drift.
 4. **Initial format pass** — runs the stack's format command (e.g. `dotnet format --no-restore`, `cargo fmt`, `ruff format .`, `gofmt -w .`) once, so the baseline the agents start from is clean.
-5. **External harness skills installation** — writes the Step 11.12 packaged skills (`ncf-backlog-migrator`, `ncf-ideation`, `ncf-project-readiness`) into `.agents/skills/ncf-*/SKILL.md`, discoverable both by external IDE assistants (Claude Code, Cursor, Antigravity) and by NCF `SkillsService` (workspace-scoped discovery). Installed files are wrapped in managed-block markers so re-running `ncf init` is idempotent and re-syncs to the new CLI version.
+5. **External harness skills installation** — writes the Step 11.12 packaged skills (`ncf-backlog`, `ncf-backlog-migrator`, `ncf-project-readiness`) into `.agents/skills/ncf-*/SKILL.md`, discoverable both by external IDE assistants (Claude Code, Cursor, Antigravity) and by NCF `SkillsService` (workspace-scoped discovery). Installed files are wrapped in managed-block markers so re-running `ncf init` is idempotent and re-syncs to the new CLI version.
 6. **Configuration bootstrap** — generates `.nightcodeforge/config.json` (the format already consumed by `CodeStackPresets.ResolveConfig`), stamped with the detected stack, build/test/format commands, base branch, and the CLI's `ncfVersion`.
 
 ### 1.2 Readiness Audit (`ncf audit`)
@@ -130,8 +130,8 @@ Plus CLI-managed metadata fields (`ncfVersion`, `baseBranch`) that the audit che
 
 | Skill | Source (Step 11.12) | Installed To |
 | :--- | :--- | :--- |
+| `ncf-backlog` | `skills/ncf-backlog/` | `.agents/skills/ncf-backlog/` |
 | `ncf-backlog-migrator` | `skills/ncf-backlog-migrator/` | `.agents/skills/ncf-backlog-migrator/` |
-| `ncf-ideation` | `skills/ncf-ideation/` | `.agents/skills/ncf-ideation/` |
 | `ncf-project-readiness` | `skills/ncf-project-readiness/` | `.agents/skills/ncf-project-readiness/` |
 
 - Installed inside managed-block markers; `ncf init` re-syncs them to the CLI's embedded copy on every run (version stamp compared against skill `version:` frontmatter).

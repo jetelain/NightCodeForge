@@ -68,23 +68,23 @@ public class SkillsInstallerTests
             // Initial install
             SkillsInstaller.InstallSkills(tempDir);
 
-            // User adds a custom note at the bottom of ncf-ideation/SKILL.md
-            var ideationFile = Path.Combine(tempDir, ".agents", "skills", "ncf-ideation", "SKILL.md");
-            var originalContent = File.ReadAllText(ideationFile);
+            // User adds a custom note at the bottom of ncf-backlog/SKILL.md
+            var backlogFile = Path.Combine(tempDir, ".agents", "skills", "ncf-backlog", "SKILL.md");
+            var originalContent = File.ReadAllText(backlogFile);
             var customAppendix = "\n# User Custom Rules\nAlways double check DB migrations.\n";
-            File.AppendAllText(ideationFile, customAppendix);
+            File.AppendAllText(backlogFile, customAppendix);
 
             // Re-run install (like a second ncf init)
             SkillsInstaller.InstallSkills(tempDir);
 
-            var updatedContent = File.ReadAllText(ideationFile);
+            var updatedContent = File.ReadAllText(backlogFile);
             Assert.Contains(customAppendix.Trim(), updatedContent);
             Assert.Contains(Constants.ManagedBlockHeader, updatedContent);
             Assert.Contains(Constants.ManagedBlockFooter, updatedContent);
 
             // Running a 3rd time is identical
             SkillsInstaller.InstallSkills(tempDir);
-            var recheckContent = File.ReadAllText(ideationFile);
+            var recheckContent = File.ReadAllText(backlogFile);
             Assert.Equal(updatedContent, recheckContent);
         }
         finally

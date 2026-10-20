@@ -1,5 +1,6 @@
 namespace NightCodeForge.Cli;
 
+using System.Text;
 using NightCodeForge.Cli.Commands;
 using NightCodeForge.Cli.Common;
 using NightCodeForge.Core.Execution;
@@ -8,6 +9,8 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        Console.OutputEncoding = Encoding.UTF8;
+
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>
         {

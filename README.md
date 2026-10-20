@@ -99,7 +99,7 @@ ncf audit       # Pre-flight readiness scorecard (🟢 / 🟡 / 🔴)
 1. **`.gitignore` Merge:** Safely merges NCF-mandatory entries (`bin/`, `obj/`, `.vs/`, `TestResults/`, `*.trx`, runtime transcripts) inside managed markers without clobbering user entries.
 2. **`.editorconfig` Enforcement:** Ensures `root = true`, LF line endings (`end_of_line = lf`), UTF-8 charset, and standard indent rules to completely prevent phantom diffs across environments.
 3. **Shared Stack Detection:** Identifies the project stack (`dotnet`, `node`, `python`, `rust`, `go`) using the shared `CodeStackPresets` engine without drift.
-4. **Agent Skills Installation:** Installs packaged skills (`ncf-backlog-migrator`, `ncf-ideation`, `ncf-project-readiness`) into `.agents/skills/` under managed blocks, discoverable by both external IDE agents and internal harnesses.
+4. **Agent Skills Installation:** Installs packaged skills (`ncf-backlog`, `ncf-backlog-migrator`, `ncf-project-readiness`) into `.agents/skills/` under managed blocks, discoverable by both external IDE agents and internal harnesses.
 5. **Configuration Bootstrap:** Writes `.nightcodeforge/config.json` with detected build/test/format commands, base branch, and timeouts.
 6. **Baseline Format Pass:** Runs the stack's code formatter (e.g. `dotnet format --no-restore`, `cargo fmt`, `ruff format .`, `gofmt -w .`) to guarantee a clean starting baseline.
 

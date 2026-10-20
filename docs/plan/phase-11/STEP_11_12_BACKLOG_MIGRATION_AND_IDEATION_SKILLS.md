@@ -18,8 +18,8 @@ This step produces **first-class, package-ready agent skills** that any external
    - Ingests raw project artifacts—existing `ROADMAP.md`, `TODO.md`, `issues/*.md`, GitHub issue dumps, or scratch notes.
    - Deconstructs them into well-scoped, PR-sized [ForgeTask](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/ForgeTask.cs) proposals with structured acceptance criteria, affected files, test strategies, priority (1–5), and initial dependency linking.
    - Directly authors standardized task markdown files in `docs/tasks/*.md` which NightCodeForge automatically detects, synchronizes into the SQLite database, and tracks with full temporal audit history.
-2. **Ideation Skill (`ncf-ideation`):**
-   - Guided interactive brainstorming and architectural decomposition for new features or subsystems directly within the developer's favorite chat tool, emitting task markdown files into `docs/tasks/`.
+2. **Backlog Management Skill (`ncf-backlog`):**
+   - Guided interactive brainstorming and architectural decomposition for new features, milestone planning & DAG dependency structuring, and in-flight creation of non-blocking follow-up tasks by agents without scope creep, emitting task markdown files into `docs/tasks/`.
 3. **Flexible `depends_on` Resolution & In-Place Normalization:**
    - Enhances [TaskFrontmatter](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/TaskFrontmatter.cs) and [TaskMarkdownSyncService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/TaskMarkdownSyncService.cs) so external harnesses and developers can author batches of interdependent tasks referencing prerequisites by **numeric ID**, **filename**, **title**, or **slug**.
    - Analyzes dependency DAGs topologically, allocating database IDs to prerequisites first, detecting circular dependencies fail-fast, and automatically rewriting markdown files on disk with canonical numeric IDs.
@@ -39,7 +39,7 @@ This step produces **first-class, package-ready agent skills** that any external
 ```mermaid
 flowchart TD
     subgraph Authoring ["Skill Authoring (repo source of truth)"]
-        SrcSkills["skills/<br/>ncf-backlog-migrator/SKILL.md<br/>ncf-ideation/SKILL.md<br/>ncf-project-readiness/SKILL.md"]
+        SrcSkills["skills/<br/>ncf-backlog/SKILL.md<br/>ncf-backlog-migrator/SKILL.md<br/>ncf-project-readiness/SKILL.md"]
         Prompts["docs/prompts/*.md"]
         Spec["docs/TASK_MARKDOWN_SPECIFICATION.md"]
     end
@@ -84,8 +84,8 @@ skills/
 │   ├── SKILL.md              # frontmatter + instructions (self-contained)
 │   └── assets/               # task markdown template
 │       └── TASK_TEMPLATE.md
-├── ncf-ideation/
-│   └── SKILL.md              # frontmatter + instructions
+├── ncf-backlog/
+│   └── SKILL.md              # frontmatter + instructions (ideation, planning, follow-up)
 └── ncf-project-readiness/
     └── SKILL.md              # frontmatter + instructions
 ```
@@ -129,15 +129,12 @@ description: Migrates external project backlogs, roadmaps, and TODOs into cohesi
 
 ---
 
-## 5. Skill Specification: `ncf-ideation`
+## 5. Skill Specification: `ncf-backlog`
 
 ### 5.1 Core Behaviors
-- Inspects repository structure, existing classes, tests, and dependencies.
-- Interviews the developer interactively:
-  - *"What is the main user problem or capability we are targeting?"*
-  - *"Are there existing classes or services that should be extended rather than rebuilt?"*
-  - *"What test harness exists (unit tests, CLI invocation, integration tests)?"*
-- Synthesizes findings into structured task proposals written directly to `docs/tasks/{yyyy-MM-dd}-{slug}.md`, linking prerequisite dependencies by slug or filename.
+- **Ideation & Architecture:** Inspects repository structure, existing classes, tests, and dependencies; conducts interactive developer interviews; decomposes ideas into PR-sized tasks.
+- **Planning & DAG Sequencing:** Establishes layered milestones (Domain -> Infrastructure -> Presentation) and prerequisite dependencies (`depends_on`).
+- **In-Flight Non-Blocking Follow-up Tasks:** Decision matrix and workflow for active agents to file technical debt, secondary optimizations, or non-blocking edge cases directly into `docs/tasks/` without scope creep.
 
 ---
 
@@ -211,7 +208,7 @@ For developers working in external chat interfaces without skill integration, pr
 
 - [x] **Skill Authoring (packaging source of truth):**
   - Create `skills/ncf-backlog-migrator/SKILL.md` + `assets/TASK_TEMPLATE.md`.
-  - Create `skills/ncf-ideation/SKILL.md`.
+  - Create `skills/ncf-backlog/SKILL.md`.
   - Create `skills/ncf-project-readiness/SKILL.md`.
   - Unit tests validating the frontmatter contract and `SkillsService` loadability for every skill (`PackagedSkillsTests`).
 - [x] **Prompt Library:**

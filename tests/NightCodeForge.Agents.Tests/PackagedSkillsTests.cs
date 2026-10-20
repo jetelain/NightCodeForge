@@ -23,7 +23,7 @@ public class PackagedSkillsTests
 
     [Theory]
     [InlineData("ncf-backlog-migrator")]
-    [InlineData("ncf-ideation")]
+    [InlineData("ncf-backlog")]
     [InlineData("ncf-project-readiness")]
     public void PackagedSkill_ConformsToFrontmatterContract(string skillName)
     {
@@ -75,11 +75,11 @@ public class PackagedSkillsTests
         Assert.NotNull(discovered);
 
         var names = discovered.Select(s => s.Name).ToList();
+        Assert.Contains("ncf-backlog", names);
         Assert.Contains("ncf-backlog-migrator", names);
-        Assert.Contains("ncf-ideation", names);
         Assert.Contains("ncf-project-readiness", names);
 
-        foreach (var expectedSkill in new[] { "ncf-backlog-migrator", "ncf-ideation", "ncf-project-readiness" })
+        foreach (var expectedSkill in new[] { "ncf-backlog", "ncf-backlog-migrator", "ncf-project-readiness" })
         {
             var content = await skillsService.LoadSkillAsync(repoRoot, expectedSkill);
             Assert.NotNull(content);
@@ -112,8 +112,8 @@ public class PackagedSkillsTests
     }
 
     [Theory]
+    [InlineData("ncf-backlog")]
     [InlineData("ncf-backlog-migrator")]
-    [InlineData("ncf-ideation")]
     public void ExternalHarnessSkills_ExplainDocsTasksFrontmatterAndDatabaseSync(string skillName)
     {
         var repoRoot = FindRepositoryRoot();
