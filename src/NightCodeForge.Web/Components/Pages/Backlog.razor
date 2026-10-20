@@ -12,6 +12,7 @@
 @inject ITaskDependencyStore DependencyStore
 @inject OrchestratorHubClientConnection HubConnection
 @inject ToastService ToastService
+@inject ITaskDiskSyncCoordinator DiskSyncCoordinator
 @inject ILogger<Backlog> Logger
 @implements IDisposable
 
@@ -63,7 +64,24 @@
                     💡 Ideate / Propose Tasks
                 </a>
 
-                <button type="button" class="forge-btn forge-btn-secondary" @onclick="ReloadTasksAsync" title="Refresh Backlog">
+                <button type="button"
+                        class="forge-btn forge-btn-secondary"
+                        id="btn-sync-docs-tasks"
+                        @onclick="SyncDocsTasksAsync"
+                        disabled="@(_isSyncing || _isLoading)"
+                        title="Immediate bidirectional synchronization with docs/tasks/*.md">
+                    @if (_isSyncing)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="width: 0.85rem; height: 0.85rem; border-width: 0.15em; margin-right: 0.35rem; display: inline-block;"></span>
+                        <span>Syncing...</span>
+                    }
+                    else
+                    {
+                        <span>⚡ Sync docs/tasks</span>
+                    }
+                </button>
+
+                <button type="button" class="forge-btn forge-btn-secondary" id="btn-refresh-backlog" @onclick="ReloadTasksAsync" title="Refresh Backlog">
                     🔄 Refresh
                 </button>
             </div>
@@ -250,6 +268,7 @@
     private TaskOverallStatus? _statusFilter;
     private PriorityFilterMode _priorityFilter = PriorityFilterMode.All;
     private bool _isLoading = false;
+    private bool _isSyncing = false;
     private bool _disposed;
 
     // Modals state
@@ -416,6 +435,36 @@
     {
         await LoadDataAsync();
         StateHasChanged();
+    }
+
+    private async Task SyncDocsTasksAsync()
+    {
+        var active = WorkspaceState.ActiveWorkspace;
+        if (active == null || _isSyncing)
+        {
+            return;
+        }
+
+        _isSyncing = true;
+        try
+        {
+            var result = await DiskSyncCoordinator.SyncWorkspaceDocsTasksAsync(active);
+            await LoadDataAsync();
+            var message = result.TasksWrittenToDisk > 0 || result.TasksIngestedOrUpdatedFromDisk > 0
+                ? $"Successfully synced {result.TasksWrittenToDisk} task(s) with docs/tasks/ ({result.TasksIngestedOrUpdatedFromDisk} read from disk)."
+                : "docs/tasks/ and database are in lockstep.";
+            ToastService.Show("docs/tasks Synchronized", message, ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to synchronize docs/tasks for workspace {WorkspaceId}.", active.Id);
+            ToastService.Show("docs/tasks Sync Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSyncing = false;
+            StateHasChanged();
+        }
     }
 
     private void SetView(BacklogViewMode mode)

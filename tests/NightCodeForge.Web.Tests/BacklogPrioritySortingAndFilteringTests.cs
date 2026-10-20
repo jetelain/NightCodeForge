@@ -44,6 +44,7 @@ public class BacklogPrioritySortingAndFilteringTests : BunitContext
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton(_toastService);
         Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
+        Services.AddSingleton<ITaskDiskSyncCoordinator>(new MockTaskDiskSyncCoordinator());
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),

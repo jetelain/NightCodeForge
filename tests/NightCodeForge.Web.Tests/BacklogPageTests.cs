@@ -2,6 +2,7 @@ using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
@@ -22,6 +23,8 @@ public class BacklogPageTests : BunitContext
     private readonly OrchestratorHubClientConnection _hubConnection;
     private readonly ToastService _toastService;
 
+    private readonly MockTaskDiskSyncCoordinator _diskSyncCoordinator;
+
     public BacklogPageTests()
     {
         _workspaceState = new WorkspaceStateService();
@@ -32,6 +35,7 @@ public class BacklogPageTests : BunitContext
         _orchestrator = new MockTaskOrchestrator();
         _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
         _toastService = TestServices.CreateToastService();
+        _diskSyncCoordinator = new MockTaskDiskSyncCoordinator();
 
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
@@ -44,6 +48,7 @@ public class BacklogPageTests : BunitContext
         Services.AddSingleton(_toastService);
         Services.AddSingleton<IDevQueueService>(new MockDevQueueService());
         Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
+        Services.AddSingleton<ITaskDiskSyncCoordinator>(_diskSyncCoordinator);
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),
@@ -160,5 +165,59 @@ public class BacklogPageTests : BunitContext
             var inFlightCol = cut.Find(".column-inflight");
             Assert.Contains("Live Task", inFlightCol.TextContent);
         });
+    }
+
+    [Fact]
+    public void ImmediateDocsTasksSyncButton_RendersInHeaderWhenWorkspaceActive()
+    {
+        var workspace = new Workspace { Id = 5, Name = "DocsSync Proj", RepositoryPath = "C:\\Projects\\DocsSync" };
+        _workspaceState.SetActiveWorkspace(workspace);
+
+        var cut = Render<Backlog>();
+
+        var syncBtn = cut.Find("#btn-sync-docs-tasks");
+        Assert.NotNull(syncBtn);
+        Assert.Contains("Sync docs/tasks", syncBtn.TextContent);
+    }
+
+    [Fact]
+    public async Task ImmediateDocsTasksSyncButton_OnClick_InvokesCoordinatorAndShowsSuccessToast()
+    {
+        var workspace = new Workspace { Id = 6, Name = "DocsSync Action", RepositoryPath = "C:\\Projects\\DocsSyncAction" };
+        _workspaceState.SetActiveWorkspace(workspace);
+
+        _diskSyncCoordinator.ResultToReturn = new TaskDiskSyncResult(
+            TasksIngestedOrUpdatedFromDisk: 2,
+            TasksWrittenToDisk: 4,
+            RefreshedTasks: Array.Empty<ForgeTask>(),
+            WrittenPaths: new Dictionary<int, string>());
+
+        var cut = Render<Backlog>();
+        var syncBtn = cut.Find("#btn-sync-docs-tasks");
+
+        await cut.InvokeAsync(() => syncBtn.Click());
+
+        Assert.Equal(1, _diskSyncCoordinator.SyncCount);
+        Assert.Equal(6, _diskSyncCoordinator.LastSyncedWorkspace?.Id);
+
+        // Verify toast level and text
+        Assert.Contains(_toastService.Toasts, t => t.Title == "docs/tasks Synchronized" && t.Level == ToastLevel.Success);
+    }
+
+    [Fact]
+    public async Task ImmediateDocsTasksSyncButton_WhenSyncFails_ShowsErrorToastAndDoesNotCrash()
+    {
+        var workspace = new Workspace { Id = 7, Name = "DocsSync Error", RepositoryPath = "C:\\Projects\\DocsSyncError" };
+        _workspaceState.SetActiveWorkspace(workspace);
+
+        _diskSyncCoordinator.ExceptionToThrow = new TaskMarkdownSyncException("Syntax error in markdown YAML frontmatter", "task-1.md");
+
+        var cut = Render<Backlog>();
+        var syncBtn = cut.Find("#btn-sync-docs-tasks");
+
+        await cut.InvokeAsync(() => syncBtn.Click());
+
+        Assert.Equal(1, _diskSyncCoordinator.SyncCount);
+        Assert.Contains(_toastService.Toasts, t => t.Title == "docs/tasks Sync Error" && t.Level == ToastLevel.Error);
     }
 }
