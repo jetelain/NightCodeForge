@@ -2,7 +2,7 @@
 
 > **Phase 11 Implementation Step (Post-MVP)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
-> *Target Components:* `src/NightCodeForge.Cli/` (new, `PackAsTool`), `src/NightCodeForge.Core` (shared `CodeStackPresets` / `WorkspaceProjectConfig`), `skills/` (embedded resources, produced by Step 11.12), `.nightcodeforge/`, `.gitignore`, `.editorconfig` | *Status:* Planned  
+> *Target Components:* `src/NightCodeForge.Cli/` (new, `PackAsTool`), `src/NightCodeForge.Core` (shared `CodeStackPresets` / `WorkspaceProjectConfig`), `skills/` (embedded resources, produced by Step 11.12), `.nightcodeforge/`, `.gitignore`, `.editorconfig` | *Status:* Completed  
 > *Companion Step:* [Step 11.12: Packaged Agent Skills for Backlog Migration & Ideation](STEP_11_12_BACKLOG_MIGRATION_AND_IDEATION_SKILLS.md) (authors the skills this CLI packages and installs)
 
 ---
@@ -141,18 +141,18 @@ Plus CLI-managed metadata fields (`ncfVersion`, `baseBranch`) that the audit che
 
 ## 5. Implementation Checklist & Deliverables
 
-- [ ] **CLI Project:**
+- [x] **CLI Project:**
   - Create `src/NightCodeForge.Cli/` with `PackAsTool` NuGet packaging (`ToolCommandName=ncf`), added to `NightCodeForge.slnx`.
   - Implement `ncf init` (gitignore merge, editorconfig, stack detection via `CodeStackPresets`, format pass, skill install with managed blocks, config bootstrap).
   - Implement `ncf audit` (5 pillars, `.nightcodeforge/audit-report.md`, exit codes 0/1/2).
   - Embed `skills/**` as resources; `--dry-run` and `--stack` escape hatch.
-- [ ] **Integration Points:**
+- [x] **Integration Points:**
   - Verify `CodeStackPresets.ResolveConfig` parses the exact JSON the CLI emits (shared types, no duplication).
-  - Workspace Creation Wizard ([WizardStep1Directory.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Workspaces/WizardStep1Directory.razor)) displays a hint pointing to `ncf init` for existing repositories.
-- [ ] **Tests:**
+  - Workspace Creation Wizard ([WizardStep1PathProbe.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Workspaces/Steps/WizardStep1PathProbe.razor)) displays a hint pointing to `ncf init` for existing repositories.
+- [x] **Tests:**
   - Unit tests: gitignore/editorconfig merge idempotency (managed blocks, user entries preserved), stack detection across dotnet/node/python/rust/go fixture repos, config bootstrap JSON conformance to `WorkspaceProjectConfig`.
   - Integration tests: `ncf init` on a sample git repo installs skills under managed blocks and is idempotent; `ncf audit` returns 🔴 on a broken build / failing tests and 🟢 on a healthy fixture.
-- [ ] **Docs:**
+- [x] **Docs:**
   - `README.md` section: one-command onboarding (`dotnet tool install` + `ncf init` + `ncf audit`).
   - Future commands (`ncf server`, `ncf register`, `ncf import`) documented as a forward-looking roadmap note, not implemented.
 

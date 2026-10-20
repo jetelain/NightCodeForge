@@ -13,7 +13,8 @@ public record CodeStackPreset(
     string TestCommand,
     string? FormatCommand = null,
     string? SastCommand = null,
-    string? CoverageCommand = null);
+    string? CoverageCommand = null,
+    string? DisplayName = null);
 
 /// <summary>
 /// Project-level configuration discovered from .nightcodeforge/config.json or nightcodeforge.json.
@@ -29,6 +30,8 @@ public class WorkspaceProjectConfig
     public int? BuildTimeoutSeconds { get; set; }
     public int? TestTimeoutSeconds { get; set; }
     public bool? AllowNoTests { get; set; }
+    public string? NcfVersion { get; set; }
+    public string? BaseBranch { get; set; }
     public string? ParseWarning { get; set; }
 }
 
@@ -40,7 +43,8 @@ public static class CodeStackPresets
         TestCommand: "dotnet test --no-build",
         FormatCommand: "dotnet format",
         SastCommand: null,
-        CoverageCommand: WorkflowDefaults.DefaultCoverageTestCommand);
+        CoverageCommand: WorkflowDefaults.DefaultCoverageTestCommand,
+        DisplayName: ".NET / C#");
 
     public static readonly CodeStackPreset Node = new(
         Name: "node",
@@ -48,7 +52,8 @@ public static class CodeStackPresets
         TestCommand: "npm test",
         FormatCommand: null,
         SastCommand: null,
-        CoverageCommand: "npm test -- --coverage");
+        CoverageCommand: "npm test -- --coverage",
+        DisplayName: "Node.js / TypeScript");
 
     public static readonly CodeStackPreset Python = new(
         Name: "python",
@@ -56,7 +61,8 @@ public static class CodeStackPresets
         TestCommand: "pytest",
         FormatCommand: "ruff format .",
         SastCommand: null,
-        CoverageCommand: "pytest --cov");
+        CoverageCommand: "pytest --cov",
+        DisplayName: "Python");
 
     public static readonly CodeStackPreset Rust = new(
         Name: "rust",
@@ -64,7 +70,8 @@ public static class CodeStackPresets
         TestCommand: "cargo test",
         FormatCommand: "cargo fmt",
         SastCommand: null,
-        CoverageCommand: "cargo tarpaulin");
+        CoverageCommand: "cargo tarpaulin",
+        DisplayName: "Rust");
 
     public static readonly CodeStackPreset Go = new(
         Name: "go",
@@ -72,18 +79,155 @@ public static class CodeStackPresets
         TestCommand: "go test ./...",
         FormatCommand: "gofmt -w .",
         SastCommand: null,
-        CoverageCommand: "go test -coverprofile=coverage.out ./...");
+        CoverageCommand: "go test -coverprofile=coverage.out ./...",
+        DisplayName: "Go");
 
+    /// <summary>
+    /// Attempts to resolve a CodeStackPreset by name or alias without silent fallback.
+    /// </summary>
+    public static bool TryResolve(string? stackName, out CodeStackPreset? preset)
+    {
+        var normalized = stackName?.Trim().ToLowerInvariant();
+        switch (normalized)
+        {
+            case "dotnet" or "csharp" or "cs" or "fsharp" or "fs" or ".net":
+                preset = DotNet;
+                return true;
+            case "node" or "npm" or "javascript" or "typescript" or "ts" or "js":
+                preset = Node;
+                return true;
+            case "python" or "py":
+                preset = Python;
+                return true;
+            case "rust" or "cargo" or "rs":
+                preset = Rust;
+                return true;
+            case "go" or "golang":
+                preset = Go;
+                return true;
+            default:
+                preset = null;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Resolves active preset from a stack name or alias. Defaults to DotNet if unresolved.
+    /// </summary>
     public static CodeStackPreset Resolve(string? stackName)
     {
-        return (stackName?.Trim().ToLowerInvariant()) switch
+        if (TryResolve(stackName, out var preset) && preset != null)
         {
-            "node" or "npm" or "javascript" or "typescript" or "ts" or "js" => Node,
-            "python" or "py" => Python,
-            "rust" or "cargo" or "rs" => Rust,
-            "go" or "golang" => Go,
-            _ => DotNet
-        };
+            return preset;
+        }
+
+        return DotNet;
+    }
+
+    /// <summary>
+    /// Deterministically detects the technology stack preset of a repository by inspecting
+    /// marker files at the root level and subdirectories (up to 2 levels deep).
+    /// Returns null if undetectable (fail-fast, no silent fallback).
+    /// </summary>
+    public static CodeStackPreset? Detect(string directoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+        {
+            return null;
+        }
+
+        // 1. Root-level checks (primary priority)
+        var rootMatch = CheckDirectoryMarkers(directoryPath);
+        if (rootMatch != null) return rootMatch;
+
+        // 2. Subdirectories (up to 2 levels deep, ignoring hidden and build/artifact folders)
+        try
+        {
+            var firstLevelDirs = EnumerateEligibleDirectories(directoryPath).ToList();
+
+            // Check level 1
+            foreach (var subDir in firstLevelDirs)
+            {
+                var match = CheckDirectoryMarkers(subDir);
+                if (match != null) return match;
+            }
+
+            // Check level 2 (e.g. src/MyApp or backend/service)
+            foreach (var subDir in firstLevelDirs)
+            {
+                foreach (var secondLevelDir in EnumerateEligibleDirectories(subDir))
+                {
+                    var match = CheckDirectoryMarkers(secondLevelDir);
+                    if (match != null) return match;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Directory permission or path access errors treated as undetectable
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateEligibleDirectories(string path)
+    {
+        try
+        {
+            return Directory.EnumerateDirectories(path).Where(subDir =>
+            {
+                var name = Path.GetFileName(subDir);
+                return !name.StartsWith('.') &&
+                       !name.Equals("bin", StringComparison.OrdinalIgnoreCase) &&
+                       !name.Equals("obj", StringComparison.OrdinalIgnoreCase) &&
+                       !name.Equals("node_modules", StringComparison.OrdinalIgnoreCase) &&
+                       !name.Equals("TestResults", StringComparison.OrdinalIgnoreCase) &&
+                       !name.Equals("target", StringComparison.OrdinalIgnoreCase) &&
+                       !name.Equals("dist", StringComparison.OrdinalIgnoreCase) &&
+                       !name.Equals("build", StringComparison.OrdinalIgnoreCase) &&
+                       !name.Equals("venv", StringComparison.OrdinalIgnoreCase) &&
+                       !name.Equals("__pycache__", StringComparison.OrdinalIgnoreCase);
+            });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Enumerable.Empty<string>();
+        }
+    }
+
+    private static CodeStackPreset? CheckDirectoryMarkers(string dir)
+    {
+        try
+        {
+            if (HasDotNetFiles(dir)) return DotNet;
+            if (File.Exists(Path.Combine(dir, "Cargo.toml"))) return Rust;
+            if (File.Exists(Path.Combine(dir, "go.mod"))) return Go;
+            if (File.Exists(Path.Combine(dir, "package.json"))) return Node;
+            if (File.Exists(Path.Combine(dir, "pyproject.toml")) ||
+                File.Exists(Path.Combine(dir, "setup.py")) ||
+                File.Exists(Path.Combine(dir, "requirements.txt"))) return Python;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Ignore access errors
+        }
+
+        return null;
+    }
+
+    private static bool HasDotNetFiles(string path)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(path, "*.sln").Any() ||
+                   Directory.EnumerateFiles(path, "*.slnx").Any() ||
+                   Directory.EnumerateFiles(path, "*.csproj").Any() ||
+                   Directory.EnumerateFiles(path, "*.fsproj").Any();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

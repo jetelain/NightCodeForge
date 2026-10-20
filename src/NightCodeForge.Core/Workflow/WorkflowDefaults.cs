@@ -16,6 +16,7 @@ public static class WorkflowDefaults
     public const int MaxStageOutputChars = 32768;
     public const string DefaultCoverageTestCommand = "dotnet test --no-build --collect:\"XPlat Code Coverage\" --logger trx";
     public const string ModelPreloadKeepAlive = "15m";
+    public const string FastTestCategoryFilter = "Category!=Acceptance&Category!=E2E";
     public const string DefaultBaseBranch = "main";
 
     /// <summary>

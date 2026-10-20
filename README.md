@@ -79,6 +79,48 @@ NightCodeForge eliminates idle GPU time through **automatic Git checkpointing an
 
 ---
 
+## 🚀 One-Command Repository Onboarding: `ncf` CLI (`dotnet tool`)
+
+Preparing an existing repository (e.g. .NET, Node.js, Python, Rust, Go) for NightCodeForge is 100% deterministic and takes seconds with the `ncf` global tool:
+
+```bash
+# Install the tool globally from NuGet
+dotnet tool install --global NightCodeForge.Cli
+
+# Or build and install locally from source in this repository:
+.\install-cli.ps1
+
+# In your target repository:
+ncf init        # Deterministic preparation (idempotent)
+ncf audit       # Pre-flight readiness scorecard (🟢 / 🟡 / 🔴)
+```
+
+### What `ncf init` Does Deterministically
+1. **`.gitignore` Merge:** Safely merges NCF-mandatory entries (`bin/`, `obj/`, `.vs/`, `TestResults/`, `*.trx`, runtime transcripts) inside managed markers without clobbering user entries.
+2. **`.editorconfig` Enforcement:** Ensures `root = true`, LF line endings (`end_of_line = lf`), UTF-8 charset, and standard indent rules to completely prevent phantom diffs across environments.
+3. **Shared Stack Detection:** Identifies the project stack (`dotnet`, `node`, `python`, `rust`, `go`) using the shared `CodeStackPresets` engine without drift.
+4. **Agent Skills Installation:** Installs packaged skills (`ncf-backlog-migrator`, `ncf-ideation`, `ncf-project-readiness`) into `.agents/skills/` under managed blocks, discoverable by both external IDE agents and internal harnesses.
+5. **Configuration Bootstrap:** Writes `.nightcodeforge/config.json` with detected build/test/format commands, base branch, and timeouts.
+6. **Baseline Format Pass:** Runs the stack's code formatter (e.g. `dotnet format --no-restore`, `cargo fmt`, `ruff format .`, `gofmt -w .`) to guarantee a clean starting baseline.
+
+### 5-Pillar Readiness Scorecard (`ncf audit`)
+`ncf audit` performs a read-only check across 5 pillars, generating console feedback and `.nightcodeforge/audit-report.md`:
+* **1. Git Health:** Validates committed HEAD on primary branch (`main`/`master`) with a clean working tree.
+* **2. Build Determinism:** Verifies that CLI build succeeds cleanly non-interactively.
+* **3. Test Fast Feedback:** Runs the fast test suite (`Category!=Acceptance&Category!=E2E`).
+* **4. Isolation Readiness:** Scans for hardcoded machine paths and unmocked external network calls in unit tests.
+* **5. NCF Configuration:** Validates `.nightcodeforge/config.json` and ensures installed skills match CLI versions.
+
+> **Remediation Companion:** If the audit produces 🟡 warnings or 🔴 blockers, load the `ncf-project-readiness` skill in your AI assistant (Claude Code, Cursor, Antigravity) to guide code fixes.
+
+#### Roadmap Commands (Future Stage 11)
+The CLI architecture is designed to accommodate future commands:
+* `ncf server` — Install and launch the NightCodeForge web dashboard.
+* `ncf register` — Register the prepared workspace via Web API.
+* `ncf import` — Bulk import `.nightcodeforge/tasks/*.md` into the database.
+
+---
+
 ## 🏗️ Architecture at a Glance
 
 ```mermaid

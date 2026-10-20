@@ -422,50 +422,8 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
 
     private static string DetectTechStack(string directoryPath)
     {
-        try
-        {
-            if (Directory.EnumerateFiles(directoryPath, "*.sln").Any() ||
-                Directory.EnumerateFiles(directoryPath, "*.csproj").Any())
-            {
-                return ".NET / C#";
-            }
-
-            foreach (var subDir in Directory.EnumerateDirectories(directoryPath))
-            {
-                var name = Path.GetFileName(subDir);
-                if (name.StartsWith('.') ||
-                    name.Equals("node_modules", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("obj", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                if (Directory.EnumerateFiles(subDir, "*.csproj").Any() || Directory.EnumerateFiles(subDir, "*.sln").Any())
-                {
-                    return ".NET / C#";
-                }
-            }
-
-            if (File.Exists(Path.Combine(directoryPath, "package.json")))
-                return "Node.js / TypeScript";
-
-            if (File.Exists(Path.Combine(directoryPath, "Cargo.toml")))
-                return "Rust";
-
-            if (File.Exists(Path.Combine(directoryPath, "pyproject.toml")) ||
-                File.Exists(Path.Combine(directoryPath, "requirements.txt")))
-                return "Python";
-
-            if (File.Exists(Path.Combine(directoryPath, "go.mod")))
-                return "Go";
-        }
-        catch
-        {
-            // Ignore access exceptions
-        }
-
-        return "General / Polyglot";
+        var detected = CodeStackPresets.Detect(directoryPath);
+        return detected?.DisplayName ?? detected?.Name ?? "General / Polyglot";
     }
 
     private static bool CheckHasAgentGuidelines(string directoryPath)
@@ -487,26 +445,15 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         try
         {
             var gitignorePath = Path.Combine(repoPath, ".gitignore");
-            var requiredEntries = TaskSyncConstants.RequiredGitIgnoreEntries;
+            var existingContent = File.Exists(gitignorePath)
+                ? await File.ReadAllTextAsync(gitignorePath, cancellationToken)
+                : null;
 
-            if (File.Exists(gitignorePath))
+            var updatedContent = NightCodeForge.Core.Services.GitignorePreparer.Prepare(existingContent);
+            if (!string.Equals(existingContent?.Replace("\r\n", "\n"), updatedContent.Replace("\r\n", "\n"), StringComparison.Ordinal))
             {
-                var content = await File.ReadAllTextAsync(gitignorePath, cancellationToken);
-                var lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                var missing = requiredEntries.Where(e => !lines.Contains(e) && !lines.Contains(e.TrimEnd('/'))).ToList();
-
-                if (missing.Count > 0)
-                {
-                    var textToAppend = "\n# NightCodeForge task artifacts, test outputs and transcripts\n" + string.Join("\n", missing) + "\n";
-                    await File.AppendAllTextAsync(gitignorePath, textToAppend, cancellationToken);
-                    _logger.LogInformation("Appended {Count} NightCodeForge entries to '{GitIgnorePath}'", missing.Count, gitignorePath);
-                }
-            }
-            else
-            {
-                var initialContent = "# NightCodeForge task artifacts, test outputs and transcripts\n" + string.Join("\n", requiredEntries) + "\n";
-                await File.WriteAllTextAsync(gitignorePath, initialContent, cancellationToken);
-                _logger.LogInformation("Created '{GitIgnorePath}' with NightCodeForge entries", gitignorePath);
+                await File.WriteAllTextAsync(gitignorePath, updatedContent, cancellationToken);
+                _logger.LogInformation("Configured .gitignore in '{GitIgnorePath}'", gitignorePath);
             }
         }
         catch (Exception ex)

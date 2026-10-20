@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>ncf</ToolCommandName>
+    <PackageId>NightCodeForge.Cli</PackageId>
+    <Version>1.0.0</Version>
+    <Description>NightCodeForge CLI — Deterministic repository preparation, onboarding, and readiness audit.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NightCodeForge.Core\NightCodeForge.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\skills\**\*" LogicalName="skills/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

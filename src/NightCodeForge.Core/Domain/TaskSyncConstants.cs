@@ -20,9 +20,16 @@ public static class TaskSyncConstants
 
     public static readonly IReadOnlyList<string> RequiredGitIgnoreEntries = new[]
     {
+        "bin/",
+        "obj/",
+        ".vs/",
+        "TestResults/",
+        "*.trx",
         "docs/tasks/",
         "docs/transcripts/",
-        "TestResults/",
-        "*.trx"
+        ".nightcodeforge/transcripts/",
+        ".nightcodeforge/worktrees/",
+        ".nightcodeforge/logs/",
+        ".nightcodeforge/audit-report.md"
     };
 }

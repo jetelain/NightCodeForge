@@ -431,8 +431,15 @@ FodyWeavers.xsd
 *.db-wal
 
 # NightCodeForge task artifacts, test outputs and transcripts
-docs/tasks/
-docs/transcripts/
+bin/
+obj/
+.vs/
 TestResults/
 *.trx
+docs/tasks/
+docs/transcripts/
+.nightcodeforge/transcripts/
+.nightcodeforge/worktrees/
+.nightcodeforge/logs/
+.nightcodeforge/audit-report.md
 

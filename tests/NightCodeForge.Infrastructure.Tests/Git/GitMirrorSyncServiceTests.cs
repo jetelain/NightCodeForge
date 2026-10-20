@@ -108,6 +108,28 @@ public class GitMirrorSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ConfigureHostRepositoryAsync_AppliesManagedBlocks_Idempotently()
+    {
+        // Act 1
+        await _syncService.ConfigureHostRepositoryAsync(_hostRepo.RepositoryPath);
+        var ec1 = await File.ReadAllTextAsync(Path.Combine(_hostRepo.RepositoryPath, ".editorconfig"));
+        var gi1 = await File.ReadAllTextAsync(Path.Combine(_hostRepo.RepositoryPath, ".gitignore"));
+
+        Assert.Contains(ManagedBlockConstants.Header, ec1);
+        Assert.Contains(ManagedBlockConstants.Footer, ec1);
+        Assert.Contains(ManagedBlockConstants.Header, gi1);
+        Assert.Contains(ManagedBlockConstants.Footer, gi1);
+
+        // Act 2 (Idempotent run)
+        await _syncService.ConfigureHostRepositoryAsync(_hostRepo.RepositoryPath);
+        var ec2 = await File.ReadAllTextAsync(Path.Combine(_hostRepo.RepositoryPath, ".editorconfig"));
+        var gi2 = await File.ReadAllTextAsync(Path.Combine(_hostRepo.RepositoryPath, ".gitignore"));
+
+        Assert.Equal(ec1, ec2);
+        Assert.Equal(gi1, gi2);
+    }
+
+    [Fact]
     public async Task InitializeMirrorAsync_ClonesRepo_AndConfiguresHostOriginRemote()
     {
         // Act

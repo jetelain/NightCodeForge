@@ -125,53 +125,26 @@ public class GitMirrorSyncService : IGitMirrorSyncService
         try
         {
             var editorConfigPath = Path.Combine(repoPath, ".editorconfig");
-            if (File.Exists(editorConfigPath))
+            var existingContent = File.Exists(editorConfigPath)
+                ? await File.ReadAllTextAsync(editorConfigPath, cancellationToken)
+                : null;
+
+            var updatedContent = NightCodeForge.Core.Services.EditorConfigPreparer.Prepare(existingContent);
+            if (string.Equals(existingContent?.Replace("\r\n", "\n"), updatedContent.Replace("\r\n", "\n"), StringComparison.Ordinal))
             {
-                var content = await File.ReadAllTextAsync(editorConfigPath, cancellationToken);
-                if (!content.Contains("end_of_line = lf", StringComparison.OrdinalIgnoreCase) &&
-                    !content.Contains("end_of_line=lf", StringComparison.OrdinalIgnoreCase))
-                {
-                    var textToAppend = "\n[*]\nend_of_line = lf\n";
-                    await File.AppendAllTextAsync(editorConfigPath, textToAppend, cancellationToken);
-                    _logger.LogInformation("Appended end_of_line = lf block to '{EditorConfigPath}'", editorConfigPath);
-                    try
-                    {
-                        await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".editorconfig"], cancellationToken: cancellationToken);
-                        await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: configure .editorconfig for NightCodeForge"], cancellationToken: cancellationToken);
-                    }
-                    catch (Exception commitEx)
-                    {
-                        _logger.LogDebug(commitEx, "Could not commit .editorconfig updates to '{RepoPath}'", repoPath);
-                    }
-                }
+                return;
             }
-            else
+
+            await File.WriteAllTextAsync(editorConfigPath, updatedContent, cancellationToken);
+            _logger.LogInformation("Configured .editorconfig in '{RepoPath}'", repoPath);
+            try
             {
-                var initialContent =
-                    "# EditorConfig for cross-platform consistency\n" +
-                    "root = true\n\n" +
-                    "[*]\n" +
-                    "indent_style = space\n" +
-                    "indent_size = 4\n" +
-                    "end_of_line = lf\n" +
-                    "charset = utf-8\n" +
-                    "trim_trailing_whitespace = true\n" +
-                    "insert_final_newline = true\n\n" +
-                    "[*.{json,yml,yaml,md}]\n" +
-                    "indent_size = 2\n\n" +
-                    "[*.{bat,cmd}]\n" +
-                    "end_of_line = crlf\n";
-                await File.WriteAllTextAsync(editorConfigPath, initialContent, cancellationToken);
-                _logger.LogInformation("Created '{EditorConfigPath}' with cross-platform configuration", editorConfigPath);
-                try
-                {
-                    await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".editorconfig"], cancellationToken: cancellationToken);
-                    await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: configure .editorconfig for NightCodeForge"], cancellationToken: cancellationToken);
-                }
-                catch (Exception commitEx)
-                {
-                    _logger.LogDebug(commitEx, "Could not commit .editorconfig creation to '{RepoPath}'", repoPath);
-                }
+                await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".editorconfig"], cancellationToken: cancellationToken);
+                await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: configure .editorconfig for NightCodeForge"], cancellationToken: cancellationToken);
+            }
+            catch (Exception commitEx)
+            {
+                _logger.LogDebug(commitEx, "Could not commit .editorconfig updates to '{RepoPath}'", repoPath);
             }
         }
         catch (Exception ex)
@@ -185,44 +158,26 @@ public class GitMirrorSyncService : IGitMirrorSyncService
         try
         {
             var gitignorePath = Path.Combine(repoPath, ".gitignore");
-            var requiredEntries = NightCodeForge.Core.Domain.TaskSyncConstants.RequiredGitIgnoreEntries;
+            var existingContent = File.Exists(gitignorePath)
+                ? await File.ReadAllTextAsync(gitignorePath, cancellationToken)
+                : null;
 
-            if (File.Exists(gitignorePath))
+            var updatedContent = NightCodeForge.Core.Services.GitignorePreparer.Prepare(existingContent);
+            if (string.Equals(existingContent?.Replace("\r\n", "\n"), updatedContent.Replace("\r\n", "\n"), StringComparison.Ordinal))
             {
-                var content = await File.ReadAllTextAsync(gitignorePath, cancellationToken);
-                var lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                var missing = requiredEntries.Where(e => !lines.Contains(e) && !lines.Contains(e.TrimEnd('/'))).ToList();
-
-                if (missing.Count > 0)
-                {
-                    var textToAppend = "\n# NightCodeForge task artifacts, test outputs and transcripts\n" + string.Join("\n", missing) + "\n";
-                    await File.AppendAllTextAsync(gitignorePath, textToAppend, cancellationToken);
-                    _logger.LogInformation("Appended {Count} NightCodeForge entries to '{GitIgnorePath}'", missing.Count, gitignorePath);
-                    try
-                    {
-                        await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".gitignore"], cancellationToken: cancellationToken);
-                        await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: configure .gitignore for NightCodeForge"], cancellationToken: cancellationToken);
-                    }
-                    catch (Exception commitEx)
-                    {
-                        _logger.LogDebug(commitEx, "Could not commit .gitignore updates to '{RepoPath}'", repoPath);
-                    }
-                }
+                return;
             }
-            else
+
+            await File.WriteAllTextAsync(gitignorePath, updatedContent, cancellationToken);
+            _logger.LogInformation("Configured .gitignore in '{RepoPath}'", repoPath);
+            try
             {
-                var initialContent = "# NightCodeForge task artifacts, test outputs and transcripts\n" + string.Join("\n", requiredEntries) + "\n";
-                await File.WriteAllTextAsync(gitignorePath, initialContent, cancellationToken);
-                _logger.LogInformation("Created '{GitIgnorePath}' with NightCodeForge entries", gitignorePath);
-                try
-                {
-                    await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".gitignore"], cancellationToken: cancellationToken);
-                    await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: create .gitignore for NightCodeForge"], cancellationToken: cancellationToken);
-                }
-                catch (Exception commitEx)
-                {
-                    _logger.LogDebug(commitEx, "Could not commit .gitignore creation to '{RepoPath}'", repoPath);
-                }
+                await _gitCliRunner.ExecuteAsync(repoPath, ["add", ".gitignore"], cancellationToken: cancellationToken);
+                await _gitCliRunner.ExecuteAsync(repoPath, ["commit", "-m", "chore: configure .gitignore for NightCodeForge"], cancellationToken: cancellationToken);
+            }
+            catch (Exception commitEx)
+            {
+                _logger.LogDebug(commitEx, "Could not commit .gitignore creation or updates to '{RepoPath}'", repoPath);
             }
         }
         catch (Exception ex)
