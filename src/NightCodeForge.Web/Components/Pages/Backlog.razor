@@ -13,6 +13,7 @@
 @inject OrchestratorHubClientConnection HubConnection
 @inject ToastService ToastService
 @inject ITaskDiskSyncCoordinator DiskSyncCoordinator
+@inject NavigationManager Navigation
 @inject ILogger<Backlog> Logger
 @implements IDisposable
 
@@ -200,7 +201,7 @@
             {
                 <KanbanBoard Tasks="filtered"
                              TaskDependencies="_dependenciesMap"
-                             OnTaskSelected="OpenTaskDrawer"
+                             OnTaskSelected="OpenTask"
                              OnPromoteTask="OpenPromoteModal"
                              OnLinkDependencies="OpenDependencyModal"
                              OnPriorityChanged="HandlePriorityChanged" />
@@ -209,12 +210,12 @@
             {
                 <DagVisualizer Tasks="filtered"
                                Dependencies="_allDependencies"
-                               OnTaskSelected="OpenTaskDrawer"
+                               OnTaskSelected="OpenTask"
                                OnLinkDependencies="OpenDependencyModal" />
             }
         </div>
 
-        <!-- Modals & Drawers -->
+        <!-- Modals -->
         <TaskCreationModal IsOpen="_showCreateModal"
                            WorkspaceId="@(WorkspaceState.ActiveWorkspace?.Id ?? 0)"
                            DefaultBaseBranch="@(WorkspaceState.ActiveWorkspace?.DefaultBaseBranch)"
@@ -234,16 +235,6 @@
                                 AllDependencies="_allDependencies"
                                 OnClosed="CloseDepModal"
                                 OnSaved="ReloadTasksAsync" />
-
-        <TaskDetailDrawer IsOpen="_showDrawer"
-                          Task="_selectedTask"
-                          AllTasks="_allTasks"
-                          PrerequisiteIds="GetPrerequisitesForSelected()"
-                          DependentIds="GetDependentsForSelected()"
-                          OnClose="CloseDrawer"
-                          OnPromoteClicked="OpenPromoteModal"
-                          OnLinkDependenciesClicked="OpenDependencyModal"
-                          OnTaskUpdated="ReloadTasksAsync" />
     }
 </div>
 
@@ -276,7 +267,6 @@
     private bool _showCreateModal;
     private bool _showPromoteModal;
     private bool _showDepModal;
-    private bool _showDrawer;
 
     private async Task HandleTaskCreated(ForgeTask createdTask)
     {
@@ -315,7 +305,6 @@
                 _selectedTask = null;
                 _showPromoteModal = false;
                 _showDepModal = false;
-                _showDrawer = false;
                 await LoadDataAsync();
                 StateHasChanged();
             }
@@ -567,15 +556,9 @@
             .ToList();
     }
 
-    private void OpenTaskDrawer(ForgeTask task)
+    private void OpenTask(ForgeTask task)
     {
-        _selectedTask = task;
-        _showDrawer = true;
-    }
-
-    private void CloseDrawer()
-    {
-        _showDrawer = false;
+        Navigation.NavigateTo($"/tasks/{task.Id}");
     }
 
     private void OpenPromoteModal(ForgeTask task)

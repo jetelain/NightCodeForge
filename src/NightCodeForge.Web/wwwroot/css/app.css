@@ -3538,8 +3538,6 @@ code, kbd, samp, pre {
     color: var(--text-secondary);
     line-height: 1.5;
     white-space: pre-wrap;
-    max-height: 240px;
-    overflow-y: auto;
     font-family: inherit;
 }
 
@@ -5975,6 +5973,94 @@ div.spinner-pulse {
     gap: 0.5rem;
     margin-top: 0.25rem;
 }
+
+/* ==========================================================================
+   Dedicated Task Detail Page & Form Grids
+   ========================================================================== */
+
+.task-detail-page,
+.create-task-page {
+    width: 100%;
+    max-width: 1600px;
+    margin: 0 auto;
+    padding-bottom: 3rem;
+}
+
+.task-detail-grid,
+.create-task-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 1.5rem;
+    align-items: start;
+}
+
+@media (max-width: 1100px) {
+    .task-detail-grid,
+    .create-task-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.task-spec-markdown-body {
+    background: transparent;
+    padding: 0.5rem 0;
+}
+
+.task-spec-markdown-body h1,
+.task-spec-markdown-body h2,
+.task-spec-markdown-body h3,
+.task-spec-markdown-body h4 {
+    color: var(--text-primary);
+    margin-top: 1.5rem;
+    margin-bottom: 0.6rem;
+    font-weight: 600;
+}
+
+.task-spec-markdown-body h1:first-child,
+.task-spec-markdown-body h2:first-child,
+.task-spec-markdown-body h3:first-child {
+    margin-top: 0;
+}
+
+.task-spec-markdown-body p,
+.task-spec-markdown-body ul,
+.task-spec-markdown-body ol {
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+}
+
+.task-spec-markdown-body pre {
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    overflow-x: auto;
+    margin-bottom: 1rem;
+}
+
+.task-spec-markdown-body code {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+}
+
+.task-spec-markdown-body table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1.25rem;
+}
+
+.task-spec-markdown-body th,
+.task-spec-markdown-body td {
+    padding: 0.6rem 0.85rem;
+    border: 1px solid var(--border-subtle);
+    text-align: left;
+}
+
+.task-spec-markdown-body th {
+    background: var(--bg-surface);
+    font-weight: 600;
+}
+
 
 
 

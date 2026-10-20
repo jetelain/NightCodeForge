@@ -1,12 +1,19 @@
 using Bunit;
+using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Web.Components.Backlog;
+using NightCodeForge.Web.Services;
 using Xunit;
 
 namespace NightCodeForge.Web.Tests;
 
 public class DagVisualizerTests : BunitContext
 {
+    public DagVisualizerTests()
+    {
+        Services.AddSingleton<IDagLayoutEngine, DagLayoutEngine>();
+    }
+
     [Fact]
     public void WhenNoTasks_RendersEmptyState()
     {

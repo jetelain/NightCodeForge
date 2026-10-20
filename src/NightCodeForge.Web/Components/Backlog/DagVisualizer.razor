@@ -1,6 +1,8 @@
 @namespace NightCodeForge.Web.Components.Backlog
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Dependencies
+@using NightCodeForge.Web.Services
+@inject IDagLayoutEngine LayoutEngine
 
 <div class="dag-visualizer-container card-glass">
     <!-- Toolbar -->
@@ -14,7 +16,7 @@
                 <button type="button" class="forge-btn forge-btn-secondary btn-xs" @onclick="ZoomOut" title="Zoom Out">−</button>
                 <span class="zoom-level-text font-mono">@((int)(_zoomScale * 100))%</span>
                 <button type="button" class="forge-btn forge-btn-secondary btn-xs" @onclick="ZoomIn" title="Zoom In">+</button>
-                <button type="button" class="forge-btn forge-btn-secondary btn-xs" @onclick="ResetZoom" title="Reset Fit">Reset</button>
+                <button type="button" class="forge-btn forge-btn-secondary btn-xs" @onclick="ResetZoom" title="Reset Zoom">Reset</button>
             </div>
         </div>
     </div>
@@ -43,141 +45,82 @@
         }
         else
         {
-            var graphLayout = ComputeGraphLayout();
-            var svgWidth = (int)(graphLayout.Width * _zoomScale);
-            var svgHeight = (int)(graphLayout.Height * _zoomScale);
-            var viewBoxStr = $"0 0 {graphLayout.Width:F0} {graphLayout.Height:F0}";
-
             <svg class="dag-svg"
-                 width="@svgWidth"
-                 height="@svgHeight"
-                 viewBox="@viewBoxStr"
-                 style="display: block; min-width: 100%; transition: width 0.15s ease, height 0.15s ease;">
+                 width="@_graphLayout.GetZoomedWidthInvariant(_zoomScale)"
+                 height="@_graphLayout.GetZoomedHeightInvariant(_zoomScale)"
+                 viewBox="@_graphLayout.ViewBox"
+                 style="display: block; transition: width 0.15s ease, height 0.15s ease;">
 
-                <defs>
-                    <!-- Marker for Completed Edges -->
-                    <marker id="arrow-completed"
-                            viewBox="0 0 10 10"
-                            refX="9"
-                            refY="5"
-                            markerWidth="6"
-                            markerHeight="6"
-                            orient="auto-start-reverse">
-                        <path d="M 0 1 L 10 5 L 0 9 z" fill="#10b981" />
-                    </marker>
-
-                    <!-- Marker for Pending Edges -->
-                    <marker id="arrow-pending"
-                            viewBox="0 0 10 10"
-                            refX="9"
-                            refY="5"
-                            markerWidth="6"
-                            markerHeight="6"
-                            orient="auto-start-reverse">
-                        <path d="M 0 1 L 10 5 L 0 9 z" fill="#6366f1" />
-                    </marker>
-
-                    <!-- Gradients for Node Backgrounds -->
-                    <linearGradient id="grad-suggested" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stop-color="#2a2416" />
-                        <stop offset="100%" stop-color="#1c1810" />
-                    </linearGradient>
-                    <linearGradient id="grad-open-ready" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stop-color="#162238" />
-                        <stop offset="100%" stop-color="#0f172a" />
-                    </linearGradient>
-                    <linearGradient id="grad-open-blocked" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stop-color="#241e2b" />
-                        <stop offset="100%" stop-color="#161420" />
-                    </linearGradient>
-                    <linearGradient id="grad-inflight" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stop-color="#2e1b4d" />
-                        <stop offset="100%" stop-color="#19112e" />
-                    </linearGradient>
-                    <linearGradient id="grad-ready" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stop-color="#133331" />
-                        <stop offset="100%" stop-color="#0c201f" />
-                    </linearGradient>
-                    <linearGradient id="grad-closed" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stop-color="#123324" />
-                        <stop offset="100%" stop-color="#0b2017" />
-                    </linearGradient>
-                </defs>
-
-                <!-- 1. Render Edges -->
+                <!-- 1. Render Edges Layer -->
                 <g class="dag-edges-layer">
-                    @foreach (var edge in graphLayout.Edges)
+                    @foreach (var edge in _graphLayout.Edges)
                     {
-                        var cpOffset = Math.Max(40, Math.Abs(edge.TargetX - edge.SourceX) * 0.45);
-                        var pathData = $"M {edge.SourceX:F1} {edge.SourceY:F1} C {edge.SourceX + cpOffset:F1} {edge.SourceY:F1}, {edge.TargetX - cpOffset:F1} {edge.TargetY:F1}, {edge.TargetX:F1} {edge.TargetY:F1}";
-
-                        <path d="@pathData"
+                        <path d="@edge.PathData"
                               class="dag-edge @(edge.IsCompleted ? "edge-completed" : "edge-pending")"
-                              marker-end="url(#@(edge.IsCompleted ? "arrow-completed" : "arrow-pending"))"
                               fill="none"
-                              stroke="@(edge.IsCompleted ? "#10b981" : "#6366f1")"
+                              stroke="@edge.StrokeColor"
                               stroke-width="2.2"
                               stroke-dasharray="@(edge.IsCompleted ? "none" : "5,3")"
                               opacity="0.85" />
+                        <polygon points="@edge.ArrowPoints"
+                                 fill="@edge.StrokeColor"
+                                 opacity="0.9" />
                     }
                 </g>
 
-                <!-- 2. Render Nodes -->
+                <!-- 2. Render Nodes Layer -->
                 <g class="dag-nodes-layer">
-                    @foreach (var node in graphLayout.Nodes)
+                    @foreach (var node in _graphLayout.Nodes)
                     {
                         var task = node.Task;
-                        var isInFlight = IsInFlight(task);
-                        var isBlocked = task.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(task.CurrentStageId) && node.IsBlocked;
-                        var isReadyToExecute = task.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(task.CurrentStageId) && !node.IsBlocked;
 
-                        <g class="dag-node-group status-@task.Status.ToString().ToLowerInvariant() @(isBlocked ? "node-blocked" : "") @(isReadyToExecute ? "node-ready" : "") @(isInFlight ? "node-inflight" : "")"
-                           transform="translate(@node.X, @node.Y)"
+                        <g class="dag-node-group status-@task.Status.ToString().ToLowerInvariant() @(node.IsBlocked ? "node-blocked" : "") @(node.IsReadyToExecute ? "node-ready" : "") @(node.IsInFlight ? "node-inflight" : "")"
+                           transform="@node.Transform"
                            @onclick="() => HandleNodeClick(task)"
                            style="cursor: pointer;">
 
                             <!-- Node Box Container -->
-                            <rect width="210"
+                            <rect width="220"
                                   height="76"
                                   rx="8"
                                   ry="8"
-                                  fill="@GetNodeFillUrl(task, isBlocked)"
-                                  stroke="@GetNodeStrokeColor(task, isBlocked)"
-                                  stroke-width="@(isReadyToExecute || task.IsWaitingForHuman || isInFlight ? "2" : "1.2")"
+                                  fill="@node.FillColor"
+                                  stroke="@node.StrokeColor"
+                                  stroke-width="@(node.IsReadyToExecute || task.IsWaitingForHuman || node.IsInFlight ? "2" : "1.2")"
                                   class="dag-node-box" />
 
-                            <!-- Top Bar: Task ID, Priority, Mode -->
-                            @RenderSvgText(10, 20, $"#{task.Id}", className: "dag-node-id font-mono", fill: "#94a3b8", fontSize: 11, fontWeight: "700")
+                            <!-- Task ID -->
+                            @SvgText(12, 20, $"#{task.Id}", className: "dag-node-id font-mono", fill: "#94a3b8", fontSize: 11, fontWeight: "700")
 
                             <!-- Priority Badge Pill -->
-                            <rect x="52" y="9" width="26" height="15" rx="3" fill="@GetPriorityBg(task.Priority)" />
-                            @RenderSvgText(65, 20, $"P{task.Priority}", fill: GetPriorityText(task.Priority), fontSize: 10, fontWeight: "700", textAnchor: "middle")
+                            <rect x="54" y="9" width="28" height="15" rx="3" fill="@node.PriorityBg" />
+                            @SvgText(68, 20, $"P{task.Priority}", fill: node.PriorityText, fontSize: 10, fontWeight: "700", textAnchor: "middle")
 
                             <!-- MergeMode Pill -->
-                            @RenderSvgText(200, 20, task.MergeMode == MergeMode.Automatic ? "Auto" : "Manual", fill: task.MergeMode == MergeMode.Automatic ? "#5eead4" : "#a5b4fc", fontSize: 10, textAnchor: "end")
+                            @SvgText(208, 20, task.MergeMode == MergeMode.Automatic ? "Auto" : "Manual", fill: task.MergeMode == MergeMode.Automatic ? "#5eead4" : "#a5b4fc", fontSize: 10, textAnchor: "end")
 
                             <!-- Title (clipped with ellipsis) -->
-                            @RenderSvgText(10, 42, TruncateText(task.Title, 24), className: "dag-node-title", fill: "#f8fafc", fontSize: 12, fontWeight: "600")
+                            @SvgText(12, 42, node.TruncatedTitle, className: "dag-node-title", fill: "#f8fafc", fontSize: 12, fontWeight: "600")
 
                             <!-- Status Footer Badge -->
                             @if (task.IsWaitingForHuman)
                             {
-                                <rect x="10" y="52" width="112" height="16" rx="3" fill="rgba(245, 158, 11, 0.25)" stroke="#f59e0b" stroke-width="0.8" />
-                                @RenderSvgText(16, 64, "⚠️ Waiting Human", fill: "#fde68a", fontSize: 10, fontWeight: "600")
+                                <rect x="12" y="52" width="118" height="16" rx="3" fill="rgba(245, 158, 11, 0.25)" stroke="#f59e0b" stroke-width="0.8" />
+                                @SvgText(18, 64, "⚠️ Waiting Human", fill: "#fde68a", fontSize: 10, fontWeight: "600")
                             }
-                            else if (isBlocked)
+                            else if (node.IsBlocked)
                             {
-                                <rect x="10" y="52" width="86" height="16" rx="3" fill="rgba(239, 68, 68, 0.2)" stroke="#ef4444" stroke-width="0.8" />
-                                @RenderSvgText(16, 64, $"🔒 Blocked ({node.BlockerCount})", fill: "#fca5a5", fontSize: 10, fontWeight: "600")
+                                <rect x="12" y="52" width="92" height="16" rx="3" fill="rgba(239, 68, 68, 0.2)" stroke="#ef4444" stroke-width="0.8" />
+                                @SvgText(18, 64, $"🔒 Blocked ({node.BlockerCount})", fill: "#fca5a5", fontSize: 10, fontWeight: "600")
                             }
-                            else if (isReadyToExecute)
+                            else if (node.IsReadyToExecute)
                             {
-                                <rect x="10" y="52" width="80" height="16" rx="3" fill="rgba(16, 185, 129, 0.2)" stroke="#10b981" stroke-width="0.8" />
-                                @RenderSvgText(16, 64, "🟢 Ready", fill: "#6ee7b7", fontSize: 10, fontWeight: "600")
+                                <rect x="12" y="52" width="82" height="16" rx="3" fill="rgba(16, 185, 129, 0.2)" stroke="#10b981" stroke-width="0.8" />
+                                @SvgText(18, 64, "🟢 Ready", fill: "#6ee7b7", fontSize: 10, fontWeight: "600")
                             }
                             else
                             {
-                                @RenderSvgText(10, 64, GetStatusLabel(task), fill: GetStatusTextColor(task), fontSize: 10)
+                                @SvgText(12, 64, node.StatusLabel, fill: node.StatusTextColor, fontSize: 10)
                             }
                         </g>
                     }
@@ -194,12 +137,18 @@
     [Parameter] public EventCallback<ForgeTask> OnLinkDependencies { get; set; }
 
     private float _zoomScale = 1.0f;
+    private DagGraphLayout _graphLayout = new();
 
     private int ValidDependenciesCount => Dependencies.Count(d =>
         Tasks.Any(t => t.Id == d.TaskId) && Tasks.Any(t => t.Id == d.DependsOnTaskId));
 
+    protected override void OnParametersSet()
+    {
+        _graphLayout = LayoutEngine.ComputeLayout(Tasks, Dependencies);
+    }
+
     private void ZoomIn() => _zoomScale = Math.Min(2.0f, _zoomScale + 0.15f);
-    private void ZoomOut() => _zoomScale = Math.Max(0.5f, _zoomScale - 0.15f);
+    private void ZoomOut() => _zoomScale = Math.Max(0.4f, _zoomScale - 0.15f);
     private void ResetZoom() => _zoomScale = 1.0f;
 
     private async Task HandleNodeClick(ForgeTask task)
@@ -207,9 +156,9 @@
         await OnTaskSelected.InvokeAsync(task);
     }
 
-    private static MarkupString RenderSvgText(
-        double x,
-        double y,
+    private static MarkupString SvgText(
+        int x,
+        int y,
         string content,
         string? className = null,
         string? fill = null,
@@ -222,254 +171,7 @@
         var weightAttr = fontWeight != null ? $" font-weight=\"{fontWeight}\"" : "";
         var anchorAttr = textAnchor != null ? $" text-anchor=\"{textAnchor}\"" : "";
         var encoded = System.Net.WebUtility.HtmlEncode(content);
-        return new MarkupString($"<text x=\"{x:F1}\" y=\"{y:F1}\"{classAttr}{fillAttr} font-size=\"{fontSize}\"{weightAttr}{anchorAttr}>{encoded}</text>");
-    }
-
-    private class GraphLayout
-    {
-        public double Width { get; set; }
-        public double Height { get; set; }
-        public List<LayoutNode> Nodes { get; } = new();
-        public List<LayoutEdge> Edges { get; } = new();
-    }
-
-    private class LayoutNode
-    {
-        public ForgeTask Task { get; set; } = default!;
-        public double X { get; set; }
-        public double Y { get; set; }
-        public int Rank { get; set; }
-        public bool IsBlocked { get; set; }
-        public int BlockerCount { get; set; }
-    }
-
-    private class LayoutEdge
-    {
-        public double SourceX { get; set; }
-        public double SourceY { get; set; }
-        public double TargetX { get; set; }
-        public double TargetY { get; set; }
-        public bool IsCompleted { get; set; }
-    }
-
-    private GraphLayout ComputeGraphLayout()
-    {
-        var layout = new GraphLayout();
-        if (Tasks.Count == 0) return layout;
-
-        var taskMap = Tasks.ToDictionary(t => t.Id);
-
-        // Filter valid dependencies where both endpoints exist in active workspace
-        var validDeps = Dependencies
-            .Where(d => taskMap.ContainsKey(d.TaskId) && taskMap.ContainsKey(d.DependsOnTaskId))
-            .ToList();
-
-        // Build prereq map: TaskId -> List of DependsOnTaskId
-        var prereqMap = new Dictionary<int, List<int>>();
-        foreach (var task in Tasks)
-        {
-            prereqMap[task.Id] = new List<int>();
-        }
-
-        foreach (var (taskId, dependsOnId) in validDeps)
-        {
-            prereqMap[taskId].Add(dependsOnId);
-        }
-
-        // Compute rank per node: Rank = max(prereqs rank) + 1, root = 0
-        var ranks = new Dictionary<int, int>();
-
-        int GetRank(int id, HashSet<int> visiting)
-        {
-            if (ranks.TryGetValue(id, out var r)) return r;
-            if (visiting.Contains(id)) return 0; // Cycle safety
-
-            visiting.Add(id);
-            int maxPrereqRank = -1;
-
-            if (prereqMap.TryGetValue(id, out var prereqs))
-            {
-                foreach (var p in prereqs)
-                {
-                    var pr = GetRank(p, visiting);
-                    if (pr > maxPrereqRank) maxPrereqRank = pr;
-                }
-            }
-
-            visiting.Remove(id);
-            var computed = maxPrereqRank + 1;
-            ranks[id] = computed;
-            return computed;
-        }
-
-        foreach (var task in Tasks)
-        {
-            GetRank(task.Id, new HashSet<int>());
-        }
-
-        // Group tasks by rank
-        var rankGroups = Tasks
-            .GroupBy(t => ranks[t.Id])
-            .OrderBy(g => g.Key)
-            .ToList();
-
-        const double nodeWidth = 210;
-        const double nodeHeight = 76;
-        const double colSpacing = 280;
-        const double rowSpacing = 106;
-        const double padLeft = 40;
-        const double padTop = 40;
-
-        var nodePositions = new Dictionary<int, (double X, double Y)>();
-        int maxRowCount = 0;
-        int maxRank = 0;
-
-        foreach (var group in rankGroups)
-        {
-            var rank = group.Key;
-            if (rank > maxRank) maxRank = rank;
-
-            var items = group.OrderBy(t => t.Priority).ThenBy(t => t.Id).ToList();
-            if (items.Count > maxRowCount) maxRowCount = items.Count;
-
-            for (int i = 0; i < items.Count; i++)
-            {
-                var t = items[i];
-                var x = padLeft + rank * colSpacing;
-                var y = padTop + i * rowSpacing;
-                nodePositions[t.Id] = (x, y);
-
-                // Compute blockers
-                var prereqs = prereqMap[t.Id];
-                var blockers = prereqs.Count(p => taskMap.TryGetValue(p, out var pt) && pt.Status != TaskOverallStatus.Closed);
-
-                layout.Nodes.Add(new LayoutNode
-                {
-                    Task = t,
-                    X = x,
-                    Y = y,
-                    Rank = rank,
-                    IsBlocked = blockers > 0,
-                    BlockerCount = blockers
-                });
-            }
-        }
-
-        layout.Width = Math.Max(920, padLeft + (maxRank + 1) * colSpacing + 40);
-        layout.Height = Math.Max(480, padTop + Math.Max(1, maxRowCount) * rowSpacing + 40);
-
-        // Add edges: (DependsOnId -> TaskId) because DependsOnId executes before TaskId!
-        foreach (var (taskId, dependsOnId) in validDeps)
-        {
-            if (nodePositions.TryGetValue(dependsOnId, out var src) && nodePositions.TryGetValue(taskId, out var dst))
-            {
-                var srcTask = taskMap[dependsOnId];
-                var isCompleted = srcTask.Status == TaskOverallStatus.Closed;
-
-                layout.Edges.Add(new LayoutEdge
-                {
-                    SourceX = src.X + nodeWidth,
-                    SourceY = src.Y + nodeHeight / 2.0,
-                    TargetX = dst.X,
-                    TargetY = dst.Y + nodeHeight / 2.0,
-                    IsCompleted = isCompleted
-                });
-            }
-        }
-
-        return layout;
-    }
-
-    private static bool IsInFlight(ForgeTask task) =>
-        task.Status == TaskOverallStatus.Reviewed ||
-        task.Status == TaskOverallStatus.Implemented ||
-        (task.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(task.CurrentStageId));
-
-    private static string GetNodeFillUrl(ForgeTask task, bool isBlocked)
-    {
-        if (isBlocked) return "url(#grad-open-blocked)";
-        if (IsInFlight(task)) return "url(#grad-inflight)";
-        return task.Status switch
-        {
-            TaskOverallStatus.Suggested => "url(#grad-suggested)",
-            TaskOverallStatus.Open => "url(#grad-open-ready)",
-            TaskOverallStatus.Ready => "url(#grad-ready)",
-            TaskOverallStatus.Closed => "url(#grad-closed)",
-            _ => "#181b24"
-        };
-    }
-
-    private static string GetNodeStrokeColor(ForgeTask task, bool isBlocked)
-    {
-        if (isBlocked) return "#f59e0b";
-        if (IsInFlight(task)) return "#a855f7";
-        return task.Status switch
-        {
-            TaskOverallStatus.Suggested => "#eab308",
-            TaskOverallStatus.Open => "#6366f1",
-            TaskOverallStatus.Ready => "#14b8a6",
-            TaskOverallStatus.Closed => "#10b981",
-            TaskOverallStatus.Rejected or TaskOverallStatus.Failed => "#ef4444",
-            _ => "#2d3345"
-        };
-    }
-
-    private static string GetStatusTextColor(ForgeTask task)
-    {
-        if (IsInFlight(task)) return "#d8b4fe";
-        return task.Status switch
-        {
-            TaskOverallStatus.Suggested => "#fde047",
-            TaskOverallStatus.Open => "#a5b4fc",
-            TaskOverallStatus.Ready => "#5eead4",
-            TaskOverallStatus.Closed => "#6ee7b7",
-            TaskOverallStatus.Rejected or TaskOverallStatus.Failed => "#fca5a5",
-            _ => "#94a3b8"
-        };
-    }
-
-    private static string GetStatusLabel(ForgeTask task)
-    {
-        if (task.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(task.CurrentStageId))
-        {
-            return $"In-Flight: {task.CurrentStageId}";
-        }
-        return task.Status switch
-        {
-            TaskOverallStatus.Suggested => "💡 Suggested",
-            TaskOverallStatus.Reviewed => "Stage 1: Reviewed",
-            TaskOverallStatus.Implemented => "Stage 3: Implemented",
-            TaskOverallStatus.Ready => "🔍 Ready for Review",
-            TaskOverallStatus.Closed => "✅ Closed",
-            TaskOverallStatus.Rejected => "Archived",
-            TaskOverallStatus.Failed => "Failed",
-            _ => task.Status.ToString()
-        };
-    }
-
-    private static string GetPriorityBg(int priority) => priority switch
-    {
-        TaskPriority.Critical => "rgba(239, 68, 68, 0.3)",
-        TaskPriority.High => "rgba(249, 115, 22, 0.3)",
-        TaskPriority.Normal => "rgba(59, 130, 246, 0.3)",
-        TaskPriority.Low => "rgba(100, 116, 139, 0.25)",
-        TaskPriority.Trivial => "rgba(71, 85, 105, 0.25)",
-        _ => "rgba(100, 116, 139, 0.25)"
-    };
-
-    private static string GetPriorityText(int priority) => priority switch
-    {
-        TaskPriority.Critical => "#fca5a5",
-        TaskPriority.High => "#fed7aa",
-        TaskPriority.Normal => "#93c5fd",
-        TaskPriority.Low => "#cbd5e1",
-        TaskPriority.Trivial => "#94a3b8",
-        _ => "#94a3b8"
-    };
-
-    private static string TruncateText(string text, int max)
-    {
-        if (string.IsNullOrEmpty(text) || text.Length <= max) return text;
-        return text.Substring(0, max).TrimEnd() + "…";
+        return new MarkupString(FormattableString.Invariant(
+            $"<text x=\"{x}\" y=\"{y}\"{classAttr}{fillAttr} font-size=\"{fontSize}\"{weightAttr}{anchorAttr}>{encoded}</text>"));
     }
 }

@@ -49,6 +49,7 @@ public class BacklogPageTests : BunitContext
         Services.AddSingleton<IDevQueueService>(new MockDevQueueService());
         Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
         Services.AddSingleton<ITaskDiskSyncCoordinator>(_diskSyncCoordinator);
+        Services.AddSingleton<IDagLayoutEngine, DagLayoutEngine>();
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),

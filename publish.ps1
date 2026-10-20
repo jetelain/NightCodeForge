@@ -281,8 +281,8 @@ foreach ($configFilePath in $configFiles) {
     }
     if (-not $settings.Logging.PSObject.Properties['LogLevel']) {
         $settings.Logging | Add-Member -MemberType NoteProperty -Name 'LogLevel' -Value ([PSCustomObject]@{
-            "Default" = "Information"
-            "Microsoft.AspNetCore" = "Warning"
+            "Default" = "Warning"
+            "NighCodeForge" = "Information"
         })
     }
     $settings.Logging | Add-Member -MemberType NoteProperty -Name 'LogsDirectory' -Value $logsDirPath -Force
