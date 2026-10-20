@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Components.Monitoring;
 using NightCodeForge.Web.Services;
 using Xunit;
@@ -28,6 +29,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         _taskReviewService = new FakeTaskReviewService();
 
         Services.AddSingleton<ITaskRepository>(_taskRepository);
+        Services.AddSingleton<ITaskOrchestrator>(new MockTaskOrchestrator());
         Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton<IDevQueueService>(_devQueueService);

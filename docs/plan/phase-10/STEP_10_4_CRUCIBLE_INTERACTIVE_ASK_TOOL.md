@@ -66,15 +66,33 @@ In [StageConversationViewer.razor](../../../src/NightCodeForge.Web/Components/Mo
    - The paused conversation is found on resumption by repository lookup (task id + stage id + `WaitingForHuman`); no extra DataBag key or `AgentSessionContext` field is introduced (a persisted id would be redundant and can go stale).
    - Real-time activity event `AgentActivityKind.Interrupted` is broadcast (already the case; keep it).
 
-2. **Interactive UI Question Card in Chat History:**
+2. **Interactive UI Question Card in Chat History & Structured Answers:**
    - In `StageConversationViewer.razor`, tool turns for the `ask` tool render using a dedicated `AgentQuestionTurnCard.razor` (or inline dedicated block).
+   - **Structured Question-Answer Persistence (Zero-Guessing):**
+     - When human answers are submitted (either from the viewer or Inbox), `TaskOrchestrator` stores the structured answers in `PipelineDataBag` (`PipelineDataBagKeys.LastHumanAnswerJson`) in addition to natural language text (`LastHumanAnswer`).
+     - When `CrucibleAgentHarness` records the `StageTurnRole.ToolResult` turn on resumption, it persists the structured payload into `ConversationTurn.MetadataJson`:
+       ```json
+       {
+         "CallId": "call-ask-123",
+         "Answers": [
+           {
+             "QuestionIndex": 0,
+             "QuestionId": 42,
+             "SelectedOptionIndex": 1,
+             "SelectedOption": "staging",
+             "AnswerText": "staging"
+           }
+         ]
+       }
+       ```
+     - `AgentQuestionTurnCard` reads the structured `Answers` from `MetadataJson` to determine selected options (`selectedOptionIndex == optIndex` or exact option match), completely eliminating fragile text-reconstruction heuristics or regex guessing.
    - **While Pending (Waiting for Answer):**
      - Displays question prompt(s), context / rationale, and selectable option chips.
      - Displays a prominent amber "Waiting for Answer" badge with pulsing indicator.
      - Allows direct answer entry and submission within the conversation viewer without going to `/inbox`. `SubmitAnswersAsync(taskId, IReadOnlyDictionary<int,string>)` is keyed by **database `Question` ids** (created from the interruption with a shared `BatchId`), whereas `QuestionItem` has no id: the viewer must resolve the task's `Pending` `Question` rows of the batch and match them to the card's questions. Inbox semantics apply: partial answers keep the task waiting, the task resumes only when the whole batch is answered, already-answered questions are rejected.
    - **Once Answered:**
      - Displays the block in answered state ("✓ Clarification Provided").
-     - Highlights the selected option(s) and displays the user's answer text.
+     - Highlights the selected option(s) deterministically using structured metadata and displays the user's answer text.
 
 3. **Lossless Conversation Resumption:**
    - In `CrucibleAgentHarness.RunStageAsync`, before starting a new conversation, look up the conversation for `context.ForgeTask.Id` and `context.StageId` with `Status == StageExecutionStatus.WaitingForHuman`; resume it only when `context.PendingHumanAnswer` is present, otherwise close it (`Cancelled`) so nothing stays `WaitingForHuman` forever.
@@ -83,7 +101,7 @@ In [StageConversationViewer.razor](../../../src/NightCodeForge.Web/Components/Mo
      - **Resume the initial conversation**: do NOT call `StartConversationAsync`.
      - Update its status from `WaitingForHuman` back to `Running`.
      - Do NOT insert a duplicate bootstrap user prompt turn.
-     - Ensure the `StageTurnRole.ToolResult` turn with the human answer (`ask` tool name, `ToolResult = context.PendingHumanAnswer`) is recorded in the initial conversation.
+     - Ensure the `StageTurnRole.ToolResult` turn with the human answer (`ask` tool name, `ToolResult = context.PendingHumanAnswer`, `MetadataJson` with CallId and structured `Answers`) is recorded in the initial conversation.
      - Append all subsequent turns (thinking, tool executions, assistant response) to the same initial conversation.
      - Upon completion, `CompleteConversationAsync` sets the initial conversation status to `Completed` with its final duration and summary.
 
@@ -122,33 +140,39 @@ flowchart TD
 ### Subagent Action 10.4.2: Initial Conversation Resumption & Answer Turn Pairing
 - **Target Files:**
   - `src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs`
-  - `src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs` (cancellation handling only)
+  - `src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs`
+  - `src/NightCodeForge.Core/Workflow/PipelineDataBagKeys.cs`
+  - `src/NightCodeForge.Core/Domain/QuestionAnswerEntry.cs` (or structured model)
   - `src/NightCodeForge.Core/Services/StartupRecoveryService.cs`
 - **Tasks:**
-  1. In `CrucibleAgentHarness.RunStageAsync`:
+  1. In `TaskOrchestrator.cs`:
+     - When `SubmitAnswersAsync` processes answers, create structured `QuestionAnswerEntry` items (tracking `QuestionIndex`, `QuestionId`, `SelectedOption`, `SelectedOptionIndex`, `AnswerText`).
+     - Store structured answers in `PipelineDataBag` under `PipelineDataBagKeys.LastHumanAnswerJson` in addition to `LastHumanAnswer`.
+  2. In `CrucibleAgentHarness.RunStageAsync`:
      - Query `_taskRepository.GetWaitingConversationAsync(context.ForgeTask.Id, context.StageId)`.
      - If one exists **and** `context.PendingHumanAnswer` is set: reuse it as `conversation`, set it back to `Running`, skip the duplicate bootstrap prompt turn.
      - If one exists without pending answer: close it as `Cancelled`, then start a new conversation.
      - Else: start a new conversation as usual.
      - Repository failures here must surface (fail fast) instead of being logged and silently forking the audit trail into a new conversation.
-  2. In `CrucibleAgentHarness.RunStageAsync` during Preemptive Resumption (step 8):
+  3. In `CrucibleAgentHarness.RunStageAsync` during Preemptive Resumption (step 8):
      - When `!string.IsNullOrWhiteSpace(context.PendingHumanAnswer)`:
        - Enqueue (via `turnWriter`) a `StageTurnRole.ToolResult` turn for the `ask` tool carrying the call id and `ToolResult = context.PendingHumanAnswer`, unless the conversation already has one.
+       - Include structured answers in `MetadataJson` (`{ "CallId": callId, "Answers": [...] }`) when available.
        - Enqueue the follow-up user turn ("Please proceed with your plan based on the clarified answers.") if not present.
-  3. In the `TaskOrchestrator.cs` cancellation handler and in `StartupRecoveryService`: also close conversations in `WaitingForHuman` (today only `Running` ones are handled) when the task is cancelled or recovered without an answer.
-- **Acceptance Criteria:** Submitting answers resumes the exact same conversation ID without creating a new conversation record, and records the answer turn as `StageTurnRole.ToolResult`.
+  4. In the `TaskOrchestrator.cs` cancellation handler and in `StartupRecoveryService`: also close conversations in `WaitingForHuman` (today only `Running` ones are handled) when the task is cancelled or recovered without an answer.
+- **Acceptance Criteria:** Submitting answers resumes the exact same conversation ID without creating a new conversation record, and records the answer turn as `StageTurnRole.ToolResult` containing structured metadata.
 
 ---
 
 ### Subagent Action 10.4.3: Interactive Question Card & Answer UI in StageConversationViewer
 - **Target Files:**
-  - (New) `src/NightCodeForge.Web/Components/Monitoring/AgentQuestionTurnCard.razor`
+  - `src/NightCodeForge.Web/Components/Monitoring/AgentQuestionTurnCard.razor`
   - `src/NightCodeForge.Web/Components/Monitoring/StageConversationViewer.razor`
   - `src/NightCodeForge.Web/Components/Monitoring/StageRunSelector.razor`
   - `src/NightCodeForge.Web/wwwroot/css/app.css`
 - **Tasks:**
   1. Create `AgentQuestionTurnCard.razor`:
-     - Accepts `IReadOnlyList<QuestionItem> Questions`, `string? Answer`, `bool IsWaitingForAnswer`, `EventCallback<string> OnAnswerSubmitted`.
+     - Accepts `IReadOnlyList<QuestionItem> Questions`, `string? Answer`, `string? MetadataJson`, `bool IsWaitingForAnswer`, `EventCallback<string> OnAnswerSubmitted`, `EventCallback<IReadOnlyDictionary<int, string>> OnBatchAnswersSubmitted`.
      - Renders clean question cards with:
        - Question prompt and optional context/rationale.
        - Suggested options as selectable chip buttons.
@@ -156,17 +180,18 @@ flowchart TD
        - "Submit Clarification" button (enabled when answer is provided).
      - When answered:
        - Shows green badge "✓ Answered".
-       - Highlights the selected choice chip and displays the answered text in a formatted summary box.
+       - Parses structured `Answers` from `MetadataJson` (or falls back to clean normalized matching).
+       - Highlights the selected choice chip deterministically (e.g. `selectedOptionIndex == optIndex`) and displays the answered text in a formatted summary box.
   2. Update `StageConversationViewer.razor`:
      - When a turn is an `ask` tool turn: render `AgentQuestionTurnCard` instead of generic `ToolCallCard` (use the canonical tool-name constant, not a string literal).
      - Extract questions list from `turn.ToolArguments` or `turn.MetadataJson`.
-     - Extract answer from paired `ToolResult` turn (`PairToolResults` pairs by tool name, in order).
-     - Wire up `OnAnswerSubmitted` to resolve the pending DB `Question` ids of the interrupted batch and call `TaskOrchestrator.SubmitAnswersAsync` (see section 2 for partial-batch semantics), then refresh.
+     - Extract answer from paired `ToolResult` turn (`PairToolResults` pairs by tool name, in order) and pass paired `turn.MetadataJson`.
+     - Wire up `OnAnswerSubmitted` / `OnBatchAnswersSubmitted` to resolve the pending DB `Question` ids of the interrupted batch and call `TaskOrchestrator.SubmitAnswersAsync`, then refresh.
      - Update `GetStatusClass`: add `StageExecutionStatus.WaitingForHuman => "badge-amber"` (currently falls through to `badge-zinc`) and show the label "Waiting for Answer" in the header badge.
   3. Update `StageRunSelector.razor`:
      - For runs with `Status == StageExecutionStatus.WaitingForHuman`: show `⚠️ Waiting` or `❓ Question` badge.
   4. Add CSS styles in `app.css` for `.agent-question-turn-card`, option chips, and answer summary.
-- **Acceptance Criteria:** Pending questions appear as an interactive card in the stage conversation viewer with a "Waiting for Answer" badge. Submitting an answer from either the viewer or the Inbox updates the card to show the selected answer, resumes the conversation, and displays subsequent turns in the same view.
+- **Acceptance Criteria:** Pending questions appear as an interactive card in the stage conversation viewer with a "Waiting for Answer" badge. Submitting an answer from either the viewer or the Inbox updates the card to show the selected answer deterministically via structured metadata, resumes the conversation, and displays subsequent turns in the same view.
 
 ---
 

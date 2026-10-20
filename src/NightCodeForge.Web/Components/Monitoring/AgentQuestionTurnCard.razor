@@ -1,0 +1,219 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@using System.Text.Json
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Web.Services
+
+<div class="agent-question-turn-card @(IsWaitingForAnswer ? "waiting" : "answered")">
+    <!-- Header -->
+    <div class="agent-question-header">
+        <div class="agent-question-title-group">
+            <span>❓</span>
+            <span>Agent Clarification Request</span>
+        </div>
+        <div>
+            @if (IsWaitingForAnswer)
+            {
+                <span class="agent-question-badge-waiting">
+                    <span class="pulsing-indicator"></span>
+                    <span>Waiting for Answer</span>
+                </span>
+            }
+            else
+            {
+                <span class="agent-question-badge-answered">
+                    <span>✓</span>
+                    <span>Clarification Provided</span>
+                </span>
+            }
+        </div>
+    </div>
+
+    <!-- Questions List -->
+    @{
+        var items = Questions?.Count > 0 ? Questions : new[] { new QuestionItem("Agent requested clarification.") };
+    }
+
+    @for (int i = 0; i < items.Count; i++)
+    {
+        var index = i;
+        var q = items[i];
+        var isMulti = items.Count > 1;
+
+        <div class="agent-question-item-card">
+            <div class="agent-question-prompt">
+                @(isMulti ? $"{index + 1}. " : "")@q.Prompt
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(q.Rationale))
+            {
+                <div class="agent-question-rationale">
+                    <span>💡 <strong>Context:</strong> @q.Rationale</span>
+                </div>
+            }
+
+            @if (q.Options is { Count: > 0 })
+            {
+                <div class="agent-question-options-group">
+                    <span class="agent-question-options-label">Suggested Options:</span>
+                    <div class="agent-question-chips">
+                        @for (int optIdx = 0; optIdx < q.Options.Count; optIdx++)
+                        {
+                            var optionIndex = optIdx;
+                            var optionText = q.Options[optIdx];
+                            var isSelected = string.Equals(_selectedOptions.GetValueOrDefault(index), optionText, StringComparison.OrdinalIgnoreCase);
+                            var isAnsweredSelected = !IsWaitingForAnswer && IsOptionSelected(index, optionIndex, optionText);
+
+                            <button type="button"
+                                    class="agent-option-chip @(isSelected ? "selected" : "") @(isAnsweredSelected ? "answered-selected" : "")"
+                                    disabled="@(!IsWaitingForAnswer)"
+                                    @onclick="() => SelectOption(index, optionText)">
+                                @optionText
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (IsWaitingForAnswer)
+            {
+                <div class="agent-question-input-row">
+                    <textarea class="agent-question-input"
+                              placeholder="Type your response or select an option above..."
+                              value="@_answerTexts.GetValueOrDefault(index, string.Empty)"
+                              @oninput="(e) => OnInputChanged(index, e.Value?.ToString())"></textarea>
+                </div>
+            }
+        </div>
+    }
+
+    @if (!IsWaitingForAnswer && !string.IsNullOrWhiteSpace(Answer))
+    {
+        <div class="agent-question-answer-box">
+            <div class="agent-question-answer-header">
+                <span>💬</span>
+                <span>User Response</span>
+            </div>
+            <div class="agent-question-answer-content">
+                @Answer
+            </div>
+        </div>
+    }
+
+    @if (IsWaitingForAnswer)
+    {
+        <div class="agent-question-actions">
+            <button type="button"
+                    class="forge-btn forge-btn-primary"
+                    disabled="@(!CanSubmit || _isSubmitting)"
+                    @onclick="SubmitClarificationAsync">
+                @if (_isSubmitting)
+                {
+                    <span>Submitting...</span>
+                }
+                else
+                {
+                    <span>✓ Submit Clarification</span>
+                }
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<QuestionItem> Questions { get; set; } = Array.Empty<QuestionItem>();
+    [Parameter] public string? Answer { get; set; }
+    [Parameter] public string? MetadataJson { get; set; }
+    [Parameter] public bool IsWaitingForAnswer { get; set; }
+    [Parameter] public EventCallback<string> OnAnswerSubmitted { get; set; }
+    [Parameter] public EventCallback<IReadOnlyDictionary<int, string>> OnBatchAnswersSubmitted { get; set; }
+
+    private readonly Dictionary<int, string> _selectedOptions = new();
+    private readonly Dictionary<int, string> _answerTexts = new();
+    private IReadOnlyDictionary<int, QuestionAnswerEntry> _structuredAnswers = new Dictionary<int, QuestionAnswerEntry>();
+    private bool _isSubmitting;
+
+    protected override void OnParametersSet()
+    {
+        _structuredAnswers = StageConversationParser.ExtractStructuredAnswers(MetadataJson);
+    }
+
+    public bool IsOptionSelected(int questionIndex, int optionIndex, string optionText)
+    {
+        return StageConversationParser.IsOptionSelected(_structuredAnswers, Answer, questionIndex, optionIndex, optionText);
+    }
+
+    private bool CanSubmit
+    {
+        get
+        {
+            var count = Questions?.Count > 0 ? Questions.Count : 1;
+            for (int i = 0; i < count; i++)
+            {
+                if (!string.IsNullOrWhiteSpace(_answerTexts.GetValueOrDefault(i)))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    private void SelectOption(int questionIndex, string option)
+    {
+        _selectedOptions[questionIndex] = option;
+        _answerTexts[questionIndex] = option;
+    }
+
+    private void OnInputChanged(int questionIndex, string? value)
+    {
+        var text = value ?? string.Empty;
+        _answerTexts[questionIndex] = text;
+
+        if (Questions != null && questionIndex < Questions.Count && Questions[questionIndex].Options != null)
+        {
+            var matchedOption = Questions[questionIndex].Options!
+                .FirstOrDefault(o => string.Equals(o, text.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (matchedOption != null)
+            {
+                _selectedOptions[questionIndex] = matchedOption;
+            }
+            else
+            {
+                _selectedOptions.Remove(questionIndex);
+            }
+        }
+    }
+
+    private async Task SubmitClarificationAsync()
+    {
+        if (!CanSubmit || _isSubmitting) return;
+
+        _isSubmitting = true;
+        try
+        {
+            var count = Questions?.Count > 0 ? Questions.Count : 1;
+            var answeredDict = new Dictionary<int, string>();
+            for (int i = 0; i < count; i++)
+            {
+                if (_answerTexts.TryGetValue(i, out var ans) && !string.IsNullOrWhiteSpace(ans))
+                {
+                    answeredDict[i] = ans.Trim();
+                }
+            }
+
+            if (OnBatchAnswersSubmitted.HasDelegate)
+            {
+                await OnBatchAnswersSubmitted.InvokeAsync(answeredDict);
+            }
+            else if (OnAnswerSubmitted.HasDelegate)
+            {
+                var singleAnswer = StageConversationParser.FormatSingleSubmissionAnswer(answeredDict);
+                await OnAnswerSubmitted.InvokeAsync(singleAnswer);
+            }
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+}

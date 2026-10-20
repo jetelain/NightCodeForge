@@ -126,6 +126,7 @@
         {
             StageExecutionStatus.Completed => ("✅", "badge-emerald"),
             StageExecutionStatus.Running => ("⏳", "badge-amber"),
+            StageExecutionStatus.WaitingForHuman => ("❓", "badge-amber"),
             StageExecutionStatus.Failed => ("❌", "badge-crimson"),
             StageExecutionStatus.Skipped => ("⏭", "badge-zinc"),
             StageExecutionStatus.Pending => ("⚪", "badge-zinc"),

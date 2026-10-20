@@ -114,13 +114,13 @@ public class StartupRecoveryService : IStartupRecoveryService
                     // Agentic Stage: Rehydrate memory from active database conversation turns
                     var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
                     var activeConv = convs
-                        .Where(c => c.StageId == stage.StageId && c.Status == StageExecutionStatus.Running)
+                        .Where(c => c.StageId == stage.StageId && (c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman))
                         .OrderByDescending(c => c.AttemptIndex)
                         .ThenByDescending(c => c.StartedAt)
                         .FirstOrDefault();
 
-                    // Supersede any older running conversations left dangling by previous crashes
-                    foreach (var other in convs.Where(c => c.Status == StageExecutionStatus.Running && (activeConv == null || c.Id != activeConv.Id)))
+                    // Supersede any older running/waiting conversations left dangling by previous crashes
+                    foreach (var other in convs.Where(c => (c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman) && (activeConv == null || c.Id != activeConv.Id)))
                     {
                         await _taskRepository.CompleteConversationAsync(
                             other.Id,
@@ -214,7 +214,7 @@ public class StartupRecoveryService : IStartupRecoveryService
 
                     // Supersede incomplete conversation runs if any exist
                     var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
-                    foreach (var runningConv in convs.Where(c => c.Status == StageExecutionStatus.Running))
+                    foreach (var runningConv in convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman))
                     {
                         await _taskRepository.CompleteConversationAsync(
                             runningConv.Id,

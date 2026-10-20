@@ -14,3 +14,5 @@ Planning documents (docs/plan) are **specifications**: they state required behav
 
 Do not touch git (no `git commit`, `git checkout`, `git restore`, `git reset`, `git add`, etc.) unless explicitly asked by the user. Never discard, stage, unstage, or commit changes without explicit user request.
 
+UI and Presentation separation: Keep Razor components (`.razor`) focused on presentation, layout, and user interaction. Parsing, payload extraction, data mapping, and non-trivial logic must not live directly in `@code` blocks of Razor components. Instead, extract them into dedicated services or helper classes (e.g., in `Services` or Core) to allow reuse and straightforward unit testing without requiring UI rendering context.
+

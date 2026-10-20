@@ -466,7 +466,7 @@ public class EfCoreTaskRepository : ITaskRepository
         if (conversation != null)
         {
             conversation.Status = status;
-            conversation.CompletedAt = DateTime.UtcNow;
+            conversation.CompletedAt = status == StageExecutionStatus.WaitingForHuman ? null : DateTime.UtcNow;
             if (summary != null) conversation.Summary = summary;
             if (transcriptFileName != null) conversation.TranscriptFileName = transcriptFileName;
             await _context.SaveChangesAsync(cancellationToken);
@@ -531,6 +531,31 @@ public class EfCoreTaskRepository : ITaskRepository
             .AsNoTracking()
             .Include(c => c.Turns.OrderBy(t => t.TurnIndex))
             .FirstOrDefaultAsync(c => c.Id == conversationId, cancellationToken);
+    }
+
+    public async Task<Conversation?> GetWaitingConversationAsync(
+        int taskId,
+        string stageId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.Conversations
+            .Include(c => c.Turns.OrderBy(t => t.TurnIndex))
+            .Where(c => c.TaskId == taskId && c.StageId == stageId && c.Status == StageExecutionStatus.WaitingForHuman)
+            .OrderByDescending(c => c.StartedAt)
+            .ThenByDescending(c => c.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task ResumeConversationAsync(
+        int conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        var conversation = await _context.Conversations.FindAsync(new object[] { conversationId }, cancellationToken)
+            ?? throw new KeyNotFoundException($"Conversation #{conversationId} not found.");
+
+        conversation.Status = StageExecutionStatus.Running;
+        conversation.CompletedAt = null;
+        await _context.SaveChangesAsync(cancellationToken);
     }
 
     public Task<Conversation> StartIdeationConversationAsync(

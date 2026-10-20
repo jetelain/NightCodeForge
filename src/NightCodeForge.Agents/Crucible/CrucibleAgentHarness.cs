@@ -96,32 +96,45 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         int attemptIndex = (context.PipelineContext?.StageRetries.GetValueOrDefault(context.StageId, 0) ?? 0) + 1;
         Conversation? conversation = null;
-        if (_taskRepository != null)
+        var waitingConversation = await _taskRepository.GetWaitingConversationAsync(context.ForgeTask.Id, context.StageId, cancellationToken);
+        if (waitingConversation != null)
         {
-            try
+            if (!string.IsNullOrWhiteSpace(context.PendingHumanAnswer))
             {
-                conversation = await _taskRepository.StartConversationAsync(
-                    context.ForgeTask.Id,
-                    context.StageId,
-                    WorkflowStageKind.Agentic,
-                    attemptIndex,
-                    context.Profile.Id,
-                    HarnessId,
-                    context.Profile.ModelName,
-                    cancellationToken: cancellationToken);
-
-                if (!string.IsNullOrWhiteSpace(context.BootstrapPrompt))
-                {
-                    await _taskRepository.AddConversationTurnAsync(
-                        conversation.Id,
-                        StageTurnRole.User,
-                        content: context.BootstrapPrompt,
-                        cancellationToken: cancellationToken);
-                }
+                conversation = waitingConversation;
+                await _taskRepository.ResumeConversationAsync(conversation.Id, cancellationToken);
+                conversation.Status = StageExecutionStatus.Running;
+                conversation.CompletedAt = null;
             }
-            catch (Exception ex)
+            else
             {
-                _logger.LogWarning(ex, "Failed to start stage conversation record for task #{TaskId}", context.ForgeTask.Id);
+                await _taskRepository.CompleteConversationAsync(
+                    waitingConversation.Id,
+                    StageExecutionStatus.Cancelled,
+                    summary: "Cancelled superseded paused conversation",
+                    cancellationToken: cancellationToken);
+            }
+        }
+
+        if (conversation == null)
+        {
+            conversation = await _taskRepository.StartConversationAsync(
+                context.ForgeTask.Id,
+                context.StageId,
+                WorkflowStageKind.Agentic,
+                attemptIndex,
+                context.Profile.Id,
+                HarnessId,
+                context.Profile.ModelName,
+                cancellationToken: cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(context.BootstrapPrompt))
+            {
+                await _taskRepository.AddConversationTurnAsync(
+                    conversation.Id,
+                    StageTurnRole.User,
+                    content: context.BootstrapPrompt,
+                    cancellationToken: cancellationToken);
             }
         }
 
@@ -317,6 +330,25 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
         }
 
+        // Conversation turns are written one at a time and in order: the repository (typically a scoped DbContext)
+        // does not support concurrent operations, and a fire-and-forget write would hide its failures.
+        var turnWriter = new TurnWriter(_logger);
+        var writtenToolCallIds = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
+        if (conversation?.Turns != null)
+        {
+            foreach (var t in conversation.Turns)
+            {
+                if (t.Role == StageTurnRole.Tool)
+                {
+                    var cid = ExtractCallId(t);
+                    if (!string.IsNullOrEmpty(cid))
+                    {
+                        writtenToolCallIds.TryAdd(cid, true);
+                    }
+                }
+            }
+        }
+
         // 8. Preemptive Resumption: Complete pending 'ask' tool call with human answers as tool result
         if (!string.IsNullOrWhiteSpace(context.PendingHumanAnswer))
         {
@@ -325,7 +357,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             {
                 foreach (var content in msg.Contents)
                 {
-                    if (content is FunctionCallContent fcc && !string.IsNullOrEmpty(fcc.CallId))
+                    if (content is FunctionCallContent fcc && !string.IsNullOrEmpty(fcc.CallId) && string.Equals(fcc.Name, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
                     {
                         pendingCallIds.Add(fcc.CallId);
                     }
@@ -336,6 +368,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 }
             }
 
+            const string followUpPrompt = "Please proceed with your plan based on the clarified answers.";
+
             if (pendingCallIds.Count > 0)
             {
                 foreach (var pendingId in pendingCallIds)
@@ -345,12 +379,93 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         new FunctionResultContent(pendingId, context.PendingHumanAnswer)
                     }));
                 }
-                chatHistory.Add(new ChatMessage(ChatRole.User, "Please proceed with your plan based on the clarified answers."));
+                chatHistory.Add(new ChatMessage(ChatRole.User, followUpPrompt));
             }
             else if (!chatHistory.Any(m => (m.Text != null && m.Text.Contains(context.PendingHumanAnswer, StringComparison.Ordinal))
                      || m.Contents.OfType<FunctionResultContent>().Any(frc => frc.Result?.ToString()?.Contains(context.PendingHumanAnswer, StringComparison.Ordinal) == true)))
             {
                 chatHistory.Add(new ChatMessage(ChatRole.User, $"[Human Clarification]:\n{context.PendingHumanAnswer}\n\nPlease proceed with your plan."));
+            }
+
+            // Persist ToolResult and follow-up turns in the resumed database conversation
+            if (conversation != null)
+            {
+                var targetCallIds = pendingCallIds.ToList();
+                if (targetCallIds.Count == 0)
+                {
+                    var askTurn = conversation.Turns?.LastOrDefault(t => t.Role == StageTurnRole.Tool && string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase));
+                    var cid = ExtractCallId(askTurn);
+                    if (!string.IsNullOrEmpty(cid)) targetCallIds.Add(cid);
+                }
+
+                var repository = _taskRepository;
+                var convId = conversation.Id;
+
+                if (targetCallIds.Count > 0)
+                {
+                    foreach (var callId in targetCallIds)
+                    {
+                        bool alreadyHasToolResult = conversation.Turns != null && conversation.Turns.Any(t =>
+                            t.Role == StageTurnRole.ToolResult &&
+                            string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase) &&
+                            ((t.MetadataJson != null && t.MetadataJson.Contains(callId)) || (string.IsNullOrEmpty(t.MetadataJson) && t.ToolResult == context.PendingHumanAnswer)));
+
+                        if (!alreadyHasToolResult)
+                        {
+                            var meta = BuildToolResultMetadata(callId, context.PendingHumanAnswerJson);
+                            turnWriter.Enqueue(
+                                () => repository.AddConversationTurnAsync(
+                                    convId,
+                                    StageTurnRole.ToolResult,
+                                    toolName: CanonicalToolNames.Ask,
+                                    toolResult: context.PendingHumanAnswer,
+                                    metadataJson: meta,
+                                    cancellationToken: cancellationToken),
+                                $"Failed to record ToolResult turn for conversation #{convId}");
+                        }
+                    }
+                }
+                else
+                {
+                    // Fallback: If no call id was found in history or metadata, ensure human answer is still persisted
+                    bool alreadyHasToolResult = conversation.Turns != null && conversation.Turns.Any(t =>
+                        t.Role == StageTurnRole.ToolResult &&
+                        string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase) &&
+                        t.ToolResult == context.PendingHumanAnswer);
+
+                    if (!alreadyHasToolResult)
+                    {
+                        var fallbackCallId = Guid.NewGuid().ToString("N");
+                        var meta = BuildToolResultMetadata(fallbackCallId, context.PendingHumanAnswerJson);
+                        turnWriter.Enqueue(
+                            () => repository.AddConversationTurnAsync(
+                                convId,
+                                StageTurnRole.ToolResult,
+                                toolName: CanonicalToolNames.Ask,
+                                toolResult: context.PendingHumanAnswer,
+                                metadataJson: meta,
+                                cancellationToken: cancellationToken),
+                            $"Failed to record ToolResult turn for conversation #{convId}");
+                    }
+                }
+
+                var lastAskTurnIndex = conversation.Turns?
+                    .LastOrDefault(t => t.Role == StageTurnRole.Tool && string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
+                    ?.TurnIndex ?? -1;
+
+                bool alreadyHasFollowUp = conversation.Turns != null && conversation.Turns.Any(t =>
+                    t.TurnIndex > lastAskTurnIndex && t.Role == StageTurnRole.User && t.Content == followUpPrompt);
+
+                if (!alreadyHasFollowUp)
+                {
+                    turnWriter.Enqueue(
+                        () => repository.AddConversationTurnAsync(
+                            convId,
+                            StageTurnRole.User,
+                            content: followUpPrompt,
+                            cancellationToken: cancellationToken),
+                        $"Failed to record follow-up prompt for conversation #{convId}");
+                }
             }
         }
 
@@ -362,10 +477,6 @@ public partial class CrucibleAgentHarness : IAgentHarness
             : baseClient.GetService<ChatClientMetadata>()?.DefaultModelId;
 
         string latestSerializedState = SerializeSession(chatHistory);
-
-        // Conversation turns are written one at a time and in order: the repository (typically a scoped DbContext)
-        // does not support concurrent operations, and a fire-and-forget write would hide its failures.
-        var turnWriter = new TurnWriter(_logger);
 
         // The tracer sits closest to the model (below persistence and compaction) so that it records the exact
         // requests sent to the LLM: everything MAF injects, plus the history after compaction.
@@ -386,6 +497,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
                             "USER" or "User" => StageTurnRole.User,
                             _ => StageTurnRole.Assistant
                         };
+
+                        if (role == StageTurnRole.Tool && !string.IsNullOrEmpty(entry.CallId) && !writtenToolCallIds.TryAdd(entry.CallId, true))
+                        {
+                            return;
+                        }
 
                         var repository = _taskRepository;
                         var conversationId = conversation.Id;
@@ -480,7 +596,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         {
             // Every queued conversation turn must be persisted before the conversation is closed.
             await turnWriter.DrainAsync();
-            return await SaveTranscriptAsync(conversation, context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, status, summary, ct, tracingClient, harnessOptions, activeSkills, attemptIndex);
+            return await SaveTranscriptAsync(conversation, context, workspacePath, chatHistory, stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, status, summary, ct, tracingClient, harnessOptions, activeSkills, conversation?.AttemptIndex ?? attemptIndex);
         }
 
         async Task<AgentRunResult> CompleteWithRequestChangesAsync(RequestChangesException reqChange)
@@ -516,16 +632,68 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     .Where(frc => !string.IsNullOrEmpty(frc.CallId))
                     .Select(frc => frc.CallId!));
 
-            var hasPendingAsk = chatHistory.Any(m => m.Role == ChatRole.Assistant &&
-                m.Contents.OfType<FunctionCallContent>().Any(f => f.Name == "ask" && !answeredCallIds.Contains(f.CallId)));
-            if (!hasPendingAsk)
+            FunctionCallContent? pendingAsk = chatHistory
+                .Where(m => m.Role == ChatRole.Assistant)
+                .SelectMany(m => m.Contents.OfType<FunctionCallContent>())
+                .FirstOrDefault(f => string.Equals(f.Name, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase) && !answeredCallIds.Contains(f.CallId));
+
+            string callId;
+            if (pendingAsk != null && !string.IsNullOrEmpty(pendingAsk.CallId))
             {
-                var callId = Guid.NewGuid().ToString("N");
-                var askArgs = new Dictionary<string, object?> { ["questions"] = interruption.Questions };
+                callId = pendingAsk.CallId;
+            }
+            else
+            {
+                var tracerCallId = tracingClient?.CapturedEntries
+                    .LastOrDefault(e => string.Equals(e.Role, "TOOL", StringComparison.OrdinalIgnoreCase) && string.Equals(e.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))?.CallId;
+                var existingConvCallId = conversation?.Turns != null
+                    ? ExtractCallId(conversation.Turns.LastOrDefault(t => t.Role == StageTurnRole.Tool && string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase)))
+                    : null;
+
+                callId = !string.IsNullOrEmpty(tracerCallId)
+                    ? tracerCallId
+                    : (!string.IsNullOrEmpty(existingConvCallId) ? existingConvCallId : Guid.NewGuid().ToString("N"));
+
+                var questionItems = interruption.Questions.Select(q => new QuestionItem(
+                    q.Prompt,
+                    q.Rationale,
+                    !string.IsNullOrWhiteSpace(q.OptionsJson)
+                        ? JsonSerializer.Deserialize<List<string>>(q.OptionsJson)
+                        : null
+                )).ToList();
+
+                var askArgs = new Dictionary<string, object?> { ["questions"] = questionItems };
                 chatHistory.Add(new ChatMessage(ChatRole.Assistant, new List<AIContent>
                 {
-                    new FunctionCallContent(callId, "ask", askArgs)
+                    new FunctionCallContent(callId, CanonicalToolNames.Ask, askArgs)
                 }));
+            }
+
+            // Exactly one Tool turn for ask with callId must be present in DB
+            if (!writtenToolCallIds.ContainsKey(callId) && conversation != null)
+            {
+                writtenToolCallIds.TryAdd(callId, true);
+                var questionItems = interruption.Questions.Select(q => new QuestionItem(
+                    q.Prompt,
+                    q.Rationale,
+                    !string.IsNullOrWhiteSpace(q.OptionsJson)
+                        ? JsonSerializer.Deserialize<List<string>>(q.OptionsJson)
+                        : null
+                )).ToList();
+                var askArgsJson = JsonSerializer.Serialize(new { questions = questionItems });
+                var metadataJson = JsonSerializer.Serialize(new { CallId = callId });
+                var repository = _taskRepository;
+                var conversationId = conversation.Id;
+
+                turnWriter.Enqueue(
+                    () => repository.AddConversationTurnAsync(
+                        conversationId,
+                        StageTurnRole.Tool,
+                        toolName: CanonicalToolNames.Ask,
+                        toolArguments: askArgsJson,
+                        metadataJson: metadataJson,
+                        cancellationToken: cancellationToken),
+                    $"Failed to record ask tool turn for conversation #{conversationId}");
             }
 
             latestSerializedState = SerializeSession(chatHistory);
@@ -1018,7 +1186,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 var stageStatus = status switch
                 {
                     AgentRunStatus.Completed => StageExecutionStatus.Completed,
-                    AgentRunStatus.WaitingForHuman => StageExecutionStatus.Running,
+                    AgentRunStatus.WaitingForHuman => StageExecutionStatus.WaitingForHuman,
                     AgentRunStatus.Cancelled => StageExecutionStatus.Cancelled,
                     _ => StageExecutionStatus.Failed
                 };
@@ -1399,6 +1567,42 @@ public partial class CrucibleAgentHarness : IAgentHarness
         object? Arguments = null,
         string? Result = null,
         string? ProtectedData = null);
+
+    private static string? ExtractCallId(ConversationTurn? turn)
+    {
+        if (turn == null || string.IsNullOrWhiteSpace(turn.MetadataJson)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(turn.MetadataJson);
+            if (doc.RootElement.TryGetProperty("CallId", out var cProp))
+            {
+                return cProp.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+            // Ignore malformed metadata
+        }
+        return null;
+    }
+
+    private static string BuildToolResultMetadata(string callId, string? structuredAnswerJson)
+    {
+        var metaDict = new Dictionary<string, object?> { ["CallId"] = callId };
+        if (!string.IsNullOrWhiteSpace(structuredAnswerJson))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(structuredAnswerJson);
+                metaDict["Answers"] = doc.RootElement.Clone();
+            }
+            catch (JsonException)
+            {
+                // Ignore malformed JSON
+            }
+        }
+        return JsonSerializer.Serialize(metaDict);
+    }
 
     private record SerializedFunctionCall(string? CallId, string Name, object? Arguments);
     private record SerializedFunctionResult(string? CallId, string? Result);

@@ -6,6 +6,7 @@ namespace NightCodeForge.Core.Workflow;
 public static class PipelineDataBagKeys
 {
     public const string LastHumanAnswer = "LastHumanAnswer";
+    public const string LastHumanAnswerJson = "LastHumanAnswerJson";
     public const string ApprovedPlan = "Stage1.ApprovedPlan";
     public const string CompilerErrors = "diagnostics.compiler_errors";
     public const string PendingProposals = "PendingProposals";

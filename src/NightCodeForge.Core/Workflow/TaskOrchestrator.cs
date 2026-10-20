@@ -446,6 +446,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             WorkspacePath = taskWorkingPath,
                             SerializedStateJson = resumeMemory,
                             PendingHumanAnswer = lastHumanAnswer,
+                            PendingHumanAnswerJson = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswerJson),
                             TaskMarkdownPath = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath),
                             ReviewDiffStat = reviewDiffStat,
                             ApprovedPlan = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ApprovedPlan)
@@ -764,11 +765,11 @@ public class TaskOrchestrator : ITaskOrchestrator
             try
             {
                 var convs = await _taskRepository.GetConversationsAsync(task.Id, ct);
-                var runningConv = convs.FirstOrDefault(c => c.Status == StageExecutionStatus.Running);
-                if (runningConv != null)
+                var activeConvs = convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman).ToList();
+                foreach (var activeConv in activeConvs)
                 {
                     await _taskRepository.CompleteConversationAsync(
-                        runningConv.Id,
+                        activeConv.Id,
                         StageExecutionStatus.Cancelled,
                         summary: "Execution was cancelled.",
                         cancellationToken: ct);
@@ -783,6 +784,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             if (_cancellationManager.IsCancelRequested(task.Id))
             {
                 task.Status = TaskOverallStatus.Cancelled;
+                task.IsWaitingForHuman = false;
             }
             pipelineContext.SyncDataBagToTask();
             await _taskRepository.UpdateAsync(task, cancellationToken: ct);
@@ -874,6 +876,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             if (_cancellationManager.IsCancelRequested(task.Id))
             {
                 task.Status = TaskOverallStatus.Cancelled;
+                task.IsWaitingForHuman = false;
                 await _taskRepository.UpdateAsync(task, cancellationToken: CancellationToken.None);
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
                 return;
@@ -888,6 +891,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             _logger.LogInformation("ForgeTask #{TaskId} was cancelled out-of-band; aborting stage completion.", task.Id);
             task.Status = TaskOverallStatus.Cancelled;
+            task.IsWaitingForHuman = false;
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
             return;
         }
@@ -1113,11 +1117,11 @@ public class TaskOrchestrator : ITaskOrchestrator
             try
             {
                 var convs = await _taskRepository.GetConversationsAsync(taskId, ct);
-                var runningConv = convs.FirstOrDefault(c => c.Status == StageExecutionStatus.Running);
-                if (runningConv != null)
+                var activeConvs = convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman).ToList();
+                foreach (var activeConv in activeConvs)
                 {
                     await _taskRepository.CompleteConversationAsync(
-                        runningConv.Id,
+                        activeConv.Id,
                         StageExecutionStatus.Cancelled,
                         summary: "Execution was cancelled.",
                         cancellationToken: ct);
@@ -1130,6 +1134,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     if (currentTask != null && currentTask.Status != TaskOverallStatus.Closed)
                     {
                         currentTask.Status = TaskOverallStatus.Cancelled;
+                        currentTask.IsWaitingForHuman = false;
                         await _taskRepository.UpdateAsync(currentTask, cancellationToken: ct);
                         await _dependencyStore.UpdateTaskStatusAsync(taskId, TaskOverallStatus.Cancelled, ct);
                     }
@@ -1292,8 +1297,51 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
         var formattedQna = sb.ToString().TrimEnd();
 
+        var answerEntries = new List<QuestionAnswerEntry>();
+        for (int i = 0; i < batchQuestions.Count; i++)
+        {
+            var q = batchQuestions[i];
+            var ans = q.Answer ?? string.Empty;
+            int? selectedOptionIndex = null;
+            string? selectedOption = null;
+
+            if (!string.IsNullOrWhiteSpace(q.OptionsJson))
+            {
+                try
+                {
+                    var options = JsonSerializer.Deserialize<List<string>>(q.OptionsJson);
+                    if (options != null)
+                    {
+                        for (int optIdx = 0; optIdx < options.Count; optIdx++)
+                        {
+                            if (string.Equals(options[optIdx]?.Trim(), ans.Trim(), StringComparison.OrdinalIgnoreCase))
+                            {
+                                selectedOptionIndex = optIdx;
+                                selectedOption = options[optIdx];
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Ignore malformed options JSON
+                }
+            }
+
+            answerEntries.Add(new QuestionAnswerEntry(
+                QuestionIndex: i,
+                QuestionId: q.Id,
+                SelectedOptionIndex: selectedOptionIndex,
+                SelectedOption: selectedOption,
+                AnswerText: ans));
+        }
+
+        var structuredJson = JsonSerializer.Serialize(answerEntries);
+
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
         bag.Set(PipelineDataBagKeys.LastHumanAnswer, formattedQna);
+        bag.Set(PipelineDataBagKeys.LastHumanAnswerJson, structuredJson);
 
         // Complete pending tool call in saved conversation memory
         var currentMemory = bag.Get<string>(PipelineDataBagKeys.RecoveredSerializedMemory)

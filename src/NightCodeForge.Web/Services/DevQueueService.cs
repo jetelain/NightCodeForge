@@ -232,8 +232,15 @@ public class DevQueueService : IDevQueueService
                 if (task != null && task.Status != TaskOverallStatus.Closed && task.Status != TaskOverallStatus.Cancelled)
                 {
                     task.Status = TaskOverallStatus.Cancelled;
+                    task.IsWaitingForHuman = false;
                     await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);
                     _logger.LogInformation("Marked Task #{TaskId} status as Cancelled after job cancellation", taskId.Value);
+
+                    var convs = await taskRepo.GetConversationsAsync(task.Id, cancellationToken);
+                    foreach (var c in convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman))
+                    {
+                        await taskRepo.CompleteConversationAsync(c.Id, StageExecutionStatus.Cancelled, summary: "Execution was cancelled.", cancellationToken: cancellationToken);
+                    }
 
                     var workspaceRepo = scope.ServiceProvider.GetService<IWorkspaceRepository>();
                     var markdownSync = scope.ServiceProvider.GetService<ITaskMarkdownSyncService>();

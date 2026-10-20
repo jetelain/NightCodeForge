@@ -160,7 +160,8 @@
                                              WorkflowStages="@_workflowStages"
                                              IsActiveStage="@IsStageActive(_selectedConversation?.StageId)"
                                              LiveStreamingThinking="@_liveStreamingThinking"
-                                             LiveStreamingMessage="@_liveStreamingMessage" />
+                                             LiveStreamingMessage="@_liveStreamingMessage"
+                                             OnConversationUpdated="LoadTaskDataAsync" />
                 </div>
             </div>
         }

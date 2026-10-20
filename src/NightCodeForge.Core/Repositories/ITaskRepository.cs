@@ -74,6 +74,15 @@ public interface ITaskRepository
         int conversationId,
         CancellationToken cancellationToken = default);
 
+    Task<Conversation?> GetWaitingConversationAsync(
+        int taskId,
+        string stageId,
+        CancellationToken cancellationToken = default);
+
+    Task ResumeConversationAsync(
+        int conversationId,
+        CancellationToken cancellationToken = default);
+
     Task<Conversation> StartIdeationConversationAsync(
         int workspaceId,
         string? title = null,
@@ -551,7 +560,7 @@ public class InMemoryTaskRepository : ITaskRepository
             if (_conversations.TryGetValue(conversationId, out var conversation))
             {
                 conversation.Status = status;
-                conversation.CompletedAt = DateTime.UtcNow;
+                conversation.CompletedAt = status == StageExecutionStatus.WaitingForHuman ? null : DateTime.UtcNow;
                 if (summary != null) conversation.Summary = summary;
                 if (transcriptFileName != null) conversation.TranscriptFileName = transcriptFileName;
             }
@@ -629,6 +638,46 @@ public class InMemoryTaskRepository : ITaskRepository
                 return Task.FromResult<Conversation?>(conversation);
             }
             return Task.FromResult<Conversation?>(null);
+        }
+    }
+
+    public Task<Conversation?> GetWaitingConversationAsync(
+        int taskId,
+        string stageId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var conv = _conversations.Values
+                .Where(c => c.TaskId == taskId && string.Equals(c.StageId, stageId, StringComparison.OrdinalIgnoreCase) && c.Status == StageExecutionStatus.WaitingForHuman)
+                .OrderByDescending(c => c.StartedAt)
+                .ThenByDescending(c => c.Id)
+                .FirstOrDefault();
+
+            if (conv != null)
+            {
+                conv.Turns = conv.Turns.OrderBy(t => t.TurnIndex).ToList();
+                return Task.FromResult<Conversation?>(conv);
+            }
+
+            return Task.FromResult<Conversation?>(null);
+        }
+    }
+
+    public Task ResumeConversationAsync(
+        int conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            if (!_conversations.TryGetValue(conversationId, out var conversation))
+            {
+                throw new KeyNotFoundException($"Conversation #{conversationId} not found.");
+            }
+
+            conversation.Status = StageExecutionStatus.Running;
+            conversation.CompletedAt = null;
+            return Task.CompletedTask;
         }
     }
 
