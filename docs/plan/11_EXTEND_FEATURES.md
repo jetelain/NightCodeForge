@@ -15,10 +15,11 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
 1. **Tier 1: Real-Project Onboarding & Backlog Management (Top Priority - Immediate Value):**
    - **Step 11.2:** Dedicated Task Creation Page (`/tasks/new`), First-Class Priority Management (P1–P5), and MergeMode Lifecycle.
    - **Step 11.7:** Task State History & Temporal Snapshot Audit Trail (interactive timeline and DiffPlex visual text diffs in Web UI).
-   - **Step 11.12:** Interactive Agent Skills for Backlog Migration & Ideation (`ncf-backlog-migrator`, `ncf-ideation`, ready-to-use prompts, and bulk import).
-   - **Step 11.13:** Project Preparedness, Compatibility Audit & Onboarding Tooling (verifying clean builds, fast test suites, and `.nightcodeforge` configuration for `OllamaRouter` and `ComicGenCLI`).
+   - **Step 11.12:** Packaged Agent Skills for Backlog Migration & Ideation — versioned, model-agnostic skills (`ncf-backlog-migrator`, `ncf-ideation`, `ncf-project-readiness`) authored as a packaging source of truth and ready to be distributed by the `ncf` CLI, plus ready-to-use prompt templates. (Web UI bulk import is deferred to a later step.)
+   - **Step 11.13:** `ncf` CLI — a NuGet `dotnet tool` performing all deterministic preparation in one command: `.gitignore`/`.editorconfig` management, stack detection, initial format pass, external harness skills installation (`.agents/skills/`), and `.nightcodeforge/config.json` bootstrap, with a read-only `ncf audit` readiness scorecard. (Future lower-priority commands: `ncf server`, `ncf register` via Web API.)
    - **Step 11.14:** Intelligent Task Dependency Detection in Ideation & Review Agents (backlog context injection, DAG relationship inference, and prerequisite enforcement).
    - **Step 11.15:** Priority-Aware Task Queue Scheduling & Execution Ordering (aligning DAG cascade unblocking, Hangfire insertion order, and DevQueue promotion with 1 Highest -> 5 Lowest).
+   - **Step 11.16:** Task Attachments & Context Documents — a workspace-level read-only `attachments/` store (sibling of the canonical clone and task worktrees) populated from file drops, cited host paths, and URL captures (MarkItDown markdown companions), citable by the ideation agent (`@attachment:{id}`) and readable by the three workflow stage agents.
 
 2. **Tier 2: Core Ideation & Developer Ergonomics Quick Wins:**
    - **Step 11.5:** Ideation Quick Notes, Suggestions Backlog & Conversational Refinement.
@@ -43,9 +44,10 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
 | **11.2** | [📄 Step 11.2: Dedicated Task Creation Page, Priority Management & MergeMode](phase-11/STEP_11_2_TASK_CREATION_PAGE_AND_MERGE_MODE.md) | Dedicated task authoring page (`/tasks/new`) and modal, first-class editable Priority management (P1 Critical to P5 Trivial badges, drawer & inline card editing, sorting/filtering in Backlog), DAG prerequisite selection at creation, and interactive `MergeMode` editing (`Automatic`, `ManualReviewRequired`; `ExternalPullRequest` deferred to Step 11.10). | Completed |
 | **11.7** | [🕰️ Step 11.7: Task State History & Temporal Snapshot Audit Trail](phase-11/STEP_11_7_TASK_STATE_HISTORY_AND_AUDIT_TRAIL.md) | Temporal audit history for `ForgeTask` entities: backend `TaskHistories` table with immutable snapshots, attribution (`ChangedBy`, `ChangeReason`), and interactive `TaskHistoryTimeline.razor` UI with DiffPlex text diff comparison. | **Top Priority** |
 | **11.15** | [⏱️ Step 11.15: Priority-Aware Task Queue Scheduling & Execution Ordering](phase-11/STEP_11_15_PRIORITY_AWARE_TASK_QUEUE_SCHEDULING.md) | Priority queue enforcement for single GPU inference worker: DAG unblocking cascade ordered by `Priority ASC (1 -> 5)`, P1 hotfix routing to `llm-urgent`, and DevQueue priority sorting and manual head promotion. | Completed |
-| **11.12** | [📋 Step 11.12: Interactive Agent Skills for Backlog Migration & Ideation](phase-11/STEP_11_12_BACKLOG_MIGRATION_AND_IDEATION_SKILLS.md) | Agent skills (`ncf-backlog-migrator`, `ncf-ideation`) and prompt templates to help developers ingest roadmaps, markdown TODOs, or issue dumps into PR-sized NCF tasks; Web UI bulk importer (`/tasks/import`). | **Next Priority** |
-| **11.13** | [🚀 Step 11.13: Project Preparedness, Compatibility Audit & Onboarding Tooling](phase-11/STEP_11_13_PROJECT_PREPAREDNESS_AND_ONBOARDING.md) | Skill (`ncf-project-readiness`) and CLI pre-flight check (`ncf-audit.ps1`) to audit and configure existing repositories (`OllamaRouter`, `ComicGenCLI`): deterministic builds, category test filters, git hygiene, and `.nightcodeforge/workspace.json` bootstrap. | **Next Priority** |
+| **11.12** | [� Step 11.12: Packaged Agent Skills for Backlog Migration & Ideation](phase-11/STEP_11_12_BACKLOG_MIGRATION_AND_IDEATION_SKILLS.md) | Versioned, model-agnostic agent skills (`ncf-backlog-migrator`, `ncf-ideation`, `ncf-project-readiness`) authored under `skills/` as packaging source of truth for the `ncf` CLI, plus ready-to-use prompt templates. Web UI bulk import (`/tasks/import`) deferred to a later step. | **Next Priority** |
+| **11.13** | [🚀 Step 11.13: `ncf` CLI — Deterministic Project Preparation & Onboarding](phase-11/STEP_11_13_PROJECT_PREPAREDNESS_AND_ONBOARDING.md) | NuGet `dotnet tool` (`ncf init` / `ncf audit`): one-command deterministic preparation of existing repositories — `.gitignore`/`.editorconfig` merge, stack detection via shared `CodeStackPresets`, initial format pass, skills installation into `.agents/skills/`, `.nightcodeforge/config.json` bootstrap, and green/yellow/red readiness audit. | **Next Priority** |
 | **11.14** | [🔗 Step 11.14: Intelligent Task Dependency Detection in Ideation & Review Agents](phase-11/STEP_11_14_INTELLIGENT_TASK_DEPENDENCY_DETECTION.md) | Backlog context injection for Ideation and Stage 1 Review agents; system prompts requiring identification of prerequisites, shared interfaces, and ordering; auto-population of `dependsOnTitles` and DAG dependency chips in Kanban and Drawer. | **Next Priority** |
+| **11.16** | [📎 Step 11.16: Task Attachments & Context Documents](phase-11/STEP_11_16_TASK_ATTACHMENTS_AND_CONTEXT_DOCS.md) | Workspace-level read-only `attachments/` directory (sibling of clone & worktrees): intake via file drop, cited host paths, and URL captures with MarkItDown markdown companions; SHA-256 dedup & reusability; `@attachment:{id}` citations in tasks; read-only `list_attachments`/`read_attachment` tools for ideation and the three workflow stage agents; attachments picker on `/tasks/new`. | **Next Priority** |
 
 ### Priority Tier 2: Core Ideation & Developer Ergonomics Quick Wins
 
@@ -88,33 +90,35 @@ flowchart LR
     History --> Timeline["TaskHistoryTimeline.razor (DiffPlex Diffs)"]
 ```
 
-### 3.3 Step 11.12: Backlog Migration & Ideation Skills
+### 3.3 Step 11.12: Packaged Skills (distributed by the `ncf` CLI)
 ```mermaid
 flowchart TD
-    subgraph InputSources ["External Project Assets"]
-        Roadmap["Existing ROADMAP.md / TODO.md / Issues<br/>(OllamaRouter, ComicGenCLI)"]
-    end
-
-    subgraph AgentSkills ["Interactive Agent Skills"]
+    subgraph Authoring ["Skill Authoring (source of truth: skills/)"]
         MigrateSkill["ncf-backlog-migrator<br/>- PR Sizing Enforcement<br/>- Sub-tasks & Acceptance Criteria<br/>- Dependency Identification"]
         IdeateSkill["ncf-ideation<br/>- Interactive Architectural Brainstorming"]
+        ReadinessSkill["ncf-project-readiness<br/>- Scorecard remediation loop"]
     end
 
-    subgraph BacklogOutputs ["NCF Intake"]
-        WebImport["Web UI Bulk Importer (/tasks/import)"]
-        DirectTasks["Direct Tasks Table / .nightcodeforge/tasks/*.md"]
+    subgraph Cli ["ncf CLI (Step 11.13, NuGet dotnet tool)"]
+        Packaging["Skills embedded as resources<br/>versioned with the CLI"]
     end
 
-    Roadmap --> MigrateSkill --> WebImport --> DirectTasks
-    IdeateSkill --> DirectTasks
+    subgraph TargetRepo ["Target Repository"]
+        Agents[".agents/skills/ncf-*<br/>(installed by `ncf init`)"]
+    end
+
+    MigrateSkill --> Packaging
+    IdeateSkill --> Packaging
+    ReadinessSkill --> Packaging
+    Packaging --> Agents
 ```
 
-### 3.4 Step 11.13: Project Preparedness & Onboarding Tooling
+### 3.4 Step 11.13: `ncf` CLI — Deterministic Preparation & Audit
 ```mermaid
 flowchart LR
-    TargetRepo["Target Project<br/>(OllamaRouter / ComicGenCLI)"] --> AuditTool["ncf-project-readiness Audit<br/>1. Clean git status<br/>2. Deterministic CLI build<br/>3. Fast test pass (no E2E)<br/>4. Execution mode choice"]
-    AuditTool --> Bootstrap[".nightcodeforge/workspace.json"]
-    AuditTool --> Scorecard["Readiness Scorecard (🟢 / 🟡 / 🔴)"]
+    TargetRepo["Target Project<br/>(OllamaRouter / ComicGenCLI)"] --> Init["ncf init (deterministic)<br/>1. Merge .gitignore / .editorconfig<br/>2. Stack detection (CodeStackPresets)<br/>3. Initial format pass<br/>4. Install skills → .agents/skills/<br/>5. Bootstrap .nightcodeforge/config.json"]
+    TargetRepo --> Audit["ncf audit (read-only)<br/>1. Git hygiene<br/>2. Deterministic CLI build<br/>3. Fast test pass (no E2E)<br/>4. Isolation heuristics<br/>5. Config / skill sync"]
+    Audit --> Scorecard["Readiness Scorecard (🟢 / 🟡 / 🔴)<br/>.nightcodeforge/audit-report.md"]
 ```
 
 ### 3.5 Step 11.14: Intelligent Task Dependency Detection
@@ -139,11 +143,11 @@ flowchart TD
   - [ ] Add sorting and filtering by priority in [Backlog.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Backlog.razor) (`OrderBy(t => t.Priority).ThenBy(t => t.CreatedAt)` putting P1 first).
   - [ ] Enable interactive MergeMode editing (Automatic, ManualReviewRequired) in [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) and [ApproveMergeModal.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Review/ApproveMergeModal.razor) (ExternalPullRequest deferred to Step 11.10).
 
-- [ ] **Step 11.7 (Task State History & Audit Trail):**
+- [x] **Step 11.7 (Task State History & Audit Trail):**
   - [x] Configure EF Core table `TaskHistories` with unique `(TaskId, Version)` index and entity `ForgeTaskHistory`.
   - [x] Implement repository baseline history capture and version incrementation in `EfCoreTaskRepository`.
-  - [ ] Ensure all mutation channels (`TaskDetailDrawer`, `IdeationService`, `TaskOrchestrator`, `TaskMarkdownSyncService`) provide explicit `ChangedBy` and `ChangeReason`.
-  - [ ] Build `TaskHistoryTimeline.razor` revision viewer with DiffPlex text diff comparison and embed in `TaskDetailDrawer.razor` and `TaskInspector.razor`.
+  - [x] Ensure all mutation channels (`TaskDetailDrawer`, `IdeationService`, `TaskOrchestrator`, `TaskMarkdownSyncService`) provide explicit `ChangedBy` and `ChangeReason`.
+  - [x] Build `TaskHistoryTimeline.razor` revision viewer with DiffPlex text diff comparison and embed in `TaskDetailDrawer.razor` and `TaskInspector.razor`.
 
 - [x] **Step 11.15 (Priority-Aware Task Queue Scheduling & Ordering):**
   - [x] Update `TaskOrchestrator` cascade unblocking to query and sort unblocked tasks by `Priority ASC (1 -> 5), CreatedAt ASC`.
@@ -151,17 +155,20 @@ flowchart TD
   - [x] Set default priority to `3` (Normal) across `ForgeTask`, `TaskCreationModal`, `MaintainerPromotionModal`, and `CanonicalTools`.
   - [x] Add queue priority sorting and manual head promotion in `DevQueueService` and `DevQueueTable.razor`.
 
-- [ ] **Step 11.12 (Backlog Migration & Ideation Skills):**
-  - [ ] Create `.nightcodeforge/skills/ncf-backlog-migrator/SKILL.md` with PR-sizing and decomposition rules.
-  - [ ] Create `.nightcodeforge/skills/ncf-ideation/SKILL.md` for interactive brainstorming.
-  - [ ] Provide standalone prompt templates in `docs/prompts/BACKLOG_MIGRATION_PROMPT.md` and `docs/prompts/TASK_DECOMPOSITION_PROMPT.md`.
-  - [ ] Build Web UI bulk import page or modal (`/tasks/import`) supporting markdown files and JSON proposals.
+- [ ] **Step 11.12 (Packaged Agent Skills):**
+  - [ ] Author `skills/ncf-backlog-migrator/SKILL.md` (+ `assets/TASK_TEMPLATE.md`) with PR-sizing and decomposition rules.
+  - [ ] Author `skills/ncf-ideation/SKILL.md` for interactive brainstorming.
+  - [ ] Author `skills/ncf-project-readiness/SKILL.md` (remediation companion to `ncf audit`).
+  - [ ] Unit tests validating skill frontmatter contract and `SkillsService` loadability for every packaged skill.
+  - [ ] Provide standalone prompt templates in `docs/prompts/` (`BACKLOG_MIGRATION_PROMPT.md`, `TASK_DECOMPOSITION_PROMPT.md`, `PROJECT_PREPAREDNESS_PROMPT.md`).
+  - [ ] **Deferred (lower priority, later step):** Web UI bulk import page/modal (`/tasks/import`, `ITaskImportService`).
 
-- [ ] **Step 11.13 (Project Preparedness & Onboarding Tooling):**
-  - [ ] Create `.nightcodeforge/skills/ncf-project-readiness/SKILL.md`.
-  - [ ] Provide standalone prompt in `docs/prompts/PROJECT_PREPAREDNESS_PROMPT.md`.
-  - [ ] Implement automated configuration generator producing `.nightcodeforge/workspace.json`.
-  - [ ] Implement `scripts/ncf-audit.ps1` and `scripts/ncf-audit.sh` pre-flight audit CLI scripts.
+- [ ] **Step 11.13 (`ncf` CLI — Deterministic Preparation & Onboarding):**
+  - [ ] Create `src/NightCodeForge.Cli/` packaged as NuGet `dotnet tool` (`ncf`), referencing `NightCodeForge.Core` and embedding `skills/**` as resources.
+  - [ ] Implement `ncf init`: `.gitignore`/`.editorconfig` merge (managed blocks, idempotent), stack detection via shared `CodeStackPresets`, initial format pass, skills installation into `.agents/skills/`, `.nightcodeforge/config.json` bootstrap with `ncfVersion`.
+  - [ ] Implement `ncf audit`: read-only 5-pillar readiness scorecard (git hygiene, deterministic build, fast tests, isolation heuristics, config/skill sync) with `.nightcodeforge/audit-report.md` and exit codes 0/1/2.
+  - [ ] Tests: merge idempotency, stack detection fixtures (dotnet/node/python/rust/go), config JSON conformance to `WorkspaceProjectConfig`, end-to-end `init` + `audit` on sample git repos.
+  - [ ] **Deferred (later Stage 11 commands):** `ncf server` (install web app), `ncf register` (register workspace via Web API), `ncf import`.
 
 - [ ] **Step 11.14 (Intelligent Task Dependency Detection):**
   - [ ] Implement `IWorkspaceBacklogSummaryService` generating compact `<existing_workspace_tasks>` digests.
@@ -169,6 +176,13 @@ flowchart TD
   - [ ] Inject existing backlog digest and dependency verification directives into Stage 1 Task Review directive in `CrucibleAgentHarness`.
   - [ ] Update `TaskMarkdownSyncService` to parse `## Dependencies` from `docs/tasks/*.md` and sync `TaskDependency` records.
   - [ ] Render clickable prerequisite and downstream dependency chips in `KanbanCard.razor` and `TaskDetailDrawer.razor`.
+
+- [ ] **Step 11.16 (Task Attachments & Context Documents):**
+  - [ ] Create `attachments/` store sibling to the canonical clone and task worktrees, with `manifest.json` registry and `TaskAttachments` / `TaskAttachmentLinks` EF Core tables.
+  - [ ] Implement `IAttachmentIntakeService`: file drop, cited host-path copy, and URL capture (SSRF-guarded) with MarkItDown markdown companions and SHA-256 deduplication.
+  - [ ] Register read-only `list_attachments` / `read_attachment` tools for ideation and the three workflow stage agents; inject attachments digests into ideation and stage prompts.
+  - [ ] Support `@attachment:{id}` citations in task descriptions, materialized as `TaskAttachmentLinks` on task creation (hard error on unknown IDs).
+  - [ ] Build Web UI: chat drop zone + attachment chips, workspace attachments panel with preview drawer, attachments picker on `/tasks/new`, and user-only delete.
 
 ### Tier 2 Deliverables (Quick Wins & Ergonomics)
 - [ ] **Step 11.5 (Ideation Quick Notes & Suggestions):** Quick notes bar, proposal card tri-state actions, "Refine in Ideation", scoped `edit_task` tools, 24h pruning.
