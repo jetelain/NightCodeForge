@@ -115,19 +115,21 @@ public class TriageServiceTests : IDisposable
         Assert.Equal(TaskOverallStatus.Suggested, created.Status);
         Assert.Equal(MergeMode.ManualReviewRequired, created.MergeMode);
         Assert.Equal("main", created.BaseBranch);
+        Assert.Equal(TaskOrigin.UntrustedIntake, created.Origin);
 
         // Verify task was persisted in repository
         var inRepo = await _taskRepo.GetByIdAsync(created.Id);
         Assert.NotNull(inRepo);
         Assert.Equal(TaskOverallStatus.Suggested, inRepo.Status);
+        Assert.Equal(TaskOrigin.UntrustedIntake, inRepo.Origin);
 
         // Verify baseline history attribution
         var history = await _taskRepo.GetHistoryAsync(created.Id);
         Assert.Single(history);
         var baseline = history[0];
         Assert.Equal(1, baseline.Version);
-        Assert.Equal(AuditActors.TaskReviewAgent, baseline.ChangedBy);
-        Assert.Equal("Created task proposal from backlog triage", baseline.ChangeReason);
+        Assert.Equal(AuditActors.TriageAgent, baseline.ChangedBy);
+        Assert.Equal("Created task proposal from untrusted intake triage", baseline.ChangeReason);
     }
 
     [Fact]

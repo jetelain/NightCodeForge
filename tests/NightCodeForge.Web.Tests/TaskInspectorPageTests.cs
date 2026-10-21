@@ -51,7 +51,7 @@ public class TaskInspectorPageTests : BunitContext
 
         Assert.Contains("Task Execution Inspector", cut.Find("h1").TextContent);
         Assert.NotNull(cut.Find("#task-inspector-empty"));
-        Assert.Contains("No Tasks Available", cut.Markup);
+        Assert.Contains("No Executed Tasks Found", cut.Markup);
     }
 
     [Fact]
@@ -64,6 +64,7 @@ public class TaskInspectorPageTests : BunitContext
             Title = "Implement OAuth2 Flow",
             Description = "Full OAuth2 authorization code flow with PKCE.",
             Status = TaskOverallStatus.Open,
+            HasExecutionRun = true,
             CurrentStageId = "implementation"
         });
 
@@ -94,14 +95,16 @@ public class TaskInspectorPageTests : BunitContext
             Id = 105,
             WorkspaceId = 1,
             Title = "Database Migration",
-            Status = TaskOverallStatus.Reviewed
+            Status = TaskOverallStatus.Reviewed,
+            HasExecutionRun = true
         });
         await _taskRepository.CreateAsync(new ForgeTask
         {
             Id = 106,
             WorkspaceId = 1,
             Title = "Specified Route Task",
-            Status = TaskOverallStatus.Implemented
+            Status = TaskOverallStatus.Implemented,
+            HasExecutionRun = true
         });
 
         var cut = Render<TaskInspector>(p => p.Add(x => x.TaskId, 106));
@@ -120,7 +123,8 @@ public class TaskInspectorPageTests : BunitContext
             Id = 201,
             WorkspaceId = 1,
             Title = "Selected Finished Task",
-            Status = TaskOverallStatus.Closed
+            Status = TaskOverallStatus.Closed,
+            HasExecutionRun = true
         });
 
         _workerState.HandleWorkerStatus("Running", 202, "implementation", "Local GPU", "Active Running Task", "feature/task-202");
@@ -142,7 +146,8 @@ public class TaskInspectorPageTests : BunitContext
             Id = 301,
             WorkspaceId = 1,
             Title = "Closed Completed Pipeline Task",
-            Status = TaskOverallStatus.Closed
+            Status = TaskOverallStatus.Closed,
+            HasExecutionRun = true
         };
 
         await _taskRepository.CreateAsync(task);
@@ -167,7 +172,8 @@ public class TaskInspectorPageTests : BunitContext
             Id = 401,
             WorkspaceId = 1,
             Title = "Live Stepper Task",
-            Status = TaskOverallStatus.Open
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true
         };
         await _taskRepository.CreateAsync(task);
 
@@ -185,6 +191,57 @@ public class TaskInspectorPageTests : BunitContext
 
         cut.WaitForState(() => cut.Markup.Contains("#401 - Live Stepper Task (Implemented)"));
         Assert.Contains("#401 - Live Stepper Task (Implemented)", cut.Markup);
+    }
+
+    [Fact]
+    public async Task TaskInspector_Dropdown_ExcludesUnstartedTasks_AndIncludesExecutedAndRolledBackTasks()
+    {
+        // 1. Unstarted Open task (HasExecutionRun == false)
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 501,
+            WorkspaceId = 1,
+            Title = "Unstarted Fresh Task",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = false
+        });
+
+        // 2. Executed Open task that was rolled back (HasExecutionRun == true, Status == Open)
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 502,
+            WorkspaceId = 1,
+            Title = "Rolled Back Stage Task",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true,
+            MaxExecutedStageOrder = 2
+        });
+
+        // 3. Implemented task (HasExecutionRun == true, Status == Implemented)
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 503,
+            WorkspaceId = 1,
+            Title = "Completed Feature Task",
+            Status = TaskOverallStatus.Implemented,
+            HasExecutionRun = true,
+            MaxExecutedStageOrder = 4
+        });
+
+        var cut = Render<TaskInspector>();
+
+        cut.WaitForState(() => cut.Markup.Contains("Rolled Back Stage Task"));
+
+        var dropdown = cut.Find("#task-selector-dropdown");
+        var options = dropdown.QuerySelectorAll("option").Select(o => o.TextContent).ToList();
+
+        // Rolled back and executed tasks are selectable
+        Assert.Contains(options, o => o.Contains("#502") && o.Contains("Rolled Back Stage Task (Open)"));
+        Assert.Contains(options, o => o.Contains("#503") && o.Contains("Completed Feature Task (Implemented)"));
+
+        // Unstarted task is omitted
+        Assert.DoesNotContain(options, o => o.Contains("#501"));
+        Assert.DoesNotContain(options, o => o.Contains("Unstarted Fresh Task"));
     }
 
     #region Fakes

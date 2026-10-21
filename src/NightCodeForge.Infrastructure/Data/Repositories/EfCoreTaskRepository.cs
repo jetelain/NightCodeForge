@@ -78,6 +78,22 @@ public class EfCoreTaskRepository : ITaskRepository
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<ForgeTask>> GetExecutedTasksByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default)
+    {
+        return await _context.Tasks
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Include(i => i.Workflow)
+            .Include(i => i.Dependencies)
+            .Include(i => i.DependentTasks)
+            .Include(i => i.Questions)
+            .Include(i => i.ExecutionRecords)
+            .Include(i => i.ExecutionLogs)
+            .Where(t => t.WorkspaceId == workspaceId && t.HasExecutionRun)
+            .OrderByDescending(t => t.UpdatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
     public Task<ForgeTask> CreateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
     {
         return CreateWithBaselineAsync(task, dependsOn, AuditActors.System, TaskSyncConstants.InitialTaskCreation, cancellationToken);

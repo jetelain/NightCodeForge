@@ -13,6 +13,9 @@ public class TaskFrontmatter
     public string? Workspace { get; set; }
     public string? Status { get; set; }
     
+    [YamlMember(Alias = "origin")]
+    public string? Origin { get; set; }
+    
     [YamlMember(Alias = "current_stage")]
     public string? CurrentStage { get; set; }
     

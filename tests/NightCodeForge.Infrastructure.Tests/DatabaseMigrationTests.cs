@@ -69,6 +69,7 @@ public class DatabaseMigrationTests : IDisposable
 
         Assert.NotEmpty(appliedMigrations);
         Assert.Contains("20261019025958_InitialCreate", appliedMigrations);
+        Assert.Contains("20261021065652_AddPortalScopingAndExecutionFlags", appliedMigrations);
         Assert.Empty(pendingMigrations);
 
         // Assert - Query physical __EFMigrationsHistory table directly
@@ -82,8 +83,9 @@ public class DatabaseMigrationTests : IDisposable
             historyRows.Add((reader.GetString(0), reader.GetString(1)));
         }
 
-        Assert.Single(historyRows);
-        Assert.Equal("20261019025958_InitialCreate", historyRows[0].MigrationId);
+        Assert.Equal(2, historyRows.Count);
+        Assert.Contains(historyRows, h => h.MigrationId == "20261019025958_InitialCreate");
+        Assert.Contains(historyRows, h => h.MigrationId == "20261021065652_AddPortalScopingAndExecutionFlags");
     }
 
     [Fact]
@@ -245,8 +247,9 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Null(ex);
 
         var appliedMigrations = (await context.Database.GetAppliedMigrationsAsync()).ToList();
-        Assert.Single(appliedMigrations);
-        Assert.Equal("20261019025958_InitialCreate", appliedMigrations[0]);
+        Assert.Equal(2, appliedMigrations.Count);
+        Assert.Contains("20261019025958_InitialCreate", appliedMigrations);
+        Assert.Contains("20261021065652_AddPortalScopingAndExecutionFlags", appliedMigrations);
     }
 
     [Fact]

@@ -136,4 +136,40 @@ public class PipelineStepperTests : BunitContext
         Assert.Contains("step-active", stage1.ClassName);
         Assert.NotEmpty(stage1.QuerySelectorAll(".spinner-pulse"));
     }
+
+    [Fact]
+    public void PipelineStepper_WhenCurrentStageStatusNullOrPending_RendersPendingWithoutSpinners()
+    {
+        var cut = Render<PipelineStepper>(p => p
+            .Add(c => c.WorkflowStages, CreateTestStages())
+            .Add(c => c.CurrentStageId, "task-review")
+            .Add(c => c.CurrentStageStatus, null));
+
+        var steps = cut.FindAll(".step-item");
+        var stage1 = steps[0];
+
+        // Should be step-pending, not step-active
+        Assert.Contains("step-pending", stage1.ClassName);
+        Assert.DoesNotContain("step-active", stage1.ClassName);
+        Assert.Empty(cut.FindAll(".spinner-pulse"));
+    }
+
+    [Fact]
+    public void PipelineStepper_WhenIsWaitingForHumanFlagIsTrue_RendersWaitingIconInsteadOfSpinner()
+    {
+        var cut = Render<PipelineStepper>(p => p
+            .Add(c => c.WorkflowStages, CreateTestStages())
+            .Add(c => c.CurrentStageId, "task-review")
+            .Add(c => c.CurrentStageStatus, StageExecutionStatus.Running)
+            .Add(c => c.IsWaitingForHuman, true));
+
+        var steps = cut.FindAll(".step-item");
+        var stage1 = steps[0];
+
+        // Honors IsWaitingForHuman override over Running
+        Assert.Contains("step-waiting", stage1.ClassName);
+        Assert.DoesNotContain("step-active", stage1.ClassName);
+        Assert.Contains("✋", stage1.TextContent);
+        Assert.Empty(cut.FindAll(".spinner-pulse"));
+    }
 }

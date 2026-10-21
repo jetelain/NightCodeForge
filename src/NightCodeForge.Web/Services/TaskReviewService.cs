@@ -63,14 +63,25 @@ public partial class TaskReviewService : ITaskReviewService
         IReadOnlyList<ForgeTask> candidateTasks;
         if (workspaceId.HasValue)
         {
-            candidateTasks = await _taskRepository.GetByWorkspaceIdAsync(workspaceId.Value, cancellationToken);
+            var wsTasks = await _taskRepository.GetByWorkspaceIdAsync(workspaceId.Value, cancellationToken);
+            candidateTasks = wsTasks
+                .Where(t => t.HasExecutionRun && t.Status is TaskOverallStatus.Ready 
+                                                         or TaskOverallStatus.Implemented 
+                                                         or TaskOverallStatus.Reviewed 
+                                                         or TaskOverallStatus.Closed)
+                .OrderByDescending(t => t.UpdatedAt)
+                .ToList();
         }
         else
         {
             var readyTasks = await _taskRepository.GetByStatusAsync(TaskOverallStatus.Ready, cancellationToken);
             var implementedTasks = await _taskRepository.GetByStatusAsync(TaskOverallStatus.Implemented, cancellationToken);
             var reviewedTasks = await _taskRepository.GetByStatusAsync(TaskOverallStatus.Reviewed, cancellationToken);
-            candidateTasks = readyTasks.Concat(implementedTasks).Concat(reviewedTasks).ToList();
+            var closedTasks = await _taskRepository.GetByStatusAsync(TaskOverallStatus.Closed, cancellationToken);
+            candidateTasks = readyTasks.Concat(implementedTasks).Concat(reviewedTasks).Concat(closedTasks)
+                .Where(t => t.HasExecutionRun)
+                .OrderByDescending(t => t.UpdatedAt)
+                .ToList();
         }
 
         var results = new List<TaskReviewSnapshot>();

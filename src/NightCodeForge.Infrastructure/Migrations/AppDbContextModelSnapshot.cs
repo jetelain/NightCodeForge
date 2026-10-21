@@ -272,6 +272,11 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("HasExecutionRun")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("InterruptedAgentProfileId")
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
@@ -289,8 +294,18 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("MaxExecutedStageOrder")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(0);
+
                     b.Property<int>("MergeMode")
                         .HasColumnType("INTEGER");
+
+                    b.Property<int>("Origin")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(0);
 
                     b.Property<string>("PipelineDataJson")
                         .HasColumnType("TEXT");
@@ -329,6 +344,10 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.HasIndex("WorkflowId");
 
                     b.HasIndex("WorkspaceId");
+
+                    b.HasIndex("WorkspaceId", "HasExecutionRun");
+
+                    b.HasIndex("WorkspaceId", "Origin", "Status");
 
                     b.ToTable("Tasks");
                 });

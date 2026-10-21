@@ -64,7 +64,9 @@
 <PipelineStepper @ref="_stepperRef"
                  TaskId="WorkerState.Current.ActiveTaskId"
                  WorkflowStages="_workflowStages"
-                 CurrentStageId="@WorkerState.Current.StageId" />
+                 CurrentStageId="@WorkerState.Current.StageId"
+                 CurrentStageStatus="@(WorkerState.Current.Status == WorkerExecutionStatus.Running ? StageExecutionStatus.Running : (WorkerState.Current.Status == WorkerExecutionStatus.WaitingForHuman ? StageExecutionStatus.WaitingForHuman : (WorkerState.Current.ActiveTaskId.HasValue ? StageExecutionStatus.Pending : null)))"
+                 IsWaitingForHuman="@(WorkerState.Current.Status == WorkerExecutionStatus.WaitingForHuman)" />
 
 <!-- 3. Live Tool Call Activity Strip -->
 <ToolActivityStrip @ref="_toolStripRef" />
@@ -127,41 +129,6 @@
         catch
         {
             // Handled
-        }
-
-        // Auto-discover in-flight active task from repository
-        if (!WorkerState.Current.ActiveTaskId.HasValue)
-        {
-            try
-            {
-                var wsId = WorkspaceState.ActiveWorkspace?.Id;
-                IEnumerable<ForgeTask> allTasks;
-                if (wsId.HasValue)
-                {
-                    allTasks = await TaskRepository.GetByWorkspaceIdAsync(wsId.Value);
-                }
-                else
-                {
-                    var open = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Open);
-                    var reviewed = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Reviewed);
-                    var implemented = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Implemented);
-                    allTasks = open.Concat(reviewed).Concat(implemented);
-                }
-
-                var active = allTasks.FirstOrDefault(t =>
-                    t.Status == TaskOverallStatus.Reviewed ||
-                    t.Status == TaskOverallStatus.Implemented ||
-                    (t.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(t.CurrentStageId)));
-
-                if (active != null)
-                {
-                    WorkerState.HandleWorkerStatus("Running", active.Id, active.CurrentStageId ?? StandardStageIds.TaskReview, "Local GPU", active.Title, active.FeatureBranch);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error resolving active in-flight task for monitoring: {ex.Message}");
-            }
         }
 
         if (WorkerState.Current.ActiveTaskId.HasValue && WorkerState.Current.ActiveTaskId.Value > 0)

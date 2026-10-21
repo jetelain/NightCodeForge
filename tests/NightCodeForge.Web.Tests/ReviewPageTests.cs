@@ -187,6 +187,7 @@ public class ReviewPageTests : BunitContext
             WorkspaceId = 1,
             Title = "Task in Workspace 1",
             Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true,
             BaseBranch = "main",
             PipelineDataJson = new PipelineDataBag().ToJson()
         };
@@ -196,6 +197,7 @@ public class ReviewPageTests : BunitContext
             WorkspaceId = 2,
             Title = "Task in Workspace 2",
             Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true,
             BaseBranch = "main",
             PipelineDataJson = new PipelineDataBag().ToJson()
         };

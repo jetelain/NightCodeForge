@@ -259,7 +259,7 @@
         {
             var tasks = await TaskRepository.GetByWorkspaceIdAsync(workspace.Id);
             var suggested = tasks
-                .Where(t => t.Status == TaskOverallStatus.Suggested)
+                .Where(t => t.Status == TaskOverallStatus.Suggested && t.Origin == TaskOrigin.UntrustedIntake)
                 .OrderByDescending(t => t.CreatedAt)
                 .Take(10)
                 .ToList();

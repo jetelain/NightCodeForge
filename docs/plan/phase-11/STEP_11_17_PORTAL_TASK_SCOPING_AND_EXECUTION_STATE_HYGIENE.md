@@ -3,7 +3,7 @@
 > **Phase 11 Implementation Step (Post-MVP - Top Priority UX & Acceptance Polish)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Core/Repositories`, `src/NightCodeForge.Agents/Triage`, `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Web/Components/Monitoring`, `src/NightCodeForge.Web/Services`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 ---
 
@@ -218,27 +218,27 @@ The page auto-discovery logic synthetically marked any `Open` task with a non-em
 
 ## 4. Definition of Done Checklist
 
-- [ ] **Task Origin Domain & Ingestion:**
-  - [ ] Add `TaskOrigin` enum (`Manual`, `Ideation`, `UntrustedIntake`, `Import`, `GitHubIssue`) and property `ForgeTask.Origin`.
-  - [ ] Configure EF Core column and migration in `AppDbContext`.
-  - [ ] Update `TriageService` to stamp `TaskOrigin.UntrustedIntake` on all triage task proposals.
-  - [ ] Update `TaskMarkdownSyncService` to serialize and parse `origin` in YAML frontmatter.
-- [ ] **Execution Tracking Flag & Scoping:**
-  - [ ] Add `HasExecutionRun` (bool) and `MaxExecutedStageOrder` (int) to `ForgeTask` entity and EF Core schema index `(WorkspaceId, HasExecutionRun)`.
-  - [ ] Update `TaskOrchestrator` to stamp `task.HasExecutionRun = true` upon stage execution initiation.
-  - [ ] Ensure `task.HasExecutionRun` remains `true` when Step 11.14 rolls back task status to `TaskOverallStatus.Open` upon detecting unmerged dependencies.
-  - [ ] Implement `GetExecutedTasksByWorkspaceIdAsync` on `ITaskRepository` querying `t.HasExecutionRun == true`.
-  - [ ] Update `TaskInspector.razor` dropdown to only display tasks with `HasExecutionRun == true` (including suspended/rolled-back tasks).
-  - [ ] Update `TaskReviewService.GetPendingReviewsAsync` to only return tasks with `HasExecutionRun == true` in reviewable statuses (`Ready`, `Implemented`, `Reviewed`, `Closed`).
-  - [ ] Update `Triage.razor` to filter "Proposed Backlog Tasks" strictly by `Status == Suggested && Origin == UntrustedIntake`.
-- [ ] **Execution State Hygiene:**
-  - [ ] Fix `PipelineStepper.razor` to default null `CurrentStageStatus` to `Pending` instead of `Running`.
-  - [ ] Purge synthetic "Running" auto-discovery logic from `Monitoring.razor`.
-  - [ ] Verify idle tasks render all stages as Pending without active spinners.
-- [ ] **Automated Tests:**
-  - [ ] Unit test: `TriageService` assigns `TaskOrigin.UntrustedIntake` and appropriate audit actor.
-  - [ ] Unit test: `ITaskRepository.GetExecutedTasksByWorkspaceIdAsync` filters by `HasExecutionRun`, excluding unstarted open/suggested tasks.
-  - [ ] Unit test: Verify task with `HasExecutionRun == true` and `Status == Open` (rolled back by Step 11.14) is returned by `GetExecutedTasksByWorkspaceIdAsync`.
-  - [ ] Component test: `Triage.razor` displays only untrusted intake tasks when database contains mixed suggestions.
-  - [ ] Component test: `TaskInspector.razor` dropdown lists executed and rolled-back tasks, excluding unstarted tasks.
-  - [ ] Component test: `PipelineStepper.razor` renders `Pending` when task has not commenced execution.
+- [x] **Task Origin Domain & Ingestion:**
+  - [x] Add `TaskOrigin` enum (`Manual`, `Ideation`, `UntrustedIntake`, `Import`, `GitHubIssue`) and property `ForgeTask.Origin`.
+  - [x] Configure EF Core column and migration in `AppDbContext`.
+  - [x] Update `TriageService` to stamp `TaskOrigin.UntrustedIntake` on all triage task proposals.
+  - [x] Update `TaskMarkdownSyncService` to serialize and parse `origin` in YAML frontmatter.
+- [x] **Execution Tracking Flag & Scoping:**
+  - [x] Add `HasExecutionRun` (bool) and `MaxExecutedStageOrder` (int) to `ForgeTask` entity and EF Core schema index `(WorkspaceId, HasExecutionRun)`.
+  - [x] Update `TaskOrchestrator` to stamp `task.HasExecutionRun = true` upon stage execution initiation.
+  - [x] Ensure `task.HasExecutionRun` remains `true` when Step 11.14 rolls back task status to `TaskOverallStatus.Open` upon detecting unmerged dependencies.
+  - [x] Implement `GetExecutedTasksByWorkspaceIdAsync` on `ITaskRepository` querying `t.HasExecutionRun == true`.
+  - [x] Update `TaskInspector.razor` dropdown to only display tasks with `HasExecutionRun == true` (including suspended/rolled-back tasks).
+  - [x] Update `TaskReviewService.GetPendingReviewsAsync` to only return tasks with `HasExecutionRun == true` in reviewable statuses (`Ready`, `Implemented`, `Reviewed`, `Closed`).
+  - [x] Update `Triage.razor` to filter "Proposed Backlog Tasks" strictly by `Status == Suggested && Origin == UntrustedIntake`.
+- [x] **Execution State Hygiene:**
+  - [x] Fix `PipelineStepper.razor` to default null `CurrentStageStatus` to `Pending` instead of `Running`.
+  - [x] Purge synthetic "Running" auto-discovery logic from `Monitoring.razor`.
+  - [x] Verify idle tasks render all stages as Pending without active spinners.
+- [x] **Automated Tests:**
+  - [x] Unit test: `TriageService` assigns `TaskOrigin.UntrustedIntake` and appropriate audit actor.
+  - [x] Unit test: `ITaskRepository.GetExecutedTasksByWorkspaceIdAsync` filters by `HasExecutionRun`, excluding unstarted open/suggested tasks.
+  - [x] Unit test: Verify task with `HasExecutionRun == true` and `Status == Open` (rolled back by Step 11.14) is returned by `GetExecutedTasksByWorkspaceIdAsync`.
+  - [x] Component test: `Triage.razor` displays only untrusted intake tasks when database contains mixed suggestions.
+  - [x] Component test: `TaskInspector.razor` dropdown lists executed and rolled-back tasks, excluding unstarted tasks.
+  - [x] Component test: `PipelineStepper.razor` renders `Pending` when task has not commenced execution.

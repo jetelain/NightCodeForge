@@ -202,6 +202,7 @@ public class TriagePageTests : BunitContext
             Title = "Investigate unexpected deserialization format",
             Description = "Incoming webhook payload schema changed",
             Status = TaskOverallStatus.Suggested,
+            Origin = TaskOrigin.UntrustedIntake,
             Priority = 2,
             BaseBranch = "main",
             FeatureBranch = "suggested/task-99",
@@ -215,6 +216,75 @@ public class TriagePageTests : BunitContext
         Assert.NotNull(cut.Find("#triage-task-proposal-99"));
         Assert.Contains("Investigate unexpected deserialization format", cut.Find("#triage-task-proposal-99").TextContent);
         Assert.Contains("Suggested", cut.Find("#triage-task-proposal-99").TextContent);
+    }
+
+    [Fact]
+    public async Task WhenMixedSuggestedTasksExist_TriagePortalOnlyDisplaysUntrustedIntakeOrigin()
+    {
+        var workspace = new Workspace { Id = 1, Name = "Core", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(workspace);
+
+        // 1. Untrusted Intake Suggested task (should display)
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 99,
+            WorkspaceId = 1,
+            Title = "Untrusted Vulnerability Report",
+            Description = "Report from external researcher",
+            Status = TaskOverallStatus.Suggested,
+            Origin = TaskOrigin.UntrustedIntake,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        // 2. Ideation Suggested task (should NOT display in triage)
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 100,
+            WorkspaceId = 1,
+            Title = "Internal Ideation Feature",
+            Description = "Brainstormed feature",
+            Status = TaskOverallStatus.Suggested,
+            Origin = TaskOrigin.Ideation,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        // 3. Manual Suggested task (should NOT display in triage)
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 101,
+            WorkspaceId = 1,
+            Title = "Manual User Task",
+            Description = "Manually created task",
+            Status = TaskOverallStatus.Suggested,
+            Origin = TaskOrigin.Manual,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        // 4. Untrusted intake task already accepted to Open (should NOT display in triage proposals)
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 102,
+            WorkspaceId = 1,
+            Title = "Accepted Open Task",
+            Description = "Already in active development queue",
+            Status = TaskOverallStatus.Open,
+            Origin = TaskOrigin.UntrustedIntake,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        var cut = Render<Triage>();
+
+        // Only Task 99 is rendered
+        Assert.NotNull(cut.Find("#triage-task-proposal-99"));
+        Assert.Contains("Untrusted Vulnerability Report", cut.Find("#triage-task-proposal-99").TextContent);
+
+        Assert.Null(cut.FindAll("#triage-task-proposal-100").FirstOrDefault());
+        Assert.Null(cut.FindAll("#triage-task-proposal-101").FirstOrDefault());
+        Assert.Null(cut.FindAll("#triage-task-proposal-102").FirstOrDefault());
+
+        Assert.DoesNotContain("Internal Ideation Feature", cut.Markup);
+        Assert.DoesNotContain("Manual User Task", cut.Markup);
+        Assert.DoesNotContain("Accepted Open Task", cut.Markup);
     }
 }
 

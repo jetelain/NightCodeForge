@@ -47,7 +47,7 @@
                 @onchange="HandleTaskSelectionChanged">
             @if (!_availableTasks.Any())
             {
-                <option value="0">No tasks found</option>
+                <option value="0">No executed tasks found</option>
             }
             @foreach (var t in _availableTasks)
             {
@@ -72,9 +72,9 @@ else if (!_isLoadingTasks)
 {
     <div class="card-surface" id="task-inspector-empty" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 3rem 1.5rem; text-align: center; color: var(--text-muted);">
         <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">📂</div>
-        <h3 style="font-size: 1.1rem; color: var(--text-primary); margin-bottom: 0.5rem;">No Tasks Available</h3>
+        <h3 style="font-size: 1.1rem; color: var(--text-primary); margin-bottom: 0.5rem;">No Executed Tasks Found</h3>
         <p style="font-size: 0.85rem; margin: 0 auto 1.25rem auto; max-width: 480px;">
-            There are currently no tasks in this workspace. Create a task via Ideation or Intake Triage to begin execution and review.
+            No executed tasks found. Once a task begins execution in the DevQueue or reaches a stage checkpoint, it will be inspectable here.
         </p>
         <a href="/ideation" class="forge-btn forge-btn-primary" style="padding: 0.4rem 0.9rem; font-size: 0.82rem; text-decoration: none;">
             💡 Start Ideation Chat
@@ -134,7 +134,7 @@ else if (!_isLoadingTasks)
             IReadOnlyList<ForgeTask> allTasks;
             if (wsId.HasValue)
             {
-                allTasks = await TaskRepository.GetByWorkspaceIdAsync(wsId.Value);
+                allTasks = await TaskRepository.GetExecutedTasksByWorkspaceIdAsync(wsId.Value);
             }
             else
             {
@@ -144,7 +144,9 @@ else if (!_isLoadingTasks)
                 var ready = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Ready);
                 var closed = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Closed);
                 var failed = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Failed);
-                allTasks = open.Concat(reviewed).Concat(implemented).Concat(ready).Concat(closed).Concat(failed).ToList();
+                allTasks = open.Concat(reviewed).Concat(implemented).Concat(ready).Concat(closed).Concat(failed)
+                    .Where(t => t.HasExecutionRun)
+                    .ToList();
             }
 
             _availableTasks = allTasks.OrderByDescending(t => t.UpdatedAt).ToList();

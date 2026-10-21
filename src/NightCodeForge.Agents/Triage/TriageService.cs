@@ -127,6 +127,7 @@ public class TriageService : ITriageService
                     Title = p.Title,
                     Description = p.Description,
                     Status = TaskOverallStatus.Suggested,
+                    Origin = TaskOrigin.UntrustedIntake,
                     MergeMode = MergeMode.ManualReviewRequired,
                     BaseBranch = baseBranch,
                     Priority = p.Priority > 0 ? p.Priority : TaskPriority.Normal,
@@ -138,8 +139,8 @@ public class TriageService : ITriageService
                 var created = await _taskRepository.CreateWithBaselineAsync(
                     newTask,
                     dependsOn: null,
-                    createdBy: AuditActors.TaskReviewAgent,
-                    reason: "Created task proposal from backlog triage",
+                    createdBy: AuditActors.TriageAgent,
+                    reason: "Created task proposal from untrusted intake triage",
                     cancellationToken: cancellationToken);
                 createdTasks.Add(created);
                 _logger.LogInformation("Triage generated suggested task #{NewTaskId}: '{Title}'", created.Id, created.Title);

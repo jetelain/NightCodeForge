@@ -1119,5 +1119,94 @@ public class AppDbContextTests : IDisposable
             Environment.SetEnvironmentVariable(AppDbContext.WorkspaceIdSeedEnvironmentVariable, prevEnv);
         }
     }
+
+    [Fact]
+    public async Task EfCoreTaskRepository_GetExecutedTasksByWorkspaceIdAsync_ReturnsOnlyExecutedTasks()
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var context = new AppDbContext(options);
+        await context.EnsureDatabaseCreatedAndWalAsync();
+
+        var ws1 = new Workspace { Name = "Workspace1", RepositoryPath = "/path/ws1" };
+        var ws2 = new Workspace { Name = "Workspace2", RepositoryPath = "/path/ws2" };
+        context.Workspaces.AddRange(ws1, ws2);
+        await context.SaveChangesAsync();
+
+        var repo = new EfCoreTaskRepository(context);
+
+        // 1. Fresh unstarted Open task (HasExecutionRun = false)
+        await repo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws1.Id,
+            Title = "Unstarted Task",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = false
+        });
+
+        // 2. Unstarted Suggested task (HasExecutionRun = false)
+        await repo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws1.Id,
+            Title = "Suggested Backlog Task",
+            Status = TaskOverallStatus.Suggested,
+            HasExecutionRun = false
+        });
+
+        // 3. Rolled back Open task (HasExecutionRun = true, MaxExecutedStageOrder = 2)
+        var rolledBackTask = await repo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws1.Id,
+            Title = "Rolled Back Task",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true,
+            MaxExecutedStageOrder = 2
+        });
+
+        // 4. Executed Implemented task (HasExecutionRun = true)
+        var implementedTask = await repo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws1.Id,
+            Title = "Implemented Task",
+            Status = TaskOverallStatus.Implemented,
+            HasExecutionRun = true,
+            MaxExecutedStageOrder = 4
+        });
+
+        // 5. Executed Closed task (HasExecutionRun = true)
+        var closedTask = await repo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws1.Id,
+            Title = "Closed Task",
+            Status = TaskOverallStatus.Closed,
+            HasExecutionRun = true,
+            MaxExecutedStageOrder = 7
+        });
+
+        // 6. Executed task in different workspace (ws2)
+        await repo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws2.Id,
+            Title = "Other Workspace Task",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true
+        });
+
+        // Act
+        var executedTasks = await repo.GetExecutedTasksByWorkspaceIdAsync(ws1.Id);
+
+        // Assert
+        Assert.Equal(3, executedTasks.Count);
+        Assert.Contains(executedTasks, t => t.Id == rolledBackTask.Id && t.Status == TaskOverallStatus.Open && t.HasExecutionRun);
+        Assert.Contains(executedTasks, t => t.Id == implementedTask.Id && t.Status == TaskOverallStatus.Implemented && t.HasExecutionRun);
+        Assert.Contains(executedTasks, t => t.Id == closedTask.Id && t.Status == TaskOverallStatus.Closed && t.HasExecutionRun);
+        Assert.DoesNotContain(executedTasks, t => !t.HasExecutionRun);
+        Assert.DoesNotContain(executedTasks, t => t.WorkspaceId == ws2.Id);
+    }
 }
 

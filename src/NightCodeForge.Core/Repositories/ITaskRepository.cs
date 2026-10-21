@@ -17,6 +17,7 @@ public interface ITaskRepository
     Task<TaskOverallStatus?> GetStatusAsync(int id, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<ForgeTask>> GetByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ForgeTask>> GetExecutedTasksByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default);
     Task<ForgeTask> CreateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default);
     Task<ForgeTask> CreateWithBaselineAsync(ForgeTask task, IEnumerable<int>? dependsOn, string createdBy, string? reason, CancellationToken cancellationToken = default);
     Task UpdateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default);
@@ -167,6 +168,25 @@ public class InMemoryTaskRepository : ITaskRepository
         lock (_lock)
         {
             var list = _tasks.Values.Where(i => i.WorkspaceId == workspaceId).ToList();
+            foreach (var task in list)
+            {
+                if (_dependencies.TryGetValue(task.Id, out var deps))
+                {
+                    task.Dependencies = deps.Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
+                }
+            }
+            return Task.FromResult<IReadOnlyList<ForgeTask>>(list);
+        }
+    }
+
+    public Task<IReadOnlyList<ForgeTask>> GetExecutedTasksByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var list = _tasks.Values
+                .Where(t => t.WorkspaceId == workspaceId && t.HasExecutionRun)
+                .OrderByDescending(t => t.UpdatedAt)
+                .ToList();
             foreach (var task in list)
             {
                 if (_dependencies.TryGetValue(task.Id, out var deps))

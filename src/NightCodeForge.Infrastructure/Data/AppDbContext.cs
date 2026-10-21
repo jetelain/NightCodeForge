@@ -132,6 +132,9 @@ public class AppDbContext : DbContext
             b.HasKey(i => i.Id);
             b.Property(i => i.Title).IsRequired().HasMaxLength(512);
             b.Property(i => i.Status).HasConversion<int>();
+            b.Property(i => i.Origin).HasConversion<int>().HasDefaultValue(TaskOrigin.Manual);
+            b.Property(i => i.HasExecutionRun).HasDefaultValue(false);
+            b.Property(i => i.MaxExecutedStageOrder).HasDefaultValue(0);
             b.Property(i => i.MergeMode).HasConversion<int>();
             b.Property(i => i.IsWaitingForHuman).HasDefaultValue(false);
             b.Property(i => i.InterruptedAgentProfileId).HasMaxLength(128);
@@ -143,6 +146,10 @@ public class AppDbContext : DbContext
             b.Property(i => i.SquashCommitSha).HasMaxLength(64);
             b.Property(i => i.WorkflowId);
             b.Property(i => i.Version).HasDefaultValue(1);
+
+            b.HasIndex(i => i.WorkspaceId);
+            b.HasIndex(i => new { i.WorkspaceId, i.Origin, i.Status });
+            b.HasIndex(i => new { i.WorkspaceId, i.HasExecutionRun });
 
             b.HasOne(i => i.Workflow)
                 .WithMany(w => w.Tasks)
@@ -386,6 +393,11 @@ public class AppDbContext : DbContext
     public const string InitialCreateMigrationId = "20261019025958_InitialCreate";
 
     /// <summary>
+    /// Migration identifier for portal scoping and execution flags.
+    /// </summary>
+    public const string AddPortalScopingAndExecutionFlagsMigrationId = "20261021065652_AddPortalScopingAndExecutionFlags";
+
+    /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
     /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
@@ -431,30 +443,38 @@ public class AppDbContext : DbContext
 
             if (hasWorkspacesTable)
             {
-                cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '__EFMigrationsHistory';";
-                var hasHistoryTable = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+                cmd.CommandText = @"
+CREATE TABLE IF NOT EXISTS ""__EFMigrationsHistory"" (
+    ""MigrationId"" TEXT NOT NULL CONSTRAINT ""PK___EFMigrationsHistory"" PRIMARY KEY,
+    ""ProductVersion"" TEXT NOT NULL
+);";
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
 
-                var isInitialMigrationRecorded = false;
-                if (hasHistoryTable)
-                {
-                    cmd.CommandText = "SELECT COUNT(*) FROM __EFMigrationsHistory WHERE MigrationId = @migId;";
-                    var p = cmd.CreateParameter();
-                    p.ParameterName = "@migId";
-                    p.Value = InitialCreateMigrationId;
-                    cmd.Parameters.Add(p);
-                    isInitialMigrationRecorded = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
-                }
+                cmd.CommandText = "SELECT COUNT(*) FROM __EFMigrationsHistory WHERE MigrationId = @migId;";
+                var p = cmd.CreateParameter();
+                p.ParameterName = "@migId";
+                p.Value = InitialCreateMigrationId;
+                cmd.Parameters.Add(p);
+                var isInitialMigrationRecorded = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
 
                 if (!isInitialMigrationRecorded)
                 {
                     cmd.Parameters.Clear();
-                    cmd.CommandText = @"
-CREATE TABLE IF NOT EXISTS ""__EFMigrationsHistory"" (
-    ""MigrationId"" TEXT NOT NULL CONSTRAINT ""PK___EFMigrationsHistory"" PRIMARY KEY,
-    ""ProductVersion"" TEXT NOT NULL
-);
-INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + InitialCreateMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                // If the Tasks table already contains the HasExecutionRun column (e.g. EnsureCreatedAsync with current model),
+                // baseline the AddPortalScopingAndExecutionFlags migration to prevent duplicate column addition.
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Tasks') WHERE name = 'HasExecutionRun';";
+                var hasExecutionRunColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasExecutionRunColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddPortalScopingAndExecutionFlagsMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }

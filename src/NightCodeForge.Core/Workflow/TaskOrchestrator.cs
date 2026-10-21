@@ -246,6 +246,10 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         // Persist current stage immediately so UI / Kanban / DAG shows task is actively executing
+        var stageIndex = pipeline.Stages.ToList().FindIndex(s => string.Equals(s.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase));
+        var stageOrder = stageIndex >= 0 ? stageIndex + 1 : 1;
+        task.HasExecutionRun = true;
+        task.MaxExecutedStageOrder = Math.Max(task.MaxExecutedStageOrder, stageOrder);
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
 
         try

@@ -82,6 +82,7 @@
     [Parameter] public string? CurrentStageId { get; set; }
     [Parameter] public StageExecutionStatus? CurrentStageStatus { get; set; }
     [Parameter] public TaskOverallStatus? OverallStatus { get; set; }
+    [Parameter] public bool IsWaitingForHuman { get; set; }
     [Parameter] public IEnumerable<Conversation>? Conversations { get; set; }
     [Parameter] public EventCallback<string> OnStageSelected { get; set; }
 
@@ -208,7 +209,12 @@
 
         if (!string.IsNullOrEmpty(CurrentStageId) && OverallStatus != TaskOverallStatus.Closed && OverallStatus != TaskOverallStatus.Ready && OverallStatus != TaskOverallStatus.Failed)
         {
-            ApplyStageTransition(CurrentStageId, CurrentStageStatus ?? StageExecutionStatus.Running);
+            var effectiveStatus = CurrentStageStatus ?? StageExecutionStatus.Pending;
+            if (IsWaitingForHuman || CurrentStageStatus == StageExecutionStatus.WaitingForHuman)
+            {
+                effectiveStatus = StageExecutionStatus.WaitingForHuman;
+            }
+            ApplyStageTransition(CurrentStageId, effectiveStatus);
         }
     }
 

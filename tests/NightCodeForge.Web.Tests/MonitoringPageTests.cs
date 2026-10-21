@@ -119,7 +119,7 @@ public class MonitoringPageTests : BunitContext
     }
 
     [Fact]
-    public async Task MonitoringPage_WhenInFlightTaskExistsOnInitialize_AutoDiscoversTaskAndUpdatesWorkerState()
+    public async Task MonitoringPage_WhenOpenTaskExistsOnInitialize_DoesNotSynthesizeWorkerRunningState()
     {
         await _taskRepository.CreateAsync(new ForgeTask
         {
@@ -132,14 +132,9 @@ public class MonitoringPageTests : BunitContext
 
         var cut = Render<Monitoring>();
 
-        cut.WaitForState(() => _workerState.Current.ActiveTaskId == 42);
-
-        Assert.Equal(42, _workerState.Current.ActiveTaskId);
-        Assert.Equal(WorkerExecutionStatus.Running, _workerState.Current.Status);
-        Assert.Equal("task-review", _workerState.Current.StageId);
-
-        Assert.Contains("RUNNING", cut.Find("#worker-telemetry-card").TextContent);
-        Assert.Contains("#42", cut.Find("#worker-telemetry-card").TextContent);
+        Assert.Equal(WorkerExecutionStatus.Idle, _workerState.Current.Status);
+        Assert.Null(_workerState.Current.ActiveTaskId);
+        Assert.Contains("IDLE", cut.Find("#worker-telemetry-card").TextContent);
     }
 
     [Fact]

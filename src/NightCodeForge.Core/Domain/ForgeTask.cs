@@ -10,6 +10,9 @@ public class ForgeTask
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public TaskOverallStatus Status { get; set; } = TaskOverallStatus.Suggested;
+    public TaskOrigin Origin { get; set; } = TaskOrigin.Manual;
+    public bool HasExecutionRun { get; set; } = false;
+    public int MaxExecutedStageOrder { get; set; } = 0;
     public MergeMode MergeMode { get; set; } = MergeMode.ManualReviewRequired;
     public bool IsWaitingForHuman { get; set; } = false;
     public string? InterruptedAgentProfileId { get; set; }

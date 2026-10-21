@@ -76,6 +76,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             Title = task.Title,
             Workspace = task.Workspace?.Name,
             Status = task.Status.ToString(),
+            Origin = FormatOrigin(task.Origin),
             CurrentStage = task.CurrentStageId,
             Priority = task.Priority,
             MergeMode = task.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required",
@@ -162,6 +163,28 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         var bytes = Encoding.UTF8.GetBytes(normalized);
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexString(hash);
+    }
+
+    public static string FormatOrigin(TaskOrigin origin) => origin switch
+    {
+        TaskOrigin.UntrustedIntake => "untrusted_intake",
+        TaskOrigin.Ideation => "ideation",
+        TaskOrigin.Import => "import",
+        TaskOrigin.GitHubIssue => "github_issue",
+        _ => "manual"
+    };
+
+    public static TaskOrigin ParseOrigin(string? origin)
+    {
+        if (string.IsNullOrWhiteSpace(origin)) return TaskOrigin.Manual;
+        return origin.Trim().ToLowerInvariant() switch
+        {
+            "untrusted_intake" or "untrustedintake" => TaskOrigin.UntrustedIntake,
+            "ideation" => TaskOrigin.Ideation,
+            "import" => TaskOrigin.Import,
+            "github_issue" or "githubissue" or "github" => TaskOrigin.GitHubIssue,
+            _ => TaskOrigin.Manual
+        };
     }
 
     public static string GenerateSlug(string title)
@@ -762,6 +785,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     BaseBranch = !string.IsNullOrWhiteSpace(nt.Item.Frontmatter.BaseBranch) ? nt.Item.Frontmatter.BaseBranch : (workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch),
                     FeatureBranch = nt.Item.Frontmatter.FeatureBranch ?? string.Empty,
                     Status = TaskOverallStatus.Suggested,
+                    Origin = ParseOrigin(nt.Item.Frontmatter.Origin),
                     CurrentStageId = StandardStageIds.TaskReview,
                     CreatedAt = nt.Item.Frontmatter.CreatedAt ?? TryExtractDateFromPath(nt.Item.FilePath) ?? DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow,
@@ -780,6 +804,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 nt.Item.Frontmatter.Id = created.Id;
                 nt.Item.Frontmatter.CreatedAt = created.CreatedAt;
                 nt.Item.Frontmatter.Status = created.Status.ToString();
+                nt.Item.Frontmatter.Origin = FormatOrigin(created.Origin);
                 nt.Item.Frontmatter.MergeMode = created.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required";
                 nt.Item.Frontmatter.WaitingForHuman = created.IsWaitingForHuman;
                 nt.Item.Frontmatter.CurrentStage = created.CurrentStageId;
@@ -851,23 +876,29 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     ? Domain.MergeMode.Automatic
                     : Domain.MergeMode.ManualReviewRequired;
                 var newBaseBranch = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) ? item.Frontmatter.BaseBranch.Trim() : task.BaseBranch;
+                var newOrigin = ParseOrigin(item.Frontmatter.Origin);
 
                 bool titleChanged = !string.Equals(newTitle, task.Title, StringComparison.Ordinal);
                 bool descChanged = !string.Equals(newDesc, task.Description, StringComparison.Ordinal);
                 bool priorityChanged = newPriority != task.Priority;
                 bool mergeModeChanged = newMergeMode != task.MergeMode;
                 bool baseBranchChanged = !string.Equals(newBaseBranch, task.BaseBranch, StringComparison.Ordinal);
+                bool originChanged = newOrigin != task.Origin;
 
                 var currentDeps = task.Dependencies.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList();
                 bool depsChanged = finalDepIds != null && !finalDepIds.OrderBy(x => x).SequenceEqual(currentDeps);
 
-                if (titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged)
+                if (titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged)
                 {
                     task.Title = newTitle;
                     task.Description = newDesc;
                     task.Priority = newPriority;
                     task.MergeMode = newMergeMode;
                     task.BaseBranch = newBaseBranch;
+                    if (originChanged)
+                    {
+                        task.Origin = newOrigin;
+                    }
                     if (!string.IsNullOrWhiteSpace(item.Frontmatter.FeatureBranch))
                     {
                         task.FeatureBranch = item.Frontmatter.FeatureBranch;
@@ -1217,6 +1248,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         ? Domain.MergeMode.Automatic
                         : Domain.MergeMode.ManualReviewRequired;
                     var newBaseBranch = !string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? frontmatter.BaseBranch.Trim() : task.BaseBranch;
+                    var newOrigin = ParseOrigin(frontmatter.Origin);
 
                     var currentDeps = task.Dependencies.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList();
                     bool depsChanged = resolvedDeps != null && !resolvedDeps.OrderBy(x => x).SequenceEqual(currentDeps);
@@ -1226,14 +1258,19 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     bool priorityChanged = newPriority != task.Priority;
                     bool mergeModeChanged = newMergeMode != task.MergeMode;
                     bool baseBranchChanged = !string.Equals(newBaseBranch, task.BaseBranch, StringComparison.Ordinal);
+                    bool originChanged = newOrigin != task.Origin;
 
-                    if (titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged)
+                    if (titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged)
                     {
                         task.Title = newTitle;
                         task.Description = newDesc;
                         task.Priority = newPriority;
                         task.MergeMode = newMergeMode;
                         task.BaseBranch = newBaseBranch;
+                        if (originChanged)
+                        {
+                            task.Origin = newOrigin;
+                        }
                         if (!string.IsNullOrWhiteSpace(frontmatter.FeatureBranch))
                         {
                             task.FeatureBranch = frontmatter.FeatureBranch;
@@ -1297,6 +1334,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 IsWaitingForHuman = frontmatter.WaitingForHuman,
                 BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? WorkflowDefaults.DefaultBaseBranch : frontmatter.BaseBranch,
                 Status = TaskOverallStatus.Suggested,
+                Origin = ParseOrigin(frontmatter.Origin),
                 CurrentStageId = StandardStageIds.TaskReview,
                 CreatedAt = frontmatter.CreatedAt ?? TryExtractDateFromPath(filePath) ?? DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
@@ -1313,6 +1351,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             frontmatter.Id = created.Id;
             frontmatter.CreatedAt = created.CreatedAt;
             frontmatter.Status = created.Status.ToString();
+            frontmatter.Origin = FormatOrigin(created.Origin);
             frontmatter.MergeMode = created.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required";
             frontmatter.WaitingForHuman = created.IsWaitingForHuman;
             frontmatter.CurrentStage = created.CurrentStageId;

@@ -11,6 +11,7 @@ public static class AuditActors
     public const string IdeationAgent = "IdeationAgent";
     public const string Orchestrator = "TaskOrchestrator";
     public const string TaskReviewAgent = "agent:task-review";
+    public const string TriageAgent = "agent:triage";
     public const string FileWatcher = "file-watcher";
 
     /// <summary>
