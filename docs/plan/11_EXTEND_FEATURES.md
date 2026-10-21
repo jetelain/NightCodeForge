@@ -20,8 +20,10 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
    - **Step 11.14:** Intelligent Task Dependency Detection in Ideation & Review Agents (backlog context injection, DAG relationship inference, and prerequisite enforcement).
    - **Step 11.15:** Priority-Aware Task Queue Scheduling & Execution Ordering (aligning DAG cascade unblocking, Hangfire insertion order, and DevQueue promotion with 1 Highest -> 5 Lowest).
    - **Step 11.16:** Task Attachments & Context Documents — a workspace-level read-only `attachments/` store (sibling of the canonical clone and task worktrees) populated from file drops, cited host paths, and URL captures (MarkItDown markdown companions), citable by the ideation agent (`@attachment:{id}`) and readable by the three workflow stage agents.
+   - **Step 11.17:** Portal Task Scoping, Origin Provenance & Pipeline State Hygiene — enforcing `TaskOrigin.UntrustedIntake` for `/triage` proposed backlog cards, restricting `/inspector` and `/review` dropdowns to tasks with $\ge 1$ stage run, and eliminating false "Running" stepper indicators on idle tasks.
 
 2. **Tier 2: Core Ideation & Developer Ergonomics Quick Wins:**
+   - **Step 11.18:** Live Operations Telemetry: Real-Time LLM Calls, Shell Activity & OllamaRouter Deep Monitoring — re-architecting `/monitoring` from redundant pipeline inspector into a real-time Developer Operations Console showing current and last $N$ LLM calls, deterministic bash/CLI operations, and deep OllamaRouter cluster/VRAM metrics.
    - **Step 11.5:** Ideation Quick Notes, Suggestions Backlog & Conversational Refinement.
    - **Step 11.1:** Heterogeneous Dual Model Architecture (Reviewer vs Coder models) and difficulty escalation.
    - **Step 11.3:** Smart CLI Output Filtering (compiler and test noise suppression for 95% token savings).
@@ -48,11 +50,13 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
 | **11.13** | [🚀 Step 11.13: `ncf` CLI — Deterministic Project Preparation & Onboarding](phase-11/STEP_11_13_PROJECT_PREPAREDNESS_AND_ONBOARDING.md) | NuGet `dotnet tool` (`ncf init` / `ncf audit`): one-command deterministic preparation of existing repositories — `.gitignore`/`.editorconfig` merge, stack detection via shared `CodeStackPresets`, initial format pass, skills installation into `.agents/skills/`, `.nightcodeforge/config.json` bootstrap, and green/yellow/red readiness audit. | Completed |
 | **11.14** | [🔗 Step 11.14: Intelligent Task Dependency Detection in Ideation & Review Agents](phase-11/STEP_11_14_INTELLIGENT_TASK_DEPENDENCY_DETECTION.md) | Backlog context injection for Ideation and Stage 1 Review agents; system prompts requiring identification of prerequisites, shared interfaces, and ordering; auto-population of `dependsOnTitles` and DAG dependency chips in Kanban and Drawer. | **Next Priority** |
 | **11.16** | [📎 Step 11.16: Task Attachments & Context Documents](phase-11/STEP_11_16_TASK_ATTACHMENTS_AND_CONTEXT_DOCS.md) | Workspace-level read-only `attachments/` directory (sibling of clone & worktrees): intake via file drop, cited host paths, and URL captures with MarkItDown markdown companions; SHA-256 dedup & reusability; `@attachment:{id}` citations in tasks; read-only `list_attachments`/`read_attachment` tools for ideation and the three workflow stage agents; attachments picker on `/tasks/new`. | **Next Priority** |
+| **11.17** | [🎯 Step 11.17: Portal Task Scoping, Origin Provenance & Pipeline State Hygiene](phase-11/STEP_11_17_PORTAL_TASK_SCOPING_AND_EXECUTION_STATE_HYGIENE.md) | Enforce `TaskOrigin.UntrustedIntake` filtering in `/triage`, restrict `/inspector` task dropdown and `/review` pending reviews to tasks with $\ge 1$ stage run, and eliminate false "Running" state for idle tasks in `PipelineStepper`. | Planned |
 
 ### Priority Tier 2: Core Ideation & Developer Ergonomics Quick Wins
 
 | Step | Specification | Focus & Key Deliverables | Status |
 | :--- | :--- | :--- | :--- |
+| **11.18** | [⚡ Step 11.18: Live Operations Telemetry: Real-Time LLM Calls, Shell Activity & OllamaRouter Deep Monitoring](phase-11/STEP_11_18_LIVE_OPERATIONS_TELEMETRY_LLM_SHELL_OLLAMAROUTER.md) | Re-architect `/monitoring` into a live Developer Operations Console: in-flight and last $N$ LLM calls (speed, tokens, target backend), live shell/CLI commands with stdout/stderr, and deep OllamaRouter cluster/VRAM metrics. | Planned |
 | **11.5** | [💡 Step 11.5: Ideation Quick Notes, Suggestions & Conversational Refinement](phase-11/STEP_11_5_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md) | Quick notes backlog intake ("Think Now, Chat Later"); proposal card lifecycle (`Approve` $\rightarrow$ Open, `Keep as Suggestion` $\rightarrow$ Suggested, `Discard` $\rightarrow$ Delete); "Refine in Ideation" pre-seeded chat; scoped `edit_task` tools; 24h draft pruning. | Planned |
 | **11.1** | [🧠 Step 11.1: Dual Model Role Configuration & Difficulty Escalation](phase-11/STEP_11_1_DUAL_MODEL_ROLE_CONFIGURATION_AND_DIFFICULTY_ESCALATION.md) | Heterogeneous model architecture: Architect/Reviewer model (e.g. Qwen 3.8 27B) for ideation, review, code review; Coder model (e.g. Qwen 3.6 35B A3B) for fast coding; dynamic difficulty escalation for difficult/expert tasks. | Planned |
 | **11.3** | [🧹 Step 11.3: Smart CLI & Build Tool Output Filtering (Context Compression)](phase-11/STEP_11_3_SMART_CLI_AND_BASH_OUTPUT_FILTERING.md) | Semantic output filtering for verbose CLI tools (`dotnet build`, `dotnet test`, `npm`). Relativizes paths, strips SDK boilerplates, drops non-fatal warnings when errors exist, preserving raw transcripts on disk. | Planned |
@@ -131,6 +135,25 @@ flowchart TD
     AutoDAG --> DAGRun["DAG-Ordered Execution in Hangfire Queue"]
 ```
 
+### 3.6 Step 11.17: Portal Task Scoping & Origin Provenance
+```mermaid
+flowchart LR
+    Triage["Untrusted Intake Triage"] -->|Stamp Origin = UntrustedIntake| DB[("ForgeTask")]
+    DB -->|Origin == UntrustedIntake| TriageUI["/triage Proposed Tasks"]
+    DB -->|HasExecutionRun == true| InspectorUI["/inspector Task Dropdown (incl. Step 11.14 rollbacks)"]
+    DB -->|HasExecutionRun & Status in (Ready, Implemented, Reviewed, Closed)| ReviewUI["/review Pending Reviews"]
+```
+
+### 3.7 Step 11.18: Live Operations Telemetry & OllamaRouter Integration
+```mermaid
+flowchart LR
+    LLM["Inference Calls (IChatClient)"] --> Telemetry["OperationsTelemetryService<br/>(Ring Buffer N=50)"]
+    Shell["Deterministic Shell (CliWrap)"] --> Telemetry
+    Router["OllamaRouter (/api/ps & /monitor)"] --> Telemetry
+    Telemetry --> Hub["OrchestratorHub (SignalR)"]
+    Hub --> MonitorUI["/monitoring Live Operations Console"]
+```
+
 ---
 
 ## 4. Phase 11 Definition of Done (DoD) Checklist
@@ -185,7 +208,25 @@ flowchart TD
   - [ ] Support `@attachment:{id}` citations in task descriptions, materialized as `TaskAttachmentLinks` on task creation (hard error on unknown IDs).
   - [ ] Build Web UI: chat drop zone + attachment chips, workspace attachments panel with preview drawer, attachments picker on `/tasks/new`, and user-only delete.
 
+- [ ] **Step 11.17 (Portal Task Scoping, Origin Provenance & Pipeline State Hygiene):**
+  - [ ] Add `TaskOrigin` enum (`Manual`, `Ideation`, `UntrustedIntake`, `Import`, `GitHubIssue`) and property `ForgeTask.Origin` with EF Core migration.
+  - [ ] Update `TriageService` to stamp `TaskOrigin.UntrustedIntake` on all triage task proposals.
+  - [ ] Update `TaskMarkdownSyncService` to serialize and parse `origin` in YAML frontmatter.
+  - [ ] Update `Triage.razor` to filter "Proposed Backlog Tasks" strictly by `Status == Suggested && Origin == UntrustedIntake`.
+  - [ ] Add `HasExecutionRun` (bool) and `MaxExecutedStageOrder` (int) to `ForgeTask` entity and EF Core index `(WorkspaceId, HasExecutionRun)`.
+  - [ ] Stamp `task.HasExecutionRun = true` in `TaskOrchestrator` upon execution start, preserving `true` across Step 11.14 rollback resets to `Open`.
+  - [ ] Implement `GetExecutedTasksByWorkspaceIdAsync` on `ITaskRepository` querying `t.HasExecutionRun == true`.
+  - [ ] Update `TaskInspector.razor` dropdown to display tasks with `HasExecutionRun == true` (including rolled-back/suspended tasks).
+  - [ ] Update `TaskReviewService.GetPendingReviewsAsync` to only return tasks with `HasExecutionRun == true` in reviewable statuses (`Ready`, `Implemented`, `Reviewed`, `Closed`).
+  - [ ] Fix `PipelineStepper.razor` to default null `CurrentStageStatus` to `Pending` instead of `Running`, and eliminate synthetic "Running" state in `Monitoring.razor`.
+
 ### Tier 2 Deliverables (Quick Wins & Ergonomics)
+- [ ] **Step 11.18 (Live Operations Telemetry: Real-Time LLM Calls, Shell Activity & OllamaRouter Deep Monitoring):**
+  - [ ] Implement `IOperationsTelemetryService` with thread-safe ring buffer (`MaxLlmCalls = 50`, `MaxShellCommands = 50`).
+  - [ ] Instrument `CrucibleAgentHarness` and `InferenceService` to emit start/progress/completion telemetry on every chat completion call.
+  - [ ] Instrument `CliRunner` and deterministic execution stages to emit shell command start and finish telemetry.
+  - [ ] Extend `IOllamaRouterGatewayService` with cluster latency checks and resident model VRAM percentage calculations.
+  - [ ] Redesign `/monitoring` with `ActiveOperationsHero` (live LLM inference + live shell command), `OllamaRouterClusterHealthCard`, `LlmCallsHistoryTable`, and `ShellOperationsFeed`.
 - [ ] **Step 11.5 (Ideation Quick Notes & Suggestions):** Quick notes bar, proposal card tri-state actions, "Refine in Ideation", scoped `edit_task` tools, 24h pruning.
 - [ ] **Step 11.1 (Dual Model Role Configuration):** Architect/Reviewer model vs Coder model, dynamic escalation on difficult tasks.
 - [ ] **Step 11.3 (Smart CLI Output Filtering):** Compiler & test noise suppression, workspace path relativization.
