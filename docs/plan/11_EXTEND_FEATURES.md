@@ -171,7 +171,7 @@ flowchart TD
   - [x] **Deferred (later Stage 11 commands):** `ncf server` (install web app), `ncf register` (register workspace via Web API), `ncf import`.
 
 - [ ] **Step 11.14 (Intelligent Task Dependency Detection):**
-  - [ ] Implement `IWorkspaceBacklogSummaryService` generating compact `<existing_workspace_tasks>` digests.
+  - [ ] Implement `IWorkspaceBacklogSummaryService` generating compact `<existing_workspace_tasks>` digests (excluding archived/closed tasks, capped to top 15–20 active tasks by priority order).
   - [ ] Inject existing backlog digest into `IdeationService` system prompt.
   - [ ] Inject existing backlog digest and dependency verification directives into Stage 1 Task Review directive in `CrucibleAgentHarness`.
   - [ ] Update `TaskMarkdownSyncService` to parse `## Dependencies` from `docs/tasks/*.md` and sync `TaskDependency` records.
