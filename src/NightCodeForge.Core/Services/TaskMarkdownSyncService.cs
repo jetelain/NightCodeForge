@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -183,6 +184,18 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             trimmed = trimmed.Substring(11);
         }
         return GenerateSlug(trimmed);
+    }
+
+    public static DateTime? TryExtractDateFromPath(string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath)) return null;
+        var fileName = Path.GetFileName(filePath);
+        if (fileName.Length >= 10 && DatePrefixRegex().IsMatch(fileName) &&
+            DateTime.TryParseExact(fileName[..10], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        {
+            return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+        }
+        return null;
     }
 
     public async Task<string> SyncTaskToDiskAsync(
@@ -750,7 +763,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     FeatureBranch = nt.Item.Frontmatter.FeatureBranch ?? string.Empty,
                     Status = TaskOverallStatus.Suggested,
                     CurrentStageId = StandardStageIds.TaskReview,
-                    CreatedAt = nt.Item.Frontmatter.CreatedAt ?? DateTime.UtcNow,
+                    CreatedAt = nt.Item.Frontmatter.CreatedAt ?? TryExtractDateFromPath(nt.Item.FilePath) ?? DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow,
                     Version = 1
                 };
@@ -1285,7 +1298,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? WorkflowDefaults.DefaultBaseBranch : frontmatter.BaseBranch,
                 Status = TaskOverallStatus.Suggested,
                 CurrentStageId = StandardStageIds.TaskReview,
-                CreatedAt = frontmatter.CreatedAt ?? DateTime.UtcNow,
+                CreatedAt = frontmatter.CreatedAt ?? TryExtractDateFromPath(filePath) ?? DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
                 Version = 1
             };

@@ -402,4 +402,35 @@ Enriched description formulated by review agent directly on disk.
         Assert.DoesNotContain("\r\n", rawText);
         Assert.Contains("\n", rawText);
     }
+
+    [Theory]
+    [InlineData(null, false, 0, 0, 0)]
+    [InlineData("", false, 0, 0, 0)]
+    [InlineData("   ", false, 0, 0, 0)]
+    [InlineData("my-task.md", false, 0, 0, 0)]
+    [InlineData("2026-10-task.md", false, 0, 0, 0)]
+    [InlineData("2026-99-99-task.md", false, 0, 0, 0)]
+    [InlineData("2026-10-20-task-alpha.md", true, 2026, 10, 20)]
+    [InlineData("docs/tasks/2026-10-20-task-alpha.md", true, 2026, 10, 20)]
+    [InlineData("C:\\repo\\docs\\tasks\\2026-10-20-task-alpha.md", true, 2026, 10, 20)]
+    public void TryExtractDateFromPath_ExtractsDateCorrectly(
+        string? path,
+        bool shouldBeValid,
+        int expectedYear,
+        int expectedMonth,
+        int expectedDay)
+    {
+        var result = TaskMarkdownSyncService.TryExtractDateFromPath(path);
+        if (!shouldBeValid)
+        {
+            Assert.Null(result);
+        }
+        else
+        {
+            Assert.NotNull(result);
+            Assert.Equal(DateTimeKind.Utc, result.Value.Kind);
+            Assert.Equal(new DateTime(expectedYear, expectedMonth, expectedDay, 0, 0, 0, DateTimeKind.Utc), result.Value);
+        }
+    }
 }
+
