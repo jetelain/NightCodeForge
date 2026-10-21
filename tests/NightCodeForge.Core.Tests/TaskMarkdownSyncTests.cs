@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 
@@ -39,7 +41,9 @@ public class TaskMarkdownSyncTests : IDisposable
         services.AddSingleton<NightCodeForge.Core.Dependencies.ITaskDependencyStore>(depStore);
         services.AddSingleton<NightCodeForge.Core.Dependencies.IDependencyResolutionEngine>(new NightCodeForge.Core.Dependencies.DependencyResolutionEngine(depStore));
         var sp = services.BuildServiceProvider();
-        return new TaskMarkdownSyncService(sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>());
+        return new TaskMarkdownSyncService(
+            sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
+            new Mock<IWorkspacePathResolver>().Object);
     }
 
     [Fact]
@@ -431,6 +435,320 @@ Enriched description formulated by review agent directly on disk.
             Assert.Equal(DateTimeKind.Utc, result.Value.Kind);
             Assert.Equal(new DateTime(expectedYear, expectedMonth, expectedDay, 0, 0, 0, DateTimeKind.Utc), result.Value);
         }
+    }
+
+    [Fact]
+    public async Task SyncTaskToDiskAsync_WithCloneDirectory_MirrorsToCloneDocsTasksFolder()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var task = new ForgeTask
+        {
+            Id = 501,
+            WorkspaceId = 1,
+            Title = "Clone Sync Test Task",
+            Description = "Sync to both host repo and isolated clone",
+            Status = TaskOverallStatus.Open
+        };
+        await repo.CreateAsync(task);
+
+        var cloneDir = Path.Combine(_tempWorkspaceDir, "clone");
+        Directory.CreateDirectory(cloneDir);
+
+        var hostFilePath = await sync.SyncTaskToDiskAsync(
+            task,
+            _tempWorkspaceDir,
+            dependencies: null,
+            agentProfileId: null,
+            cloneDirectory: cloneDir);
+
+        Assert.True(File.Exists(hostFilePath));
+
+        var cloneTasksDir = Path.Combine(cloneDir, "docs", "tasks");
+        Assert.True(Directory.Exists(cloneTasksDir));
+
+        var cloneFilePath = Path.Combine(cloneTasksDir, Path.GetFileName(hostFilePath));
+        Assert.True(File.Exists(cloneFilePath));
+
+        var hostContent = await File.ReadAllTextAsync(hostFilePath);
+        var cloneContent = await File.ReadAllTextAsync(cloneFilePath);
+        Assert.Equal(hostContent, cloneContent);
+    }
+
+    [Fact]
+    public async Task SyncAllTasksToDiskAsync_WithCloneDirectory_MirrorsAllTasksToCloneDocsTasksFolder()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var task1 = new ForgeTask { Id = 601, WorkspaceId = 1, Title = "Task 1", Status = TaskOverallStatus.Open };
+        var task2 = new ForgeTask { Id = 602, WorkspaceId = 1, Title = "Task 2", Status = TaskOverallStatus.Suggested };
+        await repo.CreateAsync(task1);
+        await repo.CreateAsync(task2);
+
+        var cloneDir = Path.Combine(_tempWorkspaceDir, "clone");
+        Directory.CreateDirectory(cloneDir);
+
+        var workspace = new Workspace { Id = 1, Name = "Test WS", RepositoryPath = _tempWorkspaceDir };
+
+        var result = await sync.SyncAllTasksToDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            hostRepositoryPath: _tempWorkspaceDir,
+            cloneDirectory: cloneDir);
+
+        Assert.Equal(2, result.WrittenPaths.Count);
+
+        var cloneTasksDir = Path.Combine(cloneDir, "docs", "tasks");
+        Assert.True(Directory.Exists(cloneTasksDir));
+
+        var cloneFiles = Directory.GetFiles(cloneTasksDir, "*.md");
+        Assert.Equal(2, cloneFiles.Length);
+    }
+
+    [Fact]
+    public async Task ArchiveOrCleanupTaskFileAsync_WithCloneDirectory_CleansUpCloneFile()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var task = new ForgeTask
+        {
+            Id = 701,
+            WorkspaceId = 1,
+            Title = "Task to Archive",
+            Status = TaskOverallStatus.Closed
+        };
+        await repo.CreateAsync(task);
+
+        var cloneDir = Path.Combine(_tempWorkspaceDir, "clone");
+        Directory.CreateDirectory(cloneDir);
+
+        var hostFilePath = await sync.SyncTaskToDiskAsync(
+            task,
+            _tempWorkspaceDir,
+            dependencies: null,
+            agentProfileId: null,
+            cloneDirectory: cloneDir);
+
+        var cloneTasksDir = Path.Combine(cloneDir, "docs", "tasks");
+        var cloneFilePath = Path.Combine(cloneTasksDir, Path.GetFileName(hostFilePath));
+        Assert.True(File.Exists(hostFilePath));
+        Assert.True(File.Exists(cloneFilePath));
+
+        // Archive or cleanup
+        await sync.ArchiveOrCleanupTaskFileAsync(task, _tempWorkspaceDir, archive: false, cloneDirectory: cloneDir);
+
+        Assert.False(File.Exists(hostFilePath));
+        Assert.False(File.Exists(cloneFilePath));
+    }
+
+    [Fact]
+    public async Task SyncTaskToDiskAsync_WithoutExplicitCloneDirectory_ResolvesSiblingCloneFromWorkspacePath()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var repoDir = Path.Combine(_tempWorkspaceDir, "repo");
+        var siblingClone = Path.Combine(_tempWorkspaceDir, "clone");
+        Directory.CreateDirectory(repoDir);
+        Directory.CreateDirectory(siblingClone);
+
+        var task = new ForgeTask
+        {
+            Id = 801,
+            WorkspaceId = 1,
+            Title = "Sibling Clone Task",
+            Description = "Syncs without explicit clone directory",
+            Status = TaskOverallStatus.Open,
+            Workspace = null // Navigation property is null, mimicking real repository query
+        };
+        await repo.CreateAsync(task);
+
+        // Call SyncTaskToDiskAsync without passing cloneDirectory
+        var hostFilePath = await sync.SyncTaskToDiskAsync(task, repoDir);
+        Assert.True(File.Exists(hostFilePath));
+
+        var cloneTasksDir = Path.Combine(siblingClone, "docs", "tasks");
+        Assert.True(Directory.Exists(cloneTasksDir));
+
+        var cloneFilePath = Path.Combine(cloneTasksDir, Path.GetFileName(hostFilePath));
+        Assert.True(File.Exists(cloneFilePath));
+
+        var hostContent = await File.ReadAllTextAsync(hostFilePath);
+        var cloneContent = await File.ReadAllTextAsync(cloneFilePath);
+        Assert.Equal(hostContent, cloneContent);
+    }
+
+    [Fact]
+    public async Task SyncAllTasksToDiskAsync_MatchesExactHostFilename_WhenTaskHasSuffix()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var task1 = new ForgeTask { Id = 901, WorkspaceId = 1, Title = "Same Name Task", Status = TaskOverallStatus.Open };
+        var task2 = new ForgeTask { Id = 902, WorkspaceId = 1, Title = "Same Name Task", Status = TaskOverallStatus.Open };
+        await repo.CreateAsync(task1);
+        await repo.CreateAsync(task2);
+
+        var cloneDir = Path.Combine(_tempWorkspaceDir, "clone");
+        Directory.CreateDirectory(cloneDir);
+
+        var workspace = new Workspace { Id = 1, Name = "Test WS", RepositoryPath = _tempWorkspaceDir };
+
+        var result = await sync.SyncAllTasksToDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            hostRepositoryPath: _tempWorkspaceDir,
+            cloneDirectory: cloneDir);
+
+        Assert.Equal(2, result.WrittenPaths.Count);
+
+        var hostFile1 = result.WrittenPaths[901];
+        var hostFile2 = result.WrittenPaths[902];
+
+        var cloneTasksDir = Path.Combine(cloneDir, "docs", "tasks");
+        var cloneFile1 = Path.Combine(cloneTasksDir, Path.GetFileName(hostFile1));
+        var cloneFile2 = Path.Combine(cloneTasksDir, Path.GetFileName(hostFile2));
+
+        Assert.True(File.Exists(cloneFile1), $"Clone file 1 should exist at {cloneFile1}");
+        Assert.True(File.Exists(cloneFile2), $"Clone file 2 should exist with matching suffix at {cloneFile2}");
+    }
+
+    [Fact]
+    public async Task SyncTaskToDiskAsync_WithCloneDirectoryEndingInTasks_CorrectlyAppendsDocsTasks()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var task = new ForgeTask
+        {
+            Id = 910,
+            WorkspaceId = 1,
+            Title = "Task in Folder Ending in Tasks",
+            Status = TaskOverallStatus.Open
+        };
+        await repo.CreateAsync(task);
+
+        // Path ends in the word "tasks", but is NOT a docs/tasks directory
+        var cloneDir = Path.Combine(_tempWorkspaceDir, "worker-tasks");
+        Directory.CreateDirectory(cloneDir);
+
+        var hostFilePath = await sync.SyncTaskToDiskAsync(
+            task,
+            _tempWorkspaceDir,
+            dependencies: null,
+            agentProfileId: null,
+            cloneDirectory: cloneDir);
+
+        var expectedCloneTasksDir = Path.Combine(cloneDir, "docs", "tasks");
+        Assert.True(Directory.Exists(expectedCloneTasksDir), "docs/tasks subfolder should have been created inside worker-tasks");
+
+        var cloneFilePath = Path.Combine(expectedCloneTasksDir, Path.GetFileName(hostFilePath));
+        Assert.True(File.Exists(cloneFilePath), $"Clone task should be placed in docs/tasks, not root of worker-tasks at {cloneFilePath}");
+
+        var incorrectRootPlacement = Path.Combine(cloneDir, Path.GetFileName(hostFilePath));
+        Assert.False(File.Exists(incorrectRootPlacement), "Task file should not be placed directly in worker-tasks root");
+    }
+
+    [Fact]
+    public async Task SyncTaskToDiskAsync_WithCloneDirectoryHavingTrailingSlash_DoesNotDoubleNestDocsTasks()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var task = new ForgeTask
+        {
+            Id = 920,
+            WorkspaceId = 1,
+            Title = "Task with Trailing Slash Clone",
+            Status = TaskOverallStatus.Open
+        };
+        await repo.CreateAsync(task);
+
+        var cloneDir = Path.Combine(_tempWorkspaceDir, "clone-trailing");
+        var cloneDocsTasks = Path.Combine(cloneDir, "docs", "tasks") + Path.DirectorySeparatorChar;
+        Directory.CreateDirectory(cloneDocsTasks);
+
+        var hostFilePath = await sync.SyncTaskToDiskAsync(
+            task,
+            _tempWorkspaceDir,
+            dependencies: null,
+            agentProfileId: null,
+            cloneDirectory: cloneDocsTasks);
+
+        var expectedFile = Path.Combine(cloneDir, "docs", "tasks", Path.GetFileName(hostFilePath));
+        Assert.True(File.Exists(expectedFile), $"File should exist at {expectedFile}");
+
+        var doubleNestedDir = Path.Combine(cloneDir, "docs", "tasks", "docs", "tasks");
+        Assert.False(Directory.Exists(doubleNestedDir), "Trailing slash must not cause docs/tasks/docs/tasks double nesting");
+    }
+
+    [Fact]
+    public async Task SyncAllTasksToDiskAsync_WhenOldCloneFileHasDivergentName_DeletesOldCloneFileAndWritesMatchingHostFile()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var task = new ForgeTask
+        {
+            Id = 930,
+            WorkspaceId = 1,
+            Title = "Renamed Task",
+            Status = TaskOverallStatus.Open
+        };
+        await repo.CreateAsync(task);
+
+        var cloneDir = Path.Combine(_tempWorkspaceDir, "clone-stale-cleanup");
+        var cloneTasksDir = Path.Combine(cloneDir, "docs", "tasks");
+        Directory.CreateDirectory(cloneTasksDir);
+
+        // Pre-create stale file with old slug in clone directory
+        var staleCloneFile = Path.Combine(cloneTasksDir, "2026-10-18-outdated-slug.md");
+        var staleFrontmatter = "---\nid: 930\ntitle: Old Outdated Title\nstatus: Open\n---\n# Old Outdated Title\n";
+        await File.WriteAllTextAsync(staleCloneFile, staleFrontmatter);
+
+        var workspace = new Workspace { Id = 1, Name = "Test WS", RepositoryPath = _tempWorkspaceDir };
+
+        var result = await sync.SyncAllTasksToDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            hostRepositoryPath: _tempWorkspaceDir,
+            cloneDirectory: cloneDir);
+
+        var hostFile = result.WrittenPaths[930];
+        var matchingCloneFile = Path.Combine(cloneTasksDir, Path.GetFileName(hostFile));
+
+        Assert.True(File.Exists(matchingCloneFile), $"New matching clone file must exist at {matchingCloneFile}");
+        Assert.False(File.Exists(staleCloneFile), $"Stale clone file with divergent name {staleCloneFile} must have been deleted");
+    }
+
+    [Fact]
+    public async Task ResolveCloneTasksDirectoryAsync_WhenWorkspacePathIsNotWorktree_DoesNotMatchSiblingFolder()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var customRepoDir = Path.Combine(_tempWorkspaceDir, "MyCustomProject");
+        var siblingClone = Path.Combine(_tempWorkspaceDir, "clone");
+        Directory.CreateDirectory(customRepoDir);
+        Directory.CreateDirectory(siblingClone);
+
+        var workspace = new Workspace
+        {
+            Id = 940,
+            Name = "MyCustomProject",
+            RepositoryPath = customRepoDir,
+            Ext4MirrorPath = null
+        };
+
+        var resolved = await sync.ResolveCloneTasksDirectoryAsync(
+            workspaceId: 940,
+            workspace: workspace,
+            workspacePath: customRepoDir);
+
+        Assert.Null(resolved);
     }
 }
 

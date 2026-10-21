@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
@@ -134,7 +135,9 @@ public class TaskReviewDiskReadBackTests : IDisposable
         syncServices.AddSingleton<ITaskRepository>(taskRepo);
         syncServices.AddSingleton<IDependencyResolutionEngine>(depEngine);
         var syncSp = syncServices.BuildServiceProvider();
-        var syncService = new TaskMarkdownSyncService(syncSp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>());
+        var syncService = new TaskMarkdownSyncService(
+            syncSp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
+            new Mock<IWorkspacePathResolver>().Object);
 
         var harness = new TestHarness();
         var harnessRegistry = new TestHarnessRegistry(harness);

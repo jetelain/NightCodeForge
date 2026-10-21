@@ -5,9 +5,11 @@ using NightCodeForge.Agents.Ideation;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Transcripts;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
 
 namespace NightCodeForge.Agents.Tests;
@@ -866,6 +868,83 @@ Let me know what you think!";
         Assert.Contains("sub-tasks", profile.SystemPrompt);
         Assert.Contains("open questions", profile.SystemPrompt);
         Assert.Contains("task review", profile.SystemPrompt);
+    }
+
+    [Fact]
+    public async Task ConverseAsync_PreSyncsBacklogToCloneDocsTasks_AndInstructsBacklogAwareness()
+    {
+        var mockSync = new Mock<ITaskMarkdownSyncService>();
+        var capturedMessages = new List<ChatMessage>();
+        var fakeClient = new MessageCapturingChatClient(msgs => capturedMessages = msgs.ToList())
+        {
+            ResponseToReturn = "Understood."
+        };
+
+        var service = new TestIdeationServiceBuilder
+        {
+            BaseChatClient = fakeClient,
+            MarkdownSyncService = mockSync.Object
+        }.Build();
+
+        var workspace = CreateWorkspace(15);
+
+        await service.ConverseAsync(workspace, "Brainstorm new initiatives");
+
+        // Verify SyncAllTasksToDiskAsync was called to populate clone docs/tasks
+        mockSync.Verify(s => s.SyncAllTasksToDiskAsync(
+            workspace,
+            It.IsAny<string>(),
+            It.IsAny<string?>(),
+            It.IsAny<string?>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        // Verify system prompt instructs agent about existing backlog and docs/tasks
+        var systemMsg = capturedMessages.FirstOrDefault(m => m.Role == ChatRole.System);
+        Assert.NotNull(systemMsg);
+        Assert.Contains("docs/tasks", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("backlog", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ConverseAsync_WhenExt4MirrorPathExists_PrefersExt4MirrorPathEvenIfWorkingCloneFails()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ideation-ext4-" + Guid.NewGuid().ToString("N"));
+        var cloneDir = Path.Combine(tempDir, "custom-clone");
+        Directory.CreateDirectory(cloneDir);
+
+        try
+        {
+            var mockPathResolver = new Mock<IWorkspacePathResolver>();
+            mockPathResolver.Setup(r => r.ToHostPath(cloneDir)).Returns(cloneDir);
+            mockPathResolver.Setup(r => r.GetAgentWorkingClonePath(It.IsAny<int>()))
+                .Throws(new InvalidOperationException("WSL unavailable"));
+
+            var mockSync = new Mock<ITaskMarkdownSyncService>();
+            var fakeClient = new FakeChatClient { ResponseToReturn = "Acknowledged." };
+
+            var service = new TestIdeationServiceBuilder
+            {
+                BaseChatClient = fakeClient,
+                MarkdownSyncService = mockSync.Object,
+                PathResolver = mockPathResolver.Object
+            }.Build();
+
+            var workspace = CreateWorkspace(16, path: tempDir);
+            workspace.Ext4MirrorPath = cloneDir;
+
+            await service.ConverseAsync(workspace, "Plan sprint");
+
+            mockSync.Verify(s => s.SyncAllTasksToDiskAsync(
+                workspace,
+                workspace.RepositoryPath,
+                workspace.RepositoryPath,
+                cloneDir,
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
     }
 }
 

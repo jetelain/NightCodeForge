@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
@@ -38,7 +40,9 @@ public class CoreCoverageTests : IDisposable
         services.AddSingleton<ITaskDependencyStore>(depStore);
         services.AddSingleton<IDependencyResolutionEngine>(new DependencyResolutionEngine(depStore));
         var sp = services.BuildServiceProvider();
-        return new TaskMarkdownSyncService(sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>());
+        return new TaskMarkdownSyncService(
+            sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
+            new Mock<IWorkspacePathResolver>().Object);
     }
 
     [Fact]

@@ -86,7 +86,9 @@ public static class ServiceCollectionExtensions
 
         // 8. Markdown ForgeTask Mirroring
         services.TryAddSingleton<ITaskMarkdownSyncService>(sp =>
-            new TaskMarkdownSyncService(sp.GetRequiredService<IServiceScopeFactory>()));
+            new TaskMarkdownSyncService(
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp.GetRequiredService<IWorkspacePathResolver>()));
 
         // 9. Deterministic Quality Gate Stages
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicBuildStage>();

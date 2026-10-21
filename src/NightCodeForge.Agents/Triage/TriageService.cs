@@ -20,6 +20,7 @@ public class TriageService : ITriageService
     private readonly IWorkspaceRepository _workspaceRepository;
     private readonly IHarnessRegistry _harnessRegistry;
     private readonly ITaskMarkdownSyncService _markdownSyncService;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
     private readonly ILogger<TriageService> _logger;
 
@@ -28,6 +29,7 @@ public class TriageService : ITriageService
         IWorkspaceRepository workspaceRepository,
         IHarnessRegistry harnessRegistry,
         ITaskMarkdownSyncService markdownSyncService,
+        IWorkspacePathResolver pathResolver,
         IGlobalOptimizationSettingsService globalOptimizationSettings,
         ILogger<TriageService> logger)
     {
@@ -35,6 +37,7 @@ public class TriageService : ITriageService
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _harnessRegistry = harnessRegistry ?? throw new ArgumentNullException(nameof(harnessRegistry));
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _globalOptimizationSettings = globalOptimizationSettings ?? throw new ArgumentNullException(nameof(globalOptimizationSettings));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -53,6 +56,49 @@ public class TriageService : ITriageService
 
         _logger.LogInformation("Starting untrusted intake triage for '{ReportTitle}' on workspace #{WorkspaceId} ({BaseBranch})",
             request.Title, workspace.Id, baseBranch);
+
+        // Pre-sync existing backlog tasks into clone/docs/tasks so the triage agent knows about existing backlog
+        string? cloneDir = null;
+        if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            var customClone = _pathResolver.ToHostPath(workspace.Ext4MirrorPath);
+            if (Directory.Exists(customClone)) cloneDir = customClone;
+        }
+        if (cloneDir == null && workspace.Id > 0)
+        {
+            try
+            {
+                var canonicalClone = _pathResolver.GetAgentWorkingClonePath(workspace.Id);
+                if (!string.IsNullOrWhiteSpace(canonicalClone))
+                {
+                    var hostClone = _pathResolver.ToHostPath(canonicalClone);
+                    if (Directory.Exists(hostClone)) cloneDir = hostClone;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not resolve working clone directory for workspace #{WorkspaceId}", workspace.Id);
+            }
+        }
+
+        var repoPath = (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
+            ? workspace.RepositoryPath
+            : cloneDir;
+
+        if (string.IsNullOrWhiteSpace(repoPath))
+        {
+            throw new DirectoryNotFoundException(
+                $"Neither workspace repository path '{workspace.RepositoryPath}' nor agent clone directory exists for workspace #{workspace.Id}.");
+        }
+
+        try
+        {
+            await _markdownSyncService.SyncAllTasksToDiskAsync(workspace, repoPath, repoPath, cloneDirectory: cloneDir, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to pre-sync existing backlog tasks to clone/docs/tasks for workspace #{WorkspaceId}", workspace.Id);
+        }
 
         // 1. Resolve triage agent profile with RestrictedReadOnly sandbox tier and ReadOnly agent mode
         var profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, StandardStageIds.Triage, cancellationToken);
@@ -81,7 +127,7 @@ public class TriageService : ITriageService
         var pipelineContext = new PipelineContext(triageTask, workspace);
         pipelineContext.CurrentProfile = profile;
 
-        var stageDirective = "Analyze the reported task against the repository base branch. Determine affected files and acceptance criteria. Call propose_tasks to recommend structured backlog items. You have read-only access and cannot modify code or access external networks. If the reported task or method is missing from the base branch, verify its absence in the codebase and promptly propose the needed feature or bug backlog item via propose_tasks without exhaustively exploring other branches.";
+        var stageDirective = "Analyze the reported task against the repository base branch. Determine affected files and acceptance criteria. Inspect existing backlog tasks in docs/tasks/ to ensure the issue is not already reported, in progress, or planned. Call propose_tasks to recommend structured backlog items. You have read-only access and cannot modify code or access external networks. If the reported task or method is missing from the base branch, verify its absence in the codebase and promptly propose the needed feature or bug backlog item via propose_tasks without exhaustively exploring other branches.";
 
         var workspacePath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
             ? workspace.Ext4MirrorPath
@@ -102,7 +148,7 @@ public class TriageService : ITriageService
             StageDirective = stageDirective,
             RequiredMode = AgentMode.ReadOnly,
             WorkspacePath = workspacePath,
-            BootstrapPrompt = $"External Report to Triage:\nTitle: {request.Title}\nDescription:\n{request.Description}\n\nPlease inspect the codebase, determine affected components, and invoke propose_tasks to recommend concrete backlog items.",
+            BootstrapPrompt = $"External Report to Triage:\nTitle: {request.Title}\nDescription:\n{request.Description}\n\nPlease inspect the codebase and check existing backlog tasks in docs/tasks/, determine affected components, and invoke propose_tasks to recommend concrete backlog items.",
             OptimizationFlags = profile.OptimizationFlags ?? _globalOptimizationSettings?.GetFlags() ?? new LocalOptimizationFlags(),
             PipelineContext = pipelineContext
         };
@@ -145,18 +191,22 @@ public class TriageService : ITriageService
                 createdTasks.Add(created);
                 _logger.LogInformation("Triage generated suggested task #{NewTaskId}: '{Title}'", created.Id, created.Title);
 
-                // Mirror new suggested task to docs/tasks/
-                if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
+                // Mirror new suggested task to docs/tasks/ (both workspace repository and clone)
+                var syncTarget = (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
+                    ? workspace.RepositoryPath
+                    : cloneDir;
+
+                if (!string.IsNullOrWhiteSpace(syncTarget))
                 {
                     try
                     {
-                        var tasksDir = Path.Combine(workspace.RepositoryPath, "docs", "tasks");
-                        Directory.CreateDirectory(tasksDir);
-                        var slug = SanitizeSlug(created.Title);
-                        var fileName = $"{DateTime.UtcNow:yyyy-MM-dd}-{slug}.md";
-                        var filePath = Path.Combine(tasksDir, fileName);
-                        var markdown = _markdownSyncService.GenerateMarkdown(created);
-                        await File.WriteAllTextAsync(filePath, markdown, cancellationToken);
+                        await _markdownSyncService.SyncTaskToDiskAsync(
+                            created,
+                            syncTarget,
+                            dependencies: null,
+                            agentProfileId: null,
+                            cloneDirectory: cloneDir,
+                            cancellationToken: cancellationToken);
                     }
                     catch (Exception mex)
                     {
@@ -167,12 +217,5 @@ public class TriageService : ITriageService
         }
 
         return createdTasks;
-    }
-
-    private static string SanitizeSlug(string title)
-    {
-        if (string.IsNullOrWhiteSpace(title)) return "task";
-        var cleaned = System.Text.RegularExpressions.Regex.Replace(title.ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-');
-        return string.IsNullOrWhiteSpace(cleaned) ? "task" : cleaned;
     }
 }

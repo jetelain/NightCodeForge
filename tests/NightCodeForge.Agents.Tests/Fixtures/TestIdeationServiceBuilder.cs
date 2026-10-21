@@ -17,12 +17,21 @@ using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
 
 public class TestIdeationServiceBuilder
 {
-    public IWorkspacePathResolver PathResolver { get; set; } = new Mock<IWorkspacePathResolver>().Object;
+    public IWorkspacePathResolver PathResolver { get; set; } = CreateDefaultPathResolver();
     public IOllamaChatClientFactory? ChatClientFactory { get; set; }
+
+    private static IWorkspacePathResolver CreateDefaultPathResolver()
+    {
+        var mock = new Mock<IWorkspacePathResolver>();
+        mock.Setup(r => r.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
+        mock.Setup(r => r.GetAgentWorkingClonePath(It.IsAny<int>())).Returns<int>(id => $"~/.nightcodeforge/wks/{id}/clone");
+        return mock.Object;
+    }
     public IChatClient? BaseChatClient { get; set; }
     public IExecutionEnvironmentProvider EnvProvider { get; set; } = new SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object);
     public IWebSearchService WebSearchService { get; set; } = new Mock<IWebSearchService>().Object;
@@ -34,6 +43,7 @@ public class TestIdeationServiceBuilder
     public IGlobalOptimizationSettingsService GlobalOptimizationSettings { get; set; } = new Mock<IGlobalOptimizationSettingsService>().Object;
     public SkillsService SkillsService { get; set; } = new();
     public IWorkspaceRepository WorkspaceRepository { get; set; } = new InMemoryWorkspaceRepository();
+    public ITaskMarkdownSyncService MarkdownSyncService { get; set; } = new Mock<ITaskMarkdownSyncService>().Object;
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
     public ILogger<IdeationService> Logger { get; set; } = NullLogger<IdeationService>.Instance;
     public ILogger<CanonicalTools> CanonicalToolsLogger { get; set; } = NullLogger<CanonicalTools>.Instance;
@@ -61,6 +71,7 @@ public class TestIdeationServiceBuilder
             GlobalOptimizationSettings,
             SkillsService,
             WorkspaceRepository,
+            MarkdownSyncService,
             LlmOptions,
             Logger,
             CanonicalToolsLogger,

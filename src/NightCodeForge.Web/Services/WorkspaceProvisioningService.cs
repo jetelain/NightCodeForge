@@ -297,6 +297,30 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
             }
 
             await EnsureGitIgnoreEntriesAsync(workspace.RepositoryPath, cancellationToken);
+
+            // Scaffold docs/tasks/ in clone mirror and sync tasks to clone/docs/tasks
+            var mirrorPath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
+                ? workspace.Ext4MirrorPath
+                : _pathResolver.GetAgentWorkingClonePath(workspace.Id);
+
+            if (!string.IsNullOrWhiteSpace(mirrorPath))
+            {
+                var hostMirror = _pathResolver.ToHostPath(mirrorPath);
+                if (!string.IsNullOrWhiteSpace(hostMirror) && Directory.Exists(hostMirror))
+                {
+                    var cloneDocsTasks = Path.Combine(hostMirror, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
+                    if (!Directory.Exists(cloneDocsTasks))
+                    {
+                        Directory.CreateDirectory(cloneDocsTasks);
+                    }
+                    await _markdownSyncService.SyncAllTasksToDiskAsync(
+                        workspace,
+                        workspace.RepositoryPath,
+                        workspace.RepositoryPath,
+                        cloneDirectory: hostMirror,
+                        cancellationToken: cancellationToken);
+                }
+            }
         }
         catch (Exception ex)
         {

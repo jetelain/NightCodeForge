@@ -19,6 +19,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 
@@ -48,6 +49,7 @@ public partial class IdeationService : IIdeationService
     private readonly AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer _activityStreamer;
     private readonly IWorkspacePathResolver _pathResolver;
+    private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly SessionTranscriptService _transcriptService;
     private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
     private readonly ILogger<IdeationService> _logger;
@@ -70,6 +72,7 @@ public partial class IdeationService : IIdeationService
         IGlobalOptimizationSettingsService globalOptimizationSettings,
         SkillsService skillsService,
         IWorkspaceRepository workspaceRepository,
+        ITaskMarkdownSyncService markdownSyncService,
         Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
         ILogger<IdeationService> logger,
         ILogger<CanonicalTools> canonicalToolsLogger,
@@ -87,6 +90,7 @@ public partial class IdeationService : IIdeationService
         _globalOptimizationSettings = globalOptimizationSettings ?? throw new ArgumentNullException(nameof(globalOptimizationSettings));
         _skillsService = skillsService ?? throw new ArgumentNullException(nameof(skillsService));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
+        _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         ArgumentNullException.ThrowIfNull(llmOptions);
         _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -195,6 +199,43 @@ public partial class IdeationService : IIdeationService
         await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.StageStarted, "Starting ideation discovery", cancellationToken, metadata);
 
         var repoPath = !string.IsNullOrEmpty(workspace.RepositoryPath) ? workspace.RepositoryPath : Directory.GetCurrentDirectory();
+
+        // Pre-sync existing backlog tasks into clone/docs/tasks so the ideation agent has full visibility of existing tasks
+        string? cloneDir = null;
+        if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            var customClone = _pathResolver.ToHostPath(workspace.Ext4MirrorPath);
+            if (Directory.Exists(customClone)) cloneDir = customClone;
+        }
+        if (cloneDir == null && workspace.Id > 0)
+        {
+            try
+            {
+                var canonicalClone = _pathResolver.GetAgentWorkingClonePath(workspace.Id);
+                if (!string.IsNullOrWhiteSpace(canonicalClone))
+                {
+                    var hostClone = _pathResolver.ToHostPath(canonicalClone);
+                    if (Directory.Exists(hostClone)) cloneDir = hostClone;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not resolve working clone directory for workspace #{WorkspaceId}", workspace.Id);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(repoPath) && Directory.Exists(repoPath))
+        {
+            try
+            {
+                await _markdownSyncService.SyncAllTasksToDiskAsync(workspace, repoPath, repoPath, cloneDirectory: cloneDir, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to pre-sync existing backlog tasks to clone/docs/tasks for workspace #{WorkspaceId}", workspace.Id);
+            }
+        }
+
         var agentsRules = await _agentsMdService.IngestRulesAsync(repoPath, cancellationToken);
         var projectConfig = CodeStackPresets.ResolveConfig(repoPath, null);
         var projectContext = _agentsMdService.FormatProjectContextSection(agentsRules, projectConfig, workspace);
@@ -298,6 +339,12 @@ When proposing implementation tasks to the developer, adhere to the following ru
    - Structure each task's description with clear Markdown sections (## Summary, ## Sub-tasks / Scope, ## Testing Plan, ## Open Questions if applicable).
    - If multiple tasks are proposed, they will be scheduled sequentially with dependencies established automatically (or via dependsOnTitles).
    - After proposing tasks, explain your proposal and architectural rationale clearly to the developer.
+
+5. EXISTING BACKLOG & ISSUE AWARENESS:
+   - Existing backlog tasks and issues are maintained as Markdown specifications in 'docs/tasks/'.
+   - Before proposing new tasks, inspect 'docs/tasks/' (using 'read' or 'bash' e.g. ls docs/tasks) to understand currently planned, in-progress, or completed work.
+   - Do NOT propose duplicate tasks for issues already present in the backlog.
+   - You may reference existing task IDs or link dependencies (via dependsOnTitles) to existing backlog tasks when planning follow-ups or prerequisite work.
 </task_planning_guidelines>";
 
         // Skills catalog (lean ~25 tokens/skill) is only injected when the agent can call load_skill.

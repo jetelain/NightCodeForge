@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 
@@ -39,7 +41,9 @@ public class TaskFlexibleDependencySyncTests : IDisposable
         services.AddSingleton<Dependencies.ITaskDependencyStore>(depStore);
         services.AddSingleton<Dependencies.IDependencyResolutionEngine>(new Dependencies.DependencyResolutionEngine(depStore));
         var sp = services.BuildServiceProvider();
-        return new TaskMarkdownSyncService(sp.GetRequiredService<IServiceScopeFactory>());
+        return new TaskMarkdownSyncService(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            new Mock<IWorkspacePathResolver>().Object);
     }
 
     [Fact]

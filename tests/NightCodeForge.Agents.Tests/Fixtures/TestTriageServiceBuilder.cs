@@ -15,8 +15,17 @@ public class TestTriageServiceBuilder
     public IWorkspaceRepository WorkspaceRepository { get; set; } = new InMemoryWorkspaceRepository();
     public IHarnessRegistry HarnessRegistry { get; set; } = new Mock<IHarnessRegistry>().Object;
     public ITaskMarkdownSyncService MarkdownSyncService { get; set; } = new Mock<ITaskMarkdownSyncService>().Object;
+    public IWorkspacePathResolver PathResolver { get; set; } = CreateDefaultPathResolver();
     public IGlobalOptimizationSettingsService GlobalOptimizationSettings { get; set; } = new FakeGlobalOptimizationSettingsService();
     public ILogger<TriageService> Logger { get; set; } = NullLogger<TriageService>.Instance;
+
+    private static IWorkspacePathResolver CreateDefaultPathResolver()
+    {
+        var mock = new Mock<IWorkspacePathResolver>();
+        mock.Setup(r => r.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
+        mock.Setup(r => r.GetAgentWorkingClonePath(It.IsAny<int>())).Returns<int>(id => $"~/.nightcodeforge/wks/{id}/clone");
+        return mock.Object;
+    }
 
     public TriageService Build()
     {
@@ -25,6 +34,7 @@ public class TestTriageServiceBuilder
             WorkspaceRepository,
             HarnessRegistry,
             MarkdownSyncService,
+            PathResolver,
             GlobalOptimizationSettings,
             Logger);
     }

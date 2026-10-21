@@ -51,7 +51,9 @@ public class TaskSyncHygieneAndAuditTrailTests : IDisposable
         services.AddSingleton<IDependencyResolutionEngine>(depEngine);
         var sp = services.BuildServiceProvider();
 
-        var syncService = new TaskMarkdownSyncService(sp.GetRequiredService<IServiceScopeFactory>());
+        var syncService = new TaskMarkdownSyncService(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            new Mock<IWorkspacePathResolver>().Object);
         return (syncService, taskRepo, depEngine, depStore);
     }
 

@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
 using YamlDotNet.Serialization;
@@ -27,6 +28,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     private static partial Regex DatePrefixRegex();
 
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly IDeserializer _yamlDeserializer;
     private readonly ISerializer _yamlSerializer;
     private readonly ConcurrentDictionary<string, byte> _suppressedHashes = new();
@@ -35,9 +37,12 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     private readonly TimeSpan _debounceWindow = TimeSpan.FromMilliseconds(300);
 
     [ActivatorUtilitiesConstructor]
-    public TaskMarkdownSyncService(IServiceScopeFactory scopeFactory)
+    public TaskMarkdownSyncService(
+        IServiceScopeFactory scopeFactory,
+        IWorkspacePathResolver pathResolver)
     {
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _yamlDeserializer = CreateYamlDeserializer();
         _yamlSerializer = CreateYamlSerializer();
     }
@@ -221,11 +226,181 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         return null;
     }
 
-    public async Task<string> SyncTaskToDiskAsync(
+    private static string NormalizeCloneTasksDirectory(string cloneDirectory)
+    {
+        var trimmed = cloneDirectory.TrimEnd('/', '\\');
+        var leaf = Path.GetFileName(trimmed);
+        var parent = Path.GetDirectoryName(trimmed);
+        var parentLeaf = !string.IsNullOrEmpty(parent) ? Path.GetFileName(parent) : null;
+
+        if (leaf.Equals(TaskSyncConstants.TasksSegment, StringComparison.OrdinalIgnoreCase) &&
+            parentLeaf?.Equals(TaskSyncConstants.DocsSegment, StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return trimmed;
+        }
+
+        return Path.Combine(trimmed, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
+    }
+
+    public string? ResolveCloneTasksDirectory(int workspaceId, Workspace? workspace = null, string? workspacePath = null)
+    {
+        return ResolveCloneTasksDirectoryAsync(workspaceId, workspace, workspacePath).GetAwaiter().GetResult();
+    }
+
+    public async Task<string?> ResolveCloneTasksDirectoryAsync(int workspaceId, Workspace? workspace = null, string? workspacePath = null, CancellationToken cancellationToken = default)
+    {
+        if (workspaceId <= 0) return null;
+
+        // Try to resolve workspace from repository if null
+        if (workspace == null)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var wsRepo = scope.ServiceProvider.GetService<IWorkspaceRepository>();
+                if (wsRepo != null)
+                {
+                    workspace = await wsRepo.GetByIdAsync(workspaceId, cancellationToken);
+                }
+            }
+            catch (Exception)
+            {
+                // Best-effort workspace lookup; continues with path resolver fallbacks
+            }
+        }
+
+        // 1. If explicit Ext4MirrorPath is present on workspace
+        if (workspace != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            var hostMirror = _pathResolver.ToHostPath(workspace.Ext4MirrorPath);
+            if (!string.IsNullOrWhiteSpace(hostMirror) && Directory.Exists(hostMirror))
+            {
+                return NormalizeCloneTasksDirectory(hostMirror);
+            }
+        }
+
+        // 2. Canonical working clone path
+        try
+        {
+            var canonicalClone = _pathResolver.GetAgentWorkingClonePath(workspaceId);
+            if (!string.IsNullOrWhiteSpace(canonicalClone))
+            {
+                var hostClone = _pathResolver.ToHostPath(canonicalClone);
+                if (!string.IsNullOrWhiteSpace(hostClone) && Directory.Exists(hostClone))
+                {
+                    return NormalizeCloneTasksDirectory(hostClone);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore path resolution failure if environment metadata is inaccessible
+        }
+
+        // 3. Fallback: Crucible path resolver targeting the clone (taskId = null)
+        try
+        {
+            var cruciblePath = _pathResolver.ResolveCruciblePath(workspaceId, string.Empty, null);
+            if (!string.IsNullOrWhiteSpace(cruciblePath) && Directory.Exists(cruciblePath))
+            {
+                return NormalizeCloneTasksDirectory(cruciblePath);
+            }
+        }
+        catch (Exception)
+        {
+            // Ignore if crucible resolution cannot map the directory
+        }
+
+        // 4. Fallback: Check if given workspacePath is an agent worktree / repo copy with sibling clone
+        // Note: Sibling clone applies when workspacePath is an isolated worktree or working copy (e.g. leaf is 'repo', 'task-*', 'wt-*', 'mirror')
+        var targetCandidate = !string.IsNullOrWhiteSpace(workspacePath) ? workspacePath : workspace?.RepositoryPath;
+        if (!string.IsNullOrWhiteSpace(targetCandidate))
+        {
+            try
+            {
+                var normPath = Path.GetFullPath(targetCandidate).TrimEnd('/', '\\');
+                var leafName = Path.GetFileName(normPath);
+                if (leafName.StartsWith("task-", StringComparison.OrdinalIgnoreCase) ||
+                    leafName.StartsWith("wt-", StringComparison.OrdinalIgnoreCase) ||
+                    leafName.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
+                    leafName.Equals("mirror", StringComparison.OrdinalIgnoreCase))
+                {
+                    var parentDir = Path.GetDirectoryName(normPath);
+                    if (!string.IsNullOrEmpty(parentDir))
+                    {
+                        var siblingClone = Path.Combine(parentDir, "clone");
+                        if (Directory.Exists(siblingClone))
+                        {
+                            return NormalizeCloneTasksDirectory(siblingClone);
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Ignore invalid path formats
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<string> ResolveCloneTargetFilePathAsync(string cloneTasksDir, string hostTargetFile, ForgeTask task, CancellationToken cancellationToken)
+    {
+        var hostFileName = Path.GetFileName(hostTargetFile);
+        if (!string.IsNullOrWhiteSpace(hostFileName))
+        {
+            var targetClonePath = Path.Combine(cloneTasksDir, hostFileName);
+
+            // Clean up any stale or renamed file holding this task's ID under a different name in clone
+            if (Directory.Exists(cloneTasksDir))
+            {
+                var files = Directory.GetFiles(cloneTasksDir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly);
+                foreach (var file in files)
+                {
+                    if (string.Equals(file, targetClonePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        var existingContent = await File.ReadAllTextAsync(file, cancellationToken);
+                        var (existingFm, _) = ParseMarkdown(existingContent, file);
+                        if (existingFm.Id == task.Id)
+                        {
+                            File.Delete(file);
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // Continue scanning other candidate files
+                    }
+                }
+            }
+
+            return targetClonePath;
+        }
+
+        return await ResolveTargetFilePathAsync(cloneTasksDir, task, cancellationToken);
+    }
+
+    public Task<string> SyncTaskToDiskAsync(
         ForgeTask task,
         string workspacePath,
         IReadOnlyList<int>? dependencies = null,
         string? agentProfileId = null,
+        CancellationToken cancellationToken = default)
+    {
+        return SyncTaskToDiskAsync(task, workspacePath, dependencies, agentProfileId, cloneDirectory: null, cancellationToken);
+    }
+
+    public async Task<string> SyncTaskToDiskAsync(
+        ForgeTask task,
+        string workspacePath,
+        IReadOnlyList<int>? dependencies,
+        string? agentProfileId,
+        string? cloneDirectory,
         CancellationToken cancellationToken = default)
     {
         var tasksDir = Path.Combine(workspacePath, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
@@ -238,13 +413,49 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         _suppressedHashes[hash] = 1;
 
         await File.WriteAllTextAsync(targetFile, markdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
+
+        // Keep issues in sync into clone/docs/tasks
+        var cloneTasksDir = !string.IsNullOrWhiteSpace(cloneDirectory)
+            ? NormalizeCloneTasksDirectory(cloneDirectory)
+            : await ResolveCloneTasksDirectoryAsync(task.WorkspaceId, task.Workspace, workspacePath, cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(cloneTasksDir))
+        {
+            try
+            {
+                var normClone = Path.GetFullPath(cloneTasksDir).TrimEnd('/', '\\');
+                var normTasks = Path.GetFullPath(tasksDir).TrimEnd('/', '\\');
+                if (!string.Equals(normClone, normTasks, StringComparison.OrdinalIgnoreCase))
+                {
+                    Directory.CreateDirectory(cloneTasksDir);
+                    var cloneTargetFile = await ResolveCloneTargetFilePathAsync(cloneTasksDir, targetFile, task, cancellationToken);
+                    _suppressedHashes[hash] = 1;
+                    await File.WriteAllTextAsync(cloneTargetFile, markdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
+                }
+            }
+            catch (Exception)
+            {
+                // Best-effort clone mirror write; primary workspace path already succeeded
+            }
+        }
+
         return targetFile;
+    }
+
+    public Task<SyncAllToDiskResult> SyncAllTasksToDiskAsync(
+        Workspace workspace,
+        string targetDirectory,
+        string? hostRepositoryPath = null,
+        CancellationToken cancellationToken = default)
+    {
+        return SyncAllTasksToDiskAsync(workspace, targetDirectory, hostRepositoryPath, cloneDirectory: null, cancellationToken);
     }
 
     public async Task<SyncAllToDiskResult> SyncAllTasksToDiskAsync(
         Workspace workspace,
         string targetDirectory,
-        string? hostRepositoryPath = null,
+        string? hostRepositoryPath,
+        string? cloneDirectory,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workspace);
@@ -265,6 +476,54 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             {
                 hostTasksDir = Path.Combine(hostRepositoryPath, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
                 Directory.CreateDirectory(hostTasksDir);
+            }
+
+            var cloneTasksDir = !string.IsNullOrWhiteSpace(cloneDirectory)
+                ? NormalizeCloneTasksDirectory(cloneDirectory)
+                : await ResolveCloneTasksDirectoryAsync(workspace.Id, workspace, targetDirectory, cancellationToken);
+
+            string? normalizedCloneTasksDir = null;
+            bool mirrorToClone = false;
+            var cloneExistingFilesById = new Dictionary<int, string>();
+
+            if (!string.IsNullOrWhiteSpace(cloneTasksDir))
+            {
+                try
+                {
+                    normalizedCloneTasksDir = Path.GetFullPath(cloneTasksDir).TrimEnd('/', '\\');
+                    var normTasksDir = Path.GetFullPath(tasksDir).TrimEnd('/', '\\');
+                    var normHostTasksDir = hostTasksDir != null ? Path.GetFullPath(hostTasksDir).TrimEnd('/', '\\') : null;
+
+                    mirrorToClone = !string.Equals(normalizedCloneTasksDir, normTasksDir, StringComparison.OrdinalIgnoreCase) &&
+                                    (normHostTasksDir == null || !string.Equals(normalizedCloneTasksDir, normHostTasksDir, StringComparison.OrdinalIgnoreCase));
+
+                    if (mirrorToClone)
+                    {
+                        Directory.CreateDirectory(cloneTasksDir);
+
+                        // Index existing clone markdown files once to avoid O(N^2) file reads and enable stale file cleanup
+                        foreach (var file in Directory.GetFiles(cloneTasksDir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly))
+                        {
+                            try
+                            {
+                                var content = await File.ReadAllTextAsync(file, cancellationToken);
+                                var (fm, _) = ParseMarkdown(content, file);
+                                if (fm.Id.HasValue && fm.Id.Value > 0)
+                                {
+                                    cloneExistingFilesById[fm.Id.Value] = file;
+                                }
+                            }
+                            catch (Exception)
+                            {
+                                // Ignore unparseable or locked candidate files
+                            }
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    mirrorToClone = false;
+                }
             }
 
             var allTasks = await taskRepo.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
@@ -314,6 +573,30 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     var hostFile = Path.Combine(hostTasksDir, Path.GetFileName(targetFile));
                     _suppressedHashes[hash] = 1;
                     await File.WriteAllTextAsync(hostFile, markdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
+                }
+
+                if (mirrorToClone && normalizedCloneTasksDir != null)
+                {
+                    try
+                    {
+                        var cloneFile = Path.Combine(cloneTasksDir!, Path.GetFileName(targetFile));
+
+                        // If an older file existed for this task under a different name, delete it to ensure exact parity
+                        if (cloneExistingFilesById.TryGetValue(task.Id, out var oldCloneFile) &&
+                            !string.Equals(Path.GetFullPath(oldCloneFile), Path.GetFullPath(cloneFile), StringComparison.OrdinalIgnoreCase) &&
+                            File.Exists(oldCloneFile))
+                        {
+                            File.Delete(oldCloneFile);
+                        }
+
+                        _suppressedHashes[hash] = 1;
+                        await File.WriteAllTextAsync(cloneFile, markdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
+                        cloneExistingFilesById[task.Id] = cloneFile;
+                    }
+                    catch (Exception)
+                    {
+                        // Best effort mirror to clone
+                    }
                 }
             }
 
@@ -1372,9 +1655,38 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         }
     }
 
-    public async Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive = true, CancellationToken cancellationToken = default)
+    public Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive = true, CancellationToken cancellationToken = default)
+        => ArchiveOrCleanupTaskFileAsync(task, workspacePath, archive, cloneDirectory: null, cancellationToken);
+
+    public async Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive, string? cloneDirectory, CancellationToken cancellationToken = default)
     {
         var tasksDir = Path.Combine(workspacePath, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
+        await ArchiveOrCleanupInDirectoryAsync(tasksDir, task.Id, archive, cancellationToken);
+
+        var cloneTasksDir = !string.IsNullOrWhiteSpace(cloneDirectory)
+            ? NormalizeCloneTasksDirectory(cloneDirectory)
+            : await ResolveCloneTasksDirectoryAsync(task.WorkspaceId, task.Workspace, workspacePath, cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(cloneTasksDir))
+        {
+            try
+            {
+                var normClone = Path.GetFullPath(cloneTasksDir).TrimEnd('/', '\\');
+                var normTasks = Path.GetFullPath(tasksDir).TrimEnd('/', '\\');
+                if (!string.Equals(normClone, normTasks, StringComparison.OrdinalIgnoreCase))
+                {
+                    await ArchiveOrCleanupInDirectoryAsync(cloneTasksDir, task.Id, archive, cancellationToken);
+                }
+            }
+            catch (Exception)
+            {
+                // Best-effort cleanup in clone tasks directory
+            }
+        }
+    }
+
+    private async Task ArchiveOrCleanupInDirectoryAsync(string tasksDir, int taskId, bool archive, CancellationToken cancellationToken)
+    {
         if (!Directory.Exists(tasksDir)) return;
 
         var files = Directory.GetFiles(tasksDir, TaskSyncConstants.MarkdownPattern);
@@ -1384,7 +1696,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             {
                 var content = await File.ReadAllTextAsync(file, cancellationToken);
                 var (fm, _) = ParseMarkdown(content, file);
-                if (fm.Id == task.Id)
+                if (fm.Id == taskId)
                 {
                     if (archive)
                     {

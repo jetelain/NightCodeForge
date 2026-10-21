@@ -1,3 +1,4 @@
+using Moq;
 using NightCodeForge.Agents.Triage;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
@@ -238,6 +239,149 @@ public class TriageServiceTests : IDisposable
         Assert.Equal(6, ex.WorkspaceId);
     }
 
+    [Fact]
+    public async Task TriageExternalReportAsync_PreSyncsBacklogToCloneDocsTasks_AndInstructsAgent()
+    {
+        string? capturedPrompt = null;
+        _fakeHarness.OnRunStage = ctx =>
+        {
+            capturedPrompt = ctx.StageDirective;
+            return AgentRunResult.Completed(
+                new AgentRunMetrics(10, 10, 10, 20),
+                summary: "Triage check");
+        };
+
+        var mockSync = new Mock<ITaskMarkdownSyncService>();
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = mockSync.Object
+        }.Build();
+
+        var request = new TriageReportRequest(
+            Title: "Bug report",
+            Description: "Unexpected behavior.");
+
+        await triageService.TriageExternalReportAsync(_workspace, request);
+
+        mockSync.Verify(s => s.SyncAllTasksToDiskAsync(
+            _workspace,
+            It.IsAny<string>(),
+            It.IsAny<string?>(),
+            It.IsAny<string?>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        Assert.NotNull(capturedPrompt);
+        Assert.Contains("docs/tasks", capturedPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("backlog", capturedPrompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task TriageExternalReportAsync_WhenTaskProposed_SyncsToBothRepoAndCloneDirectory()
+    {
+        var cloneDir = Path.Combine(_tempDir, "clone");
+        Directory.CreateDirectory(cloneDir);
+
+        _workspace.Ext4MirrorPath = cloneDir;
+
+        _fakeHarness.OnRunStage = ctx =>
+        {
+            ctx.PipelineContext?.DataBag.Set(PipelineDataBagKeys.PendingProposals, new List<TaskProposal>
+            {
+                new("Add clone sync test", "Testing clone sync in triage", "feature")
+            });
+            return AgentRunResult.Completed(new AgentRunMetrics(10, 10, 10, 20), summary: "Proposed.");
+        };
+
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = _markdownSyncService
+        }.Build();
+
+        var request = new TriageReportRequest(
+            Title: "Clone sync test",
+            Description: "Ensure proposed task is mirrored to clone docs/tasks.");
+
+        var result = await triageService.TriageExternalReportAsync(_workspace, request);
+
+        Assert.Single(result);
+        var hostTasksDir = Path.Combine(_workspace.RepositoryPath, "docs", "tasks");
+        Assert.True(Directory.Exists(hostTasksDir));
+        Assert.NotEmpty(Directory.GetFiles(hostTasksDir, "*.md"));
+
+        var cloneTasksDir = Path.Combine(cloneDir, "docs", "tasks");
+        Assert.True(Directory.Exists(cloneTasksDir));
+        var cloneFiles = Directory.GetFiles(cloneTasksDir, "*.md");
+        Assert.Single(cloneFiles);
+    }
+
+    [Fact]
+    public async Task TriageExternalReportAsync_WhenNeitherRepositoryNorCloneExists_ThrowsDirectoryNotFoundException()
+    {
+        var nonExistentRepo = Path.Combine(_tempDir, "does-not-exist");
+        var invalidWorkspace = new Workspace
+        {
+            Id = 99,
+            Name = "Invalid Workspace",
+            RepositoryPath = nonExistentRepo,
+            Ext4MirrorPath = null
+        };
+
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = _markdownSyncService
+        }.Build();
+
+        var request = new TriageReportRequest("Bug", "Crash on launch");
+
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() =>
+            triageService.TriageExternalReportAsync(invalidWorkspace, request));
+    }
+
+    [Fact]
+    public async Task TriageExternalReportAsync_WhenExt4MirrorPathExists_PrefersExt4MirrorPathEvenIfWorkingCloneFails()
+    {
+        var cloneDir = Path.Combine(_tempDir, "custom-mirror");
+        Directory.CreateDirectory(cloneDir);
+
+        var mockPathResolver = new Mock<IWorkspacePathResolver>();
+        mockPathResolver.Setup(r => r.ToHostPath(cloneDir)).Returns(cloneDir);
+        mockPathResolver.Setup(r => r.GetAgentWorkingClonePath(It.IsAny<int>()))
+            .Throws(new InvalidOperationException("WSL provider metadata failed"));
+
+        var mockSync = new Mock<ITaskMarkdownSyncService>();
+
+        _workspace.Ext4MirrorPath = cloneDir;
+
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = mockSync.Object,
+            PathResolver = mockPathResolver.Object
+        }.Build();
+
+        var request = new TriageReportRequest("Check Ext4 mirror", "Ensure custom clone mirror path is used");
+
+        await triageService.TriageExternalReportAsync(_workspace, request);
+
+        mockSync.Verify(s => s.SyncAllTasksToDiskAsync(
+            _workspace,
+            _workspace.RepositoryPath,
+            _workspace.RepositoryPath,
+            cloneDir,
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     private class FakeAgentHarness : IAgentHarness
     {
         public string HarnessId => "crucible";
@@ -276,8 +420,29 @@ public class TriageServiceTests : IDisposable
 
         public string ComputeContentHash(string content) => string.Empty;
 
-        public Task<string> SyncTaskToDiskAsync(ForgeTask task, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Path.Combine(workspacePath, "task.md"));
+        public Task<string> SyncTaskToDiskAsync(ForgeTask task, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default)
+        {
+            var dir = Path.Combine(workspacePath, "docs", "tasks");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"task-{task.Id}.md");
+            var content = GenerateMarkdown(task, dependencies, agentProfileId);
+            File.WriteAllText(path, content);
+            return Task.FromResult(path);
+        }
+
+        public Task<string> SyncTaskToDiskAsync(ForgeTask task, string workspacePath, IReadOnlyList<int>? dependencies, string? agentProfileId, string? cloneDirectory, CancellationToken cancellationToken = default)
+        {
+            var result = SyncTaskToDiskAsync(task, workspacePath, dependencies, agentProfileId, cancellationToken);
+            if (!string.IsNullOrEmpty(cloneDirectory) && Directory.Exists(cloneDirectory))
+            {
+                var cloneDir = Path.Combine(cloneDirectory, "docs", "tasks");
+                Directory.CreateDirectory(cloneDir);
+                var cloneFilePath = Path.Combine(cloneDir, $"task-{task.Id}.md");
+                var content = GenerateMarkdown(task, dependencies, agentProfileId);
+                File.WriteAllText(cloneFilePath, content);
+            }
+            return result;
+        }
 
         public Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task ProcessFileChangedAsync(string filePath, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
