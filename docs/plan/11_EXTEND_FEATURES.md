@@ -172,9 +172,10 @@ flowchart TD
 
 - [ ] **Step 11.14 (Intelligent Task Dependency Detection):**
   - [ ] Implement `IWorkspaceBacklogSummaryService` generating compact `<existing_workspace_tasks>` digests (excluding archived/closed tasks, capped to top 15–20 active tasks by priority order).
-  - [ ] Inject existing backlog digest into `IdeationService` system prompt.
-  - [ ] Inject existing backlog digest and dependency verification directives into Stage 1 Task Review directive in `CrucibleAgentHarness`.
-  - [ ] Update `TaskMarkdownSyncService` to parse `## Dependencies` from `docs/tasks/*.md` and sync `TaskDependency` records.
+  - [ ] Inject existing backlog digest into `IdeationService` system prompt with circular dependency prohibition.
+  - [ ] Inject existing backlog digest and dependency directives into Stage 1 Task Review directive in `CrucibleAgentHarness`.
+  - [ ] Direct Stage 1 Review Agent to populate `depends_on` in YAML frontmatter (with rationale under `## Dependencies`), enforce cycle rejection loopback, and verify `TaskMarkdownSyncService` dependency synchronization.
+  - [ ] Implement dynamic task suspension and full workflow reset in `TaskOrchestrator`: if Stage 1 reveals unclosed prerequisites, reset `task.Status = Open` and `CurrentStageId = TaskReview` to rerun full workflow once prerequisites close.
   - [ ] Render clickable prerequisite and downstream dependency chips in `KanbanCard.razor` and `TaskDetailDrawer.razor`.
 
 - [ ] **Step 11.16 (Task Attachments & Context Documents):**

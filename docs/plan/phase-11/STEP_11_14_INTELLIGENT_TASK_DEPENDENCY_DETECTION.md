@@ -20,8 +20,12 @@ This step instructs and equips both the **Ideation Agent** and the **Stage 1 (Ta
    - Populate `dependsOnTitles` or task IDs in [TaskProposal](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/ForgeTask.cs) / `propose_tasks` calls.
 3. **Verify & Enforce Dependencies in Stage 1 (Task Review):**
    - The Task Review agent explicitly inspects whether the task relies on APIs, models, or schema changes from another task that is not yet merged.
-   - Proactively links prerequisites or queries the maintainer via `ask` before coding begins.
-4. **Surface Dependencies Clearly in UI:**
+   - Proactively updates frontmatter `depends_on: [...]` and documents architectural rationale under `## Dependencies`.
+4. **Detect & Reject Circular Dependencies Fail-Fast:**
+   - Prohibit circular dependency links (`A -> B -> A`). Reject invalid edits immediately and prompt the agent to re-check the graph.
+5. **Dynamic Task Suspension & Workflow Reset on Unclosed Prerequisites:**
+   - If an unclosed prerequisite is detected during Stage 1, immediately suspend execution, reset `task.Status = TaskOverallStatus.Open`, and reset `CurrentStageId` to Stage 1. Once all prerequisites reach `Closed` (merged), the task is automatically re-enqueued to execute the full workflow from scratch against the updated repository state.
+6. **Surface Dependencies Clearly in UI:**
    - Display clickable dependency badges ("Depends on #12", "Blocks #15") and DAG relationship indicators across [KanbanCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor) and [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor).
 
 ---
@@ -39,24 +43,33 @@ flowchart TD
     end
 
     subgraph IdeationStage ["Ideation & Backlog Discovery"]
-        CompactSummary --> IdeationPrompt["Ideation System Prompt<br/>(<existing_tasks> section)"]
+        CompactSummary --> IdeationPrompt["Ideation System Prompt<br/>(<existing_workspace_tasks> section)"]
         IdeationPrompt --> AgentPropose["Agent calls propose_tasks(..., dependsOnTitles)"]
-        AgentPropose --> AutoLink["Save Task & Create TaskDependency records"]
+        AgentPropose --> CheckIdeationCycle{"Creates Cycle?"}
+        CheckIdeationCycle -- Yes --> RejectIdeationCycle["Reject & Return Error to Agent"]
+        CheckIdeationCycle -- No --> AutoLink["Save Task & Create TaskDependency records"]
     end
 
     subgraph ReviewStage ["Stage 1: Task Review & Specification"]
-        CompactSummary --> ReviewPrompt["Task Review Prompt<br/>(Analyze dependencies & race conditions)"]
+        CompactSummary --> ReviewPrompt["Task Review Prompt<br/>(Audit dependencies & race conditions)"]
         ReviewPrompt --> CodeInspect["Inspect Code & Proposed Architecture"]
-        CodeInspect --> CheckDeps{"Missing Prerequisite?"}
-        CheckDeps -- Yes --> AskOrLink["Call 'ask' or record in docs/tasks/ Dependencies"]
-        CheckDeps -- No --> ApprovePlan["Approve Plan & Proceed"]
-        AskOrLink --> UpdateDeps["Update TaskDependency in DB"]
+        CodeInspect --> CheckDeps{"Unmerged Prerequisite?"}
+        CheckDeps -- No --> ApprovePlan["Approve Plan & Advance to Implementation"]
+        CheckDeps -- Yes --> CheckReviewCycle{"Creates Directed Cycle?"}
+        CheckReviewCycle -- Yes --> RejectReviewCycle["Reject Dependency & Prompt Agent to Re-check"]
+        RejectReviewCycle --> ReviewPrompt
+        CheckReviewCycle -- No --> UpdateFrontmatter["Write depends_on to Frontmatter & Sync DB"]
+        UpdateFrontmatter --> CheckPrereqsClosed{"Are All Prerequisites Closed?"}
+        CheckPrereqsClosed -- Yes --> ApprovePlan
+        CheckPrereqsClosed -- No --> SuspendReset["Suspend Task Execution<br/>• Reset task.Status to Open<br/>• Reset CurrentStageId to Stage 1"]
     end
 
     subgraph Scheduler ["DAG Queue Dispatcher"]
-        UpdateDeps --> DAGCheck{"All DependsOn Tasks Completed?"}
-        DAGCheck -- No --> Hold["Hold in Backlog / WaitingForPrerequisites"]
-        DAGCheck -- Yes --> Queue["Enqueue to Hangfire Worker"]
+        SuspendReset --> Hold["Hold in Backlog / Waiting for Prerequisites"]
+        ApprovePlan --> QueueStage2["Enqueue to Next Stage (Stage 2/3)"]
+        Hold --> PrereqClosed{"All Prerequisites Merged & Closed?"}
+        PrereqClosed -- Yes --> ReQueue["Re-enqueue Task to Rerun Full Workflow from Stage 1"]
+        ReQueue --> ReviewPrompt
     end
 ```
 
@@ -112,6 +125,7 @@ When planning or proposing tasks:
 2. DO NOT propose duplicate tasks for capabilities already captured in existing tasks or already merged in the codebase.
 3. If your proposed task builds on, calls, or extends interfaces or data models introduced in an existing open/suggested task, you MUST set 'dependsOnTitles' in your 'propose_tasks' call with the title or ID of the prerequisite task.
 4. Explain to the developer why this dependency exists and the recommended order of execution.
+5. AVOID CIRCULAR DEPENDENCIES: Ensure your dependencies form a strict acyclic graph. Circular dependencies will be rejected with an error.
 </dependency_identification_rules>
 ```
 
@@ -121,35 +135,108 @@ Updated `StandardStageIds.TaskReview` directive:
 StandardStageIds.TaskReview or "stage-1" =>
     "You are a Staff Software Architect & Requirements Investigator. " +
     "1. Thoroughly investigate the task requirements and inspect the codebase using 'read' and 'bash'. " +
-    "2. BACKLOG DEPENDENCY AUDIT: Inspect the <existing_workspace_tasks> list (top active tasks by priority). Determine whether this task depends on any unmerged tasks (e.g. shared database migrations, missing models, interface definitions). If a hard dependency is found, document it under '## Dependencies' in docs/tasks/ and call 'ask' if you need user confirmation to sequence it. " +
-    "3. MANDATORY FILE EDIT: Edit the task specification document on disk in docs/tasks/ using 'edit' or 'write' with your approved architecture, affected files, technical plan, dependencies, and acceptance criteria. " +
-    "4. Gather all questions and ambiguities into a single 'ask' call using the question list. Do not guess. " +
-    "5. Do not write production code.",
+    "2. BACKLOG DEPENDENCY AUDIT: Inspect the <existing_workspace_tasks> list (top active tasks by priority). Determine whether this task depends on any unmerged tasks (e.g. shared database migrations, missing models, interface definitions). If a prerequisite is found, record it in the YAML frontmatter under 'depends_on: [ ... ]' (using prerequisite task ID or title) and document the architectural rationale under '## Dependencies' in the markdown body. " +
+    "3. CIRCULAR DEPENDENCY PREVENTION: Never introduce a circular dependency (e.g. A depends on B when B already depends on A). Cycles are rejected and will fail the file edit. If a cycle is detected, re-check your assumptions. " +
+    "4. WORKFLOW SUSPENSION AWARENESS: Note that if you declare a dependency on a task that is not yet merged/closed, this task will be suspended and reset to 'Open' until the prerequisite is completed, after which the full workflow will rerun from Stage 1. " +
+    "5. MANDATORY FILE EDIT: Edit the task specification document on disk in docs/tasks/ using 'edit' or 'write' with updated frontmatter (including 'depends_on'), approved architecture, affected files, technical plan, dependencies, and acceptance criteria. " +
+    "6. Gather all questions and ambiguities into a single 'ask' call using the question list. Do not guess. " +
+    "7. Do not write production code.",
 ```
 
 ---
 
 ## 5. Specification Markdown Synchronization for Dependencies
 
-When the Stage 1 review agent updates `docs/tasks/{id}-{slug}.md`, it records dependencies under a standardized markdown header:
+When the Stage 1 review agent updates `docs/tasks/{id}-{slug}.md`, it records dependencies in two complementary locations:
+
+### 5.1 Machine-Readable Frontmatter (`depends_on`)
+The primary source of truth for automated DAG dependency synchronization is the YAML frontmatter:
+
+```yaml
+---
+id: 102
+title: "Implement Ollama streaming response parser"
+status: "Open"
+priority: 2
+depends_on: [ 101 ]
+---
+```
+*(Supports numeric task IDs like `[ 101, 103 ]` or string titles/slugs like `[ "Core LLM HTTP client abstractions" ]`)*.
+
+### 5.2 Architectural Context Section (`## Dependencies`)
+In the markdown body, the agent documents human-readable technical rationale explaining why the ordering is necessary:
 
 ```markdown
 ## Dependencies
-- Depends on: #101 (Core LLM HTTP client abstractions)
+- Depends on: #101 (Core LLM HTTP client abstractions) - requires `IHttpClient` interface definitions before parser implementation.
 ```
 
-[TaskMarkdownSyncService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/TaskMarkdownSyncService.cs) parses this section upon stage completion, verifies the referenced task IDs or titles exist, and creates or updates the corresponding [TaskDependency](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/TaskDependency.cs) database records automatically.
+### 5.3 Automated Sync & Normalization
+Upon file save on disk, [TaskMarkdownSyncService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/TaskMarkdownSyncService.cs) immediately:
+1. Deserializes the YAML frontmatter `depends_on` list.
+2. Resolves any string titles, slugs, or filenames to canonical task IDs.
+3. Validates DAG acyclicity via `IDependencyResolutionEngine.HasCycle`.
+4. Automatically creates, updates, or deletes the corresponding [TaskDependency](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/TaskDependency.cs) database records with full audit trail attribution (`AuditActors.User`, `TaskSyncConstants.DiskModificationsSync`).
+5. Normalizes `depends_on` in the markdown file in-place to canonical integer IDs.
+
+### 5.4 Circular Dependency Detection & Agent Re-Check Loopback
+When `TaskMarkdownSyncService` processes frontmatter dependencies:
+1. It validates candidate DAG links against the workspace dependency graph using `IDependencyResolutionEngine.HasCycle(workspaceId, candidatePairs)`.
+2. If a cycle is detected:
+   - The operation fails fast with `TaskMarkdownSyncException("Circular dependency detected when updating task #{id}.")`.
+   - The agent's file edit tool call receives an actionable error response:
+     ```text
+     [ERROR] Circular dependency detected: Task #{id} -> #{prereqId} creates a directed graph cycle.
+     The dependency update was rejected. Re-check your dependency graph and resolve the circular link.
+     ```
+   - The agent is prompted to re-evaluate the dependency direction or link to an alternative root prerequisite.
 
 ---
 
-## 6. UI Presentation: Interactive Dependency Badges
+## 6. Dynamic Task Suspension & Full Workflow Reset Protocol
 
-### 6.1 Kanban Cards ([KanbanCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor))
+### 6.1 Rationale for Suspension & Full Reset
+When a task begins execution at Stage 1 (Task Review), the scheduler had dispatched it because it had zero unsatisfied prerequisites at that moment.
+
+If the Task Review agent uncovers an unmerged prerequisite task (e.g. #101) that is currently `Open`, `Reviewed`, `Implemented`, or `Ready`:
+- **Implementation Cannot Proceed:** Stage 2 / Stage 3 agents cannot write implementation code or tests against APIs, database tables, or contracts that only exist in an unmerged branch or proposal.
+- **Workflow Must Reset to Stage 1:** When prerequisite #101 is eventually completed and merged into the base branch, the codebase will have changed (new files, modified types, new commits). The review specifications, architectural design, and affected file list established *before* #101 merged are likely stale or invalid. Therefore, the task must not merely pause mid-pipeline; it must **reset to Stage 1** so that once unblocked, the review agent re-investigates the task against the actual merged code on disk.
+
+### 6.2 Orchestration Flow in `TaskOrchestrator`
+Upon completion of Stage 1 (`StandardStageIds.TaskReview`):
+1. **Unclosed Prerequisite Audit:**
+   - `TaskOrchestrator` reloads the task's dependencies from the database.
+   - It checks whether all prerequisite tasks are in `TaskOverallStatus.Closed`:
+     ```csharp
+     var unclosedPrerequisites = task.Dependencies
+         .Where(d => d.DependsOnTask == null || d.DependsOnTask.Status != TaskOverallStatus.Closed)
+         .Select(d => d.DependsOnTaskId)
+         .ToList();
+     ```
+2. **Suspension & State Reset Action:**
+   - If `unclosedPrerequisites.Count > 0`:
+     - **Status Reset:** `task.Status = TaskOverallStatus.Open`.
+     - **Stage Reset:** `task.CurrentStageId = StandardStageIds.TaskReview`.
+     - **Routing Suppression:** Clear `result.TargetRoutingStageId` so the engine does not advance to the next pipeline stage (Implementation).
+     - **Audit Logging:** Save task with `reason: $"Task suspended: waiting for unclosed prerequisites [{string.Join(", ", unclosedPrerequisites)}]; workflow reset to Open."` and actor `AuditActors.System`.
+     - **Dependency Store Sync:** Notify `_dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status)`.
+     - **Execution Log:** Log an informational entry: `Task #{task.Id} suspended due to unclosed dependencies [{string.Join(", ", unclosedPrerequisites)}]. Workflow will rerun from Stage 1 once prerequisites are Closed.`
+     - Gracefully finish the current Hangfire job without error.
+3. **Automatic Resumption via DAG Cascade:**
+   - When the prerequisite tasks reach `TaskOverallStatus.Closed` (e.g. via PR merge or manual review approval), `TaskOrchestrator.OnTaskCompletedAsync` executes its DAG cascade unblocking check.
+   - Finding all dependencies now satisfied, the orchestrator automatically re-enqueues the task into the Hangfire queue.
+   - The worker executes the task starting cleanly from Stage 1 (Task Review) with the prerequisite commits now in the base branch.
+
+---
+
+## 7. UI Presentation: Interactive Dependency Badges
+
+### 7.1 Kanban Cards ([KanbanCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor))
 - Shows interactive chips:
   - 🔗 `Prereq: #101` (hover shows title and status; clicking navigates to or opens task drawer for #101).
   - ⚠️ Amber indicator if an upstream prerequisite failed or is blocked.
 
-### 6.2 Task Detail Drawer ([TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor))
+### 7.2 Task Detail Drawer ([TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor))
 - Displays "Dependencies & Blockers" card:
   - Lists **Prerequisite Tasks** (tasks this task depends on).
   - Lists **Downstream Blocked Tasks** (tasks waiting on this task).
@@ -157,7 +244,7 @@ When the Stage 1 review agent updates `docs/tasks/{id}-{slug}.md`, it records de
 
 ---
 
-## 7. Implementation Checklist & Deliverables
+## 8. Implementation Checklist & Deliverables
 
 - [ ] **Backlog Context Builder:**
   - Implement `IWorkspaceBacklogSummaryService` generating compact `<existing_workspace_tasks>` digests.
@@ -167,15 +254,19 @@ When the Stage 1 review agent updates `docs/tasks/{id}-{slug}.md`, it records de
   - Inject summary into [IdeationService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Ideation/IdeationService.cs) system prompt.
   - Inject summary into Stage 1 Task Review stage prompt in [CrucibleAgentHarness](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs).
 - [ ] **Stage Directives Update:**
-  - Update Stage 1 directive to explicitly instruct agents to identify task dependencies against active backlog tasks.
-  - Update Ideation task planning guidelines to require `dependsOnTitles` on overlapping work.
-- [ ] **Markdown Sync Dependency Parsing:**
-  - Update [TaskMarkdownSyncService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/TaskMarkdownSyncService.cs) to parse `## Dependencies` from `docs/tasks/*.md` and synchronize [TaskDependency](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/TaskDependency.cs) records.
+  - Update Stage 1 directive in [CrucibleAgentHarness](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs) to instruct agents to edit `depends_on` in YAML frontmatter, prohibit circular dependencies, and explain suspension on unclosed prerequisites.
+  - Update Ideation task planning guidelines to require `dependsOnTitles` on overlapping work and forbid circular dependencies.
+- [ ] **Cycle Detection & Agent Error Loopback:**
+  - Enforce `IDependencyResolutionEngine.HasCycle` in `TaskMarkdownSyncService` and ensure cycle detection errors are returned to the agent during Stage 1 file edits.
+- [ ] **Dynamic Task Suspension & Workflow Reset:**
+  - Update [TaskOrchestrator](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) upon Stage 1 completion: if newly added dependencies are not `Closed`, suspend execution, reset `task.Status = TaskOverallStatus.Open`, reset `task.CurrentStageId = StandardStageIds.TaskReview`, and terminate stage execution cleanly without routing to Stage 2/3.
+  - Ensure DAG unblocking cascade re-enqueues the task to rerun from Stage 1 once prerequisites reach `Closed`.
 - [ ] **UI Dependency Enhancements:**
   - Render prerequisite and downstream chips in [KanbanCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor).
   - Add dependency section with link modal in [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor).
 - [ ] **Tests:**
   - Unit test verifying backlog summary filters out archived, closed, rejected, and cancelled tasks.
   - Unit test verifying active task capping (e.g. max 15 or 20 tasks) and strict priority ordering (`Priority ASC`, then `UpdatedAt DESC`) with overflow notice.
-  - Unit test verifying dependency parsing in markdown sync.
-  - Scenario test validating that Ideation agent proposes tasks with linked dependencies.
+  - Unit test verifying circular dependency detection rejects cyclic frontmatter edits and prompts agent to re-check.
+  - Unit test verifying task suspension and reset: Stage 1 adding unclosed dependency resets task to `Open` / `TaskReview` and halts progression.
+  - Integration test verifying that closing the prerequisite task cascades to re-enqueue the suspended task to execute Stage 1 with updated codebase.
