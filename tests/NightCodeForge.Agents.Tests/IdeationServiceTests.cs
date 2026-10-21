@@ -398,7 +398,7 @@ Let me know what you think!";
         public void Dispose() { }
     }
 
-    private class MockChatClientFactory : Inference.IOllamaChatClientFactory
+    private class MockChatClientFactory : IOllamaChatClientFactory
     {
         private readonly Func<AgentProfile?, IChatClient> _createFunc;
         public MockChatClientFactory(Func<AgentProfile?, IChatClient> createFunc) => _createFunc = createFunc;

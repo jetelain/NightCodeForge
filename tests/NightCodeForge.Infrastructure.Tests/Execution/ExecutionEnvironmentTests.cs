@@ -264,6 +264,95 @@ public class ExecutionEnvironmentTests
     }
 
     [Fact]
+    public void ContainerExecutor_EnsureContainerRunning_WhenStopped_StartsContainer()
+    {
+        var executedCommands = new List<string>();
+        var fakeRunner = new MockProcessRunner((exe, args) =>
+        {
+            executedCommands.Add($"{exe} {args}".Trim());
+            if (args.Contains("inspect") && args.Contains(".State.Running"))
+            {
+                return new ProcessExecutionResult(0, "false\n", string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".Mounts"))
+            {
+                return new ProcessExecutionResult(0, "/workspace=/test/repo;\n", string.Empty);
+            }
+            if (args.StartsWith("start") || args.Contains(" start "))
+            {
+                return new ProcessExecutionResult(0, "ncf-sandbox-1\n", string.Empty);
+            }
+            return new ProcessExecutionResult(0, string.Empty, string.Empty);
+        });
+
+        var options = new ContainerExecutorOptions
+        {
+            AutoStartContainer = true,
+            ContainerNameOrId = "ncf-sandbox-1",
+            ContainerImage = "alpine",
+            HostWorkspacePath = "/test/repo",
+            ContainerWorkspacePath = "/workspace"
+        };
+
+        var executor = new NightCodeForgeContainerExecutor(
+            options,
+            fakeRunner,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForgeContainerExecutor>.Instance);
+
+        executor.EnsureContainerRunning();
+
+        Assert.Contains(executedCommands, cmd => cmd.Contains("start ncf-sandbox-1"));
+        Assert.DoesNotContain(executedCommands, cmd => cmd.Contains("run "));
+    }
+
+    [Fact]
+    public void ContainerExecutor_EnsureContainerRunning_WhenSpawnConflict_RemovesStaleContainerAndRetries()
+    {
+        var executedCommands = new List<string>();
+        int spawnAttempts = 0;
+
+        var fakeRunner = new MockProcessRunner((exe, args) =>
+        {
+            executedCommands.Add($"{exe} {args}".Trim());
+            if (args.Contains("inspect") && args.Contains(".State.Running"))
+            {
+                return new ProcessExecutionResult(1, string.Empty, "Error: No such container");
+            }
+            if (args.StartsWith("run ") || args.Contains(" run "))
+            {
+                spawnAttempts++;
+                if (spawnAttempts == 1)
+                {
+                    return new ProcessExecutionResult(125, string.Empty, "docker: Error response from daemon: Conflict. The container name \"/ncf-sandbox-1\" is already in use by container \"deadbeef\".");
+                }
+                return new ProcessExecutionResult(0, "deadbeef\n", string.Empty);
+            }
+            if (args.Contains("rm -f"))
+            {
+                return new ProcessExecutionResult(0, "ncf-sandbox-1\n", string.Empty);
+            }
+            return new ProcessExecutionResult(0, string.Empty, string.Empty);
+        });
+
+        var options = new ContainerExecutorOptions
+        {
+            AutoStartContainer = true,
+            ContainerNameOrId = "ncf-sandbox-1",
+            ContainerImage = "alpine"
+        };
+
+        var executor = new NightCodeForgeContainerExecutor(
+            options,
+            fakeRunner,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForgeContainerExecutor>.Instance);
+
+        executor.EnsureContainerRunning();
+
+        Assert.Equal(2, spawnAttempts);
+        Assert.Contains(executedCommands, cmd => cmd.Contains("rm -f ncf-sandbox-1"));
+    }
+
+    [Fact]
     public async Task BareHostExecutionEnvironment_ExecutesViaProcessRunner_ReturnsCommandResult()
     {
         var fakeRunner = new MockProcessRunner((exe, args) =>

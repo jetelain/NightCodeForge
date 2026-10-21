@@ -39,6 +39,12 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
     public event Action<int, string>? OnHostDirtyAlertReceived;
     public event Action<int, string, string, string, DateTime>? OnExecutionLogReceived;
     public event Action<int, string, string, string, int, DateTime>? OnOptimizationActionReceived;
+    public event Action<NightCodeForge.Core.Workflow.LlmCallRecord>? OnLlmCallStarted;
+    public event Action<string, int, double, double, int>? OnLlmCallProgress;
+    public event Action<NightCodeForge.Core.Workflow.LlmCallRecord>? OnLlmCallCompleted;
+    public event Action<NightCodeForge.Core.Workflow.ShellCommandRecord>? OnShellCommandStarted;
+    public event Action<string, string, bool>? OnShellCommandOutput;
+    public event Action<NightCodeForge.Core.Workflow.ShellCommandRecord>? OnShellCommandCompleted;
     public event Action<HubConnectionState>? OnConnectionStateChanged;
 
     public OrchestratorHubClientConnection(
@@ -230,6 +236,12 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
         hub.On<int, string>("ReceiveHostDirtyAlert", TriggerHostDirtyAlert);
         hub.On<int, string, string, string, DateTime>("ReceiveExecutionLog", TriggerExecutionLog);
         hub.On<int, string, string, string, int, DateTime>("ReceiveOptimizationAction", TriggerOptimizationAction);
+        hub.On<NightCodeForge.Core.Workflow.LlmCallRecord>("ReceiveLlmCallStarted", TriggerLlmCallStarted);
+        hub.On<string, int, double, double, int>("ReceiveLlmCallProgress", TriggerLlmCallProgress);
+        hub.On<NightCodeForge.Core.Workflow.LlmCallRecord>("ReceiveLlmCallCompleted", TriggerLlmCallCompleted);
+        hub.On<NightCodeForge.Core.Workflow.ShellCommandRecord>("ReceiveShellCommandStarted", TriggerShellCommandStarted);
+        hub.On<string, string, bool>("ReceiveShellCommandOutput", TriggerShellCommandOutput);
+        hub.On<NightCodeForge.Core.Workflow.ShellCommandRecord>("ReceiveShellCommandCompleted", TriggerShellCommandCompleted);
     }
 
     public void TriggerTokenDelta(int taskId, string token, bool isThinking) =>
@@ -258,6 +270,24 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
 
     public void TriggerOptimizationAction(int taskId, string stageId, string actionType, string description, int tokensOrBytesSaved, DateTime timestamp) =>
         OnOptimizationActionReceived?.Invoke(taskId, stageId, actionType, description, tokensOrBytesSaved, timestamp);
+
+    public void TriggerLlmCallStarted(NightCodeForge.Core.Workflow.LlmCallRecord call) =>
+        OnLlmCallStarted?.Invoke(call);
+
+    public void TriggerLlmCallProgress(string callId, int tokens, double durationMs, double tps, int reasoningTokens = 0) =>
+        OnLlmCallProgress?.Invoke(callId, tokens, durationMs, tps, reasoningTokens);
+
+    public void TriggerLlmCallCompleted(NightCodeForge.Core.Workflow.LlmCallRecord call) =>
+        OnLlmCallCompleted?.Invoke(call);
+
+    public void TriggerShellCommandStarted(NightCodeForge.Core.Workflow.ShellCommandRecord command) =>
+        OnShellCommandStarted?.Invoke(command);
+
+    public void TriggerShellCommandOutput(string commandId, string chunk, bool isError) =>
+        OnShellCommandOutput?.Invoke(commandId, chunk, isError);
+
+    public void TriggerShellCommandCompleted(NightCodeForge.Core.Workflow.ShellCommandRecord command) =>
+        OnShellCommandCompleted?.Invoke(command);
 
     public void TriggerConnectionStateChanged(HubConnectionState state) =>
         OnConnectionStateChanged?.Invoke(state);

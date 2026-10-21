@@ -39,23 +39,91 @@ public class OllamaRouterGatewayService : IOllamaRouterGatewayService
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
 
-            var response = await _httpClient.GetAsync("api/version", timeoutCts.Token);
-            bool isConnected = response.IsSuccessStatusCode;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
+            // 1. Try querying native OllamaRouter cluster monitor API
+            HttpResponseMessage? monitorResponse = null;
+            try
+            {
+                monitorResponse = await _httpClient.GetAsync("monitor/api", timeoutCts.Token);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to query monitor/api, falling back to api/version.");
+            }
+
+            if (monitorResponse != null && monitorResponse.IsSuccessStatusCode)
+            {
+                sw.Stop();
+                long latencyMs = sw.ElapsedMilliseconds;
+
+                OllamaRouterMonitorResponse? monitor = null;
+                try
+                {
+                    monitor = await monitorResponse.Content.ReadFromJsonAsync<OllamaRouterMonitorResponse>(cancellationToken: timeoutCts.Token);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Could not deserialize monitor/api response.");
+                }
+
+                if (monitor != null)
+                {
+                    var targets = new List<TargetBackendStatus>
+                    {
+                        BuildTargetStatus(
+                            name: "Local GPU Target",
+                            isEnabled: GetBoolValue(monitor.Targets, "local", true),
+                            isOnline: GetBoolValue(monitor.Online, "local", true),
+                            isBusy: GetBoolValue(monitor.Busy, "local", false),
+                            baseLatencyMs: latencyMs,
+                            activeState: TargetBackendState.Active,
+                            normalDescription: "Host GPU (Developer Workstation). Fast on-premise execution when model/context fits host VRAM, or for concurrent interactive ideation."),
+
+                        BuildTargetStatus(
+                            name: "Remote Server Target",
+                            isEnabled: GetBoolValue(monitor.Targets, "remote", true),
+                            isOnline: GetBoolValue(monitor.Online, "remote", true),
+                            isBusy: GetBoolValue(monitor.Busy, "remote", false),
+                            baseLatencyMs: latencyMs + 5,
+                            activeState: TargetBackendState.Available,
+                            normalDescription: "Dedicated LAN GPU Server (Local Area Network). High-VRAM on-premise node powering ~95% of background dev-queue tasks."),
+
+                        BuildTargetStatus(
+                            name: "Cloud Overflow Target",
+                            isEnabled: (monitor.CloudEnabled ?? true) && GetBoolValue(monitor.Targets, "cloud", true),
+                            isOnline: GetBoolValue(monitor.Online, "cloud", true),
+                            isBusy: GetBoolValue(monitor.Busy, "cloud", false),
+                            baseLatencyMs: latencyMs + 25,
+                            activeState: TargetBackendState.Active,
+                            normalDescription: "Cloud Overflow. Optional external endpoint for complex ideation or instant zero-VRAM diagnostics without waiting.")
+                    };
+
+                    return new OllamaRouterStatus(true, true, _baseUrl, targets);
+                }
+            }
+
+            // 2. Fallback to standard Ollama api/version check
+            var versionResponse = await _httpClient.GetAsync("api/version", timeoutCts.Token);
+            sw.Stop();
+            long fallbackLatencyMs = sw.ElapsedMilliseconds;
+
+            bool isConnected = versionResponse.IsSuccessStatusCode;
             bool isRouter = false;
 
-            if (response.Headers.Contains("x-ollamarouter-version") || response.Headers.Contains("x-ollama-router-target"))
+            if (versionResponse.Headers.Contains("x-ollamarouter-version") || versionResponse.Headers.Contains("x-ollama-router-target"))
             {
                 isRouter = true;
             }
 
-            var targets = new List<TargetBackendStatus>
+            var fallbackTargets = new List<TargetBackendStatus>
             {
-                new("Local GPU Target", isConnected ? TargetBackendState.Active : TargetBackendState.Offline, "Host GPU (Developer Workstation). Fast on-premise execution when model/context fits host VRAM, or for concurrent interactive ideation."),
-                new("Remote Server Target", isConnected ? TargetBackendState.Available : TargetBackendState.Offline, "Dedicated LAN GPU Server (Local Area Network). High-VRAM on-premise node powering ~95% of background dev-queue tasks."),
-                new("Cloud Overflow Target", isConnected ? TargetBackendState.Active : TargetBackendState.Offline, "Cloud Overflow. Optional external endpoint for complex ideation or instant zero-VRAM diagnostics without waiting.")
+                new("Local GPU Target", isConnected ? TargetBackendState.Active : TargetBackendState.Offline, "Host GPU (Developer Workstation). Fast on-premise execution when model/context fits host VRAM, or for concurrent interactive ideation.", isConnected ? fallbackLatencyMs : null),
+                new("Remote Server Target", isConnected ? TargetBackendState.Available : TargetBackendState.Offline, "Dedicated LAN GPU Server (Local Area Network). High-VRAM on-premise node powering ~95% of background dev-queue tasks.", isConnected ? (long?)(fallbackLatencyMs + 5) : null),
+                new("Cloud Overflow Target", isConnected ? TargetBackendState.Active : TargetBackendState.Offline, "Cloud Overflow. Optional external endpoint for complex ideation or instant zero-VRAM diagnostics without waiting.", isConnected ? (long?)(fallbackLatencyMs + 25) : null)
             };
 
-            return new OllamaRouterStatus(isConnected, isRouter, _baseUrl, targets);
+            return new OllamaRouterStatus(isConnected, isRouter, _baseUrl, fallbackTargets);
         }
         catch (Exception ex)
         {
@@ -87,7 +155,7 @@ public class OllamaRouterGatewayService : IOllamaRouterGatewayService
                 Name: m.Name ?? m.Model ?? string.Empty,
                 Model: m.Model ?? m.Name ?? string.Empty,
                 Size: m.Size,
-                SizeVram: m.SizeVram > 0 ? m.SizeVram : m.Size,
+                SizeVram: m.SizeVram,
                 ExpiresAt: m.ExpiresAt,
                 Digest: m.Digest
             )).ToList();
@@ -146,6 +214,77 @@ public class OllamaRouterGatewayService : IOllamaRouterGatewayService
             _logger.LogWarning(ex, "Failed to reclaim VRAM via fallback model unload.");
             return false;
         }
+    }
+
+    private static TargetBackendStatus BuildTargetStatus(
+        string name,
+        bool isEnabled,
+        bool isOnline,
+        bool isBusy,
+        long baseLatencyMs,
+        TargetBackendState activeState,
+        string normalDescription)
+    {
+        if (!isEnabled)
+        {
+            return new TargetBackendStatus(
+                name,
+                TargetBackendState.Disabled,
+                $"{name}. Target disabled in OllamaRouter routing configuration; requests will bypass this node.",
+                LatencyMs: null);
+        }
+
+        if (!isOnline)
+        {
+            return new TargetBackendStatus(
+                name,
+                TargetBackendState.Offline,
+                $"{name}. Target node is currently offline or unreachable.",
+                LatencyMs: null);
+        }
+
+        if (isBusy)
+        {
+            return new TargetBackendStatus(
+                name,
+                TargetBackendState.Busy,
+                $"{name}. Currently executing an active inference workload.",
+                LatencyMs: baseLatencyMs);
+        }
+
+        return new TargetBackendStatus(
+            name,
+            activeState,
+            normalDescription,
+            LatencyMs: baseLatencyMs);
+    }
+
+    private static bool GetBoolValue(Dictionary<string, bool>? dict, string key, bool defaultValue)
+    {
+        if (dict == null) return defaultValue;
+        foreach (var (k, v) in dict)
+        {
+            if (string.Equals(k, key, StringComparison.OrdinalIgnoreCase))
+            {
+                return v;
+            }
+        }
+        return defaultValue;
+    }
+
+    private class OllamaRouterMonitorResponse
+    {
+        [JsonPropertyName("targets")]
+        public Dictionary<string, bool>? Targets { get; set; }
+
+        [JsonPropertyName("online")]
+        public Dictionary<string, bool>? Online { get; set; }
+
+        [JsonPropertyName("busy")]
+        public Dictionary<string, bool>? Busy { get; set; }
+
+        [JsonPropertyName("cloudEnabled")]
+        public bool? CloudEnabled { get; set; }
     }
 
     private class OllamaPsResponse

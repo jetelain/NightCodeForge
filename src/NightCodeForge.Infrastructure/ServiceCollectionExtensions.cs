@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Interfaces;
@@ -26,7 +27,8 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         string dbConnectionString = "Data Source=nightcodeforge.db;")
     {
-        // 1. Database
+        // 1. Database & SignalR Core
+        services.AddSignalR();
         services.AddDbContext<AppDbContext>(options =>
             options.UseSqlite(dbConnectionString, sqliteOptions =>
                 sqliteOptions.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)));
@@ -62,7 +64,12 @@ public static class ServiceCollectionExtensions
         services.AddOptions<Inference.OllamaRouterOptions>();
 
         services.TryAddSingleton<NightCodeForge.Core.Execution.IBackgroundTaskRunner, NightCodeForge.Core.Execution.BackgroundTaskRunner>();
-        services.TryAddSingleton<IProcessRunner, NightCodeForge.Core.Execution.SystemProcessRunner>();
+        services.TryAddSingleton<IOperationsTelemetryService, Telemetry.OperationsTelemetryService>();
+        services.TryAddSingleton<NightCodeForge.Core.Execution.SystemProcessRunner>();
+        services.TryAddSingleton<IProcessRunner>(sp => new Execution.TelemetryProcessRunner(
+            sp.GetRequiredService<NightCodeForge.Core.Execution.SystemProcessRunner>(),
+            sp.GetRequiredService<IOperationsTelemetryService>(),
+            sp.GetRequiredService<ILogger<Execution.TelemetryProcessRunner>>()));
         services.TryAddSingleton<IWslMetadataService, Execution.WslMetadataService>();
         services.TryAddSingleton<IHostSdkDiscoveryService, Execution.HostSdkDiscoveryService>();
         services.TryAddSingleton<IWorkspacePathResolver, Execution.WorkspacePathResolver>();

@@ -75,7 +75,8 @@ public class OllamaApiClientTests
             ModelId = "default-coder:7b"
         });
 
-        var factory = new DefaultOllamaChatClientFactory(options, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var mockTelemetry = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object;
+        var factory = new DefaultOllamaChatClientFactory(options, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance, mockTelemetry);
 
         var profileCoder = new Core.Domain.AgentProfile { Name = "Coder", ModelName = "qwen2.5-coder:32b" };
         var client1 = factory.CreateClient(profileCoder);
@@ -102,7 +103,8 @@ public class OllamaApiClientTests
             ModelId = "default-coder:7b"
         });
 
-        var factory = new DefaultOllamaChatClientFactory(options, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var mockTelemetry = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object;
+        var factory = new DefaultOllamaChatClientFactory(options, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance, mockTelemetry);
 
         var clientCloud1 = factory.CreateClient("model-x", OllamaRoutingTarget.Cloud);
         var clientCloud2 = factory.CreateClient("model-x", OllamaRoutingTarget.Cloud);

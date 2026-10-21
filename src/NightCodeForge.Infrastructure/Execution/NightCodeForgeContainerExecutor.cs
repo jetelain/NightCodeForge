@@ -403,29 +403,25 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         {
             EnsureImageReady();
 
-            var inspectCmd = $"inspect -f \"{{{{.State.Running}}}}\" {_options.ContainerNameOrId}";
-            var (inspectExe, inspectArgs) = BuildDockerCommand(
-                inspectCmd,
-                _options.UseWsl,
-                _options.WslDistribution,
-                _options.ShellExecutable,
-                _options.WslExecutable);
+            var inspectSpec = BuildDockerProcessSpec(
+                _options,
+                ["inspect", "-f", "{{.State.Running}}", _options.ContainerNameOrId],
+                timeoutSeconds: 5);
 
-            var inspectResult = _processRunner.Run(inspectExe, inspectArgs, timeoutSeconds: 5);
+            var inspectResult = _processRunner.Run(inspectSpec);
             var stdout = inspectResult.StandardOutput.Trim();
-            if (inspectResult.ExitCode == 0 && stdout.Equals("true", StringComparison.OrdinalIgnoreCase))
+            if (inspectResult.ExitCode == 0)
             {
+                var isRunning = stdout.Equals("true", StringComparison.OrdinalIgnoreCase);
+
                 if (!string.IsNullOrWhiteSpace(_options.HostWorkspacePath))
                 {
                     var expectedHostWks = NormalizeMountSourcePath(ResolveHostPath(_options.HostWorkspacePath, _options));
-                    var mountInspectCmd = $"inspect -f \"{{{{range .Mounts}}}}{{{{.Destination}}}}={{{{.Source}}}};{{{{end}}}}\" {_options.ContainerNameOrId}";
-                    var (mountExe, mountArgs) = BuildDockerCommand(
-                        mountInspectCmd,
-                        _options.UseWsl,
-                        _options.WslDistribution,
-                        _options.ShellExecutable,
-                        _options.WslExecutable);
-                    var mountResult = _processRunner.Run(mountExe, mountArgs, timeoutSeconds: 5);
+                    var mountInspectSpec = BuildDockerProcessSpec(
+                        _options,
+                        ["inspect", "-f", "{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}", _options.ContainerNameOrId],
+                        timeoutSeconds: 5);
+                    var mountResult = _processRunner.Run(mountInspectSpec);
                     string currentSource = string.Empty;
                     bool currentHasClone = false;
                     if (mountResult.ExitCode == 0)
@@ -456,42 +452,44 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                     {
                         _logger.LogInformation("Recreating container {Container} because mounts do not match expected configuration (source: '{Current}' vs '{Expected}', cloneMount: {CurrentClone} vs {ExpectedClone})",
                             _options.ContainerNameOrId, currentSource, expectedHostWks, currentHasClone, expectedHasClone);
-                        var (rmExe, rmArgs) = BuildDockerCommand(
-                            $"rm -f {_options.ContainerNameOrId}",
-                            _options.UseWsl,
-                            _options.WslDistribution,
-                            _options.ShellExecutable,
-                            _options.WslExecutable);
-                        _processRunner.Run(rmExe, rmArgs, timeoutSeconds: 10);
+                        var rmSpec = BuildDockerProcessSpec(_options, ["rm", "-f", _options.ContainerNameOrId], timeoutSeconds: 10);
+                        _processRunner.Run(rmSpec);
                     }
-                    else
+                    else if (isRunning)
                     {
                         return;
                     }
+                    else
+                    {
+                        _logger.LogInformation("Starting stopped container {Container}", _options.ContainerNameOrId);
+                        var startSpec = BuildDockerProcessSpec(_options, ["start", _options.ContainerNameOrId], timeoutSeconds: 15);
+                        var startResult = _processRunner.Run(startSpec);
+                        if (startResult.ExitCode != 0)
+                        {
+                            _logger.LogError("Failed to start stopped container {Container} (exit code {ExitCode}): {Error}",
+                                _options.ContainerNameOrId, startResult.ExitCode, startResult.StandardError);
+                            throw new InvalidOperationException($"Failed to start container '{_options.ContainerNameOrId}': {startResult.StandardError}");
+                        }
+                        return;
+                    }
                 }
-                else
+                else if (isRunning)
                 {
                     return;
                 }
-            }
-
-            if (inspectResult.ExitCode == 0 && stdout.Equals("false", StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogInformation("Starting stopped container {Container}", _options.ContainerNameOrId);
-                var (startExe, startArgs) = BuildDockerCommand(
-                    $"start {_options.ContainerNameOrId}",
-                    _options.UseWsl,
-                    _options.WslDistribution,
-                    _options.ShellExecutable,
-                    _options.WslExecutable);
-                var startResult = _processRunner.Run(startExe, startArgs, timeoutSeconds: 15);
-                if (startResult.ExitCode != 0)
+                else
                 {
-                    _logger.LogError("Failed to start stopped container {Container} (exit code {ExitCode}): {Error}",
-                        _options.ContainerNameOrId, startResult.ExitCode, startResult.StandardError);
-                    throw new InvalidOperationException($"Failed to start container '{_options.ContainerNameOrId}': {startResult.StandardError}");
+                    _logger.LogInformation("Starting stopped container {Container}", _options.ContainerNameOrId);
+                    var startSpec = BuildDockerProcessSpec(_options, ["start", _options.ContainerNameOrId], timeoutSeconds: 15);
+                    var startResult = _processRunner.Run(startSpec);
+                    if (startResult.ExitCode != 0)
+                    {
+                        _logger.LogError("Failed to start stopped container {Container} (exit code {ExitCode}): {Error}",
+                            _options.ContainerNameOrId, startResult.ExitCode, startResult.StandardError);
+                        throw new InvalidOperationException($"Failed to start container '{_options.ContainerNameOrId}': {startResult.StandardError}");
+                    }
+                    return;
                 }
-                return;
             }
 
             _logger.LogInformation("Spawning container {Container} with volume mounts", _options.ContainerNameOrId);
@@ -499,10 +497,23 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             var runResult = _processRunner.Run(runSpec);
             if (runResult.ExitCode != 0)
             {
-                _logger.LogError("Failed to spawn container {Container} (exit code {ExitCode}): {Error}",
-                    _options.ContainerNameOrId, runResult.ExitCode, runResult.StandardError);
-                throw new InvalidOperationException(
-                    $"Failed to spawn container '{_options.ContainerNameOrId}' (exit code {runResult.ExitCode}): {runResult.StandardError}");
+                if (runResult.ExitCode == 125 ||
+                    (runResult.StandardError?.Contains("Conflict", StringComparison.OrdinalIgnoreCase) == true &&
+                     runResult.StandardError?.Contains("already in use", StringComparison.OrdinalIgnoreCase) == true))
+                {
+                    _logger.LogWarning("Container {Container} name conflict detected during spawn; removing stale container and retrying...", _options.ContainerNameOrId);
+                    var rmSpec = BuildDockerProcessSpec(_options, ["rm", "-f", _options.ContainerNameOrId], timeoutSeconds: 10);
+                    _processRunner.Run(rmSpec);
+                    runResult = _processRunner.Run(runSpec);
+                }
+
+                if (runResult.ExitCode != 0)
+                {
+                    _logger.LogError("Failed to spawn container {Container} (exit code {ExitCode}): {Error}",
+                        _options.ContainerNameOrId, runResult.ExitCode, runResult.StandardError);
+                    throw new InvalidOperationException(
+                        $"Failed to spawn container '{_options.ContainerNameOrId}' (exit code {runResult.ExitCode}): {runResult.StandardError}");
+                }
             }
         }
         catch (NotImplementedException)
@@ -564,13 +575,8 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
             if (IsImageFresh(_processRunner, altImage, _options, TimeSpan.FromDays(30)))
             {
-                var (tagExe, tagArgs) = BuildDockerCommand(
-                    $"tag {altImage} {image}",
-                    _options.UseWsl,
-                    _options.WslDistribution,
-                    _options.ShellExecutable,
-                    _options.WslExecutable);
-                var tagResult = _processRunner.Run(tagExe, tagArgs, timeoutSeconds: 10);
+                var tagSpec = BuildDockerProcessSpec(_options, ["tag", altImage, image], timeoutSeconds: 10);
+                var tagResult = _processRunner.Run(tagSpec);
                 if (tagResult.ExitCode == 0)
                 {
                     _logger.LogInformation("Tagged existing image {AltImage} as {Image}", altImage, image);
@@ -601,15 +607,12 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
     {
         try
         {
-            var inspectCmd = $"image inspect -f \"{{{{.Created}}}}\" {imageName}";
-            var (inspectExe, inspectArgs) = BuildDockerCommand(
-                inspectCmd,
-                options.UseWsl,
-                options.WslDistribution,
-                options.ShellExecutable,
-                options.WslExecutable);
+            var inspectSpec = BuildDockerProcessSpec(
+                options,
+                ["image", "inspect", "-f", "{{.Created}}", imageName],
+                timeoutSeconds: 5);
 
-            var inspectResult = processRunner.Run(inspectExe, inspectArgs, timeoutSeconds: 5);
+            var inspectResult = processRunner.Run(inspectSpec);
             if (inspectResult.ExitCode == 0)
             {
                 var createdStr = inspectResult.StandardOutput.Trim();
@@ -649,16 +652,13 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 ? Git.WslPathConverter.ToWslPath(tempDir)
                 : tempDir;
 
-            var buildCmd = $"build -t {imageName} \"{buildContext}\"";
-            var (buildExe, buildArgs) = BuildDockerCommand(
-                buildCmd,
-                options.UseWsl,
-                options.WslDistribution,
-                options.ShellExecutable,
-                options.WslExecutable);
+            var buildSpec = BuildDockerProcessSpec(
+                options,
+                ["build", "-t", imageName, buildContext],
+                timeoutSeconds: 600);
 
             logger.LogInformation("Building local base container image {Image} with git, ripgrep, and python3...", imageName);
-            var buildResult = processRunner.Run(buildExe, buildArgs, timeoutSeconds: 600);
+            var buildResult = processRunner.Run(buildSpec);
 
             if (buildResult.ExitCode != 0)
             {
@@ -757,7 +757,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             var wslArgs = new System.Text.StringBuilder();
             if (!string.IsNullOrWhiteSpace(options.WslDistribution))
             {
-                wslArgs.Append($"-d \"{options.WslDistribution}\" ");
+                wslArgs.Append($"-d {options.WslDistribution.Trim()} ");
             }
             wslArgs.Append($"-- {options.ShellExecutable} {dockerArgs}");
 
@@ -786,6 +786,48 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
     }
 
     /// <summary>
+    /// Builds a structured ProcessStartSpec with ArgumentList to invoke Docker either directly on the host or inside WSL2 via wsl.exe.
+    /// </summary>
+    public static ProcessStartSpec BuildDockerProcessSpec(
+        ContainerExecutorOptions options,
+        IEnumerable<string> dockerArgs,
+        int timeoutSeconds = 10,
+        string? workingDirectory = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(dockerArgs);
+
+        var argsList = dockerArgs.ToList();
+
+        if (options.UseWsl)
+        {
+            var wslArgs = new List<string>();
+            if (!string.IsNullOrWhiteSpace(options.WslDistribution))
+            {
+                wslArgs.AddRange(["-d", options.WslDistribution.Trim()]);
+            }
+            wslArgs.AddRange(["--", options.ShellExecutable]);
+            wslArgs.AddRange(argsList);
+
+            return new ProcessStartSpec
+            {
+                FileName = options.WslExecutable,
+                ArgumentList = wslArgs,
+                WorkingDirectory = workingDirectory,
+                TimeoutSeconds = timeoutSeconds
+            };
+        }
+
+        return new ProcessStartSpec
+        {
+            FileName = options.ShellExecutable,
+            ArgumentList = argsList,
+            WorkingDirectory = workingDirectory,
+            TimeoutSeconds = timeoutSeconds
+        };
+    }
+
+    /// <summary>
     /// Builds executable and arguments to invoke Docker either directly on the host or inside WSL2 via wsl.exe.
     /// </summary>
     public static (string Executable, string Arguments) BuildDockerCommand(
@@ -798,7 +840,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         if (useWsl)
         {
             var distroArg = !string.IsNullOrWhiteSpace(wslDistribution)
-                ? $"-d \"{wslDistribution}\" "
+                ? $"-d {wslDistribution.Trim()} "
                 : string.Empty;
             return (wslExecutable, $"{distroArg}-- {shellExecutable} {dockerCommand}".Trim());
         }

@@ -64,7 +64,7 @@
                     <div class="forge-subcard" style="padding: 1.5rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); box-shadow: var(--shadow-sm);">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                             <strong style="font-size: 1.05rem; color: var(--text-primary); font-weight: 700;">@target.TargetName</strong>
-                            <span class="forge-badge @(target.State == TargetBackendState.Active ? "badge-teal" : (target.State == TargetBackendState.Available ? "badge-indigo" : "badge-gray"))" style="padding: 0.25rem 0.65rem; font-size: 0.8rem;">
+                            <span class="forge-badge @OperationsTelemetryUiService.GetTargetBackendBadgeClass(target.State)" style="padding: 0.25rem 0.65rem; font-size: 0.8rem;">
                                 @target.State
                             </span>
                         </div>

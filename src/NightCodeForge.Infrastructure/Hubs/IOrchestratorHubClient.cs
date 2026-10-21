@@ -49,4 +49,34 @@ public interface IOrchestratorHubClient
     /// Context or memory optimization telemetry (e.g. tool compaction, thinking pruning, token eviction).
     /// </summary>
     Task ReceiveOptimizationAction(int taskId, string stageId, string actionType, string description, int tokensSaved, DateTime timestamp);
+
+    /// <summary>
+    /// Live operations telemetry: an LLM inference call has started.
+    /// </summary>
+    Task ReceiveLlmCallStarted(NightCodeForge.Core.Workflow.LlmCallRecord call);
+
+    /// <summary>
+    /// Live operations telemetry: streaming progress of an active LLM inference call.
+    /// </summary>
+    Task ReceiveLlmCallProgress(string callId, int completionTokens, double durationMs, double tokensPerSecond, int reasoningTokens);
+
+    /// <summary>
+    /// Live operations telemetry: an LLM inference call has completed or failed.
+    /// </summary>
+    Task ReceiveLlmCallCompleted(NightCodeForge.Core.Workflow.LlmCallRecord call);
+
+    /// <summary>
+    /// Live operations telemetry: a shell command execution has started.
+    /// </summary>
+    Task ReceiveShellCommandStarted(NightCodeForge.Core.Workflow.ShellCommandRecord command);
+
+    /// <summary>
+    /// Live operations telemetry: real-time output text chunk for an active shell command.
+    /// </summary>
+    Task ReceiveShellCommandOutput(string commandId, string outputChunk, bool isError);
+
+    /// <summary>
+    /// Live operations telemetry: a shell command execution has completed or failed.
+    /// </summary>
+    Task ReceiveShellCommandCompleted(NightCodeForge.Core.Workflow.ShellCommandRecord command);
 }

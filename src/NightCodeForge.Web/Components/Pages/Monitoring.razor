@@ -1,28 +1,30 @@
 @page "/monitoring"
 @page "/monitoring/{TaskId:int?}"
 @implements IAsyncDisposable
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Components.Monitoring
+@using NightCodeForge.Web.Services
+@inject OperationsTelemetryUiService TelemetryUi
 @inject OrchestratorHubClientConnection HubClient
-@inject WorkerStateService WorkerState
-@inject WorkspaceStateService WorkspaceState
-@inject ITaskRepository TaskRepository
-@inject IWorkflowRepository WorkflowRepository
 @inject NavigationManager Navigation
+@inject Microsoft.Extensions.Logging.ILogger<Monitoring> Logger
 
-<PageTitle>Live Telemetry - NightCodeForge</PageTitle>
+<PageTitle>Live Operations Telemetry - NightCodeForge</PageTitle>
 
+<!-- Page Header -->
 <div class="page-header" style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
     <div style="display: flex; align-items: center; gap: 0.75rem;">
         <span style="font-size: 1.75rem;">⚡</span>
         <div>
-            <h1 style="margin: 0; font-size: 1.5rem;">Live Telemetry &amp; Monitoring Console</h1>
+            <h1 style="margin: 0; font-size: 1.5rem;">Live Developer Operations &amp; Hardware Telemetry</h1>
             <p style="margin: 0.25rem 0 0 0; color: var(--text-secondary); font-size: 0.88rem;">
-                Real-time 7-stage workflow pipeline, GPU vs deterministic CPU gauges, and live execution streams.
+                System-wide real-time visibility into LLM inference calls, deterministic CLI execution, and OllamaRouter VRAM topology.
             </p>
         </div>
     </div>
 
     <!-- Connection State & Controls -->
-    <div style="display: flex; align-items: center; gap: 0.75rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
         <!-- SignalR Connection Status Pill -->
         <div class="forge-badge @GetConnectionBadgeClass()" id="signalr-connection-badge">
             <span>@GetConnectionDot()</span>
@@ -36,107 +38,68 @@
             </button>
         }
 
-        <!-- Link to Dedicated Task Inspector -->
-        @if (WorkerState.Current.ActiveTaskId.HasValue)
-        {
-            <a href="/inspector/@WorkerState.Current.ActiveTaskId.Value" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; text-decoration: none;">
-                🔎 Inspect Task #@WorkerState.Current.ActiveTaskId.Value
-            </a>
-        }
-        else
-        {
-            <a href="/inspector" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; text-decoration: none;">
-                🔎 Task Inspector
-            </a>
-        }
-
-        <!-- Workspace Indicator -->
-        <span class="forge-badge badge-indigo" style="font-size: 0.78rem;">
-            📁 @(WorkspaceState.ActiveWorkspace?.Name ?? "All Workspaces")
-        </span>
+        <!-- Link to Task-Centric Inspector -->
+        <a href="/inspector" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; text-decoration: none;">
+            🔎 Task Inspector
+        </a>
     </div>
 </div>
 
-<!-- 1. Active Worker Telemetry Card -->
-<WorkerStatusCard />
+<!-- 1. Active Operations Hero (Live in-flight LLM + Shell command) -->
+<ActiveOperationsHero />
 
-<!-- 2. 7-Step Visual Pipeline Stepper -->
-<PipelineStepper @ref="_stepperRef"
-                 TaskId="WorkerState.Current.ActiveTaskId"
-                 WorkflowStages="_workflowStages"
-                 CurrentStageId="@WorkerState.Current.StageId"
-                 CurrentStageStatus="@(WorkerState.Current.Status == WorkerExecutionStatus.Running ? StageExecutionStatus.Running : (WorkerState.Current.Status == WorkerExecutionStatus.WaitingForHuman ? StageExecutionStatus.WaitingForHuman : (WorkerState.Current.ActiveTaskId.HasValue ? StageExecutionStatus.Pending : null)))"
-                 IsWaitingForHuman="@(WorkerState.Current.Status == WorkerExecutionStatus.WaitingForHuman)" />
+<!-- 2. OllamaRouter Cluster & Resident VRAM Telemetry -->
+<OllamaRouterClusterMonitor />
 
-<!-- 3. Live Tool Call Activity Strip -->
-<ToolActivityStrip @ref="_toolStripRef" />
+<!-- 3. Operations History Streams (Tabs: LLM Inference Calls vs Shell CLI Commands) -->
+<div class="forge-card" style="padding: 1.5rem; margin-bottom: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
+        <div style="display: flex; gap: 0.5rem;" class="nav-tabs" role="tablist">
+            <button id="tab-llm-calls" type="button" class="forge-tab @(_activeTab == "llm" ? "active" : "")" style="padding: 0.45rem 1rem; font-size: 0.88rem; font-weight: 600;" @onclick="@(() => _activeTab = "llm")">
+                🧠 LLM Inference Stream (@TelemetryUi.RecentLlmCalls.Count)
+            </button>
+            <button id="tab-shell-ops" type="button" class="forge-tab @(_activeTab == "shell" ? "active" : "")" style="padding: 0.45rem 1rem; font-size: 0.88rem; font-weight: 600;" @onclick="@(() => _activeTab = "shell")">
+                💻 Shell &amp; CLI Executions (@TelemetryUi.RecentShellCommands.Count)
+            </button>
+        </div>
 
-<!-- 4. Split Grid: Thinking Trace & Live Terminal Stream -->
-<div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 1.25rem; align-items: start; margin-bottom: 2rem;">
-    <!-- Model Reasoning Accordion (<think>) -->
-    <div>
-        <ThinkingAccordion @ref="_thinkingRef" TaskId="WorkerState.Current.ActiveTaskId" />
+        <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;" @onclick="() => TelemetryUi.HydrateFromService()">
+            🔄 Refresh History
+        </button>
     </div>
 
-    <!-- Live Streaming Terminal Console -->
-    <div>
-        <TerminalConsole @ref="_terminalRef" FilterTaskId="_selectedTaskId" />
-    </div>
+    @if (_activeTab == "llm")
+    {
+        <LlmCallsHistoryTable OnSelectCall="HandleSelectLlmCall" />
+    }
+    else
+    {
+        <ShellOperationsFeed OnSelectCommand="HandleSelectShellCommand" />
+    }
 </div>
+
+<!-- Modals -->
+<InferenceInspectionModal Call="TelemetryUi.SelectedLlmCall" OnClose="() => TelemetryUi.SelectedLlmCall = null" />
+<ShellCommandOutputModal Command="TelemetryUi.SelectedShellCommand" OnClose="() => TelemetryUi.SelectedShellCommand = null" />
 
 @code {
     [Parameter] public int? TaskId { get; set; }
 
-    private PipelineStepper? _stepperRef;
-    private ToolActivityStrip? _toolStripRef;
-    private ThinkingAccordion? _thinkingRef;
-    private TerminalConsole? _terminalRef;
-    private IReadOnlyList<StageDefinition>? _workflowStages;
-
-    private int? _selectedTaskId;
-    private int? _joinedTaskId;
+    private string _activeTab = "llm";
 
     protected override async Task OnInitializedAsync()
     {
-        WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
-        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
-
-        HubClient.OnTokenDeltaReceived += HandleTokenDelta;
-        HubClient.OnToolExecutionReceived += HandleToolExecution;
-        HubClient.OnGitProgressReceived += HandleGitProgress;
-        HubClient.OnWorkerStatusReceived += HandleWorkerStatus;
-        HubClient.OnStageTransitionReceived += HandleStageTransition;
-        HubClient.OnDeterministicGateResultReceived += HandleDeterministicGateResult;
-        HubClient.OnHostDirtyAlertReceived += HandleHostDirtyAlert;
-        HubClient.OnExecutionLogReceived += HandleExecutionLog;
-        HubClient.OnOptimizationActionReceived += HandleOptimizationAction;
+        TelemetryUi.OnChange += HandleTelemetryChanged;
         HubClient.OnConnectionStateChanged += HandleConnectionStateChanged;
-
-        try
-        {
-            var defaultWf = await WorkflowRepository.GetDefaultWorkflowWithStagesAsync();
-            _workflowStages = defaultWf?.Stages?.OrderBy(s => s.SequenceOrder).ToList();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error loading default workflow stages for monitoring: {ex.Message}");
-        }
 
         try
         {
             await HubClient.StartAsync();
         }
-        catch
+        catch (Exception ex)
         {
-            // Handled
+            Logger.LogDebug(ex, "Failed to connect OrchestratorHub on Monitoring page initialization; will retry on demand or reconnect.");
         }
-
-        if (WorkerState.Current.ActiveTaskId.HasValue && WorkerState.Current.ActiveTaskId.Value > 0)
-        {
-            await JoinTaskGroupAsync(WorkerState.Current.ActiveTaskId.Value);
-        }
-
-        StateHasChanged();
     }
 
     protected override async Task OnParametersSetAsync()
@@ -147,49 +110,7 @@
         }
     }
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (firstRender && WorkerState.Current.ActiveTaskId.HasValue)
-        {
-            var activeId = WorkerState.Current.ActiveTaskId.Value;
-            if (!string.IsNullOrEmpty(WorkerState.Current.StageId))
-            {
-                _stepperRef?.ApplyStageTransition(WorkerState.Current.StageId, NightCodeForge.Core.Domain.StageExecutionStatus.Running);
-            }
-
-            try
-            {
-                var fullTask = await TaskRepository.GetByIdAsync(activeId);
-                var logs = fullTask?.ExecutionLogs;
-                if (logs != null && logs.Any() && _terminalRef != null)
-                {
-                    foreach (var log in logs)
-                    {
-                        _terminalRef.AddLog(log.TaskId, "Orchestrator", log.Level.ToString(), log.Message, log.Timestamp);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error hydrating logs in OnAfterRender for task #{activeId}: {ex.Message}");
-            }
-        }
-    }
-
-    private void HandleWorkerStateChanged()
-    {
-        InvokeAsync(async () =>
-        {
-            var activeTaskId = WorkerState.Current.ActiveTaskId;
-            if (activeTaskId.HasValue && activeTaskId != _joinedTaskId)
-            {
-                await JoinTaskGroupAsync(activeTaskId.Value);
-            }
-            StateHasChanged();
-        });
-    }
-
-    private void HandleWorkspaceChanged()
+    private void HandleTelemetryChanged()
     {
         InvokeAsync(StateHasChanged);
     }
@@ -199,107 +120,16 @@
         InvokeAsync(StateHasChanged);
     }
 
-    private void HandleTokenDelta(int taskId, string token, bool isThinking)
+    private void HandleSelectLlmCall(LlmCallRecord call)
     {
-        InvokeAsync(() =>
-        {
-            _thinkingRef?.AppendToken(taskId, token, isThinking);
-        });
+        TelemetryUi.SelectedLlmCall = call;
+        StateHasChanged();
     }
 
-    private void HandleToolExecution(int taskId, string toolName, string arguments, string status, int? durationMs)
+    private void HandleSelectShellCommand(ShellCommandRecord command)
     {
-        InvokeAsync(() =>
-        {
-            _toolStripRef?.HandleToolExecution(taskId, toolName, arguments, status, durationMs);
-            _terminalRef?.AddLog(taskId, "Tool", status.Equals("Running", StringComparison.OrdinalIgnoreCase) ? "Info" : "Debug",
-                $"[{toolName}] {status} {(durationMs.HasValue ? $"({durationMs}ms)" : "")}: {arguments}", DateTime.UtcNow);
-        });
-    }
-
-    private void HandleGitProgress(int taskId, string operation, string message)
-    {
-        InvokeAsync(() =>
-        {
-            _terminalRef?.AddLog(taskId, "Git", "Info", $"[{operation}] {message}", DateTime.UtcNow);
-        });
-    }
-
-    private void HandleWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget)
-    {
-        InvokeAsync(() =>
-        {
-            WorkerState.HandleWorkerStatus(status, activeTaskId, stageId, hardwareTarget);
-            if (activeTaskId.HasValue && activeTaskId.Value != _joinedTaskId)
-            {
-                _ = JoinTaskGroupAsync(activeTaskId.Value);
-            }
-            StateHasChanged();
-        });
-    }
-
-    private void HandleStageTransition(int taskId, string stageId, string stageKind, string status)
-    {
-        InvokeAsync(() =>
-        {
-            _stepperRef?.ApplyStageTransition(stageId, status);
-            _terminalRef?.AddLog(taskId, stageId, "Info", $"Stage transition: {stageId} [{stageKind}] -> {status}", DateTime.UtcNow);
-            if (status.Equals("Running", StringComparison.OrdinalIgnoreCase))
-            {
-                WorkerState.HandleWorkerStatus("Running", taskId, stageId, stageKind.Contains("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU");
-                if (taskId != _joinedTaskId)
-                {
-                    _ = JoinTaskGroupAsync(taskId);
-                }
-            }
-            StateHasChanged();
-        });
-    }
-
-    private void HandleDeterministicGateResult(int taskId, string gateName, bool passed, string metricsSummary)
-    {
-        InvokeAsync(() =>
-        {
-            _stepperRef?.ApplyGateResult(gateName, passed, metricsSummary);
-            _terminalRef?.AddLog(taskId, gateName, passed ? "Info" : "Warning",
-                $"Deterministic Gate [{gateName}]: Passed={passed}. Metrics: {metricsSummary}", DateTime.UtcNow);
-        });
-    }
-
-    private void HandleHostDirtyAlert(int taskId, string branchName)
-    {
-        InvokeAsync(() =>
-        {
-            _terminalRef?.AddLog(taskId, "HostAlert", "Warning",
-                $"Host working tree dirty alert on branch {branchName}", DateTime.UtcNow);
-        });
-    }
-
-    private void HandleExecutionLog(int taskId, string stageId, string level, string message, DateTime timestamp)
-    {
-        InvokeAsync(() =>
-        {
-            _terminalRef?.AddLog(taskId, stageId, level, message, timestamp);
-        });
-    }
-
-    private void HandleOptimizationAction(int taskId, string stageId, string actionType, string description, int tokensSaved, DateTime timestamp)
-    {
-        InvokeAsync(() =>
-        {
-            _terminalRef?.AddLog(taskId, stageId, "Info", $"[OPTIMIZATION] {actionType}: {description} (Saved {tokensSaved} tokens)", timestamp);
-        });
-    }
-
-    private async Task JoinTaskGroupAsync(int taskId)
-    {
-        if (_joinedTaskId.HasValue && _joinedTaskId.Value != taskId)
-        {
-            await HubClient.LeaveTaskGroupAsync(_joinedTaskId.Value);
-        }
-        _joinedTaskId = taskId;
-        _selectedTaskId = taskId;
-        await HubClient.JoinTaskGroupAsync(taskId);
+        TelemetryUi.SelectedShellCommand = command;
+        StateHasChanged();
     }
 
     private async Task ReconnectAsync()
@@ -307,14 +137,10 @@
         try
         {
             await HubClient.StartAsync();
-            if (_joinedTaskId.HasValue)
-            {
-                await HubClient.JoinTaskGroupAsync(_joinedTaskId.Value);
-            }
         }
-        catch
+        catch (Exception ex)
         {
-            // Handled
+            Logger.LogDebug(ex, "Manual SignalR reconnect failed on Monitoring page.");
         }
         StateHasChanged();
     }
@@ -345,23 +171,7 @@
 
     public async ValueTask DisposeAsync()
     {
-        WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
-        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
-
-        HubClient.OnTokenDeltaReceived -= HandleTokenDelta;
-        HubClient.OnToolExecutionReceived -= HandleToolExecution;
-        HubClient.OnGitProgressReceived -= HandleGitProgress;
-        HubClient.OnWorkerStatusReceived -= HandleWorkerStatus;
-        HubClient.OnStageTransitionReceived -= HandleStageTransition;
-        HubClient.OnDeterministicGateResultReceived -= HandleDeterministicGateResult;
-        HubClient.OnHostDirtyAlertReceived -= HandleHostDirtyAlert;
-        HubClient.OnExecutionLogReceived -= HandleExecutionLog;
-        HubClient.OnOptimizationActionReceived -= HandleOptimizationAction;
+        TelemetryUi.OnChange -= HandleTelemetryChanged;
         HubClient.OnConnectionStateChanged -= HandleConnectionStateChanged;
-
-        if (_joinedTaskId.HasValue)
-        {
-            await HubClient.LeaveTaskGroupAsync(_joinedTaskId.Value);
-        }
     }
 }

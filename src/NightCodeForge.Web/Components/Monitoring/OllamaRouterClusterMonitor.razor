@@ -1,0 +1,207 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Web.Services
+@inject IOllamaRouterGatewayService GatewayService
+@inject ToastService ToastService
+
+<div id="ollamarouter-cluster-monitor" class="forge-card" style="margin-bottom: 1.5rem; padding: 1.5rem;">
+    <!-- Header -->
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.25rem; flex-wrap: wrap;">
+                <span style="font-size: 1.5rem;">🦙</span>
+                <h3 style="font-weight: 700; font-size: 1.2rem; margin: 0; color: var(--text-primary);">
+                    OllamaRouter Cluster &amp; VRAM Monitor
+                </h3>
+                @if (_status != null)
+                {
+                    <span class="forge-badge @(_status.IsConnected ? "badge-teal" : "badge-gray")" style="padding: 0.25rem 0.65rem; font-size: 0.8rem;">
+                        @(_status.IsConnected ? "🟢 Gateway Connected" : "🔴 Gateway Offline")
+                    </span>
+                    @if (_status.IsRouterProxy)
+                    {
+                        <span class="forge-badge badge-indigo" style="padding: 0.25rem 0.65rem; font-size: 0.8rem;">
+                            Reverse Proxy Active
+                        </span>
+                    }
+                }
+            </div>
+            <p style="margin: 0; font-size: 0.88rem; color: var(--text-secondary); line-height: 1.5;">
+                Dual-compute cluster topology, target backends, resident GPU models (/api/ps), and wire-level auto-healing.
+            </p>
+        </div>
+        <div style="display: flex; gap: 0.65rem; align-items: center; flex-wrap: wrap;">
+            <a href="http://localhost:11434/monitor" target="_blank" class="forge-btn forge-btn-outline" style="padding: 0.5rem 1rem; font-size: 0.85rem;">
+                ↗ Gateway Monitor
+            </a>
+            <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.5rem 1rem; font-size: 0.85rem;" @onclick="RefreshAsync" disabled="_isLoading">
+                @(_isLoading ? "Refreshing..." : "🔄 Refresh")
+            </button>
+            <button id="reclaim-vram-btn" type="button" class="forge-btn forge-btn-primary" style="padding: 0.5rem 1.15rem; font-size: 0.85rem; font-weight: 600;" @onclick="ReclaimVramAsync" disabled="_isReclaiming">
+                @(_isReclaiming ? "Reclaiming VRAM..." : "🧹 Reclaim GPU VRAM")
+            </button>
+        </div>
+    </div>
+
+    <!-- Target Routing Endpoints & Latencies -->
+    <div style="margin-bottom: 1.5rem;">
+        <label style="display: block; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.75rem;">
+            Cluster Target Endpoints &amp; Network Latencies
+        </label>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+            @if (_status?.Targets != null)
+            {
+                @foreach (var target in _status.Targets)
+                {
+                    <div class="forge-subcard" style="padding: 1rem 1.25rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                            <strong style="font-size: 0.95rem; color: var(--text-primary); font-weight: 700;">@target.TargetName</strong>
+                            <div style="display: flex; align-items: center; gap: 0.4rem;">
+                                @if (target.LatencyMs.HasValue)
+                                {
+                                    <span class="font-mono" style="font-size: 0.78rem; color: var(--accent-teal); font-weight: 600;">
+                                        @target.LatencyMs.Value ms
+                                    </span>
+                                }
+                                <span class="forge-badge @OperationsTelemetryUiService.GetTargetBackendBadgeClass(target.State)" style="padding: 0.2rem 0.55rem; font-size: 0.75rem;">
+                                    @target.State
+                                </span>
+                            </div>
+                        </div>
+                        <p style="margin: 0; font-size: 0.82rem; color: var(--text-secondary); line-height: 1.4;">@target.Description</p>
+                    </div>
+                }
+            }
+            else
+            {
+                <div style="padding: 1.5rem; text-align: center; color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); grid-column: 1 / -1; font-size: 0.9rem;">
+                    Checking cluster targets...
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Resident GPU Models Table -->
+    <div style="margin-bottom: 1.25rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+            <label style="display: block; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 0;">
+                Resident GPU Models In Memory (/api/ps)
+            </label>
+            <span class="forge-badge badge-indigo" style="font-size: 0.78rem; padding: 0.2rem 0.6rem;">
+                @(_residentModels.Count == 1 ? "1 model resident in VRAM" : $"{_residentModels.Count} models resident in VRAM")
+            </span>
+        </div>
+
+        <div style="border-radius: var(--radius-md); border: 1px solid var(--border-subtle); overflow: hidden; background: var(--bg-surface);">
+            <table class="font-mono" style="width: 100%; border-collapse: collapse; font-size: 0.88rem;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-subtle); background: var(--bg-input);">
+                        <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Model</th>
+                        <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">VRAM Footprint &amp; Allocation</th>
+                        <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Total Size</th>
+                        <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Expires In / At</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (_residentModels.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="4" style="padding: 2rem 1rem; text-align: center; color: var(--text-muted); font-size: 0.9rem;">
+                                @(_status?.IsConnected == true ? "No models currently resident in GPU VRAM." : "Gateway unreachable at " + (_status?.BaseUrl ?? "http://localhost:11434"))
+                            </td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var rm in _residentModels)
+                        {
+                            <tr style="border-bottom: 1px solid var(--border-subtle);">
+                                <td style="padding: 0.85rem 1rem; color: var(--text-primary); font-weight: 600;">@rm.Name</td>
+                                <td style="padding: 0.85rem 1rem;">
+                                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                        <div style="flex: 1; max-width: 140px; height: 7px; background: var(--border-subtle); border-radius: 4px; overflow: hidden;">
+                                            <div style="width: @(rm.VramPercentage)%; height: 100%; background: var(--accent-teal); border-radius: 4px;"></div>
+                                        </div>
+                                        <span style="color: var(--accent-teal); font-weight: 700; font-size: 0.82rem;">
+                                            @rm.SizeVramFormatted (@rm.VramPercentageFormatted)
+                                        </span>
+                                    </div>
+                                </td>
+                                <td style="padding: 0.85rem 1rem; color: var(--text-secondary);">@rm.SizeTotalFormatted</td>
+                                <td style="padding: 0.85rem 1rem; color: var(--text-muted);">@rm.ExpiresAtFormatted</td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Wire-Level Auto-Healing Strip -->
+    <div style="padding: 0.85rem 1.15rem; border-radius: var(--radius-md); background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.2); display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 0.75rem; flex: 1; min-width: 260px;">
+            <span style="font-size: 1.3rem;">🛡️</span>
+            <span style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.4;">
+                <strong style="color: var(--text-primary);">Wire-Level Auto-Healing Active:</strong> Stripping markdown code fences (<code>```json</code>), repairing malformed tool argument payloads, and promoting <code>&lt;tool_call&gt;</code> pseudo-tags transparently.
+            </span>
+        </div>
+        <span class="forge-badge badge-teal" style="font-size: 0.78rem; font-weight: 600;">Active Guard</span>
+    </div>
+</div>
+
+@code {
+    private OllamaRouterStatus? _status;
+    private List<ResidentModelInfo> _residentModels = new();
+    private bool _isLoading;
+    private bool _isReclaiming;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+    }
+
+    public async Task RefreshAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            _status = await GatewayService.GetGatewayStatusAsync();
+            var models = await GatewayService.GetResidentModelsAsync();
+            _residentModels = models.ToList();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("OllamaRouter Query Error", ex.Message, ToastLevel.Warning);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task ReclaimVramAsync()
+    {
+        _isReclaiming = true;
+        try
+        {
+            var success = await GatewayService.ReclaimVramAsync();
+            if (success)
+            {
+                ToastService.Show("VRAM Reclaim Triggered", "Sent non-destructive memory reclaim command to OllamaRouter.", ToastLevel.Success);
+            }
+            else
+            {
+                ToastService.Show("VRAM Reclaim Notice", "Reclaim request completed (no active resident models to free or endpoint not reachable).", ToastLevel.Info);
+            }
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("VRAM Reclaim Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isReclaiming = false;
+        }
+    }
+}

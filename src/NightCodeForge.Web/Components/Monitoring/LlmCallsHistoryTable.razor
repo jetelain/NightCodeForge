@@ -1,0 +1,92 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@implements IDisposable
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Services
+@inject OperationsTelemetryUiService TelemetryUi
+
+<div id="llm-calls-history" style="overflow-x: auto;">
+    <table class="font-mono" style="width: 100%; border-collapse: collapse; font-size: 0.88rem;">
+        <thead>
+            <tr style="border-bottom: 1px solid var(--border-subtle); background: var(--bg-input);">
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Time</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Model</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Route</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Tokens (P / C)</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Speed</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Duration</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Status</th>
+                <th style="padding: 0.75rem 1rem; text-align: right; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            @{
+                var calls = TelemetryUi.RecentLlmCalls;
+            }
+            @if (calls.Count == 0)
+            {
+                <tr>
+                    <td colspan="8" style="padding: 2.5rem 1rem; text-align: center; color: var(--text-muted); font-size: 0.9rem;">
+                        No LLM inference calls recorded yet. Trigger a task, prompt an agent, or run a stage to observe live streams.
+                    </td>
+                </tr>
+            }
+            else
+            {
+                @foreach (var call in calls)
+                {
+                    <tr style="border-bottom: 1px solid var(--border-subtle); cursor: pointer;" class="hover-row" @onclick="() => OnSelectCall.InvokeAsync(call)">
+                        <td style="padding: 0.75rem 1rem; color: var(--text-secondary);">@call.StartTime.ToLocalTime().ToString("HH:mm:ss")</td>
+                        <td style="padding: 0.75rem 1rem; color: var(--text-primary); font-weight: 600;">@call.Model</td>
+                        <td style="padding: 0.75rem 1rem;">
+                            <span class="forge-badge @OperationsTelemetryUiService.GetRouteBadgeClass(call.TargetBackend)" style="font-size: 0.75rem;">
+                                @call.TargetBackend
+                            </span>
+                        </td>
+                        <td style="padding: 0.75rem 1rem; color: var(--text-secondary);">
+                            <span title="Prompt Tokens">@call.PromptTokens</span> / <strong title="Completion Tokens (including reasoning)" style="color: var(--text-primary);">@call.CompletionTokens</strong>
+                            @if (call.ReasoningTokens > 0)
+                            {
+                                <span title="Includes @call.ReasoningTokens reasoning tokens" style="font-size: 0.75rem; color: var(--accent-amber); margin-left: 0.25rem;">(🧠 @call.ReasoningTokens)</span>
+                            }
+                        </td>
+                        <td style="padding: 0.75rem 1rem; color: var(--accent-teal); font-weight: 600;">
+                            @OperationsTelemetryUiService.FormatSpeed(call.TokensPerSecond)
+                        </td>
+                        <td style="padding: 0.75rem 1rem; color: var(--text-secondary);">
+                            @OperationsTelemetryUiService.FormatDuration(call.DurationMs)
+                        </td>
+                        <td style="padding: 0.75rem 1rem;">
+                            <span class="forge-badge @OperationsTelemetryUiService.GetLlmStatusBadgeClass(call.Status)" style="font-size: 0.75rem;">
+                                @call.Status
+                            </span>
+                        </td>
+                        <td style="padding: 0.75rem 1rem; text-align: right;">
+                            <button type="button" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem;" @onclick:stopPropagation="true" @onclick="() => OnSelectCall.InvokeAsync(call)">
+                                Inspect 🔎
+                            </button>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter] public EventCallback<LlmCallRecord> OnSelectCall { get; set; }
+
+    protected override void OnInitialized()
+    {
+        TelemetryUi.OnChange += HandleChange;
+    }
+
+    private void HandleChange()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        TelemetryUi.OnChange -= HandleChange;
+    }
+}

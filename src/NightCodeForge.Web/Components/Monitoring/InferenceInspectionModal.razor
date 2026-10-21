@@ -1,0 +1,139 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Services
+@inject IJSRuntime JS
+@inject ToastService ToastService
+
+@if (Call != null)
+{
+    <div class="forge-modal-backdrop" @onclick="OnClose" role="dialog" aria-modal="true" style="position: fixed; inset: 0; background: rgba(8, 10, 15, 0.85); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 1.5rem;">
+        <div class="forge-modal forge-modal-content card-glass" style="background: var(--bg-card); border: 1px solid var(--border-accent); border-radius: var(--radius-xl); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8); max-width: 820px; width: 90vw; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden;" @onclick:stopPropagation="true">
+            <!-- Header -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border-subtle); background: var(--bg-card);">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="font-size: 1.3rem;">🧠</span>
+                    <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--text-primary);">
+                        LLM Inference Call Inspection
+                    </h3>
+                </div>
+                <button type="button" class="forge-btn-icon" @onclick="OnClose" title="Close" style="background: none; border: none; font-size: 1.25rem; color: var(--text-muted); cursor: pointer;">
+                    ✕
+                </button>
+            </div>
+
+            <!-- Body -->
+            <div style="padding: 1.5rem; overflow-y: auto; flex: 1; background: var(--bg-card);">
+                <!-- Metadata Bar -->
+                <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1.25rem;">
+                    <span class="forge-badge badge-indigo">
+                        Model: <strong>@Call.Model</strong>
+                    </span>
+                    <span class="forge-badge @OperationsTelemetryUiService.GetRouteBadgeClass(Call.TargetBackend)">
+                        Route: <strong>@Call.TargetBackend</strong>
+                    </span>
+                    <span class="forge-badge @OperationsTelemetryUiService.GetLlmStatusBadgeClass(Call.Status)">
+                        Status: <strong>@Call.Status</strong>
+                    </span>
+                    <span class="forge-badge badge-gray font-mono">
+                        Duration: <strong>@OperationsTelemetryUiService.FormatDuration(Call.DurationMs)</strong>
+                    </span>
+                    <span class="forge-badge badge-teal font-mono">
+                        Speed: <strong>@OperationsTelemetryUiService.FormatSpeed(Call.TokensPerSecond)</strong>
+                    </span>
+                    <span class="forge-badge badge-gray font-mono">
+                        Prompt: <strong>@Call.PromptTokens</strong> | Completion: <strong>@Call.CompletionTokens</strong>
+                        @if (Call.ReasoningTokens > 0)
+                        {
+                            <span> | Reasoning: <strong style="color: var(--accent-amber);">🧠 @Call.ReasoningTokens</strong></span>
+                        }
+                    </span>
+                </div>
+
+                <div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 1.25rem;" class="font-mono">
+                    Call ID: @Call.CallId &nbsp;|&nbsp; Started: @Call.StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff")
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(Call.ErrorMessage))
+                {
+                    <div style="margin-bottom: 1.25rem; padding: 1rem; border-radius: var(--radius-md); background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3);">
+                        <strong style="color: var(--accent-crimson); font-size: 0.88rem; display: block; margin-bottom: 0.35rem;">Execution Error:</strong>
+                        <div class="font-mono" style="font-size: 0.82rem; color: var(--text-primary); white-space: pre-wrap;">@Call.ErrorMessage</div>
+                    </div>
+                }
+
+                <!-- Prompt Section -->
+                <div style="margin-bottom: 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <label style="font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">
+                            Prompt Preview / Head
+                        </label>
+                        <button type="button" class="forge-btn forge-btn-secondary" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" @onclick="CopyPromptAsync">
+                            📋 Copy Prompt
+                        </button>
+                    </div>
+                    <pre class="font-mono" style="margin: 0; padding: 1rem; border-radius: var(--radius-md); background: var(--bg-input); border: 1px solid var(--border-subtle); font-size: 0.82rem; color: var(--text-primary); white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto;">@(string.IsNullOrWhiteSpace(Call.PromptPreview) ? "(No prompt content recorded)" : Call.PromptPreview)</pre>
+                </div>
+
+                <!-- Completion Section -->
+                <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <label style="font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">
+                            Model Completion / Output @(Call.ReasoningTokens > 0 ? "(with Reasoning 🧠)" : "")
+                        </label>
+                        @if (!string.IsNullOrWhiteSpace(Call.CompletionPreview))
+                        {
+                            <button type="button" class="forge-btn forge-btn-secondary" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" @onclick="CopyCompletionAsync">
+                                📋 Copy Output
+                            </button>
+                        }
+                    </div>
+                    <pre class="font-mono" style="margin: 0; padding: 1rem; border-radius: var(--radius-md); background: var(--bg-input); border: 1px solid var(--border-subtle); font-size: 0.82rem; color: var(--text-primary); white-space: pre-wrap; word-break: break-all; max-height: 250px; overflow-y: auto;">@(string.IsNullOrWhiteSpace(Call.CompletionPreview) ? (Call.Status == LlmCallStatus.Running ? "Inferring completion tokens in real-time..." : "(No completion generated)") : Call.CompletionPreview)</pre>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div style="padding: 1rem 1.5rem; border-top: 1px solid var(--border-subtle); background: var(--bg-card); display: flex; justify-content: flex-end;">
+                <button type="button" class="forge-btn forge-btn-secondary" @onclick="OnClose">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public LlmCallRecord? Call { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private async Task CopyPromptAsync()
+    {
+        if (Call != null && !string.IsNullOrEmpty(Call.PromptPreview))
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("navigator.clipboard.writeText", Call.PromptPreview);
+                ToastService.Show("Copied", "Prompt preview copied to clipboard.", ToastLevel.Success);
+            }
+            catch (Exception ex)
+            {
+                ToastService.Show("Clipboard Notice", "Could not copy prompt: " + ex.Message, ToastLevel.Warning);
+            }
+        }
+    }
+
+    private async Task CopyCompletionAsync()
+    {
+        if (Call != null && !string.IsNullOrEmpty(Call.CompletionPreview))
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("navigator.clipboard.writeText", Call.CompletionPreview);
+                ToastService.Show("Copied", "Completion output copied to clipboard.", ToastLevel.Success);
+            }
+            catch (Exception ex)
+            {
+                ToastService.Show("Clipboard Notice", "Could not copy output: " + ex.Message, ToastLevel.Warning);
+            }
+        }
+    }
+}

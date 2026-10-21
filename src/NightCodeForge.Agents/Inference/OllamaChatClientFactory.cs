@@ -82,15 +82,18 @@ public static class OllamaChatClientFactory
 public class DefaultOllamaChatClientFactory : IOllamaChatClientFactory
 {
     private readonly IOptions<LlmProviderOptions> _options;
-    private readonly ILoggerFactory? _loggerFactory;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly NightCodeForge.Core.Interfaces.IOperationsTelemetryService _telemetryService;
     private readonly ConcurrentDictionary<string, IChatClient> _clientCache = new(StringComparer.OrdinalIgnoreCase);
 
     public DefaultOllamaChatClientFactory(
         IOptions<LlmProviderOptions> options,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        NightCodeForge.Core.Interfaces.IOperationsTelemetryService telemetryService)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
     }
 
     public IChatClient CreateClient(string? modelId = null) =>
@@ -103,7 +106,10 @@ public class DefaultOllamaChatClientFactory : IOllamaChatClientFactory
         var cacheKey = $"{effectiveModel}:{routingTarget}";
 
         return _clientCache.GetOrAdd(cacheKey, _ =>
-            OllamaChatClientFactory.CreateOllama(defaultOpts, effectiveModel, _loggerFactory?.CreateLogger("OllamaApiClient"), routingTarget));
+        {
+            var rawClient = OllamaChatClientFactory.CreateOllama(defaultOpts, effectiveModel, _loggerFactory.CreateLogger("OllamaApiClient"), routingTarget);
+            return new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, routingTarget.ToString(), _loggerFactory.CreateLogger<TelemetryChatClient>());
+        });
     }
 
     public IChatClient CreateClient(AgentProfile? profile) =>

@@ -1,0 +1,117 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Services
+@inject IJSRuntime JS
+@inject ToastService ToastService
+
+@if (Command != null)
+{
+    <div class="forge-modal-backdrop" @onclick="OnClose" role="dialog" aria-modal="true" style="position: fixed; inset: 0; background: rgba(8, 10, 15, 0.85); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 1.5rem;">
+        <div class="forge-modal forge-modal-content card-glass" style="background: var(--bg-card); border: 1px solid var(--border-accent); border-radius: var(--radius-xl); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8); max-width: 860px; width: 92vw; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden;" @onclick:stopPropagation="true">
+            <!-- Header -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border-subtle); background: var(--bg-card);">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="font-size: 1.3rem;">💻</span>
+                    <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--text-primary);">
+                        Shell Execution &amp; Terminal Output
+                    </h3>
+                </div>
+                <button type="button" class="forge-btn-icon" @onclick="OnClose" title="Close" style="background: none; border: none; font-size: 1.25rem; color: var(--text-muted); cursor: pointer;">
+                    ✕
+                </button>
+            </div>
+
+            <!-- Body -->
+            <div style="padding: 1.5rem; overflow-y: auto; flex: 1; background: var(--bg-card);">
+                <!-- Metadata Bar -->
+                <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1.25rem;">
+                    <span class="forge-badge @OperationsTelemetryUiService.GetExitCodeBadgeClass(Command.ExitCode)">
+                        Exit Code: <strong>@(Command.ExitCode.HasValue ? Command.ExitCode.Value.ToString() : "Running")</strong>
+                    </span>
+                    <span class="forge-badge @OperationsTelemetryUiService.GetShellStatusBadgeClass(Command.Status)">
+                        Status: <strong>@Command.Status</strong>
+                    </span>
+                    <span class="forge-badge badge-gray font-mono">
+                        Duration: <strong>@OperationsTelemetryUiService.FormatDuration(Command.DurationMs)</strong>
+                    </span>
+                    <span class="forge-badge badge-indigo font-mono">
+                        Cwd: <strong>@Command.WorkingDirectory</strong>
+                    </span>
+                </div>
+
+                <!-- Command line box -->
+                <div style="margin-bottom: 1.25rem;">
+                    <label style="font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); display: block; margin-bottom: 0.4rem;">
+                        Command Line
+                    </label>
+                    <div class="font-mono" style="padding: 0.75rem 1rem; border-radius: var(--radius-md); background: var(--bg-input); border: 1px solid var(--border-subtle); font-size: 0.88rem; color: var(--text-primary); word-break: break-all;">
+                        $ @Command.CommandLine
+                    </div>
+                </div>
+
+                <!-- Terminal Output Section -->
+                <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <label style="font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">
+                            Captured Standard Output &amp; Error Streams
+                        </label>
+                        <button type="button" class="forge-btn forge-btn-secondary" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" @onclick="CopyOutputAsync">
+                            📋 Copy Full Output
+                        </button>
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(Command.ErrorPreview))
+                    {
+                        <div style="margin-bottom: 0.75rem;">
+                            <span class="forge-badge badge-crimson" style="font-size: 0.72rem; margin-bottom: 0.35rem; display: inline-block;">Standard Error</span>
+                            <pre class="font-mono" style="margin: 0; padding: 0.85rem 1rem; border-radius: var(--radius-md); background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); font-size: 0.82rem; color: var(--accent-crimson); white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto;">@Command.ErrorPreview</pre>
+                        </div>
+                    }
+
+                    <div>
+                        @if (!string.IsNullOrEmpty(Command.ErrorPreview))
+                        {
+                            <span class="forge-badge badge-teal" style="font-size: 0.72rem; margin-bottom: 0.35rem; display: inline-block;">Standard Output</span>
+                        }
+                        <pre class="font-mono" style="margin: 0; padding: 1rem; border-radius: var(--radius-md); background: #0f172a; border: 1px solid #1e293b; font-size: 0.82rem; color: #f8fafc; white-space: pre-wrap; word-break: break-all; min-height: 120px; max-height: 380px; overflow-y: auto; line-height: 1.45;">@(string.IsNullOrWhiteSpace(Command.OutputPreview) ? (Command.Status == ShellCommandStatus.Running ? "Process executing... waiting for standard output." : "(No output captured on stdout)") : Command.OutputPreview)</pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div style="padding: 1rem 1.5rem; border-top: 1px solid var(--border-subtle); background: var(--bg-card); display: flex; justify-content: flex-end;">
+                <button type="button" class="forge-btn forge-btn-secondary" @onclick="OnClose">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public ShellCommandRecord? Command { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private async Task CopyOutputAsync()
+    {
+        if (Command != null)
+        {
+            var text = "";
+            if (!string.IsNullOrEmpty(Command.OutputPreview)) text += Command.OutputPreview;
+            if (!string.IsNullOrEmpty(Command.ErrorPreview)) text += (text.Length > 0 ? "\n--- Stderr ---\n" : "") + Command.ErrorPreview;
+
+            if (!string.IsNullOrEmpty(text))
+            {
+                try
+                {
+                    await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+                    ToastService.Show("Copied", "Terminal output copied to clipboard.", ToastLevel.Success);
+                }
+                catch (Exception ex)
+                {
+                    ToastService.Show("Clipboard Notice", "Could not copy output: " + ex.Message, ToastLevel.Warning);
+                }
+            }
+        }
+    }
+}

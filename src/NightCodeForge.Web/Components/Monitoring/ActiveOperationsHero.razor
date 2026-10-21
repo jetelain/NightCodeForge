@@ -1,0 +1,146 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@implements IDisposable
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Services
+@inject OperationsTelemetryUiService TelemetryUi
+
+<div id="active-operations-hero" class="forge-card" style="margin-bottom: 1.5rem; padding: 1.25rem 1.5rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span style="font-size: 1.25rem;">⚡</span>
+            <h3 style="margin: 0; font-size: 1.1rem; font-weight: 700; color: var(--text-primary);">Active System Operations</h3>
+        </div>
+        <div style="font-size: 0.8rem; color: var(--text-muted);">
+            Universal runtime interception across all tasks, background jobs &amp; CLI tools
+        </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.25rem;">
+        <!-- In-Flight LLM Inference Card -->
+        <div id="active-llm-card" class="forge-subcard" style="padding: 1.25rem; border-radius: var(--radius-md); background: var(--bg-surface); border: 1px solid var(--border-subtle); display: flex; flex-direction: column; justify-content: space-between;">
+            <div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="font-size: 1.3rem;">🧠</span>
+                        <strong style="font-size: 0.95rem; color: var(--text-primary);">In-Flight LLM Inference</strong>
+                    </div>
+                    @if (TelemetryUi.ActiveLlmCall != null)
+                    {
+                        <span class="forge-badge badge-amber" style="animation: pulse 1.8s infinite; font-size: 0.78rem;">
+                            ● Inferring
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="forge-badge badge-gray" style="font-size: 0.78rem;">
+                            ○ Idle
+                        </span>
+                    }
+                </div>
+
+                @if (TelemetryUi.ActiveLlmCall != null)
+                {
+                    var call = TelemetryUi.ActiveLlmCall;
+                    <div style="margin-bottom: 0.75rem;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem;">
+                            <span style="font-weight: 700; color: var(--text-primary); font-size: 0.92rem;">@call.Model</span>
+                            <span class="forge-badge @OperationsTelemetryUiService.GetRouteBadgeClass(call.TargetBackend)" style="font-size: 0.75rem;">
+                                @call.TargetBackend
+                            </span>
+                        </div>
+                        <div style="display: flex; gap: 1.25rem; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.5rem; flex-wrap: wrap;">
+                            <span>Speed: <strong style="color: var(--accent-teal);">@OperationsTelemetryUiService.FormatSpeed(call.TokensPerSecond)</strong></span>
+                            <span>Tokens: <strong>@call.CompletionTokens</strong></span>
+                            @if (call.ReasoningTokens > 0)
+                            {
+                                <span title="Reasoning / Thinking Tokens">Reasoning: <strong style="color: var(--accent-amber);">🧠 @call.ReasoningTokens</strong></span>
+                            }
+                            <span>Elapsed: <strong>@OperationsTelemetryUiService.FormatDuration(call.DurationMs)</strong></span>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(call.PromptPreview))
+                        {
+                            <div class="font-mono" style="padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.78rem; color: var(--text-muted); max-height: 58px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap; line-height: 1.4;">
+                                "@call.PromptPreview"
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div style="padding: 1.25rem 0.5rem; text-align: center; color: var(--text-muted); font-size: 0.88rem;">
+                        No LLM inference calls currently in flight.<br/>
+                        <span style="font-size: 0.78rem;">Ready for agent prompts, ideation chats, or quality gates.</span>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- In-Flight Shell Operation Card -->
+        <div id="active-shell-card" class="forge-subcard" style="padding: 1.25rem; border-radius: var(--radius-md); background: var(--bg-surface); border: 1px solid var(--border-subtle); display: flex; flex-direction: column; justify-content: space-between;">
+            <div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="font-size: 1.3rem;">💻</span>
+                        <strong style="font-size: 0.95rem; color: var(--text-primary);">In-Flight Shell Operation</strong>
+                    </div>
+                    @if (TelemetryUi.ActiveShellCommand != null)
+                    {
+                        <span class="forge-badge badge-amber" style="animation: pulse 1.8s infinite; font-size: 0.78rem;">
+                            ● Executing
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="forge-badge badge-gray" style="font-size: 0.78rem;">
+                            ○ Idle
+                        </span>
+                    }
+                </div>
+
+                @if (TelemetryUi.ActiveShellCommand != null)
+                {
+                    var cmd = TelemetryUi.ActiveShellCommand;
+                    <div style="margin-bottom: 0.75rem;">
+                        <div class="font-mono" style="font-weight: 700; color: var(--text-primary); font-size: 0.85rem; margin-bottom: 0.35rem; word-break: break-all;">
+                            $ @cmd.CommandLine
+                        </div>
+                        <div style="display: flex; gap: 1.25rem; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                            <span>Cwd: <strong class="font-mono" style="font-size: 0.78rem;">@cmd.WorkingDirectory</strong></span>
+                            <span>Elapsed: <strong>@OperationsTelemetryUiService.FormatDuration(cmd.DurationMs)</strong></span>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(cmd.OutputPreview))
+                        {
+                            <div class="font-mono" style="padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.76rem; color: var(--text-secondary); max-height: 58px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap; line-height: 1.3;">
+                                @cmd.OutputPreview
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div style="padding: 1.25rem 0.5rem; text-align: center; color: var(--text-muted); font-size: 0.88rem;">
+                        No shell commands currently running.<br/>
+                        <span style="font-size: 0.78rem;">Ready for dotnet build, test passes, bash tools, or git CLI.</span>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        TelemetryUi.OnChange += HandleChange;
+    }
+
+    private void HandleChange()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        TelemetryUi.OnChange -= HandleChange;
+    }
+}

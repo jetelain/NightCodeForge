@@ -366,5 +366,12 @@ public class SignalRActivityBridgeServiceTests
             ExecutionLogs.Add((taskId, stageId, level, message, timestamp));
             return Task.CompletedTask;
         }
+
+        public Task ReceiveLlmCallStarted(NightCodeForge.Core.Workflow.LlmCallRecord call) => Task.CompletedTask;
+        public Task ReceiveLlmCallProgress(string callId, int completionTokens, double durationMs, double tokensPerSecond, int reasoningTokens) => Task.CompletedTask;
+        public Task ReceiveLlmCallCompleted(NightCodeForge.Core.Workflow.LlmCallRecord call) => Task.CompletedTask;
+        public Task ReceiveShellCommandStarted(NightCodeForge.Core.Workflow.ShellCommandRecord command) => Task.CompletedTask;
+        public Task ReceiveShellCommandOutput(string commandId, string outputChunk, bool isError) => Task.CompletedTask;
+        public Task ReceiveShellCommandCompleted(NightCodeForge.Core.Workflow.ShellCommandRecord command) => Task.CompletedTask;
     }
 }

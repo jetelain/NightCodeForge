@@ -1,0 +1,93 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@implements IDisposable
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Services
+@inject OperationsTelemetryUiService TelemetryUi
+
+<div id="shell-commands-history" style="overflow-x: auto;">
+    <table class="font-mono" style="width: 100%; border-collapse: collapse; font-size: 0.88rem;">
+        <thead>
+            <tr style="border-bottom: 1px solid var(--border-subtle); background: var(--bg-input);">
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Time</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Command Line</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Working Directory</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Duration</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Exit Code</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Status</th>
+                <th style="padding: 0.75rem 1rem; text-align: right; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            @{
+                var commands = TelemetryUi.RecentShellCommands;
+            }
+            @if (commands.Count == 0)
+            {
+                <tr>
+                    <td colspan="7" style="padding: 2.5rem 1rem; text-align: center; color: var(--text-muted); font-size: 0.9rem;">
+                        No shell / CLI operations recorded yet. Build passes, test runs, and git executions will stream here automatically.
+                    </td>
+                </tr>
+            }
+            else
+            {
+                @foreach (var cmd in commands)
+                {
+                    <tr style="border-bottom: 1px solid var(--border-subtle); cursor: pointer;" class="hover-row" @onclick="() => OnSelectCommand.InvokeAsync(cmd)">
+                        <td style="padding: 0.75rem 1rem; color: var(--text-secondary);">@cmd.StartTime.ToLocalTime().ToString("HH:mm:ss")</td>
+                        <td style="padding: 0.75rem 1rem; color: var(--text-primary); font-weight: 600; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                            $ @cmd.CommandLine
+                        </td>
+                        <td style="padding: 0.75rem 1rem; color: var(--text-secondary); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="@cmd.WorkingDirectory">
+                            @cmd.WorkingDirectory
+                        </td>
+                        <td style="padding: 0.75rem 1rem; color: var(--text-secondary);">
+                            @OperationsTelemetryUiService.FormatDuration(cmd.DurationMs)
+                        </td>
+                        <td style="padding: 0.75rem 1rem;">
+                            @if (cmd.ExitCode.HasValue)
+                            {
+                                <span class="forge-badge @OperationsTelemetryUiService.GetExitCodeBadgeClass(cmd.ExitCode)" style="font-size: 0.75rem;">
+                                    @cmd.ExitCode.Value
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="forge-badge badge-gray" style="font-size: 0.75rem;">—</span>
+                            }
+                        </td>
+                        <td style="padding: 0.75rem 1rem;">
+                            <span class="forge-badge @OperationsTelemetryUiService.GetShellStatusBadgeClass(cmd.Status)" style="font-size: 0.75rem;">
+                                @cmd.Status
+                            </span>
+                        </td>
+                        <td style="padding: 0.75rem 1rem; text-align: right;">
+                            <button type="button" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem;" @onclick:stopPropagation="true" @onclick="() => OnSelectCommand.InvokeAsync(cmd)">
+                                View Output 🖥️
+                            </button>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter] public EventCallback<ShellCommandRecord> OnSelectCommand { get; set; }
+
+    protected override void OnInitialized()
+    {
+        TelemetryUi.OnChange += HandleChange;
+    }
+
+    private void HandleChange()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        TelemetryUi.OnChange -= HandleChange;
+    }
+}

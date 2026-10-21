@@ -14,19 +14,25 @@ public record ResidentModelInfo(
     public string SizeVramFormatted => SizeVram > 0 ? $"{SizeVram / (1024.0 * 1024 * 1024):F1} GB" : "0 GB";
     public string SizeTotalFormatted => Size > 0 ? $"{Size / (1024.0 * 1024 * 1024):F1} GB" : "0 GB";
     public string ExpiresAtFormatted => ExpiresAt.HasValue ? ExpiresAt.Value.LocalDateTime.ToString("HH:mm:ss") : "Indefinite";
+    public double VramPercentage => Size > 0 ? Math.Clamp(Math.Round((double)SizeVram / Size * 100.0, 1), 0.0, 100.0) : (SizeVram > 0 ? 100.0 : 0.0);
+    public string VramPercentageFormatted => $"{VramPercentage:F0}%";
 }
 
 public enum TargetBackendState
 {
     Active,
     Available,
+    Busy,
+    Disabled,
     Offline
 }
 
 public record TargetBackendStatus(
     string TargetName,
     TargetBackendState State,
-    string Description);
+    string Description,
+    long? LatencyMs = null,
+    string? CurrentModel = null);
 
 public record OllamaRouterStatus(
     bool IsConnected,

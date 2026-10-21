@@ -61,7 +61,7 @@ public class WslDockerExecutionTests
         var psi = NightCodeForgeContainerExecutor.BuildProcessStartInfo(options);
 
         Assert.Equal("wsl.exe", psi.FileName);
-        Assert.Equal("-d \"Ubuntu\" -- docker exec -i my-sandbox bash --noprofile --norc", psi.Arguments);
+        Assert.Equal("-d Ubuntu -- docker exec -i my-sandbox bash --noprofile --norc", psi.Arguments);
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class WslDockerExecutionTests
         var psi = NightCodeForgeContainerExecutor.BuildProcessStartInfo(options);
 
         Assert.Equal("wsl.exe", psi.FileName);
-        Assert.Equal("-d \"docker-desktop\" -- docker exec -i --user 1000:1000 ncf-restricted bash --noprofile --norc", psi.Arguments);
+        Assert.Equal("-d docker-desktop -- docker exec -i --user 1000:1000 ncf-restricted bash --noprofile --norc", psi.Arguments);
     }
 
     [Fact]
@@ -117,6 +117,38 @@ public class WslDockerExecutionTests
     }
 
     [Fact]
+    public void BuildDockerProcessSpec_NativeDocker_BuildsArgumentList()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ShellExecutable = "docker",
+            UseWsl = false
+        };
+
+        var spec = NightCodeForgeContainerExecutor.BuildDockerProcessSpec(options, ["inspect", "-f", "{{.State.Running}}", "ncf-sandbox"]);
+
+        Assert.Equal("docker", spec.FileName);
+        Assert.Equal(new[] { "inspect", "-f", "{{.State.Running}}", "ncf-sandbox" }, spec.ArgumentList);
+    }
+
+    [Fact]
+    public void BuildDockerProcessSpec_WslWithDistro_BuildsCorrectWslArgumentListWithoutQuotes()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ShellExecutable = "docker",
+            UseWsl = true,
+            WslDistribution = "Ubuntu",
+            WslExecutable = "wsl.exe"
+        };
+
+        var spec = NightCodeForgeContainerExecutor.BuildDockerProcessSpec(options, ["start", "ncf-sandbox-1"]);
+
+        Assert.Equal("wsl.exe", spec.FileName);
+        Assert.Equal(new[] { "-d", "Ubuntu", "--", "docker", "start", "ncf-sandbox-1" }, spec.ArgumentList);
+    }
+
+    [Fact]
     public void BuildDockerCommand_GeneratesCorrectCommandPair()
     {
         var (nativeExe, nativeArgs) = NightCodeForgeContainerExecutor.BuildDockerCommand("ps -a", useWsl: false);
@@ -125,7 +157,7 @@ public class WslDockerExecutionTests
 
         var (wslExe, wslArgs) = NightCodeForgeContainerExecutor.BuildDockerCommand("run -d --name test alpine", useWsl: true, wslDistribution: "Ubuntu");
         Assert.Equal("wsl.exe", wslExe);
-        Assert.Equal("-d \"Ubuntu\" -- docker run -d --name test alpine", wslArgs);
+        Assert.Equal("-d Ubuntu -- docker run -d --name test alpine", wslArgs);
     }
 
     [Fact]
@@ -514,4 +546,6 @@ public class WslDockerExecutionTests
         Assert.Equal("/workspace/clone/src/Engine", rel);
     }
 }
+
+
 

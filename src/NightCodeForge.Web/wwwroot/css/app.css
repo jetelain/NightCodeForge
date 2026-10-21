@@ -540,6 +540,12 @@ code, kbd, samp, pre {
     color: #fca5a5;
 }
 
+.badge-gray {
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+}
+
 /* 9. Floating Toast Host & Animated Cards */
 .toast-host {
     position: fixed;
@@ -1894,7 +1900,9 @@ code, kbd, samp, pre {
     animation: fadeIn 0.2s ease-out;
 }
 
-.forge-modal-card.wizard-card {
+.forge-modal-card.wizard-card,
+.forge-modal,
+.forge-modal-content {
     background: var(--bg-card);
     border: 1px solid var(--border-accent);
     border-radius: var(--radius-lg);

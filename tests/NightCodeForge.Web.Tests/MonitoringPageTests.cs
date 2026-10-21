@@ -1,7 +1,10 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
-using NightCodeForge.Core.Domain;
+using Moq;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Workflow;
+using NightCodeForge.Web.Components.Monitoring;
 using NightCodeForge.Web.Components.Pages;
 using NightCodeForge.Web.Services;
 using Xunit;
@@ -14,6 +17,9 @@ public class MonitoringPageTests : BunitContext
     private readonly WorkspaceStateService _workspaceState;
     private readonly InMemoryTaskRepository _taskRepository;
     private readonly OrchestratorHubClientConnection _hubConnection;
+    private readonly Mock<IOperationsTelemetryService> _mockTelemetryService;
+    private readonly Mock<IOllamaRouterGatewayService> _mockGatewayService;
+    private readonly OperationsTelemetryUiService _uiService;
 
     public MonitoringPageTests()
     {
@@ -23,12 +29,44 @@ public class MonitoringPageTests : BunitContext
         _workspaceState = new WorkspaceStateService();
         _taskRepository = new InMemoryTaskRepository();
         _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        _mockTelemetryService = new Mock<IOperationsTelemetryService>();
+        _mockGatewayService = new Mock<IOllamaRouterGatewayService>();
+
+        _mockTelemetryService.Setup(t => t.GetRecentLlmCalls(It.IsAny<int>())).Returns(new List<LlmCallRecord>());
+        _mockTelemetryService.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(new List<ShellCommandRecord>());
+
+        _mockGatewayService.Setup(g => g.GetGatewayStatusAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OllamaRouterStatus(
+                IsConnected: true,
+                IsRouterProxy: true,
+                BaseUrl: "http://localhost:11434",
+                Targets: new List<TargetBackendStatus>
+                {
+                    new("Local GPU Target", TargetBackendState.Active, "Workstation GPU", LatencyMs: 12),
+                    new("Remote Server Target", TargetBackendState.Available, "LAN GPU", LatencyMs: 24),
+                    new("Cloud Overflow Target", TargetBackendState.Active, "Cloud fallback", LatencyMs: 80)
+                }));
+
+        _mockGatewayService.Setup(g => g.GetResidentModelsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ResidentModelInfo>
+            {
+                new("qwen2.5-coder:32b", "qwen2.5-coder:32b", 20_000_000_000, 19_000_000_000, DateTimeOffset.UtcNow.AddMinutes(5))
+            });
+
+        _mockGatewayService.Setup(g => g.ReclaimVramAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        _uiService = new OperationsTelemetryUiService(_hubConnection, _mockTelemetryService.Object);
 
         Services.AddSingleton(_workerState);
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<IWorkflowRepository>(new InMemoryWorkflowRepository(new[] { TestWorkflowFixtures.CreateStandardWorkflow() }));
         Services.AddSingleton(_hubConnection);
+        Services.AddSingleton<IOperationsTelemetryService>(_mockTelemetryService.Object);
+        Services.AddSingleton<IOllamaRouterGatewayService>(_mockGatewayService.Object);
+        Services.AddSingleton(_uiService);
+        Services.AddSingleton(TestServices.CreateToastService());
     }
 
     [Fact]
@@ -37,115 +75,117 @@ public class MonitoringPageTests : BunitContext
         var cut = Render<Monitoring>();
 
         // Header and title
-        Assert.Contains("Live Telemetry & Monitoring Console", cut.Find("h1").TextContent);
+        Assert.Contains("Live Developer Operations & Hardware Telemetry", cut.Find("h1").TextContent);
         Assert.NotNull(cut.Find("#signalr-connection-badge"));
 
-        // All 5 core components
-        Assert.NotNull(cut.Find("#worker-telemetry-card"));
-        Assert.NotNull(cut.Find(".pipeline-stepper-container"));
-        Assert.NotNull(cut.Find("#tool-activity-strip"));
-        Assert.NotNull(cut.Find("#thinking-accordion"));
-        Assert.NotNull(cut.Find("#terminal-console-container"));
+        // Live Hero & cluster monitor
+        Assert.NotNull(cut.Find("#active-operations-hero"));
+        Assert.NotNull(cut.Find("#active-llm-card"));
+        Assert.NotNull(cut.Find("#active-shell-card"));
+        Assert.NotNull(cut.Find("#ollamarouter-cluster-monitor"));
+
+        // Default tab: LLM stream
+        Assert.NotNull(cut.Find("#llm-calls-history"));
     }
 
     [Fact]
-    public void MonitoringPage_WhenSignalRStageTransitionTriggered_UpdatesStepperAndLogs()
+    public void MonitoringPage_WhenSignalRLlmCallStarted_UpdatesActiveHeroAndHistoryTable()
     {
         var cut = Render<Monitoring>();
 
-        // Simulate SignalR event with exact stage ID
-        _hubConnection.TriggerStageTransition(15, "implementation", "Agentic", "Running");
+        var call = new LlmCallRecord(
+            CallId: "call-99",
+            Model: "deepseek-coder:33b",
+            TargetBackend: "Remote",
+            StartTime: DateTime.UtcNow,
+            DurationMs: 0,
+            PromptTokens: 250,
+            CompletionTokens: 0,
+            TokensPerSecond: 0,
+            PromptPreview: "Write an algorithm",
+            CompletionPreview: null,
+            Status: LlmCallStatus.Running,
+            ErrorMessage: null);
 
-        // Stepper reflects running stage 3
-        cut.WaitForState(() => cut.FindAll("#stage-step-3.step-active").Any());
-        var stage3 = cut.Find("#stage-step-3");
-        Assert.Contains("step-active", stage3.ClassName);
+        _hubConnection.TriggerLlmCallStarted(call);
 
-        // Terminal console has log
-        var terminalLogs = cut.FindAll(".log-line");
-        Assert.Contains(terminalLogs, l => l.TextContent.Contains("Stage transition: implementation"));
-    }
+        cut.WaitForState(() => cut.Find("#active-llm-card").TextContent.Contains("deepseek-coder:33b"));
+        Assert.Contains("Inferring", cut.Find("#active-llm-card").TextContent);
 
-    [Fact]
-    public void MonitoringPage_WhenSignalRDeterministicGateResultTriggered_UpdatesStepperWithMetrics()
-    {
-        var cut = Render<Monitoring>();
-
-        _hubConnection.TriggerDeterministicGateResult(15, "deterministic-post-impl", true, "+1.4% Coverage");
-
-        var stage4 = cut.Find("#stage-step-4");
-        Assert.Contains("step-completed", stage4.ClassName);
-        Assert.Contains("+1.4% Coverage", stage4.TextContent);
-    }
-
-    [Fact]
-    public void MonitoringPage_WhenSignalRToolExecutionTriggered_UpdatesToolActivityStripAndTerminal()
-    {
-        var cut = Render<Monitoring>();
-
-        _hubConnection.TriggerToolExecution(15, "bash", "dotnet build", "Running", null);
-
-        var toolPills = cut.FindAll(".tool-call-pill");
-        Assert.Single(toolPills);
-        Assert.Contains("bash", toolPills[0].TextContent);
-
-        _hubConnection.TriggerToolExecution(15, "bash", "dotnet build", "Completed", 1200);
-
-        toolPills = cut.FindAll(".tool-call-pill");
-        Assert.Contains("1.20s", toolPills[0].TextContent);
-    }
-
-    [Fact]
-    public void MonitoringPage_WhenSignalRThinkingDeltaTriggered_StreamsReasoningTokens()
-    {
-        var cut = Render<Monitoring>();
-
-        _hubConnection.TriggerTokenDelta(15, "Formulating ", true);
-        _hubConnection.TriggerTokenDelta(15, "hypothesis...", true);
-
-        var thinkContent = cut.Find("#think-accordion-content-body");
-        Assert.Contains("Formulating hypothesis...", thinkContent.TextContent);
-    }
-
-    [Fact]
-    public void MonitoringPage_WhenSignalRExecutionLogTriggered_AppendsLogToTerminal()
-    {
-        var cut = Render<Monitoring>();
-
-        _hubConnection.TriggerExecutionLog(15, "Implementation", "Warning", "High memory usage detected", DateTime.UtcNow);
-
-        var terminalLogs = cut.FindAll(".log-line");
-        Assert.Contains(terminalLogs, l => l.TextContent.Contains("High memory usage detected"));
-    }
-
-    [Fact]
-    public async Task MonitoringPage_WhenOpenTaskExistsOnInitialize_DoesNotSynthesizeWorkerRunningState()
-    {
-        await _taskRepository.CreateAsync(new ForgeTask
+        var completedCall = call with
         {
-            Id = 42,
-            WorkspaceId = 1,
-            Title = "Active Migration Task",
-            Status = TaskOverallStatus.Open,
-            CurrentStageId = "task-review"
-        });
+            DurationMs = 1500,
+            CompletionTokens = 85,
+            TokensPerSecond = 34.5,
+            CompletionPreview = "Done!",
+            Status = LlmCallStatus.Completed
+        };
+        _hubConnection.TriggerLlmCallCompleted(completedCall);
 
-        var cut = Render<Monitoring>();
-
-        Assert.Equal(WorkerExecutionStatus.Idle, _workerState.Current.Status);
-        Assert.Null(_workerState.Current.ActiveTaskId);
-        Assert.Contains("IDLE", cut.Find("#worker-telemetry-card").TextContent);
+        cut.WaitForState(() => cut.Find("#active-llm-card").TextContent.Contains("Idle"));
+        Assert.Contains("deepseek-coder:33b", cut.Find("#llm-calls-history").TextContent);
     }
 
     [Fact]
-    public void MonitoringPage_WhenOptimizationActionReceived_LogsWithTokensUnit()
+    public void MonitoringPage_WhenSignalRShellCommandStarted_UpdatesActiveShellCardAndHistory()
     {
         var cut = Render<Monitoring>();
 
-        _hubConnection.TriggerOptimizationAction(15, "implementation", "ToolResultCompaction", "Pruned 3 outputs", 1500, DateTime.UtcNow);
+        var cmd = new ShellCommandRecord(
+            CommandId: "cmd-123",
+            CommandLine: "dotnet build --no-restore",
+            WorkingDirectory: "/src/NightCodeForge",
+            StartTime: DateTime.UtcNow,
+            DurationMs: 0,
+            ExitCode: null,
+            Status: ShellCommandStatus.Running,
+            OutputPreview: "Building projects...",
+            ErrorPreview: null);
 
-        var terminalLogs = cut.FindAll(".log-line");
-        Assert.Contains(terminalLogs, l => l.TextContent.Contains("(Saved 1500 tokens)"));
+        _hubConnection.TriggerShellCommandStarted(cmd);
+
+        cut.WaitForState(() => cut.Find("#active-shell-card").TextContent.Contains("dotnet build"));
+        Assert.Contains("Executing", cut.Find("#active-shell-card").TextContent);
+
+        var completedCmd = cmd with
+        {
+            DurationMs = 2400,
+            ExitCode = 0,
+            Status = ShellCommandStatus.Completed
+        };
+        _hubConnection.TriggerShellCommandCompleted(completedCmd);
+
+        cut.WaitForState(() => cut.Find("#active-shell-card").TextContent.Contains("Idle"));
+    }
+
+    [Fact]
+    public void MonitoringPage_TabSwitching_SwitchesBetweenLlmAndShellStreams()
+    {
+        var cut = Render<Monitoring>();
+
+        // Default tab is LLM
+        Assert.NotNull(cut.Find("#llm-calls-history"));
+        Assert.Empty(cut.FindAll("#shell-commands-history"));
+
+        // Switch to Shell
+        cut.Find("#tab-shell-ops").Click();
+        Assert.NotNull(cut.Find("#shell-commands-history"));
+        Assert.Empty(cut.FindAll("#llm-calls-history"));
+
+        // Switch back to LLM
+        cut.Find("#tab-llm-calls").Click();
+        Assert.NotNull(cut.Find("#llm-calls-history"));
+    }
+
+    [Fact]
+    public void MonitoringPage_ReclaimVramButton_TriggersGatewayCall()
+    {
+        var cut = Render<Monitoring>();
+
+        var reclaimBtn = cut.Find("#reclaim-vram-btn");
+        reclaimBtn.Click();
+
+        _mockGatewayService.Verify(g => g.ReclaimVramAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -165,5 +205,264 @@ public class MonitoringPageTests : BunitContext
         Render<Monitoring>(p => p.Add(x => x.TaskId, 99));
 
         Assert.Contains("/inspector/99", navMan.Uri);
+    }
+
+    [Fact]
+    public void MonitoringPage_WhenTargetIsDisabled_RendersDisabledBadgeAndGrayStyle()
+    {
+        _mockGatewayService.Setup(g => g.GetGatewayStatusAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OllamaRouterStatus(
+                IsConnected: true,
+                IsRouterProxy: true,
+                BaseUrl: "http://localhost:11434",
+                Targets: new List<TargetBackendStatus>
+                {
+                    new("Local GPU Target", TargetBackendState.Disabled, "Local GPU is disabled"),
+                    new("Remote Server Target", TargetBackendState.Available, "LAN GPU", LatencyMs: 20)
+                }));
+
+        var cut = Render<Monitoring>();
+
+        var monitor = cut.Find("#ollamarouter-cluster-monitor");
+        Assert.Contains("Disabled", monitor.TextContent);
+        Assert.Contains("badge-gray", monitor.InnerHtml);
+    }
+
+    [Fact]
+    public void ShellCommandOutputModal_RendersWithBackdropAndModalCard()
+    {
+        var cmd = new ShellCommandRecord(
+            CommandId: "cmd-test",
+            CommandLine: "dotnet test --filter Category!=E2E",
+            WorkingDirectory: "c:\\repo",
+            StartTime: DateTime.UtcNow,
+            DurationMs: 1200,
+            ExitCode: 0,
+            Status: ShellCommandStatus.Completed,
+            OutputPreview: "All 500 tests passed!",
+            ErrorPreview: null);
+
+        var cut = Render<ShellCommandOutputModal>(p => p
+            .Add(x => x.Command, cmd));
+
+        var backdrop = cut.Find(".forge-modal-backdrop");
+        Assert.NotNull(backdrop);
+        Assert.Equal("dialog", backdrop.GetAttribute("role"));
+        Assert.Equal("true", backdrop.GetAttribute("aria-modal"));
+
+        var card = cut.Find(".forge-modal");
+        Assert.NotNull(card);
+        Assert.Contains("forge-modal-content", card.ClassList);
+        Assert.Contains("card-glass", card.ClassList);
+        Assert.Contains("All 500 tests passed!", card.TextContent);
+    }
+
+    [Fact]
+    public void InferenceInspectionModal_RendersWithBackdropAndModalCard()
+    {
+        var call = new LlmCallRecord(
+            CallId: "call-test",
+            Model: "qwen2.5-coder:32b",
+            TargetBackend: "Remote",
+            StartTime: DateTime.UtcNow,
+            DurationMs: 3400,
+            PromptTokens: 1200,
+            CompletionTokens: 300,
+            TokensPerSecond: 38.5,
+            PromptPreview: "Write a unit test",
+            CompletionPreview: "public class Test { }",
+            Status: LlmCallStatus.Completed,
+            ErrorMessage: null);
+
+        var cut = Render<InferenceInspectionModal>(p => p
+            .Add(x => x.Call, call));
+
+        var backdrop = cut.Find(".forge-modal-backdrop");
+        Assert.NotNull(backdrop);
+        Assert.Equal("dialog", backdrop.GetAttribute("role"));
+        Assert.Equal("true", backdrop.GetAttribute("aria-modal"));
+
+        var card = cut.Find(".forge-modal");
+        Assert.NotNull(card);
+        Assert.Contains("forge-modal-content", card.ClassList);
+        Assert.Contains("card-glass", card.ClassList);
+        Assert.Contains("qwen2.5-coder:32b", card.TextContent);
+    }
+
+    [Theory]
+    [InlineData(TargetBackendState.Active, "badge-teal")]
+    [InlineData(TargetBackendState.Available, "badge-indigo")]
+    [InlineData(TargetBackendState.Busy, "badge-amber")]
+    [InlineData(TargetBackendState.Disabled, "badge-gray")]
+    [InlineData(TargetBackendState.Offline, "badge-crimson")]
+    public void OperationsTelemetryUiService_GetTargetBackendBadgeClass_ReturnsExpectedClass(TargetBackendState state, string expectedClass)
+    {
+        Assert.Equal(expectedClass, OperationsTelemetryUiService.GetTargetBackendBadgeClass(state));
+    }
+
+    [Fact]
+    public async Task OperationsTelemetryUiService_ConcurrentEnumerationAndMutation_DoesNotThrowCollectionModified()
+    {
+        // Seed initial items
+        for (int i = 0; i < 10; i++)
+        {
+            _hubConnection.TriggerLlmCallStarted(new LlmCallRecord($"call-{i}", "model", "Local", DateTime.UtcNow, 0, 10, 0, 0, "p", null, LlmCallStatus.Running, null));
+            _hubConnection.TriggerShellCommandStarted(new ShellCommandRecord($"cmd-{i}", "cmd", "cwd", DateTime.UtcNow, 0, null, ShellCommandStatus.Running, null, null));
+        }
+
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        var exceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+
+        var readerTask = Task.Run(() =>
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    foreach (var call in _uiService.RecentLlmCalls)
+                    {
+                        _ = call.Model;
+                    }
+                    foreach (var cmd in _uiService.RecentShellCommands)
+                    {
+                        _ = cmd.CommandLine;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    exceptions.Add(ex);
+                }
+            }
+        });
+
+        var writerLlmTask = Task.Run(() =>
+        {
+            int counter = 100;
+            while (!cts.Token.IsCancellationRequested && counter < 200)
+            {
+                _hubConnection.TriggerLlmCallStarted(new LlmCallRecord($"call-{counter}", "model", "Local", DateTime.UtcNow, 0, 10, 0, 0, "p", null, LlmCallStatus.Running, null));
+                _hubConnection.TriggerLlmCallProgress($"call-{counter}", 50, 100, 25.0);
+                counter++;
+            }
+        });
+
+        var writerShellTask = Task.Run(() =>
+        {
+            int counter = 100;
+            while (!cts.Token.IsCancellationRequested && counter < 200)
+            {
+                _hubConnection.TriggerShellCommandStarted(new ShellCommandRecord($"cmd-{counter}", "cmd", "cwd", DateTime.UtcNow, 0, null, ShellCommandStatus.Running, null, null));
+                _hubConnection.TriggerShellCommandOutput($"cmd-{counter}", "output chunk", false);
+                counter++;
+            }
+        });
+
+        await Task.WhenAll(writerLlmTask, writerShellTask);
+        cts.Cancel();
+        await readerTask;
+
+        Assert.Empty(exceptions);
+    }
+
+    [Fact]
+    public void MonitoringPage_WhenReasoningTokensPresent_RendersReasoningBadgesInHeroTableAndModal()
+    {
+        var cut = Render<Monitoring>();
+
+        var runningCallWithReasoning = new LlmCallRecord(
+            CallId: "call-r1",
+            Model: "deepseek-r1:14b",
+            TargetBackend: "Local",
+            StartTime: DateTime.UtcNow,
+            DurationMs: 800,
+            PromptTokens: 150,
+            CompletionTokens: 60,
+            TokensPerSecond: 45.0,
+            PromptPreview: "Solve with deep reasoning",
+            CompletionPreview: null,
+            Status: LlmCallStatus.Running,
+            ErrorMessage: null,
+            ReasoningTokens: 40);
+
+        _hubConnection.TriggerLlmCallStarted(runningCallWithReasoning);
+
+        cut.WaitForState(() => cut.Find("#active-llm-card").TextContent.Contains("deepseek-r1:14b"));
+        var heroText = cut.Find("#active-llm-card").TextContent;
+        Assert.Contains("Reasoning:", heroText);
+        Assert.Contains("40", heroText);
+
+        var completedCallWithReasoning = runningCallWithReasoning with
+        {
+            DurationMs = 2000,
+            CompletionTokens = 120,
+            ReasoningTokens = 80,
+            TokensPerSecond = 60.0,
+            CompletionPreview = "[Reasoning]\nChecking constraints...\n\n[Response]\nDone.",
+            Status = LlmCallStatus.Completed
+        };
+
+        _hubConnection.TriggerLlmCallCompleted(completedCallWithReasoning);
+
+        cut.WaitForState(() => cut.Find("#llm-calls-history").TextContent.Contains("deepseek-r1:14b"));
+        var tableText = cut.Find("#llm-calls-history").TextContent;
+        Assert.Contains("(🧠 80)", tableText);
+
+        // Test Inspection Modal
+        var modalCut = Render<InferenceInspectionModal>(p => p.Add(x => x.Call, completedCallWithReasoning));
+        var modalMarkup = modalCut.Markup;
+        Assert.Contains("Reasoning: <strong style=\"color: var(--accent-amber);\">🧠 80</strong>", modalMarkup);
+        Assert.Contains("Model Completion / Output (with Reasoning 🧠)", modalMarkup);
+        Assert.Contains("[Reasoning]", modalMarkup);
+        Assert.Contains("[Response]", modalMarkup);
+    }
+
+    [Fact]
+    public void OperationsTelemetryUiService_WhenMultipleLlmCallsRunning_AndOneCompletes_KeepsOtherCallActive()
+    {
+        var call1 = new LlmCallRecord("c-1", "model-1", "Local", DateTime.UtcNow, 0, 10, 0, 0, "p1", null, LlmCallStatus.Running, null);
+        var call2 = new LlmCallRecord("c-2", "model-2", "Remote", DateTime.UtcNow, 0, 20, 0, 0, "p2", null, LlmCallStatus.Running, null);
+
+        _hubConnection.TriggerLlmCallStarted(call1);
+        _hubConnection.TriggerLlmCallStarted(call2);
+
+        Assert.Equal("c-2", _uiService.ActiveLlmCall?.CallId);
+
+        // Complete call2
+        _hubConnection.TriggerLlmCallCompleted(call2 with { Status = LlmCallStatus.Completed });
+
+        // call1 must still be active
+        Assert.NotNull(_uiService.ActiveLlmCall);
+        Assert.Equal("c-1", _uiService.ActiveLlmCall.CallId);
+        Assert.Equal(LlmCallStatus.Running, _uiService.ActiveLlmCall.Status);
+    }
+
+    [Fact]
+    public void OperationsTelemetryUiService_WhenProgressArrivesForSelectedCall_UpdatesSelectedCall()
+    {
+        var call = new LlmCallRecord("c-sel", "model-sel", "Local", DateTime.UtcNow, 0, 10, 0, 0, "p", null, LlmCallStatus.Running, null);
+        _hubConnection.TriggerLlmCallStarted(call);
+
+        _uiService.SelectedLlmCall = call;
+
+        _hubConnection.TriggerLlmCallProgress("c-sel", 120, 1500, 80.0, 40);
+
+        Assert.NotNull(_uiService.SelectedLlmCall);
+        Assert.Equal(120, _uiService.SelectedLlmCall.CompletionTokens);
+        Assert.Equal(40, _uiService.SelectedLlmCall.ReasoningTokens);
+        Assert.Equal(80.0, _uiService.SelectedLlmCall.TokensPerSecond);
+    }
+
+    [Fact]
+    public void OperationsTelemetryUiService_WhenOutputArrivesForSelectedCommand_UpdatesSelectedCommandOutput()
+    {
+        var cmd = new ShellCommandRecord("cmd-sel", "dotnet build", "/repo", DateTime.UtcNow, 0, null, ShellCommandStatus.Running, "initial", null);
+        _hubConnection.TriggerShellCommandStarted(cmd);
+
+        _uiService.SelectedShellCommand = cmd;
+
+        _hubConnection.TriggerShellCommandOutput("cmd-sel", " more output", false);
+
+        Assert.NotNull(_uiService.SelectedShellCommand);
+        Assert.Contains("initial more output", _uiService.SelectedShellCommand.OutputPreview);
     }
 }

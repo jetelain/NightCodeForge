@@ -354,7 +354,8 @@ textarea.forge-input, textarea.form-control-dark {
     padding: 1.5rem;
 }
 
-.forge-modal {
+.forge-modal,
+.forge-modal-content {
     background: var(--bg-card);
     border: 1px solid var(--border-accent);
     border-radius: var(--radius-xl);

@@ -3,7 +3,7 @@
 > **Phase 11 Implementation Step (Post-MVP - High Impact Ergonomics & Operations)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Core/Workflow`, `src/NightCodeForge.Core/Interfaces`, `src/NightCodeForge.Agents/Inference`, `src/NightCodeForge.Infrastructure/Inference`, `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Web/Components/Monitoring`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 ---
 
@@ -24,9 +24,9 @@ This step re-architects `/monitoring` into the **Live Developer Operations & Har
 
 ```mermaid
 flowchart TD
-    subgraph ExecutionEngines ["Execution Engines & Runtimes"]
-        LLMInference["CrucibleAgentHarness / InferenceService<br/>(LLM Chat Completions)"]
-        CliExecution["CliRunner / BashTool / Stage Gates<br/>(Bash, dotnet, git, tests)"]
+    subgraph ExecutionEngines ["Transparent Execution Decorators & Gateways"]
+        LLMWrapper["TelemetryChatClient<br/>(Decorating IChatClient via DelegatingChatClient)"]
+        CliWrapper["TelemetryProcessRunner<br/>(Decorating IProcessRunner)"]
         RouterGateway["IOllamaRouterGatewayService<br/>(OllamaRouter HTTP Endpoints)"]
     end
 
@@ -39,11 +39,11 @@ flowchart TD
         TopBar["Cluster Health Strip & VRAM Reclaim Button"]
         ActiveHero["Active Operations Hero<br/>(In-Flight LLM Call + Active CLI Command)"]
         RouterCard["OllamaRouter Target Routing & Resident VRAM Table"]
-        HistorySplit["Operations History Streams<br/>- Tab 1: Last N LLM Calls (Tokens, Speed, Route)<br/>- Tab 2: Last N Bash/Shell Operations (Exit Codes, Output)"]
+        HistorySplit["Operations History Streams<br/>- Tab 1: Last N LLM Calls (Tokens, Speed, Route)<br/>- Tab 2: Last N Shell Operations (Exit Codes, Output)"]
     end
 
-    LLMInference -->|OnLlmCallStarted / Completed| Service
-    CliExecution -->|OnShellCommandStarted / Completed| Service
+    LLMWrapper -->|OnLlmCallStarted / Progress / Completed| Service
+    CliWrapper -->|OnShellCommandStarted / Completed| Service
     RouterGateway -->|Poll /api/ps & /monitor metrics| Service
 
     Service --> Hub
@@ -62,9 +62,6 @@ flowchart TD
 
    public record LlmCallRecord(
        string CallId,
-       int? TaskId,
-       string? StageId,
-       string? AgentProfileId,
        string Model,
        string TargetBackend,       // "Local", "Remote", "Cloud"
        DateTime StartTime,
@@ -79,8 +76,6 @@ flowchart TD
 
    public record ShellCommandRecord(
        string CommandId,
-       int? TaskId,
-       string? StageId,
        string CommandLine,
        string WorkingDirectory,
        DateTime StartTime,
@@ -90,6 +85,10 @@ flowchart TD
        string? OutputPreview,
        string? ErrorPreview);
    ```
+
+   > [!NOTE]
+   > **Decoupled System-Wide Interception:**  
+   > By design, `LlmCallRecord` and `ShellCommandRecord` operate strictly at the runtime infrastructure layer and do not require `TaskId`, `StageId`, or agent profile metadata. Intercepting calls through transparent decorators around `IChatClient` and `IProcessRunner` captures 100% of LLM calls and OS shell operations uniformly across the entire application (including agent harnesses, deterministic verification gates, git CLI, background tasks, and diagnostic tools) without needing context propagation or polluting low-level primitives.
 
 2. **Ring Buffer Service (`IOperationsTelemetryService`):**
    - Implemented as a thread-safe singleton using lock-free or concurrent ring buffers.
@@ -106,17 +105,23 @@ flowchart TD
 
 ---
 
-### 3.2 Telemetry Instrumentation
+### 3.2 Telemetry Instrumentation via Transparent Decorators
 
-1. **LLM Inference Capture (`CrucibleAgentHarness` & `InferenceService`):**
-   - **Start:** When a call to `IChatClient.CompleteAsync` or `CompleteStreamingAsync` begins, record a new `LlmCallRecord` with `Status = Running`, start timestamp, target backend header (`X-OllamaRouter-Target`), model name, and prompt head preview (first 500 characters).
-   - **Progress:** During streaming, update current token count and calculate running `TokensPerSecond = TokensGenerated / ElapsedSeconds`.
-   - **Completion:** Record total prompt/completion tokens, total duration in milliseconds, completion head snippet, and mark `Status = Completed`.
-   - **Error / Failure:** On exception or HTTP timeout, mark `Status = Failed` with the sanitized error message.
+Rather than invasive, point-by-point manual instrumentation inside various agent harnesses, tools, and stage gate runners, telemetry capture is implemented via transparent decorators over core runtime interfaces:
 
-2. **Bash & CLI Execution Capture (`CliRunner`, `BashTool`, `DeterministicVerificationStage`):**
-   - **Start:** Before executing a CLI process via `CliWrap`, record `ShellCommandRecord` with `CommandLine`, sanitized `WorkingDirectory`, and `Status = Running`.
-   - **Completion:** On process exit, capture `ExitCode`, execution duration, and truncated `OutputPreview` / `ErrorPreview` (last 200 lines / 10KB).
+1. **LLM Inference Capture (`TelemetryChatClient` decorating `IChatClient`):**
+   - Implemented as a `Microsoft.Extensions.AI.DelegatingChatClient` injected into the chat client pipeline via `IOllamaChatClientFactory` (or registered via DI).
+   - **Start:** When `CompleteAsync` or `CompleteStreamingAsync` begins, generates a unique `CallId` (GUID) and notifies `IOperationsTelemetryService` with `Status = Running`, start timestamp, target backend header (e.g. `X-OllamaRouter-Target` or `ChatOptions`), model name, and prompt head preview (first 500 characters).
+   - **Streaming Progress:** As streaming chunks arrive, increments generated token counts and computes real-time `TokensPerSecond = TokensGenerated / ElapsedSeconds`.
+   - **Completion:** On completion, captures total prompt/completion tokens, total duration in milliseconds, completion head snippet, and updates status to `Status = Completed`.
+   - **Error / Failure:** On exception or HTTP timeout, records elapsed duration and sanitized error message, marks `Status = Failed`, and rethrows to preserve downstream error handling.
+
+2. **Shell & CLI Execution Capture (`TelemetryProcessRunner` decorating `IProcessRunner`):**
+   - Implemented as a decorator around `IProcessRunner` registered in DI, transparently intercepting `Run`, `RunAsync`, `RunStreamingAsync`, and `StartSession` across all consumers (git CLI, WSL, host runners, container execution, and stage gates).
+   - **Start:** Before launching a process spec, generates a unique `CommandId` (GUID) and notifies `IOperationsTelemetryService` with `CommandLine`, sanitized `WorkingDirectory`, start timestamp, and `Status = Running`.
+   - **Streaming / Chunk Buffering:** Interleaves stdout and stderr chunks into a bounded rolling preview buffer (last 200 lines / 10KB) for real-time inspection.
+   - **Completion:** When the process exits, captures `ExitCode`, execution duration, truncated `OutputPreview` / `ErrorPreview`, and updates status to `Status = Completed` (or `Status = Failed` if exit code is non-zero).
+   - **Exception:** If process launching fails (e.g. executable not found or access denied), marks `Status = Failed` with the error description and rethrows.
 
 ---
 
@@ -163,10 +168,10 @@ Replace the single-task pipeline stepper layout with a high-density, real-time c
 +---------------------------------------------------------------------------------------+
 | OPERATIONS STREAMS (Tabs: [🧠 LLM Calls (50)] | [💻 Shell Commands (50)])               |
 | +-----------------------------------------------------------------------------------+ |
-| | Time     | Task  | Stage         | Model       | Route  | Tokens | Duration | Status | |
-| | 08:32:01 | #42   | Implementation| Qwen 32B    | Remote | 1,420  | 3,420ms  | ✅ Done| |
-| | 08:31:12 | #42   | TaskReview    | Qwen 32B    | Local  | 890    | 1,210ms  | ✅ Done| |
-| | 08:30:05 | #41   | CodeReview    | DeepSeek 14B| Remote | 2,150  | 5,610ms  | ✅ Done| |
+| | Time     | Model       | Route  | Tokens | Speed    | Duration | Status           | |
+| | 08:32:01 | Qwen 32B    | Remote | 1,420  | 38.5 t/s | 3,420ms  | ✅ Done          | |
+| | 08:31:12 | Qwen 32B    | Local  | 890    | 42.1 t/s | 1,210ms  | ✅ Done          | |
+| | 08:30:05 | DeepSeek 14B| Remote | 2,150  | 29.4 t/s | 5,610ms  | ✅ Done          | |
 | +-----------------------------------------------------------------------------------+ |
 +---------------------------------------------------------------------------------------+
 ```
@@ -178,21 +183,22 @@ Replace the single-task pipeline stepper layout with a high-density, real-time c
 
 ## 4. Definition of Done Checklist
 
-- [ ] **Operations Telemetry Service:**
-  - [ ] Implement `IOperationsTelemetryService` with thread-safe ring buffer (`MaxLlmCalls = 50`, `MaxShellCommands = 50`).
-  - [ ] Add domain models `LlmCallRecord` and `ShellCommandRecord`.
-  - [ ] Integrate with SignalR `OrchestratorHub` broadcasting live events (`LlmCallStarted`, `LlmCallCompleted`, `ShellCommandStarted`, `ShellCommandCompleted`).
-- [ ] **Telemetry Instrumentation:**
-  - [ ] Instrument `CrucibleAgentHarness` and `InferenceService` to emit start/progress/completion telemetry on every chat completion call.
-  - [ ] Instrument `CliRunner` and deterministic execution stages to emit shell command start and finish telemetry.
-- [ ] **OllamaRouter Gateway Integration:**
-  - [ ] Extend `IOllamaRouterGatewayService` with cluster latency checks and resident model VRAM percentage calculations.
-  - [ ] Wire VRAM reclaim button to trigger non-destructive memory release directly from `/monitoring`.
-- [ ] **Web UI Redesign (`Monitoring.razor`):**
-  - [ ] Replace redundant pipeline stepper with `ActiveOperationsHero` (live LLM inference card + live shell command card).
-  - [ ] Embed OllamaRouter cluster health and resident VRAM models card.
-  - [ ] Build `LlmCallsHistoryTable` with token metrics, target route badges, and expandable prompt/completion viewer modal.
-  - [ ] Build `ShellOperationsFeed` with command line, exit code pill, execution duration, and expandable stdout/stderr viewer.
-- [ ] **Automated Tests:**
-  - [ ] Unit tests for `OperationsTelemetryService` ring buffer bounded eviction and concurrent thread safety.
-  - [ ] Component tests for `Monitoring.razor` rendering live active operations and history tables without throwing exceptions when idle.
+- [x] **Operations Telemetry Service:**
+  - [x] Implement `IOperationsTelemetryService` with thread-safe ring buffer (`MaxLlmCalls = 50`, `MaxShellCommands = 50`).
+  - [x] Add domain models `LlmCallRecord` and `ShellCommandRecord`.
+  - [x] Integrate with SignalR `OrchestratorHub` broadcasting live events (`LlmCallStarted`, `LlmCallCompleted`, `ShellCommandStarted`, `ShellCommandCompleted`).
+- [x] **Telemetry Interception Decorators:**
+  - [x] Implement `TelemetryChatClient` (`DelegatingChatClient`) wrapping `IChatClient` (integrated into `OllamaChatClientFactory` / DI pipeline) to capture LLM start, streaming progress, token rates, and completion without requiring task metadata.
+  - [x] Implement `TelemetryProcessRunner` decorator wrapping `IProcessRunner` in DI to universally capture CLI start, streaming output preview, duration, and exit codes across all system processes without requiring task metadata.
+- [x] **OllamaRouter Gateway Integration:**
+  - [x] Extend `IOllamaRouterGatewayService` with cluster latency checks and resident model VRAM percentage calculations.
+  - [x] Wire VRAM reclaim button to trigger non-destructive memory release directly from `/monitoring`.
+- [x] **Web UI Redesign (`Monitoring.razor`):**
+  - [x] Replace redundant pipeline stepper with `ActiveOperationsHero` (live LLM inference card + live shell command card).
+  - [x] Embed OllamaRouter cluster health and resident VRAM models card.
+  - [x] Build `LlmCallsHistoryTable` with token metrics, target route badges, and expandable prompt/completion viewer modal.
+  - [x] Build `ShellOperationsFeed` with command line, exit code pill, execution duration, and expandable stdout/stderr viewer.
+- [x] **Automated Tests:**
+  - [x] Unit tests for `OperationsTelemetryService` ring buffer bounded eviction and concurrent thread safety.
+  - [x] Component tests for `Monitoring.razor` rendering live active operations and history tables without throwing exceptions when idle.
+
