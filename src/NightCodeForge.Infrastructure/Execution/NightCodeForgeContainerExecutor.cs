@@ -467,13 +467,20 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 throw new InvalidOperationException("Container shell process terminated unexpectedly (stdout closed).");
             }
 
-            var trimmedLine = line.Trim();
-            if (trimmedLine.StartsWith(sentinel, StringComparison.Ordinal))
+            var sentinelIdx = line.IndexOf(sentinel, StringComparison.Ordinal);
+            if (sentinelIdx >= 0)
             {
-                var suffix = trimmedLine[sentinel.Length..];
+                var suffix = line[(sentinelIdx + sentinel.Length)..];
                 var match = SentinelExitCodeRegex().Match(suffix);
                 if (match.Success && int.TryParse(match.Groups[1].Value, out var exitCode))
                 {
+                    var prefix = line[..sentinelIdx];
+                    if (!string.IsNullOrEmpty(prefix))
+                    {
+                        _telemetryService.UpdateShellCommandOutput(commandId, prefix + "\n", false);
+                        buffer.Append(prefix + "\n");
+                    }
+
                     linkedCts.Cancel();
                     return (buffer, exitCode);
                 }

@@ -155,6 +155,37 @@ public class ContainerReplExecutorTests
     }
 
     [Fact]
+    public async Task ContainerExecutor_OutputWithoutTrailingNewline_CompletesSuccessfullyWithoutHanging()
+    {
+        var mockRunner = new MockProcessRunner(sentinel => $"<Project Sdk=\"Microsoft.NET.Sdk\">{sentinel} 0\n");
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "mock-sandbox",
+            DefaultWorkingDirectory = "/workspace",
+            DefaultTimeoutSeconds = 5
+        };
+
+        using var executor = new NightCodeForgeContainerExecutor(
+            options,
+            mockRunner,
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            new Mock<IHostUserIdentityResolver>().Object,
+            telemetryMock.Object);
+
+        var result = await executor.ExecuteAsync("cat OllamaRouter.Tests.csproj");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("<Project Sdk=\"Microsoft.NET.Sdk\">", result.StandardOutput);
+        Assert.DoesNotContain("__NCF_SENTINEL_", result.StandardOutput);
+        telemetryMock.Verify(t => t.UpdateShellCommandOutput(
+            It.IsAny<string>(),
+            It.Is<string>(s => s.Contains("<Project Sdk=\"Microsoft.NET.Sdk\">")),
+            false),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task ContainerExecutor_ExecuteAsync_WhenStdinWriteFails_MarksShellCommandFailedAndRethrows()
     {
         var mockRunner = new MockThrowingStdinProcessRunner();
@@ -248,12 +279,19 @@ public class ContainerReplExecutorTests
 
     private class MockProcessRunner : NightCodeForge.Core.Interfaces.IProcessRunner
     {
+        private readonly Func<string, string>? _outputGenerator;
+
+        public MockProcessRunner(Func<string, string>? outputGenerator = null)
+        {
+            _outputGenerator = outputGenerator;
+        }
+
         public NightCodeForge.Core.Interfaces.ProcessStartSpec? LastSpec { get; private set; }
 
         public NightCodeForge.Core.Interfaces.IProcessStreamSession StartSession(NightCodeForge.Core.Interfaces.ProcessStartSpec spec)
         {
             LastSpec = spec;
-            return new MockChannelStreamSession();
+            return new MockChannelStreamSession(_outputGenerator);
         }
 
         public NightCodeForge.Core.Interfaces.ProcessExecutionResult Run(NightCodeForge.Core.Interfaces.ProcessStartSpec spec) => throw new NotImplementedException();
@@ -275,7 +313,7 @@ public class ContainerReplExecutorTests
         public StreamReader StandardOutput => _stdout;
         public StreamReader StandardError => _stderr;
 
-        public MockChannelStreamSession()
+        public MockChannelStreamSession(Func<string, string>? outputGenerator = null)
         {
             var inStream = new DelegatingWriteStream(bytes =>
             {
@@ -283,7 +321,9 @@ public class ContainerReplExecutorTests
                 var match = System.Text.RegularExpressions.Regex.Match(text, @"(__NCF_SENTINEL_[a-zA-Z0-9_]+__)");
                 if (match.Success)
                 {
-                    var response = System.Text.Encoding.UTF8.GetBytes($"mock-result\n{match.Groups[1].Value} 0\n");
+                    var sentinel = match.Groups[1].Value;
+                    var output = outputGenerator != null ? outputGenerator(sentinel) : $"mock-result\n{sentinel} 0\n";
+                    var response = System.Text.Encoding.UTF8.GetBytes(output);
                     _pipe.Writer.TryWrite(response);
                 }
             });
