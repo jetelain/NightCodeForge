@@ -24,9 +24,9 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
 
 2. **Tier 2: Core Ideation & Developer Ergonomics Quick Wins:**
    - **Step 11.18:** Live Operations Telemetry: Real-Time LLM Calls, Shell Activity & OllamaRouter Deep Monitoring — re-architecting `/monitoring` from redundant pipeline inspector into a real-time Developer Operations Console showing current and last $N$ LLM calls, deterministic bash/CLI operations, and deep OllamaRouter cluster/VRAM metrics.
-   - **Step 11.19:** Conversational UI Unification, Stepper Running Hygiene & Review Room Ergonomics — reusing `AgentQuestionTurnCard` in the Question Inbox, fixing the Pipeline Stepper false "Pending" state during active runs, unifying Task Inspector and Ideation chat to share a compact, readable conversation UI, and adding sticky file tree navigation with Inspector deep link to the Review Room.
+   - **Step 11.19:** Conversational UI Unification, Stepper Running Hygiene, Review File Tree & Syntax Highlighting — reusing `AgentQuestionTurnCard` in the Question Inbox, fixing the Pipeline Stepper false "Pending" state during active runs, unifying Task Inspector and Ideation chat to share a compact, readable conversation UI, and adding sticky navigation, hierarchical directory tree view (preventing truncated filenames), and simple syntax highlighting in the Review Room.
    - **Step 11.20:** Live Operations Telemetry Refinement, Command Transparency & Context Sizing — 500ms dynamic ticking timer preventing frozen elapsed duration on large tool generation, clean static badge styling, container command transparency logging real commands instead of persistent wrappers, and accurate full prompt context sizing.
-   - **Step 11.21:** Dynamic Tool Timeouts, Container ICU Globalization & Review Rejection Test Mandate — dynamic bash timeout formula $\max(300\text{s}, \text{build} + \text{test})$, full `libicu-dev` & locales in container base image fixing `NETSDK1188`, and mandatory automated regression test authoring contract on Review rejection.
+   - **Step 11.21:** Dynamic Tool Timeouts, Container ICU & User Permissions, and Review Rejection Test Mandate — dynamic bash timeout formula $\max(300\text{s}, \text{build} + \text{test})$, full `libicu-dev` & locales in container base image fixing `NETSDK1188`, preserving host user name and group (`-u $(id -u):$(id -g)`) to eliminate workspace file permission conflicts, and mandatory automated regression test authoring contract on Review rejection.
    - **Step 11.5:** Ideation Quick Notes, Suggestions Backlog & Conversational Refinement.
    - **Step 11.1:** Heterogeneous Dual Model Architecture (Reviewer vs Coder models) and difficulty escalation.
    - **Step 11.3:** Smart CLI Output Filtering (compiler and test noise suppression for 95% token savings).
@@ -60,9 +60,9 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
 | Step | Specification | Focus & Key Deliverables | Status |
 | :--- | :--- | :--- | :--- |
 | **11.18** | [⚡ Step 11.18: Live Operations Telemetry: Real-Time LLM Calls, Shell Activity & OllamaRouter Deep Monitoring](phase-11/STEP_11_18_LIVE_OPERATIONS_TELEMETRY_LLM_SHELL_OLLAMAROUTER.md) | Re-architect `/monitoring` into a live Developer Operations Console: in-flight and last $N$ LLM calls (speed, tokens, target backend), live shell/CLI commands with stdout/stderr, and deep OllamaRouter cluster/VRAM metrics. | Completed |
-| **11.19** | [🎨 Step 11.19: Conversational UI Unification, Stepper Running Hygiene & Review Room Ergonomics](phase-11/STEP_11_19_CONVERSATIONAL_UI_UNIFICATION_AND_REVIEW_ERGONOMICS.md) | Reuse `AgentQuestionTurnCard` in `/inbox`, fix `PipelineStepper` false "Pending" state during active runs, unify `StageConversationViewer` with `Ideation` compact bubble layout, and provide sticky file tree with `/inspector` link in Review room. | **Top Priority** |
+| **11.19** | [🎨 Step 11.19: Conversational UI Unification, Stepper Running Hygiene, Review File Tree & Syntax Highlighting](phase-11/STEP_11_19_CONVERSATIONAL_UI_UNIFICATION_AND_REVIEW_ERGONOMICS.md) | Reuse `AgentQuestionTurnCard` in `/inbox`, fix `PipelineStepper` false "Pending" state during active runs, unify `StageConversationViewer` with `Ideation` compact bubble layout, provide sticky file tree with `/inspector` link, hierarchical tree view preventing path truncation, and DiffViewer syntax highlighting. | **Top Priority** |
 | **11.20** | [⚡ Step 11.20: Live Operations Telemetry Refinement, Command Transparency & Context Sizing](phase-11/STEP_11_20_LIVE_TELEMETRY_REFINEMENT_AND_COMMAND_TRANSPARENCY.md) | Dynamic 500ms ticker preventing frozen elapsed time during large tool generation, clean static badges (remove pulse animations), real command logging in container executor, and full prompt context sizing across telemetry. | **Top Priority** |
-| **11.21** | [🛡️ Step 11.21: Dynamic Tool Timeouts, Container ICU Globalization & Review Rejection Test Mandate](phase-11/STEP_11_21_CONTAINER_ICU_DYNAMIC_TIMEOUTS_AND_REVIEW_TEST_MANDATE.md) | Dynamic bash tool timeout $\max(300\text{s}, \text{build} + \text{test})$, install `libicu-dev` & locales in base container image (resolving `NETSDK1188`), and mandate automated test creation for each bug upon review rejection. | **Top Priority** |
+| **11.21** | [🛡️ Step 11.21: Dynamic Tool Timeouts, Container ICU & User Permissions, and Review Rejection Test Mandate](phase-11/STEP_11_21_CONTAINER_ICU_DYNAMIC_TIMEOUTS_AND_REVIEW_TEST_MANDATE.md) | Dynamic bash tool timeout $\max(300\text{s}, \text{build} + \text{test})$, install `libicu-dev` & locales in base container image (resolving `NETSDK1188`), preserve host user/group permissions (`-u $(id -u):$(id -g)`), and mandate automated test creation for each bug upon review rejection. | **Top Priority** |
 | **11.5** | [💡 Step 11.5: Ideation Quick Notes, Suggestions & Conversational Refinement](phase-11/STEP_11_5_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md) | Quick notes backlog intake ("Think Now, Chat Later"); proposal card lifecycle (`Approve` $\rightarrow$ Open, `Keep as Suggestion` $\rightarrow$ Suggested, `Discard` $\rightarrow$ Delete); "Refine in Ideation" pre-seeded chat; scoped `edit_task` tools; 24h draft pruning. | Planned |
 | **11.1** | [🧠 Step 11.1: Dual Model Role Configuration & Difficulty Escalation](phase-11/STEP_11_1_DUAL_MODEL_ROLE_CONFIGURATION_AND_DIFFICULTY_ESCALATION.md) | Heterogeneous model architecture: Architect/Reviewer model (e.g. Qwen 3.8 27B) for ideation, review, code review; Coder model (e.g. Qwen 3.6 35B A3B) for fast coding; dynamic difficulty escalation for difficult/expert tasks. | Planned |
 | **11.3** | [🧹 Step 11.3: Smart CLI & Build Tool Output Filtering (Context Compression)](phase-11/STEP_11_3_SMART_CLI_AND_BASH_OUTPUT_FILTERING.md) | Semantic output filtering for verbose CLI tools (`dotnet build`, `dotnet test`, `npm`). Relativizes paths, strips SDK boilerplates, drops non-fatal warnings when errors exist, preserving raw transcripts on disk. | Planned |
@@ -233,13 +233,17 @@ flowchart LR
   - [x] Implement `TelemetryProcessRunner` decorator wrapping `IProcessRunner` to universally capture all process execution without requiring task metadata.
   - [x] Extend `IOllamaRouterGatewayService` with cluster latency checks and resident model VRAM percentage calculations.
   - [x] Redesign `/monitoring` with `ActiveOperationsHero` (live LLM inference + live shell command), `OllamaRouterClusterHealthCard`, `LlmCallsHistoryTable`, and `ShellOperationsFeed`.
-- [ ] **Step 11.19 (Conversational UI Unification, Stepper Running Hygiene & Review Room Ergonomics):**
+- [ ] **Step 11.19 (Conversational UI Unification, Stepper Running Hygiene, Review File Tree & Syntax Highlighting):**
   - [ ] Enhance `AgentQuestionTurnCard.razor` with task metadata header (Task #Id, Title, Stage, Time) and reuse in `Inbox.razor` / `QuestionCard.razor`.
   - [ ] Fix `PipelineStepper.razor` to preserve `StageExecutionStatus.Running` when `OverallStatus == TaskOverallStatus.InProgress` or stage conversation is running.
   - [ ] Explicitly pass `CurrentStageStatus` in `TaskExecutionInspector.razor` to `<PipelineStepper>`.
   - [ ] Unify `StageConversationViewer.razor` with `Ideation.razor` compact chat bubble architecture, avatar column, inline `<details class="think-trace">`, and compact `<details class="tool-trace">`.
   - [ ] Style `.file-tree` in `Review.razor` with sticky positioning (`position: sticky; top: 1rem; max-height: calc(100vh - 2rem)`).
   - [ ] Add deep link button to `/inspector/@_snapshot.TaskId` in `Review.razor` header.
+  - [ ] Implement `ReviewFileTreeBuilder` helper class creating hierarchical `ReviewFileTreeNode` tree with folder grouping and single-child compression.
+  - [ ] Update `Review.razor` left panel to render hierarchical tree view ensuring filename is always visible.
+  - [ ] Implement `ISyntaxHighlightingService` / `SimpleSyntaxHighlighter` tokenizing C#, TS/JS, Python, JSON, XML, Shell code lines into safe HTML spans.
+  - [ ] Integrate syntax highlighting in `DiffViewer.razor` for both Side-by-Side and Unified views.
 - [ ] **Step 11.20 (Live Operations Telemetry Refinement, Command Transparency & Context Sizing):**
   - [ ] Add 500ms dynamic ticking timer in `ActiveOperationsHero.razor` computing live elapsed duration from `StartTime` when status is `Running`.
   - [ ] Remove `animation: pulse` from `● Inferring` and `● Executing` badges in `ActiveOperationsHero.razor`.
@@ -247,10 +251,13 @@ flowchart LR
   - [ ] Suppress outer persistent interactive shell session wrapper (`wsl.exe ... docker exec ... bash`) from hero active shell card.
   - [ ] Implement full input messages token estimation in `TelemetryChatClient.cs` and capture `response.Usage.InputTokenCount`.
   - [ ] Display `Context: {N} tokens` in `ActiveOperationsHero`, `LlmCallsHistoryTable`, and `InferenceInspectionModal`.
-- [ ] **Step 11.21 (Dynamic Tool Timeouts, Container ICU Globalization & Review Rejection Test Mandate):**
+- [ ] **Step 11.21 (Dynamic Tool Timeouts, Container ICU & User Permissions, and Review Rejection Test Mandate):**
   - [ ] Update `CanonicalTools.bash` timeout calculation to $\max(300\text{s}, \text{buildTimeout} + \text{testTimeout})$.
   - [ ] Update `DefaultAgentBaseDockerfile` to install `libicu-dev`, `locales`, and configure `en_US.UTF-8` and `fr_FR.UTF-8` locales.
   - [ ] Set `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0`, `LANG=en_US.UTF-8`, `LC_ALL=en_US.UTF-8` in `NightCodeForgeContainerExecutor.ExecuteAsync`.
+  - [ ] Implement host user/group discovery capturing `$(id -u):$(id -g)` once and caching in `ContainerExecutorOptions.UserUidGid`.
+  - [ ] Update `BuildDockerRunArgs` and `BuildProcessStartSpec` in `NightCodeForgeContainerExecutor.cs` to pass `--user <uid>:<gid>`.
+  - [ ] Configure container environment `$HOME` and relocate shared package caches (`/cache/nuget` with `NUGET_PACKAGES=/cache/nuget`) ensuring zero-redownload parity for non-root UIDs.
   - [ ] Update `StandardWorkflowDefinitions.cs` review stage directive requiring automated unit/integration tests for each bug upon rejection.
   - [ ] Update `CrucibleAgentHarness.cs` review and implementation loopback directives to enforce the bug regression test mandate.
 - [ ] **Step 11.5 (Ideation Quick Notes & Suggestions):** Quick notes bar, proposal card tri-state actions, "Refine in Ideation", scoped `edit_task` tools, 24h pruning.

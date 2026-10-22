@@ -1,4 +1,4 @@
-# 🎨 Step 11.19: Conversational UI Unification, Stepper Running Hygiene & Review Room Ergonomics
+# 🎨 Step 11.19: Conversational UI Unification, Stepper Running Hygiene, Review File Tree & Syntax Highlighting
 
 > **Phase 11 Implementation Step (Post-MVP - Developer Ergonomics & UI Polish)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary & Problem Statement
 
-User feedback across real-world project trials highlighted four UX inconsistencies and state tracking issues:
+User feedback across real-world project trials highlighted six UX inconsistencies, state tracking issues, and review ergonomics friction points:
 
 1. **Question Inbox vs. Task Inspector Clarification UI Divergence:**
    The Question Inbox (`/inbox` via `QuestionCard.razor`) and the Task Execution Inspector (`AgentQuestionTurnCard.razor`) implemented two divergent visual designs and interaction models for the exact same human-in-the-loop clarification workflow. `AgentQuestionTurnCard` provides a significantly cleaner experience (pulsing "Waiting for Answer" badge, suggested option chips, inline response area, and clear resolution state), whereas `QuestionCard` relies on bulky legacy styling.
@@ -27,6 +27,14 @@ User feedback across real-world project trials highlighted four UX inconsistenci
 4. **Review Room File List Stickiness & Task Inspector Deep Link:**
    In `/review` (`Review.razor`), the changed files tree scrolls out of view when reviewing large file diffs, forcing maintainers to scroll all the way back to the top to switch files. Furthermore, maintainers in the review room lacked a direct way to view the task execution history and logs.
    *Resolution:* Make `.file-tree` sticky (`position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto;`) and add a prominent "🔍 View Task Inspector" deep link in the review room header pointing directly to `/inspector/{TaskId}`.
+
+5. **Review Room File Path Truncation in Left Panel (Missing Tree View):**
+   In `/review` (`Review.razor`), the changed files in the left sidebar are rendered as flat strings (`file.Path`) with `overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`. Because real-world projects contain deeply nested paths (e.g. `src/NightCodeForge.Web/Components/Pages/Review.razor`), the 240px–300px sidebar cuts off the path trailing characters, completely hiding the actual filename and extension. Maintainers cannot identify which file they are selecting without hovering or clicking.
+   *Resolution:* Rework the flat file list into an interactive Hierarchical Tree View. Group changed files by directory structure, collapse single-child intermediate directory chains (e.g. `src/NightCodeForge.Web/` as a single folder node), render directories as collapsible nodes, and present the leaf file name prominently so the filename is **always fully visible**. Adhering to the UI/presentation separation rule, extract tree-building, sorting, and path-compression logic into a dedicated `ReviewFileTreeBuilder` helper class in `NightCodeForge.Web.Services` rather than placing non-trivial logic in Razor `@code` blocks.
+
+6. **Plain Text Code in Diff Viewer (Missing Syntax Highlighting):**
+   In `DiffViewer.razor`, both Side-by-Side and Unified diff views display code lines as plain, unformatted monospaced text inside table cells. Reviewing diffs across diverse project languages (C#, TypeScript, JavaScript, Python, JSON, XML, Markdown, Shell) is cognitively taxing without visual distinctions for keywords, strings, comments, types, and numbers.
+   *Resolution:* Implement a lightweight, zero-dependency server-side syntax highlighting service (`ISyntaxHighlightingService` / `SimpleSyntaxHighlighter`) in `NightCodeForge.Web.Services`. The service performs deterministic lexical tokenization per line based on file extension, wrapping tokens in standard CSS spans (`tok-keyword`, `tok-string`, `tok-comment`, `tok-type`, `tok-number`, `tok-punct`) with full HTML entity encoding for safety. `DiffViewer.razor` calls the highlighter to render formatted code lines while maintaining diff row background highlights, character-level diff spans, and inline commenting capability.
 
 ---
 
@@ -60,6 +68,16 @@ flowchart TD
         Bubble --> ToolTrace["Collapsible Tool Pill (&lt;details class='tool-trace'&gt;)"]
         Bubble --> Clarification["Embedded AgentQuestionTurnCard"]
         Bubble --> Markdown["Rendered Markdown Text"]
+    end
+
+    subgraph ReviewTreeAndSyntax ["Review Room Tree & Syntax Highlighting"]
+        SnapFiles["Flat FileChangeSnapshot List<br/>(e.g. src/A/B/File.cs)"] --> TreeBuilder["ReviewFileTreeBuilder<br/>(Path splitting, single-child collapse, sorting)"]
+        TreeBuilder --> TreeNode["ReviewFileTreeNode Hierarchy<br/>- Folders: Collapsible, Dir Path<br/>- Files: Full Filename Always Visible, Badge, +/-"]
+        TreeNode --> TreeUI["Review.razor (.file-tree-container)"]
+
+        DiffLine["Diff Line Text + File Extension<br/>(e.g. public class Foo, .cs)"] --> SyntaxSvc["ISyntaxHighlightingService<br/>(SimpleSyntaxHighlighter)"]
+        SyntaxSvc --> SafeHtml["Tokenized MarkupString<br/>&lt;span class='tok-keyword'&gt;public&lt;/span&gt; ..."]
+        SafeHtml --> DiffView["DiffViewer.razor (Side-by-Side & Unified)"]
     end
 ```
 
@@ -144,9 +162,10 @@ flowchart TD
 2. **Shared Style Standardization in CSS:**
    - Ensure `.chat-bubble`, `.think-trace`, `.tool-trace`, and `.agent-question-turn-card` rules in `app.css` are shared and consistent across both `/ideation` and `/inspector`.
 
-### 3.4 Review Room Ergonomics
+### 3.4 Review Room Ergonomics: Sticky Navigation, Tree View & Syntax Highlighting
 
-1. **Sticky File Tree:**
+#### 3.4.1 Sticky Navigation & Task Inspector Deep Link
+1. **Sticky File Tree Container:**
    - In `Review.razor` (and related stylesheet), style the `.file-tree` container with:
      ```css
      .file-tree {
@@ -169,6 +188,91 @@ flowchart TD
      </a>
      ```
 
+#### 3.4.2 Hierarchical File Tree View
+To eliminate the issue of truncated file paths hiding filenames in the left panel, implement a hierarchical tree view that separates directory hierarchy from filenames:
+
+1. **Domain Model & Service Separation (`ReviewFileTreeNode` & `ReviewFileTreeBuilder`):**
+   In accordance with the UI separation rule, all tree structuring, directory grouping, single-child collapsing, and sorting logic lives in a dedicated helper in `src/NightCodeForge.Web/Services/ReviewFileTreeBuilder.cs`:
+   ```csharp
+   public class ReviewFileTreeNode
+   {
+       public string Name { get; set; } = string.Empty;
+       public string FullPath { get; set; } = string.Empty;
+       public bool IsDirectory { get; set; }
+       public bool IsExpanded { get; set; } = true;
+       public FileChangeType? ChangeType { get; set; }
+       public int Additions { get; set; }
+       public int Deletions { get; set; }
+       public FileChangeSnapshot? FileSnapshot { get; set; }
+       public List<ReviewFileTreeNode> Children { get; set; } = new();
+   }
+   ```
+2. **Path Compression & Sorting Rules:**
+   - Split each `FileChangeSnapshot.Path` by `/`.
+   - Compress chains of single-child intermediate directories (e.g. `src/NightCodeForge.Web/Components` renders as a single folder node label `src/NightCodeForge.Web/Components`, rather than 4 separate indented levels).
+   - Order folder nodes first, followed by file nodes alphabetically.
+   - Aggregate additions and deletions on directory nodes to display folder-level impact summaries.
+   - Auto-expand nodes leading to the currently selected file.
+3. **Presentation & Styling in `Review.razor`:**
+   - Directory Node:
+     - Folder toggle button (`📁` / `📂` or chevron icon) with folder path label.
+     - Clicking toggles `IsExpanded`.
+   - File Leaf Node:
+     - Prominently displays the **bare filename** (`Review.razor`), ensuring it is **never truncated** by parent path prefixes.
+     - Displays change type badge (`[M]`, `[A]`, `[D]`, `[R]`).
+     - Displays change line counts (`+42 -12`).
+     - Selected file highlighted with active border and background accent.
+   - CSS Indentation:
+     - Clean hierarchical indentation (`margin-left: 0.75rem`) with subtle vertical guide lines.
+
+#### 3.4.3 Simple Syntax Highlighting in `DiffViewer.razor`
+To provide clear visual distinctions for keywords, strings, comments, types, and numbers without external heavy JavaScript bundle overhead:
+
+1. **Service Abstraction (`ISyntaxHighlightingService` / `SimpleSyntaxHighlighter`):**
+   Create `ISyntaxHighlightingService` in `src/NightCodeForge.Web/Services/`:
+   ```csharp
+   public interface ISyntaxHighlightingService
+   {
+       MarkupString HighlightLine(string lineText, string? filePath);
+   }
+   ```
+2. **Lexical Tokenization Engine (`SimpleSyntaxHighlighter.cs`):**
+   - Detects language family from file extension:
+     - C# (`.cs`, `.csx`)
+     - TypeScript / JavaScript (`.ts`, `.tsx`, `.js`, `.jsx`)
+     - Python (`.py`)
+     - JSON (`.json`)
+     - Markup / XML (`.xml`, `.csproj`, `.props`, `.html`, `.razor`)
+     - Shell / Scripting (`.sh`, `.bash`, `.ps1`)
+     - Fallback / Text (`.txt`, `.md`, unknown extensions)
+   - Performs line-by-line lexical tokenization:
+     - **Keywords:** `public`, `class`, `async`, `await`, `return`, `if`, `else`, `function`, `const`, `let`, `def`, `import`, `using`, `namespace`, etc. $\rightarrow$ `<span class="tok-keyword">...</span>`
+     - **Types / Built-ins:** `string`, `int`, `bool`, `Task`, `void`, `List`, `IReadOnlyList`, `var`, etc. $\rightarrow$ `<span class="tok-type">...</span>`
+     - **Strings & Characters:** `"..."`, `'...'`, `$"..."`, `` `...` `` $\rightarrow$ `<span class="tok-string">...</span>`
+     - **Comments:** `// ...`, `/* ... */`, `# ...` $\rightarrow$ `<span class="tok-comment">...</span>`
+     - **Numbers & Literals:** `0-9+`, `true`, `false`, `null`, `None` $\rightarrow$ `<span class="tok-number">...</span>`
+     - **Punctuation & Operators:** `{ } [ ] ( ) => ; = + - * /` $\rightarrow$ `<span class="tok-punct">...</span>`
+   - **XSS Safety Mandate:** All raw text within tokens is passed through `System.Text.Encodings.Web.HtmlEncoder.Default.Encode()` before assembling the `MarkupString`.
+3. **Integration in `DiffViewer.razor`:**
+   - Inject `ISyntaxHighlightingService`.
+   - In Side-by-Side view:
+     - `<td class="diff-text old-text ...">@SyntaxHighlighter.HighlightLine(oldLine?.Text ?? "", File.Path)</td>`
+     - `<td class="diff-text new-text ...">@SyntaxHighlighter.HighlightLine(newLine?.Text ?? "", File.Path)</td>`
+   - In Unified view:
+     - `<td class="diff-text">@SyntaxHighlighter.HighlightLine(line.Text, File.Path)</td>`
+   - Retain background color coding for additions (`diff-added`), deletions (`diff-deleted`), and modifications (`diff-modified`), allowing syntax highlighting to render atop diff row backgrounds seamlessly.
+   - Maintain full comment thread interactivity and line clicking behavior.
+4. **CSS Token Theme in `app.css`:**
+   - Define theme tokens matching modern IDE dark-mode palettes:
+     ```css
+     .tok-keyword { color: #c678dd; font-weight: 600; }
+     .tok-type { color: #4ec9b0; }
+     .tok-string { color: #98c379; }
+     .tok-comment { color: #7f848e; font-style: italic; }
+     .tok-number { color: #d19a66; }
+     .tok-punct { color: #abb2bf; }
+     ```
+
 ---
 
 ## 4. Verification & Testing Strategy
@@ -177,9 +281,33 @@ flowchart TD
    - `PipelineStepperTests`: Test that when `OverallStatus == TaskOverallStatus.InProgress` and `CurrentStageStatus == null`, the active stage receives `Running` status with pulse spinner.
    - `TaskExecutionInspectorComponentTests`: Verify that selecting a running task correctly renders the active stage as running in the stepper.
    - `InboxPageTests`: Verify that `Inbox.razor` renders the unified clarification card with suggested option chips and submits answers via `TaskOrchestrator`.
-   - `ReviewPageTests`: Verify that `Review.razor` renders the sticky file list classes and contains the valid link to `/inspector/{taskId}`.
+   - `ReviewFileTreeBuilderTests`:
+     - Test tree generation from flat file paths.
+     - Test directory grouping and alphabetical sorting (folders before files).
+     - Test single-child folder chain compression (`a/b/c` $\rightarrow$ `a/b/c`).
+     - Test file node properties: bare filename, additions/deletions counts, change type.
+     - Test that deep paths (e.g. `src/A/B/C/Component.razor`) produce `Component.razor` as the node name.
+   - `SyntaxHighlightingServiceTests`:
+     - Test C# tokenization: keywords, strings, comments, numbers, types.
+     - Test HTML safety: verify strings containing `<`, `>`, `&` are HTML-encoded.
+     - Test fallback behavior for unknown extensions.
+     - Test blank and whitespace-only lines.
+   - `DiffViewerComponentTests`:
+     - Verify diff lines render syntax token spans.
+     - Verify toggle comment box and inline comment threads remain functional.
+   - `ReviewPageTests`:
+     - Verify `Review.razor` renders the tree view with folder expand/collapse.
+     - Verify clicking a file node loads the file into `DiffViewer`.
+     - Verify sticky `.file-tree` class and task inspector deep link button `/inspector/{taskId}`.
 
 2. **Manual Acceptance:**
    - Navigate to `/inbox` and verify visual parity with Task Inspector clarification cards.
    - Trigger a task execution and inspect `/inspector/{taskId}`: verify the stepper stage pulses "Running" while the stage conversation executes.
-   - Open `/review/{taskId}`: verify sticky file tree behavior on scroll and click "Task Inspector" link to confirm seamless cross-portal navigation.
+   - Open `/review/{taskId}` on a task modifying files across nested subfolders:
+     - Verify the left panel displays a clean hierarchical tree view with folders.
+     - Verify that every file displays its bare filename clearly without being cut off by ellipsis.
+     - Verify collapsible folders expand and collapse smoothly.
+     - Verify diff code lines in `DiffViewer` display syntax highlighting (colored keywords, strings, comments) for both side-by-side and unified views.
+     - Verify sticky file tree behavior when scrolling large diffs.
+     - Click "🔍 Task Inspector" to verify direct navigation.
+
