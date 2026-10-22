@@ -1,5 +1,6 @@
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
+using NightCodeForge.Agents.Compaction;
 
 namespace NightCodeForge.Agents.Inference;
 
@@ -92,15 +93,60 @@ public static class ModelCapabilityResolver
     }
 
     /// <summary>
-    /// Builds the MAF in-loop compaction strategy sized for the model's context window.
+    /// Builds the Pi-style in-loop context compaction strategy sized for the model's context window.
     /// </summary>
-    public static CompactionStrategy BuildCompactionStrategy(LlmProviderOptions? options, string? modelId)
+    public static CompactionStrategy BuildCompactionStrategy(
+        LlmProviderOptions? options,
+        string? modelId,
+        int? explicitContextWindowTokens = null,
+        int? explicitReserveTokens = null,
+        int? explicitKeepRecentTokens = null,
+        IChatClient? summarizerClient = null)
     {
         var profile = FindProfile(options, modelId);
-        int contextWindow = profile?.ContextWindowTokens ?? options?.ContextWindowTokens ?? LlmProviderOptions.DefaultContextWindowTokens;
-        int maxOutput = profile?.MaxOutputTokens ?? options?.MaxOutputTokens ?? LlmProviderOptions.DefaultMaxOutputTokens;
-        if (maxOutput >= contextWindow) maxOutput = Math.Max(1, contextWindow / 4);
+        int contextWindow = explicitContextWindowTokens
+            ?? profile?.ContextWindowTokens
+            ?? options?.ContextWindowTokens
+            ?? LlmProviderOptions.DefaultContextWindowTokens;
 
-        return new ContextWindowCompactionStrategy(contextWindow, maxOutput);
+        if (contextWindow <= 0)
+        {
+            contextWindow = LlmProviderOptions.DefaultContextWindowTokens;
+        }
+
+        bool isSmallWindow = contextWindow <= CrucibleCompactionOptions.SmallContextWindowTokens;
+
+        int defaultReserve = isSmallWindow
+            ? Math.Max(CrucibleCompactionOptions.MinSmallWindowBudgetTokens, contextWindow / 4)
+            : CrucibleCompactionOptions.DefaultReserveTokens;
+
+        // The reserve must always leave room for context: never let it reach the window itself.
+        int reserveTokens = explicitReserveTokens ?? defaultReserve;
+        if (reserveTokens >= contextWindow)
+        {
+            reserveTokens = Math.Max(1, contextWindow / 4);
+        }
+
+        int usableTokens = Math.Max(1, contextWindow - reserveTokens);
+
+        int defaultKeepRecent = isSmallWindow
+            ? Math.Max(CrucibleCompactionOptions.MinSmallWindowBudgetTokens, usableTokens / 2)
+            : CrucibleCompactionOptions.DefaultKeepRecentTokens;
+
+        int keepRecentTokens = explicitKeepRecentTokens ?? defaultKeepRecent;
+        if (keepRecentTokens >= usableTokens)
+        {
+            keepRecentTokens = Math.Max(1, usableTokens / 2);
+        }
+
+        var compactionOptions = new CrucibleCompactionOptions
+        {
+            ContextWindowTokens = contextWindow,
+            ReserveTokens = reserveTokens,
+            KeepRecentTokens = keepRecentTokens,
+            SummarizerModelId = modelId
+        };
+
+        return new PiStyleCrucibleCompactionStrategy(compactionOptions, summarizerClient);
     }
 }

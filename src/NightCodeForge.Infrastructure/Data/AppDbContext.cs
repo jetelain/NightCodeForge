@@ -398,6 +398,11 @@ public class AppDbContext : DbContext
     public const string AddPortalScopingAndExecutionFlagsMigrationId = "20261021065652_AddPortalScopingAndExecutionFlags";
 
     /// <summary>
+    /// Migration identifier for agent profile context window tokens.
+    /// </summary>
+    public const string AddAgentProfileContextWindowTokensMigrationId = "20261022031751_AddAgentProfileContextWindowTokens";
+
+    /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
     /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
@@ -475,6 +480,17 @@ VALUES ('" + InitialCreateMigrationId + @"', '10.0.12');";
                 {
                     cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + AddPortalScopingAndExecutionFlagsMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('AgentProfiles') WHERE name = 'ContextWindowTokens';";
+                var hasContextWindowTokensColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasContextWindowTokensColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddAgentProfileContextWindowTokensMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }

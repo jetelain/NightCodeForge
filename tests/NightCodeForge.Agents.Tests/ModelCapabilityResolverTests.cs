@@ -1,3 +1,5 @@
+using Microsoft.Agents.AI.Compaction;
+using Microsoft.Extensions.AI;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;

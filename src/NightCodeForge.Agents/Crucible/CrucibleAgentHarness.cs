@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Agents.Compaction;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Crucible.ChatClients;
 using NightCodeForge.Agents.Dispatcher;
@@ -545,7 +546,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
             },
             _logger);
 
-        var activeClient = new LenientToolCallChatClient(persistingClient);
+        var reasoningPruningClient = new HistoricalReasoningCompactionChatClient(persistingClient);
+        var activeClient = new LenientToolCallChatClient(reasoningPruningClient);
 
         // 10. Main Agentic Reasoning Loop with HarnessAgent & Real-Time Streaming
         int maxTurns = ResolveMaxTurns(harnessConfig, context.Profile);
@@ -572,7 +574,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
             HarnessInstructions = stabilizedPrefix,
             ChatOptions = chatOptions,
             MaximumIterationsPerRequest = maxTurns,
-            CompactionStrategy = ModelCapabilityResolver.BuildCompactionStrategy(_llmOptions, effectiveModel ?? _llmOptions?.ModelId),
+            CompactionStrategy = ModelCapabilityResolver.BuildCompactionStrategy(
+                _llmOptions,
+                effectiveModel ?? _llmOptions?.ModelId,
+                explicitContextWindowTokens: context.Profile.ContextWindowTokens,
+                summarizerClient: baseClient),
             DisableTodoProvider = true,
             DisableAgentModeProvider = true,
             DisableFileMemory = true,

@@ -54,6 +54,12 @@ public class AgentProfile
     public bool AllowNoTests { get; set; }
 
     /// <summary>
+    /// Model context window in tokens, used for context compaction budgeting.
+    /// If null, falls back to model profile, workspace, or global settings.
+    /// </summary>
+    public int? ContextWindowTokens { get; set; }
+
+    /// <summary>
     /// OllamaRouter target pinning policy (propagated as X-OllamaRouter-Target header).
     /// </summary>
     public OllamaRoutingTarget RoutingTarget { get; set; } = OllamaRoutingTarget.Auto;

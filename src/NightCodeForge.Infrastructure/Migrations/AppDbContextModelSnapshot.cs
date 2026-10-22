@@ -26,6 +26,9 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<bool>("AllowNoTests")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int?>("ContextWindowTokens")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("HarnessConfigurationJson")
                         .HasColumnType("TEXT");
 

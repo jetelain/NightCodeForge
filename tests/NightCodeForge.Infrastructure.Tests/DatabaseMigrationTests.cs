@@ -83,9 +83,10 @@ public class DatabaseMigrationTests : IDisposable
             historyRows.Add((reader.GetString(0), reader.GetString(1)));
         }
 
-        Assert.Equal(2, historyRows.Count);
-        Assert.Contains(historyRows, h => h.MigrationId == "20261019025958_InitialCreate");
-        Assert.Contains(historyRows, h => h.MigrationId == "20261021065652_AddPortalScopingAndExecutionFlags");
+        Assert.Equal(3, historyRows.Count);
+        Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.InitialCreateMigrationId);
+        Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId);
+        Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddAgentProfileContextWindowTokensMigrationId);
     }
 
     [Fact]
@@ -247,9 +248,10 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Null(ex);
 
         var appliedMigrations = (await context.Database.GetAppliedMigrationsAsync()).ToList();
-        Assert.Equal(2, appliedMigrations.Count);
-        Assert.Contains("20261019025958_InitialCreate", appliedMigrations);
-        Assert.Contains("20261021065652_AddPortalScopingAndExecutionFlags", appliedMigrations);
+        Assert.Equal(3, appliedMigrations.Count);
+        Assert.Contains(AppDbContext.InitialCreateMigrationId, appliedMigrations);
+        Assert.Contains(AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId, appliedMigrations);
+        Assert.Contains(AppDbContext.AddAgentProfileContextWindowTokensMigrationId, appliedMigrations);
     }
 
     [Fact]
