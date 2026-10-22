@@ -179,6 +179,7 @@ public class TaskOrchestratorConversationResumptionTests
             wsRepo,
             taskRepo,
             gitRunner.Object,
+            new Mock<IGitWorkspaceManager>().Object,
             new DefaultWorkflowPipelineProvider(),
             jobQueue,
             pathResolver.Object,

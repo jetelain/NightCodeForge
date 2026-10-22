@@ -63,6 +63,15 @@ public interface IGitWorkspaceManager
     Task<string> EnsureWorktreeAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Verifies and enforces that both the worktree .git pointer and the canonical clone worktree gitdir
+    /// use bidirectional relative paths, ensuring portability across host, WSL, and Docker containers.
+    /// </summary>
+    /// <param name="workspace">The workspace owning the repository.</param>
+    /// <param name="taskId">The task ID identifying the worktree.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task EnsureWorktreeRelativePathsAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Removes the ephemeral Git worktree for the given task and prunes worktree metadata.
     /// </summary>
     Task RemoveWorktreeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default);

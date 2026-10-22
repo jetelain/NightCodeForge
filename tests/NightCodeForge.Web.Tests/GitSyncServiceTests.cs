@@ -254,6 +254,7 @@ public class GitSyncServiceTests
         public Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default) => Task.FromResult("abcdef1234567890abcdef1234567890abcdef12");
         public Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, bool allowCreateBaseBranch, CancellationToken cancellationToken = default) => Task.FromResult("abcdef1234567890abcdef1234567890abcdef12");
         public Task<string> EnsureWorktreeAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.FromResult($"/wks/task-{taskId}");
+        public Task EnsureWorktreeRelativePathsAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task RemoveWorktreeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public string GetWorktreePath(Workspace workspace, int taskId) => $"/wks/task-{taskId}";
         public Task RevertOrCleanAsync(Workspace workspace, int? taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;

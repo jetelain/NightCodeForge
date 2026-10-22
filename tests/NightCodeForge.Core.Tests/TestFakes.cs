@@ -88,6 +88,16 @@ public class FakeGitWorkspaceManager : IGitWorkspaceManager
         return Task.FromResult(GetWorktreePath(workspace, taskId));
     }
 
+    public List<int> NormalizedTaskIds { get; } = new();
+    public Exception? NormalizeFailure { get; set; }
+
+    public Task EnsureWorktreeRelativePathsAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)
+    {
+        NormalizedTaskIds.Add(taskId);
+        if (NormalizeFailure is not null) throw NormalizeFailure;
+        return Task.CompletedTask;
+    }
+
     public Task RemoveWorktreeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)
     {
         return Task.CompletedTask;

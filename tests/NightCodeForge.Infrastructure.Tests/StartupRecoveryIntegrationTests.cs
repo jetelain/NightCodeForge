@@ -34,6 +34,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
             workspaceRepo,
             taskRepo,
             _runner,
+            new GitWorkspaceManager(_runner, _pathResolver, new Mock<IWslMetadataService>().Object, NullLogger<GitWorkspaceManager>.Instance),
             CreatePipelineProvider(),
             jobQueue,
             _pathResolver,
@@ -253,6 +254,157 @@ public class StartupRecoveryIntegrationTests : IDisposable
         Assert.Equal(StageExecutionStatus.Failed, recoveredConv.Status);
 
         Assert.Contains(task.Id, jobQueue.UrgentQueue);
+    }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_WithWorkspaceIdGreaterThan1002000_MigratesAbsolutePointersToRelativeAndEnablesGitOperations()
+    {
+        // 1. Seed the workspace sequence in SQLite to a high ID > 1002000
+        const int targetWorkspaceId = 1002042;
+        await _context.SeedWorkspaceIdSequenceAsync(targetWorkspaceId);
+
+        // 2. Setup a temporary repository folder with sibling layout (clone and task worktrees)
+        var wksRoot = Path.Combine(Path.GetTempPath(), $"ncf_wks_{targetWorkspaceId}_{Guid.NewGuid():N}");
+        var cloneDir = Path.Combine(wksRoot, "clone");
+        Directory.CreateDirectory(cloneDir);
+
+        try
+        {
+            using (var p1 = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", "init -b main")
+            {
+                WorkingDirectory = cloneDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }))
+            {
+                p1?.WaitForExit();
+            }
+
+            using (var p2 = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", "config user.name \"NCF Test\"")
+            {
+                WorkingDirectory = cloneDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }))
+            {
+                p2?.WaitForExit();
+            }
+
+            using (var p3 = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", "config user.email \"test@ncf.local\"")
+            {
+                WorkingDirectory = cloneDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }))
+            {
+                p3?.WaitForExit();
+            }
+
+            using (var p4 = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", "commit --allow-empty -m \"Initial root commit on main\" --no-verify")
+            {
+                WorkingDirectory = cloneDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }))
+            {
+                p4?.WaitForExit();
+            }
+
+            // 3. Register Workspace entity in SQLite
+            var workspace = new Workspace
+            {
+                Name = "Container Portability Workspace",
+                RepositoryPath = cloneDir,
+                DefaultBaseBranch = "main"
+            };
+            _context.Workspaces.Add(workspace);
+            await _context.SaveChangesAsync();
+
+            Assert.True(workspace.Id >= targetWorkspaceId, $"Expected workspace.Id >= {targetWorkspaceId}, got {workspace.Id}");
+
+            // 4. Register active ForgeTask in SQLite
+            var task = new ForgeTask
+            {
+                WorkspaceId = workspace.Id,
+                Title = "Container Git Worktree Portability Task",
+                Status = TaskOverallStatus.Open,
+                CurrentStageId = "task-review"
+            };
+            _context.Tasks.Add(task);
+            await _context.SaveChangesAsync();
+
+            // 5. Ensure worktree for this task
+            var gitManager = new GitWorkspaceManager(_runner, _pathResolver, new Mock<IWslMetadataService>().Object, NullLogger<GitWorkspaceManager>.Instance);
+            var wtPath = await gitManager.EnsureWorktreeAsync(workspace, task.Id, "main");
+
+            var forwardGitFile = Path.Combine(wtPath, ".git");
+            var reverseGitDirFile = Path.Combine(cloneDir, ".git", "worktrees", $"task-{task.Id}", "gitdir");
+
+            // 6. Simulate corrupt / pre-Step-11.22 absolute pointers crossing container namespace boundary
+            File.SetAttributes(forwardGitFile, FileAttributes.Normal);
+            File.SetAttributes(reverseGitDirFile, FileAttributes.Normal);
+            await File.WriteAllTextAsync(forwardGitFile, $"gitdir: /home/gruearbre/.nightcodeforge/wks/{workspace.Id}/clone/.git/worktrees/task-{task.Id}\n");
+            await File.WriteAllTextAsync(reverseGitDirFile, $"/home/gruearbre/.nightcodeforge/wks/{workspace.Id}/task-{task.Id}/.git\n");
+
+            // Clear EF Core change tracker to simulate full application restart
+            _context.ChangeTracker.Clear();
+
+            // 7. Run StartupRecoveryService.ReconcileWorkspacesAsync
+            var workspaceRepo = new EfCoreWorkspaceRepository(_context);
+            var taskRepo = new EfCoreTaskRepository(_context);
+            var jobQueue = new FakeTestJobQueue();
+            var recoveryService = CreateRecoveryService(workspaceRepo, taskRepo, jobQueue);
+
+            await recoveryService.ReconcileWorkspacesAsync();
+
+            // 8. Assertions: Both forward and reverse pointers were migrated to relative paths
+            var forwardContent = (await File.ReadAllTextAsync(forwardGitFile)).Trim();
+            Assert.Equal($"gitdir: ../clone/.git/worktrees/task-{task.Id}", forwardContent);
+
+            var reverseContent = (await File.ReadAllTextAsync(reverseGitDirFile)).Trim();
+            Assert.Equal($"../../../../task-{task.Id}/.git", reverseContent);
+
+            // 9. Assertions: Git commands inside the worktree execute cleanly with zero errors
+            var statusResult = await _runner.ExecuteAsync(wtPath, ["status", "--porcelain"]);
+            Assert.Equal(0, statusResult.ExitCode);
+            Assert.DoesNotContain("fatal: not a git repository", statusResult.StandardError, StringComparison.OrdinalIgnoreCase);
+
+            var branchResult = await _runner.ExecuteAsync(wtPath, ["branch", "--show-current"]);
+            Assert.Equal(0, branchResult.ExitCode);
+            Assert.Equal($"feature/task-{task.Id}", branchResult.StandardOutput.Trim());
+
+            var logResult = await _runner.ExecuteAsync(wtPath, ["log", "-1", "--oneline"]);
+            Assert.Equal(0, logResult.ExitCode);
+            Assert.Contains("Initial root commit", logResult.StandardOutput);
+
+            // 10. Verify task re-enqueued to urgent queue
+            Assert.Contains(task.Id, jobQueue.UrgentQueue);
+
+            // 11. Verify ExecutionEnvironmentProvider also normalizes paths
+            var envProvider = new ExecutionEnvironmentProvider(
+                new BareHostExecutionEnvironment(_processRunner, _pathResolver),
+                _processRunner,
+                Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()),
+                _pathResolver,
+                new Mock<IHostSdkDiscoveryService>().Object,
+                gitManager,
+                NullLogger<NightCodeForgeContainerExecutor>.Instance);
+
+            var env = envProvider.GetEnvironment(workspace, taskId: task.Id);
+            Assert.NotNull(env);
+        }
+        finally
+        {
+            TestGitRepository.DeleteDirectorySafe(wksRoot);
+        }
     }
 
     private static IWorkflowPipelineProvider CreatePipelineProvider() =>

@@ -13,6 +13,7 @@ namespace NightCodeForge.Web.Tests.E2E;
 /// 4. Let the Process Flow (Autonomous Pipeline Execution)
 /// 5. Ensure Requested Feature Added in Dev Repo
 /// </summary>
+[Collection("E2E_EnvironmentSeed")]
 public class AutonomousFeatureLifecycleTests : IAsyncLifetime
 {
     private readonly ITestOutputHelper _output;

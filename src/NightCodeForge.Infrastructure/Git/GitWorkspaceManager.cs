@@ -82,6 +82,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             if (isWorktreeRegistered)
             {
                 _logger.LogInformation("Worktree for ForgeTask #{TaskId} is already registered at '{WorktreePath}'", taskId, worktreePath);
+                await EnsureWorktreeRelativePathsAsync(workspace, taskId, cancellationToken);
                 return worktreePath;
             }
         }
@@ -105,6 +106,16 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         catch (GitCommandException ex)
         {
             _logger.LogDebug(ex, "Best-effort worktree prune in '{CanonicalPath}' failed", canonicalPath);
+        }
+
+        // Configure Git native worktree relative paths
+        try
+        {
+            await _gitCliRunner.ExecuteAsync(canonicalPath, ["config", "worktree.useRelativePaths", "true"], cancellationToken: cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Setting worktree.useRelativePaths in '{CanonicalPath}' ignored", canonicalPath);
         }
 
         await EnsureWorktreeExcludedAsync(canonicalPath, cancellationToken);
@@ -136,41 +147,158 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             _logger.LogDebug(ex, "Unsetting extensions.relativeworktrees in '{CanonicalPath}' ignored (not configured)", canonicalPath);
         }
 
-        // Make the .git pointer relative so it resolves seamlessly across host, WSL, and Docker containers
-        try
-        {
-            var gitFile = Path.Combine(worktreePath, ".git");
-            if (File.Exists(gitFile))
-            {
-                var normWorktree = worktreePath.Replace('\\', '/').TrimEnd('/');
-                var normCanonical = canonicalPath.Replace('\\', '/').TrimEnd('/');
-                var cloneDirName = Path.GetFileName(normCanonical);
-                var wtParent = Path.GetDirectoryName(normWorktree);
-                var canParent = Path.GetDirectoryName(normCanonical);
-
-                string targetGitDir;
-                if (!string.IsNullOrEmpty(wtParent) && string.Equals(wtParent, canParent, StringComparison.OrdinalIgnoreCase))
-                {
-                    // Sibling layout: ~/.nightcodeforge/wks/{id}/clone and ~/.nightcodeforge/wks/{id}/task-{id}
-                    targetGitDir = $"../{cloneDirName}/.git/worktrees/task-{taskId}";
-                }
-                else
-                {
-                    // Child layout fallback: <canonical>/task-{id}
-                    targetGitDir = $"../.git/worktrees/task-{taskId}";
-                }
-
-                File.SetAttributes(gitFile, FileAttributes.Normal);
-                await File.WriteAllTextAsync(gitFile, $"gitdir: {targetGitDir}\n", cancellationToken);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not rewrite relative gitdir in '{WorktreePath}'", worktreePath);
-        }
+        // Verify and enforce bidirectional relative paths for the worktree
+        await EnsureWorktreeRelativePathsAsync(workspace, taskId, cancellationToken);
 
         _logger.LogInformation("Successfully created worktree for ForgeTask #{TaskId} at '{WorktreePath}'", taskId, worktreePath);
         return worktreePath;
+    }
+
+    /// <inheritdoc />
+    public async Task EnsureWorktreeRelativePathsAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+
+        string canonicalPath;
+        try
+        {
+            canonicalPath = GetCanonicalWorkingPath(workspace);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            _logger.LogWarning(ex, "Cannot normalize relative worktree paths: canonical path not found for Workspace #{WorkspaceId}", workspace.Id);
+            return;
+        }
+
+        var worktreePath = GetWorktreePath(workspace, taskId);
+
+        var normWorktree = worktreePath.Replace('\\', '/').TrimEnd('/');
+        var normCanonical = canonicalPath.Replace('\\', '/').TrimEnd('/');
+        var cloneDirName = Path.GetFileName(normCanonical);
+        var wtParent = Path.GetDirectoryName(normWorktree)?.Replace('\\', '/');
+        var canParent = Path.GetDirectoryName(normCanonical)?.Replace('\\', '/');
+
+        string targetGitDir;
+        string reverseGitDir;
+
+        bool isSibling = !string.IsNullOrEmpty(wtParent) && string.Equals(wtParent, canParent, StringComparison.OrdinalIgnoreCase);
+
+        if (isSibling)
+        {
+            // Sibling layout: ~/.nightcodeforge/wks/{id}/clone and ~/.nightcodeforge/wks/{id}/task-{id}
+            targetGitDir = $"../{cloneDirName}/.git/worktrees/task-{taskId}";
+            reverseGitDir = $"../../../../task-{taskId}/.git";
+        }
+        else
+        {
+            // Child layout fallback: <canonical>/task-{id}
+            targetGitDir = $"../.git/worktrees/task-{taskId}";
+            reverseGitDir = $"../../../task-{taskId}/.git";
+        }
+
+        // 1. Forward pointer in worktree: <worktree>/.git
+        var hostWorktree = ResolveHostAccessiblePath(worktreePath);
+        var forwardGitFile = Path.Combine(hostWorktree, ".git");
+
+        if (File.Exists(forwardGitFile))
+        {
+            try
+            {
+                var expectedForward = $"gitdir: {targetGitDir}\n";
+                var currentForward = await File.ReadAllTextAsync(forwardGitFile, cancellationToken).ConfigureAwait(false);
+                if (!string.Equals(currentForward.Trim(), expectedForward.Trim(), StringComparison.Ordinal))
+                {
+                    try
+                    {
+                        File.SetAttributes(forwardGitFile, FileAttributes.Normal);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Failed to clear attributes on forward pointer '{ForwardGitFile}'", forwardGitFile);
+                    }
+
+                    await File.WriteAllTextAsync(forwardGitFile, expectedForward, cancellationToken).ConfigureAwait(false);
+                    _logger.LogInformation("Normalized forward worktree pointer for task #{TaskId} in '{ForwardGitFile}' to relative: '{TargetGitDir}'",
+                        taskId, forwardGitFile, targetGitDir);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to normalize forward worktree pointer in '{ForwardGitFile}'", forwardGitFile);
+            }
+        }
+
+        // 2. Reverse pointer in canonical clone: <canonical>/.git/worktrees/task-{taskId}/gitdir
+        var hostCanonical = ResolveHostAccessiblePath(canonicalPath);
+        var expectedReverse = $"{reverseGitDir}\n";
+
+        var reverseGitDirFile = Path.Combine(hostCanonical, ".git", "worktrees", $"task-{taskId}", "gitdir");
+        if (File.Exists(reverseGitDirFile))
+        {
+            try
+            {
+                var currentReverse = await File.ReadAllTextAsync(reverseGitDirFile, cancellationToken).ConfigureAwait(false);
+                if (!string.Equals(currentReverse.Trim(), expectedReverse.Trim(), StringComparison.Ordinal))
+                {
+                    try
+                    {
+                        File.SetAttributes(reverseGitDirFile, FileAttributes.Normal);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Failed to clear attributes on reverse pointer '{ReverseGitDirFile}'", reverseGitDirFile);
+                    }
+
+                    await File.WriteAllTextAsync(reverseGitDirFile, expectedReverse, cancellationToken).ConfigureAwait(false);
+                    _logger.LogInformation("Normalized reverse worktree pointer for task #{TaskId} in '{ReverseGitDirFile}' to relative: '{ReverseGitDir}'",
+                        taskId, reverseGitDirFile, reverseGitDir);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to normalize reverse worktree pointer in '{ReverseGitDirFile}'", reverseGitDirFile);
+            }
+        }
+        else
+        {
+            var worktreesParent = Path.Combine(hostCanonical, ".git", "worktrees");
+            if (Directory.Exists(worktreesParent))
+            {
+                try
+                {
+                    foreach (var subDir in Directory.EnumerateDirectories(worktreesParent))
+                    {
+                        var candidate = Path.Combine(subDir, "gitdir");
+                        if (File.Exists(candidate))
+                        {
+                            var content = (await File.ReadAllTextAsync(candidate, cancellationToken).ConfigureAwait(false)).Trim();
+                            if (content.EndsWith($"/task-{taskId}/.git", StringComparison.OrdinalIgnoreCase) ||
+                                content.EndsWith($"\\task-{taskId}\\.git", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(Path.GetFileName(subDir), $"task-{taskId}", StringComparison.OrdinalIgnoreCase))
+                            {
+                                try
+                                {
+                                    File.SetAttributes(candidate, FileAttributes.Normal);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogDebug(ex, "Failed to clear attributes on candidate reverse pointer '{Candidate}'", candidate);
+                                }
+
+                                await File.WriteAllTextAsync(candidate, expectedReverse, cancellationToken).ConfigureAwait(false);
+                                _logger.LogInformation("Normalized discovered reverse worktree pointer in '{Candidate}' to relative: '{ReverseGitDir}'",
+                                    candidate, reverseGitDir);
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to enumerate worktree administrative directories in '{WorktreesParent}'", worktreesParent);
+                }
+            }
+        }
     }
 
     /// <inheritdoc />

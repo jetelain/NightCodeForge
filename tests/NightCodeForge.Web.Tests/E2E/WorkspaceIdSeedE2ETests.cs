@@ -7,6 +7,7 @@ using Xunit;
 
 namespace NightCodeForge.Web.Tests.E2E;
 
+[Collection("E2E_EnvironmentSeed")]
 public class WorkspaceIdSeedE2ETests
 {
     [Fact]

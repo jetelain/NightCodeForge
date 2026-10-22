@@ -301,6 +301,189 @@ public class GitWorkspaceManagerTests : IDisposable
         Assert.Equal("Original canonical", File.ReadAllText(Path.Combine(_repo.RepositoryPath, "dirty_canonical.txt")));
     }
 
+    [Fact]
+    public async Task EnsureWorktreeAsync_WritesRelativeForwardGitdir()
+    {
+        // Act
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 201, "main");
+
+        // Assert
+        var gitFile = Path.Combine(wtPath, ".git");
+        Assert.True(File.Exists(gitFile));
+
+        var content = (await File.ReadAllTextAsync(gitFile)).Trim();
+        Assert.StartsWith("gitdir: ../", content);
+        Assert.DoesNotContain(":\\", content);
+        Assert.DoesNotContain(":/", content);
+        Assert.EndsWith(".git/worktrees/task-201", content);
+    }
+
+    [Fact]
+    public async Task EnsureWorktreeAsync_WritesRelativeReverseGitdir()
+    {
+        // Act
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 202, "main");
+
+        // Assert
+        var reverseGitDir = Path.Combine(_repo.RepositoryPath, ".git", "worktrees", "task-202", "gitdir");
+        Assert.True(File.Exists(reverseGitDir));
+
+        var content = (await File.ReadAllTextAsync(reverseGitDir)).Trim();
+        Assert.StartsWith("../", content);
+        Assert.DoesNotContain(":\\", content);
+        Assert.DoesNotContain(":/", content);
+        Assert.Equal("../../../task-202/.git", content);
+
+        // Git commands from both worktree and canonical repo succeed
+        var wtBranch = await _runner.ExecuteAsync(wtPath, ["branch", "--show-current"]);
+        Assert.Equal("feature/task-202", wtBranch.StandardOutput.Trim());
+
+        var wtList = await _runner.ExecuteAsync(_repo.RepositoryPath, ["worktree", "list", "--porcelain"]);
+        Assert.Contains("task-202", wtList.StandardOutput);
+    }
+
+    [Fact]
+    public async Task EnsureWorktreeAsync_WhenAlreadyRegisteredWithAbsolutePointer_MigratesToRelative()
+    {
+        // Arrange
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 203, "main");
+        var gitFile = Path.Combine(wtPath, ".git");
+        var reverseGitDir = Path.Combine(_repo.RepositoryPath, ".git", "worktrees", "task-203", "gitdir");
+
+        // Overwrite both with synthetic absolute paths
+        var fakeAbsForward = "gitdir: C:/synthetic/abs/path/clone/.git/worktrees/task-203\n";
+        var fakeAbsReverse = "C:/synthetic/abs/path/wks/task-203/.git\n";
+        File.SetAttributes(gitFile, FileAttributes.Normal);
+        File.SetAttributes(reverseGitDir, FileAttributes.Normal);
+        await File.WriteAllTextAsync(gitFile, fakeAbsForward);
+        await File.WriteAllTextAsync(reverseGitDir, fakeAbsReverse);
+
+        // Act: Re-run EnsureWorktreeAsync (simulating already-registered worktree check)
+        var resultPath = await _manager.EnsureWorktreeAsync(_workspace, 203, "main");
+        Assert.Equal(wtPath, resultPath);
+
+        // Assert: Both forward and reverse pointers were migrated to relative
+        var migratedForward = (await File.ReadAllTextAsync(gitFile)).Trim();
+        Assert.StartsWith("gitdir: ../", migratedForward);
+        Assert.DoesNotContain("synthetic", migratedForward);
+
+        var migratedReverse = (await File.ReadAllTextAsync(reverseGitDir)).Trim();
+        Assert.Equal("../../../task-203/.git", migratedReverse);
+        Assert.DoesNotContain("synthetic", migratedReverse);
+    }
+
+    [Fact]
+    public async Task EnsureWorktreeRelativePathsAsync_HandlesWslUncPathsOnWindows()
+    {
+        // Arrange: Workspace configured with a POSIX WSL-like Ext4MirrorPath
+        var wslMetaMock = new Mock<IWslMetadataService>();
+        wslMetaMock.Setup(w => w.GetDefaultDistributionName()).Returns("Ubuntu");
+        wslMetaMock.Setup(w => w.GetDefaultUserName()).Returns("testuser");
+
+        var pathResolver = new WorkspacePathResolver(wslMetaMock.Object, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var customManager = new GitWorkspaceManager(
+            _runner,
+            pathResolver,
+            wslMetaMock.Object,
+            NullLogger<GitWorkspaceManager>.Instance);
+
+        var wslWorkspace = new Workspace
+        {
+            Id = 99,
+            Name = "WSL Test",
+            Ext4MirrorPath = "/home/testuser/.nightcodeforge/wks/99/clone",
+            RepositoryPath = _repo.RepositoryPath
+        };
+
+        // Act & Assert: Calling EnsureWorktreeRelativePathsAsync with nonexistent paths returns gracefully without throwing
+        var ex = await Record.ExceptionAsync(() => customManager.EnsureWorktreeRelativePathsAsync(wslWorkspace, 999));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public async Task GitCommands_SucceedInWorktreeWithRelativePointers()
+    {
+        // Arrange
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 205, "main");
+
+        // Act & Assert: Git status, branch, and log commands succeed without "fatal: not a git repository"
+        var status = await _runner.ExecuteAsync(wtPath, ["status", "--porcelain"]);
+        Assert.Equal(0, status.ExitCode);
+        Assert.DoesNotContain("fatal", status.StandardError, StringComparison.OrdinalIgnoreCase);
+
+        var branch = await _runner.ExecuteAsync(wtPath, ["branch", "-a"]);
+        Assert.Equal(0, branch.ExitCode);
+        Assert.Contains("feature/task-205", branch.StandardOutput);
+
+        var log = await _runner.ExecuteAsync(wtPath, ["log", "-1", "--oneline"]);
+        Assert.Equal(0, log.ExitCode);
+        Assert.Contains("Initial commit", log.StandardOutput);
+    }
+
+    [Fact]
+    public async Task EnsureWorktreeAsync_WithSiblingLayout_WritesFourDotDotsReverseGitdir()
+    {
+        // Arrange a repo in a folder named "clone" so GetWorktreePath uses sibling layout
+        var tempRoot = Path.Combine(Path.GetTempPath(), "ncf_sibling_test_" + Guid.NewGuid().ToString("N"));
+        var cloneDir = Path.Combine(tempRoot, "clone");
+        Directory.CreateDirectory(cloneDir);
+
+        try
+        {
+            using (var proc1 = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", "init -b main")
+            {
+                WorkingDirectory = cloneDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }))
+            {
+                proc1?.WaitForExit();
+            }
+
+            using (var proc2 = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", "commit --allow-empty -m init --no-verify")
+            {
+                WorkingDirectory = cloneDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }))
+            {
+                proc2?.WaitForExit();
+            }
+
+            var siblingWorkspace = new Workspace
+            {
+                Id = 88,
+                Name = "Sibling Workspace",
+                RepositoryPath = cloneDir,
+                DefaultBaseBranch = "main"
+            };
+
+            // Act
+            var wtPath = await _manager.EnsureWorktreeAsync(siblingWorkspace, 206, "main");
+
+            // Assert
+            var forwardContent = (await File.ReadAllTextAsync(Path.Combine(wtPath, ".git"))).Trim();
+            Assert.Equal("gitdir: ../clone/.git/worktrees/task-206", forwardContent);
+
+            var reverseGitDir = Path.Combine(cloneDir, ".git", "worktrees", "task-206", "gitdir");
+            Assert.True(File.Exists(reverseGitDir));
+            var reverseContent = (await File.ReadAllTextAsync(reverseGitDir)).Trim();
+            Assert.Equal("../../../../task-206/.git", reverseContent);
+
+            // Git operations succeed in both
+            var status = await _runner.ExecuteAsync(wtPath, ["status", "--porcelain"]);
+            Assert.Equal(0, status.ExitCode);
+        }
+        finally
+        {
+            TestGitRepository.DeleteDirectorySafe(tempRoot);
+        }
+    }
+
     public void Dispose()
     {
         _repo.Dispose();

@@ -14,6 +14,7 @@ public class StartupRecoveryTests : IDisposable
     private readonly InMemoryWorkspaceRepository _workspaceRepo;
     private readonly FakeGitCliRunner _gitCliRunner;
     private readonly FakeTaskJobQueue _jobQueue;
+    private readonly FakeGitWorkspaceManager _gitWorkspaceManager = new();
 
     public StartupRecoveryTests()
     {
@@ -32,6 +33,7 @@ public class StartupRecoveryTests : IDisposable
             _workspaceRepo,
             _taskRepo,
             _gitCliRunner,
+            _gitWorkspaceManager,
             pipelineProvider ?? new DefaultWorkflowPipelineProvider(),
             _jobQueue,
             new Moq.Mock<IWorkspacePathResolver>().Object,
@@ -208,6 +210,33 @@ public class StartupRecoveryTests : IDisposable
         var recovery = CreateRecoveryService();
 
         var exception = await Record.ExceptionAsync(() => recovery.ReconcileWorkspacesAsync());
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_NormalizesRelativePathsOncePerEligibleTask()
+    {
+        await _workspaceRepo.CreateAsync(new Workspace { Id = 7, Name = "Norm", RepositoryPath = _tempDir });
+        await _taskRepo.CreateAsync(new ForgeTask { Id = 701, WorkspaceId = 7, Status = TaskOverallStatus.Open });
+        await _taskRepo.CreateAsync(new ForgeTask { Id = 702, WorkspaceId = 7, Status = TaskOverallStatus.Ready });
+        await _taskRepo.CreateAsync(new ForgeTask { Id = 703, WorkspaceId = 7, Status = TaskOverallStatus.Closed });
+
+        await CreateRecoveryService().ReconcileWorkspacesAsync();
+
+        Assert.Equal(1, _gitWorkspaceManager.NormalizedTaskIds.Count(i => i == 701));
+        Assert.Equal(1, _gitWorkspaceManager.NormalizedTaskIds.Count(i => i == 702));
+        Assert.DoesNotContain(703, _gitWorkspaceManager.NormalizedTaskIds);
+    }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_NormalizationFailure_DoesNotAbortRecovery()
+    {
+        await _workspaceRepo.CreateAsync(new Workspace { Id = 8, Name = "Fail", RepositoryPath = _tempDir });
+        await _taskRepo.CreateAsync(new ForgeTask { Id = 801, WorkspaceId = 8, Status = TaskOverallStatus.Open });
+        _gitWorkspaceManager.NormalizeFailure = new IOException("boom");
+
+        var exception = await Record.ExceptionAsync(() => CreateRecoveryService().ReconcileWorkspacesAsync());
+
         Assert.Null(exception);
     }
 }

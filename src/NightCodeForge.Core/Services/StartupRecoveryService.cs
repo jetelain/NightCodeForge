@@ -17,6 +17,7 @@ public class StartupRecoveryService : IStartupRecoveryService
     private readonly IWorkspaceRepository _workspaceRepository;
     private readonly ITaskRepository _taskRepository;
     private readonly IGitCliRunner _gitCliRunner;
+    private readonly IGitWorkspaceManager _gitWorkspaceManager;
     private readonly IWorkflowPipelineProvider _pipelineProvider;
     private readonly ITaskJobQueue _jobQueue;
     private readonly IWorkspacePathResolver _pathResolver;
@@ -32,6 +33,7 @@ public class StartupRecoveryService : IStartupRecoveryService
         IWorkspaceRepository workspaceRepository,
         ITaskRepository taskRepository,
         IGitCliRunner gitCliRunner,
+        IGitWorkspaceManager gitWorkspaceManager,
         IWorkflowPipelineProvider pipelineProvider,
         ITaskJobQueue jobQueue,
         IWorkspacePathResolver pathResolver,
@@ -41,6 +43,7 @@ public class StartupRecoveryService : IStartupRecoveryService
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
+        _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
         _pipelineProvider = pipelineProvider ?? throw new ArgumentNullException(nameof(pipelineProvider));
         _jobQueue = jobQueue ?? throw new ArgumentNullException(nameof(jobQueue));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
@@ -86,10 +89,41 @@ public class StartupRecoveryService : IStartupRecoveryService
 
             // 3. Discover and rescue active agent worktrees ONLY (clone and host repo are strictly untouched)
             var worktreesToRescue = await GetWorktreesToRescueAsync(workspace, cancellationToken);
+            var taskIdsToNormalize = new HashSet<int>();
             foreach (var worktreePath in worktreesToRescue)
             {
                 PurgeStaleGitLocks(worktreePath, workspace.Id);
                 await RescueUncommittedChangesAsync(worktreePath, cancellationToken);
+
+                if (TryParseTaskIdFromWorktreePath(worktreePath, out var rescuedTaskId))
+                {
+                    taskIdsToNormalize.Add(rescuedTaskId);
+                }
+            }
+
+            // Also ensure all tasks that may own a worktree have relative paths verified
+            if (workspace.Id > 0)
+            {
+                var workspaceTasks = await _taskRepository.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
+                foreach (var task in workspaceTasks.Where(t => t.Status is TaskOverallStatus.Open
+                                                                or TaskOverallStatus.Reviewed
+                                                                or TaskOverallStatus.Implemented
+                                                                or TaskOverallStatus.Ready))
+                {
+                    taskIdsToNormalize.Add(task.Id);
+                }
+            }
+
+            foreach (var taskId in taskIdsToNormalize)
+            {
+                try
+                {
+                    await _gitWorkspaceManager.EnsureWorktreeRelativePathsAsync(workspace, taskId, cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "Failed to normalize relative worktree paths for Workspace #{WorkspaceId} Task #{TaskId}", workspace.Id, taskId);
+                }
             }
         }
 
@@ -249,6 +283,17 @@ public class StartupRecoveryService : IStartupRecoveryService
         }
 
         _logger.LogInformation("Startup workspace reconciliation completed. Reconciled {Count} active tasks.", reconciledCount);
+    }
+
+    private const string TaskWorktreeDirectoryPattern = @"^task-(\d+)$";
+
+    private static bool TryParseTaskIdFromWorktreePath(string worktreePath, out int taskId)
+    {
+        taskId = 0;
+        var trimmed = worktreePath.Replace('\\', '/').TrimEnd('/');
+        var leaf = trimmed[(trimmed.LastIndexOf('/') + 1)..];
+        var match = System.Text.RegularExpressions.Regex.Match(leaf, TaskWorktreeDirectoryPattern);
+        return match.Success && int.TryParse(match.Groups[1].Value, out taskId);
     }
 
     private void PurgeStaleGitLocks(string repoPath, int workspaceId)

@@ -83,6 +83,23 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
 
         var effectiveTaskId = taskId is > 0 ? taskId : null;
 
+        // Normalization does blocking file I/O: run it only when a new (non-bare-host) environment
+        // is about to be created, not on every cached lookup.
+        if (effectiveTaskId.HasValue
+            && workspace.ExecutionMode != ExecutionMode.BareHost
+            && !_cachedEnvironments.ContainsKey((workspace.Id, securityTier, effectiveTaskId)))
+        {
+            try
+            {
+                _gitWorkspaceManager.EnsureWorktreeRelativePathsAsync(workspace, effectiveTaskId.Value).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _containerLogger.LogWarning(ex, "Failed to normalize relative worktree paths for Workspace #{WorkspaceId} Task #{TaskId}",
+                    workspace.Id, effectiveTaskId.Value);
+            }
+        }
+
         return workspace.ExecutionMode switch
         {
             ExecutionMode.BareHost => _bareHost,

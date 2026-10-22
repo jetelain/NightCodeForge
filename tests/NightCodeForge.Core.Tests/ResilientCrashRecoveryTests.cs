@@ -55,6 +55,7 @@ public class ResilientCrashRecoveryTests
             _workspaceRepo,
             _taskRepo,
             _gitCliRunner,
+            new FakeGitWorkspaceManager(),
             pipelineProvider,
             _jobQueue,
             new Mock<IWorkspacePathResolver>().Object,
