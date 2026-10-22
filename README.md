@@ -84,11 +84,14 @@ NightCodeForge eliminates idle GPU time through **automatic Git checkpointing an
 Preparing an existing repository (e.g. .NET, Node.js, Python, Rust, Go) for NightCodeForge is 100% deterministic and takes seconds with the `ncf` global tool:
 
 ```bash
-# Install the tool globally from NuGet
-dotnet tool install --global NightCodeForge.Cli
+# 1. Complete Environment Setup (WSL2, Docker, .NET 10 SDK, Web, and CLI):
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 
-# Or build and install locally from source in this repository:
+# Or build and install CLI tool locally from source in this repository:
 .\install-cli.ps1
+
+# Or publish and install Web application locally:
+.\publish.ps1
 
 # In your target repository:
 ncf init        # Deterministic preparation (idempotent)

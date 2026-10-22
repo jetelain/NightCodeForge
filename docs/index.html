@@ -1,0 +1,1717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NightCodeForge — Let your GPU code for you overnight</title>
+  <meta name="description" content="NightCodeForge is an asynchronous developer queue and multi-agent orchestrator for local LLMs with non-blocking Git context switching." />
+  <meta name="keywords" content="local LLM, AI coding agent, Ollama, vLLM, GPU scheduling, developer queue, C#, .NET 10, multi-agent" />
+  <meta name="author" content="Julien & NightCodeForge Contributors" />
+
+  <!-- Open Graph / Social Media -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="NightCodeForge — Let your GPU code for you overnight" />
+  <meta property="og:description" content="Asynchronous developer queue and multi-agent orchestrator tailored for local LLMs. Eliminates GPU idle blocks with non-blocking Git context switching." />
+  <meta property="og:url" content="https://github.com/jetelain/NightCodeForge" />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' fill='none'%3E%3Crect width='64' height='64' rx='16' fill='%230f1117'/%3E%3Crect x='2' y='2' width='60' height='60' rx='14' stroke='%232d3345' stroke-width='2'/%3E%3Cpath d='M25.75 11.43 A 21 21 0 1 0 49.13 40.66 A 19 19 0 0 1 25.75 11.43 Z' fill='%23f59e0b'/%3E%3Cpath d='M49 20 L50.2 23.5 L53.7 24.5 L50.2 25.5 L49 29 L47.8 25.5 L44.3 24.5 L47.8 23.5 Z' fill='%2338bdf8'/%3E%3C/svg%3E" />
+
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ==========================================================================
+       Obsidian Dark Design System (aligned with NightCodeForge theme)
+       ========================================================================== */
+    :root {
+      --bg-canvas: #07090e;
+      --bg-primary: #0b0d13;
+      --bg-surface: #12151f;
+      --bg-card: #181b26;
+      --bg-card-hover: #1f2333;
+      --bg-glass: rgba(18, 21, 31, 0.75);
+      --bg-glass-card: rgba(24, 27, 38, 0.65);
+
+      --border-subtle: #232838;
+      --border-medium: #2f364c;
+      --border-focus: #6366f1;
+      --border-accent: rgba(99, 102, 241, 0.35);
+
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --text-inverse: #0b0d13;
+
+      --accent-indigo: #6366f1;
+      --accent-indigo-light: #818cf8;
+      --accent-indigo-glow: rgba(99, 102, 241, 0.25);
+      --accent-teal: #14b8a6;
+      --accent-teal-glow: rgba(20, 184, 166, 0.2);
+      --accent-amber: #f59e0b;
+      --accent-amber-glow: rgba(245, 158, 11, 0.2);
+      --accent-crimson: #ef4444;
+      --accent-purple: #a855f7;
+      --accent-cyan: #06b6d4;
+
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 16px;
+      --radius-xl: 24px;
+      --radius-full: 9999px;
+
+      --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.4);
+      --shadow-md: 0 6px 16px -2px rgba(0, 0, 0, 0.6);
+      --shadow-lg: 0 16px 36px -6px rgba(0, 0, 0, 0.75);
+      --shadow-glow: 0 0 40px -10px rgba(99, 102, 241, 0.35);
+
+      --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+      --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+      --transition-smooth: 400ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      background-color: var(--bg-canvas);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      overflow-x: hidden;
+      background: radial-gradient(circle at 50% 0%, #151928 0%, var(--bg-canvas) 60%);
+      min-height: 100vh;
+    }
+
+    /* Background Ambient Gradients */
+    .ambient-glow {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 1000px;
+      height: 550px;
+      background: radial-gradient(ellipse at 50% 20%, rgba(99, 102, 241, 0.18), rgba(20, 184, 166, 0.08) 50%, transparent 75%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .ambient-secondary {
+      position: absolute;
+      top: 1200px;
+      right: -200px;
+      width: 700px;
+      height: 700px;
+      background: radial-gradient(circle, rgba(168, 85, 247, 0.1), transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Container */
+    .container {
+      width: 100%;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ==========================================================================
+       Navigation Bar
+       ========================================================================== */
+    .navbar {
+      position: sticky;
+      top: 0;
+      width: 100%;
+      z-index: 100;
+      background-color: rgba(11, 13, 19, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border-subtle);
+      transition: background-color var(--transition-normal);
+    }
+
+    .nav-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 72px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      text-decoration: none;
+      color: var(--text-primary);
+      font-weight: 700;
+      font-size: 1.25rem;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-logo-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-md);
+      background: linear-gradient(135deg, #181b26, #252a3d);
+      border: 1px solid var(--border-medium);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
+    }
+
+    .brand-title {
+      display: flex;
+      align-items: center;
+      gap: 0.2rem;
+    }
+
+    .brand-title span.forge {
+      color: var(--accent-indigo-light);
+      font-weight: 800;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      list-style: none;
+    }
+
+    .nav-link {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.92rem;
+      font-weight: 500;
+      transition: color var(--transition-fast);
+      position: relative;
+      padding: 0.25rem 0;
+    }
+
+    .nav-link:hover {
+      color: var(--text-primary);
+    }
+
+    .nav-link:hover::after {
+      content: '';
+      position: absolute;
+      bottom: -2px;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent-indigo), var(--accent-teal));
+      border-radius: var(--radius-full);
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.65rem 1.25rem;
+      border-radius: var(--radius-md);
+      font-size: 0.92rem;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      transition: all var(--transition-normal);
+      border: 1px solid transparent;
+      line-height: 1.4;
+      font-family: inherit;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent-indigo) 0%, #4f46e5 100%);
+      color: #ffffff;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #7175f5 0%, #4338ca 100%);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.55);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: var(--bg-card);
+      color: var(--text-primary);
+      border: 1px solid var(--border-medium);
+    }
+
+    .btn-secondary:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--text-muted);
+      transform: translateY(-1px);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .btn-ghost:hover {
+      color: var(--text-primary);
+      background: var(--bg-card);
+      border-color: var(--border-medium);
+    }
+
+    .btn-sm {
+      padding: 0.4rem 0.85rem;
+      font-size: 0.84rem;
+      border-radius: var(--radius-sm);
+    }
+
+    /* ==========================================================================
+       Hero Section
+       ========================================================================== */
+    .hero {
+      padding: 5rem 0 4rem;
+      text-align: center;
+      position: relative;
+    }
+
+    .status-badge-wrapper {
+      display: inline-flex;
+      margin-bottom: 1.75rem;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.35rem 0.95rem;
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      border-radius: var(--radius-full);
+      color: #fde68a;
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--accent-amber);
+      box-shadow: 0 0 10px var(--accent-amber);
+      animation: pulse-dot 2s infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    .hero-title {
+      font-size: clamp(2.4rem, 5.5vw, 4.2rem);
+      font-weight: 800;
+      letter-spacing: -0.035em;
+      line-height: 1.15;
+      margin-bottom: 1.5rem;
+      max-width: 960px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .gradient-text {
+      background: linear-gradient(135deg, #ffffff 30%, #a5b4fc 70%, #38bdf8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: inline-block;
+    }
+
+    .hero-subtitle {
+      font-size: clamp(1.05rem, 2vw, 1.25rem);
+      color: var(--text-secondary);
+      max-width: 760px;
+      margin: 0 auto 2.5rem;
+      font-weight: 400;
+      line-height: 1.65;
+    }
+
+    .hero-cta {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .pre-release-notice {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      background: rgba(18, 21, 31, 0.7);
+      padding: 0.5rem 1rem;
+      border-radius: var(--radius-full);
+      border: 1px dashed var(--border-subtle);
+    }
+
+    /* ==========================================================================
+       Interactive Terminal / Showcase Component
+       ========================================================================== */
+    .showcase-wrapper {
+      margin-top: 3.5rem;
+      max-width: 1000px;
+      margin-left: auto;
+      margin-right: auto;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-medium);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg), var(--shadow-glow);
+      overflow: hidden;
+      text-align: left;
+    }
+
+    .terminal-header {
+      background: #0d0f17;
+      padding: 0.85rem 1.25rem;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .terminal-dots {
+      display: flex;
+      gap: 0.45rem;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+    }
+
+    .dot-red { background: #ef4444; }
+    .dot-yellow { background: #f59e0b; }
+    .dot-green { background: #10b981; }
+
+    .terminal-title {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .terminal-status-pill {
+      font-family: var(--font-mono);
+      font-size: 0.74rem;
+      padding: 0.2rem 0.55rem;
+      border-radius: var(--radius-sm);
+      background: rgba(20, 184, 166, 0.15);
+      color: #5eead4;
+      border: 1px solid rgba(20, 184, 166, 0.3);
+    }
+
+    .showcase-content {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      divide-x: 1px solid var(--border-subtle);
+    }
+
+    @media (max-width: 840px) {
+      .showcase-content {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .showcase-col {
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .showcase-col:first-child {
+      border-right: 1px solid var(--border-subtle);
+      background: rgba(11, 13, 19, 0.4);
+    }
+
+    .col-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.25rem;
+    }
+
+    .col-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+
+    .queue-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 1rem;
+      transition: all var(--transition-normal);
+    }
+
+    .queue-card.active {
+      border-color: var(--border-accent);
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(24, 27, 38, 0.95));
+      box-shadow: 0 0 20px rgba(99, 102, 241, 0.15);
+    }
+
+    .queue-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.5rem;
+    }
+
+    .task-id {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--accent-indigo-light);
+    }
+
+    .stage-badge {
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 0.15rem 0.5rem;
+      border-radius: var(--radius-sm);
+    }
+
+    .badge-review { background: rgba(99, 102, 241, 0.15); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.3); }
+    .badge-code { background: rgba(20, 184, 166, 0.15); color: #5eead4; border: 1px solid rgba(20, 184, 166, 0.3); }
+    .badge-waiting { background: rgba(245, 158, 11, 0.15); color: #fde68a; border: 1px solid rgba(245, 158, 11, 0.3); }
+
+    .task-name {
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 0.4rem;
+    }
+
+    .task-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      font-size: 0.76rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    /* Terminal Console Live Stream */
+    .console-body {
+      background: #090a10;
+      border-radius: var(--radius-md);
+      padding: 1rem;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      color: #cbd5e1;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .log-line {
+      display: flex;
+      gap: 0.5rem;
+      line-height: 1.45;
+    }
+
+    .log-time { color: var(--text-muted); }
+    .log-tag-gpu { color: #38bdf8; font-weight: 600; }
+    .log-tag-git { color: #f59e0b; font-weight: 600; }
+    .log-tag-agent { color: #a855f7; font-weight: 600; }
+    .log-tag-free { color: #10b981; font-weight: 600; }
+
+    /* ==========================================================================
+       The Core Problem & Solution (The "Why")
+       ========================================================================== */
+    .section {
+      padding: 6rem 0;
+      position: relative;
+    }
+
+    .section-header {
+      text-align: center;
+      max-width: 760px;
+      margin: 0 auto 3.5rem;
+    }
+
+    .section-eyebrow {
+      font-size: 0.84rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent-indigo-light);
+      margin-bottom: 0.75rem;
+      display: block;
+    }
+
+    .section-title {
+      font-size: clamp(2rem, 3.5vw, 2.75rem);
+      font-weight: 800;
+      letter-spacing: -0.025em;
+      line-height: 1.2;
+      margin-bottom: 1rem;
+    }
+
+    .section-desc {
+      color: var(--text-secondary);
+      font-size: 1.05rem;
+    }
+
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+    }
+
+    @media (max-width: 768px) {
+      .comparison-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .comparison-card {
+      background: var(--bg-surface);
+      border-radius: var(--radius-lg);
+      padding: 2.25rem;
+      border: 1px solid var(--border-subtle);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .comparison-card.problem {
+      border-top: 3px solid var(--accent-crimson);
+    }
+
+    .comparison-card.solution {
+      border-top: 3px solid var(--accent-teal);
+      background: linear-gradient(180deg, rgba(20, 184, 166, 0.04) 0%, var(--bg-surface) 100%);
+      box-shadow: 0 0 30px rgba(20, 184, 166, 0.08);
+    }
+
+    .card-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.25rem 0.65rem;
+      border-radius: var(--radius-full);
+      margin-bottom: 1.25rem;
+    }
+
+    .badge-problem { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
+    .badge-solution { background: rgba(20, 184, 166, 0.15); color: #5eead4; }
+
+    .comparison-card h3 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      letter-spacing: -0.01em;
+    }
+
+    .comparison-card p {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .flow-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 0.9rem;
+    }
+
+    .flow-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    .step-icon {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 700;
+      margin-top: 0.1rem;
+    }
+
+    .step-icon.neg { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+    .step-icon.pos { background: rgba(20, 184, 166, 0.2); color: #5eead4; }
+
+    /* ==========================================================================
+       Features Matrix (Grid)
+       ========================================================================== */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .feature-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 1.75rem;
+      transition: all var(--transition-normal);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    .feature-card:hover {
+      border-color: var(--border-accent);
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-md), 0 0 25px rgba(99, 102, 241, 0.12);
+    }
+
+    .feature-icon-wrapper {
+      width: 48px;
+      height: 48px;
+      border-radius: var(--radius-md);
+      background: var(--bg-card);
+      border: 1px solid var(--border-medium);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .feature-card h3 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-bottom: 0.6rem;
+      letter-spacing: -0.01em;
+    }
+
+    .feature-card p {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      line-height: 1.55;
+      margin-bottom: 1.25rem;
+      flex-grow: 1;
+    }
+
+    .feature-tag {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    /* ==========================================================================
+       Interactive Architecture & Workflow Tabs
+       ========================================================================== */
+    .interactive-box {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-medium);
+      border-radius: var(--radius-xl);
+      overflow: hidden;
+      box-shadow: var(--shadow-lg);
+    }
+
+    .tabs-header {
+      display: flex;
+      background: var(--bg-primary);
+      border-bottom: 1px solid var(--border-subtle);
+      overflow-x: auto;
+    }
+
+    .tab-btn {
+      padding: 1.1rem 1.75rem;
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 0.92rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      border-bottom: 2px solid transparent;
+      transition: all var(--transition-fast);
+      white-space: nowrap;
+      font-family: inherit;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .tab-btn.active {
+      color: var(--text-primary);
+      border-bottom-color: var(--accent-indigo);
+      background: var(--bg-surface);
+    }
+
+    .tab-panel {
+      padding: 2.5rem;
+      display: none;
+    }
+
+    .tab-panel.active {
+      display: block;
+      animation: fadeIn 300ms ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Workflow Diagram */
+    .pipeline-diagram {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+      position: relative;
+    }
+
+    @media (max-width: 860px) {
+      .pipeline-diagram {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .stage-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .stage-number {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--accent-indigo-light);
+      text-transform: uppercase;
+    }
+
+    .stage-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .stage-desc {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    .stage-pill {
+      margin-top: auto;
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+      padding: 0.25rem 0.5rem;
+      border-radius: var(--radius-sm);
+      background: var(--bg-input);
+      color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+    }
+
+    /* ==========================================================================
+       Current State & Roadmap
+       ========================================================================== */
+    .status-highlight-box {
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(18, 21, 31, 0.95) 100%);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      border-radius: var(--radius-lg);
+      padding: 2rem;
+      margin-bottom: 2.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1.75rem;
+    }
+
+    @media (max-width: 768px) {
+      .status-highlight-box {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+
+    .status-highlight-icon {
+      font-size: 2.5rem;
+      flex-shrink: 0;
+    }
+
+    .status-highlight-content h3 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fef08a;
+      margin-bottom: 0.4rem;
+    }
+
+    .status-highlight-content p {
+      font-size: 0.94rem;
+      color: var(--text-secondary);
+      line-height: 1.55;
+    }
+
+    .roadmap-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.25rem;
+    }
+
+    .roadmap-item {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 1.25rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.85rem;
+    }
+
+    .roadmap-item.completed {
+      border-left: 3px solid var(--accent-teal);
+    }
+
+    .roadmap-item.in-progress {
+      border-left: 3px solid var(--accent-amber);
+      background: linear-gradient(90deg, rgba(245, 158, 11, 0.05), var(--bg-surface));
+    }
+
+    .roadmap-item.upcoming {
+      border-left: 3px solid var(--text-muted);
+      opacity: 0.8;
+    }
+
+    .roadmap-icon {
+      font-size: 1.1rem;
+      margin-top: 0.1rem;
+    }
+
+    .roadmap-text h4 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin-bottom: 0.2rem;
+    }
+
+    .roadmap-text p {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+    }
+
+    /* CLI & Source Code Quickstart Box */
+    .quickstart-box {
+      margin-top: 3rem;
+      background: #090b10;
+      border: 1px solid var(--border-medium);
+      border-radius: var(--radius-lg);
+      padding: 1.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .quickstart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .quickstart-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .code-block-wrapper {
+      position: relative;
+      background: #0f1118;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 1rem 1.25rem;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: #e2e8f0;
+      overflow-x: auto;
+      line-height: 1.7;
+    }
+
+    .code-comment { color: var(--text-muted); }
+    .code-cmd { color: #5eead4; }
+
+    .copy-btn {
+      position: absolute;
+      top: 0.75rem;
+      right: 0.75rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      border-radius: var(--radius-sm);
+      padding: 0.3rem 0.65rem;
+      font-size: 0.75rem;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .copy-btn:hover {
+      color: var(--text-primary);
+      background: var(--bg-card-hover);
+      border-color: var(--border-medium);
+    }
+
+    /* ==========================================================================
+       Footer
+       ========================================================================== */
+    .footer {
+      border-top: 1px solid var(--border-subtle);
+      background-color: var(--bg-primary);
+      padding: 4rem 0 2rem;
+      margin-top: 4rem;
+    }
+
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr;
+      gap: 3rem;
+      margin-bottom: 3rem;
+    }
+
+    @media (max-width: 768px) {
+      .footer-grid {
+        grid-template-columns: 1fr;
+        gap: 2rem;
+      }
+    }
+
+    .footer-brand p {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      margin-top: 0.75rem;
+      max-width: 360px;
+    }
+
+    .footer-col h4 {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-primary);
+      margin-bottom: 1rem;
+    }
+
+    .footer-links {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    .footer-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.88rem;
+      transition: color var(--transition-fast);
+    }
+
+    .footer-links a:hover {
+      color: var(--accent-indigo-light);
+    }
+
+    .footer-bottom {
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+      color: var(--text-muted);
+      font-size: 0.82rem;
+    }
+
+    /* SVG Icon styles */
+    .icon {
+      width: 1em;
+      height: 1em;
+      vertical-align: -0.125em;
+      fill: currentColor;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Background decorative glows -->
+  <div class="ambient-glow" aria-hidden="true"></div>
+  <div class="ambient-secondary" aria-hidden="true"></div>
+
+  <!-- Navigation Bar -->
+  <header class="navbar">
+    <div class="container nav-container">
+      <a href="#" class="brand" id="nav-brand" aria-label="NightCodeForge Homepage">
+        <div class="brand-logo-icon">
+          <!-- Inline Logo SVG -->
+          <svg width="22" height="22" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M25.75 11.43 A 21 21 0 1 0 49.13 40.66 A 19 19 0 0 1 25.75 11.43 Z" fill="url(#nav-moon)"/>
+            <path d="M49 20 L50.2 23.5 L53.7 24.5 L50.2 25.5 L49 29 L47.8 25.5 L44.3 24.5 L47.8 23.5 Z" fill="#38bdf8"/>
+            <defs>
+              <linearGradient id="nav-moon" x1="10" y1="10" x2="48" y2="54" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#fef08a"/>
+                <stop offset="0.5" stop-color="#f59e0b"/>
+                <stop offset="1" stop-color="#d97706"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div class="brand-title">
+          <span>NightCode</span><span class="forge">Forge</span>
+        </div>
+      </a>
+
+      <nav aria-label="Main Navigation">
+        <ul class="nav-links">
+          <li><a href="#overview" class="nav-link" id="nav-overview">Overview</a></li>
+          <li><a href="#how-it-works" class="nav-link" id="nav-how-it-works">How It Works</a></li>
+          <li><a href="#features" class="nav-link" id="nav-features">Features</a></li>
+          <li><a href="#architecture" class="nav-link" id="nav-architecture">Architecture</a></li>
+          <li><a href="#status" class="nav-link" id="nav-status">Current Status</a></li>
+        </ul>
+      </nav>
+
+      <div class="nav-actions">
+        <a href="https://github.com/jetelain/NightCodeForge" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm" id="btn-github-nav">
+          <svg class="icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          <span>GitHub</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero" id="overview">
+    <div class="container">
+      <div class="status-badge-wrapper">
+        <div class="status-badge" id="hero-status-badge">
+          <span class="status-dot"></span>
+          <span>In Active Development • Pre-release Preview</span>
+        </div>
+      </div>
+
+      <h1 class="hero-title">
+        Let your GPU code for you <span class="gradient-text">overnight</span>.
+      </h1>
+
+      <p class="hero-subtitle">
+        An asynchronous developer queue and multi-agent orchestrator built specifically for local LLMs.
+        Eliminates GPU idle stalls by automatically checkpointing Git state and context-switching tasks when human input is requested.
+      </p>
+
+      <div class="hero-cta">
+        <a href="https://github.com/jetelain/NightCodeForge" target="_blank" rel="noopener noreferrer" class="btn btn-primary" id="btn-hero-github">
+          <svg class="icon" viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          <span>View on GitHub</span>
+        </a>
+        <a href="#architecture" class="btn btn-secondary" id="btn-hero-learn">
+          <span>Explore Architecture</span>
+          <span>&darr;</span>
+        </a>
+      </div>
+
+      <div class="pre-release-notice">
+        <span>📦</span>
+        <span>Public downloads and NuGet binaries are currently in preparation. You can build from source today.</span>
+      </div>
+
+      <!-- Live Mockup / Visual Terminal Component -->
+      <div class="showcase-wrapper" id="showcase-terminal">
+        <div class="terminal-header">
+          <div class="terminal-dots">
+            <span class="dot dot-red"></span>
+            <span class="dot dot-yellow"></span>
+            <span class="dot dot-green"></span>
+          </div>
+          <div class="terminal-title">
+            <span>nightcodeforge-worker: hangfire-inference-1</span>
+          </div>
+          <div class="terminal-status-pill">
+            <span>WorkerCount = 1 • VRAM Safe</span>
+          </div>
+        </div>
+
+        <div class="showcase-content">
+          <!-- Active Task Column -->
+          <div class="showcase-col">
+            <div class="col-header">
+              <span class="col-title">🗂️ Task Backlog &amp; Status</span>
+              <span style="font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono);">DAG Active</span>
+            </div>
+
+            <!-- Task 1 (Active) -->
+            <div class="queue-card active">
+              <div class="queue-card-header">
+                <span class="task-id">#TASK-104</span>
+                <span class="stage-badge badge-code">Stage 2: Implementation</span>
+              </div>
+              <div class="task-name">Add Container ICU dynamic timeouts</div>
+              <div class="task-meta">
+                <span>Branch: feature/task-104</span>
+                <span>•</span>
+                <span>Crucible Agent</span>
+              </div>
+            </div>
+
+            <!-- Task 2 (Blocked / Checkpointed) -->
+            <div class="queue-card">
+              <div class="queue-card-header">
+                <span class="task-id">#TASK-103</span>
+                <span class="stage-badge badge-waiting">Awaiting Human Input</span>
+              </div>
+              <div class="task-name">Refactor Auth token storage schema</div>
+              <div class="task-meta">
+                <span>Context Checkpointed (WIP commit saved)</span>
+              </div>
+            </div>
+
+            <!-- Task 3 (Queued) -->
+            <div class="queue-card">
+              <div class="queue-card-header">
+                <span class="task-id">#TASK-105</span>
+                <span class="stage-badge badge-review">Queued (Priority: Standard)</span>
+              </div>
+              <div class="task-name">Live Operations Telemetry Refinement</div>
+              <div class="task-meta">
+                <span>Depends on: #TASK-104</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Console Output Column -->
+          <div class="showcase-col">
+            <div class="col-header">
+              <span class="col-title">⚡ Real-time Context Switch Stream</span>
+              <span style="font-size:0.75rem; color:var(--accent-teal); font-family:var(--font-mono);">SignalR Stream</span>
+            </div>
+
+            <div class="console-body">
+              <div class="log-line">
+                <span class="log-time">02:14:10</span>
+                <span class="log-tag-agent">[Agent]</span>
+                <span>Prompting developer: "Should refresh tokens be single-use?"</span>
+              </div>
+              <div class="log-line">
+                <span class="log-time">02:14:11</span>
+                <span class="log-tag-git">[Git]</span>
+                <span>Checkpoint: git commit -m "WIP: Task 103" --no-verify</span>
+              </div>
+              <div class="log-line">
+                <span class="log-time">02:14:11</span>
+                <span class="log-tag-free">[Worker]</span>
+                <span>Saved agent state to DB. Freeing GPU worker immediately.</span>
+              </div>
+              <div class="log-line">
+                <span class="log-time">02:14:12</span>
+                <span class="log-tag-gpu">[Queue]</span>
+                <span>Dequeued Task 104 &rarr; Checked out feature/task-104</span>
+              </div>
+              <div class="log-line">
+                <span class="log-time">02:14:13</span>
+                <span class="log-tag-gpu">[OllamaRouter]</span>
+                <span>Target: Dedicated LAN GPU &bull; Model: qwen2.5-coder:32b</span>
+              </div>
+              <div class="log-line">
+                <span class="log-time">02:14:18</span>
+                <span class="log-tag-agent">[Crucible]</span>
+                <span>Executing: dotnet test --filter "Category!=Acceptance"</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Problem vs Solution Section -->
+  <section class="section" id="how-it-works">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-eyebrow">The Core Problem &amp; Breakthrough</span>
+        <h2 class="section-title">Zero Idle GPU Time. Continuous Engineering.</h2>
+        <p class="section-desc">
+          When running local models, hardware is strictly bounded by VRAM. Conventional coding agents freeze when asking questions, wasting hours of compute.
+        </p>
+      </div>
+
+      <div class="comparison-grid">
+        <!-- The Problem -->
+        <div class="comparison-card problem">
+          <div class="card-badge badge-problem">Conventional Agent Tools</div>
+          <h3>GPU Contention &amp; Idle Blocks</h3>
+          <p>
+            Local LLM inference requires dedicated VRAM. Running multiple agents concurrently causes VRAM thrashing and Out-Of-Memory (OOM) crashes.
+          </p>
+          <div class="flow-steps">
+            <div class="flow-step">
+              <span class="step-icon neg">&times;</span>
+              <span>Agent encounters an ambiguity and waits for a developer response.</span>
+            </div>
+            <div class="flow-step">
+              <span class="step-icon neg">&times;</span>
+              <span>The background process blocks and retains GPU allocation all night.</span>
+            </div>
+            <div class="flow-step">
+              <span class="step-icon neg">&times;</span>
+              <span>Remaining backlog tasks are completely stalled, wasting valuable compute.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- The Solution -->
+        <div class="comparison-card solution">
+          <div class="card-badge badge-solution">The NightCodeForge Approach</div>
+          <h3>Non-Blocking Git Checkpointing</h3>
+          <p>
+            NightCodeForge decouples tasks from the GPU worker through native Git branching, instant WIP state commits, and priority rescheduling.
+          </p>
+          <div class="flow-steps">
+            <div class="flow-step">
+              <span class="step-icon pos">&check;</span>
+              <span>On question trigger, agent memory is serialized and uncommitted files saved via Git WIP.</span>
+            </div>
+            <div class="flow-step">
+              <span class="step-icon pos">&check;</span>
+              <span>Worker terminates immediately, freeing the GPU for the next backlog task.</span>
+            </div>
+            <div class="flow-step">
+              <span class="step-icon pos">&check;</span>
+              <span>When the developer replies, the task returns with <code>llm-urgent</code> priority.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Grid -->
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-eyebrow">Engineered For Quality</span>
+        <h2 class="section-title">Architectural Highlights</h2>
+        <p class="section-desc">
+          Designed from the ground up as a production-grade developer platform combining determinism with local LLM capabilities.
+        </p>
+      </div>
+
+      <div class="features-grid">
+        <!-- Feature 1 -->
+        <div class="feature-card">
+          <div class="feature-icon-wrapper">🛡️</div>
+          <h3>Strict VRAM Protection</h3>
+          <p>
+            A dedicated Hangfire inference queue enforces <code>WorkerCount = 1</code> across tasks, guaranteeing zero VRAM thrashing or OOM crashes on consumer and workstation GPUs.
+          </p>
+          <span class="feature-tag">Sequential Hardware Bounds</span>
+        </div>
+
+        <!-- Feature 2 -->
+        <div class="feature-card">
+          <div class="feature-icon-wrapper">🔀</div>
+          <h3>Native Git CLI Isolation</h3>
+          <p>
+            Direct execution via <code>CliWrap</code> on isolated <code>feature/task-{id}</code> branches. Zero reliance on brittle wrappers, with deterministic branch resets and squash merges.
+          </p>
+          <span class="feature-tag">Pure Git Subsystem</span>
+        </div>
+
+        <!-- Feature 3 -->
+        <div class="feature-card">
+          <div class="feature-icon-wrapper">🧩</div>
+          <h3>3-Agent Workflow Pipeline</h3>
+          <p>
+            Stage 1 reviews and prompts humans proactively before coding begins; Stage 2 handles implementation, test execution and repair; Stage 3 inspects live git diffs and fixes regressions.
+          </p>
+          <span class="feature-tag">Review &rarr; Code &rarr; Audit</span>
+        </div>
+
+        <!-- Feature 4 -->
+        <div class="feature-card">
+          <div class="feature-icon-wrapper">🔌</div>
+          <h3>Universal Agent Harnesses</h3>
+          <p>
+            Run in-process native C# agents via <strong>Crucible</strong>, run external agents via <strong>Pi JSON-RPC</strong>, or connect open coding agents via the <strong>Agent Client Protocol (ACP)</strong>.
+          </p>
+          <span class="feature-tag">Crucible • Pi • ACP</span>
+        </div>
+
+        <!-- Feature 5 -->
+        <div class="feature-card">
+          <div class="feature-icon-wrapper">🌐</div>
+          <h3>Dual-Compute with OllamaRouter</h3>
+          <p>
+            Route 95% of heavy backlog jobs to a dedicated high-VRAM LAN server while keeping your workstation GPU 100% responsive for real-time interactive ideation chat.
+          </p>
+          <span class="feature-tag">Local Host + LAN Server</span>
+        </div>
+
+        <!-- Feature 6 -->
+        <div class="feature-card">
+          <div class="feature-icon-wrapper">🚀</div>
+          <h3>Deterministic CLI Onboarding</h3>
+          <p>
+            The <code>ncf</code> CLI tool prepares repositories in seconds: merges gitignore, applies editorconfig, installs agent skills, and runs a 5-pillar project readiness audit.
+          </p>
+          <span class="feature-tag"><code>ncf init</code> &amp; <code>ncf audit</code></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Interactive Architecture Section -->
+  <section class="section" id="architecture">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-eyebrow">Deep Architecture</span>
+        <h2 class="section-title">Under The Hood</h2>
+        <p class="section-desc">
+          Explore the components powering NightCodeForge's autonomous workflow execution.
+        </p>
+      </div>
+
+      <div class="interactive-box">
+        <div class="tabs-header" role="tablist">
+          <button class="tab-btn active" id="tab-btn-pipeline" role="tab" aria-selected="true" aria-controls="panel-pipeline" onclick="switchTab('pipeline')">
+            <span>🧩 3-Stage Pipeline</span>
+          </button>
+          <button class="tab-btn" id="tab-btn-topology" role="tab" aria-selected="false" aria-controls="panel-topology" onclick="switchTab('topology')">
+            <span>🌐 Dual-Compute Topology</span>
+          </button>
+          <button class="tab-btn" id="tab-btn-stack" role="tab" aria-selected="false" aria-controls="panel-stack" onclick="switchTab('stack')">
+            <span>🛠️ Technology Stack</span>
+          </button>
+        </div>
+
+        <!-- Tab 1: Pipeline -->
+        <div class="tab-panel active" id="panel-pipeline" role="tabpanel">
+          <div class="pipeline-diagram">
+            <div class="stage-card">
+              <span class="stage-number">Stage 1</span>
+              <h3 class="stage-title">ForgeTask Review Agent</h3>
+              <p class="stage-desc">
+                Pre-inspects the codebase, clarifies ambiguities, and asks the human developer clarifying questions upfront before touching any code.
+              </p>
+              <div class="stage-pill">System Prompt: Clarity &amp; Alignment</div>
+            </div>
+
+            <div class="stage-card">
+              <span class="stage-number">Stage 2</span>
+              <h3 class="stage-title">Implementation Agent</h3>
+              <p class="stage-desc">
+                Receives the approved technical specification and developer answers, modifies code, runs compiler/build loops, executes tests, and iterates to green.
+              </p>
+              <div class="stage-pill">System Prompt: TDD &amp; Coding</div>
+            </div>
+
+            <div class="stage-card">
+              <span class="stage-number">Stage 3</span>
+              <h3 class="stage-title">Code Review &amp; Fixes</h3>
+              <p class="stage-desc">
+                Generates a live <code>git diff</code> against the base branch, evaluates against rigorous quality checklists, and applies corrective patches.
+              </p>
+              <div class="stage-pill">System Prompt: Security &amp; Diff Audit</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Topology -->
+        <div class="tab-panel" id="panel-topology" role="tabpanel">
+          <div style="background:var(--bg-card); border: 1px solid var(--border-subtle); border-radius:var(--radius-md); padding:2rem; line-height:1.7;">
+            <h3 style="font-size:1.2rem; margin-bottom:0.75rem;">100% Private, On-Premise Dual-Compute Architecture</h3>
+            <p style="color:var(--text-secondary); margin-bottom:1.5rem; font-size:0.95rem;">
+              Running local models doesn't mean your workstation has to grind to a halt. NightCodeForge integrates first-class with <a href="https://github.com/jetelain/OllamaRouter" target="_blank" rel="noopener noreferrer" style="color:var(--accent-indigo-light); text-decoration:underline;">OllamaRouter</a> to dynamically partition workloads:
+            </p>
+            <ul style="list-style:none; display:flex; flex-direction:column; gap:1rem; color:var(--text-secondary); font-size:0.92rem;">
+              <li style="display:flex; align-items:flex-start; gap:0.75rem;">
+                <span style="color:var(--accent-teal); font-weight:700;">&bull;</span>
+                <div><strong style="color:var(--text-primary);">Host GPU (Workstation):</strong> Powers real-time Ideation Chat and developer codebase exploration concurrently without waiting for the background queue.</div>
+              </li>
+              <li style="display:flex; align-items:flex-start; gap:0.75rem;">
+                <span style="color:var(--accent-indigo-light); font-weight:700;">&bull;</span>
+                <div><strong style="color:var(--text-primary);">Dedicated LAN GPU Server:</strong> Runs heavy, multi-turn coding and test-execution tasks with high-context models (e.g. Qwen 2.5 Coder 32B or DeepSeek R1).</div>
+              </li>
+              <li style="display:flex; align-items:flex-start; gap:0.75rem;">
+                <span style="color:var(--accent-amber); font-weight:700;">&bull;</span>
+                <div><strong style="color:var(--text-primary);">Optional Cloud Overflow:</strong> Allows zero-VRAM offline AI diagnostics and quick transcript audits when local compute is busy.</div>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Tab 3: Tech Stack -->
+        <div class="tab-panel" id="panel-stack" role="tabpanel">
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:1.25rem;">
+            <div style="background:var(--bg-card); padding:1.25rem; border-radius:var(--radius-md); border:1px solid var(--border-subtle);">
+              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-indigo-light); margin-bottom:0.25rem;">BACKEND &amp; ENGINE</div>
+              <div style="font-weight:700; font-size:1.05rem;">.NET 10 / C#</div>
+              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;">High performance, strict typing, cross-platform.</div>
+            </div>
+            <div style="background:var(--bg-card); padding:1.25rem; border-radius:var(--radius-md); border:1px solid var(--border-subtle);">
+              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-teal); margin-bottom:0.25rem;">UI &amp; TELEMETRY</div>
+              <div style="font-weight:700; font-size:1.05rem;">Blazor &amp; SignalR</div>
+              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;">Low-latency live streaming &amp; interactive dashboard.</div>
+            </div>
+            <div style="background:var(--bg-card); padding:1.25rem; border-radius:var(--radius-md); border:1px solid var(--border-subtle);">
+              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-amber); margin-bottom:0.25rem;">QUEUE SYSTEM</div>
+              <div style="font-weight:700; font-size:1.05rem;">Hangfire + SQLite</div>
+              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;">Single-worker priority queues (urgent vs standard).</div>
+            </div>
+            <div style="background:var(--bg-card); padding:1.25rem; border-radius:var(--radius-md); border:1px solid var(--border-subtle);">
+              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-purple); margin-bottom:0.25rem;">AI INTEGRATION</div>
+              <div style="font-weight:700; font-size:1.05rem;">Microsoft.Extensions.AI</div>
+              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;">Ollama, OpenAI-compatible, &amp; OllamaRouter.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Project State & Roadmap Section -->
+  <section class="section" id="status">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-eyebrow">Project Status</span>
+        <h2 class="section-title">Current State &amp; Availability</h2>
+        <p class="section-desc">
+          NightCodeForge is currently in active pre-release development. Here is exactly where the project stands today.
+        </p>
+      </div>
+
+      <!-- Prominent Notice about Availability -->
+      <div class="status-highlight-box" id="availability-notice">
+        <div class="status-highlight-icon">🚧</div>
+        <div class="status-highlight-content">
+          <h3>Pre-Release Phase — Not Yet Available for Public Download</h3>
+          <p>
+            NightCodeForge is advancing rapidly through core architectural phases. Pre-compiled binaries, packaged desktop installers, and public NuGet packages are currently in development and will be released once initial integration phases conclude. In the meantime, full source code is public and can be tested from GitHub.
+          </p>
+        </div>
+      </div>
+
+      <!-- Roadmap Grid -->
+      <div class="roadmap-list">
+        <div class="roadmap-item completed">
+          <span class="roadmap-icon">✅</span>
+          <div class="roadmap-text">
+            <h4>Core Orchestrator &amp; Engine</h4>
+            <p>Single-worker Hangfire queue, task DAG dependencies, and EF Core persistence.</p>
+          </div>
+        </div>
+
+        <div class="roadmap-item completed">
+          <span class="roadmap-icon">✅</span>
+          <div class="roadmap-text">
+            <h4>Native Git Context Switching</h4>
+            <p>CliWrap branch sandboxing, automatic WIP checkpointing, and safe diff handling.</p>
+          </div>
+        </div>
+
+        <div class="roadmap-item completed">
+          <span class="roadmap-icon">✅</span>
+          <div class="roadmap-text">
+            <h4>Interactive Web UI &amp; SignalR</h4>
+            <p>Blazor Server dashboard, live terminal stream, question inbox, and review room.</p>
+          </div>
+        </div>
+
+        <div class="roadmap-item completed">
+          <span class="roadmap-icon">✅</span>
+          <div class="roadmap-text">
+            <h4>Universal Harnesses &amp; CLI Tool</h4>
+            <p>Crucible C# harness, ACP protocol support, and the <code>ncf</code> preparation tool.</p>
+          </div>
+        </div>
+
+        <div class="roadmap-item in-progress">
+          <span class="roadmap-icon">🔄</span>
+          <div class="roadmap-text">
+            <h4>Phase 11: Container &amp; Hardening (Current)</h4>
+            <p>Dynamic tool timeouts, containerized ICU support, command transparency, and test expansion.</p>
+          </div>
+        </div>
+
+        <div class="roadmap-item upcoming">
+          <span class="roadmap-icon">⏳</span>
+          <div class="roadmap-text">
+            <h4>Public Distribution &amp; Installers (Next)</h4>
+            <p>Packaged standalone server binaries, NuGet global tools, and official download bundles.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quickstart for Developers -->
+      <div class="quickstart-box" id="quickstart">
+        <div class="quickstart-header">
+          <div class="quickstart-title">
+            <svg class="icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0114.25 15H1.75A1.75 1.75 0 010 13.25V2.75zm1.75-.25a.25.25 0 00-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 00.25-.25V2.75a.25.25 0 00-.25-.25H1.75zM7.25 8a.75.75 0 01-.22.53l-2.25 2.25a.75.75 0 01-1.06-1.06L5.44 8 3.72 6.28a.75.75 0 011.06-1.06l2.25 2.25c.141.14.22.331.22.53zm1.5 3.25a.75.75 0 010-1.5h3.5a.75.75 0 010 1.5h-3.5z"/></svg>
+            <span>Interested in testing the code? Build from source</span>
+          </div>
+          <span style="font-size:0.8rem; color:var(--text-muted);">Requires .NET 10 SDK &amp; Git</span>
+        </div>
+
+        <div class="code-block-wrapper">
+          <button class="copy-btn" id="btn-copy-code" onclick="copySnippet()" aria-label="Copy clone commands">
+            <span id="copy-text">Copy</span>
+          </button>
+          <pre id="code-snippet"><code><span class="code-comment"># Clone the repository</span>
+<span class="code-cmd">git clone https://github.com/jetelain/NightCodeForge.git</span>
+<span class="code-cmd">cd NightCodeForge</span>
+
+<span class="code-comment"># Build the solution (.NET 10)</span>
+<span class="code-cmd">dotnet build</span>
+
+<span class="code-comment"># Run tests</span>
+<span class="code-cmd">dotnet test --filter "Category!=Acceptance&amp;Category!=E2E"</span></code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div class="brand-title" style="font-size:1.15rem; font-weight:700;">
+            <span>🌙 NightCode</span><span class="forge" style="color:var(--accent-indigo-light); font-weight:800;">Forge</span>
+          </div>
+          <p>
+            An asynchronous developer queue and multi-agent orchestrator built specifically for local LLMs.
+            Zero idle GPU time with non-blocking Git context switching.
+          </p>
+        </div>
+
+        <div class="footer-col">
+          <h4>Project Links</h4>
+          <ul class="footer-links">
+            <li><a href="https://github.com/jetelain/NightCodeForge" target="_blank" rel="noopener noreferrer" id="footer-github-link">GitHub Repository</a></li>
+            <li><a href="https://github.com/jetelain/NightCodeForge/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener noreferrer">System Architecture</a></li>
+            <li><a href="https://github.com/jetelain/NightCodeForge/blob/main/docs/CRUCIBLE.md" target="_blank" rel="noopener noreferrer">Crucible Harness</a></li>
+            <li><a href="https://github.com/jetelain/NightCodeForge/blob/main/docs/PLAN.md" target="_blank" rel="noopener noreferrer">Roadmap Specification</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h4>Ecosystem</h4>
+          <ul class="footer-links">
+            <li><a href="https://github.com/jetelain/OllamaRouter" target="_blank" rel="noopener noreferrer">OllamaRouter Gateway</a></li>
+            <li><a href="https://agentclientprotocol.com/" target="_blank" rel="noopener noreferrer">Agent Client Protocol (ACP)</a></li>
+            <li><a href="https://github.com/jetelain/NightCodeForge/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT License</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <div>&copy; <span id="current-year">2026</span> NightCodeForge. Open source under the MIT License.</div>
+        <div>Built for the local AI engineering community.</div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Interactive JavaScript logic -->
+  <script>
+    // Set dynamic year in footer
+    document.getElementById('current-year').textContent = new Date().getFullYear();
+
+    // Tab switcher logic
+    function switchTab(tabId) {
+      const tabs = ['pipeline', 'topology', 'stack'];
+      tabs.forEach(t => {
+        const btn = document.getElementById('tab-btn-' + t);
+        const panel = document.getElementById('panel-' + t);
+        if (btn && panel) {
+          if (t === tabId) {
+            btn.classList.add('active');
+            btn.setAttribute('aria-selected', 'true');
+            panel.classList.add('active');
+          } else {
+            btn.classList.remove('active');
+            btn.setAttribute('aria-selected', 'false');
+            panel.classList.remove('active');
+          }
+        }
+      });
+    }
+
+    // Copy to clipboard helper
+    function copySnippet() {
+      const codeText = "git clone https://github.com/jetelain/NightCodeForge.git\ncd NightCodeForge\ndotnet build\ndotnet test --filter \"Category!=Acceptance&Category!=E2E\"";
+      navigator.clipboard.writeText(codeText).then(() => {
+        const copyTextEl = document.getElementById('copy-text');
+        copyTextEl.textContent = 'Copied!';
+        setTimeout(() => {
+          copyTextEl.textContent = 'Copy';
+        }, 2000);
+      }).catch(err => {
+        console.error('Clipboard copy failed: ', err);
+      });
+    }
+  </script>
+</body>
+</html>
