@@ -11,6 +11,7 @@ public static class WorkflowDefaults
     public const int DefaultTestTimeoutSeconds = 120;
     public const int DefaultFormatTimeoutSeconds = 120;
     public const int DefaultSastTimeoutSeconds = 180;
+    public const int MinimumBashToolTimeoutSeconds = 300;
     public const int ProcessTimeoutExitCode = 124;
     public const int DefaultOutputSummaryTruncationLength = 300;
     public const int MaxStageOutputChars = 32768;

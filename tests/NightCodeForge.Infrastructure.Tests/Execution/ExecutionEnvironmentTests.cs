@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
@@ -68,11 +69,11 @@ public class ExecutionEnvironmentTests
 
         var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options);
 
-        Assert.Contains(mounts, m => m.ContainerPath == "/root/.nuget/packages" && !m.IsReadOnly);
-        Assert.Contains(mounts, m => m.ContainerPath == "/root/.npm" && !m.IsReadOnly);
-        Assert.Contains(mounts, m => m.ContainerPath == "/root/.local/share/pnpm/store" && !m.IsReadOnly);
-        Assert.Contains(mounts, m => m.ContainerPath == "/root/.cache/uv" && !m.IsReadOnly);
-        Assert.Contains(mounts, m => m.ContainerPath == "/root/.m2/repository" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.ContainerPath == "/cache/nuget" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.ContainerPath == "/cache/npm" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.ContainerPath == "/cache/pnpm" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.ContainerPath == "/cache/uv" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.ContainerPath == "/cache/m2" && !m.IsReadOnly);
     }
 
     [Fact]
@@ -113,7 +114,7 @@ public class ExecutionEnvironmentTests
         Assert.Equal("run", args[0]);
         Assert.Equal("-d", args[1]);
         Assert.Contains("/home/wsluser/.nightcodeforge/wks/7:/workspace", args);
-        Assert.Contains("~/.nuget/packages:/root/.nuget/packages", args);
+        Assert.Contains("~/.nuget/packages:/cache/nuget", args);
         Assert.Contains("/usr/share/dotnet:/usr/share/dotnet:ro", args);
         Assert.Contains("-w", args);
         Assert.Contains("/workspace", args);
@@ -297,7 +298,8 @@ public class ExecutionEnvironmentTests
         var executor = new NightCodeForgeContainerExecutor(
             options,
             fakeRunner,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForgeContainerExecutor>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            new Mock<IHostUserIdentityResolver>().Object);
 
         executor.EnsureContainerRunning();
 
@@ -344,7 +346,8 @@ public class ExecutionEnvironmentTests
         var executor = new NightCodeForgeContainerExecutor(
             options,
             fakeRunner,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForgeContainerExecutor>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            new Mock<IHostUserIdentityResolver>().Object);
 
         executor.EnsureContainerRunning();
 

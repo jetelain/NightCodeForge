@@ -72,6 +72,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ILogger<Execution.TelemetryProcessRunner>>()));
         services.TryAddSingleton<IWslMetadataService, Execution.WslMetadataService>();
         services.TryAddSingleton<IHostSdkDiscoveryService, Execution.HostSdkDiscoveryService>();
+        services.TryAddSingleton<IHostUserIdentityResolver, Execution.HostUserIdentityResolver>();
         services.TryAddSingleton<IWorkspacePathResolver, Execution.WorkspacePathResolver>();
         services.TryAddSingleton<Execution.BareHostExecutionEnvironment>();
         services.TryAddSingleton<IExecutionEnvironment>(sp => sp.GetRequiredService<Execution.BareHostExecutionEnvironment>());

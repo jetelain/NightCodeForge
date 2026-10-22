@@ -1339,12 +1339,21 @@ public partial class CrucibleAgentHarness : IAgentHarness
             StandardStageIds.TaskReview or "stage-1" =>
                 "You are a Staff Software Architect & Requirements Investigator. 1. Thoroughly investigate the task requirements and inspect the codebase using 'read' and 'bash'. 2. MANDATORY FILE EDIT: Edit the task specification document on disk in docs/tasks/ using 'edit' or 'write' with your approved architecture, affected files, technical plan, and acceptance criteria. Your disk changes will be read back upon stage completion to update the task specification. 3. Gather all questions and ambiguities into a single 'ask' call using the question list, expecting all answers at once; follow-up asks are permitted only for newly discovered blockers. Do not guess. 4. Do not write production code.",
             StandardStageIds.Implementation or "stage-2" =>
-                "You are a Senior Software Engineer & TDD Practitioner. Implement clean, robust code according to the task specification in docs/tasks/ and the approved plan. Keep blast radius minimal. Run builds and tests incrementally with bash. Fix all compiler errors and test failures. If breaking blockers arise, call 'ask'.",
+                BuildImplementationDirective(),
             StandardStageIds.CodeReviewAndFix or "stage-3" =>
-                "You are a Principal Code Reviewer and Quality Gatekeeper. Review the git diff against the base branch. Compare against the specification in docs/tasks/ and the implementation claims. Apply precision polish directly using 'edit'. Rejection is strictly reserved for major tasks or missing features: invoke 'request_changes' or conclude with <request_changes>[feedback]</request_changes>.",
+                BuildReviewDirective(),
             _ => "Execute assigned engineering tasks diligently using canonical tools."
         };
     }
+
+    public static string BuildReviewDirective() =>
+        "You are a Principal Code Reviewer and Quality Gatekeeper. Review the git diff against the base branch. Compare against the specification in docs/tasks/ and the implementation claims. Apply precision polish directly using 'edit'. Rejection is strictly reserved for major tasks or missing features: invoke 'request_changes' or conclude with <request_changes>[feedback]</request_changes>. For every defect you find, instruct the implementation agent to author a corresponding automated test verifying the fix.";
+
+    public static string BuildImplementationDirective() =>
+        "You are a Senior Software Engineer & TDD Practitioner. Implement clean, robust code according to the task specification in docs/tasks/ and the approved plan. Keep blast radius minimal. Run builds and tests incrementally with bash. Fix all compiler errors and test failures. If breaking blockers arise, call 'ask'.";
+
+    public static string BuildImplementationLoopbackNotice() =>
+        "The Reviewer requested changes. Notice: You are required to implement a dedicated automated test for every bug or defect identified in the reviewer's feedback before completing your implementation.";
 
     public static IList<AITool> BuildAIFunctionList(
         CanonicalTools tools,

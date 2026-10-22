@@ -53,6 +53,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IHostSdkDiscoveryService _sdkDiscoveryService;
     private readonly IGitWorkspaceManager _gitWorkspaceManager;
+    private readonly IHostUserIdentityResolver _userIdentityResolver;
     private readonly ConcurrentDictionary<(int WorkspaceId, SandboxSecurityTier SecurityTier, int? TaskId), IExecutionEnvironment> _cachedEnvironments = new();
 
     [ActivatorUtilitiesConstructor]
@@ -63,7 +64,8 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         IWorkspacePathResolver pathResolver,
         IHostSdkDiscoveryService sdkDiscoveryService,
         IGitWorkspaceManager gitWorkspaceManager,
-        ILogger<NightCodeForgeContainerExecutor> containerLogger)
+        ILogger<NightCodeForgeContainerExecutor> containerLogger,
+        IHostUserIdentityResolver userIdentityResolver)
     {
         _bareHost = bareHost ?? throw new ArgumentNullException(nameof(bareHost));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
@@ -72,6 +74,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         _sdkDiscoveryService = sdkDiscoveryService ?? throw new ArgumentNullException(nameof(sdkDiscoveryService));
         _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
         _containerLogger = containerLogger ?? throw new ArgumentNullException(nameof(containerLogger));
+        _userIdentityResolver = userIdentityResolver ?? throw new ArgumentNullException(nameof(userIdentityResolver));
     }
 
     public IExecutionEnvironment GetEnvironment(
@@ -227,9 +230,10 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                     WslExecutable = _options.WslExecutable,
                     WslUserName = _pathResolver.GetWslUserName(),
                     ExpandTildeInMounts = true,
-                    ProtectCloneWorkingTree = true
+                    ProtectCloneWorkingTree = true,
+                    UserUidGid = _userIdentityResolver.ResolveUserIdentity(useWsl, targetDistro, _options.WslExecutable)
                 };
-                return new NightCodeForgeContainerExecutor(options, _processRunner, _containerLogger);
+                return new NightCodeForgeContainerExecutor(options, _processRunner, _containerLogger, _userIdentityResolver);
             }),
 
             _ => _bareHost

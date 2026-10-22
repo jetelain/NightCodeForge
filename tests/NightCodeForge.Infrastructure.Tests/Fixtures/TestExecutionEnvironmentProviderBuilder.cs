@@ -18,6 +18,7 @@ public class TestExecutionEnvironmentProviderBuilder
     public IOptions<ExecutionEnvironmentProviderOptions> Options { get; set; } = Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions());
     public IHostSdkDiscoveryService SdkDiscoveryService { get; set; } = new Mock<IHostSdkDiscoveryService>().Object;
     public IGitWorkspaceManager GitWorkspaceManager { get; set; } = new Mock<IGitWorkspaceManager>().Object;
+    public IHostUserIdentityResolver UserIdentityResolver { get; set; } = new Mock<IHostUserIdentityResolver>().Object;
     public ILogger<NightCodeForgeContainerExecutor> Logger { get; set; } = NullLogger<NightCodeForgeContainerExecutor>.Instance;
 
     public ExecutionEnvironmentProvider Build()
@@ -30,6 +31,7 @@ public class TestExecutionEnvironmentProviderBuilder
             PathResolver,
             SdkDiscoveryService,
             GitWorkspaceManager,
-            Logger);
+            Logger,
+            UserIdentityResolver);
     }
 }

@@ -35,7 +35,7 @@ public class ContainerVolumeMount
 
 public class ContainerExecutorOptions
 {
-    public const string DefaultAgentBaseImage = "ncf-agent-base:latest";
+    public const string DefaultAgentBaseImage = "ncf-agent-base:v2";
 
     public const string DefaultAgentBaseDockerfile = """
 FROM ubuntu:24.04
@@ -54,7 +54,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-venv \
     python3-pip \
+    locales \
+    libicu-dev \
+    && locale-gen en_US.UTF-8 fr_FR.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /cache/nuget /cache/npm /cache/pnpm /cache/uv /cache/m2 \
+    && chmod -R 777 /cache
+
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+ENV NUGET_PACKAGES=/cache/nuget
+ENV npm_config_cache=/cache/npm
+ENV UV_CACHE_DIR=/cache/uv
 """;
 
     public string ContainerNameOrId { get; set; } = "ncf-sandbox";
@@ -65,6 +78,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     public int MaxBufferBytes { get; set; } = HeadTailBuffer.DefaultMaxBytes;
     public bool IsRestrictedReadOnly { get; set; } = false;
     public Func<Process>? CustomProcessFactory { get; set; }
+
+    /// <summary>
+    /// Target container user identity formatted as 'uid:gid' (e.g. '1000:1000').
+    /// When null or empty, NightCodeForgeContainerExecutor discovers and captures the host/WSL identity once.
+    /// </summary>
+    public string? UserUidGid { get; set; }
 
     /// <summary>
     /// If true, container operations (e.g. docker exec) are invoked via wsl.exe into a WSL2 environment.
@@ -107,6 +126,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     /// If true, host package manager caches (NuGet, npm, pnpm, uv, Maven) are bind-mounted into the container.
     /// </summary>
     public bool MountPackageCaches { get; set; } = true;
+
+    /// <summary>
+    /// Environment variables pointing toolchains at the neutral cache mount points (/cache/*).
+    /// </summary>
+    public static readonly IReadOnlyList<KeyValuePair<string, string>> PackageCacheEnvironment =
+    [
+        new("NUGET_PACKAGES", "/cache/nuget"),
+        new("npm_config_cache", "/cache/npm"),
+        new("npm_config_store_dir", "/cache/pnpm"),
+        new("UV_CACHE_DIR", "/cache/uv"),
+        new("MAVEN_OPTS", "-Dmaven.repo.local=/cache/m2"),
+    ];
 
     /// <summary>
     /// Host path to NuGet global packages cache (defaults to "~/.nuget/packages").
@@ -197,6 +228,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
     private readonly ContainerExecutorOptions _options;
     private readonly IProcessRunner _processRunner;
     private readonly ILogger<NightCodeForgeContainerExecutor> _logger;
+    private readonly IHostUserIdentityResolver _userIdentityResolver;
     private readonly SemaphoreSlim _execLock = new(1, 1);
 
     public ContainerExecutorOptions Options => _options;
@@ -213,19 +245,27 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
     public NightCodeForgeContainerExecutor(
         IOptions<ContainerExecutorOptions> options,
         IProcessRunner processRunner,
-        ILogger<NightCodeForgeContainerExecutor> logger)
-        : this(options?.Value ?? throw new ArgumentNullException(nameof(options)), processRunner, logger)
+        ILogger<NightCodeForgeContainerExecutor> logger,
+        IHostUserIdentityResolver userIdentityResolver)
+        : this(options?.Value ?? throw new ArgumentNullException(nameof(options)), processRunner, logger, userIdentityResolver)
     {
     }
 
     public NightCodeForgeContainerExecutor(
         ContainerExecutorOptions options,
         IProcessRunner processRunner,
-        ILogger<NightCodeForgeContainerExecutor> logger)
+        ILogger<NightCodeForgeContainerExecutor> logger,
+        IHostUserIdentityResolver userIdentityResolver)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _userIdentityResolver = userIdentityResolver ?? throw new ArgumentNullException(nameof(userIdentityResolver));
+
+        if (string.IsNullOrWhiteSpace(_options.UserUidGid))
+        {
+            _options.UserUidGid = _userIdentityResolver.ResolveUserIdentity(_options);
+        }
     }
 
     public async Task<CommandResult> ExecuteAsync(
@@ -252,8 +292,20 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             {
                 await _stdin!.WriteLineAsync($"export PATH=\"{computedPath}:$PATH\"");
             }
-            await _stdin!.WriteLineAsync("export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1");
+            await _stdin!.WriteLineAsync("export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0");
+            await _stdin!.WriteLineAsync("export LANG=en_US.UTF-8");
+            await _stdin!.WriteLineAsync("export LC_ALL=en_US.UTF-8");
+            await _stdin!.WriteLineAsync("export HOME=\"/tmp/ncf-home\"");
+            await _stdin!.WriteLineAsync("mkdir -p /tmp/ncf-home 2>/dev/null || true");
             await _stdin!.WriteLineAsync("git config --global --add safe.directory '*' 2>/dev/null || true");
+
+            if (_options.MountPackageCaches)
+            {
+                foreach (var (name, value) in ContainerExecutorOptions.PackageCacheEnvironment)
+                {
+                    await _stdin!.WriteLineAsync($"export {name}=\"{value}\"");
+                }
+            }
 
             // Set environment variables if any (scrub secrets if RestrictedReadOnly)
             if (environmentVariables != null && environmentVariables.Count > 0)
@@ -570,8 +622,8 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
             // If the alternate image exists and is fresh, tag it
             var altImage = image.StartsWith("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase)
-                ? "ncf-agent-base:latest"
-                : "nightcodeforge-agent:latest";
+                ? ContainerExecutorOptions.DefaultAgentBaseImage
+                : "nightcodeforge-agent:v2";
 
             if (IsImageFresh(_processRunner, altImage, _options, TimeSpan.FromDays(30)))
             {
@@ -714,9 +766,13 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
     public static ProcessStartSpec BuildProcessStartSpec(ContainerExecutorOptions options)
     {
         var dockerArgs = new List<string> { "exec", "-i" };
-        if (options.IsRestrictedReadOnly)
+        var effectiveUser = options.IsRestrictedReadOnly
+            ? "1000:1000"
+            : options.UserUidGid;
+
+        if (!string.IsNullOrWhiteSpace(effectiveUser))
         {
-            dockerArgs.AddRange(["--user", "1000:1000"]);
+            dockerArgs.AddRange(["--user", effectiveUser]);
         }
         dockerArgs.Add(options.ContainerNameOrId);
         dockerArgs.AddRange(["bash", "--noprofile", "--norc"]);
@@ -749,7 +805,10 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
     public static ProcessStartInfo BuildProcessStartInfo(ContainerExecutorOptions options)
     {
-        var userArg = options.IsRestrictedReadOnly ? "--user 1000:1000 " : string.Empty;
+        var effectiveUser = options.IsRestrictedReadOnly
+            ? "1000:1000"
+            : options.UserUidGid;
+        var userArg = !string.IsNullOrWhiteSpace(effectiveUser) ? $"--user {effectiveUser} " : string.Empty;
         var dockerArgs = $"exec -i {userArg}{options.ContainerNameOrId} bash --noprofile --norc";
 
         if (options.UseWsl)
@@ -894,7 +953,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             {
                 mounts.Add(new ContainerVolumeMount(
                     ResolveHostPath(options.NugetPackageCachePath, options),
-                    "/root/.nuget/packages",
+                    "/cache/nuget",
                     isReadOnly: false));
             }
 
@@ -902,7 +961,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             {
                 mounts.Add(new ContainerVolumeMount(
                     ResolveHostPath(options.NpmCachePath, options),
-                    "/root/.npm",
+                    "/cache/npm",
                     isReadOnly: false));
             }
 
@@ -910,7 +969,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             {
                 mounts.Add(new ContainerVolumeMount(
                     ResolveHostPath(options.PnpmCachePath, options),
-                    "/root/.local/share/pnpm/store",
+                    "/cache/pnpm",
                     isReadOnly: false));
             }
 
@@ -918,7 +977,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             {
                 mounts.Add(new ContainerVolumeMount(
                     ResolveHostPath(options.UvCachePath, options),
-                    "/root/.cache/uv",
+                    "/cache/uv",
                     isReadOnly: false));
             }
 
@@ -926,7 +985,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             {
                 mounts.Add(new ContainerVolumeMount(
                     ResolveHostPath(options.MavenCachePath, options),
-                    "/root/.m2/repository",
+                    "/cache/m2",
                     isReadOnly: false));
             }
         }
@@ -1173,6 +1232,9 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         }
 
         // 3. User package manager & tool paths
+        pathEntries.Add("/tmp/ncf-home/.dotnet/tools");
+        pathEntries.Add("/tmp/ncf-home/.local/bin");
+        pathEntries.Add("/root/.dotnet/tools");
         pathEntries.Add("/root/.local/bin");
         pathEntries.Add("/root/.cargo/bin");
         pathEntries.Add("/root/.npm-global/bin");
@@ -1213,7 +1275,17 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
         var computedPath = ComputePathEnvironmentVariable(options);
         args.AddRange(["-e", $"PATH={computedPath}"]);
-        args.AddRange(["-e", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1"]);
+        args.AddRange(["-e", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0"]);
+        args.AddRange(["-e", "LANG=en_US.UTF-8"]);
+        args.AddRange(["-e", "LC_ALL=en_US.UTF-8"]);
+
+        if (options.MountPackageCaches)
+        {
+            foreach (var (name, value) in ContainerExecutorOptions.PackageCacheEnvironment)
+            {
+                args.AddRange(["-e", $"{name}={value}"]);
+            }
+        }
 
         var mounts = BuildVolumeMounts(options);
         foreach (var mount in mounts)
@@ -1230,6 +1302,15 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             args.AddRange(["-w", workDir]);
         }
 
+        var effectiveUser = options.IsRestrictedReadOnly
+            ? "1000:1000"
+            : options.UserUidGid;
+
+        if (!string.IsNullOrWhiteSpace(effectiveUser))
+        {
+            args.AddRange(["--user", effectiveUser]);
+        }
+
         if (options.IsRestrictedReadOnly)
         {
             args.AddRange(["--network", "none"]);
@@ -1237,7 +1318,6 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             args.AddRange(["--tmpfs", "/tmp:rw,noexec,nosuid,size=32m"]);
             args.AddRange(["--cap-drop=ALL"]);
             args.AddRange(["--security-opt", "no-new-privileges:true"]);
-            args.AddRange(["--user", "1000:1000"]);
         }
 
         var image = !string.IsNullOrWhiteSpace(options.ContainerImage)

@@ -129,7 +129,7 @@ public class Service
     }
 
     [Fact]
-    public async Task BashAsync_DefaultsTestCommandToConfiguredTimeout()
+    public async Task BashAsync_DefaultsToDynamicCombinedSuiteTimeoutFloorOf300Seconds()
     {
         var env = new FakeEnv();
         var tools = new TestCanonicalToolsBuilder
@@ -143,8 +143,58 @@ public class Service
 
         await tools.BashAsync("dotnet test");
 
-        Assert.Equal(75, env.LastTimeoutSeconds);
+        // Math.Max(300, 75 + 45) = 300
+        Assert.Equal(300, env.LastTimeoutSeconds);
         Assert.Equal("dotnet test", env.LastCommand);
+    }
+
+    [Fact]
+    public async Task BashAsync_UsesSumOfConfiguredBuildAndTestTimeoutsWhenExceeding300Seconds()
+    {
+        var env = new FakeEnv();
+        var tools = new TestCanonicalToolsBuilder
+        {
+            WorkspaceRoot = AppContext.BaseDirectory,
+            PathResolver = TestPathResolver.Create(),
+            ExecutionEnv = env,
+            TestTimeoutSeconds = 200,
+            BuildTimeoutSeconds = 150
+        }.Build();
+
+        await tools.BashAsync("dotnet test");
+
+        // Math.Max(300, 200 + 150) = 350
+        Assert.Equal(350, env.LastTimeoutSeconds);
+        Assert.Equal("dotnet test", env.LastCommand);
+    }
+
+    [Fact]
+    public async Task BashAsync_ExplicitTimeoutBelowSuiteCeiling_IsPromotedToCeiling()
+    {
+        var env = new FakeEnv();
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
+            executionEnv: env,
+            pathResolver: TestPathResolver.Create());
+
+        await tools.BashAsync("git status", timeout: 60);
+
+        // Combined suite timeout is 300 (defaults: 120 + 120 = 240, floor 300). Explicit 60 is promoted to 300.
+        Assert.Equal(300, env.LastTimeoutSeconds);
+    }
+
+    [Fact]
+    public async Task BashAsync_ExplicitTimeoutAboveSuiteCeiling_IsHonored()
+    {
+        var env = new FakeEnv();
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
+            executionEnv: env,
+            pathResolver: TestPathResolver.Create());
+
+        await tools.BashAsync("long-command", timeout: 500);
+
+        Assert.Equal(500, env.LastTimeoutSeconds);
     }
 
     [Fact]
@@ -152,7 +202,7 @@ public class Service
     {
         var env = new FakeEnv
         {
-            NextResult = new NightCodeForge.Core.Interfaces.CommandResult(124, string.Empty, "Timed out", TimeSpan.FromSeconds(30))
+            NextResult = new NightCodeForge.Core.Interfaces.CommandResult(124, string.Empty, "Timed out", TimeSpan.FromSeconds(300))
         };
         var tools = new TestCanonicalToolsBuilder
         {
@@ -165,23 +215,8 @@ public class Service
         var output = await tools.BashAsync("npm test");
 
         Assert.Contains("[TIMEOUT]", output);
-        Assert.Contains("30s", output);
+        Assert.Contains("300s", output);
         Assert.Contains("hanging tests", output);
-    }
-
-    [Fact]
-    public async Task BashAsync_DefaultsGeneralCommandTo60SecondsTimeout()
-    {
-        var env = new FakeEnv();
-        var tools = TestCanonicalToolsBuilder.Create(
-            AppContext.BaseDirectory,
-            executionEnv: env,
-            pathResolver: TestPathResolver.Create());
-
-        await tools.BashAsync("git status");
-
-        Assert.Equal(60, env.LastTimeoutSeconds);
-        Assert.Equal("git status", env.LastCommand);
     }
 
     private class TimeoutThrowingEnv : NightCodeForge.Core.Interfaces.IExecutionEnvironment
@@ -210,7 +245,7 @@ public class Service
 
         Assert.Contains("Exit Code: 124", output);
         Assert.Contains("[TIMEOUT]", output);
-        Assert.Contains("60s", output);
+        Assert.Contains("300s", output);
     }
 
     private class FakePathResolver : NightCodeForge.Core.Interfaces.IWorkspacePathResolver

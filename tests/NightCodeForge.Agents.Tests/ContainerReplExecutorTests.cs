@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Execution;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
 
 namespace NightCodeForge.Agents.Tests;
@@ -71,7 +73,8 @@ public class ContainerReplExecutorTests
         using var executor = new NightCodeForgeContainerExecutor(
             options,
             new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance),
-            NullLogger<NightCodeForgeContainerExecutor>.Instance);
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            new Mock<IHostUserIdentityResolver>().Object);
         var result = await executor.ExecuteAsync("echo hello world");
 
         Assert.Equal(0, result.ExitCode);
@@ -92,7 +95,8 @@ public class ContainerReplExecutorTests
         using var executor = new NightCodeForgeContainerExecutor(
             options,
             mockRunner,
-            NullLogger<NightCodeForgeContainerExecutor>.Instance);
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            new Mock<IHostUserIdentityResolver>().Object);
         var result = await executor.ExecuteAsync("echo mock-result");
 
         Assert.Equal(0, result.ExitCode);

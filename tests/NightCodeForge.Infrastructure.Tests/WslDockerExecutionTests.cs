@@ -279,11 +279,11 @@ public class WslDockerExecutionTests
         Assert.Contains(mounts, m => m.HostPath == "/home/developer/.nightcodeforge/wks/42/clone/.git" && m.ContainerPath == "/workspace/clone/.git" && !m.IsReadOnly);
 
         // Package caches (NuGet, npm, pnpm, uv, Maven)
-        Assert.Contains(mounts, m => m.HostPath == "~/.nuget/packages" && m.ContainerPath == "/root/.nuget/packages" && !m.IsReadOnly);
-        Assert.Contains(mounts, m => m.HostPath == "~/.npm" && m.ContainerPath == "/root/.npm" && !m.IsReadOnly);
-        Assert.Contains(mounts, m => m.HostPath == "~/.local/share/pnpm/store" && m.ContainerPath == "/root/.local/share/pnpm/store" && !m.IsReadOnly);
-        Assert.Contains(mounts, m => m.HostPath == "~/.cache/uv" && m.ContainerPath == "/root/.cache/uv" && !m.IsReadOnly);
-        Assert.Contains(mounts, m => m.HostPath == "~/.m2/repository" && m.ContainerPath == "/root/.m2/repository" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "~/.nuget/packages" && m.ContainerPath == "/cache/nuget" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "~/.npm" && m.ContainerPath == "/cache/npm" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "~/.local/share/pnpm/store" && m.ContainerPath == "/cache/pnpm" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "~/.cache/uv" && m.ContainerPath == "/cache/uv" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.HostPath == "~/.m2/repository" && m.ContainerPath == "/cache/m2" && !m.IsReadOnly);
 
         // SDK toolchains (read-only)
         Assert.Contains(mounts, m => m.HostPath == "/usr/share/dotnet" && m.ContainerPath == "/usr/share/dotnet" && m.IsReadOnly);
@@ -342,7 +342,7 @@ public class WslDockerExecutionTests
         var wksMount = Assert.Single(mounts, m => m.ContainerPath == "/workspace");
         Assert.Equal("/home/testuser/.nightcodeforge/wks/5", wksMount.HostPath);
 
-        var nugetMount = Assert.Single(mounts, m => m.ContainerPath == "/root/.nuget/packages");
+        var nugetMount = Assert.Single(mounts, m => m.ContainerPath == "/cache/nuget");
         Assert.Equal("/home/testuser/.nuget/packages", nugetMount.HostPath);
     }
 
@@ -424,8 +424,8 @@ public class WslDockerExecutionTests
 
         Assert.Contains("-v", args);
         Assert.Contains("/home/dev/.nightcodeforge/wks/123:/workspace", args);
-        Assert.Contains("~/.nuget/packages:/root/.nuget/packages", args);
-        Assert.Contains("~/.npm:/root/.npm", args);
+        Assert.Contains("~/.nuget/packages:/cache/nuget", args);
+        Assert.Contains("~/.npm:/cache/npm", args);
         Assert.Contains("/usr/share/dotnet:/usr/share/dotnet:ro", args);
 
         Assert.Contains("-w", args);

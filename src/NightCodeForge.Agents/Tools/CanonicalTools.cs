@@ -494,21 +494,18 @@ public partial class CanonicalTools
             workDir = _workspaceRoot;
         }
 
-        int? effectiveTimeout = timeout;
-        if (!effectiveTimeout.HasValue)
+        int configuredBuildTimeout = _buildTimeoutSeconds ?? WorkflowDefaults.DefaultBuildTimeoutSeconds;
+        int configuredTestTimeout = _testTimeoutSeconds ?? WorkflowDefaults.DefaultTestTimeoutSeconds;
+        int combinedSuiteTimeout = Math.Max(WorkflowDefaults.MinimumBashToolTimeoutSeconds, configuredBuildTimeout + configuredTestTimeout);
+
+        int effectiveTimeout;
+        if (timeout.HasValue && timeout.Value > 0)
         {
-            if (command.Contains("test", StringComparison.OrdinalIgnoreCase))
-            {
-                effectiveTimeout = _testTimeoutSeconds ?? WorkflowDefaults.DefaultTestTimeoutSeconds;
-            }
-            else if (command.Contains("build", StringComparison.OrdinalIgnoreCase))
-            {
-                effectiveTimeout = _buildTimeoutSeconds ?? WorkflowDefaults.DefaultBuildTimeoutSeconds;
-            }
-            else
-            {
-                effectiveTimeout = WorkflowDefaults.DefaultCommandTimeoutSeconds;
-            }
+            effectiveTimeout = Math.Max(timeout.Value, combinedSuiteTimeout);
+        }
+        else
+        {
+            effectiveTimeout = combinedSuiteTimeout;
         }
 
         if (_executionEnv != null)
