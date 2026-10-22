@@ -29,4 +29,10 @@ public class HangfireTaskJobQueue : ITaskJobQueue
             o => o.ProcessTaskAsync(taskId, default),
             new EnqueuedState(HangfireQueues.LlmInference));
     }
+
+    public bool Delete(string jobId)
+    {
+        if (string.IsNullOrWhiteSpace(jobId)) return false;
+        return _backgroundJobClient.Delete(jobId);
+    }
 }

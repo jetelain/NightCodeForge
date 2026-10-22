@@ -154,7 +154,7 @@ public class KanbanBoardAndCardTests : BunitContext
         var tasks = new List<ForgeTask>
         {
             new ForgeTask { Id = 1, Title = "Waiting Item", Status = TaskOverallStatus.Open, CurrentStageId = "" },
-            new ForgeTask { Id = 2, Title = "Executing Item", Status = TaskOverallStatus.Open, CurrentStageId = "task-review" }
+            new ForgeTask { Id = 2, Title = "Executing Item", Status = TaskOverallStatus.Open, CurrentStageId = "task-review", HasExecutionRun = true }
         };
 
         var cut = Render<KanbanBoard>(p => p

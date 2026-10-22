@@ -77,7 +77,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             return;
         }
 
-        if (task.Status == TaskOverallStatus.Cancelled || task.Status == TaskOverallStatus.Closed)
+        if (task.Status == TaskOverallStatus.Cancelled || task.Status == TaskOverallStatus.Closed || task.Status == TaskOverallStatus.Rejected)
         {
             _logger.LogInformation("ForgeTask #{TaskId} is already in {Status} status; aborting execution.", taskId, task.Status);
             return;
@@ -117,7 +117,7 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         // The task may have been cancelled while this job was waiting for the lock.
         var persistedStatus = await _taskRepository.GetStatusAsync(task.Id, cancellationToken);
-        if (persistedStatus == TaskOverallStatus.Cancelled || persistedStatus == TaskOverallStatus.Closed)
+        if (persistedStatus == TaskOverallStatus.Cancelled || persistedStatus == TaskOverallStatus.Closed || persistedStatus == TaskOverallStatus.Rejected)
         {
             _logger.LogInformation("ForgeTask #{TaskId} is now in {Status} status; aborting execution.", taskId, persistedStatus);
             return;
@@ -820,22 +820,27 @@ public class TaskOrchestrator : ITaskOrchestrator
             // Only an explicit cancel request is terminal; a parent cancellation (e.g. shutdown) must leave the task recoverable.
             if (_cancellationManager.IsCancelRequested(task.Id))
             {
-                task.Status = TaskOverallStatus.Cancelled;
-                task.IsWaitingForHuman = false;
-                pipelineContext.SyncDataBagToTask();
-                await _taskRepository.UpdateWithHistoryAsync(
-                    task,
-                    dependsOn: null,
-                    changedBy: AuditActors.User,
-                    reason: $"Stage '{stage.StageId}' was cancelled.",
-                    cancellationToken: ct);
+                var persistedTask = await _taskRepository.GetByIdAsync(task.Id, ct);
+                if (persistedTask?.Status != TaskOverallStatus.Closed && persistedTask?.Status != TaskOverallStatus.Rejected)
+                {
+                    task.Status = TaskOverallStatus.Cancelled;
+                    task.IsWaitingForHuman = false;
+                    pipelineContext.SyncDataBagToTask();
+                    await _taskRepository.UpdateWithHistoryAsync(
+                        task,
+                        dependsOn: null,
+                        changedBy: AuditActors.User,
+                        reason: $"Stage '{stage.StageId}' was cancelled.",
+                        cancellationToken: ct);
+                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, ct);
+                }
             }
             else
             {
                 pipelineContext.SyncDataBagToTask();
                 await _taskRepository.UpdateAsync(task, cancellationToken: ct);
+                await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, ct);
             }
-            await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, ct);
 
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {
@@ -922,15 +927,19 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             if (_cancellationManager.IsCancelRequested(task.Id))
             {
-                task.Status = TaskOverallStatus.Cancelled;
-                task.IsWaitingForHuman = false;
-                await _taskRepository.UpdateWithHistoryAsync(
-                    task,
-                    dependsOn: null,
-                    changedBy: AuditActors.User,
-                    reason: $"Execution cancelled after stage '{stage.StageId}'.",
-                    cancellationToken: CancellationToken.None);
-                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
+                var persistedStatusAfterStage = await _taskRepository.GetStatusAsync(task.Id, CancellationToken.None);
+                if (persistedStatusAfterStage != TaskOverallStatus.Closed && persistedStatusAfterStage != TaskOverallStatus.Rejected)
+                {
+                    task.Status = TaskOverallStatus.Cancelled;
+                    task.IsWaitingForHuman = false;
+                    await _taskRepository.UpdateWithHistoryAsync(
+                        task,
+                        dependsOn: null,
+                        changedBy: AuditActors.User,
+                        reason: $"Execution cancelled after stage '{stage.StageId}'.",
+                        cancellationToken: CancellationToken.None);
+                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
+                }
                 return;
             }
 
@@ -1057,12 +1066,13 @@ public class TaskOrchestrator : ITaskOrchestrator
                 // Enqueue next stage with priority routing (P1 to llm-urgent, others to llm-inference)
                 if (task.Priority == TaskPriority.Critical)
                 {
-                    _jobQueue.EnqueueUrgent(task.Id);
+                    task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
                 }
                 else
                 {
-                    _jobQueue.EnqueueInference(task.Id);
+                    task.LastHangfireJobId = _jobQueue.EnqueueInference(task.Id);
                 }
+                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
             }
             else
             {
@@ -1156,7 +1166,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                     Timestamp = DateTime.UtcNow
                 }, cancellationToken);
 
-                _jobQueue.EnqueueUrgent(task.Id);
+                task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
+                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
                 return;
             }
         }
@@ -1203,7 +1214,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 if (explicitCancel)
                 {
                     var currentTask = await _taskRepository.GetByIdAsync(taskId, ct);
-                    if (currentTask != null && currentTask.Status != TaskOverallStatus.Closed)
+                    if (currentTask != null && currentTask.Status != TaskOverallStatus.Closed && currentTask.Status != TaskOverallStatus.Rejected)
                     {
                         currentTask.Status = TaskOverallStatus.Cancelled;
                         currentTask.IsWaitingForHuman = false;
@@ -1455,7 +1466,8 @@ public class TaskOrchestrator : ITaskOrchestrator
         }, cancellationToken);
 
         // Preemptive top-priority resumption on llm-urgent
-        _jobQueue.EnqueueUrgent(task.Id);
+        task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
+        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
     }
 
     public async Task RequestChangesAsync(int taskId, string revisionNotes, CancellationToken cancellationToken = default)
@@ -1498,7 +1510,8 @@ public class TaskOrchestrator : ITaskOrchestrator
         }, cancellationToken);
 
         // Enqueue to llm-urgent for rapid rework
-        _jobQueue.EnqueueUrgent(task.Id);
+        task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
+        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
     }
 
     public async Task PromoteSuggestedTaskAsync(
@@ -1534,26 +1547,20 @@ public class TaskOrchestrator : ITaskOrchestrator
             {
                 if (task.Priority == TaskPriority.Critical)
                 {
-                    _jobQueue.EnqueueUrgent(task.Id);
+                    task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
                 }
                 else
                 {
-                    _jobQueue.EnqueueInference(task.Id);
+                    task.LastHangfireJobId = _jobQueue.EnqueueInference(task.Id);
                 }
+
+                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
             }
         }
         else if (targetStatus == TaskOverallStatus.Rejected)
         {
-            task.Status = TaskOverallStatus.Rejected;
-            task.UpdatedAt = DateTime.UtcNow;
-
-            await _taskRepository.UpdateWithHistoryAsync(
-                task,
-                dependsOn: null,
-                changedBy: AuditActors.User,
-                reason: "Rejected suggested task.",
-                cancellationToken: cancellationToken);
-            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Rejected, cancellationToken);
+            await RejectTaskAsync(taskId, "Rejected suggested task.", cancellationToken);
+            return;
         }
         else
         {
@@ -1571,6 +1578,73 @@ public class TaskOrchestrator : ITaskOrchestrator
             TaskId = task.Id,
             Level = LogLevel.Information,
             Message = $"ForgeTask #{task.Id} promoted to status {targetStatus} (Priority: {priority}, MergeMode: {mergeMode}).",
+            Timestamp = DateTime.UtcNow
+        }, cancellationToken);
+    }
+
+    public async Task RejectTaskAsync(int taskId, string? reason = null, CancellationToken cancellationToken = default)
+    {
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
+        if (task == null)
+        {
+            throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+        }
+
+        if (task.Status == TaskOverallStatus.Closed || task.Status == TaskOverallStatus.Rejected)
+        {
+            throw new InvalidOperationException($"Task #{taskId} is already in a terminal state ({task.Status}).");
+        }
+
+        try
+        {
+            _cancellationManager.Cancel(task.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to cancel active execution token for rejected Task #{TaskId}", taskId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
+        {
+            try
+            {
+                _jobQueue.Delete(task.LastHangfireJobId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to cancel Hangfire job {JobId} for rejected Task #{TaskId}", task.LastHangfireJobId, taskId);
+            }
+            task.LastHangfireJobId = null;
+        }
+
+        task.Status = TaskOverallStatus.Rejected;
+        task.IsWaitingForHuman = false;
+        task.UpdatedAt = DateTime.UtcNow;
+
+        var rejectionReason = string.IsNullOrWhiteSpace(reason)
+            ? "Task manually rejected by maintainer."
+            : reason;
+
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.User,
+            reason: rejectionReason,
+            cancellationToken: cancellationToken);
+
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Rejected, cancellationToken);
+
+        var workspace = task.Workspace ?? await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken);
+        if (workspace != null)
+        {
+            await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+        }
+
+        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+        {
+            TaskId = task.Id,
+            Level = LogLevel.Warning,
+            Message = $"ForgeTask #{task.Id} was rejected by maintainer. Reason: {rejectionReason}",
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
     }
@@ -1679,12 +1753,13 @@ public class TaskOrchestrator : ITaskOrchestrator
 
                 if (unblockedTask.Priority == TaskPriority.Critical)
                 {
-                    _jobQueue.EnqueueUrgent(unblockedTask.Id);
+                    unblockedTask.LastHangfireJobId = _jobQueue.EnqueueUrgent(unblockedTask.Id);
                 }
                 else
                 {
-                    _jobQueue.EnqueueInference(unblockedTask.Id);
+                    unblockedTask.LastHangfireJobId = _jobQueue.EnqueueInference(unblockedTask.Id);
                 }
+                await _taskRepository.UpdateAsync(unblockedTask, cancellationToken: cancellationToken);
             }
 
             var foundIds = unblockedTasks.Select(t => t.Id).ToHashSet();

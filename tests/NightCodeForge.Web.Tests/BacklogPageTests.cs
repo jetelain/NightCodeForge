@@ -54,6 +54,7 @@ public class BacklogPageTests : BunitContext
             _taskRepository,
             new InMemoryWorkspaceRepository(),
             _markdownSync,
+            _orchestrator,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
     }
 

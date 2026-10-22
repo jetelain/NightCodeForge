@@ -92,6 +92,55 @@ code, kbd, samp, pre {
     grid-template-columns: 72px 1fr;
 }
 
+.forge-layout.sidebar-collapsed .brand-header {
+    padding: 0 0.5rem;
+    justify-content: center;
+    position: relative;
+}
+
+.forge-layout.sidebar-collapsed .brand-logo-wrap {
+    display: none;
+}
+
+.forge-layout.sidebar-collapsed .brand-logo-wrap .brand-text {
+    display: none;
+}
+
+.forge-layout.sidebar-collapsed .sidebar-toggle-btn {
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    margin: 0 auto;
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+}
+
+.forge-layout.sidebar-collapsed .forge-nav-link {
+    justify-content: center;
+    padding: 0.65rem 0;
+}
+
+.forge-layout.sidebar-collapsed .forge-nav-link span:not(.nav-icon) {
+    display: none;
+}
+
+.forge-layout.sidebar-collapsed .nav-section-label {
+    display: none;
+}
+
+.forge-layout.sidebar-collapsed .sidebar-footer {
+    padding: 0.5rem;
+    justify-content: center;
+}
+
+.forge-layout.sidebar-collapsed .sidebar-footer span {
+    display: none;
+}
+
 /* 5. Left Sidebar (NavMenu) */
 .forge-sidebar {
     grid-row: 1 / 3;
@@ -123,6 +172,19 @@ code, kbd, samp, pre {
     font-weight: 700;
     font-size: 1.1rem;
     text-decoration: none;
+}
+
+.brand-favicon {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+    flex-shrink: 0;
+    transition: transform var(--transition-fast);
+}
+
+.brand-logo-wrap:hover .brand-favicon {
+    transform: scale(1.05);
 }
 
 .brand-icon {
@@ -2955,7 +3017,8 @@ code, kbd, samp, pre {
     flex-wrap: wrap;
 }
 
-.stat-chip {
+.stat-chip,
+.priority-filter-btn {
     display: flex;
     align-items: center;
     gap: 0.45rem;
@@ -2967,16 +3030,23 @@ code, kbd, samp, pre {
     cursor: pointer;
     transition: all var(--transition-fast);
     user-select: none;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-weight: 500;
 }
 
-.stat-chip:hover {
+.stat-chip:hover,
+.priority-filter-btn:hover {
     border-color: var(--border-focus);
     background: var(--bg-card-hover);
 }
 
-.stat-chip.active {
+.stat-chip.active,
+.priority-filter-btn.active {
     border-color: var(--accent-indigo);
     background: rgba(99, 102, 241, 0.15);
+    color: #ffffff;
+    font-weight: 600;
 }
 
 .stat-chip-label {
@@ -2994,6 +3064,7 @@ code, kbd, samp, pre {
 .text-purple { color: #c084fc; }
 .text-teal { color: var(--accent-teal); }
 .text-emerald { color: #10b981; }
+.text-red { color: #f87171; }
 
 /* Filter & Search Toolbar */
 .backlog-toolbar {

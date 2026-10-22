@@ -340,6 +340,12 @@
                         🚀 Promote / Triage
                     </button>
                 }
+                @if (Task.Status != TaskOverallStatus.Closed && Task.Status != TaskOverallStatus.Rejected)
+                {
+                    <button type="button" class="forge-btn forge-btn-danger" id="btn-drawer-reject-task" @onclick="() => _showRejectModal = true">
+                        🗑️ Reject Task
+                    </button>
+                }
                 <a href="/inspector/@Task.Id" class="forge-btn forge-btn-secondary" style="font-size: 0.82rem; text-decoration: none;">
                     🔍 Inspect Execution &amp; Stages
                 </a>
@@ -351,6 +357,11 @@
                 </button>
             </div>
         </aside>
+
+        <TaskRejectionModal IsOpen="_showRejectModal"
+                            TargetTask="Task"
+                            OnClosed="() => _showRejectModal = false"
+                            OnRejected="HandleTaskRejected" />
     </div>
 }
 
@@ -365,9 +376,16 @@
     [Parameter] public EventCallback<ForgeTask> OnLinkDependenciesClicked { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnTaskUpdated { get; set; }
 
+    private bool _showRejectModal;
     private bool _isUpdatingPriority;
     private bool _isUpdatingMergeMode;
     private string _activeDrawerTab = "details";
+
+    private async Task HandleTaskRejected(ForgeTask rejectedTask)
+    {
+        _showRejectModal = false;
+        await OnTaskUpdated.InvokeAsync(rejectedTask);
+    }
     private bool _isEditingDescription;
     private bool _isSavingDescription;
     private string _editedDescription = string.Empty;

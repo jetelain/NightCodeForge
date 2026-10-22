@@ -254,6 +254,9 @@ public class StartupRecoveryIntegrationTests : IDisposable
         Assert.Equal(StageExecutionStatus.Failed, recoveredConv.Status);
 
         Assert.Contains(task.Id, jobQueue.UrgentQueue);
+        var recoveredTask = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(recoveredTask);
+        Assert.False(string.IsNullOrWhiteSpace(recoveredTask.LastHangfireJobId));
     }
 
     [Fact]
@@ -433,4 +436,6 @@ public class FakeTestJobQueue : ITaskJobQueue
         InferenceQueue.Add(taskId);
         return $"inference-{taskId}";
     }
+
+    public bool Delete(string jobId) => true;
 }

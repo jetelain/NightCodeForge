@@ -21,6 +21,7 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
    - **Step 11.15:** Priority-Aware Task Queue Scheduling & Execution Ordering (aligning DAG cascade unblocking, Hangfire insertion order, and DevQueue promotion with 1 Highest -> 5 Lowest).
    - **Step 11.16:** Task Attachments & Context Documents — a workspace-level read-only `attachments/` store (sibling of the canonical clone and task worktrees) populated from file drops, cited host paths, and URL captures (MarkItDown markdown companions), citable by the ideation agent (`@attachment:{id}`) and readable by the three workflow stage agents.
    - **Step 11.17:** Portal Task Scoping, Origin Provenance & Pipeline State Hygiene — enforcing `TaskOrigin.UntrustedIntake` for `/triage` proposed backlog cards, restricting `/inspector` and `/review` dropdowns to tasks with $\ge 1$ stage run, and eliminating false "Running" stepper indicators on idle tasks.
+   - **Step 11.23:** Backlog Task Rejection Lifecycle, Kanban State Hygiene & Shell UI Polish — first-class maintainer rejection action for backlog tasks (domain orchestration, audit attribution, queue eviction, disk markdown sync), white text contrast for priority filter chips, decoupling stage ID from unstarted tasks to prevent false In-Flight display, sidebar collapse visibility fix, and SVG favicon replacement.
 
 2. **Tier 2: Core Ideation & Developer Ergonomics Quick Wins:**
    - **Step 11.18:** Live Operations Telemetry: Real-Time LLM Calls, Shell Activity & OllamaRouter Deep Monitoring — re-architecting `/monitoring` from redundant pipeline inspector into a real-time Developer Operations Console showing current and last $N$ LLM calls, deterministic bash/CLI operations, and deep OllamaRouter cluster/VRAM metrics.
@@ -55,6 +56,7 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
 | **11.14** | [🔗 Step 11.14: Intelligent Task Dependency Detection in Ideation & Review Agents](phase-11/STEP_11_14_INTELLIGENT_TASK_DEPENDENCY_DETECTION.md) | Backlog context injection for Ideation and Stage 1 Review agents; system prompts requiring identification of prerequisites, shared interfaces, and ordering; auto-population of `dependsOnTitles` and DAG dependency chips in Kanban and Drawer. | **Next Priority** |
 | **11.16** | [📎 Step 11.16: Task Attachments & Context Documents](phase-11/STEP_11_16_TASK_ATTACHMENTS_AND_CONTEXT_DOCS.md) | Workspace-level read-only `attachments/` directory (sibling of clone & worktrees): intake via file drop, cited host paths, and URL captures with MarkItDown markdown companions; SHA-256 dedup & reusability; `@attachment:{id}` citations in tasks; read-only `list_attachments`/`read_attachment` tools for ideation and the three workflow stage agents; attachments picker on `/tasks/new`. | **Next Priority** |
 | **11.17** | [🎯 Step 11.17: Portal Task Scoping, Origin Provenance & Pipeline State Hygiene](phase-11/STEP_11_17_PORTAL_TASK_SCOPING_AND_EXECUTION_STATE_HYGIENE.md) | Enforce `TaskOrigin.UntrustedIntake` filtering in `/triage`, restrict `/inspector` task dropdown and `/review` pending reviews to tasks with $\ge 1$ stage run, and eliminate false "Running" state for idle tasks in `PipelineStepper`. | Completed |
+| **11.23** | [🎯 Step 11.23: Backlog Task Rejection Lifecycle, Kanban State Hygiene & Shell UI Polish](phase-11/STEP_11_23_BACKLOG_REJECTION_KANBAN_HYGIENE_AND_SHELL_ERGONOMICS.md) | First-class maintainer rejection action for backlog tasks (domain orchestration, audit attribution, queue eviction, disk markdown sync), white text contrast for priority filter chips, decoupling stage ID from unstarted tasks to prevent false In-Flight display, sidebar collapse visibility fix, and SVG favicon replacement. | **Top Priority** |
 
 ### Priority Tier 2: Core Ideation & Developer Ergonomics Quick Wins
 
@@ -283,6 +285,15 @@ flowchart LR
   - [x] Integrate worktree relative path verification into `ExecutionEnvironmentProvider` and container pre-flight.
   - [x] Update `StartupRecoveryService` to migrate legacy absolute worktree pointers on startup.
   - [x] Author unit tests in `GitWorkspaceManagerTests` verifying relative forward/reverse pointers, UNC path resolution, idempotency, and clean Git CLI execution.
+- [ ] **Step 11.23 (Backlog Task Rejection Lifecycle, Kanban State Hygiene & Shell UI Polish):**
+  - [ ] Add `RejectTaskAsync` to `ITaskOrchestrator` and `ITaskMutationService` enabling rejection of non-terminal backlog tasks with immutable audit history, DevQueue/Hangfire job cancellation, and markdown synchronization.
+  - [ ] Add `🗑️ Reject Task` action buttons in `TaskDetailDrawer.razor`, `TaskDetail.razor`, and `KanbanCard.razor`.
+  - [ ] Fix Priority filter chip text color in `app.css` to render high-contrast white text (`#ffffff` / `var(--text-primary)`) on dark surfaces.
+  - [ ] Extract `BacklogStatusClassifier` in `NightCodeForge.Web.Services` ensuring unstarted `Open` tasks (`!t.HasExecutionRun`) remain in Column 2 ("Open (Backlog)") and never in "In-Flight".
+  - [ ] Remove preemptive `CurrentStageId` initialization to `"task-review"` for unstarted tasks in `TaskMarkdownSyncService.cs` and `TriageService.cs`.
+  - [ ] Fix sidebar collapse styling in `app.css` and `NavMenu.razor` hiding `.brand-text`, centering icons, and keeping `.sidebar-toggle-btn` visible and clickable.
+  - [ ] Replace brand header emoji with vector `favicon.svg` and style `.brand-favicon` cleanly at $32\times 32\text{px}$.
+  - [ ] Author unit tests in `BacklogStatusClassifierTests` and `TaskOrchestratorRejectionTests`.
 - [ ] **Step 11.5 (Ideation Quick Notes & Suggestions):** Quick notes bar, proposal card tri-state actions, "Refine in Ideation", scoped `edit_task` tools, 24h pruning.
 - [ ] **Step 11.1 (Dual Model Role Configuration):** Architect/Reviewer model vs Coder model, dynamic escalation on difficult tasks.
 - [ ] **Step 11.3 (Smart CLI Output Filtering):** Compiler & test noise suppression, workspace path relativization.

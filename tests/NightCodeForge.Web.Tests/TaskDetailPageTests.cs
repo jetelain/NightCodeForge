@@ -21,6 +21,7 @@ public class TaskDetailPageTests : BunitContext
     private readonly ToastService _toastService;
     private readonly WorkspaceStateService _workspaceState;
     private readonly OrchestratorHubClientConnection _hubConnection;
+    private readonly MockTaskOrchestrator _orchestrator;
     private readonly TaskMutationService _mutationService;
 
     public TaskDetailPageTests()
@@ -33,10 +34,13 @@ public class TaskDetailPageTests : BunitContext
         _toastService = TestServices.CreateToastService();
         _workspaceState = new WorkspaceStateService();
         _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        _orchestrator = new MockTaskOrchestrator();
+        Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
         _mutationService = new TaskMutationService(
             _taskRepository,
             _workspaceRepository,
             _markdownSync,
+            _orchestrator,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance);
 
         Services.AddSingleton<ITaskRepository>(_taskRepository);
@@ -50,7 +54,6 @@ public class TaskDetailPageTests : BunitContext
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
         Services.AddSingleton<ITaskMutationService>(_mutationService);
-        Services.AddSingleton<ITaskOrchestrator>(new MockTaskOrchestrator());
     }
 
     [Fact]
@@ -216,5 +219,49 @@ public class TaskDetailPageTests : BunitContext
         Assert.Contains("In-Flight Prereq", cut.Markup);
         Assert.Contains("Closed", cut.Markup);
         Assert.Contains("Blocking", cut.Markup);
+    }
+
+    [Fact]
+    public async Task TaskDetail_RendersRejectButton_ForOpenTask_AndOmitsForClosedOrRejected()
+    {
+        var openTask = new ForgeTask { Id = 20, WorkspaceId = 1, Title = "Open Detail Task", Status = TaskOverallStatus.Open };
+        var closedTask = new ForgeTask { Id = 21, WorkspaceId = 1, Title = "Closed Detail Task", Status = TaskOverallStatus.Closed };
+        var rejectedTask = new ForgeTask { Id = 22, WorkspaceId = 1, Title = "Rejected Detail Task", Status = TaskOverallStatus.Rejected };
+
+        await _taskRepository.CreateAsync(openTask);
+        await _taskRepository.CreateAsync(closedTask);
+        await _taskRepository.CreateAsync(rejectedTask);
+
+        var cutOpen = Render<TaskDetail>(p => p.Add(t => t.TaskId, 20));
+        var rejectBtn = cutOpen.Find("button#btn-reject-task");
+        Assert.NotNull(rejectBtn);
+        Assert.Contains("Reject Task", rejectBtn.TextContent);
+
+        var cutClosed = Render<TaskDetail>(p => p.Add(t => t.TaskId, 21));
+        Assert.Empty(cutClosed.FindAll("button#btn-reject-task"));
+
+        var cutRejected = Render<TaskDetail>(p => p.Add(t => t.TaskId, 22));
+        Assert.Empty(cutRejected.FindAll("button#btn-reject-task"));
+    }
+
+    [Fact]
+    public async Task TaskDetail_ClickingRejectButton_OpensModal_AndRejectionUpdatesTaskStatus()
+    {
+        var task = new ForgeTask { Id = 30, WorkspaceId = 1, Title = "Detail Task to Reject", Status = TaskOverallStatus.Open };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskDetail>(p => p.Add(t => t.TaskId, 30));
+        var rejectBtn = cut.Find("button#btn-reject-task");
+        await rejectBtn.ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        var textarea = cut.Find("textarea#rejection-reason-input");
+        textarea.Change("Not viable anymore");
+
+        var confirmBtn = cut.Find("button#btn-confirm-reject");
+        await confirmBtn.ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.NotNull(_orchestrator.LastRejectCall);
+        Assert.Equal(30, _orchestrator.LastRejectCall.Value.TaskId);
+        Assert.Equal("Not viable anymore", _orchestrator.LastRejectCall.Value.Reason);
     }
 }

@@ -20,6 +20,14 @@ public class FakeTaskJobQueue : ITaskJobQueue
         InferenceQueue.Add(taskId);
         return $"job-inference-{taskId}-{Guid.NewGuid():N}";
     }
+
+    public List<string> DeletedJobs { get; } = new();
+
+    public bool Delete(string jobId)
+    {
+        DeletedJobs.Add(jobId);
+        return true;
+    }
 }
 
 public class FakeGitWorkspaceManager : IGitWorkspaceManager

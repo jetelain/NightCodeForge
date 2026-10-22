@@ -14,4 +14,9 @@ public interface ITaskJobQueue
     /// Enqueues a task with standard inference priority (llm-inference queue).
     /// </summary>
     string EnqueueInference(int taskId);
+
+    /// <summary>
+    /// Deletes or cancels an enqueued job by its Hangfire job identifier.
+    /// </summary>
+    bool Delete(string jobId);
 }

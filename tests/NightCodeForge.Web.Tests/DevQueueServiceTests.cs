@@ -767,6 +767,8 @@ public class DevQueueServiceTests : IDisposable
             EnqueuedInferenceTaskIds.Add(taskId);
             return "inference-job-id";
         }
+
+        public bool Delete(string jobId) => true;
     }
 
     private class TestDevQueueMarkdownSyncService : ITaskMarkdownSyncService

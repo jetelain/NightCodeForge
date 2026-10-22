@@ -48,12 +48,40 @@ public class InMemoryTaskJobQueue : ITaskJobQueue
     public bool TryDequeue(out EnqueuedJob? job)
     {
         // Prioritize urgent queue
-        if (_urgentJobs.TryDequeue(out job))
+        while (_urgentJobs.TryDequeue(out var candidate))
         {
-            return true;
+            lock (_allJobs)
+            {
+                if (_allJobs.Any(j => j.JobId == candidate.JobId))
+                {
+                    job = candidate;
+                    return true;
+                }
+            }
         }
 
-        return _inferenceJobs.TryDequeue(out job);
+        while (_inferenceJobs.TryDequeue(out var candidate))
+        {
+            lock (_allJobs)
+            {
+                if (_allJobs.Any(j => j.JobId == candidate.JobId))
+                {
+                    job = candidate;
+                    return true;
+                }
+            }
+        }
+
+        job = null;
+        return false;
+    }
+
+    public bool Delete(string jobId)
+    {
+        lock (_allJobs)
+        {
+            return _allJobs.RemoveAll(j => j.JobId == jobId) > 0;
+        }
     }
 
     public void Clear()

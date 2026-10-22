@@ -100,11 +100,11 @@
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Open ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Open)">
                 <span class="stat-chip-label">📂 Open</span>
-                <span class="stat-chip-val text-indigo">@_allTasks.Count(t => t.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(t.CurrentStageId))</span>
+                <span class="stat-chip-val text-indigo">@_allTasks.Count(t => BacklogStatusClassifier.IsOpenBacklog(t))</span>
             </div>
-            <div class="stat-chip" @onclick="() => FilterByStatus(TaskOverallStatus.Reviewed)">
+            <div class="stat-chip @(_statusFilter == TaskOverallStatus.Reviewed ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Reviewed)">
                 <span class="stat-chip-label">⚡ In-Flight</span>
-                <span class="stat-chip-val text-purple">@_allTasks.Count(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented || (t.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(t.CurrentStageId)))</span>
+                <span class="stat-chip-val text-purple">@_allTasks.Count(t => BacklogStatusClassifier.IsInFlight(t))</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Ready ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Ready)">
                 <span class="stat-chip-label">🔍 Ready</span>
@@ -113,6 +113,10 @@
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Closed ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Closed)">
                 <span class="stat-chip-label">✅ Closed</span>
                 <span class="stat-chip-val text-emerald">@_allTasks.Count(t => t.Status == TaskOverallStatus.Closed)</span>
+            </div>
+            <div class="stat-chip @(_statusFilter == TaskOverallStatus.Rejected ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Rejected)">
+                <span class="stat-chip-label">🗑️ Rejected</span>
+                <span class="stat-chip-val text-red">@_allTasks.Count(t => t.Status == TaskOverallStatus.Rejected)</span>
             </div>
         </div>
 
@@ -180,6 +184,8 @@
                     <option value="@TaskOverallStatus.Ready">Ready for Review</option>
                     <option value="@TaskOverallStatus.Closed">Closed &amp; Merged</option>
                     <option value="@TaskOverallStatus.Rejected">Rejected / Archived</option>
+                    <option value="@TaskOverallStatus.Cancelled">Cancelled</option>
+                    <option value="@TaskOverallStatus.Failed">Failed</option>
                 </select>
             </div>
         </div>
@@ -203,6 +209,7 @@
                              TaskDependencies="_dependenciesMap"
                              OnTaskSelected="OpenTask"
                              OnPromoteTask="OpenPromoteModal"
+                             OnRejectTask="OpenRejectModal"
                              OnLinkDependencies="OpenDependencyModal"
                              OnPriorityChanged="HandlePriorityChanged" />
             }
@@ -235,6 +242,11 @@
                                 AllDependencies="_allDependencies"
                                 OnClosed="CloseDepModal"
                                 OnSaved="ReloadTasksAsync" />
+
+        <TaskRejectionModal IsOpen="_showRejectModal"
+                            TargetTask="_selectedTask"
+                            OnClosed="CloseRejectModal"
+                            OnRejected="ReloadTasksAsync" />
     }
 </div>
 
@@ -267,6 +279,7 @@
     private bool _showCreateModal;
     private bool _showPromoteModal;
     private bool _showDepModal;
+    private bool _showRejectModal;
 
     private async Task HandleTaskCreated(ForgeTask createdTask)
     {
@@ -493,11 +506,11 @@
             if (_statusFilter == TaskOverallStatus.Reviewed)
             {
                 // Group In-Flight stages
-                query = query.Where(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented || (t.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(t.CurrentStageId)));
+                query = query.Where(t => BacklogStatusClassifier.IsInFlight(t));
             }
             else if (_statusFilter == TaskOverallStatus.Open)
             {
-                query = query.Where(t => t.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(t.CurrentStageId));
+                query = query.Where(t => BacklogStatusClassifier.IsOpenBacklog(t));
             }
             else
             {
@@ -570,6 +583,17 @@
     private void ClosePromoteModal()
     {
         _showPromoteModal = false;
+    }
+
+    private void OpenRejectModal(ForgeTask task)
+    {
+        _selectedTask = task;
+        _showRejectModal = true;
+    }
+
+    private void CloseRejectModal()
+    {
+        _showRejectModal = false;
     }
 
     private void OpenDependencyModal(ForgeTask task)

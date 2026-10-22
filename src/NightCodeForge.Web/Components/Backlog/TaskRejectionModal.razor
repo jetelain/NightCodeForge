@@ -1,0 +1,104 @@
+@namespace NightCodeForge.Web.Components.Backlog
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Web.Services
+@inject ITaskMutationService TaskMutationService
+@inject ToastService ToastService
+@inject ILogger<TaskRejectionModal> Logger
+
+@if (IsOpen && TargetTask != null)
+{
+    <div class="forge-modal-backdrop" @onclick="Close">
+        <div class="forge-modal card-glass task-rejection-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="reject-modal-title">
+            <div class="modal-header">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="font-size: 1.25rem;">🗑️</span>
+                    <h3 id="reject-modal-title" style="margin: 0; font-size: 1.15rem; font-weight: 600; color: var(--text-primary);">
+                        Reject Task #@TargetTask.Id
+                    </h3>
+                </div>
+                <button type="button" class="btn-icon" @onclick="Close" aria-label="Close dialog">✕</button>
+            </div>
+
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 1rem;">
+                <div>
+                    <h4 style="margin: 0 0 0.35rem 0; font-size: 0.95rem; color: var(--text-primary);">@TargetTask.Title</h4>
+                    <p style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">
+                        Rejecting will move this task to <strong>Archived/Rejected</strong> status, cancel any pending execution jobs, and preserve the task in audit history.
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label for="rejection-reason-input" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                        Rejection Reason (Optional)
+                    </label>
+                    <textarea id="rejection-reason-input"
+                              class="form-control-dark font-mono"
+                              rows="3"
+                              style="width: 100%; font-size: 0.85rem; padding: 0.5rem;"
+                              placeholder="Reason for rejecting this task (e.g. duplicate, obsolete, out of scope)..."
+                              @bind="_reason"
+                              disabled="@_isSubmitting"></textarea>
+                </div>
+            </div>
+
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; align-items: center; gap: 0.75rem; margin-top: 0.5rem;">
+                <button type="button" class="forge-btn forge-btn-secondary" @onclick="Close" disabled="@_isSubmitting">
+                    Cancel
+                </button>
+                <button type="button" class="forge-btn forge-btn-danger" id="btn-confirm-reject" @onclick="ConfirmRejectAsync" disabled="@_isSubmitting">
+                    @(_isSubmitting ? "Rejecting..." : "Confirm Rejection")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public ForgeTask? TargetTask { get; set; }
+    [Parameter] public EventCallback OnClosed { get; set; }
+    [Parameter] public EventCallback<ForgeTask> OnRejected { get; set; }
+
+    private string _reason = string.Empty;
+    private bool _isSubmitting;
+
+    protected override void OnParametersSet()
+    {
+        if (IsOpen)
+        {
+            _reason = string.Empty;
+            _isSubmitting = false;
+        }
+    }
+
+    private async Task Close()
+    {
+        if (_isSubmitting) return;
+        await OnClosed.InvokeAsync();
+    }
+
+    private async Task ConfirmRejectAsync()
+    {
+        if (TargetTask == null || _isSubmitting) return;
+
+        _isSubmitting = true;
+        try
+        {
+            var task = TargetTask;
+            var reason = string.IsNullOrWhiteSpace(_reason) ? null : _reason.Trim();
+            await TaskMutationService.RejectTaskAsync(task, reason);
+            ToastService.Show("Task Rejected", $"Task #{task.Id} was moved to Archived/Rejected.", ToastLevel.Warning);
+            await OnRejected.InvokeAsync(task);
+            await OnClosed.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to reject Task #{TaskId}", TargetTask.Id);
+            ToastService.Show("Rejection Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+}

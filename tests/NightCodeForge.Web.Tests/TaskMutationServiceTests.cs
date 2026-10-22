@@ -12,6 +12,7 @@ public class TaskMutationServiceTests
     private readonly InMemoryTaskRepository _taskRepository;
     private readonly InMemoryWorkspaceRepository _workspaceRepository;
     private readonly MockTaskMarkdownSyncService _markdownSync;
+    private readonly MockTaskOrchestrator _taskOrchestrator;
     private readonly TaskMutationService _service;
     private readonly Workspace _workspace;
 
@@ -20,11 +21,13 @@ public class TaskMutationServiceTests
         _taskRepository = new InMemoryTaskRepository();
         _workspaceRepository = new InMemoryWorkspaceRepository();
         _markdownSync = new MockTaskMarkdownSyncService();
+        _taskOrchestrator = new MockTaskOrchestrator();
 
         _service = new TaskMutationService(
             _taskRepository,
             _workspaceRepository,
             _markdownSync,
+            _taskOrchestrator,
             NullLogger<TaskMutationService>.Instance);
 
         _workspace = new Workspace
@@ -219,5 +222,28 @@ public class TaskMutationServiceTests
         Assert.Equal(2, lastSync.Dependencies!.Count);
         Assert.Contains(88, lastSync.Dependencies);
         Assert.Contains(99, lastSync.Dependencies);
+    }
+
+    [Fact]
+    public async Task RejectTaskAsync_DelegatesToOrchestrator_WithReason_AndUpdatesEntityStatus()
+    {
+        var task = new ForgeTask
+        {
+            Id = 42,
+            WorkspaceId = 1,
+            Title = "To be rejected",
+            Status = TaskOverallStatus.Open,
+            IsWaitingForHuman = true,
+            UpdatedAt = DateTime.UtcNow.AddHours(-1)
+        };
+        await _service.RejectTaskAsync(task, "Not needed anymore");
+
+        Assert.NotNull(_taskOrchestrator.LastRejectCall);
+        Assert.Equal(42, _taskOrchestrator.LastRejectCall.Value.TaskId);
+        Assert.Equal("Not needed anymore", _taskOrchestrator.LastRejectCall.Value.Reason);
+
+        Assert.Equal(TaskOverallStatus.Rejected, task.Status);
+        Assert.False(task.IsWaitingForHuman);
+        Assert.True(task.UpdatedAt > DateTime.UtcNow.AddMinutes(-5));
     }
 }

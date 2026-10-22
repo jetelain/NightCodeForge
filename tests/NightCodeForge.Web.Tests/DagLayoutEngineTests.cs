@@ -120,4 +120,88 @@ public class DagLayoutEngineTests
         Assert.Equal(2, layout.Nodes.Count);
         Assert.Equal(2, layout.Edges.Count);
     }
+
+    [Fact]
+    public void ComputeLayout_UnstartedOpenTask_WithPendingPrerequisite_IsBlockedAndNotInFlight()
+    {
+        var prereq = new ForgeTask { Id = 1, Title = "Prereq Open", Status = TaskOverallStatus.Open };
+        var task4 = new ForgeTask
+        {
+            Id = 4,
+            Title = "Promoted Task 4",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = false,
+            CurrentStageId = "task-review"
+        };
+
+        var tasks = new List<ForgeTask> { prereq, task4 };
+        var deps = new List<(int TaskId, int DependsOnTaskId)> { (TaskId: 4, DependsOnTaskId: 1) };
+
+        var layout = _engine.ComputeLayout(tasks, deps);
+        var node4 = layout.Nodes.First(n => n.Task.Id == 4);
+
+        Assert.True(node4.IsBlocked);
+        Assert.False(node4.IsInFlight);
+        Assert.False(node4.IsReadyToExecute);
+        Assert.Equal("🔒 Blocked (1)", node4.StatusLabel);
+    }
+
+    [Fact]
+    public void ComputeLayout_UnstartedOpenTask_WithNoBlockers_IsReadyAndNotInFlight()
+    {
+        var task4 = new ForgeTask
+        {
+            Id = 4,
+            Title = "Unblocked Open Task",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = false,
+            CurrentStageId = "task-review"
+        };
+
+        var layout = _engine.ComputeLayout(new[] { task4 }, Array.Empty<(int, int)>());
+        var node4 = layout.Nodes.First(n => n.Task.Id == 4);
+
+        Assert.False(node4.IsBlocked);
+        Assert.False(node4.IsInFlight);
+        Assert.True(node4.IsReadyToExecute);
+        Assert.Equal("🟢 Ready", node4.StatusLabel);
+    }
+
+    [Fact]
+    public void ComputeLayout_ExecutingOpenTask_IsInFlight()
+    {
+        var task4 = new ForgeTask
+        {
+            Id = 4,
+            Title = "Executing Task",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true,
+            CurrentStageId = "task-review"
+        };
+
+        var layout = _engine.ComputeLayout(new[] { task4 }, Array.Empty<(int, int)>());
+        var node4 = layout.Nodes.First(n => n.Task.Id == 4);
+
+        Assert.True(node4.IsInFlight);
+        Assert.Equal("In-Flight: task-review", node4.StatusLabel);
+    }
+
+    [Fact]
+    public void ComputeLayout_RejectedAndFailedTasks_HaveAppropriateLabelsAndColors()
+    {
+        var rejected = new ForgeTask { Id = 10, Title = "Rejected Task", Status = TaskOverallStatus.Rejected };
+        var failed = new ForgeTask { Id = 11, Title = "Failed Task", Status = TaskOverallStatus.Failed };
+
+        var layout = _engine.ComputeLayout(new[] { rejected, failed }, Array.Empty<(int, int)>());
+
+        var nodeRejected = layout.Nodes.First(n => n.Task.Id == 10);
+        Assert.Equal("🗑️ Rejected", nodeRejected.StatusLabel);
+        Assert.Equal("#2a151b", nodeRejected.FillColor);
+        Assert.Equal("#ef4444", nodeRejected.StrokeColor);
+
+        var nodeFailed = layout.Nodes.First(n => n.Task.Id == 11);
+        Assert.Equal("❌ Failed", nodeFailed.StatusLabel);
+        Assert.Equal("#2a151b", nodeFailed.FillColor);
+        Assert.Equal("#ef4444", nodeFailed.StrokeColor);
+    }
 }

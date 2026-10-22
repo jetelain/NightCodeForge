@@ -1,7 +1,7 @@
 @inherits LayoutComponentBase
 
 <div class="forge-layout @(_isSidebarCollapsed ? "sidebar-collapsed" : "")">
-    <NavMenu OnToggleSidebar="ToggleSidebar" />
+    <NavMenu IsCollapsed="_isSidebarCollapsed" OnToggleSidebar="ToggleSidebar" />
     
     <TopNavBar />
 

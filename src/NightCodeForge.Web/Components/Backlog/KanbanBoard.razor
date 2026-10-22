@@ -1,11 +1,12 @@
 @namespace NightCodeForge.Web.Components.Backlog
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Web.Services
 
 <div class="kanban-board-container">
     <div class="kanban-columns-grid">
         <!-- Column 1: Suggested / Triage -->
         @{
-            var suggestedTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Suggested).ToList();
+            var suggestedTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t) == BacklogKanbanColumn.Suggested).ToList();
         }
         <div class="kanban-column column-suggested">
             <div class="column-header">
@@ -30,6 +31,7 @@
                                     PrerequisiteIds="prereqs"
                                     OnClick="OnTaskSelected"
                                     OnPromote="OnPromoteTask"
+                                    OnReject="OnRejectTask"
                                     OnLinkDependencies="OnLinkDependencies"
                                     OnPriorityChanged="OnPriorityChanged" />
                     }
@@ -39,7 +41,7 @@
 
         <!-- Column 2: Open / Backlog -->
         @{
-            var openTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(t.CurrentStageId)).ToList();
+            var openTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t) == BacklogKanbanColumn.Open).ToList();
         }
         <div class="kanban-column column-open">
             <div class="column-header">
@@ -64,6 +66,7 @@
                                     PrerequisiteIds="prereqs"
                                     OnClick="OnTaskSelected"
                                     OnPromote="OnPromoteTask"
+                                    OnReject="OnRejectTask"
                                     OnLinkDependencies="OnLinkDependencies"
                                     OnPriorityChanged="OnPriorityChanged" />
                     }
@@ -73,7 +76,7 @@
 
         <!-- Column 3: In-Flight -->
         @{
-            var inFlightTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Reviewed || t.Status == TaskOverallStatus.Implemented || (t.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(t.CurrentStageId))).ToList();
+            var inFlightTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t) == BacklogKanbanColumn.InFlight).ToList();
         }
         <div class="kanban-column column-inflight">
             <div class="column-header">
@@ -98,6 +101,7 @@
                                     PrerequisiteIds="prereqs"
                                     OnClick="OnTaskSelected"
                                     OnPromote="OnPromoteTask"
+                                    OnReject="OnRejectTask"
                                     OnLinkDependencies="OnLinkDependencies"
                                     OnPriorityChanged="OnPriorityChanged" />
                     }
@@ -107,7 +111,7 @@
 
         <!-- Column 4: Ready for Review -->
         @{
-            var readyTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Ready).ToList();
+            var readyTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t) == BacklogKanbanColumn.ReadyForReview).ToList();
         }
         <div class="kanban-column column-ready">
             <div class="column-header">
@@ -132,6 +136,7 @@
                                     PrerequisiteIds="prereqs"
                                     OnClick="OnTaskSelected"
                                     OnPromote="OnPromoteTask"
+                                    OnReject="OnRejectTask"
                                     OnLinkDependencies="OnLinkDependencies"
                                     OnPriorityChanged="OnPriorityChanged" />
                     }
@@ -141,7 +146,7 @@
 
         <!-- Column 5: Closed & Terminal -->
         @{
-            var closedTasks = Tasks.Where(t => t.Status == TaskOverallStatus.Closed || t.Status == TaskOverallStatus.Rejected || t.Status == TaskOverallStatus.Failed).ToList();
+            var closedTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t) == BacklogKanbanColumn.Closed).ToList();
         }
         <div class="kanban-column column-closed">
             <div class="column-header">
@@ -166,6 +171,7 @@
                                     PrerequisiteIds="prereqs"
                                     OnClick="OnTaskSelected"
                                     OnPromote="OnPromoteTask"
+                                    OnReject="OnRejectTask"
                                     OnLinkDependencies="OnLinkDependencies"
                                     OnPriorityChanged="OnPriorityChanged" />
                     }
@@ -180,6 +186,7 @@
     [Parameter] public IReadOnlyDictionary<int, IReadOnlyList<int>> TaskDependencies { get; set; } = new Dictionary<int, IReadOnlyList<int>>();
     [Parameter] public EventCallback<ForgeTask> OnTaskSelected { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnPromoteTask { get; set; }
+    [Parameter] public EventCallback<ForgeTask> OnRejectTask { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnLinkDependencies { get; set; }
     [Parameter] public EventCallback<(ForgeTask Task, int NewPriority)> OnPriorityChanged { get; set; }
 }

@@ -18,4 +18,12 @@ public class MockTaskJobQueue : ITaskJobQueue
         InferenceEnqueued.Add(taskId);
         return $"job-inference-{taskId}";
     }
+
+    public List<string> DeletedJobs { get; } = new();
+
+    public bool Delete(string jobId)
+    {
+        DeletedJobs.Add(jobId);
+        return true;
+    }
 }

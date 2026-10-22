@@ -108,6 +108,12 @@
                             🚀 Triage / Promote
                         </button>
                     }
+                    @if (_task.Status != TaskOverallStatus.Closed && _task.Status != TaskOverallStatus.Rejected)
+                    {
+                        <button type="button" class="forge-btn forge-btn-danger" id="btn-reject-task" @onclick="() => _showRejectModal = true">
+                            🗑️ Reject Task
+                        </button>
+                    }
                     <a href="/inspector/@_task.Id" class="forge-btn forge-btn-secondary" style="text-decoration: none;" id="btn-inspect-task">
                         🔍 Live Inspector
                     </a>
@@ -520,6 +526,12 @@
                                   TargetTask="_task"
                                   OnClosed="() => _showPromoteModal = false"
                                   OnPromoted="ReloadTaskAsync" />
+
+        <!-- Maintainer Rejection Modal -->
+        <TaskRejectionModal IsOpen="_showRejectModal"
+                            TargetTask="_task"
+                            OnClosed="() => _showRejectModal = false"
+                            OnRejected="ReloadTaskAsync" />
     }
 </div>
 
@@ -555,6 +567,7 @@
     // Modals
     private bool _showDepModal;
     private bool _showPromoteModal;
+    private bool _showRejectModal;
 
     protected override async Task OnInitializedAsync()
     {

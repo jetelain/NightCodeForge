@@ -4,6 +4,7 @@ using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
+using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Components.Backlog;
 using NightCodeForge.Web.Services;
 using Xunit;
@@ -33,10 +34,13 @@ public class DependencyLinkingModalTests : BunitContext
         Services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton(_toastService);
+        var mockOrchestrator = new MockTaskOrchestrator();
+        Services.AddSingleton<ITaskOrchestrator>(mockOrchestrator);
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),
             _markdownSync,
+            mockOrchestrator,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
     }
 

@@ -2,6 +2,7 @@ using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Components.Backlog;
 using NightCodeForge.Web.Services;
 using Xunit;
@@ -26,10 +27,13 @@ public class TaskDetailDrawerHistoryIntegrationTests : BunitContext
         Services.AddSingleton<IDevQueueService>(_devQueueService);
         Services.AddSingleton(_toastService);
         Services.AddSingleton<ITaskHistoryDiffService>(_diffService);
+        var mockOrchestrator = new MockTaskOrchestrator();
+        Services.AddSingleton<ITaskOrchestrator>(mockOrchestrator);
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),
             new MockTaskMarkdownSyncService(),
+            mockOrchestrator,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
     }
 

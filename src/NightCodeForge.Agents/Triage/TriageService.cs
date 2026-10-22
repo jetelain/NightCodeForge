@@ -177,7 +177,7 @@ public class TriageService : ITriageService
                     MergeMode = MergeMode.ManualReviewRequired,
                     BaseBranch = baseBranch,
                     Priority = p.Priority > 0 ? p.Priority : TaskPriority.Normal,
-                    CurrentStageId = StandardStageIds.TaskReview,
+                    CurrentStageId = string.Empty,
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
                 };

@@ -40,4 +40,10 @@ public interface ITaskOrchestrator
     /// Completes a task by squash-merging its branch into base branch and cascades unblocking to dependent DAG tasks.
     /// </summary>
     Task CompleteTaskAndCascadeAsync(int taskId, string finalCommitMessage, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Transitions a non-terminal task to Rejected status, evicts/cancels any queued Hangfire jobs,
+    /// records user audit history, updates dependency graph, and syncs markdown frontmatter to disk.
+    /// </summary>
+    Task RejectTaskAsync(int taskId, string? reason = null, CancellationToken cancellationToken = default);
 }

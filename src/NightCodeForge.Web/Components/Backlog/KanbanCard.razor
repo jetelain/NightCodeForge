@@ -136,6 +136,16 @@
                 🚀 Triage
             </button>
         }
+        @if (Task.Status != TaskOverallStatus.Closed && Task.Status != TaskOverallStatus.Rejected)
+        {
+            <button type="button"
+                    class="forge-btn forge-btn-danger btn-xs reject-btn"
+                    @onclick="HandleReject"
+                    @onclick:stopPropagation="true"
+                    title="Reject Task">
+                🗑️ Reject
+            </button>
+        }
         <button type="button"
                 class="forge-btn forge-btn-secondary btn-xs"
                 @onclick="HandleLinkDependencies"
@@ -158,6 +168,7 @@
     [Parameter] public IReadOnlyList<int> PrerequisiteIds { get; set; } = Array.Empty<int>();
     [Parameter] public EventCallback<ForgeTask> OnClick { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnPromote { get; set; }
+    [Parameter] public EventCallback<ForgeTask> OnReject { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnLinkDependencies { get; set; }
     [Parameter] public EventCallback<(ForgeTask Task, int NewPriority)> OnPriorityChanged { get; set; }
 
@@ -249,6 +260,7 @@
 
     private async Task HandleClick() => await OnClick.InvokeAsync(Task);
     private async Task HandlePromote() => await OnPromote.InvokeAsync(Task);
+    private async Task HandleReject() => await OnReject.InvokeAsync(Task);
     private async Task HandleLinkDependencies() => await OnLinkDependencies.InvokeAsync(Task);
 
     private static string TruncateDescription(string desc, int maxLength)

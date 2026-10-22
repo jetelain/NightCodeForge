@@ -1069,7 +1069,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     FeatureBranch = nt.Item.Frontmatter.FeatureBranch ?? string.Empty,
                     Status = TaskOverallStatus.Suggested,
                     Origin = ParseOrigin(nt.Item.Frontmatter.Origin),
-                    CurrentStageId = StandardStageIds.TaskReview,
+                    CurrentStageId = string.Empty,
                     CreatedAt = nt.Item.Frontmatter.CreatedAt ?? TryExtractDateFromPath(nt.Item.FilePath) ?? DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow,
                     Version = 1
@@ -1618,7 +1618,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? WorkflowDefaults.DefaultBaseBranch : frontmatter.BaseBranch,
                 Status = TaskOverallStatus.Suggested,
                 Origin = ParseOrigin(frontmatter.Origin),
-                CurrentStageId = StandardStageIds.TaskReview,
+                CurrentStageId = string.Empty,
                 CreatedAt = frontmatter.CreatedAt ?? TryExtractDateFromPath(filePath) ?? DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
                 Version = 1

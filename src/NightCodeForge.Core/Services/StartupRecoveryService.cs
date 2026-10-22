@@ -277,7 +277,8 @@ public class StartupRecoveryService : IStartupRecoveryService
                 }, cancellationToken);
 
                 // Head-of-line priority re-enqueue
-                _jobQueue.EnqueueUrgent(task.Id);
+                task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
+                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
                 reconciledCount++;
             }
         }

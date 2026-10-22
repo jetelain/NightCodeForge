@@ -1,6 +1,7 @@
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Services;
 
@@ -15,6 +16,7 @@ public interface ITaskMutationService
     Task UpdatePriorityAsync(ForgeTask task, int newPriority, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
     Task UpdateMergeModeAsync(ForgeTask task, MergeMode newMergeMode, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
     Task UpdateDependenciesAsync(ForgeTask task, IEnumerable<int> prerequisiteIds, CancellationToken cancellationToken = default);
+    Task RejectTaskAsync(ForgeTask task, string? reason = null, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -26,18 +28,33 @@ public class TaskMutationService : ITaskMutationService
     private readonly ITaskRepository _taskRepository;
     private readonly IWorkspaceRepository _workspaceRepository;
     private readonly ITaskMarkdownSyncService _markdownSyncService;
+    private readonly ITaskOrchestrator _taskOrchestrator;
     private readonly ILogger<TaskMutationService> _logger;
 
     public TaskMutationService(
         ITaskRepository taskRepository,
         IWorkspaceRepository workspaceRepository,
         ITaskMarkdownSyncService markdownSyncService,
+        ITaskOrchestrator taskOrchestrator,
         ILogger<TaskMutationService> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
+        _taskOrchestrator = taskOrchestrator ?? throw new ArgumentNullException(nameof(taskOrchestrator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    public async Task RejectTaskAsync(
+        ForgeTask task,
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        await _taskOrchestrator.RejectTaskAsync(task.Id, reason, cancellationToken);
+        task.Status = TaskOverallStatus.Rejected;
+        task.IsWaitingForHuman = false;
+        task.UpdatedAt = DateTime.UtcNow;
     }
 
     public async Task UpdateTitleAsync(

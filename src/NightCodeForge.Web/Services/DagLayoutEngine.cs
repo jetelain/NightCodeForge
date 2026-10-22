@@ -232,9 +232,9 @@ public class DagLayoutEngine : IDagLayoutEngine
         Dictionary<int, ForgeTask> taskMap)
     {
         var blockers = prereqIds.Count(p => taskMap.TryGetValue(p, out var pt) && pt.Status != TaskOverallStatus.Closed);
-        var isBlocked = task.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(task.CurrentStageId) && blockers > 0;
         var isInFlight = IsInFlight(task);
-        var isReadyToExecute = task.Status == TaskOverallStatus.Open && string.IsNullOrWhiteSpace(task.CurrentStageId) && blockers == 0;
+        var isBlocked = task.Status == TaskOverallStatus.Open && !isInFlight && blockers > 0;
+        var isReadyToExecute = task.Status == TaskOverallStatus.Open && !isInFlight && blockers == 0;
 
         return new DagLayoutNode
         {
@@ -257,10 +257,7 @@ public class DagLayoutEngine : IDagLayoutEngine
         };
     }
 
-    public static bool IsInFlight(ForgeTask task) =>
-        task.Status == TaskOverallStatus.Reviewed ||
-        task.Status == TaskOverallStatus.Implemented ||
-        (task.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(task.CurrentStageId));
+    public static bool IsInFlight(ForgeTask task) => BacklogStatusClassifier.IsInFlight(task);
 
     public static string GetNodeFillColor(ForgeTask task, bool isBlocked, bool isInFlight)
     {
@@ -311,7 +308,7 @@ public class DagLayoutEngine : IDagLayoutEngine
         if (task.IsWaitingForHuman) return "⚠️ Waiting Human";
         if (isBlocked) return $"🔒 Blocked ({blockerCount})";
         if (isReadyToExecute) return "🟢 Ready";
-        if (task.Status == TaskOverallStatus.Open && !string.IsNullOrWhiteSpace(task.CurrentStageId))
+        if (task.Status == TaskOverallStatus.Open && task.HasExecutionRun && !string.IsNullOrWhiteSpace(task.CurrentStageId))
         {
             return $"In-Flight: {task.CurrentStageId}";
         }
@@ -322,8 +319,8 @@ public class DagLayoutEngine : IDagLayoutEngine
             TaskOverallStatus.Implemented => "Stage 3: Implemented",
             TaskOverallStatus.Ready => "🔍 Ready for Review",
             TaskOverallStatus.Closed => "✅ Closed",
-            TaskOverallStatus.Rejected => "Archived",
-            TaskOverallStatus.Failed => "Failed",
+            TaskOverallStatus.Rejected => "🗑️ Rejected",
+            TaskOverallStatus.Failed => "❌ Failed",
             _ => task.Status.ToString()
         };
     }

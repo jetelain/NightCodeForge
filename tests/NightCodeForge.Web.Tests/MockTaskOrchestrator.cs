@@ -10,7 +10,14 @@ public class MockTaskOrchestrator : ITaskOrchestrator
     public (int TaskId, IReadOnlyDictionary<int, string> Answers)? LastSubmitAnswersCall { get; private set; }
     public (int TaskId, string RevisionNotes)? LastRequestChangesCall { get; private set; }
     public (int TaskId, string FinalCommitMessage)? LastCompleteTaskCall { get; private set; }
+    public (int TaskId, string? Reason)? LastRejectCall { get; private set; }
     public int? LastProcessedTaskId { get; private set; }
+
+    public Task RejectTaskAsync(int taskId, string? reason = null, CancellationToken cancellationToken = default)
+    {
+        LastRejectCall = (taskId, reason);
+        return Task.CompletedTask;
+    }
 
     public Task PromoteSuggestedTaskAsync(int taskId, TaskOverallStatus targetStatus, int priority, MergeMode mergeMode, CancellationToken cancellationToken = default)
     {
