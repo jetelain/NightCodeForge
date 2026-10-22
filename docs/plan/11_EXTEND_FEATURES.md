@@ -27,6 +27,7 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
    - **Step 11.19:** Conversational UI Unification, Stepper Running Hygiene, Review File Tree & Syntax Highlighting — reusing `AgentQuestionTurnCard` in the Question Inbox, fixing the Pipeline Stepper false "Pending" state during active runs, unifying Task Inspector and Ideation chat to share a compact, readable conversation UI, and adding sticky navigation, hierarchical directory tree view (preventing truncated filenames), and simple syntax highlighting in the Review Room.
    - **Step 11.20:** Live Operations Telemetry Refinement, Command Transparency & Context Sizing — 500ms dynamic ticking timer preventing frozen elapsed duration on large tool generation, clean static badge styling, container command transparency logging real commands instead of persistent wrappers, and accurate full prompt context sizing.
    - **Step 11.21:** Dynamic Tool Timeouts, Container ICU & User Permissions, and Review Rejection Test Mandate — dynamic bash timeout formula $\max(300\text{s}, \text{build} + \text{test})$, full `libicu-dev` & locales in container base image fixing `NETSDK1188`, preserving host user name and group (`-u $(id -u):$(id -g)`) to eliminate workspace file permission conflicts, and mandatory automated regression test authoring contract on Review rejection.
+   - **Step 11.22:** Container Git Worktree Relative Paths & Cross-Environment Portability — bidirectional relative Git worktree pointer normalization (`<worktree>/.git` and `<clone>/.git/worktrees/.../gitdir`) with Windows WSL UNC path resolution and `worktree.useRelativePaths = true`, resolving Exit Code 128 "fatal: not a git repository" errors in container sandboxes.
    - **Step 11.5:** Ideation Quick Notes, Suggestions Backlog & Conversational Refinement.
    - **Step 11.1:** Heterogeneous Dual Model Architecture (Reviewer vs Coder models) and difficulty escalation.
    - **Step 11.3:** Smart CLI Output Filtering (compiler and test noise suppression for 95% token savings).
@@ -63,6 +64,7 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
 | **11.19** | [🎨 Step 11.19: Conversational UI Unification, Stepper Running Hygiene, Review File Tree & Syntax Highlighting](phase-11/STEP_11_19_CONVERSATIONAL_UI_UNIFICATION_AND_REVIEW_ERGONOMICS.md) | Reuse `AgentQuestionTurnCard` in `/inbox`, fix `PipelineStepper` false "Pending" state during active runs, unify `StageConversationViewer` with `Ideation` compact bubble layout, provide sticky file tree with `/inspector` link, hierarchical tree view preventing path truncation, and DiffViewer syntax highlighting. | **Top Priority** |
 | **11.20** | [⚡ Step 11.20: Live Operations Telemetry Refinement, Command Transparency & Context Sizing](phase-11/STEP_11_20_LIVE_TELEMETRY_REFINEMENT_AND_COMMAND_TRANSPARENCY.md) | Dynamic 500ms ticker preventing frozen elapsed time during large tool generation, clean static badges (remove pulse animations), real command logging in container executor, and full prompt context sizing across telemetry. | **Top Priority** |
 | **11.21** | [🛡️ Step 11.21: Dynamic Tool Timeouts, Container ICU & User Permissions, and Review Rejection Test Mandate](phase-11/STEP_11_21_CONTAINER_ICU_DYNAMIC_TIMEOUTS_AND_REVIEW_TEST_MANDATE.md) | Dynamic bash tool timeout $\max(300\text{s}, \text{build} + \text{test})$, install `libicu-dev` & locales in base container image (resolving `NETSDK1188`), preserve host user/group permissions (`-u $(id -u):$(id -g)`), and mandate automated test creation for each bug upon review rejection. | **Top Priority** |
+| **11.22** | [🌳 Step 11.22: Container Git Worktree Relative Paths & Cross-Environment Portability](phase-11/STEP_11_22_CONTAINER_GIT_WORKTREE_RELATIVE_PATHS_AND_PORTABILITY.md) | Enforce bidirectional relative Git worktree pointers (`<worktree>/.git` and `<clone>/.git/worktrees/.../gitdir`), resolve Windows WSL UNC paths via `ResolveHostAccessiblePath`, set `worktree.useRelativePaths = true`, and add startup legacy worktree repair. | **Top Priority** |
 | **11.5** | [💡 Step 11.5: Ideation Quick Notes, Suggestions & Conversational Refinement](phase-11/STEP_11_5_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md) | Quick notes backlog intake ("Think Now, Chat Later"); proposal card lifecycle (`Approve` $\rightarrow$ Open, `Keep as Suggestion` $\rightarrow$ Suggested, `Discard` $\rightarrow$ Delete); "Refine in Ideation" pre-seeded chat; scoped `edit_task` tools; 24h draft pruning. | Planned |
 | **11.1** | [🧠 Step 11.1: Dual Model Role Configuration & Difficulty Escalation](phase-11/STEP_11_1_DUAL_MODEL_ROLE_CONFIGURATION_AND_DIFFICULTY_ESCALATION.md) | Heterogeneous model architecture: Architect/Reviewer model (e.g. Qwen 3.8 27B) for ideation, review, code review; Coder model (e.g. Qwen 3.6 35B A3B) for fast coding; dynamic difficulty escalation for difficult/expert tasks. | Planned |
 | **11.3** | [🧹 Step 11.3: Smart CLI & Build Tool Output Filtering (Context Compression)](phase-11/STEP_11_3_SMART_CLI_AND_BASH_OUTPUT_FILTERING.md) | Semantic output filtering for verbose CLI tools (`dotnet build`, `dotnet test`, `npm`). Relativizes paths, strips SDK boilerplates, drops non-fatal warnings when errors exist, preserving raw transcripts on disk. | Planned |
@@ -158,6 +160,18 @@ flowchart LR
     Router["OllamaRouter (/api/ps & /monitor)"] --> Telemetry
     Telemetry --> Hub["OrchestratorHub (SignalR)"]
     Hub --> MonitorUI["/monitoring Live Operations Console"]
+```
+
+### 3.8 Step 11.22: Container Git Worktree Relative Paths & Cross-Environment Portability
+```mermaid
+flowchart LR
+    subgraph HostAndWsl ["Host / WSL / Container Unified Filesystem"]
+        WorktreeGit[".git in task-{id}<br/><code>gitdir: ../clone/.git/worktrees/task-{id}</code>"]
+        WorktreesMeta["clone/.git/worktrees/task-{id}/gitdir<br/><code>../../../task-{id}/.git</code>"]
+    end
+    WorktreeGit <-->|Bidirectional Relative Traversal| WorktreesMeta
+    HostAndWsl --> ResolvesHost["Resolves seamlessly on Host (Windows UNC & Linux)"]
+    HostAndWsl --> ResolvesContainer["Resolves seamlessly inside Container (/workspace)"]
 ```
 
 ---
@@ -260,6 +274,15 @@ flowchart LR
   - [ ] Configure container environment `$HOME` and relocate shared package caches (`/cache/nuget` with `NUGET_PACKAGES=/cache/nuget`) ensuring zero-redownload parity for non-root UIDs.
   - [ ] Update `StandardWorkflowDefinitions.cs` review stage directive requiring automated unit/integration tests for each bug upon rejection.
   - [ ] Update `CrucibleAgentHarness.cs` review and implementation loopback directives to enforce the bug regression test mandate.
+- [ ] **Step 11.22 (Container Git Worktree Relative Paths & Cross-Environment Portability):**
+  - [ ] Enforce bidirectional relative worktree pointers in `GitWorkspaceManager` (`../{cloneDir}/.git/worktrees/task-{id}` forward and `../../../task-{id}/.git` reverse).
+  - [ ] Ensure all worktree `.git` file I/O operations resolve Windows WSL UNC paths via `ResolveHostAccessiblePath(path)`.
+  - [ ] Add `EnsureWorktreeRelativePathsAsync(Workspace workspace, int taskId)` to `IGitWorkspaceManager` and `GitWorkspaceManager`.
+  - [ ] Configure `worktree.useRelativePaths = true` on the canonical repository.
+  - [ ] Enforce relative normalization unconditionally in `EnsureWorktreeAsync`, even when `isWorktreeRegistered == true`.
+  - [ ] Integrate worktree relative path verification into `ExecutionEnvironmentProvider` and container pre-flight.
+  - [ ] Update `StartupRecoveryService` to migrate legacy absolute worktree pointers on startup.
+  - [ ] Author unit tests in `GitWorkspaceManagerTests` verifying relative forward/reverse pointers, UNC path resolution, idempotency, and clean Git CLI execution.
 - [ ] **Step 11.5 (Ideation Quick Notes & Suggestions):** Quick notes bar, proposal card tri-state actions, "Refine in Ideation", scoped `edit_task` tools, 24h pruning.
 - [ ] **Step 11.1 (Dual Model Role Configuration):** Architect/Reviewer model vs Coder model, dynamic escalation on difficult tasks.
 - [ ] **Step 11.3 (Smart CLI Output Filtering):** Compiler & test noise suppression, workspace path relativization.

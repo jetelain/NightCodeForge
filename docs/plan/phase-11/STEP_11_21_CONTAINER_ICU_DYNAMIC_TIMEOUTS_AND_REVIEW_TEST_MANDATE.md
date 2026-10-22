@@ -210,6 +210,7 @@ To eliminate file permission conflicts where files generated inside the containe
        ```csharp
        await _stdin!.WriteLineAsync("git config --global --add safe.directory '*' 2>/dev/null || true");
        ```
+   - *Note:* For Git worktree bidirectional relative path normalization across container sandboxes (resolving Exit Code 128 `fatal: not a git repository`), see [Step 11.22](STEP_11_22_CONTAINER_GIT_WORKTREE_RELATIVE_PATHS_AND_PORTABILITY.md).
 
 5. **Shared Package Cache Preservation (`NUGET_PACKAGES=/cache/nuget`):**
    - **The Problem:** In the legacy setup, `NightCodeForgeContainerExecutor.BuildVolumeMounts` mounted host caches to `/root/.nuget/packages` and `/root/.npm`. When running with `-u $(id -u):$(id -g)`, a non-root user cannot traverse `/root` (`chmod 700`). Furthermore, the .NET SDK defaults to `$HOME/.nuget/packages`, completely ignoring `/root/.nuget/packages`.
