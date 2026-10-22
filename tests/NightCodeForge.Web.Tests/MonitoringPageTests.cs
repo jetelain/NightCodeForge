@@ -465,4 +465,85 @@ public class MonitoringPageTests : BunitContext
         Assert.NotNull(_uiService.SelectedShellCommand);
         Assert.Contains("initial more output", _uiService.SelectedShellCommand.OutputPreview);
     }
+
+    [Fact]
+    public void ActiveOperationsHero_RendersContextTokensAndCleanStaticBadges()
+    {
+        var cut = Render<Monitoring>();
+
+        var call = new LlmCallRecord(
+            CallId: "call-context-test",
+            Model: "qwen2.5-coder:32b",
+            TargetBackend: "Local",
+            StartTime: DateTime.UtcNow,
+            DurationMs: 0,
+            PromptTokens: 14200,
+            CompletionTokens: 0,
+            TokensPerSecond: 0,
+            PromptPreview: "Inspect code",
+            CompletionPreview: null,
+            Status: LlmCallStatus.Running,
+            ErrorMessage: null);
+
+        var cmd = new ShellCommandRecord(
+            CommandId: "cmd-test",
+            CommandLine: "dotnet test",
+            WorkingDirectory: "/workspace",
+            StartTime: DateTime.UtcNow,
+            DurationMs: 0,
+            ExitCode: null,
+            Status: ShellCommandStatus.Running,
+            OutputPreview: null,
+            ErrorPreview: null);
+
+        _hubConnection.TriggerLlmCallStarted(call);
+        _hubConnection.TriggerShellCommandStarted(cmd);
+
+        cut.WaitForState(() => cut.Find("#active-llm-card").TextContent.Contains("14200"));
+        var heroMarkup = cut.Find("#active-operations-hero").InnerHtml;
+
+        // Context size displayed
+        Assert.Contains("Context:", heroMarkup);
+        Assert.Contains("14200 tokens", heroMarkup);
+
+        // Clean static badges without pulse animation
+        Assert.DoesNotContain("animation: pulse", heroMarkup);
+    }
+
+    [Fact]
+    public void OperationsTelemetryUiService_FormatLiveDuration_ComputesLiveElapsedForRunningStatus()
+    {
+        var startTime = DateTime.UtcNow.AddSeconds(-5);
+        var runningCall = new LlmCallRecord("c1", "m", "Local", startTime, 1000, 10, 0, 0, "p", null, LlmCallStatus.Running, null);
+        var completedCall = runningCall with { Status = LlmCallStatus.Completed, DurationMs = 2500 };
+
+        var liveElapsed = OperationsTelemetryUiService.FormatLiveLlmDuration(runningCall);
+        var staticElapsed = OperationsTelemetryUiService.FormatLiveLlmDuration(completedCall);
+
+        // Running call elapsed duration should be at least ~4-5s (dynamic from startTime)
+        Assert.EndsWith("s", liveElapsed);
+        Assert.NotEqual("1000ms", liveElapsed);
+        Assert.NotEqual("1.00s", liveElapsed);
+
+        // Completed call elapsed duration should match DurationMs (2.50s)
+        Assert.Equal("2.50s", staticElapsed);
+
+        var runningCmd = new ShellCommandRecord("cmd1", "dotnet test", "/repo", startTime, 500, null, ShellCommandStatus.Running, null, null);
+        var completedCmd = runningCmd with { Status = ShellCommandStatus.Completed, DurationMs = 1200 };
+
+        var liveCmdElapsed = OperationsTelemetryUiService.FormatLiveShellDuration(runningCmd);
+        var staticCmdElapsed = OperationsTelemetryUiService.FormatLiveShellDuration(completedCmd);
+
+        Assert.EndsWith("s", liveCmdElapsed);
+        Assert.NotEqual("500ms", liveCmdElapsed);
+        Assert.Equal("1.20s", staticCmdElapsed);
+    }
+
+    [Fact]
+    public void LlmCallsHistoryTable_RendersContextOutputColumnHeader()
+    {
+        var cut = Render<Monitoring>();
+        var table = cut.Find("#llm-calls-history");
+        Assert.Contains("Tokens (Context / Output)", table.TextContent);
+    }
 }

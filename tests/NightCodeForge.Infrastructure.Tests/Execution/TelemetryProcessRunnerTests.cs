@@ -211,4 +211,39 @@ public class TelemetryProcessRunnerTests
         Assert.Equal(ShellCommandStatus.Completed, completed.Status);
         Assert.Equal(0, completed.ExitCode);
     }
+
+    [Fact]
+    public void StartSession_WhenPersistentShellSession_BypassesTelemetry()
+    {
+        var spec = new ProcessStartSpec
+        {
+            FileName = "wsl.exe",
+            ArgumentList = ["-d", "Ubuntu", "--", "docker", "exec", "-i", "ncf-sandbox", "bash", "--noprofile", "--norc"]
+        };
+        var innerSession = new Mock<IProcessStreamSession>();
+        _innerRunner.Setup(r => r.StartSession(spec)).Returns(innerSession.Object);
+
+        var session = _runner.StartSession(spec);
+
+        Assert.Same(innerSession.Object, session);
+        _telemetryService.Verify(t => t.RecordShellCommandStarted(It.IsAny<ShellCommandRecord>()), Times.Never);
+        _telemetryService.Verify(t => t.RecordShellCommandCompleted(It.IsAny<ShellCommandRecord>()), Times.Never);
+    }
+
+    [Fact]
+    public void StartSession_WhenOrdinaryBashCommand_DoesNotBypassTelemetry()
+    {
+        var spec = new ProcessStartSpec
+        {
+            FileName = "bash",
+            Arguments = "-c \"echo hello\""
+        };
+        var innerSession = new Mock<IProcessStreamSession>();
+        _innerRunner.Setup(r => r.StartSession(spec)).Returns(innerSession.Object);
+
+        var session = _runner.StartSession(spec);
+
+        Assert.NotSame(innerSession.Object, session);
+        _telemetryService.Verify(t => t.RecordShellCommandStarted(It.IsAny<ShellCommandRecord>()), Times.Once);
+    }
 }

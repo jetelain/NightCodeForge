@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Infrastructure.Execution;
 
@@ -229,6 +230,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
     private readonly IProcessRunner _processRunner;
     private readonly ILogger<NightCodeForgeContainerExecutor> _logger;
     private readonly IHostUserIdentityResolver _userIdentityResolver;
+    private readonly IOperationsTelemetryService _telemetryService;
     private readonly SemaphoreSlim _execLock = new(1, 1);
 
     public ContainerExecutorOptions Options => _options;
@@ -246,8 +248,9 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         IOptions<ContainerExecutorOptions> options,
         IProcessRunner processRunner,
         ILogger<NightCodeForgeContainerExecutor> logger,
-        IHostUserIdentityResolver userIdentityResolver)
-        : this(options?.Value ?? throw new ArgumentNullException(nameof(options)), processRunner, logger, userIdentityResolver)
+        IHostUserIdentityResolver userIdentityResolver,
+        IOperationsTelemetryService telemetryService)
+        : this(options?.Value ?? throw new ArgumentNullException(nameof(options)), processRunner, logger, userIdentityResolver, telemetryService)
     {
     }
 
@@ -255,12 +258,14 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         ContainerExecutorOptions options,
         IProcessRunner processRunner,
         ILogger<NightCodeForgeContainerExecutor> logger,
-        IHostUserIdentityResolver userIdentityResolver)
+        IHostUserIdentityResolver userIdentityResolver,
+        IOperationsTelemetryService telemetryService)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _userIdentityResolver = userIdentityResolver ?? throw new ArgumentNullException(nameof(userIdentityResolver));
+        _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
 
         if (string.IsNullOrWhiteSpace(_options.UserUidGid))
         {
@@ -330,15 +335,37 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 await _stdin!.WriteLineAsync("export HTTP_PROXY=\"\" HTTPS_PROXY=\"\" ALL_PROXY=\"\"");
             }
 
-            var cleanCommand = command.Replace("\r", "");
-            await _stdin!.WriteLineAsync($"cd \"{workDir}\"; ( {cleanCommand}\n) < /dev/null");
-            await _stdin.WriteLineAsync($"echo \"{sentinel} $?\"");
-            await _stdin.FlushAsync();
+            var cleanCommand = command.Replace("\r", "").Trim();
+            var commandId = Guid.NewGuid().ToString("N");
+            var runningRecord = new ShellCommandRecord(
+                CommandId: commandId,
+                CommandLine: cleanCommand,
+                WorkingDirectory: workDir,
+                StartTime: DateTime.UtcNow,
+                DurationMs: 0,
+                ExitCode: null,
+                Status: ShellCommandStatus.Running,
+                OutputPreview: null,
+                ErrorPreview: null);
+
+            _telemetryService.RecordShellCommandStarted(runningRecord);
 
             try
             {
-                var (output, exitCode) = await ReadUntilSentinelAsync(sentinel, timeout, cancellationToken);
+                await _stdin!.WriteLineAsync($"cd \"{workDir}\"; ( {cleanCommand}\n) < /dev/null");
+                await _stdin.WriteLineAsync($"echo \"{sentinel} $?\"");
+                await _stdin.FlushAsync();
+
+                var (output, exitCode) = await ReadUntilSentinelAsync(sentinel, timeout, commandId, cancellationToken);
                 stopwatch.Stop();
+                var completedRecord = runningRecord with
+                {
+                    DurationMs = stopwatch.Elapsed.TotalMilliseconds,
+                    ExitCode = exitCode,
+                    OutputPreview = output.GetFormattedString(),
+                    Status = exitCode == 0 ? ShellCommandStatus.Completed : ShellCommandStatus.Failed
+                };
+                _telemetryService.RecordShellCommandCompleted(completedRecord);
                 return new CommandResult(exitCode, output.GetFormattedString(), string.Empty, stopwatch.Elapsed, output.IsTruncated);
             }
             catch (TimeoutException)
@@ -352,18 +379,48 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 try
                 {
                     // 2. Wait 2-second grace period for shell to settle and emit sentinel
-                    var (graceOutput, exitCode) = await ReadUntilSentinelAsync(sentinel, 2, cancellationToken);
+                    var (graceOutput, exitCode) = await ReadUntilSentinelAsync(sentinel, 2, commandId, cancellationToken);
                     stopwatch.Stop();
+                    var timeoutRecord = runningRecord with
+                    {
+                        DurationMs = stopwatch.Elapsed.TotalMilliseconds,
+                        ExitCode = exitCode,
+                        OutputPreview = graceOutput.GetFormattedString(),
+                        ErrorPreview = "Command timed out and was aborted with SIGINT.",
+                        Status = ShellCommandStatus.Failed
+                    };
+                    _telemetryService.RecordShellCommandCompleted(timeoutRecord);
                     return new CommandResult(exitCode, graceOutput.GetFormattedString(), "Command timed out and was aborted with SIGINT.", stopwatch.Elapsed, graceOutput.IsTruncated);
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
                     // 3. Unresponsive: forcefully restart shell process
-                    _logger.LogError("Container shell process unresponsive after SIGINT grace period. Forcefully restarting shell.");
+                    _logger.LogError(ex, "Container shell process unresponsive or threw exception after SIGINT grace period: {Message}. Forcefully restarting shell.", ex.Message);
                     ForceRestartShellProcess();
                     stopwatch.Stop();
+                    var terminatedRecord = runningRecord with
+                    {
+                        DurationMs = stopwatch.Elapsed.TotalMilliseconds,
+                        ExitCode = 124,
+                        ErrorPreview = $"Command timed out after {timeout}s and was terminated.",
+                        Status = ShellCommandStatus.Failed
+                    };
+                    _telemetryService.RecordShellCommandCompleted(terminatedRecord);
                     return new CommandResult(124, string.Empty, $"Command timed out after {timeout}s and was terminated.", stopwatch.Elapsed, false);
                 }
+            }
+            catch (Exception ex)
+            {
+                stopwatch.Stop();
+                var failedRecord = runningRecord with
+                {
+                    DurationMs = stopwatch.Elapsed.TotalMilliseconds,
+                    ExitCode = -1,
+                    ErrorPreview = ex.Message,
+                    Status = ShellCommandStatus.Failed
+                };
+                _telemetryService.RecordShellCommandCompleted(failedRecord);
+                throw;
             }
         }
         finally
@@ -375,6 +432,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
     private async Task<(HeadTailBuffer Output, int ExitCode)> ReadUntilSentinelAsync(
         string sentinel,
         int timeoutSeconds,
+        string commandId,
         CancellationToken cancellationToken)
     {
         var buffer = new HeadTailBuffer(_options.MaxBufferBytes);
@@ -421,6 +479,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 }
             }
 
+            _telemetryService.UpdateShellCommandOutput(commandId, line + "\n", false);
             buffer.Append(line + "\n");
         }
     }

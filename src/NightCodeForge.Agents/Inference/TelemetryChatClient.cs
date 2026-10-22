@@ -52,7 +52,7 @@ public class TelemetryChatClient : DelegatingChatClient
         var target = ResolveTarget(options);
         var messagesList = chatMessages?.ToList() ?? new List<ChatMessage>();
         var promptPreview = ExtractPromptPreview(messagesList);
-        var promptTokens = EstimateTokens(promptPreview);
+        var promptTokens = EstimateTotalContextTokens(messagesList);
         var startTime = DateTime.UtcNow;
 
         var runningRecord = new LlmCallRecord(
@@ -114,7 +114,9 @@ public class TelemetryChatClient : DelegatingChatClient
                 }
             }
 
-            var finalPromptTokens = (int)(response.Usage?.InputTokenCount ?? promptTokens);
+            var finalPromptTokens = (response.Usage?.InputTokenCount.HasValue == true && response.Usage.InputTokenCount.Value > 0)
+                ? (int)response.Usage.InputTokenCount.Value
+                : promptTokens;
             var tokensPerSec = durationMs > 50 ? (completionTokens / (durationMs / 1000.0)) : 0.0;
 
             var completedRecord = runningRecord with
@@ -158,7 +160,7 @@ public class TelemetryChatClient : DelegatingChatClient
         var target = ResolveTarget(options);
         var messagesList = chatMessages?.ToList() ?? new List<ChatMessage>();
         var promptPreview = ExtractPromptPreview(messagesList);
-        var promptTokens = EstimateTokens(promptPreview);
+        var promptTokens = EstimateTotalContextTokens(messagesList);
         var startTime = DateTime.UtcNow;
 
         var runningRecord = new LlmCallRecord(
@@ -182,6 +184,7 @@ public class TelemetryChatClient : DelegatingChatClient
         var textBuffer = new StringBuilder();
         int tokenCount = 0;
         int reasoningTokens = 0;
+        int? streamingInputTokens = null;
         bool inThinkTag = false;
         bool completionRecorded = false;
         bool completedNaturally = false;
@@ -206,9 +209,13 @@ public class TelemetryChatClient : DelegatingChatClient
                 catch (Exception ex)
                 {
                     sw.Stop();
+                    var finalPromptTokens = streamingInputTokens.HasValue && streamingInputTokens.Value > 0
+                        ? streamingInputTokens.Value
+                        : promptTokens;
                     var failedRecord = runningRecord with
                     {
                         DurationMs = sw.Elapsed.TotalMilliseconds,
+                        PromptTokens = finalPromptTokens,
                         CompletionTokens = tokenCount,
                         ReasoningTokens = reasoningTokens,
                         CompletionPreview = BuildCombinedPreview(reasoningBuffer, textBuffer),
@@ -246,6 +253,10 @@ public class TelemetryChatClient : DelegatingChatClient
                         }
                         else if (content is UsageContent uc && uc.Details != null)
                         {
+                            if (uc.Details.InputTokenCount.HasValue && uc.Details.InputTokenCount.Value > 0)
+                            {
+                                streamingInputTokens = (int)uc.Details.InputTokenCount.Value;
+                            }
                             if (uc.Details.OutputTokenCount.HasValue && uc.Details.OutputTokenCount.Value > tokenCount)
                             {
                                 tokenCount = (int)uc.Details.OutputTokenCount.Value;
@@ -294,9 +305,14 @@ public class TelemetryChatClient : DelegatingChatClient
                     ? LlmCallStatus.Completed
                     : (cancellationToken.IsCancellationRequested ? LlmCallStatus.Cancelled : LlmCallStatus.Completed);
 
+                var finalPromptTokens = streamingInputTokens.HasValue && streamingInputTokens.Value > 0
+                    ? streamingInputTokens.Value
+                    : promptTokens;
+
                 var completedRecord = runningRecord with
                 {
                     DurationMs = durationMs,
+                    PromptTokens = finalPromptTokens,
                     CompletionTokens = tokenCount,
                     TokensPerSecond = finalTps,
                     ReasoningTokens = reasoningTokens,
@@ -459,6 +475,71 @@ public class TelemetryChatClient : DelegatingChatClient
             return $"[Reasoning]\n{Truncate(reasoningTrimmed, 500)}";
         }
         return Truncate(textTrimmed, 500);
+    }
+
+    public static int EstimateTotalContextTokens(IEnumerable<ChatMessage>? messages)
+    {
+        if (messages == null) return 0;
+        int totalTokens = 0;
+        bool hasAnyMessage = false;
+
+        foreach (var message in messages)
+        {
+            hasAnyMessage = true;
+            // Per-message framing overhead (~4 tokens for role and boundary delimiters)
+            totalTokens += 4;
+
+            if (message.Contents != null && message.Contents.Count > 0)
+            {
+                foreach (var content in message.Contents)
+                {
+                    switch (content)
+                    {
+                        case TextContent tc when !string.IsNullOrEmpty(tc.Text):
+                            totalTokens += EstimateTokens(tc.Text);
+                            break;
+                        case TextReasoningContent trc when !string.IsNullOrEmpty(trc.Text):
+                            totalTokens += EstimateTokens(trc.Text);
+                            break;
+                        case FunctionCallContent fcc:
+                            if (!string.IsNullOrEmpty(fcc.Name))
+                            {
+                                totalTokens += EstimateTokens(fcc.Name);
+                            }
+                            if (fcc.Arguments != null && fcc.Arguments.Count > 0)
+                            {
+                                foreach (var (k, v) in fcc.Arguments)
+                                {
+                                    totalTokens += EstimateTokens(k);
+                                    if (v != null)
+                                    {
+                                        var valStr = v is string s ? s : System.Text.Json.JsonSerializer.Serialize(v);
+                                        totalTokens += EstimateTokens(valStr);
+                                    }
+                                }
+                            }
+                            break;
+                        case FunctionResultContent frc:
+                            if (!string.IsNullOrEmpty(frc.CallId))
+                            {
+                                totalTokens += EstimateTokens(frc.CallId);
+                            }
+                            if (frc.Result != null)
+                            {
+                                var resStr = frc.Result is string s ? s : System.Text.Json.JsonSerializer.Serialize(frc.Result);
+                                totalTokens += EstimateTokens(resStr);
+                            }
+                            break;
+                    }
+                }
+            }
+            else if (!string.IsNullOrEmpty(message.Text))
+            {
+                totalTokens += EstimateTokens(message.Text);
+            }
+        }
+
+        return hasAnyMessage ? Math.Max(1, totalTokens) : 0;
     }
 
     private static int EstimateTokens(string text)

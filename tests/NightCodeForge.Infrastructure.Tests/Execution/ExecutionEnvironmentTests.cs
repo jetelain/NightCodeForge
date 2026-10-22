@@ -299,7 +299,8 @@ public class ExecutionEnvironmentTests
             options,
             fakeRunner,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForgeContainerExecutor>.Instance,
-            new Mock<IHostUserIdentityResolver>().Object);
+            new Mock<IHostUserIdentityResolver>().Object,
+            new Mock<IOperationsTelemetryService>().Object);
 
         executor.EnsureContainerRunning();
 
@@ -347,7 +348,8 @@ public class ExecutionEnvironmentTests
             options,
             fakeRunner,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForgeContainerExecutor>.Instance,
-            new Mock<IHostUserIdentityResolver>().Object);
+            new Mock<IHostUserIdentityResolver>().Object,
+            new Mock<IOperationsTelemetryService>().Object);
 
         executor.EnsureContainerRunning();
 

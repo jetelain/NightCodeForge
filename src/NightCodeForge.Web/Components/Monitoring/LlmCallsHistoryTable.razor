@@ -11,7 +11,7 @@
                 <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Time</th>
                 <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Model</th>
                 <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Route</th>
-                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Tokens (P / C)</th>
+                <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);" title="Input context tokens sent to model / Output tokens generated">Tokens (Context / Output)</th>
                 <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Speed</th>
                 <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Duration</th>
                 <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);">Status</th>
@@ -43,7 +43,7 @@
                             </span>
                         </td>
                         <td style="padding: 0.75rem 1rem; color: var(--text-secondary);">
-                            <span title="Prompt Tokens">@call.PromptTokens</span> / <strong title="Completion Tokens (including reasoning)" style="color: var(--text-primary);">@call.CompletionTokens</strong>
+                            <span title="Context Size (Prompt Tokens)">@call.PromptTokens</span> / <strong title="Output Tokens (including reasoning)" style="color: var(--text-primary);">@call.CompletionTokens</strong>
                             @if (call.ReasoningTokens > 0)
                             {
                                 <span title="Includes @call.ReasoningTokens reasoning tokens" style="font-size: 0.75rem; color: var(--accent-amber); margin-left: 0.25rem;">(🧠 @call.ReasoningTokens)</span>

@@ -1,3 +1,4 @@
+using System.Globalization;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 
@@ -261,14 +262,36 @@ public class OperationsTelemetryUiService : IDisposable
     public static string FormatDuration(double durationMs)
     {
         if (durationMs <= 0) return "0ms";
-        if (durationMs < 1000) return $"{durationMs:F0}ms";
-        return $"{durationMs / 1000.0:F2}s";
+        if (durationMs < 1000) return string.Create(CultureInfo.InvariantCulture, $"{durationMs:F0}ms");
+        return string.Create(CultureInfo.InvariantCulture, $"{durationMs / 1000.0:F2}s");
+    }
+
+    public static string FormatLiveLlmDuration(LlmCallRecord call)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+        if (call.Status == LlmCallStatus.Running)
+        {
+            var elapsed = (DateTime.UtcNow - call.StartTime).TotalMilliseconds;
+            return FormatDuration(Math.Max(elapsed, call.DurationMs));
+        }
+        return FormatDuration(call.DurationMs);
+    }
+
+    public static string FormatLiveShellDuration(ShellCommandRecord cmd)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+        if (cmd.Status == ShellCommandStatus.Running)
+        {
+            var elapsed = (DateTime.UtcNow - cmd.StartTime).TotalMilliseconds;
+            return FormatDuration(Math.Max(elapsed, cmd.DurationMs));
+        }
+        return FormatDuration(cmd.DurationMs);
     }
 
     public static string FormatSpeed(double tps)
     {
         if (tps <= 0) return "—";
-        return $"{tps:F1} t/s";
+        return string.Create(CultureInfo.InvariantCulture, $"{tps:F1} t/s");
     }
 
     public static string GetRouteBadgeClass(string? route)

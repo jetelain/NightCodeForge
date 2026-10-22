@@ -355,6 +355,13 @@ public class TelemetryProcessRunner : IProcessRunner
     {
         ArgumentNullException.ThrowIfNull(spec);
 
+        if (IsPersistentInteractiveShellSession(spec))
+        {
+            // Suppress persistent interactive wrapper sessions (e.g. container REPL bash sessions)
+            // from telemetry to keep the Active Operations console transparent to real developer commands.
+            return _innerRunner.StartSession(spec);
+        }
+
         var commandId = Guid.NewGuid().ToString("N");
         var cmdLine = FormatCommandLine(spec);
         var workingDir = ResolveWorkingDirectory(spec);
@@ -376,6 +383,35 @@ public class TelemetryProcessRunner : IProcessRunner
 
         var innerSession = _innerRunner.StartSession(spec);
         return new TelemetryProcessStreamSession(innerSession, runningRecord, _telemetryService, sw);
+    }
+
+    private static bool IsPersistentInteractiveShellSession(ProcessStartSpec spec)
+    {
+        if (spec.ArgumentList != null)
+        {
+            var args = spec.ArgumentList.ToList();
+            bool hasBash = args.Any(a => string.Equals(a, "bash", StringComparison.OrdinalIgnoreCase) || a.EndsWith("/bash", StringComparison.OrdinalIgnoreCase));
+            bool hasNoProfile = args.Any(a => string.Equals(a, "--noprofile", StringComparison.OrdinalIgnoreCase));
+            bool hasNoRc = args.Any(a => string.Equals(a, "--norc", StringComparison.OrdinalIgnoreCase));
+            if (hasBash && hasNoProfile && hasNoRc)
+            {
+                return true;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(spec.Arguments))
+        {
+            var tokens = spec.Arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            bool hasBash = tokens.Any(a => string.Equals(a, "bash", StringComparison.OrdinalIgnoreCase) || a.EndsWith("/bash", StringComparison.OrdinalIgnoreCase));
+            bool hasNoProfile = tokens.Any(a => string.Equals(a, "--noprofile", StringComparison.OrdinalIgnoreCase));
+            bool hasNoRc = tokens.Any(a => string.Equals(a, "--norc", StringComparison.OrdinalIgnoreCase));
+            if (hasBash && hasNoProfile && hasNoRc)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string FormatCommandLine(ProcessStartSpec spec)

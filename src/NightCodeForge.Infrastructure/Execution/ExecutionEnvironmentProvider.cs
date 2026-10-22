@@ -54,6 +54,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
     private readonly IHostSdkDiscoveryService _sdkDiscoveryService;
     private readonly IGitWorkspaceManager _gitWorkspaceManager;
     private readonly IHostUserIdentityResolver _userIdentityResolver;
+    private readonly IOperationsTelemetryService _telemetryService;
     private readonly ConcurrentDictionary<(int WorkspaceId, SandboxSecurityTier SecurityTier, int? TaskId), IExecutionEnvironment> _cachedEnvironments = new();
 
     [ActivatorUtilitiesConstructor]
@@ -65,7 +66,8 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         IHostSdkDiscoveryService sdkDiscoveryService,
         IGitWorkspaceManager gitWorkspaceManager,
         ILogger<NightCodeForgeContainerExecutor> containerLogger,
-        IHostUserIdentityResolver userIdentityResolver)
+        IHostUserIdentityResolver userIdentityResolver,
+        IOperationsTelemetryService telemetryService)
     {
         _bareHost = bareHost ?? throw new ArgumentNullException(nameof(bareHost));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
@@ -75,6 +77,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
         _containerLogger = containerLogger ?? throw new ArgumentNullException(nameof(containerLogger));
         _userIdentityResolver = userIdentityResolver ?? throw new ArgumentNullException(nameof(userIdentityResolver));
+        _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
     }
 
     public IExecutionEnvironment GetEnvironment(
@@ -233,7 +236,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                     ProtectCloneWorkingTree = true,
                     UserUidGid = _userIdentityResolver.ResolveUserIdentity(useWsl, targetDistro, _options.WslExecutable)
                 };
-                return new NightCodeForgeContainerExecutor(options, _processRunner, _containerLogger, _userIdentityResolver);
+                return new NightCodeForgeContainerExecutor(options, _processRunner, _containerLogger, _userIdentityResolver, _telemetryService);
             }),
 
             _ => _bareHost

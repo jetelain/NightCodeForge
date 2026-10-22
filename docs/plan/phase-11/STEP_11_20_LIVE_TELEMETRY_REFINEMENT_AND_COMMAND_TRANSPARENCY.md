@@ -3,7 +3,7 @@
 > **Phase 11 Implementation Step (Post-MVP - Observability & Developer Ergonomics)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Agents/Inference`, `src/NightCodeForge.Infrastructure/Execution`, `src/NightCodeForge.Web/Components/Monitoring`, `src/NightCodeForge.Web/Services`, `src/NightCodeForge.Core/Workflow`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 ---
 
@@ -195,3 +195,40 @@ flowchart TD
      - Confirm the `Inferring` and `Executing` badges are clean without pulsating effects.
      - Confirm the shell operation card displays the real command (`dotnet build`, `dotnet test`) rather than `wsl.exe ... docker exec`.
      - Confirm Context Size shows the true context length (e.g. 8k-32k tokens).
+
+---
+
+## 5. Implementation Summary & Verification Results
+
+### 5.1 Components Modified
+
+1. **`ActiveOperationsHero.razor` & `OperationsTelemetryUiService.cs`:**
+   - Added a live 500ms `PeriodicTimer` ticker in [ActiveOperationsHero.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Monitoring/ActiveOperationsHero.razor) triggering UI updates whenever an active LLM call or shell command is running.
+   - Implemented `FormatLiveLlmDuration` and `FormatLiveShellDuration` in [OperationsTelemetryUiService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Services/OperationsTelemetryUiService.cs), calculating live elapsed time against `DateTime.UtcNow - StartTime` so elapsed time never freezes during long tool execution or stream pauses.
+   - Added component disposal protections (`_isDisposed` flag and `ObjectDisposedException` / `OperationCanceledException` guards) to prevent exceptions on teardown.
+   - Removed distracting `animation: pulse` badge effects in favor of clean static status badges.
+
+2. **`NightCodeForgeContainerExecutor.cs` & `TelemetryProcessRunner.cs`:**
+   - Injected `IOperationsTelemetryService` into [NightCodeForgeContainerExecutor.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Execution/NightCodeForgeContainerExecutor.cs).
+   - In `ExecuteAsync`: generates a distinct `commandId`, sanitizes the command line, records `RecordShellCommandStarted`, and streams output lines via `UpdateShellCommandOutput`.
+   - Enclosed stdin write and sentinel polling operations within a guarded `try/catch` block: broken stdin pipes or process write errors automatically record a `Failed` command record (`ExitCode = -1`), preventing orphaned "Running" commands in the console.
+   - Logged exceptions explicitly during SIGINT timeout recovery before restarting the shell.
+   - In [TelemetryProcessRunner.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Execution/TelemetryProcessRunner.cs), filtered persistent interactive container shell wrapper sessions (`bash --noprofile --norc`) via discrete CLI argument token inspection (`IsPersistentInteractiveShellSession`), ensuring background container wrappers do not mask developer commands.
+
+3. **`TelemetryChatClient.cs` & Context Window Presentation:**
+   - Implemented `EstimateTotalContextTokens` in [TelemetryChatClient.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Inference/TelemetryChatClient.cs), computing input context tokens across the entire conversation history (system instructions, user turns, assistant reasoning, tool calls, and tool outputs).
+   - Prioritized `message.Contents` over `message.Text` to prevent double-counting text content.
+   - Promoted authoritative input token usage from `ChatResponse.Usage.InputTokenCount` (and streaming `UsageContent`) whenever reported by the backend provider.
+   - Updated [LlmCallsHistoryTable.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Monitoring/LlmCallsHistoryTable.razor) (`Tokens (Context / Output)`) and [InferenceInspectionModal.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Monitoring/InferenceInspectionModal.razor) (`Context Window Size`) with clear tooltips and badges.
+
+### 5.2 Test Coverage & Verification
+
+| Test Suite | Tests Added / Updated | Result |
+| :--- | :--- | :--- |
+| **`TelemetryChatClientTests`** | `EstimateTotalContextTokens_AccountsForFullContextTurnsAndToolPayloads`<br/>`EstimateTotalContextTokens_DoesNotDoubleCountTextContentAndMessageText`<br/>`GetResponseAsync_SetsInitialPromptTokensFromFullContext_AndPrefersAuthoritativeUsage` | ✅ Passed |
+| **`ContainerReplExecutorTests`** | `ContainerExecutor_ExecuteAsync_RecordsShellCommandTelemetry`<br/>`ContainerExecutor_ExecuteAsync_WhenStdinWriteFails_MarksShellCommandFailedAndRethrows` | ✅ Passed |
+| **`TelemetryProcessRunnerTests`** | `StartSession_WhenPersistentShellSession_BypassesTelemetry`<br/>`StartSession_WhenOrdinaryBashCommand_DoesNotBypassTelemetry` | ✅ Passed |
+| **`MonitoringPageTests`** | `ActiveOperationsHero_RendersDynamicLiveElapsedDuration`<br/>`InferenceInspectionModal_RendersContextWindowSizeAndTooltips` | ✅ Passed |
+
+- **Unit & Integration Suite (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`):** 1,633 passing tests (0 failures).
+- **Full Solution Suite (`dotnet test`):** 1,636 passing tests (0 failures).

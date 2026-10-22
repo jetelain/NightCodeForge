@@ -19,6 +19,7 @@ public class TestExecutionEnvironmentProviderBuilder
     public IHostSdkDiscoveryService SdkDiscoveryService { get; set; } = new Mock<IHostSdkDiscoveryService>().Object;
     public IGitWorkspaceManager GitWorkspaceManager { get; set; } = new Mock<IGitWorkspaceManager>().Object;
     public IHostUserIdentityResolver UserIdentityResolver { get; set; } = new Mock<IHostUserIdentityResolver>().Object;
+    public IOperationsTelemetryService TelemetryService { get; set; } = new Mock<IOperationsTelemetryService>().Object;
     public ILogger<NightCodeForgeContainerExecutor> Logger { get; set; } = NullLogger<NightCodeForgeContainerExecutor>.Instance;
 
     public ExecutionEnvironmentProvider Build()
@@ -32,6 +33,7 @@ public class TestExecutionEnvironmentProviderBuilder
             SdkDiscoveryService,
             GitWorkspaceManager,
             Logger,
-            UserIdentityResolver);
+            UserIdentityResolver,
+            TelemetryService);
     }
 }

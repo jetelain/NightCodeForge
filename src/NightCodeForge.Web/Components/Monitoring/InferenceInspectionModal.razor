@@ -40,8 +40,11 @@
                     <span class="forge-badge badge-teal font-mono">
                         Speed: <strong>@OperationsTelemetryUiService.FormatSpeed(Call.TokensPerSecond)</strong>
                     </span>
-                    <span class="forge-badge badge-gray font-mono">
-                        Prompt: <strong>@Call.PromptTokens</strong> | Completion: <strong>@Call.CompletionTokens</strong>
+                    <span class="forge-badge badge-gray font-mono" title="Input context tokens sent to model">
+                        Context Window Size: <strong>@Call.PromptTokens tokens</strong>
+                    </span>
+                    <span class="forge-badge badge-gray font-mono" title="Generated output tokens">
+                        Output: <strong>@Call.CompletionTokens tokens</strong>
                         @if (Call.ReasoningTokens > 0)
                         {
                             <span> | Reasoning: <strong style="color: var(--accent-amber);">🧠 @Call.ReasoningTokens</strong></span>

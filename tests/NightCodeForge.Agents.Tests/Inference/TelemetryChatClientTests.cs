@@ -324,4 +324,87 @@ public class TelemetryChatClientTests
         Assert.NotNull(completedRecord);
         Assert.Equal(LlmCallStatus.Cancelled, completedRecord.Status);
     }
+
+    [Fact]
+    public void EstimateTotalContextTokens_CalculatesTokensAcrossAllMessageRolesAndToolPayloads()
+    {
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, "You are a software engineer assistant."),
+            new(ChatRole.User, "Please inspect file.cs and run tests."),
+            new(ChatRole.Assistant, new List<AIContent>
+            {
+                new FunctionCallContent("call_1", "run_command", new Dictionary<string, object?> { ["command"] = "dotnet test" })
+            }),
+            new(ChatRole.Tool, new List<AIContent>
+            {
+                new FunctionResultContent("call_1", "Passed 50 tests successfully.")
+            }),
+            new(ChatRole.Assistant, "All tests passed cleanly.")
+        };
+
+        var estimated = TelemetryChatClient.EstimateTotalContextTokens(messages);
+
+        // Framing overhead: 5 messages * 4 = 20
+        // Plus content tokens of each text, function name, arguments, results
+        Assert.True(estimated > 40, $"Estimated tokens ({estimated}) should account for all 5 turns and tool calls/results");
+    }
+
+    [Fact]
+    public void EstimateTotalContextTokens_DoesNotDoubleCountTextContentAndMessageText()
+    {
+        // "12345678" has 8 chars => ceil(8 / 4.0) = 2 tokens.
+        // Framing overhead for 1 message is 4 tokens.
+        // Total should be exactly 4 + 2 = 6 tokens, not 4 + 2 + 2 = 8 tokens.
+        var message = new ChatMessage(ChatRole.User, "12345678");
+        var estimated = TelemetryChatClient.EstimateTotalContextTokens([message]);
+
+        Assert.Equal(6, estimated);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_SetsInitialPromptTokensFromFullContext_AndPrefersAuthoritativeUsage()
+    {
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, "Long system prompt instruction repeated. " + new string('X', 400)),
+            new(ChatRole.User, "User prompt turn 1. " + new string('Y', 400)),
+            new(ChatRole.Assistant, "Assistant turn 1. " + new string('Z', 400)),
+            new(ChatRole.User, "Final query")
+        };
+
+        var expectedResponse = new ChatResponse(new ChatMessage(ChatRole.Assistant, "Final answer"))
+        {
+            Usage = new UsageDetails
+            {
+                InputTokenCount = 385,
+                OutputTokenCount = 15
+            }
+        };
+
+        _innerClient
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expectedResponse);
+
+        LlmCallRecord? startedRecord = null;
+        LlmCallRecord? completedRecord = null;
+
+        _telemetryService
+            .Setup(t => t.RecordLlmCallStarted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => startedRecord = r);
+
+        _telemetryService
+            .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => completedRecord = r);
+
+        await _client.GetResponseAsync(messages);
+
+        Assert.NotNull(startedRecord);
+        // Initial PromptTokens in startedRecord should be calculated from ALL 4 messages (well above 500 chars / 125 tokens)
+        Assert.True(startedRecord.PromptTokens > 250, $"Started PromptTokens should be > 250, got {startedRecord.PromptTokens}");
+
+        Assert.NotNull(completedRecord);
+        // Completed PromptTokens must prefer the authoritative response.Usage.InputTokenCount
+        Assert.Equal(385, completedRecord.PromptTokens);
+    }
 }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Execution;
 
 namespace NightCodeForge.Agents.Tests;
@@ -74,7 +75,8 @@ public class ContainerReplExecutorTests
             options,
             new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance),
             NullLogger<NightCodeForgeContainerExecutor>.Instance,
-            new Mock<IHostUserIdentityResolver>().Object);
+            new Mock<IHostUserIdentityResolver>().Object,
+            new Mock<IOperationsTelemetryService>().Object);
         var result = await executor.ExecuteAsync("echo hello world");
 
         Assert.Equal(0, result.ExitCode);
@@ -96,7 +98,8 @@ public class ContainerReplExecutorTests
             options,
             mockRunner,
             NullLogger<NightCodeForgeContainerExecutor>.Instance,
-            new Mock<IHostUserIdentityResolver>().Object);
+            new Mock<IHostUserIdentityResolver>().Object,
+            new Mock<IOperationsTelemetryService>().Object);
         var result = await executor.ExecuteAsync("echo mock-result");
 
         Assert.Equal(0, result.ExitCode);
@@ -104,6 +107,143 @@ public class ContainerReplExecutorTests
         Assert.NotNull(mockRunner.LastSpec);
         Assert.Equal("docker", mockRunner.LastSpec.FileName);
         Assert.Contains("mock-sandbox", mockRunner.LastSpec.ArgumentList!);
+    }
+
+    [Fact]
+    public async Task ContainerExecutor_ExecuteAsync_RecordsShellCommandTelemetry()
+    {
+        var mockRunner = new MockProcessRunner();
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "mock-sandbox",
+            DefaultWorkingDirectory = "/workspace",
+            DefaultTimeoutSeconds = 5
+        };
+
+        ShellCommandRecord? startedRecord = null;
+        ShellCommandRecord? completedRecord = null;
+
+        telemetryMock
+            .Setup(t => t.RecordShellCommandStarted(It.IsAny<ShellCommandRecord>()))
+            .Callback<ShellCommandRecord>(r => startedRecord = r);
+
+        telemetryMock
+            .Setup(t => t.RecordShellCommandCompleted(It.IsAny<ShellCommandRecord>()))
+            .Callback<ShellCommandRecord>(r => completedRecord = r);
+
+        using var executor = new NightCodeForgeContainerExecutor(
+            options,
+            mockRunner,
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            new Mock<IHostUserIdentityResolver>().Object,
+            telemetryMock.Object);
+
+        var result = await executor.ExecuteAsync("dotnet test --filter Category!=Acceptance", workingDirectory: "/workspace/tests");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.NotNull(startedRecord);
+        Assert.Equal("dotnet test --filter Category!=Acceptance", startedRecord.CommandLine);
+        Assert.Equal("/workspace/tests", startedRecord.WorkingDirectory);
+        Assert.Equal(NightCodeForge.Core.Workflow.ShellCommandStatus.Running, startedRecord.Status);
+
+        Assert.NotNull(completedRecord);
+        Assert.Equal(startedRecord.CommandId, completedRecord.CommandId);
+        Assert.Equal(0, completedRecord.ExitCode);
+        Assert.Equal(NightCodeForge.Core.Workflow.ShellCommandStatus.Completed, completedRecord.Status);
+        Assert.Contains("mock-result", completedRecord.OutputPreview);
+    }
+
+    [Fact]
+    public async Task ContainerExecutor_ExecuteAsync_WhenStdinWriteFails_MarksShellCommandFailedAndRethrows()
+    {
+        var mockRunner = new MockThrowingStdinProcessRunner();
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "mock-sandbox",
+            DefaultWorkingDirectory = "/workspace",
+            DefaultTimeoutSeconds = 5
+        };
+
+        ShellCommandRecord? startedRecord = null;
+        ShellCommandRecord? completedRecord = null;
+
+        telemetryMock
+            .Setup(t => t.RecordShellCommandStarted(It.IsAny<ShellCommandRecord>()))
+            .Callback<ShellCommandRecord>(r => startedRecord = r);
+
+        telemetryMock
+            .Setup(t => t.RecordShellCommandCompleted(It.IsAny<ShellCommandRecord>()))
+            .Callback<ShellCommandRecord>(r => completedRecord = r);
+
+        using var executor = new NightCodeForgeContainerExecutor(
+            options,
+            mockRunner,
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            new Mock<IHostUserIdentityResolver>().Object,
+            telemetryMock.Object);
+
+        var ex = await Assert.ThrowsAsync<IOException>(() => executor.ExecuteAsync("echo hello", workingDirectory: "/workspace"));
+        Assert.Equal("Pipe broken", ex.Message);
+
+        Assert.NotNull(startedRecord);
+        Assert.NotNull(completedRecord);
+        Assert.Equal(startedRecord.CommandId, completedRecord.CommandId);
+        Assert.Equal(NightCodeForge.Core.Workflow.ShellCommandStatus.Failed, completedRecord.Status);
+        Assert.Equal(-1, completedRecord.ExitCode);
+        Assert.Equal("Pipe broken", completedRecord.ErrorPreview);
+    }
+
+    private class MockThrowingStdinProcessRunner : NightCodeForge.Core.Interfaces.IProcessRunner
+    {
+        public NightCodeForge.Core.Interfaces.IProcessStreamSession StartSession(NightCodeForge.Core.Interfaces.ProcessStartSpec spec)
+        {
+            return new MockThrowingStdinSession();
+        }
+
+        public NightCodeForge.Core.Interfaces.ProcessExecutionResult Run(NightCodeForge.Core.Interfaces.ProcessStartSpec spec) => throw new NotImplementedException();
+        public Task<NightCodeForge.Core.Interfaces.ProcessExecutionResult> RunAsync(NightCodeForge.Core.Interfaces.ProcessStartSpec spec, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public IAsyncEnumerable<NightCodeForge.Core.Interfaces.ProcessStreamChunk> RunStreamingAsync(NightCodeForge.Core.Interfaces.ProcessStartSpec spec, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+    }
+
+    private class MockThrowingStdinSession : NightCodeForge.Core.Interfaces.IProcessStreamSession
+    {
+        private readonly StreamWriter _stdin;
+        private readonly StreamReader _stdout;
+        private readonly StreamReader _stderr;
+
+        public int? ExitCode => null;
+        public bool HasExited => false;
+        public StreamWriter StandardInput => _stdin;
+        public StreamReader StandardOutput => _stdout;
+        public StreamReader StandardError => _stderr;
+
+        public MockThrowingStdinSession()
+        {
+            var throwStream = new DelegatingWriteStream(bytes =>
+            {
+                var text = System.Text.Encoding.UTF8.GetString(bytes);
+                if (text.Contains("echo hello"))
+                {
+                    throw new IOException("Pipe broken");
+                }
+            });
+            _stdin = new StreamWriter(throwStream) { AutoFlush = true, NewLine = "\n" };
+            _stdout = new StreamReader(new MemoryStream());
+            _stderr = new StreamReader(new MemoryStream());
+        }
+
+        public IAsyncEnumerable<NightCodeForge.Core.Interfaces.ProcessStreamChunk> ReadAllAsync(CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task<int> WaitForExitAsync(CancellationToken cancellationToken = default) => Task.FromResult(-1);
+        public void Kill() { }
+        public void Dispose()
+        {
+            _stdin.Dispose();
+            _stdout.Dispose();
+            _stderr.Dispose();
+        }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private class MockProcessRunner : NightCodeForge.Core.Interfaces.IProcessRunner

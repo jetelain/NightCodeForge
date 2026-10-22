@@ -26,7 +26,7 @@
                     </div>
                     @if (TelemetryUi.ActiveLlmCall != null)
                     {
-                        <span class="forge-badge badge-amber" style="animation: pulse 1.8s infinite; font-size: 0.78rem;">
+                        <span class="forge-badge badge-amber" style="font-size: 0.78rem; font-weight: 600;">
                             ● Inferring
                         </span>
                     }
@@ -49,13 +49,14 @@
                             </span>
                         </div>
                         <div style="display: flex; gap: 1.25rem; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.5rem; flex-wrap: wrap;">
+                            <span title="Context Size (Prompt Tokens)">Context: <strong style="color: var(--text-primary);">@call.PromptTokens tokens</strong></span>
                             <span>Speed: <strong style="color: var(--accent-teal);">@OperationsTelemetryUiService.FormatSpeed(call.TokensPerSecond)</strong></span>
                             <span>Tokens: <strong>@call.CompletionTokens</strong></span>
                             @if (call.ReasoningTokens > 0)
                             {
                                 <span title="Reasoning / Thinking Tokens">Reasoning: <strong style="color: var(--accent-amber);">🧠 @call.ReasoningTokens</strong></span>
                             }
-                            <span>Elapsed: <strong>@OperationsTelemetryUiService.FormatDuration(call.DurationMs)</strong></span>
+                            <span>Elapsed: <strong>@OperationsTelemetryUiService.FormatLiveLlmDuration(call)</strong></span>
                         </div>
                         @if (!string.IsNullOrWhiteSpace(call.PromptPreview))
                         {
@@ -85,7 +86,7 @@
                     </div>
                     @if (TelemetryUi.ActiveShellCommand != null)
                     {
-                        <span class="forge-badge badge-amber" style="animation: pulse 1.8s infinite; font-size: 0.78rem;">
+                        <span class="forge-badge badge-amber" style="font-size: 0.78rem; font-weight: 600;">
                             ● Executing
                         </span>
                     }
@@ -106,7 +107,7 @@
                         </div>
                         <div style="display: flex; gap: 1.25rem; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
                             <span>Cwd: <strong class="font-mono" style="font-size: 0.78rem;">@cmd.WorkingDirectory</strong></span>
-                            <span>Elapsed: <strong>@OperationsTelemetryUiService.FormatDuration(cmd.DurationMs)</strong></span>
+                            <span>Elapsed: <strong>@OperationsTelemetryUiService.FormatLiveShellDuration(cmd)</strong></span>
                         </div>
                         @if (!string.IsNullOrWhiteSpace(cmd.OutputPreview))
                         {
@@ -129,18 +130,67 @@
 </div>
 
 @code {
+    private CancellationTokenSource? _timerCts;
+    private bool _isDisposed;
+
     protected override void OnInitialized()
     {
         TelemetryUi.OnChange += HandleChange;
+        StartLiveTimer();
+    }
+
+    private void StartLiveTimer()
+    {
+        _timerCts = new CancellationTokenSource();
+        _ = RunLiveTickerAsync(_timerCts.Token);
+    }
+
+    private async Task RunLiveTickerAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        try
+        {
+            while (!token.IsCancellationRequested && await timer.WaitForNextTickAsync(token))
+            {
+                if (_isDisposed) break;
+                if (TelemetryUi.ActiveLlmCall != null || TelemetryUi.ActiveShellCommand != null)
+                {
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on component disposal
+        }
+        catch (ObjectDisposedException)
+        {
+            // Expected if component is disposed while awaiting invoke or tick
+        }
     }
 
     private void HandleChange()
     {
-        InvokeAsync(StateHasChanged);
+        if (_isDisposed) return;
+        try
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Expected if component was disposed immediately before event handling
+        }
     }
 
     public void Dispose()
     {
+        _isDisposed = true;
         TelemetryUi.OnChange -= HandleChange;
+        if (_timerCts != null)
+        {
+            _timerCts.Cancel();
+            _timerCts.Dispose();
+            _timerCts = null;
+        }
     }
 }
