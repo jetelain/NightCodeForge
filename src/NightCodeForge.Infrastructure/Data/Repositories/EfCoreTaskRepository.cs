@@ -175,6 +175,7 @@ public class EfCoreTaskRepository : ITaskRepository
                 var currentVersion = existing.Version;
                 _context.Entry(existing).CurrentValues.SetValues(task);
                 existing.Version = currentVersion;
+                _context.Entry(existing).State = EntityState.Modified;
             }
         }
         else
@@ -190,16 +191,18 @@ public class EfCoreTaskRepository : ITaskRepository
 
             _context.TaskDependencies.RemoveRange(existingDeps);
 
-            foreach (var depId in dependsOn.Distinct())
+            var newDeps = dependsOn.Distinct().Select(depId => new TaskDependency
             {
-                _context.TaskDependencies.Add(new TaskDependency
-                {
-                    TaskId = task.Id,
-                    DependsOnTaskId = depId
-                });
+                TaskId = task.Id,
+                DependsOnTaskId = depId
+            }).ToList();
+
+            foreach (var dep in newDeps)
+            {
+                _context.TaskDependencies.Add(dep);
             }
 
-            task.Dependencies = dependsOn.Distinct().Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
+            task.Dependencies = newDeps;
             if (existing != null && !ReferenceEquals(existing, task))
             {
                 existing.Dependencies = task.Dependencies;
@@ -228,6 +231,7 @@ public class EfCoreTaskRepository : ITaskRepository
             if (!ReferenceEquals(existing, task))
             {
                 _context.Entry(existing).CurrentValues.SetValues(task);
+                _context.Entry(existing).State = EntityState.Modified;
             }
         }
         else
@@ -245,13 +249,21 @@ public class EfCoreTaskRepository : ITaskRepository
 
             _context.TaskDependencies.RemoveRange(existingDeps);
 
-            foreach (var depId in depList)
+            var newDeps = depList.Select(depId => new TaskDependency
             {
-                _context.TaskDependencies.Add(new TaskDependency
-                {
-                    TaskId = task.Id,
-                    DependsOnTaskId = depId
-                });
+                TaskId = task.Id,
+                DependsOnTaskId = depId
+            }).ToList();
+
+            foreach (var dep in newDeps)
+            {
+                _context.TaskDependencies.Add(dep);
+            }
+
+            task.Dependencies = newDeps;
+            if (existing != null && !ReferenceEquals(existing, task))
+            {
+                existing.Dependencies = task.Dependencies;
             }
         }
         else
@@ -260,12 +272,6 @@ public class EfCoreTaskRepository : ITaskRepository
                 .Where(d => d.TaskId == task.Id)
                 .Select(d => d.DependsOnTaskId)
                 .ToListAsync(cancellationToken);
-        }
-
-        task.Dependencies = depList.Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
-        if (existing != null && !ReferenceEquals(existing, task))
-        {
-            existing.Dependencies = task.Dependencies;
         }
 
         var history = new ForgeTaskHistory

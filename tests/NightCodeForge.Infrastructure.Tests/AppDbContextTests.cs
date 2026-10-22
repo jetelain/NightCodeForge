@@ -1208,5 +1208,130 @@ public class AppDbContextTests : IDisposable
         Assert.DoesNotContain(executedTasks, t => !t.HasExecutionRun);
         Assert.DoesNotContain(executedTasks, t => t.WorkspaceId == ws2.Id);
     }
+
+    [Fact]
+    public async Task SetWaitingForHumanAsync_PersistsDirectlyToDatabase_EvenWhenLocalTrackerHasStaleValues()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var ws = new Workspace { Name = "StaleTrackerWS", RepositoryPath = "/path", DefaultBaseBranch = "main" };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Stale Tracker Test",
+            IsWaitingForHuman = false,
+            Status = TaskOverallStatus.Open
+        };
+        context.Tasks.Add(task);
+        await context.SaveChangesAsync();
+
+        // Simulate another process (e.g. Hangfire) setting IsWaitingForHuman = true in DB
+        using (var otherContext = new AppDbContext(_options))
+        {
+            await otherContext.Database.ExecuteSqlAsync($"UPDATE Tasks SET IsWaitingForHuman = 1 WHERE Id = {task.Id}");
+        }
+
+        // In the original context, Local still has IsWaitingForHuman = false
+        var depStore = new EfCoreTaskDependencyStore(context);
+        await depStore.SetWaitingForHumanAsync(task.Id, false);
+
+        // Verify in fresh context from database that IsWaitingForHuman was set to false
+        using (var freshContext = new AppDbContext(_options))
+        {
+            var reloaded = await freshContext.Tasks.AsNoTracking().FirstAsync(t => t.Id == task.Id);
+            Assert.False(reloaded.IsWaitingForHuman);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_PersistsAllProperties_EvenWhenLocalTrackerHasStaleValues()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var ws = new Workspace { Name = "StaleUpdateWS", RepositoryPath = "/path", DefaultBaseBranch = "main" };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Stale Update Test",
+            IsWaitingForHuman = false,
+            Status = TaskOverallStatus.Open
+        };
+        context.Tasks.Add(task);
+        await context.SaveChangesAsync();
+
+        // Simulate another process setting IsWaitingForHuman = 1 in DB
+        using (var otherContext = new AppDbContext(_options))
+        {
+            await otherContext.Database.ExecuteSqlAsync($"UPDATE Tasks SET IsWaitingForHuman = 1 WHERE Id = {task.Id}");
+        }
+
+        // An untracked task incoming with IsWaitingForHuman = false
+        var incomingTask = new ForgeTask
+        {
+            Id = task.Id,
+            WorkspaceId = ws.Id,
+            Title = "Updated Title",
+            IsWaitingForHuman = false,
+            Status = TaskOverallStatus.Open
+        };
+
+        var repo = new EfCoreTaskRepository(context);
+        await repo.UpdateAsync(incomingTask);
+
+        // Verify database received the updated IsWaitingForHuman = false
+        using (var freshContext = new AppDbContext(_options))
+        {
+            var reloaded = await freshContext.Tasks.AsNoTracking().FirstAsync(t => t.Id == task.Id);
+            Assert.False(reloaded.IsWaitingForHuman);
+            Assert.Equal("Updated Title", reloaded.Title);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateWithHistoryAsync_WhenDependsOnIsNull_DoesNotTriggerUniqueConstraintErrorOnExistingDependencies()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var ws = new Workspace { Name = "DepWS", RepositoryPath = "/path", DefaultBaseBranch = "main" };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        var t1 = new ForgeTask { WorkspaceId = ws.Id, Title = "Task 1", Status = TaskOverallStatus.Closed };
+        var t2 = new ForgeTask { WorkspaceId = ws.Id, Title = "Task 2", Status = TaskOverallStatus.Open };
+        context.Tasks.AddRange(t1, t2);
+        await context.SaveChangesAsync();
+
+        context.TaskDependencies.Add(new TaskDependency { TaskId = t2.Id, DependsOnTaskId = t1.Id });
+        await context.SaveChangesAsync();
+
+        // Simulate stage advance where dependsOn: null is passed
+        using (var updateContext = new AppDbContext(_options))
+        {
+            var repo = new EfCoreTaskRepository(updateContext);
+            var taskToAdvance = await updateContext.Tasks.AsNoTracking().FirstAsync(t => t.Id == t2.Id);
+            taskToAdvance.CurrentStageId = "code-review";
+
+            // This must succeed without 'UNIQUE constraint failed: TaskDependencies.TaskId, TaskDependencies.DependsOnTaskId'
+            await repo.UpdateWithHistoryAsync(taskToAdvance, dependsOn: null, changedBy: "system", reason: "Stage advance");
+        }
+
+        using (var verifyContext = new AppDbContext(_options))
+        {
+            var reloaded = await verifyContext.Tasks.Include(t => t.Dependencies).FirstAsync(t => t.Id == t2.Id);
+            Assert.Equal("code-review", reloaded.CurrentStageId);
+            Assert.Single(reloaded.Dependencies);
+            Assert.Equal(t1.Id, reloaded.Dependencies.First().DependsOnTaskId);
+        }
+    }
 }
+
 

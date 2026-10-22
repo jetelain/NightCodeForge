@@ -93,12 +93,20 @@ public class TaskOrchestrator : ITaskOrchestrator
         var isReady = await _dependencyEngine.IsReadyForExecutionAsync(taskId, cancellationToken);
         if (!isReady)
         {
-            _logger.LogInformation("ForgeTask #{TaskId} prerequisites not yet completed or not open; waiting.", taskId);
+            var isWaiting = await _dependencyStore.IsTaskWaitingForHumanAsync(taskId, cancellationToken);
+            var status = await _dependencyStore.GetTaskStatusAsync(taskId, cancellationToken);
+            string reason = isWaiting
+                ? "waiting for human clarification input"
+                : (status != TaskOverallStatus.Open && status != TaskOverallStatus.Reviewed && status != TaskOverallStatus.Implemented)
+                    ? $"not in an executable status (Status: {status})"
+                    : "waiting on prerequisite tasks before execution";
+
+            _logger.LogInformation("ForgeTask #{TaskId} is not ready for execution ({Reason}); waiting.", taskId, reason);
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {
                 TaskId = task.Id,
                 Level = LogLevel.Information,
-                Message = $"ForgeTask #{task.Id} is waiting on prerequisite tasks before execution.",
+                Message = $"ForgeTask #{task.Id} is {reason}.",
                 Timestamp = DateTime.UtcNow
             }, cancellationToken);
             return;
