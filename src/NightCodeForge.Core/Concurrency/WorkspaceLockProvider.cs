@@ -5,10 +5,10 @@ namespace NightCodeForge.Core.Concurrency;
 
 /// <summary>
 /// Hierarchical keyed asynchronous lock provider ensuring:
-/// 1. Workspace-level locks (AcquireLockAsync) are strictly exclusive across the workspace,
-///    blocking all task locks and waiting for active tasks on that workspace to finish.
-/// 2. Task-level locks (AcquireTaskLockAsync) are shared at the workspace tier (allowing concurrent
-///    execution of different tasks on the same workspace) but exclusive per taskId.
+/// 1. Workspace-level locks (AcquireLockAsync) are strictly exclusive across the canonical workspace,
+///    serializing canonical Git and mirror synchronization operations to eliminate .git/index.lock races.
+/// 2. Task-level locks (AcquireTaskLockAsync) are exclusive per taskId, serializing executions of the same
+///    task without blocking independent tasks or workspace-level Git merge operations.
 /// Includes lock inspection telemetry and emergency release recovery mechanisms.
 /// </summary>
 public class WorkspaceLockProvider : IWorkspaceLockProvider
@@ -33,13 +33,10 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
 
         public ActiveLockEntry? ActiveWorkspaceLock;
         public readonly Dictionary<int, ActiveLockEntry> ActiveTaskLocks = new();
-        public int ActiveReaders;
         public bool WriterActive;
-        public int WaitingWritersCount;
 
         public readonly ConcurrentDictionary<int, SemaphoreSlim> TaskSemaphores = new();
-        public readonly Queue<TaskCompletionSource<bool>> WaitingWriters = new();
-        public readonly Queue<TaskCompletionSource<bool>> WaitingReaders = new();
+        public readonly LinkedList<TaskCompletionSource<ActiveLockEntry>> WaitingWriters = new();
 
         public WorkspaceLockState(int workspaceId)
         {
@@ -56,76 +53,49 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
 
     public async Task<IDisposable> AcquireLockAsync(int workspaceId, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var state = GetOrCreateState(workspaceId);
-        TaskCompletionSource<bool>? waiter = null;
+        TaskCompletionSource<ActiveLockEntry> waiter;
 
         lock (state.Sync)
         {
-            if (!state.WriterActive && state.ActiveReaders == 0 && state.WaitingWritersCount <= 0)
+            if (!state.WriterActive && state.WaitingWriters.Count == 0)
             {
                 state.WriterActive = true;
+                return CreateWorkspaceReleaser(state, workspaceId);
             }
-            else
-            {
-                state.WaitingWritersCount++;
-                waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                state.WaitingWriters.Enqueue(waiter);
-            }
+
+            waiter = new TaskCompletionSource<ActiveLockEntry>(TaskCreationOptions.RunContinuationsAsynchronously);
+            state.WaitingWriters.AddLast(waiter);
         }
 
         try
         {
-            if (waiter != null)
+            await using var reg = cancellationToken.Register(() =>
             {
-                await using var reg = cancellationToken.Register(() =>
+                lock (state.Sync)
                 {
-                    lock (state.Sync)
+                    if (waiter.TrySetCanceled(cancellationToken))
                     {
-                        if (waiter.TrySetCanceled(cancellationToken))
-                        {
-                            state.WaitingWritersCount--;
-                            if (state.WaitingWritersCount < 0) state.WaitingWritersCount = 0;
-                            Drain(state);
-                        }
+                        state.WaitingWriters.Remove(waiter);
+                        Drain(state);
                     }
-                });
+                }
+            });
 
-                await waiter.Task;
-            }
+            var entry = await waiter.Task;
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            lock (state.Sync)
-            {
-                var lockId = Guid.NewGuid().ToString("N");
-                var entry = new ActiveLockEntry
-                {
-                    LockId = lockId,
-                    Key = GetWorkspaceKey(workspaceId),
-                    WorkspaceId = workspaceId,
-                    TaskId = null,
-                    LockType = WorkspaceLockTypes.WorkspaceExclusive,
-                    AcquiredAt = DateTime.UtcNow,
-                    State = state
-                };
-                state.ActiveWorkspaceLock = entry;
-                return new WorkspaceReleaser(this, entry);
-            }
+            return new WorkspaceReleaser(this, entry);
         }
         catch
         {
-            lock (state.Sync)
+            if (waiter.Task.IsCompletedSuccessfully)
             {
-                if (waiter != null && waiter.Task.IsCompletedSuccessfully)
-                {
-                    state.WriterActive = false;
-                    Drain(state);
-                }
-                else if (waiter == null)
-                {
-                    state.WriterActive = false;
-                    Drain(state);
-                }
+                // Granted but caller cancelled: give the lock back (no-op if emergency released).
+                ReleaseWorkspace(waiter.Task.Result);
             }
             throw;
         }
@@ -136,22 +106,10 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
         var state = GetOrCreateState(workspaceId);
         lock (state.Sync)
         {
-            if (!state.WriterActive && state.ActiveReaders == 0 && state.WaitingWritersCount <= 0)
+            if (!state.WriterActive && state.WaitingWriters.Count == 0)
             {
                 state.WriterActive = true;
-                var lockId = Guid.NewGuid().ToString("N");
-                var entry = new ActiveLockEntry
-                {
-                    LockId = lockId,
-                    Key = GetWorkspaceKey(workspaceId),
-                    WorkspaceId = workspaceId,
-                    TaskId = null,
-                    LockType = WorkspaceLockTypes.WorkspaceExclusive,
-                    AcquiredAt = DateTime.UtcNow,
-                    State = state
-                };
-                state.ActiveWorkspaceLock = entry;
-                lockReleaser = new WorkspaceReleaser(this, entry);
+                lockReleaser = CreateWorkspaceReleaser(state, workspaceId);
                 return true;
             }
 
@@ -165,6 +123,8 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(timeout);
         try
@@ -180,77 +140,16 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
 
     public async Task<IDisposable> AcquireTaskLockAsync(int workspaceId, int taskId, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var state = GetOrCreateState(workspaceId);
         var taskSem = state.GetTaskSemaphore(taskId);
 
         await taskSem.WaitAsync(cancellationToken);
 
-        TaskCompletionSource<bool>? waiter = null;
-        try
+        lock (state.Sync)
         {
-            lock (state.Sync)
-            {
-                if (!state.WriterActive && state.WaitingWritersCount <= 0)
-                {
-                    state.ActiveReaders++;
-                }
-                else
-                {
-                    waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    state.WaitingReaders.Enqueue(waiter);
-                }
-            }
-
-            if (waiter != null)
-            {
-                await using var reg = cancellationToken.Register(() =>
-                {
-                    lock (state.Sync)
-                    {
-                        waiter.TrySetCanceled(cancellationToken);
-                    }
-                });
-
-                await waiter.Task;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            lock (state.Sync)
-            {
-                var lockId = Guid.NewGuid().ToString("N");
-                var entry = new ActiveLockEntry
-                {
-                    LockId = lockId,
-                    Key = GetTaskKey(workspaceId, taskId),
-                    WorkspaceId = workspaceId,
-                    TaskId = taskId,
-                    LockType = WorkspaceLockTypes.TaskExclusive,
-                    AcquiredAt = DateTime.UtcNow,
-                    State = state,
-                    TaskSemaphore = taskSem
-                };
-                state.ActiveTaskLocks[taskId] = entry;
-                return new TaskReleaser(this, entry);
-            }
-        }
-        catch
-        {
-            lock (state.Sync)
-            {
-                if (waiter != null && waiter.Task.IsCompletedSuccessfully)
-                {
-                    state.ActiveReaders--;
-                    Drain(state);
-                }
-                else if (waiter == null)
-                {
-                    state.ActiveReaders--;
-                    Drain(state);
-                }
-            }
-            taskSem.Release();
-            throw;
+            return CreateTaskReleaser(state, workspaceId, taskId, taskSem);
         }
     }
 
@@ -266,29 +165,8 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
 
         lock (state.Sync)
         {
-            if (!state.WriterActive && state.WaitingWritersCount <= 0)
-            {
-                state.ActiveReaders++;
-                var lockId = Guid.NewGuid().ToString("N");
-                var entry = new ActiveLockEntry
-                {
-                    LockId = lockId,
-                    Key = GetTaskKey(workspaceId, taskId),
-                    WorkspaceId = workspaceId,
-                    TaskId = taskId,
-                    LockType = WorkspaceLockTypes.TaskExclusive,
-                    AcquiredAt = DateTime.UtcNow,
-                    State = state,
-                    TaskSemaphore = taskSem
-                };
-                state.ActiveTaskLocks[taskId] = entry;
-                lockReleaser = new TaskReleaser(this, entry);
-                return true;
-            }
-
-            taskSem.Release();
-            lockReleaser = null;
-            return false;
+            lockReleaser = CreateTaskReleaser(state, workspaceId, taskId, taskSem);
+            return true;
         }
     }
 
@@ -298,16 +176,20 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(timeout);
-        try
-        {
-            var releaser = await AcquireTaskLockAsync(workspaceId, taskId, timeoutCts.Token);
-            return (true, releaser);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var state = GetOrCreateState(workspaceId);
+        var taskSem = state.GetTaskSemaphore(taskId);
+
+        var acquired = await taskSem.WaitAsync(timeout, cancellationToken);
+        if (!acquired)
         {
             return (false, null);
+        }
+
+        lock (state.Sync)
+        {
+            return (true, CreateTaskReleaser(state, workspaceId, taskId, taskSem));
         }
     }
 
@@ -360,11 +242,13 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
         {
             if (!taskId.HasValue)
             {
-                if (state.ActiveWorkspaceLock != null)
+                if (state.ActiveWorkspaceLock != null || state.WriterActive)
                 {
-                    var entry = state.ActiveWorkspaceLock;
-                    entry.IsEmergencyReleased = true;
-                    state.ActiveWorkspaceLock = null;
+                    if (state.ActiveWorkspaceLock != null)
+                    {
+                        state.ActiveWorkspaceLock.IsEmergencyReleased = true;
+                        state.ActiveWorkspaceLock = null;
+                    }
                     state.WriterActive = false;
                     Drain(state);
                     return true;
@@ -377,8 +261,6 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
                 {
                     entry.IsEmergencyReleased = true;
                     state.ActiveTaskLocks.Remove(taskId.Value);
-                    state.ActiveReaders--;
-                    Drain(state);
                     if (entry.TaskSemaphore != null && entry.TaskSemaphore.CurrentCount == 0)
                     {
                         entry.TaskSemaphore.Release();
@@ -396,11 +278,15 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
         {
             lock (state.Sync)
             {
-                if (state.ActiveWorkspaceLock != null)
+                if (state.ActiveWorkspaceLock != null || state.WriterActive)
                 {
-                    state.ActiveWorkspaceLock.IsEmergencyReleased = true;
-                    state.ActiveWorkspaceLock = null;
+                    if (state.ActiveWorkspaceLock != null)
+                    {
+                        state.ActiveWorkspaceLock.IsEmergencyReleased = true;
+                        state.ActiveWorkspaceLock = null;
+                    }
                     state.WriterActive = false;
+                    Drain(state);
                 }
 
                 foreach (var entry in state.ActiveTaskLocks.Values)
@@ -412,11 +298,47 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
                     }
                 }
                 state.ActiveTaskLocks.Clear();
-                state.ActiveReaders = 0;
-
-                Drain(state);
             }
         }
+    }
+
+    private WorkspaceReleaser CreateWorkspaceReleaser(WorkspaceLockState state, int workspaceId)
+    {
+        var entry = CreateWorkspaceEntry(state, workspaceId);
+        state.ActiveWorkspaceLock = entry;
+        return new WorkspaceReleaser(this, entry);
+    }
+
+    private static ActiveLockEntry CreateWorkspaceEntry(WorkspaceLockState state, int workspaceId)
+    {
+        return new ActiveLockEntry
+        {
+            LockId = Guid.NewGuid().ToString("N"),
+            Key = GetWorkspaceKey(workspaceId),
+            WorkspaceId = workspaceId,
+            TaskId = null,
+            LockType = WorkspaceLockTypes.WorkspaceExclusive,
+            AcquiredAt = DateTime.UtcNow,
+            State = state
+        };
+    }
+
+    private TaskReleaser CreateTaskReleaser(WorkspaceLockState state, int workspaceId, int taskId, SemaphoreSlim taskSem)
+    {
+        var lockId = Guid.NewGuid().ToString("N");
+        var entry = new ActiveLockEntry
+        {
+            LockId = lockId,
+            Key = GetTaskKey(workspaceId, taskId),
+            WorkspaceId = workspaceId,
+            TaskId = taskId,
+            LockType = WorkspaceLockTypes.TaskExclusive,
+            AcquiredAt = DateTime.UtcNow,
+            State = state,
+            TaskSemaphore = taskSem
+        };
+        state.ActiveTaskLocks[taskId] = entry;
+        return new TaskReleaser(this, entry);
     }
 
     private WorkspaceLockState GetOrCreateState(int workspaceId)
@@ -433,36 +355,14 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
 
         while (state.WaitingWriters.Count > 0)
         {
-            var peek = state.WaitingWriters.Peek();
-            if (peek.Task.IsCompleted)
+            var nextWriter = state.WaitingWriters.First!.Value;
+            state.WaitingWriters.RemoveFirst();
+            var entry = CreateWorkspaceEntry(state, state.WorkspaceId);
+            if (nextWriter.TrySetResult(entry))
             {
-                state.WaitingWriters.Dequeue();
-                continue;
-            }
-
-            if (state.ActiveReaders == 0)
-            {
-                var nextWriter = state.WaitingWriters.Dequeue();
-                state.WaitingWritersCount--;
-                if (state.WaitingWritersCount < 0) state.WaitingWritersCount = 0;
-                if (nextWriter.TrySetResult(true))
-                {
-                    state.WriterActive = true;
-                    return;
-                }
-            }
-            else
-            {
+                state.WriterActive = true;
+                state.ActiveWorkspaceLock = entry;
                 return;
-            }
-        }
-
-        while (state.WaitingReaders.Count > 0)
-        {
-            var nextReader = state.WaitingReaders.Dequeue();
-            if (!nextReader.Task.IsCompleted && nextReader.TrySetResult(true))
-            {
-                state.ActiveReaders++;
             }
         }
     }
@@ -497,8 +397,6 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
             }
 
             state.ActiveTaskLocks.Remove(entry.TaskId!.Value);
-            state.ActiveReaders--;
-            Drain(state);
         }
 
         entry.TaskSemaphore?.Release();

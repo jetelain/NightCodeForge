@@ -290,126 +290,57 @@ public class WorkspaceLockTests
     }
 
     [Fact]
-    public async Task ExclusiveWorkspaceLock_BlocksTaskLocksOnSameWorkspace()
+    public async Task ActiveTaskLock_DoesNotBlockExclusiveWorkspaceLockOnSameWorkspace()
     {
         var provider = new WorkspaceLockProvider();
         const int workspaceId = 1;
         const int taskId = 101;
 
-        var exclusiveLock = await provider.AcquireLockAsync(workspaceId);
-        try
-        {
-            // TryAcquireTaskLock must fail while exclusive lock is held
-            Assert.False(provider.TryAcquireTaskLock(workspaceId, taskId, out var immediateReleaser));
-            Assert.Null(immediateReleaser);
+        // An active task lock (e.g. running LLM agent loop in isolated worktree)
+        // must NOT block an exclusive workspace lock (e.g. SquashAndMergeAsync on canonical clone)
+        using var taskLock = await provider.AcquireTaskLockAsync(workspaceId, taskId);
 
-            var (asyncAcquired, asyncReleaser) = await provider.TryAcquireTaskLockAsync(workspaceId, taskId, TimeSpan.FromMilliseconds(50));
-            Assert.False(asyncAcquired);
-            Assert.Null(asyncReleaser);
+        // TryAcquireLock succeeds immediately without waiting
+        var acquired = provider.TryAcquireLock(workspaceId, out var workspaceLock);
+        Assert.True(acquired);
+        Assert.NotNull(workspaceLock);
 
-            var taskLockAcquiredTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var taskLockJob = Task.Run(async () =>
-            {
-                using var releaser = await provider.AcquireTaskLockAsync(workspaceId, taskId);
-                taskLockAcquiredTcs.SetResult();
-            });
+        workspaceLock?.Dispose();
 
-            // Ensure task lock is blocked
-            await Task.Delay(50);
-            Assert.False(taskLockAcquiredTcs.Task.IsCompleted);
-
-            // Release exclusive lock
-            exclusiveLock.Dispose();
-
-            // Task lock should now unblock and complete
-            await taskLockAcquiredTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            await taskLockJob.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        finally
-        {
-            exclusiveLock.Dispose();
-        }
+        // Async acquisition also succeeds immediately
+        using var asyncLock = await provider.AcquireLockAsync(workspaceId);
+        Assert.NotNull(asyncLock);
     }
 
     [Fact]
-    public async Task ActiveTaskLock_BlocksExclusiveWorkspaceLockOnSameWorkspace()
+    public async Task MultipleConcurrentTasks_DoNotBlockExclusiveWorkspaceLock()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 1;
+
+        // Multiple tasks executing concurrently in isolated worktrees
+        using var task1Lock = await provider.AcquireTaskLockAsync(workspaceId, 101);
+        using var task2Lock = await provider.AcquireTaskLockAsync(workspaceId, 102);
+
+        // Workspace-level lock (e.g. maintainer squash-merge in Review Room) acquires immediately
+        using var exclusiveLock = await provider.AcquireLockAsync(workspaceId);
+        Assert.NotNull(exclusiveLock);
+    }
+
+    [Fact]
+    public async Task ExclusiveWorkspaceLock_DoesNotBlockTaskLocksOnSameWorkspace()
     {
         var provider = new WorkspaceLockProvider();
         const int workspaceId = 1;
         const int taskId = 101;
 
-        var taskLock = await provider.AcquireTaskLockAsync(workspaceId, taskId);
-        try
-        {
-            // TryAcquireLock must fail while task lock is held
-            Assert.False(provider.TryAcquireLock(workspaceId, out var immediateReleaser));
-            Assert.Null(immediateReleaser);
+        using var exclusiveLock = await provider.AcquireLockAsync(workspaceId);
 
-            var (asyncAcquired, asyncReleaser) = await provider.TryAcquireLockAsync(workspaceId, TimeSpan.FromMilliseconds(50));
-            Assert.False(asyncAcquired);
-            Assert.Null(asyncReleaser);
-
-            var exclusiveAcquiredTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var exclusiveJob = Task.Run(async () =>
-            {
-                using var releaser = await provider.AcquireLockAsync(workspaceId);
-                exclusiveAcquiredTcs.SetResult();
-            });
-
-            // Ensure exclusive lock is blocked
-            await Task.Delay(50);
-            Assert.False(exclusiveAcquiredTcs.Task.IsCompleted);
-
-            // Release task lock
-            taskLock.Dispose();
-
-            // Exclusive lock should now unblock and complete
-            await exclusiveAcquiredTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            await exclusiveJob.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        finally
-        {
-            taskLock.Dispose();
-        }
-    }
-
-    [Fact]
-    public async Task MultipleConcurrentTasks_HoldSharedWorkspaceLock_BlockingExclusiveLock()
-    {
-        var provider = new WorkspaceLockProvider();
-        const int workspaceId = 1;
-
-        var task1Lock = await provider.AcquireTaskLockAsync(workspaceId, 101);
-        var task2Lock = await provider.AcquireTaskLockAsync(workspaceId, 102);
-
-        try
-        {
-            var exclusiveAcquiredTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var exclusiveJob = Task.Run(async () =>
-            {
-                using var releaser = await provider.AcquireLockAsync(workspaceId);
-                exclusiveAcquiredTcs.SetResult();
-            });
-
-            // Ensure exclusive lock is blocked
-            await Task.Delay(50);
-            Assert.False(exclusiveAcquiredTcs.Task.IsCompleted);
-
-            // Releasing task 1 only is not enough (task 2 is still running)
-            task1Lock.Dispose();
-            await Task.Delay(50);
-            Assert.False(exclusiveAcquiredTcs.Task.IsCompleted);
-
-            // Releasing task 2 drains readers, allowing exclusive lock to proceed
-            task2Lock.Dispose();
-            await exclusiveAcquiredTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            await exclusiveJob.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        finally
-        {
-            task1Lock.Dispose();
-            task2Lock.Dispose();
-        }
+        // Task in isolated worktree can still acquire task execution lock
+        var acquired = provider.TryAcquireTaskLock(workspaceId, taskId, out var taskLock);
+        Assert.True(acquired);
+        Assert.NotNull(taskLock);
+        taskLock?.Dispose();
     }
 
     [Fact]
@@ -425,4 +356,165 @@ public class WorkspaceLockTests
         Assert.NotNull(ws2TaskLock);
         ws2TaskLock?.Dispose();
     }
+
+    [Fact]
+    public async Task CancelledWorkspaceLockWaiters_DoNotLeakOrStarveRemainingWaiters()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 1;
+
+        var holder = await provider.AcquireLockAsync(workspaceId);
+
+        // Many waiters time out / cancel while the lock is held
+        for (var i = 0; i < 20; i++)
+        {
+            var (acquired, releaser) = await provider.TryAcquireLockAsync(workspaceId, TimeSpan.FromMilliseconds(5));
+            Assert.False(acquired);
+            Assert.Null(releaser);
+        }
+
+        // One live waiter remains queued behind the holder
+        var liveWaiter = provider.AcquireLockAsync(workspaceId);
+        Assert.False(liveWaiter.IsCompleted);
+
+        // A new caller must not barge ahead of the queued waiter
+        Assert.False(provider.TryAcquireLock(workspaceId, out _));
+
+        holder.Dispose();
+
+        using var granted = await liveWaiter.WaitAsync(TimeSpan.FromSeconds(2));
+
+        // While the live waiter holds it, nobody else can acquire
+        Assert.False(provider.TryAcquireLock(workspaceId, out _));
+
+        granted.Dispose();
+
+        // Fully released: no phantom waiters remain
+        Assert.True(provider.TryAcquireLock(workspaceId, out var final));
+        final?.Dispose();
+    }
+
+    [Fact]
+    public async Task AcquireLockAsync_WithPreCancelledToken_ThrowsAndLeavesLockAvailable()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 1;
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => provider.AcquireLockAsync(workspaceId, cts.Token));
+
+        // Lock must remain free and immediately acquirable
+        var acquired = provider.TryAcquireLock(workspaceId, out var releaser);
+        Assert.True(acquired);
+        Assert.NotNull(releaser);
+        releaser?.Dispose();
+    }
+
+    [Fact]
+    public async Task AcquireTaskLockAsync_WithPreCancelledToken_ThrowsAndLeavesTaskLockAvailable()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 1;
+        const int taskId = 101;
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => provider.AcquireTaskLockAsync(workspaceId, taskId, cts.Token));
+
+        var acquired = provider.TryAcquireTaskLock(workspaceId, taskId, out var releaser);
+        Assert.True(acquired);
+        Assert.NotNull(releaser);
+        releaser?.Dispose();
+    }
+
+    [Fact]
+    public async Task AcquireLockAsync_CancelledWhileWaiting_RemovesWaiterAndAllowsSubsequentAcquisitions()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 1;
+
+        var holder = await provider.AcquireLockAsync(workspaceId);
+
+        using var cts = new CancellationTokenSource();
+        var waitingTask = provider.AcquireLockAsync(workspaceId, cts.Token);
+
+        // Cancel while queued
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waitingTask);
+
+        // Release holder
+        holder.Dispose();
+
+        // New acquisition succeeds immediately
+        using var newLock = await provider.AcquireLockAsync(workspaceId);
+        Assert.NotNull(newLock);
+    }
+
+    [Fact]
+    public async Task TryAcquireTaskLockAsync_WithCancelledToken_ThrowsOperationCanceledException()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 1;
+        const int taskId = 101;
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => provider.TryAcquireTaskLockAsync(workspaceId, taskId, TimeSpan.FromSeconds(1), cts.Token));
+
+        var (acquired, releaser) = await provider.TryAcquireTaskLockAsync(workspaceId, taskId, TimeSpan.FromSeconds(1));
+        Assert.True(acquired);
+        Assert.NotNull(releaser);
+        releaser?.Dispose();
+    }
+
+    [Fact]
+    public async Task EmergencyRelease_WhenWriterActiveWithNullActiveLock_ReleasesLockAndAllowsNewAcquisition()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 1;
+
+        var holder = await provider.AcquireLockAsync(workspaceId);
+        Assert.Single(provider.GetActiveLocks());
+
+        var released = provider.EmergencyRelease(workspaceId);
+        Assert.True(released);
+        Assert.Empty(provider.GetActiveLocks());
+
+        // Calling EmergencyRelease again when not held returns false
+        Assert.False(provider.EmergencyRelease(workspaceId));
+
+        using var reacquired = await provider.AcquireLockAsync(workspaceId);
+        Assert.NotNull(reacquired);
+    }
+
+    [Fact]
+    public async Task EmergencyRelease_GrantsQueuedWaiter_AndStaleHolderDisposeDoesNotReleaseNewOwner()
+    {
+        var provider = new WorkspaceLockProvider();
+        const int workspaceId = 1;
+
+        var staleHolder = await provider.AcquireLockAsync(workspaceId);
+        var waiter = provider.AcquireLockAsync(workspaceId);
+        Assert.False(waiter.IsCompleted);
+
+        Assert.True(provider.EmergencyRelease(workspaceId));
+        using var newOwner = await waiter.WaitAsync(TimeSpan.FromSeconds(2));
+
+        // New owner is visible in telemetry as soon as it is granted
+        Assert.Single(provider.GetActiveLocks());
+
+        // Stale holder disposing must not free the new owner's lock
+        staleHolder.Dispose();
+        Assert.Single(provider.GetActiveLocks());
+        Assert.False(provider.TryAcquireLock(workspaceId, out _));
+    }
 }
+

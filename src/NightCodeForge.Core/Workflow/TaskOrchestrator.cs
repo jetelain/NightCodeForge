@@ -157,41 +157,44 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         try
         {
-            if (workspace.ExecutionMode != ExecutionMode.BareHost)
+            using (await _workspaceLockProvider.AcquireLockAsync(workspace.Id, cancellationToken))
             {
-                if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+                if (workspace.ExecutionMode != ExecutionMode.BareHost)
                 {
-                    try
+                    if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
                     {
-                        var defaultMirrorDir = _pathResolver.GetAgentWorkingClonePath(workspace.Id);
-                        var initializedPath = await _gitMirrorSyncService.InitializeMirrorAsync(workspace, defaultMirrorDir, cancellationToken);
-                        if (!string.IsNullOrWhiteSpace(initializedPath))
+                        try
                         {
-                            workspace.Ext4MirrorPath = initializedPath;
-                            await _workspaceRepository.UpdateAsync(workspace, cancellationToken);
+                            var defaultMirrorDir = _pathResolver.GetAgentWorkingClonePath(workspace.Id);
+                            var initializedPath = await _gitMirrorSyncService.InitializeMirrorAsync(workspace, defaultMirrorDir, cancellationToken);
+                            if (!string.IsNullOrWhiteSpace(initializedPath))
+                            {
+                                workspace.Ext4MirrorPath = initializedPath;
+                                await _workspaceRepository.UpdateAsync(workspace, cancellationToken);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Automatic ext4 mirror initialization failed for workspace #{WorkspaceId}", workspace.Id);
                         }
                     }
-                    catch (Exception ex)
+
+                    if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
                     {
-                        _logger.LogWarning(ex, "Automatic ext4 mirror initialization failed for workspace #{WorkspaceId}", workspace.Id);
+                        try
+                        {
+                            await _gitMirrorSyncService.ConfigureHostRepositoryAsync(workspace.RepositoryPath, cancellationToken);
+                            await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, task.BaseBranch, cancellationToken);
+                        }
+                        catch (Exception mex)
+                        {
+                            _logger.LogWarning(mex, "Ext4 mirror fetch synchronization failed for task #{TaskId}", taskId);
+                        }
                     }
                 }
 
-                if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
-                {
-                    try
-                    {
-                        await _gitMirrorSyncService.ConfigureHostRepositoryAsync(workspace.RepositoryPath, cancellationToken);
-                        await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, task.BaseBranch, cancellationToken);
-                    }
-                    catch (Exception mex)
-                    {
-                        _logger.LogWarning(mex, "Ext4 mirror fetch synchronization failed for task #{TaskId}", taskId);
-                    }
-                }
+                await _gitWorkspaceManager.CheckoutTaskBranchAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
             }
-
-            await _gitWorkspaceManager.CheckoutTaskBranchAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -1102,7 +1105,10 @@ public class TaskOrchestrator : ITaskOrchestrator
                 if (task.MergeMode == MergeMode.Automatic)
                 {
                     _logger.LogInformation("ForgeTask #{TaskId} reached Ready with MergeMode.Automatic; executing auto-merge.", task.Id);
-                    await CompleteTaskAndCascadeInternalAsync(task, workspace, $"Auto-merge task #{task.Id}: {task.Title}", cancellationToken);
+                    using (await _workspaceLockProvider.AcquireLockAsync(workspace.Id, cancellationToken))
+                    {
+                        await CompleteTaskAndCascadeInternalAsync(task, workspace, $"Auto-merge task #{task.Id}: {task.Title}", cancellationToken);
+                    }
                 }
                 else
                 {

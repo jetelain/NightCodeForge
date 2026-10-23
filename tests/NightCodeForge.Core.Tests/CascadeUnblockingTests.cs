@@ -226,4 +226,59 @@ public class CascadeUnblockingTests
         // Neither is enqueued to urgent queue
         Assert.Empty(_jobQueue.UrgentQueue);
     }
+
+    [Fact]
+    public async Task CompleteTaskAndCascadeAsync_WhenAnotherTaskLockIsHeld_ExecutesSquashMergeImmediatelyWithoutBlocking()
+    {
+        // ForgeTask 401 is Ready for Review and squash-merge
+        var task401 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 401,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Ready,
+            BaseBranch = "main"
+        });
+        _depStore.AddTask(401, 1, TaskOverallStatus.Ready);
+
+        // ForgeTask 999 is currently executing in Hangfire dev-queue in its isolated worktree
+        var task999 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 999,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            BaseBranch = "main"
+        });
+        _depStore.AddTask(999, 1, TaskOverallStatus.Open);
+
+        // Simulate background task 999 actively holding its task execution lock
+        using var backgroundTaskLock = await _lockProvider.AcquireTaskLockAsync(1, 999);
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore
+        }.Build();
+
+        // Maintainer clicks "Approve & Merge" in Review Room for Task 401:
+        // Must complete immediately (< 500ms) without being blocked by task 999
+        var mergeTask = orchestrator.CompleteTaskAndCascadeAsync(401, "feat: squash task 401");
+        await mergeTask.WaitAsync(TimeSpan.FromSeconds(1));
+
+        // 1. Squash merge executed for Task 401
+        Assert.Single(_gitManager.SquashMerges);
+        var merge = _gitManager.SquashMerges[0];
+        Assert.Equal(401, merge.TaskId);
+        Assert.Equal("main", merge.BaseBranch);
+
+        // 2. Status updated to Closed
+        var closed401 = await _taskRepo.GetByIdAsync(401);
+        Assert.NotNull(closed401);
+        Assert.Equal(TaskOverallStatus.Closed, closed401.Status);
+    }
 }
+
