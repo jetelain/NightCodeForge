@@ -211,9 +211,10 @@ When `serverDef.Command` is populated and `executionEnv` is `NightCodeForgeConta
    var client = await McpClient.CreateAsync(transport, cancellationToken: ct);
    ```
 
-4. **Security Isolation Guarantee:**
-   - If the task requires `ContainerSandbox`, stdio tools **never** spawn direct processes on the host. If no running container is available or execution environment is not resolved, stdio tools are skipped with an explicit audit log.
-   - For `BareHostExecutionEnvironment` (local dev mode only), `StdioClientTransportOptions` runs `serverDef.Command` directly on the host, subject to `SecurityTier` constraints.
+4. **Execution Environment Dispatch Matrix:**
+   - **`ContainerSandbox`:** Stdio tools spawn strictly via `docker exec -i -w ...` (via `wsl.exe` if Docker runs in WSL) inside the task container. If no running container is available, stdio tools are skipped with an explicit audit log.
+   - **`WslDirect`:** Stdio tools execute directly inside the WSL Linux distribution using `wsl.exe -d <distro> --cd <linuxWorktreePath> <command> <args>`.
+   - **`BareHost`:** Spawns `serverDef.Command` directly on the host using `StdioClientTransportOptions`, subject to profile `SecurityTier` constraints.
 
 ---
 

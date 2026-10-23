@@ -67,7 +67,7 @@ window.blazorVoiceAgent = {
     intentionalStop: false,
     silenceDebounceMs: 1500,
 
-    init: function (dotNetHelper, lang = 'fr-FR', debounceMs = 1500) {
+    init: function (dotNetHelper, lang = (navigator.language || 'en-US'), debounceMs = 1500) {
         this.dotNetHelper = dotNetHelper;
         this.silenceDebounceMs = debounceMs;
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;

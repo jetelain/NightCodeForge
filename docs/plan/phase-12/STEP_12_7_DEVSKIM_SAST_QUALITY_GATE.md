@@ -48,10 +48,14 @@
    ```bash
    devskim analyze . -f sarif -o .nightcodeforge/sast-results.sarif --severity critical,important
    ```
-2. **Execution Context:**
-   The command runs inside the task's effective execution environment ([ContainerSandbox](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Execution/ContainerSandboxEnvironment.cs), [WslDirect](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Execution/WslDirectEnvironment.cs), or [BareHost](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Execution/BareHostEnvironment.cs)) targeted at the workspace working directory.
+2. **Execution Context (WSL on Windows / Host on Linux):**
+   - DevSkim is a static source code analysis tool: it only inspects source files on disk and emits a SARIF report; it does not execute application code or require project runtime dependencies.
+   - To avoid polluting or bloating non-.NET guest container images (e.g. Node.js, Python, Rust, Go) with .NET SDK runtimes, `DeterministicSastStage` invokes DevSkim externally against the task's worktree path on disk:
+     - **Windows Environments:** Spawns via WSL (`wsl.exe devskim analyze <worktreePathInWsl> -f sarif -o <outputPathInWsl> --severity critical,important`) where DevSkim CLI is installed.
+     - **Linux Environments:** Executes `devskim analyze <worktreePath> ...` directly on the host.
+     - If custom `SastCommand` is explicitly configured in `.nightcodeforge/config.json`, it is executed within the workspace's configured `IExecutionEnvironment`.
 3. **Graceful Fallback & Availability Check:**
-   If `devskim` binary is not found on `PATH`, the runner checks for `dotnet devskim analyze` (local tool). If neither is available, the stage fails with a clear installation prerequisite message directing how to install the tool (`dotnet tool install -g Microsoft.CST.DevSkim.CLI`), unless `AllowMissingTools` is explicitly configured.
+   - The stage checks for `devskim` binary on `PATH` (or via `wsl devskim` on Windows). If not available, the stage fails with a clear installation prerequisite message directing how to install the tool (`dotnet tool install -g Microsoft.CST.DevSkim.CLI`), unless `AllowMissingTools` is explicitly configured.
 
 ### 3.2 SARIF Parsing & Finding Domain Models
 1. **Strongly-Typed Finding Record:**
@@ -123,8 +127,8 @@ Broadcast real-time SignalR gate result to `ReceiveDeterministicGateResult`.
 - [ ] **Presets & Configuration:**
   - [ ] Update `CodeStackPresets.cs` to provide default `devskim` command across presets.
   - [ ] Support `sast_fail_severity` and `sast_ignore_rules` in `.nightcodeforge/config.json`.
-- [ ] **Container & Environment Provisioning:**
-  - [ ] Add `dotnet tool install -g Microsoft.CST.DevSkim.CLI` to `ContainerSandbox` Dockerfile specifications.
+- [ ] **Host / WSL Environment Provisioning:**
+  - [ ] Ensure `dotnet tool install -g Microsoft.CST.DevSkim.CLI` is documented and checked via WSL (`wsl.exe devskim`) on Windows and directly on Linux host.
 - [ ] **Web UI Components:**
   - [ ] Add SAST gate card to `Review.razor`.
   - [ ] Display findings list in `TaskExecutionInspector.razor`.

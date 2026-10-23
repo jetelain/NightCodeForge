@@ -213,32 +213,35 @@ Upon completion of Stage 1 (`StandardStageIds.TaskReview`):
          .Select(d => d.DependsOnTaskId)
          .ToList();
      ```
-2. **Suspension & State Reset Action:**
+2. **Suspension, Resource Cleanup & State Reset Action:**
    - If `unclosedPrerequisites.Count > 0`:
      - **Status Reset:** `task.Status = TaskOverallStatus.Open`.
      - **Stage Reset:** `task.CurrentStageId = StandardStageIds.TaskReview`.
      - **Routing Suppression:** Clear `result.TargetRoutingStageId` so the engine does not advance to the next pipeline stage (Implementation).
-     - **Audit Logging:** Save task with `reason: $"Task suspended: waiting for unclosed prerequisites [{string.Join(", ", unclosedPrerequisites)}]; workflow reset to Open."` and actor `AuditActors.System`.
+     - **Worktree & Container Cleanup:** Immediately invoke `_gitWorkspaceManager.RemoveWorktreeAsync(workspace, task.Id, cancellationToken)` and `_environmentProvider.CleanupTaskContainerAsync(workspace, task.Id, cancellationToken)`. This releases disk space, prevents idle container leaks, and guarantees that when the prerequisite merges and unblocks this task, a brand-new worktree will be provisioned directly off the freshly updated base branch head.
+     - **Audit Logging:** Save task with `reason: $"Task suspended: waiting for unclosed prerequisites [{string.Join(", ", unclosedPrerequisites)}]; workflow reset to Open; worktree cleaned up."` and actor `AuditActors.System`.
      - **Dependency Store Sync:** Notify `_dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status)`.
-     - **Execution Log:** Log an informational entry: `Task #{task.Id} suspended due to unclosed dependencies [{string.Join(", ", unclosedPrerequisites)}]. Workflow will rerun from Stage 1 once prerequisites are Closed.`
+     - **Execution Log:** Log an informational entry: `Task #{task.Id} suspended due to unclosed dependencies [{string.Join(", ", unclosedPrerequisites)}]. Worktree removed; workflow will rerun from Stage 1 once prerequisites are Closed.`
      - Gracefully finish the current Hangfire job without error.
 3. **Automatic Resumption via DAG Cascade:**
-   - When the prerequisite tasks reach `TaskOverallStatus.Closed` (e.g. via PR merge or manual review approval), `TaskOrchestrator.OnTaskCompletedAsync` executes its DAG cascade unblocking check.
-   - Finding all dependencies now satisfied, the orchestrator automatically re-enqueues the task into the Hangfire queue.
-   - The worker executes the task starting cleanly from Stage 1 (Task Review) with the prerequisite commits now in the base branch.
+   - When the prerequisite tasks reach `TaskOverallStatus.Closed` (e.g. via PR merge or manual review approval), `TaskOrchestrator.CompleteTaskAndCascadeInternalAsync` executes its DAG cascade unblocking check via `_dependencyEngine.ResolveCascadeUnblockedTasksAsync(task.Id)`.
+   - Finding all dependencies now satisfied, the orchestrator automatically re-enqueues the unblocked task into the Hangfire queue (`_jobQueue.EnqueueUrgent` or `_jobQueue.Enqueue`).
+   - The worker executes the task starting cleanly from Stage 1 (Task Review) with a fresh worktree branched off the updated base branch containing the prerequisite commits.
 
 ---
 
-## 7. UI Presentation: Interactive Dependency Badges
+## 7. UI Presentation: Interactive Dependency Badges & Suspension States
 
 ### 7.1 Kanban Cards ([KanbanCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor))
 - Shows interactive chips:
   - 🔗 `Prereq: #101` (hover shows title and status; clicking navigates to or opens task drawer for #101).
   - ⚠️ Amber indicator if an upstream prerequisite failed or is blocked.
+  - ⏸️ **Suspended Badge (`⏸️ Blocked on #101`):** When a task is in `Status == TaskOverallStatus.Open` but has unclosed dependencies, render a distinctive amber/slate suspended pill so developers immediately understand why the card is not currently executing or enqueued in DevQueue.
 
 ### 7.2 Task Detail Drawer ([TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor))
 - Displays "Dependencies & Blockers" card:
-  - Lists **Prerequisite Tasks** (tasks this task depends on).
+  - Lists **Prerequisite Tasks** (tasks this task depends on) with status pills and completion state.
+  - If any prerequisite is unclosed, displays an alert banner: `⏸️ Task execution is suspended awaiting completion of #101. Worktree will automatically initialize when unblocked.`
   - Lists **Downstream Blocked Tasks** (tasks waiting on this task).
   - Quick **Add/Remove Dependency** button linking to [DependencyLinkingModal.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/DependencyLinkingModal.razor).
 
@@ -258,11 +261,12 @@ Upon completion of Stage 1 (`StandardStageIds.TaskReview`):
   - Update Ideation task planning guidelines to require `dependsOnTitles` on overlapping work and forbid circular dependencies.
 - [ ] **Cycle Detection & Agent Error Loopback:**
   - Enforce `IDependencyResolutionEngine.HasCycle` in `TaskMarkdownSyncService` and ensure cycle detection errors are returned to the agent during Stage 1 file edits.
-- [ ] **Dynamic Task Suspension & Workflow Reset:**
-  - Update [TaskOrchestrator](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) upon Stage 1 completion: if newly added dependencies are not `Closed`, suspend execution, reset `task.Status = TaskOverallStatus.Open`, reset `task.CurrentStageId = StandardStageIds.TaskReview`, and terminate stage execution cleanly without routing to Stage 2/3.
-  - Ensure DAG unblocking cascade re-enqueues the task to rerun from Stage 1 once prerequisites reach `Closed`.
+- [ ] **Dynamic Task Suspension, Resource Cleanup & Workflow Reset:**
+  - Update [TaskOrchestrator](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) upon Stage 1 completion: if newly added dependencies are not `Closed`, suspend execution, reset `task.Status = TaskOverallStatus.Open`, reset `task.CurrentStageId = StandardStageIds.TaskReview`, terminate stage execution cleanly without routing to Stage 2/3, remove the task worktree (`RemoveWorktreeAsync`), and clean up the container (`CleanupTaskContainerAsync`).
+  - Ensure DAG unblocking cascade re-enqueues the task to rerun from Stage 1 with a fresh worktree once prerequisites reach `Closed`.
 - [ ] **UI Dependency Enhancements:**
   - Render prerequisite and downstream chips in [KanbanCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor).
+  - Render distinctive `⏸️ Suspended (Waiting on #X)` pill on Kanban cards and drawer when an Open task has unclosed prerequisites.
   - Add dependency section with link modal in [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor).
 - [ ] **Tests:**
   - Unit test verifying backlog summary filters out archived, closed, rejected, and cancelled tasks.

@@ -165,6 +165,8 @@ public async Task<string> BashAsync(
 }
 ```
 
+> **Design Constraint (per AGENTS.md):** In `CanonicalTools`, `ICliOutputFilterRegistry` must be a required constructor dependency (no optional constructor parameters or fallback nulling). All callers and test suites must explicitly provide the dependency or test mock.
+
 In [CanonicalAIFunctionFactory.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Tools/CanonicalAIFunctionFactory.cs):
 
 ```csharp

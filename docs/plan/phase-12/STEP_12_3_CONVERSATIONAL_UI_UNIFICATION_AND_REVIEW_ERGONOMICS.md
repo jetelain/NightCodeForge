@@ -46,6 +46,7 @@ User feedback across real-world project trials highlighted key UX inconsistencie
      - 🚀 **Running** (actively executing a stage)
      - ⏳ **In Flight (Waiting for Slot)** (queued in DevQueue/Hangfire awaiting GPU inference)
      - 💬 **Waiting for Human** (`IsWaitingForHuman == true`, pending clarification)
+     - 📋 **Backlog / Open** (un-queued open tasks)
      - ✅ **Closed** (merged or closed tasks)  
    Tasks are sorted by Priority ASC, then Last Active / CreatedAt DESC within each group. In accordance with UI separation rules, task classification and grouping logic is encapsulated in `TaskInspectorGroupingHelper` in `NightCodeForge.Web.Services`.
 
@@ -159,11 +160,12 @@ flowchart TD
 
 ### 3.5 Task Inspector Grouped Dropdown
 1. Extract `TaskInspectorGroupingHelper` into `src/NightCodeForge.Web/Services/TaskInspectorGroupingHelper.cs`:
-   - Categorizes tasks into four distinct groups:
+   - Categorizes tasks into distinct groups:
      1. 🚀 **Running** (`task.Status == TaskOverallStatus.InProgress`)
      2. ⏳ **In Flight (Waiting for Slot)** (`task.HasExecutionRun == true` or queued in DevQueue, but not actively running or blocked)
      3. 💬 **Waiting for Human** (`task.IsWaitingForHuman == true`)
-     4. ✅ **Closed** (`task.Status == TaskOverallStatus.Closed`)
+     4. 📋 **Backlog / Open** (`task.Status == TaskOverallStatus.Open` and not actively queued/running)
+     5. ✅ **Closed** (`task.Status == TaskOverallStatus.Closed`)
    - Orders items by Priority ASC (1 to 5) then Last Active DESC within each group.
 2. Update `TaskExecutionInspector.razor` / `TaskInspector.razor` task selector to render semantic `<optgroup label="...">` elements.
 

@@ -120,7 +120,7 @@ flowchart TD
         CompleteStep["CompleteTaskAndCascadeAsync"]
         MergeModeDecision{"task.MergeMode?"}
         DirectMerge["Local Workspace Squash & Merge<br/>(MergeMode.Automatic / ManualReviewRequired)"]
-        PushBranch["git push origin feature/task-42"]
+        PushBranch["git push github feature/task-42<br/>(Authenticated GitHub Remote)"]
         CreatePR["Create Pull Request<br/>(via GitHub Client)"]
     end
 
@@ -167,7 +167,7 @@ flowchart TD
 
 ### 5.1 Pull Request Generation Flow
 When a task reaches completion and `task.MergeMode == MergeMode.ExternalPullRequest`:
-1. **Push Branch:** The orchestrator pushes `feature/task-{id}` to the configured GitHub remote (`git push origin feature/task-{id}`).
+1. **Push Branch to GitHub Remote:** The orchestrator pushes `feature/task-{id}` directly to the remote GitHub repository (using an authenticated remote URL `https://x-access-token:{token}@github.com/{owner}/{repo}.git` or a dedicated `github` remote configured with `GitHubIntegrationSettings.ApiToken`), ensuring the feature branch is published upstream to GitHub rather than solely to the local clone.
 2. **Build PR Body:** Formats a structured PR description:
    ```markdown
    ## 🚀 Autonomous Implementation: Task #{TaskId} - {TaskTitle}

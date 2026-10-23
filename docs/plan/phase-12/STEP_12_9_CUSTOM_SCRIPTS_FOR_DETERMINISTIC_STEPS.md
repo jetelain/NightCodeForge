@@ -95,6 +95,8 @@ The script writes output to standard output. The script runner parses lines in r
 | **Python (`.py`)** | `python .nightcodeforge/scripts/run.py` | `python3 .nightcodeforge/scripts/run.py` | `docker exec -w /workspace ... python3 .nightcodeforge/scripts/run.py` |
 | **PowerShell (`.ps1`)** | `pwsh -File .nightcodeforge/scripts/run.ps1` | `pwsh -File .nightcodeforge/scripts/run.ps1` | `docker exec -w /workspace ... pwsh -File .nightcodeforge/scripts/run.ps1` |
 
+> **Fail-Fast Policy (No Silent Failures):** If the required interpreter binary (`bash`, `python3`/`python`, `pwsh`) is not present in the target execution environment, the stage must immediately fail with a dedicated domain exception (`DeterministicScriptExecutionException: Required runtime '{interpreter}' was not found in the {ExecutionMode} environment for script '{scriptPath}'.`), reporting the failure directly to the activity stream rather than masking it as a generic process exit error.
+
 ---
 
 ## 5. Architectural Flow

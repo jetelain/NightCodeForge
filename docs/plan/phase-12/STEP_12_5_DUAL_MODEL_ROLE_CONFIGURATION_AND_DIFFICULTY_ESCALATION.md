@@ -118,6 +118,7 @@
    - Stage transitions (e.g. Task Review -> Implementation or Implementation -> Code Review) often require loading a new model into VRAM.
    - Deterministic stages (e.g. [DeterministicBuildStage](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/Stages/DeterministicBuildStage.cs), `DeterministicTestStage`, git checkout, linting) execute purely on the host CPU for 10–45 seconds with 0 GPU load.
    - During deterministic stage execution, the orchestrator/stage issues an asynchronous, non-blocking JIT preload request via [IOllamaModelPreloadService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Interfaces/IOllamaModelCatalogService.cs#L22) (`POST /api/generate` with `keep_alive: "15m"`).
+   - **Cancellation & Failure Guard:** The preload task accepts the deterministic stage's `CancellationToken`. If the deterministic stage encounters an immediate failure (e.g. compile error after 1 second) or is cancelled, the preload HTTP request is aborted, preventing Ollama from evicting the previous model on a single GPU.
    - By the time the deterministic CPU step completes, the target model weights are warm and resident in VRAM, eliminating perceived model swap delays.
 2. **Difficulty-Aware Preload Lookahead:**
    - When a deterministic stage looks ahead in the pipeline to determine the upcoming `Agentic` stage's model, it must apply the difficulty escalation rules:
