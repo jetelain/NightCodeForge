@@ -37,6 +37,9 @@ public class DeterministicStageTests
         public int? LastTimeoutSeconds { get; private set; }
 
         public IExecutionEnvironment GetEnvironment(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard, int? taskId = null) => this;
+        public Task CleanupTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task CleanupWorkspaceContainersAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<int>>([]);
 
         public Task<CommandResult> ExecuteAsync(
             string command,

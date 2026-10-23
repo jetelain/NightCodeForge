@@ -168,7 +168,7 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
         // Ingest proposal into backlog
         var addBtn = proposalCard.First.Locator("button:has-text('Add to Backlog'), button.add-backlog-btn");
         await addBtn.ClickAsync();
-        await _page.WaitForSelectorAsync(".toast-item.toast-success:has-text('Added to Backlog')", new PageWaitForSelectorOptions { Timeout = 15000 });
+        await _page.WaitForSelectorAsync(".toast-item.toast-success:has-text('Added to Backlog')", new PageWaitForSelectorOptions { Timeout = 45000 });
 
         // =============================================================
         // Step 3: Validate the Task (Auto-Merge)

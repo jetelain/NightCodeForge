@@ -39,6 +39,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
             jobQueue,
             _pathResolver,
             _processRunner,
+            new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
             NullLogger<StartupRecoveryService>.Instance);
 
     private readonly IWorkspacePathResolver _pathResolver = new WorkspacePathResolver(

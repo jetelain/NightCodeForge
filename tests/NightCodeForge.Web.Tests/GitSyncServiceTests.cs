@@ -30,6 +30,7 @@ public class GitSyncServiceTests
             _taskRepository,
             new Mock<IWorkspacePathResolver>().Object,
             new Mock<IWslMetadataService>().Object,
+            new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
             NullLogger<GitSyncService>.Instance);
     }
 

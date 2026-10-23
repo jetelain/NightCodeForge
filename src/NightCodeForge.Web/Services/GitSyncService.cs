@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Infrastructure.Git;
 
 namespace NightCodeForge.Web.Services;
@@ -22,6 +23,7 @@ public class GitSyncService : IGitSyncService
     private readonly ITaskRepository _taskRepository;
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IWslMetadataService _wslMetadataService;
+    private readonly IExecutionEnvironmentProvider _environmentProvider;
     private readonly ILogger<GitSyncService> _logger;
 
     private static readonly ConcurrentDictionary<int, DateTime> LastFetchedTimes = new();
@@ -34,6 +36,7 @@ public class GitSyncService : IGitSyncService
         ITaskRepository taskRepository,
         IWorkspacePathResolver pathResolver,
         IWslMetadataService wslMetadataService,
+        IExecutionEnvironmentProvider environmentProvider,
         ILogger<GitSyncService> logger)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
@@ -42,6 +45,7 @@ public class GitSyncService : IGitSyncService
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _wslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
+        _environmentProvider = environmentProvider ?? throw new ArgumentNullException(nameof(environmentProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -354,6 +358,16 @@ public class GitSyncService : IGitSyncService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed executing git worktree prune on '{TargetPath}'", targetPath);
+        }
+
+        // Reap sandbox containers of closed / rejected / deleted tasks
+        try
+        {
+            await TaskContainerReaper.ReapAsync(_environmentProvider, _taskRepository, workspace, _logger, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to reap orphaned task containers for workspace #{WorkspaceId}", workspace.Id);
         }
 
         // Clean up inactive/done task worktrees

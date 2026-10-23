@@ -35,6 +35,7 @@ public class TestOrchestratorBuilder
     }
     public IWorkspaceLockProvider LockProvider { get; set; } = new WorkspaceLockProvider();
     public IGitWorkspaceManager GitWorkspaceManager { get; set; } = CreateDefaultGitWorkspaceManager();
+    public Mock<IExecutionEnvironmentProvider> EnvironmentProviderMock { get; } = new();
     public IWorkflowPipelineProvider PipelineProvider { get; set; } = new DefaultWorkflowPipelineProvider();
 
     private static IGitWorkspaceManager CreateDefaultGitWorkspaceManager()
@@ -93,6 +94,7 @@ public class TestOrchestratorBuilder
         DependencyEngine,
         LockProvider,
         GitWorkspaceManager,
+        EnvironmentProviderMock.Object,
         PipelineProvider,
         JobQueue,
         DependencyStore,

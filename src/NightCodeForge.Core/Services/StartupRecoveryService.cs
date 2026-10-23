@@ -22,6 +22,7 @@ public class StartupRecoveryService : IStartupRecoveryService
     private readonly ITaskJobQueue _jobQueue;
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IProcessRunner _processRunner;
+    private readonly IExecutionEnvironmentProvider _environmentProvider;
     private readonly ILogger<StartupRecoveryService> _logger;
 
     private const string RecoveryNoticeContent = "[System Notice: Host restarted unexpectedly; workspace restored; resuming from previous conversation turn]";
@@ -38,6 +39,7 @@ public class StartupRecoveryService : IStartupRecoveryService
         ITaskJobQueue jobQueue,
         IWorkspacePathResolver pathResolver,
         IProcessRunner processRunner,
+        IExecutionEnvironmentProvider environmentProvider,
         ILogger<StartupRecoveryService> logger)
     {
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
@@ -48,6 +50,7 @@ public class StartupRecoveryService : IStartupRecoveryService
         _jobQueue = jobQueue ?? throw new ArgumentNullException(nameof(jobQueue));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _environmentProvider = environmentProvider ?? throw new ArgumentNullException(nameof(environmentProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -124,6 +127,19 @@ public class StartupRecoveryService : IStartupRecoveryService
                 {
                     _logger.LogWarning(ex, "Failed to normalize relative worktree paths for Workspace #{WorkspaceId} Task #{TaskId}", workspace.Id, taskId);
                 }
+            }
+        }
+
+        // Reap sandbox containers of closed / rejected / deleted tasks
+        foreach (var workspace in workspaces.Where(w => w.Id > 0))
+        {
+            try
+            {
+                await TaskContainerReaper.ReapAsync(_environmentProvider, _taskRepository, workspace, _logger, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Failed to reap orphaned task containers for workspace #{WorkspaceId}", workspace.Id);
             }
         }
 

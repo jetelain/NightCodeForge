@@ -184,6 +184,7 @@ public class TaskOrchestratorConversationResumptionTests
             jobQueue,
             pathResolver.Object,
             procRunner.Object,
+            new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
             NullLogger<StartupRecoveryService>.Instance);
 
         await recoveryService.ReconcileWorkspacesAsync();

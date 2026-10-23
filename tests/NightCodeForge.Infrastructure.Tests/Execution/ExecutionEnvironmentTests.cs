@@ -264,6 +264,252 @@ public class ExecutionEnvironmentTests
         Assert.False(fresh);
     }
 
+    private static ContainerExecutorOptions StoppedTestOptions() => new()
+    {
+        AutoStartContainer = true,
+        ContainerNameOrId = "ncf-sandbox-1",
+        ContainerImage = "alpine",
+        HostWorkspacePath = "/test/repo",
+        ContainerWorkspacePath = "/workspace",
+        MountPackageCaches = true,
+        MountHostSdks = false,
+        ProtectCloneWorkingTree = false
+    };
+
+    /// <summary>Simulates `docker inspect` mount output (destination=source=rw;) for the expected mounts, minus omitted ones.</summary>
+    private static string MountInspectOutput(ContainerExecutorOptions options, string? omitDestination = null, string? readOnlyFlipDestination = null) =>
+        string.Concat(NightCodeForgeContainerExecutor.BuildVolumeMounts(options)
+            .Where(m => m.ContainerPath != omitDestination)
+            .Select(m => $"{m.ContainerPath}={m.HostPath}={(m.ContainerPath == readOnlyFlipDestination ? m.IsReadOnly : !m.IsReadOnly).ToString().ToLowerInvariant()};"));
+
+    private static NightCodeForgeContainerExecutor CreateExecutor(ContainerExecutorOptions options, IProcessRunner runner) =>
+        new(
+            options,
+            runner,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            new Mock<IHostUserIdentityResolver>().Object,
+            new Mock<IOperationsTelemetryService>().Object);
+
+    private static MockProcessRunner DriftRunner(List<string> executed, string mountOutput, string image, bool running = true, string user = "") =>
+        new((exe, args) =>
+        {
+            executed.Add($"{exe} {args}".Trim());
+            if (args.Contains("inspect") && args.Contains(".State.Running"))
+            {
+                return new ProcessExecutionResult(0, running ? "true\n" : "false\n", string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".Mounts"))
+            {
+                return new ProcessExecutionResult(0, mountOutput, string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".Config.Image"))
+            {
+                return new ProcessExecutionResult(0, image + "\n", string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".Config.User"))
+            {
+                return new ProcessExecutionResult(0, user + "\n", string.Empty);
+            }
+            return new ProcessExecutionResult(0, string.Empty, string.Empty);
+        });
+
+    [Fact]
+    public void EnsureContainerRunning_WhenUserDiffers_RemovesAndRecreatesContainer()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        options.UserUidGid = "1000:1000";
+        var runner = DriftRunner(executed, MountInspectOutput(options), "alpine", user: "0:0");
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.Contains(executed, c => c.Contains("rm -f ncf-sandbox-1"));
+        Assert.Contains(executed, c => c.Contains("run "));
+    }
+
+    [Fact]
+    public void EnsureContainerRunning_WhenUserMatches_ReusesContainerWithoutRecreation()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        options.UserUidGid = "1000:1000";
+        var runner = DriftRunner(executed, MountInspectOutput(options), "alpine", user: "1000:1000");
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.DoesNotContain(executed, c => c.Contains("rm -f"));
+        Assert.DoesNotContain(executed, c => c.Contains("run "));
+    }
+
+
+    [Fact]
+    public void EnsureContainerRunning_WhenMountsAreMissing_RemovesAndRecreatesContainer()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        var runner = DriftRunner(executed, MountInspectOutput(options, omitDestination: "/cache/nuget"), "alpine");
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        var rmIndex = executed.FindIndex(c => c.Contains("rm -f ncf-sandbox-1"));
+        var runIndex = executed.FindIndex(c => c.Contains("run "));
+        Assert.True(rmIndex >= 0, "expected docker rm -f");
+        Assert.True(runIndex > rmIndex, "expected docker run after docker rm");
+        Assert.Contains(executed, c => c.Contains("/cache/nuget") && c.Contains("run "));
+    }
+
+    [Fact]
+    public void EnsureContainerRunning_WhenMountModeDiffers_RemovesAndRecreatesContainer()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        var runner = DriftRunner(executed, MountInspectOutput(options, readOnlyFlipDestination: "/cache/npm"), "alpine");
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.Contains(executed, c => c.Contains("rm -f ncf-sandbox-1"));
+        Assert.Contains(executed, c => c.Contains("run "));
+    }
+
+    [Fact]
+    public void EnsureContainerRunning_WhenMountsMatch_ReusesContainerWithoutRecreation()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        var runner = DriftRunner(executed, MountInspectOutput(options), "alpine");
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.DoesNotContain(executed, c => c.Contains("rm -f"));
+        Assert.DoesNotContain(executed, c => c.Contains("run "));
+        Assert.DoesNotContain(executed, c => c.Contains("start "));
+    }
+
+    [Fact]
+    public void EnsureContainerRunning_WhenImageMismatches_RemovesAndRecreatesContainer()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        var runner = DriftRunner(executed, MountInspectOutput(options), "alpine:old");
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.Contains(executed, c => c.Contains("rm -f ncf-sandbox-1"));
+        Assert.Contains(executed, c => c.Contains("run "));
+    }
+
+    [Fact]
+    public void EnsureContainerRunning_WhenWindowsDriveMountsMatchDockerDesktopHostMnt_ReusesContainerWithoutRecreation()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        options.HostWorkspacePath = "C:\\test\\repo";
+        options.UseWsl = false;
+
+        // Simulate Docker Desktop returning /host_mnt/c/test/repo for C:\test\repo
+        var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options)
+            .Select(m => m.ContainerPath == "/workspace"
+                ? $"/workspace=/host_mnt/c/test/repo={(!m.IsReadOnly).ToString().ToLowerInvariant()};"
+                : $"{m.ContainerPath}={m.HostPath}={(!m.IsReadOnly).ToString().ToLowerInvariant()};");
+        var mountOutput = string.Concat(mounts);
+        var runner = DriftRunner(executed, mountOutput, "alpine");
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.DoesNotContain(executed, c => c.Contains("rm -f"));
+        Assert.DoesNotContain(executed, c => c.Contains("run "));
+    }
+
+    [Fact]
+    public void EnsureContainerRunning_WhenInspectFails_RemovesAndRecreatesContainer()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        var runner = new MockProcessRunner((exe, args) =>
+        {
+            executed.Add($"{exe} {args}".Trim());
+            if (args.Contains("inspect") && args.Contains(".State.Running"))
+            {
+                return new ProcessExecutionResult(0, "true\n", string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".Mounts"))
+            {
+                return new ProcessExecutionResult(1, string.Empty, "Error: No such container: ncf-sandbox-1");
+            }
+            return new ProcessExecutionResult(0, string.Empty, string.Empty);
+        });
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.Contains(executed, c => c.Contains("rm -f ncf-sandbox-1"));
+        Assert.Contains(executed, c => c.Contains("run "));
+    }
+
+    [Fact]
+    public void EnsureContainerRunning_WhenImageHasImplicitLatestTag_ReusesContainerWithoutRecreation()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        options.ContainerImage = "alpine";
+        var runner = DriftRunner(executed, MountInspectOutput(options), "alpine:latest");
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.DoesNotContain(executed, c => c.Contains("rm -f"));
+        Assert.DoesNotContain(executed, c => c.Contains("run "));
+    }
+
+    [Fact]
+    public void EnsureContainerRunning_WhenMountDestinationHasTrailingSlash_ReusesContainerWithoutRecreation()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        // Simulate Docker inspect returning destinations with trailing slashes
+        var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options)
+            .Select(m => $"{m.ContainerPath}/={m.HostPath}={(!m.IsReadOnly).ToString().ToLowerInvariant()};");
+        var mountOutput = string.Concat(mounts);
+        var runner = DriftRunner(executed, mountOutput, "alpine");
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.DoesNotContain(executed, c => c.Contains("rm -f"));
+        Assert.DoesNotContain(executed, c => c.Contains("run "));
+    }
+
+    [Fact]
+    public void EnsureContainerRunning_WhenContainerWorkspacePathNull_DetectsDriftWithoutThrowing()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        options.ContainerWorkspacePath = null!;
+        var runner = DriftRunner(executed, "/workspace=/other/path=true;", "alpine");
+
+        // Should not throw ArgumentNullException, and should detect source mismatch drift
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.Contains(executed, c => c.Contains("rm -f ncf-sandbox-1"));
+        Assert.Contains(executed, c => c.Contains("run "));
+    }
+
+    [Fact]
+    public void EnsureContainerRunning_WhenCanonicalClonePathSourceMismatches_RemovesAndRecreatesContainer()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        options.CanonicalClonePath = "/original/clone";
+        var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options)
+            .Select(m => m.ContainerPath == "/clone"
+                ? "/clone=/mismatched/clone=false;"
+                : $"{m.ContainerPath}={m.HostPath}={(!m.IsReadOnly).ToString().ToLowerInvariant()};");
+        var mountOutput = string.Concat(mounts);
+        var runner = DriftRunner(executed, mountOutput, "alpine");
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.Contains(executed, c => c.Contains("rm -f ncf-sandbox-1"));
+        Assert.Contains(executed, c => c.Contains("run "));
+    }
+
     [Fact]
     public void ContainerExecutor_EnsureContainerRunning_WhenStopped_StartsContainer()
     {
@@ -277,7 +523,11 @@ public class ExecutionEnvironmentTests
             }
             if (args.Contains("inspect") && args.Contains(".Mounts"))
             {
-                return new ProcessExecutionResult(0, "/workspace=/test/repo;\n", string.Empty);
+                return new ProcessExecutionResult(0, MountInspectOutput(StoppedTestOptions()), string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".Config.Image"))
+            {
+                return new ProcessExecutionResult(0, "alpine\n", string.Empty);
             }
             if (args.StartsWith("start") || args.Contains(" start "))
             {
@@ -286,14 +536,7 @@ public class ExecutionEnvironmentTests
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         });
 
-        var options = new ContainerExecutorOptions
-        {
-            AutoStartContainer = true,
-            ContainerNameOrId = "ncf-sandbox-1",
-            ContainerImage = "alpine",
-            HostWorkspacePath = "/test/repo",
-            ContainerWorkspacePath = "/workspace"
-        };
+        var options = StoppedTestOptions();
 
         var executor = new NightCodeForgeContainerExecutor(
             options,
@@ -459,6 +702,116 @@ public class ExecutionEnvironmentTests
         Assert.Equal(ExecutionTier.WslDirect, env.Tier);
         Assert.Equal("Debian", env.Distribution);
         Assert.Equal("/mnt/c/project", env.DefaultWorkingDirectory);
+    }
+
+    private static (ExecutionEnvironmentProvider Provider, List<string> Executed) BuildCleanupProvider(Func<string, ProcessExecutionResult>? handler = null)
+    {
+        var executed = new List<string>();
+        var runner = new MockProcessRunner((exe, args) =>
+        {
+            var cmd = $"{exe} {args}".Trim();
+            executed.Add(cmd);
+            return handler?.Invoke(cmd) ?? new ProcessExecutionResult(0, string.Empty, string.Empty);
+        });
+        var provider = new TestExecutionEnvironmentProviderBuilder
+        {
+            ProcessRunner = runner,
+            PathResolver = new FakePathResolver(),
+            Options = Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions { AutoDetectWsl = false })
+        }.Build();
+        return (provider, executed);
+    }
+
+    [Fact]
+    public async Task CleanupTaskContainerAsync_RemovesMatchingTaskContainer()
+    {
+        var (provider, executed) = BuildCleanupProvider();
+        var workspace = new Workspace { Id = 3, ExecutionMode = ExecutionMode.ContainerSandbox, ContainerName = "ncf-sandbox-3" };
+
+        await provider.CleanupTaskContainerAsync(workspace, 5);
+
+        Assert.Equal(["docker rm -f ncf-sandbox-3-task-5"], executed);
+    }
+
+    [Fact]
+    public async Task CleanupTaskContainerAsync_WithWsl_RoutesThroughWslExecutable()
+    {
+        var (provider, executed) = BuildCleanupProvider();
+        var workspace = new Workspace
+        {
+            Id = 3,
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            ContainerName = "ncf-sandbox-3",
+            UseWslForContainers = true,
+            WslDistribution = "Ubuntu"
+        };
+
+        await provider.CleanupTaskContainerAsync(workspace, 5);
+
+        Assert.Equal(["wsl.exe -d Ubuntu -- docker rm -f ncf-sandbox-3-task-5"], executed);
+    }
+
+    [Fact]
+    public async Task CleanupTaskContainerAsync_WhenContainerMissingOrDockerFails_DoesNotThrow()
+    {
+        var (missing, _) = BuildCleanupProvider(_ => new ProcessExecutionResult(1, string.Empty, "Error: No such container: x"));
+        var (failing, _) = BuildCleanupProvider(_ => new ProcessExecutionResult(1, string.Empty, "Cannot connect to the Docker daemon"));
+        var workspace = new Workspace { Id = 3, ExecutionMode = ExecutionMode.ContainerSandbox, ContainerName = "ncf-sandbox-3" };
+
+        await missing.CleanupTaskContainerAsync(workspace, 5);
+        await failing.CleanupTaskContainerAsync(workspace, 5);
+    }
+
+    [Fact]
+    public async Task CleanupTaskContainerAsync_WhenNotContainerSandbox_DoesNothing()
+    {
+        var (provider, executed) = BuildCleanupProvider();
+
+        await provider.CleanupTaskContainerAsync(new Workspace { Id = 3, ExecutionMode = ExecutionMode.BareHost }, 5);
+
+        Assert.Empty(executed);
+    }
+
+    [Fact]
+    public async Task ListTaskContainerIdsAsync_ParsesOnlyExactTaskContainerNames()
+    {
+        var (provider, executed) = BuildCleanupProvider(cmd => cmd.Contains(" ps ")
+            ? new ProcessExecutionResult(0, "ncf-sandbox-3-task-5\nncf-sandbox-3-task-12\nncf-sandbox-3-task-x\nother-ncf-sandbox-3-task-9\n", string.Empty)
+            : new ProcessExecutionResult(0, string.Empty, string.Empty));
+        var workspace = new Workspace { Id = 3, ExecutionMode = ExecutionMode.ContainerSandbox, ContainerName = "ncf-sandbox-3" };
+
+        var ids = await provider.ListTaskContainerIdsAsync(workspace);
+
+        Assert.Equal([5, 12], ids);
+        Assert.Contains(executed, c => c.Contains("name=ncf-sandbox-3-task-"));
+    }
+
+    [Fact]
+    public async Task ListTaskContainerIdsAsync_WithLeadingSlashAndDuplicates_ParsesAndDeduplicatesCorrectly()
+    {
+        var (provider, executed) = BuildCleanupProvider(cmd => cmd.Contains(" ps ")
+            ? new ProcessExecutionResult(0, "/ncf-sandbox-3-task-5\nncf-sandbox-3-task-5\n/ncf-sandbox-3-task-19\n", string.Empty)
+            : new ProcessExecutionResult(0, string.Empty, string.Empty));
+        var workspace = new Workspace { Id = 3, ExecutionMode = ExecutionMode.ContainerSandbox, ContainerName = "ncf-sandbox-3" };
+
+        var ids = await provider.ListTaskContainerIdsAsync(workspace);
+
+        Assert.Equal([5, 19], ids);
+    }
+
+    [Fact]
+    public async Task CleanupWorkspaceContainersAsync_RemovesAllListedTaskContainers()
+    {
+        var (provider, executed) = BuildCleanupProvider(cmd => cmd.Contains(" ps ")
+            ? new ProcessExecutionResult(0, "ncf-sandbox-3-task-5\nncf-sandbox-3-task-6\n", string.Empty)
+            : new ProcessExecutionResult(0, string.Empty, string.Empty));
+        var workspace = new Workspace { Id = 3, ExecutionMode = ExecutionMode.ContainerSandbox, ContainerName = "ncf-sandbox-3" };
+
+        await provider.CleanupWorkspaceContainersAsync(workspace);
+
+        Assert.Contains("docker rm -f ncf-sandbox-3-task-5", executed);
+        Assert.Contains("docker rm -f ncf-sandbox-3-task-6", executed);
+        Assert.Contains("docker rm -f ncf-sandbox-3", executed);
     }
 
     private class MockProcessRunner : IProcessRunner

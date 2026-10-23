@@ -22,6 +22,7 @@ public class TaskOrchestrator : ITaskOrchestrator
     private readonly IDependencyResolutionEngine _dependencyEngine;
     private readonly IWorkspaceLockProvider _workspaceLockProvider;
     private readonly IGitWorkspaceManager _gitWorkspaceManager;
+    private readonly IExecutionEnvironmentProvider _environmentProvider;
     private readonly IWorkflowPipelineProvider _pipelineProvider;
     private readonly ITaskJobQueue _jobQueue;
     private readonly ITaskDependencyStore _dependencyStore;
@@ -40,6 +41,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         IDependencyResolutionEngine dependencyEngine,
         IWorkspaceLockProvider workspaceLockProvider,
         IGitWorkspaceManager gitWorkspaceManager,
+        IExecutionEnvironmentProvider environmentProvider,
         IWorkflowPipelineProvider pipelineProvider,
         ITaskJobQueue jobQueue,
         ITaskDependencyStore dependencyStore,
@@ -57,6 +59,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         _dependencyEngine = dependencyEngine ?? throw new ArgumentNullException(nameof(dependencyEngine));
         _workspaceLockProvider = workspaceLockProvider ?? throw new ArgumentNullException(nameof(workspaceLockProvider));
         _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
+        _environmentProvider = environmentProvider ?? throw new ArgumentNullException(nameof(environmentProvider));
         _pipelineProvider = pipelineProvider ?? throw new ArgumentNullException(nameof(pipelineProvider));
         _jobQueue = jobQueue ?? throw new ArgumentNullException(nameof(jobQueue));
         _dependencyStore = dependencyStore ?? throw new ArgumentNullException(nameof(dependencyStore));
@@ -1832,6 +1835,24 @@ public class TaskOrchestrator : ITaskOrchestrator
         var workspace = task.Workspace ?? await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken);
         if (workspace != null)
         {
+            try
+            {
+                await _gitWorkspaceManager.RemoveWorktreeAsync(workspace, task.Id, cancellationToken);
+            }
+            catch (Exception wex) when (wex is not OperationCanceledException)
+            {
+                _logger.LogWarning(wex, "Failed to remove worktree for rejected task #{TaskId}", task.Id);
+            }
+
+            try
+            {
+                await _environmentProvider.CleanupTaskContainerAsync(workspace, task.Id, cancellationToken);
+            }
+            catch (Exception cex) when (cex is not OperationCanceledException)
+            {
+                _logger.LogWarning(cex, "Failed to clean up container for rejected task #{TaskId}", task.Id);
+            }
+
             await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
         }
 
@@ -1966,6 +1987,15 @@ public class TaskOrchestrator : ITaskOrchestrator
             reason: $"ForgeTask #{task.Id} completed and squash-merged to {task.BaseBranch}.",
             cancellationToken: cancellationToken);
         await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Closed, cancellationToken);
+
+        try
+        {
+            await _environmentProvider.CleanupTaskContainerAsync(workspace, task.Id, cancellationToken);
+        }
+        catch (Exception cex) when (cex is not OperationCanceledException)
+        {
+            _logger.LogWarning(cex, "Failed to clean up container for completed task #{TaskId}", task.Id);
+        }
 
         try
         {

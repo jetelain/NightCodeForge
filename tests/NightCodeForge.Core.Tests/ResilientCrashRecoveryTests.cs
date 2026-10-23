@@ -60,6 +60,7 @@ public class ResilientCrashRecoveryTests
             _jobQueue,
             new Mock<IWorkspacePathResolver>().Object,
             new Mock<IProcessRunner>().Object,
+            new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
             NullLogger<StartupRecoveryService>.Instance);
     }
 
@@ -234,7 +235,7 @@ public class ResilientCrashRecoveryTests
             WorkflowStageKind.Deterministic,
             attemptIndex: 1);
 
-        var stage = new DeterministicTestWithCoverageGate(new Mock<IExecutionEnvironmentProvider>().Object);
+        var stage = new DeterministicTestWithCoverageGate(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object));
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
         var recoveryService = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline));
 

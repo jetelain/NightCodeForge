@@ -532,64 +532,51 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             {
                 var isRunning = stdout.Equals("true", StringComparison.OrdinalIgnoreCase);
 
-                if (!string.IsNullOrWhiteSpace(_options.HostWorkspacePath))
+                var drift = DetectContainerDrift();
+                if (drift != null)
                 {
-                    var expectedHostWks = NormalizeMountSourcePath(ResolveHostPath(_options.HostWorkspacePath, _options));
-                    var mountInspectSpec = BuildDockerProcessSpec(
-                        _options,
-                        ["inspect", "-f", "{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}", _options.ContainerNameOrId],
-                        timeoutSeconds: 5);
-                    var mountResult = _processRunner.Run(mountInspectSpec);
-                    string currentSource = string.Empty;
-                    bool currentHasClone = false;
-                    if (mountResult.ExitCode == 0)
+                    if (drift.StartsWith("Missing/Mismatched mounts:", StringComparison.OrdinalIgnoreCase))
                     {
-                        var mountsStr = mountResult.StandardOutput.Trim();
-                        foreach (var entry in mountsStr.Split(';', StringSplitOptions.RemoveEmptyEntries))
-                        {
-                            var parts = entry.Split('=', 2);
-                            if (parts.Length == 2)
-                            {
-                                if (string.Equals(parts[0].Trim(), _options.ContainerWorkspacePath, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    currentSource = NormalizeMountSourcePath(parts[1].Trim());
-                                }
-                                if (string.Equals(parts[0].Trim(), "/clone", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    currentHasClone = true;
-                                }
-                            }
-                        }
+                        var missingMounts = drift["Missing/Mismatched mounts:".Length..].Trim();
+                        _logger.LogWarning("Recreating container {Container} due to mount drift. Missing/Mismatched: {MissingMounts}",
+                            _options.ContainerNameOrId, missingMounts);
                     }
-
-                    var expectedMounts = BuildVolumeMounts(_options);
-                    var expectedHasClone = expectedMounts.Any(m => string.Equals(m.ContainerPath, "/clone", StringComparison.OrdinalIgnoreCase));
-
-                    if ((!string.IsNullOrWhiteSpace(currentSource) && !string.Equals(currentSource, expectedHostWks, StringComparison.OrdinalIgnoreCase)) ||
-                        (currentHasClone != expectedHasClone))
+                    else if (drift.StartsWith("Image mismatch:", StringComparison.OrdinalIgnoreCase))
                     {
-                        _logger.LogInformation("Recreating container {Container} because mounts do not match expected configuration (source: '{Current}' vs '{Expected}', cloneMount: {CurrentClone} vs {ExpectedClone})",
-                            _options.ContainerNameOrId, currentSource, expectedHostWks, currentHasClone, expectedHasClone);
-                        var rmSpec = BuildDockerProcessSpec(_options, ["rm", "-f", _options.ContainerNameOrId], timeoutSeconds: 10);
-                        _processRunner.Run(rmSpec);
+                        var mismatch = drift["Image mismatch:".Length..].Trim();
+                        _logger.LogWarning("Recreating container {Container} due to image drift. Mismatch: {Mismatch}",
+                            _options.ContainerNameOrId, mismatch);
                     }
-                    else if (isRunning)
+                    else if (drift.StartsWith("User mismatch:", StringComparison.OrdinalIgnoreCase))
                     {
-                        return;
+                        var mismatch = drift["User mismatch:".Length..].Trim();
+                        _logger.LogWarning("Recreating container {Container} due to user drift. Mismatch: {Mismatch}",
+                            _options.ContainerNameOrId, mismatch);
                     }
                     else
                     {
-                        _logger.LogInformation("Starting stopped container {Container}", _options.ContainerNameOrId);
-                        var startSpec = BuildDockerProcessSpec(_options, ["start", _options.ContainerNameOrId], timeoutSeconds: 15);
-                        var startResult = _processRunner.Run(startSpec);
-                        if (startResult.ExitCode != 0)
-                        {
-                            _logger.LogError("Failed to start stopped container {Container} (exit code {ExitCode}): {Error}",
-                                _options.ContainerNameOrId, startResult.ExitCode, startResult.StandardError);
-                            throw new InvalidOperationException($"Failed to start container '{_options.ContainerNameOrId}': {startResult.StandardError}");
-                        }
-                        return;
+                        _logger.LogWarning("Recreating container {Container} due to configuration drift. {Drift}",
+                            _options.ContainerNameOrId, drift);
                     }
+                    try
+                    {
+                        _shellSession?.Kill();
+                        if (_shellProcess != null && !_shellProcess.HasExited)
+                        {
+                            _shellProcess.Kill(entireProcessTree: true);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Best-effort shell process termination before container recreation");
+                    }
+                    _shellSession?.Dispose();
+                    _shellSession = null;
+                    _shellProcess?.Dispose();
+                    _shellProcess = null;
+
+                    var rmSpec = BuildDockerProcessSpec(_options, ["rm", "-f", _options.ContainerNameOrId], timeoutSeconds: 10);
+                    _processRunner.Run(rmSpec);
                 }
                 else if (isRunning)
                 {
@@ -645,6 +632,160 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         }
     }
 
+    private const string MountInspectFormat = "{{range .Mounts}}{{.Destination}}={{.Source}}={{.RW}};{{end}}";
+    private const string ImageInspectFormat = "{{.Config.Image}}";
+    private const string UserInspectFormat = "{{.Config.User}}";
+
+    private static string NormalizeContainerPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+        var trimmed = path.Trim().Replace('\\', '/');
+        return trimmed.Length > 1 ? trimmed.TrimEnd('/') : trimmed;
+    }
+
+    /// <summary>
+    /// Compares the existing container's mounts and image with the current expected configuration.
+    /// Returns a description of the drift, or null when the container can be safely reused.
+    /// </summary>
+    private string? DetectContainerDrift()
+    {
+        var mountResult = _processRunner.Run(BuildDockerProcessSpec(
+            _options,
+            ["inspect", "-f", MountInspectFormat, _options.ContainerNameOrId],
+            timeoutSeconds: 5));
+        if (mountResult.ExitCode != 0)
+        {
+            return $"Failed to inspect mounts of container (exit code {mountResult.ExitCode}): {mountResult.StandardError}";
+        }
+
+        var actual = new Dictionary<string, (string Source, bool IsRw)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in mountResult.StandardOutput.Trim().Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = entry.Trim().Split('=');
+            if (parts.Length < 3) continue;
+            var isRw = bool.TryParse(parts[^1].Trim(), out var rw) && rw;
+            var destination = NormalizeContainerPath(parts[0]);
+            var source = string.Join('=', parts[1..^1]).Trim();
+            actual[destination] = (NormalizeMountSourcePath(source), isRw);
+        }
+
+        var expectedMounts = BuildVolumeMounts(_options);
+        var problems = new List<string>();
+        foreach (var expected in expectedMounts)
+        {
+            var expectedDest = NormalizeContainerPath(expected.ContainerPath);
+            if (!actual.TryGetValue(expectedDest, out var current))
+            {
+                problems.Add($"{expected.ContainerPath} (missing)");
+                continue;
+            }
+
+            var expectedRw = !expected.IsReadOnly;
+            if (current.IsRw != expectedRw)
+            {
+                problems.Add($"{expected.ContainerPath} (expected {(expected.IsReadOnly ? "ro" : "rw")})");
+            }
+        }
+
+        // Verify /clone presence matches expectation (e.g. absent when not expected)
+        var normClone = NormalizeContainerPath("/clone");
+        var expectedHasClone = expectedMounts.Any(m => string.Equals(NormalizeContainerPath(m.ContainerPath), normClone, StringComparison.OrdinalIgnoreCase));
+        if (!expectedHasClone && (actual.ContainsKey(normClone) || actual.ContainsKey(NormalizeContainerPath("/clone/.git"))))
+        {
+            problems.Add("/clone (expected absent)");
+        }
+
+        var containerWks = !string.IsNullOrWhiteSpace(_options.ContainerWorkspacePath)
+            ? _options.ContainerWorkspacePath
+            : "/workspace";
+        var normWks = NormalizeContainerPath(containerWks);
+
+        if (!string.IsNullOrWhiteSpace(_options.HostWorkspacePath) &&
+            actual.TryGetValue(normWks, out var wks))
+        {
+            var expectedSource = NormalizeMountSourcePath(ResolveHostPath(_options.HostWorkspacePath, _options));
+            if (!string.Equals(wks.Source, expectedSource, StringComparison.OrdinalIgnoreCase))
+            {
+                problems.Add($"{containerWks} (source '{wks.Source}' vs '{expectedSource}')");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(_options.CanonicalClonePath) &&
+            actual.TryGetValue(normClone, out var cloneMount))
+        {
+            var expectedCloneSource = NormalizeMountSourcePath(ResolveHostPath(_options.CanonicalClonePath, _options));
+            if (!string.Equals(cloneMount.Source, expectedCloneSource, StringComparison.OrdinalIgnoreCase))
+            {
+                problems.Add($"/clone (source '{cloneMount.Source}' vs '{expectedCloneSource}')");
+            }
+        }
+
+        if (problems.Count > 0)
+        {
+            return $"Missing/Mismatched mounts: {string.Join(", ", problems)}";
+        }
+
+        var expectedImage = !string.IsNullOrWhiteSpace(_options.ContainerImage)
+            ? _options.ContainerImage
+            : ContainerExecutorOptions.DefaultAgentBaseImage;
+        var imageResult = _processRunner.Run(BuildDockerProcessSpec(
+            _options,
+            ["inspect", "-f", ImageInspectFormat, _options.ContainerNameOrId],
+            timeoutSeconds: 5));
+        if (imageResult.ExitCode != 0)
+        {
+            return $"Failed to inspect image of container (exit code {imageResult.ExitCode}): {imageResult.StandardError}";
+        }
+
+        var actualImage = imageResult.StandardOutput.Trim();
+        if (!IsMatchingImage(actualImage, expectedImage))
+        {
+            return $"Image mismatch: '{actualImage}' vs '{expectedImage}'";
+        }
+
+        var expectedUser = _options.IsRestrictedReadOnly ? "1000:1000" : _options.UserUidGid;
+        if (!string.IsNullOrWhiteSpace(expectedUser))
+        {
+            var userResult = _processRunner.Run(BuildDockerProcessSpec(
+                _options,
+                ["inspect", "-f", UserInspectFormat, _options.ContainerNameOrId],
+                timeoutSeconds: 5));
+            if (userResult.ExitCode != 0)
+            {
+                return $"Failed to inspect user of container (exit code {userResult.ExitCode}): {userResult.StandardError}";
+            }
+
+            var actualUser = userResult.StandardOutput.Trim();
+            if (!string.Equals(actualUser, expectedUser, StringComparison.Ordinal))
+            {
+                return $"User mismatch: '{actualUser}' vs '{expectedUser}'";
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsMatchingImage(string actual, string expected)
+    {
+        if (string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Handle implicit :latest tag equivalence (e.g. "alpine" vs "alpine:latest")
+        if (expected.IndexOf(':') < 0 && string.Equals(actual, expected + ":latest", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (actual.IndexOf(':') < 0 && string.Equals(actual + ":latest", expected, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     private static string NormalizeMountSourcePath(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return string.Empty;
@@ -657,7 +798,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         {
             norm = "/mnt/" + norm["/run/desktop/mnt/host/".Length..];
         }
-        return norm;
+        return Git.WslPathConverter.ToWslPath(norm).TrimEnd('/');
     }
 
     /// <summary>

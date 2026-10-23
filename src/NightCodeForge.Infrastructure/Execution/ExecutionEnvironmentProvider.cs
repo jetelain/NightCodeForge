@@ -132,21 +132,11 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
 
             ExecutionMode.ContainerSandbox => _cachedEnvironments.GetOrAdd((workspace.Id, securityTier, effectiveTaskId), _ =>
             {
-                var useWsl = workspace.UseWslForContainers ||
-                             !string.IsNullOrWhiteSpace(workspace.WslDistribution) ||
-                             _options.UseWslForContainers ||
-                             (_options.AutoDetectWsl && ShouldAutoUseWslForContainers(workspace));
-
-                var baseContainerName = !string.IsNullOrWhiteSpace(workspace.ContainerName)
-                    ? workspace.ContainerName
-                    : (!string.IsNullOrWhiteSpace(workspace.ContainerImage)
-                        ? (workspace.ContainerImage.Contains(':') || workspace.ContainerImage.Contains('/')
-                            ? $"ncf-sandbox-{workspace.Id}"
-                            : workspace.ContainerImage)
-                        : "ncf-sandbox");
+                var useWsl = ShouldUseWslForContainers(workspace);
+                var baseContainerName = ResolveBaseContainerName(workspace);
 
                 var containerName = effectiveTaskId.HasValue
-                    ? $"{baseContainerName}-task-{effectiveTaskId.Value}"
+                    ? TaskContainerName(baseContainerName, effectiveTaskId.Value)
                     : baseContainerName;
 
                 var rawPath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
@@ -241,6 +231,166 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
 
             _ => _bareHost
         };
+    }
+
+    private const string TaskContainerInfix = "-task-";
+    private const string DockerNoSuchContainerMessage = "No such container";
+
+    private bool ShouldUseWslForContainers(Workspace workspace) =>
+        workspace.UseWslForContainers ||
+        !string.IsNullOrWhiteSpace(workspace.WslDistribution) ||
+        _options.UseWslForContainers ||
+        (_options.AutoDetectWsl && ShouldAutoUseWslForContainers(workspace));
+
+    private static string ResolveBaseContainerName(Workspace workspace) =>
+        !string.IsNullOrWhiteSpace(workspace.ContainerName)
+            ? workspace.ContainerName
+            : (!string.IsNullOrWhiteSpace(workspace.ContainerImage)
+                ? (workspace.ContainerImage.Contains(':') || workspace.ContainerImage.Contains('/')
+                    ? $"ncf-sandbox-{workspace.Id}"
+                    : workspace.ContainerImage)
+                : "ncf-sandbox");
+
+    private static string TaskContainerName(string baseContainerName, int taskId) =>
+        $"{baseContainerName}{TaskContainerInfix}{taskId}";
+
+    private ContainerExecutorOptions BuildDockerTargetOptions(Workspace workspace) => new()
+    {
+        UseWsl = ShouldUseWslForContainers(workspace),
+        WslDistribution = workspace.WslDistribution ?? _options.DefaultWslDistribution,
+        WslExecutable = _options.WslExecutable
+    };
+
+    /// <inheritdoc />
+    public async Task CleanupTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox || taskId <= 0)
+        {
+            return;
+        }
+
+        DiscardCachedTaskEnvironments(workspace.Id, taskId);
+        var containerName = TaskContainerName(ResolveBaseContainerName(workspace), taskId);
+        await RemoveContainerAsync(workspace, containerName, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task CleanupWorkspaceContainersAsync(Workspace workspace, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox)
+        {
+            return;
+        }
+
+        DiscardCachedWorkspaceEnvironments(workspace.Id);
+
+        foreach (var taskId in await ListTaskContainerIdsAsync(workspace, cancellationToken))
+        {
+            await CleanupTaskContainerAsync(workspace, taskId, cancellationToken);
+        }
+
+        var baseContainerName = ResolveBaseContainerName(workspace);
+        await RemoveContainerAsync(workspace, baseContainerName, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox)
+        {
+            return [];
+        }
+
+        var prefix = ResolveBaseContainerName(workspace) + TaskContainerInfix;
+        var spec = NightCodeForgeContainerExecutor.BuildDockerProcessSpec(
+            BuildDockerTargetOptions(workspace),
+            ["ps", "-a", "--filter", $"name={prefix}", "--format", "{{.Names}}"],
+            timeoutSeconds: 10);
+
+        ProcessExecutionResult result;
+        try
+        {
+            result = await _processRunner.RunAsync(spec, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _containerLogger.LogWarning(ex, "Failed to list task containers with prefix '{Prefix}' for Workspace #{WorkspaceId}", prefix, workspace.Id);
+            return [];
+        }
+
+        if (result.ExitCode != 0)
+        {
+            _containerLogger.LogWarning("Listing task containers with prefix '{Prefix}' failed (exit code {ExitCode}): {Error}",
+                prefix, result.ExitCode, result.StandardError);
+            return [];
+        }
+
+        var ids = new HashSet<int>();
+        foreach (var rawName in result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var name = rawName.TrimStart('/');
+            // Docker name filters are substring matches: keep only exact '{prefix}{taskId}' names.
+            if (name.StartsWith(prefix, StringComparison.Ordinal) &&
+                int.TryParse(name[prefix.Length..], out var taskId) && taskId > 0)
+            {
+                ids.Add(taskId);
+            }
+        }
+
+        return ids.ToList();
+    }
+
+    private void DiscardCachedWorkspaceEnvironments(int workspaceId)
+    {
+        foreach (var key in _cachedEnvironments.Keys.Where(k => k.WorkspaceId == workspaceId).ToList())
+        {
+            if (_cachedEnvironments.TryRemove(key, out var env) && env is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+    }
+
+    private void DiscardCachedTaskEnvironments(int workspaceId, int taskId)
+    {
+        foreach (var key in _cachedEnvironments.Keys.Where(k => k.WorkspaceId == workspaceId && k.TaskId == taskId).ToList())
+        {
+            if (_cachedEnvironments.TryRemove(key, out var env) && env is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+    }
+
+    private async Task RemoveContainerAsync(Workspace workspace, string containerName, CancellationToken cancellationToken)
+    {
+        var spec = NightCodeForgeContainerExecutor.BuildDockerProcessSpec(
+            BuildDockerTargetOptions(workspace),
+            ["rm", "-f", containerName],
+            timeoutSeconds: 10);
+
+        try
+        {
+            var result = await _processRunner.RunAsync(spec, cancellationToken);
+            var combinedError = (result.StandardError ?? string.Empty) + " " + (result.StandardOutput ?? string.Empty);
+            if (result.ExitCode != 0 &&
+                !combinedError.Contains(DockerNoSuchContainerMessage, StringComparison.OrdinalIgnoreCase))
+            {
+                _containerLogger.LogWarning("Failed to remove container {Container} (exit code {ExitCode}): {Error}",
+                    containerName, result.ExitCode, result.StandardError);
+            }
+            else if (result.ExitCode == 0)
+            {
+                _containerLogger.LogInformation("Removed container {Container}", containerName);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _containerLogger.LogWarning(ex, "Failed to remove container {Container}", containerName);
+        }
     }
 
     private string ResolveWorktreePath(Workspace workspace, int taskId, string? parentDir = null)

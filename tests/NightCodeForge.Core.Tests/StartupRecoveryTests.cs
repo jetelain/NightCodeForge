@@ -38,6 +38,7 @@ public class StartupRecoveryTests : IDisposable
             _jobQueue,
             new Moq.Mock<IWorkspacePathResolver>().Object,
             new Moq.Mock<IProcessRunner>().Object,
+            new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Moq.Mock<IExecutionEnvironment>().Object),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<StartupRecoveryService>.Instance);
     }
 
@@ -180,7 +181,7 @@ public class StartupRecoveryTests : IDisposable
             PipelineDataJson = bag.ToJson()
         });
 
-        var stage = new DeterministicTestWithCoverageGate(new Moq.Mock<IExecutionEnvironmentProvider>().Object);
+        var stage = new DeterministicTestWithCoverageGate(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Moq.Mock<IExecutionEnvironment>().Object));
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
 
         var recovery = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline));

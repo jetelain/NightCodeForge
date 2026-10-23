@@ -21,4 +21,11 @@ public class SingleExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         Workspace workspace,
         SandboxSecurityTier securityTier = SandboxSecurityTier.Standard,
         int? taskId = null) => _environment;
+
+    public Task CleanupTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task CleanupWorkspaceContainersAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<int>>([]);
 }

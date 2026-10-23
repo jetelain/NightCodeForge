@@ -41,5 +41,21 @@ public interface IExecutionEnvironmentProvider
         NightCodeForge.Core.Domain.Workspace workspace,
         NightCodeForge.Core.Domain.SandboxSecurityTier securityTier = NightCodeForge.Core.Domain.SandboxSecurityTier.Standard,
         int? taskId = null);
+
+    /// <summary>
+    /// Removes the per-task sandbox container of a task (no-op when the workspace is not container-sandboxed
+    /// or the container does not exist). Never throws on Docker/WSL failures: failures are logged.
+    /// </summary>
+    Task CleanupTaskContainerAsync(NightCodeForge.Core.Domain.Workspace workspace, int taskId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes all per-task sandbox containers belonging to the workspace.
+    /// </summary>
+    Task CleanupWorkspaceContainersAsync(NightCodeForge.Core.Domain.Workspace workspace, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the ids of tasks that currently own a (running or stopped) sandbox container in the workspace.
+    /// </summary>
+    Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(NightCodeForge.Core.Domain.Workspace workspace, CancellationToken cancellationToken = default);
 }
 

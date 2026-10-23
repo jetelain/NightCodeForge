@@ -269,6 +269,11 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             }
         }
 
+        if (workspace != null && workspace.ExecutionMode == ExecutionMode.BareHost && string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            return null;
+        }
+
         // 1. If explicit Ext4MirrorPath is present on workspace
         if (workspace != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
