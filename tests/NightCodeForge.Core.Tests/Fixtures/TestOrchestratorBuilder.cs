@@ -34,8 +34,20 @@ public class TestOrchestratorBuilder
         set => _dependencyEngine = value;
     }
     public IWorkspaceLockProvider LockProvider { get; set; } = new WorkspaceLockProvider();
-    public IGitWorkspaceManager GitWorkspaceManager { get; set; } = new Mock<IGitWorkspaceManager>().Object;
+    public IGitWorkspaceManager GitWorkspaceManager { get; set; } = CreateDefaultGitWorkspaceManager();
     public IWorkflowPipelineProvider PipelineProvider { get; set; } = new DefaultWorkflowPipelineProvider();
+
+    private static IGitWorkspaceManager CreateDefaultGitWorkspaceManager()
+    {
+        var mock = new Mock<IGitWorkspaceManager>();
+        mock.Setup(m => m.CheckMergeableAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MergeabilityCheckResult(IsMergeable: true, ConflictedFiles: Array.Empty<string>(), BaseBranchSha: "base-sha", FeatureBranchSha: "feat-sha"));
+        mock.Setup(m => m.SyncFromBaseBranchAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MergeSyncResult(Success: true, HasConflict: false, ConflictedFiles: Array.Empty<string>(), MergeCommitSha: "base-sha"));
+        mock.Setup(m => m.GetBranchShaAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("base-sha");
+        return mock.Object;
+    }
     public ITaskJobQueue JobQueue { get; set; } = new FakeTaskJobQueue();
     public IHarnessRegistry HarnessRegistry { get; set; } = new HarnessRegistry();
     public IGitMirrorSyncService GitMirrorSyncService { get; set; } = new Mock<IGitMirrorSyncService>().Object;
@@ -72,6 +84,7 @@ public class TestOrchestratorBuilder
     public IWorkspacePathResolver PathResolver { get; set; } = CreateDefaultPathResolver();
     public IAgentActivityStreamer Streamer { get; set; } = new InMemoryAgentActivityStreamer();
     public ITaskCancellationManager CancellationManager { get; set; } = new TaskCancellationManager(NullLogger<TaskCancellationManager>.Instance);
+    public IConflictResolutionVerifier ConflictResolutionVerifier { get; set; } = new Mock<IConflictResolutionVerifier>().Object;
     public ILogger<TaskOrchestrator> Logger { get; set; } = NullLogger<TaskOrchestrator>.Instance;
 
     public TaskOrchestrator Build() => new(
@@ -89,5 +102,6 @@ public class TestOrchestratorBuilder
         PathResolver,
         Streamer,
         CancellationManager,
+        ConflictResolutionVerifier,
         Logger);
 }

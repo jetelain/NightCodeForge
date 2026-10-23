@@ -21,8 +21,22 @@ public class ApproveMergeModalMergeModeTests : BunitContext
         _taskRepository = new InMemoryTaskRepository();
         _toastService = TestServices.CreateToastService();
 
+        var mutationService = new Moq.Mock<ITaskMutationService>();
+        mutationService.Setup(m => m.UpdateMergeModeAsync(Moq.It.IsAny<int>(), Moq.It.IsAny<MergeMode>(), Moq.It.IsAny<CancellationToken>()))
+            .Returns<int, MergeMode, CancellationToken>(async (id, mode, ct) =>
+            {
+                var t = await _taskRepository.GetByIdAsync(id, ct);
+                if (t != null)
+                {
+                    t.MergeMode = mode;
+                    t.UpdatedAt = DateTime.UtcNow;
+                    await _taskRepository.UpdateWithHistoryAsync(t, null, AuditActors.User, $"Updated MergeMode to {mode} via ApproveMergeModal", ct);
+                }
+            });
+
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
+        Services.AddSingleton<ITaskMutationService>(mutationService.Object);
         Services.AddSingleton(_toastService);
     }
 

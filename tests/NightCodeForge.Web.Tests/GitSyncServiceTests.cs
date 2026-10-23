@@ -258,6 +258,12 @@ public class GitSyncServiceTests
         public Task RemoveWorktreeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public string GetWorktreePath(Workspace workspace, int taskId) => $"/wks/task-{taskId}";
         public Task RevertOrCleanAsync(Workspace workspace, int? taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ValidateGitVersionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<MergeSyncResult> SyncFromBaseBranchAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.FromResult(new MergeSyncResult(true, false, Array.Empty<string>(), "sha"));
+        public Task<MergeabilityCheckResult> CheckMergeableAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.FromResult(new MergeabilityCheckResult(true, Array.Empty<string>(), "base", "feat"));
+        public Task AbortMergeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<string> GetBranchShaAsync(Workspace workspace, string branchName, CancellationToken cancellationToken = default) => Task.FromResult("sha");
+        public Task ResetCanonicalBranchAsync(Workspace workspace, string branchName, string targetSha, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private class MockGitMirrorSyncService : IGitMirrorSyncService

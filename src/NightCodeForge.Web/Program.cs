@@ -100,6 +100,9 @@ using (var scope = app.Services.CreateScope())
     var webSearchSettings = scope.ServiceProvider.GetRequiredService<NightCodeForge.Core.Interfaces.IWebSearchSettingsService>();
     await webSearchSettings.LoadSettingsAsync();
 
+    var gitPreflight = scope.ServiceProvider.GetRequiredService<NightCodeForge.Core.Interfaces.IGitWorkspaceManager>();
+    await gitPreflight.ValidateGitVersionAsync();
+
     var recoveryService = scope.ServiceProvider.GetRequiredService<IStartupRecoveryService>();
     await recoveryService.ReconcileWorkspacesAsync();
 

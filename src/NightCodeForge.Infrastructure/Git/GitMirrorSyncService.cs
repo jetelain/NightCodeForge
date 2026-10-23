@@ -485,6 +485,21 @@ public class GitMirrorSyncService : IGitMirrorSyncService
         }
         catch (GitCommandException ex)
         {
+            var isNonFastForward = ex.StandardError.Contains("[rejected]", StringComparison.OrdinalIgnoreCase)
+                || ex.StandardError.Contains("non-fast-forward", StringComparison.OrdinalIgnoreCase)
+                || ex.StandardError.Contains("fetch first", StringComparison.OrdinalIgnoreCase);
+
+            if (isNonFastForward)
+            {
+                _logger.LogWarning("Push of base branch '{BaseBranch}' to host-origin was rejected as non-fast-forward: {Error}", baseBranch, ex.StandardError);
+                return new GitSyncResult(
+                    Success: false,
+                    FallbackUsed: false,
+                    BranchPushed: baseBranch,
+                    WarningMessage: ex.StandardError,
+                    IsNonFastForward: true);
+            }
+
             _logger.LogWarning(ex, "Push of base branch '{BaseBranch}' to host-origin rejected. Initiating dirty host tree fallback.", baseBranch);
 
             var fallbackBranch = $"{baseBranch}-ncf";

@@ -30,6 +30,8 @@ public class DiffStatTests : IDisposable
             _runner,
             pathResolver,
             wslMeta,
+            new Mock<IGitMirrorSyncService>().Object,
+            new Mock<IWorkspaceLockProvider>().Object,
             NullLogger<GitWorkspaceManager>.Instance);
 
         _repo.CreateFile("README.md", "# Base Project");

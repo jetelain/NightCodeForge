@@ -9,11 +9,13 @@ namespace NightCodeForge.Core.Interfaces;
 /// <param name="FallbackUsed">Whether the dirty host tree fallback branch (feature/task-{id}-ncf) was used.</param>
 /// <param name="BranchPushed">The actual branch name pushed to host-origin.</param>
 /// <param name="WarningMessage">Warning or guidance message if fallback occurred.</param>
+/// <param name="IsNonFastForward">Whether the push was rejected due to a non-fast-forward race.</param>
 public record GitSyncResult(
     bool Success,
     bool FallbackUsed,
     string BranchPushed,
-    string? WarningMessage);
+    string? WarningMessage,
+    bool IsNonFastForward = false);
 
 /// <summary>
 /// Notification interface for Git alerts (e.g. dirty host tree push rejections).

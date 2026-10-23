@@ -31,6 +31,7 @@ public class TaskOrchestrator : ITaskOrchestrator
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly Streaming.IAgentActivityStreamer _streamer;
     private readonly ITaskCancellationManager _cancellationManager;
+    private readonly IConflictResolutionVerifier _conflictResolutionVerifier;
     private readonly ILogger<TaskOrchestrator> _logger;
 
     public TaskOrchestrator(
@@ -48,6 +49,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         IWorkspacePathResolver pathResolver,
         Streaming.IAgentActivityStreamer streamer,
         ITaskCancellationManager cancellationManager,
+        IConflictResolutionVerifier conflictResolutionVerifier,
         ILogger<TaskOrchestrator> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -64,6 +66,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _streamer = streamer ?? throw new ArgumentNullException(nameof(streamer));
         _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
+        _conflictResolutionVerifier = conflictResolutionVerifier ?? throw new ArgumentNullException(nameof(conflictResolutionVerifier));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -345,6 +348,13 @@ public class TaskOrchestrator : ITaskOrchestrator
             CurrentProfile = profile
         };
 
+        // Explicit maintainer resume after an escalation: grant a fresh conflict-resolution budget.
+        if (isResumedRun &&
+            (pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.ConflictResolutionAttempts) ?? 0) >= ConflictResolutionConstants.MaxConflictResolutionAttempts)
+        {
+            pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictResolutionAttempts, 0);
+        }
+
         var hostWorkingPath = !string.IsNullOrWhiteSpace(taskWorkingPath) ? _pathResolver.ToHostPath(taskWorkingPath) : null;
         if (string.IsNullOrWhiteSpace(hostWorkingPath))
         {
@@ -408,6 +418,79 @@ public class TaskOrchestrator : ITaskOrchestrator
             catch (Exception ex)
             {
                 throw new TaskMarkdownSyncException($"Pre-stage task synchronization failed for task #{task.Id}: {ex.Message}", ex, taskId: task.Id);
+            }
+        }
+
+        // Gate 1: Pre-Implementation Baseline Synchronization
+        if (string.Equals(stage.StageId, StandardStageIds.PreImplementationBaseline, StringComparison.OrdinalIgnoreCase))
+        {
+            await _gitWorkspaceManager.CreateWipCheckpointAsync(
+                workspace,
+                task.Id,
+                StandardStageIds.TaskReview,
+                "WIP checkpoint before Pre-Implementation Baseline sync",
+                cancellationToken);
+
+            var baselineSyncResult = await _gitWorkspaceManager.SyncFromBaseBranchAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+            if (baselineSyncResult.HasConflict)
+            {
+                await _gitWorkspaceManager.AbortMergeAsync(workspace, task.Id, cancellationToken);
+                var conflictMsg = $"Merge conflict during Pre-Implementation Baseline synchronization with '{task.BaseBranch}' in {baselineSyncResult.ConflictedFiles.Count} files.";
+
+                task.Status = TaskOverallStatus.Failed;
+                await _taskRepository.UpdateWithHistoryAsync(
+                    task,
+                    dependsOn: null,
+                    changedBy: AuditActors.TaskOrchestrator,
+                    reason: conflictMsg,
+                    cancellationToken: cancellationToken);
+                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
+                _logger.LogError("Gate 1 failed for task #{TaskId}: {Message}", task.Id, conflictMsg);
+
+                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                {
+                    TaskId = task.Id,
+                    Level = LogLevel.Error,
+                    Message = conflictMsg,
+                    Timestamp = DateTime.UtcNow
+                }, cancellationToken);
+
+                throw new MergeConflictException(task.Id, task.BaseBranch, baselineSyncResult.ConflictedFiles, conflictMsg);
+            }
+
+            await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+            {
+                TaskId = task.Id,
+                Level = LogLevel.Information,
+                Message = string.Format(ConflictResolutionConstants.AuditBaselineSyncSuccessFormat, task.BaseBranch),
+                Timestamp = DateTime.UtcNow
+            }, cancellationToken);
+        }
+
+        // Marker Materialization at Implementation stage start
+        if (string.Equals(stage.StageId, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
+        {
+            var conflictFiles = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.ConflictFiles);
+            if (conflictFiles is { Count: > 0 })
+            {
+                _logger.LogInformation("Materializing conflict markers before Implementation Agent runs for task #{TaskId}", task.Id);
+                var conflictSync = await _gitWorkspaceManager.SyncFromBaseBranchAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+                if (conflictSync.HasConflict)
+                {
+                    // An empty list means the agent already staged its resolutions in a previous attempt:
+                    // keep the original list so the deterministic verification still runs.
+                    if (conflictSync.ConflictedFiles.Count > 0)
+                    {
+                        pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictFiles, conflictSync.ConflictedFiles.ToList());
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("Conflict previously reported for task #{TaskId} is no longer present; clearing conflict keys", task.Id);
+                    pipelineContext.DataBag.Remove(PipelineDataBagKeys.ConflictFiles);
+                    pipelineContext.DataBag.Remove(PipelineDataBagKeys.ConflictBaseBranch);
+                    pipelineContext.DataBag.Remove(PipelineDataBagKeys.ConflictDetectedAt);
+                }
             }
         }
 
@@ -546,6 +629,18 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             _logger.LogInformation(ocex, "Stage '{StageId}' for task #{TaskId} was cancelled.", stage.StageId, taskId);
             result = StageExecutionResult.Cancelled("Stage execution was cancelled.");
+        }
+        catch (MergeConflictException mex)
+        {
+            task.Status = TaskOverallStatus.Failed;
+            await _taskRepository.UpdateWithHistoryAsync(
+                task,
+                dependsOn: null,
+                changedBy: AuditActors.TaskOrchestrator,
+                reason: mex.Message,
+                cancellationToken: cancellationToken);
+            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
+            throw;
         }
         catch (Exception ex)
         {
@@ -962,6 +1057,86 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         if (result.IsSuccess)
         {
+            if (string.Equals(stage.StageId, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase) &&
+                pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.ConflictFiles) is { Count: > 0 } activeConflictFiles)
+            {
+                var verifierResult = await _conflictResolutionVerifier.VerifyResolutionAsync(
+                    workspace,
+                    task.Id,
+                    task.BaseBranch,
+                    activeConflictFiles,
+                    cancellationToken);
+
+                if (!verifierResult.IsSuccess)
+                {
+                    var attempts = (pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.ConflictResolutionAttempts) ?? 0) + 1;
+                    pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictResolutionAttempts, attempts);
+
+                    if (attempts >= ConflictResolutionConstants.MaxConflictResolutionAttempts)
+                    {
+                        _logger.LogWarning("Conflict resolution budget exhausted for task #{TaskId} ({Attempts} attempts). Escalating to maintainer.",
+                            task.Id, attempts);
+
+                        task.IsWaitingForHuman = true;
+                        task.InterruptedStageId = StandardStageIds.Implementation;
+                        pipelineContext.SyncDataBagToTask();
+
+                        await _taskRepository.UpdateWithHistoryAsync(
+                            task,
+                            dependsOn: null,
+                            changedBy: AuditActors.TaskOrchestrator,
+                            reason: ConflictResolutionConstants.AuditConflictResolutionBudgetExhausted,
+                            cancellationToken: cancellationToken);
+                        await _dependencyStore.SetWaitingForHumanAsync(task.Id, true, cancellationToken);
+
+                        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                        {
+                            TaskId = task.Id,
+                            Level = LogLevel.Warning,
+                            Message = ConflictResolutionConstants.AuditConflictResolutionBudgetExhausted,
+                            Timestamp = DateTime.UtcNow
+                        }, cancellationToken);
+
+                        return;
+                    }
+
+                    // Loopback to Implementation with concrete feedback
+                    result = StageExecutionResult.Failure(verifierResult.ErrorMessage ?? "Conflict resolution verification failed.", loopBackStageId: StandardStageIds.Implementation);
+
+                    var compilerErrors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors) ?? new List<string>();
+                    compilerErrors.Add(verifierResult.ErrorMessage ?? "Conflict markers or unmerged index entries remain.");
+                    pipelineContext.DataBag.Set(PipelineDataBagKeys.CompilerErrors, compilerErrors);
+                }
+                else
+                {
+                    // Verified successfully!
+                    pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictResolutionAttempts, 0);
+                    pipelineContext.DataBag.Remove(PipelineDataBagKeys.ConflictFiles);
+                    pipelineContext.DataBag.Remove(PipelineDataBagKeys.ConflictBaseBranch);
+                    pipelineContext.DataBag.Remove(PipelineDataBagKeys.ConflictDetectedAt);
+                    pipelineContext.DataBag.Set(PipelineDataBagKeys.HasResolvedConflict, true);
+
+                    var resolvedMsg = string.Format(ConflictResolutionConstants.AuditConflictResolvedByAgentFormat, activeConflictFiles.Count, string.Join(", ", activeConflictFiles));
+                    await _taskRepository.UpdateWithHistoryAsync(
+                        task,
+                        dependsOn: null,
+                        changedBy: AuditActors.TaskOrchestrator,
+                        reason: resolvedMsg,
+                        cancellationToken: cancellationToken);
+
+                    await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                    {
+                        TaskId = task.Id,
+                        Level = LogLevel.Information,
+                        Message = resolvedMsg,
+                        Timestamp = DateTime.UtcNow
+                    }, cancellationToken);
+                }
+            }
+        }
+
+        if (result.IsSuccess)
+        {
             // Case B: Stage Completed
             pipelineContext.ResetRetries();
 
@@ -1030,7 +1205,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
             else if (string.Equals(stage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
             {
-                task.Status = TaskOverallStatus.Ready;
+                // Task status will transition to Ready after Gate 2 verification below
             }
 
             var nextStageId = result.TargetRoutingStageId;
@@ -1079,6 +1254,56 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
             else
             {
+                // Gate 2: Pre-Review / Ready Gate Verification
+                // 1. Commit any pending worktree output
+                await _gitWorkspaceManager.CreateWipCheckpointAsync(
+                    workspace,
+                    task.Id,
+                    stage.StageId,
+                    "WIP checkpoint before Gate 2 mergeability check",
+                    cancellationToken);
+
+                // Refresh base branch
+                if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+                {
+                    using (await _workspaceLockProvider.AcquireLockAsync(workspace.Id, cancellationToken))
+                    {
+                        await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, task.BaseBranch, cancellationToken);
+                    }
+                }
+
+                var mergeCheck = await _gitWorkspaceManager.CheckMergeableAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+                if (mergeCheck != null && !mergeCheck.IsMergeable)
+                {
+                    _logger.LogWarning("Gate 2 detected merge conflict for task #{TaskId} with '{BaseBranch}' in {Count} files",
+                        task.Id, task.BaseBranch, mergeCheck.ConflictedFiles.Count);
+                    await InitiateConflictResolutionAsync(task, workspace, pipelineContext, mergeCheck.ConflictedFiles, cancellationToken);
+                    return;
+                }
+
+                // Mergeable: sync from base branch in worktree
+                var syncResult = await _gitWorkspaceManager.SyncFromBaseBranchAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+                if (syncResult != null && syncResult.HasConflict)
+                {
+                    await InitiateConflictResolutionAsync(task, workspace, pipelineContext, syncResult.ConflictedFiles, cancellationToken);
+                    return;
+                }
+
+                var baseHadAdvanced = syncResult != null && syncResult.MergeCommitSha != null && mergeCheck != null && syncResult.MergeCommitSha != mergeCheck.FeatureBranchSha;
+                if (baseHadAdvanced)
+                {
+                    _logger.LogInformation("Base branch advanced during task #{TaskId} execution. Re-running deterministic verification gates before Ready.", task.Id);
+                    var reverifyResult = await stage.ExecuteAsync(pipelineContext, cancellationToken);
+                    if (!reverifyResult.IsSuccess)
+                    {
+                        _logger.LogWarning("Re-verification after sync failed for task #{TaskId}: {Error}. Routing back to Implementation.",
+                            task.Id, reverifyResult.ErrorMessage);
+                        var loopBackStageId = stage.LoopBackStageId ?? StandardStageIds.Implementation;
+                        await HandleLoopBackAsync(task, workspace, pipelineContext, stage, loopBackStageId, reverifyResult, cancellationToken);
+                        return;
+                    }
+                }
+
                 // Final stage reached: Transition to Ready and generate review diff stat
                 task.Status = TaskOverallStatus.Ready;
 
@@ -1093,12 +1318,17 @@ public class TaskOrchestrator : ITaskOrchestrator
                 }
 
                 pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, diffStat);
+                var hasResolvedConflict = pipelineContext.DataBag.Get<bool?>(PipelineDataBagKeys.HasResolvedConflict) == true;
+                var readyReason = hasResolvedConflict
+                    ? ConflictResolutionConstants.AuditPostReviewVerificationPassedReopened
+                    : $"Pipeline completed all stages at '{stage.StageId}'. Status: {task.Status}";
+
                 pipelineContext.SyncDataBagToTask();
                 await _taskRepository.UpdateWithHistoryAsync(
                     task,
                     dependsOn: null,
                     changedBy: AuditActors.TaskOrchestrator,
-                    reason: $"Pipeline completed all stages at '{stage.StageId}'. Status: {task.Status}",
+                    reason: readyReason,
                     cancellationToken: cancellationToken);
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Ready, cancellationToken);
 
@@ -1129,53 +1359,8 @@ public class TaskOrchestrator : ITaskOrchestrator
         var targetLoopBackId = result.TargetRoutingStageId ?? stage.LoopBackStageId;
         if (!string.IsNullOrWhiteSpace(targetLoopBackId))
         {
-            var retries = pipelineContext.IncrementRetry(stage.StageId);
-            var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
-            if (retries <= effectiveMaxRetries)
-            {
-                _logger.LogWarning("Stage '{StageId}' failed, routing backward to '{TargetStage}' (Retry {Retry}/{Max}): {Reason}",
-                    stage.StageId, targetLoopBackId, retries, effectiveMaxRetries, result.ErrorMessage);
-
-                var errors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors) ?? new List<string>();
-                var failedTests = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
-                if (failedTests is { Count: > 0 })
-                {
-                    errors.AddRange(failedTests.Select(ft => $"[{stage.StageId} test failure] {ft}"));
-                }
-                var newWarnings = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.WarningsNew);
-                if (newWarnings is { Count: > 0 } && (string.Equals(stage.StageId, StageImplementationTypes.DeterministicRatchet, StringComparison.OrdinalIgnoreCase) || stage.StageId.Contains("ratchet", StringComparison.OrdinalIgnoreCase)))
-                {
-                    errors.AddRange(newWarnings.Select(w => $"[warning ratchet] {w}"));
-                }
-                if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
-                {
-                    errors.Add($"[{stage.StageId} attempt {retries}] {result.ErrorMessage}");
-                }
-                pipelineContext.DataBag.Set(PipelineDataBagKeys.CompilerErrors, errors);
-
-                task.CurrentStageId = targetLoopBackId;
-                pipelineContext.SyncDataBagToTask();
-                await _taskRepository.UpdateWithHistoryAsync(
-                    task,
-                    dependsOn: null,
-                    changedBy: AuditActors.TaskOrchestrator,
-                    reason: $"Quality gate '{stage.StageId}' failed. Looping back to '{targetLoopBackId}' (attempt {retries}/{effectiveMaxRetries}).",
-                    cancellationToken: cancellationToken);
-                await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
-                await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
-
-                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
-                {
-                    TaskId = task.Id,
-                    Level = LogLevel.Warning,
-                    Message = $"Quality gate '{stage.StageId}' failed: {result.ErrorMessage}. Looping back to '{targetLoopBackId}' (attempt {retries}/{effectiveMaxRetries}).",
-                    Timestamp = DateTime.UtcNow
-                }, cancellationToken);
-
-                task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
-                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-                return;
-            }
+            await HandleLoopBackAsync(task, workspace, pipelineContext, stage, targetLoopBackId, result, cancellationToken);
+            return;
         }
 
         // Case C: Permanent Failure
@@ -1627,6 +1812,10 @@ public class TaskOrchestrator : ITaskOrchestrator
         task.IsWaitingForHuman = false;
         task.UpdatedAt = DateTime.UtcNow;
 
+        var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
+        bag.Remove(PipelineDataBagKeys.HasResolvedConflict);
+        task.PipelineDataJson = bag.ToJson();
+
         var rejectionReason = string.IsNullOrWhiteSpace(reason)
             ? "Task manually rejected by maintainer."
             : reason;
@@ -1655,7 +1844,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         }, cancellationToken);
     }
 
-    public async Task CompleteTaskAndCascadeAsync(int taskId, string finalCommitMessage, CancellationToken cancellationToken = default)
+    public async Task<CompleteTaskResult> CompleteTaskAndCascadeAsync(int taskId, string finalCommitMessage, CancellationToken cancellationToken = default)
     {
         var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
         if (task == null)
@@ -1670,45 +1859,106 @@ public class TaskOrchestrator : ITaskOrchestrator
             throw new InvalidOperationException($"Workspace #{task.WorkspaceId} not found.");
         }
 
-        await CompleteTaskAndCascadeInternalAsync(task, workspace, finalCommitMessage, cancellationToken);
+        return await CompleteTaskAndCascadeInternalAsync(task, workspace, finalCommitMessage, cancellationToken);
     }
 
-    private async Task CompleteTaskAndCascadeInternalAsync(
+    private async Task<CompleteTaskResult> CompleteTaskAndCascadeInternalAsync(
         ForgeTask task,
         Workspace workspace,
         string finalCommitMessage,
         CancellationToken cancellationToken)
     {
-        // 1. Squash & Merge feature branch into base branch
-        var squashSha = await _gitWorkspaceManager.SquashAndMergeAsync(
-            workspace,
-            task.Id,
-            task.BaseBranch,
-            finalCommitMessage,
-            cancellationToken);
-
-        task.SquashCommitSha = squashSha;
-
-        // If ext4 mirror is active, push the merged base branch back to host-origin so developer host repository is updated!
-        if (_gitMirrorSyncService != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        int pushRetries = 0;
+        while (true)
         {
+            var preSquashSha = await _gitWorkspaceManager.GetBranchShaAsync(workspace, task.BaseBranch, cancellationToken);
+
+            string squashSha;
             try
             {
-                await _gitMirrorSyncService.PushBaseBranchToHostAsync(
+                squashSha = await _gitWorkspaceManager.SquashAndMergeAsync(
+                    workspace,
+                    task.Id,
+                    task.BaseBranch,
+                    finalCommitMessage,
+                    cancellationToken);
+            }
+            catch (MergeConflictException ex)
+            {
+                _logger.LogWarning(ex, "Squash and merge failed for ForgeTask #{TaskId} due to merge conflict with '{BaseBranch}'.", task.Id, task.BaseBranch);
+
+                var pipelineContext = new PipelineContext(task, workspace);
+                await InitiateConflictResolutionAsync(task, workspace, pipelineContext, ex.ConflictedFiles, cancellationToken, discardApproval: task.MergeMode == MergeMode.ManualReviewRequired);
+
+                return new CompleteTaskResult(CompleteTaskStatus.ConflictResolutionDispatched, ConflictedFiles: ex.ConflictedFiles);
+            }
+
+
+            // If ext4 mirror is active, push the merged base branch back to host-origin so developer host repository is updated!
+            if (_gitMirrorSyncService != null && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+            {
+                var pushResult = await _gitMirrorSyncService.PushBaseBranchToHostAsync(
                     workspace.Ext4MirrorPath,
                     task.BaseBranch,
                     cancellationToken);
+
+                if (pushResult.IsNonFastForward)
+                {
+                    if (pushRetries < ConflictResolutionConstants.MaxPushRetries)
+                    {
+                        pushRetries++;
+                        _logger.LogWarning("Non-fast-forward push rejection for task #{TaskId}. Resetting to pre-squash SHA {PreSquashSha}, pulling from host and retrying (attempt {Attempt}/{Max}).",
+                            task.Id, preSquashSha, pushRetries, ConflictResolutionConstants.MaxPushRetries);
+
+                        if (!string.IsNullOrEmpty(preSquashSha))
+                        {
+                            await _gitWorkspaceManager.ResetCanonicalBranchAsync(workspace, task.BaseBranch, preSquashSha, cancellationToken);
+                        }
+                        await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, task.BaseBranch, cancellationToken);
+                        continue;
+                    }
+
+                    _logger.LogError("Mirror push rejected as non-fast-forward after {MaxRetries} retries for task #{TaskId}.",
+                        ConflictResolutionConstants.MaxPushRetries, task.Id);
+                    if (!string.IsNullOrEmpty(preSquashSha))
+                    {
+                        await _gitWorkspaceManager.ResetCanonicalBranchAsync(workspace, task.BaseBranch, preSquashSha, cancellationToken);
+                    }
+                    throw new MirrorPushRejectedException(task.BaseBranch, workspace.Ext4MirrorPath, pushResult.WarningMessage ?? "Non-fast-forward push rejection.");
+                }
+                else if (!pushResult.Success)
+                {
+                    if (!string.IsNullOrEmpty(preSquashSha))
+                    {
+                        await _gitWorkspaceManager.ResetCanonicalBranchAsync(workspace, task.BaseBranch, preSquashSha, cancellationToken);
+                    }
+                    throw new GitCommandException(workspace.Ext4MirrorPath, new[] { "push", "host-origin", task.BaseBranch }, 1, string.Empty, pushResult.WarningMessage ?? "Push failed");
+                }
             }
-            catch (Exception ex)
+
+            task.SquashCommitSha = squashSha;
+
+            // Push succeeded! Remove task worktree now
+            try
             {
-                _logger.LogWarning(ex, "Failed pushing merged base branch '{BaseBranch}' to host-origin for task #{TaskId}",
-                    task.BaseBranch, task.Id);
+                await _gitWorkspaceManager.RemoveWorktreeAsync(workspace, task.Id, cancellationToken);
             }
+            catch (Exception wex)
+            {
+                _logger.LogWarning(wex, "Failed to remove worktree for completed task #{TaskId}", task.Id);
+            }
+
+            break;
         }
 
         // 2. Mark task as completed (Closed)
         task.Status = TaskOverallStatus.Closed;
         task.CurrentStageId = string.Empty;
+
+        var closedBag = PipelineDataBag.FromJson(task.PipelineDataJson);
+        closedBag.Remove(PipelineDataBagKeys.HasResolvedConflict);
+        closedBag.Remove(PipelineDataBagKeys.ConflictResolutionAttempts);
+        task.PipelineDataJson = closedBag.ToJson();
         await _taskRepository.UpdateWithHistoryAsync(
             task,
             dependsOn: null,
@@ -1789,6 +2039,133 @@ public class TaskOrchestrator : ITaskOrchestrator
                 _logger.LogWarning(ex, "Failed archiving markdown file for closed task #{TaskId}", task.Id);
             }
         }
+
+        return new CompleteTaskResult(CompleteTaskStatus.Completed);
+    }
+
+    private async Task InitiateConflictResolutionAsync(
+        ForgeTask task,
+        Workspace workspace,
+        PipelineContext pipelineContext,
+        IReadOnlyList<string> conflictedFiles,
+        CancellationToken cancellationToken,
+        bool discardApproval = false)
+    {
+        pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictFiles, conflictedFiles.ToList());
+        pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictBaseBranch, task.BaseBranch);
+        pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictDetectedAt, DateTime.UtcNow);
+
+        task.Status = TaskOverallStatus.Open;
+        task.CurrentStageId = StandardStageIds.Implementation;
+        task.IsWaitingForHuman = false;
+        pipelineContext.SyncDataBagToTask();
+
+        var reason = discardApproval
+            ? string.Format(ConflictResolutionConstants.AuditApprovalDiscardedFormat, task.BaseBranch)
+            : string.Format(ConflictResolutionConstants.AuditConflictResolutionRoutedFormat, task.BaseBranch);
+
+        if (task.Priority == TaskPriority.Critical)
+        {
+            task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
+        }
+        else
+        {
+            task.LastHangfireJobId = _jobQueue.EnqueueInference(task.Id);
+        }
+
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.TaskOrchestrator,
+            reason: reason,
+            cancellationToken: cancellationToken);
+
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
+        await _dependencyStore.SetWaitingForHumanAsync(task.Id, false, cancellationToken);
+
+        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+        {
+            TaskId = task.Id,
+            Level = LogLevel.Warning,
+            Message = reason,
+            Timestamp = DateTime.UtcNow
+        }, cancellationToken);
+    }
+
+    private async Task HandleLoopBackAsync(
+        ForgeTask task,
+        Workspace workspace,
+        PipelineContext pipelineContext,
+        IWorkflowStage stage,
+        string targetLoopBackId,
+        StageExecutionResult result,
+        CancellationToken cancellationToken)
+    {
+        var retries = pipelineContext.IncrementRetry(stage.StageId);
+        var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
+        if (retries <= effectiveMaxRetries)
+        {
+            _logger.LogWarning("Stage '{StageId}' failed, routing backward to '{TargetStage}' (Retry {Retry}/{Max}): {Reason}",
+                stage.StageId, targetLoopBackId, retries, effectiveMaxRetries, result.ErrorMessage);
+
+            var errors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors) ?? new List<string>();
+            var failedTests = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
+            if (failedTests is { Count: > 0 })
+            {
+                errors.AddRange(failedTests.Select(ft => $"[{stage.StageId} test failure] {ft}"));
+            }
+            var newWarnings = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.WarningsNew);
+            if (newWarnings is { Count: > 0 } && (string.Equals(stage.StageId, StageImplementationTypes.DeterministicRatchet, StringComparison.OrdinalIgnoreCase) || stage.StageId.Contains("ratchet", StringComparison.OrdinalIgnoreCase)))
+            {
+                errors.AddRange(newWarnings.Select(w => $"[warning ratchet] {w}"));
+            }
+            if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+            {
+                errors.Add($"[{stage.StageId} attempt {retries}] {result.ErrorMessage}");
+            }
+            pipelineContext.DataBag.Set(PipelineDataBagKeys.CompilerErrors, errors);
+
+            task.CurrentStageId = targetLoopBackId;
+            pipelineContext.SyncDataBagToTask();
+            await _taskRepository.UpdateWithHistoryAsync(
+                task,
+                dependsOn: null,
+                changedBy: AuditActors.TaskOrchestrator,
+                reason: $"Quality gate '{stage.StageId}' failed. Looping back to '{targetLoopBackId}' (attempt {retries}/{effectiveMaxRetries}).",
+                cancellationToken: cancellationToken);
+            await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
+            await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+
+            await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+            {
+                TaskId = task.Id,
+                Level = LogLevel.Warning,
+                Message = $"Quality gate '{stage.StageId}' failed: {result.ErrorMessage}. Looping back to '{targetLoopBackId}' (attempt {retries}/{effectiveMaxRetries}).",
+                Timestamp = DateTime.UtcNow
+            }, cancellationToken);
+
+            task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
+            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            return;
+        }
+
+        task.Status = TaskOverallStatus.Failed;
+        pipelineContext.SyncDataBagToTask();
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.TaskOrchestrator,
+            reason: $"Stage '{stage.StageId}' failed and exceeded max retry limit ({effectiveMaxRetries}). Error: {result.ErrorMessage}",
+            cancellationToken: cancellationToken);
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
+        await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+        {
+            TaskId = task.Id,
+            Level = LogLevel.Error,
+            Message = $"Stage '{stage.StageId}' exceeded max retry limit ({effectiveMaxRetries}): {result.ErrorMessage}",
+            Timestamp = DateTime.UtcNow
+        }, cancellationToken);
     }
 
     private static bool HasCustomHandler(IWorkflowStage stage)

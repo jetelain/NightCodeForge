@@ -15,6 +15,7 @@ public interface ITaskMutationService
     Task UpdateDescriptionAsync(ForgeTask task, string newDescription, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
     Task UpdatePriorityAsync(ForgeTask task, int newPriority, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
     Task UpdateMergeModeAsync(ForgeTask task, MergeMode newMergeMode, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
+    Task UpdateMergeModeAsync(int taskId, MergeMode newMergeMode, CancellationToken cancellationToken = default);
     Task UpdateDependenciesAsync(ForgeTask task, IEnumerable<int> prerequisiteIds, CancellationToken cancellationToken = default);
     Task RejectTaskAsync(ForgeTask task, string? reason = null, CancellationToken cancellationToken = default);
 }
@@ -175,6 +176,19 @@ public class TaskMutationService : ITaskMutationService
             cancellationToken);
 
         await SyncMarkdownToDiskAsync(task, prerequisiteIds, cancellationToken);
+    }
+
+    public async Task UpdateMergeModeAsync(
+        int taskId,
+        MergeMode newMergeMode,
+        CancellationToken cancellationToken = default)
+    {
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
+        if (task == null)
+        {
+            throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+        }
+        await UpdateMergeModeAsync(task, newMergeMode, null, cancellationToken);
     }
 
     public async Task UpdateDependenciesAsync(

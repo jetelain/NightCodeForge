@@ -34,7 +34,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
             workspaceRepo,
             taskRepo,
             _runner,
-            new GitWorkspaceManager(_runner, _pathResolver, new Mock<IWslMetadataService>().Object, NullLogger<GitWorkspaceManager>.Instance),
+            new GitWorkspaceManager(_runner, _pathResolver, new Mock<IWslMetadataService>().Object, new Mock<IGitMirrorSyncService>().Object, new Mock<IWorkspaceLockProvider>().Object, NullLogger<GitWorkspaceManager>.Instance),
             CreatePipelineProvider(),
             jobQueue,
             _pathResolver,
@@ -345,7 +345,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
             await _context.SaveChangesAsync();
 
             // 5. Ensure worktree for this task
-            var gitManager = new GitWorkspaceManager(_runner, _pathResolver, new Mock<IWslMetadataService>().Object, NullLogger<GitWorkspaceManager>.Instance);
+            var gitManager = new GitWorkspaceManager(_runner, _pathResolver, new Mock<IWslMetadataService>().Object, new Mock<IGitMirrorSyncService>().Object, new Mock<IWorkspaceLockProvider>().Object, NullLogger<GitWorkspaceManager>.Instance);
             var wtPath = await gitManager.EnsureWorktreeAsync(workspace, task.Id, "main");
 
             var forwardGitFile = Path.Combine(wtPath, ".git");

@@ -29,6 +29,8 @@ public class NoiseFilteredDiffTests : IDisposable
             _runner,
             pathResolver,
             wslMeta,
+            new Mock<IGitMirrorSyncService>().Object,
+            new Mock<IWorkspaceLockProvider>().Object,
             NullLogger<GitWorkspaceManager>.Instance);
 
         // Base branch setup

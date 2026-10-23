@@ -42,6 +42,7 @@ public class ReviewPageTests : BunitContext
         Services.AddSingleton(_commentState);
         Services.AddSingleton(_toastService);
         Services.AddSingleton(_workspaceState);
+        Services.AddSingleton<ITaskMutationService>(new Mock<ITaskMutationService>().Object);
     }
 
     [Fact]

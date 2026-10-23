@@ -125,6 +125,39 @@ public class FakeGitWorkspaceManager : IGitWorkspaceManager
     {
         return Task.CompletedTask;
     }
+
+    public MergeSyncResult SyncResult { get; set; } = new(Success: true, HasConflict: false, ConflictedFiles: Array.Empty<string>(), MergeCommitSha: "sync-sha-0001");
+    public MergeabilityCheckResult MergeabilityResult { get; set; } = new(IsMergeable: true, ConflictedFiles: Array.Empty<string>(), BaseBranchSha: "base-sha", FeatureBranchSha: "feat-sha");
+
+    public Task ValidateGitVersionAsync(CancellationToken cancellationToken = default)
+    {
+        return Task.CompletedTask;
+    }
+
+    public Task<MergeSyncResult> SyncFromBaseBranchAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(SyncResult);
+    }
+
+    public Task<MergeabilityCheckResult> CheckMergeableAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(MergeabilityResult);
+    }
+
+    public Task AbortMergeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)
+    {
+        return Task.CompletedTask;
+    }
+
+    public Task<string> GetBranchShaAsync(Workspace workspace, string branchName, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult("branch-sha");
+    }
+
+    public Task ResetCanonicalBranchAsync(Workspace workspace, string branchName, string targetSha, CancellationToken cancellationToken = default)
+    {
+        return Task.CompletedTask;
+    }
 }
 
 public class FakeGitCliRunner : IGitCliRunner

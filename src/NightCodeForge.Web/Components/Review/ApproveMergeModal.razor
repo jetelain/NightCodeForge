@@ -1,10 +1,10 @@
 @using NightCodeForge.Core.Domain
-@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Exceptions
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Services
 @inject ITaskOrchestrator TaskOrchestrator
+@inject ITaskMutationService TaskMutationService
 @inject ToastService ToastService
-@inject IServiceProvider ServiceProvider
 
 <div class="forge-modal-backdrop" id="approve-merge-modal">
     <div class="forge-modal card-glass modal-md">
@@ -95,18 +95,11 @@
         if (_selectedMergeMode == mode) return;
         _selectedMergeMode = mode;
 
-        var taskRepo = ServiceProvider.GetService<ITaskRepository>();
-        if (taskRepo != null && TaskId > 0)
+        if (TaskId > 0)
         {
             try
             {
-                var task = await taskRepo.GetByIdAsync(TaskId);
-                if (task != null)
-                {
-                    task.MergeMode = mode;
-                    task.UpdatedAt = DateTime.UtcNow;
-                    await taskRepo.UpdateWithHistoryAsync(task, null, AuditActors.User, $"Updated MergeMode to {mode} via ApproveMergeModal");
-                }
+                await TaskMutationService.UpdateMergeModeAsync(TaskId, mode);
             }
             catch (Exception ex)
             {
@@ -128,15 +121,28 @@
         _isSubmitting = true;
         try
         {
-            await TaskOrchestrator.CompleteTaskAndCascadeAsync(TaskId, _commitMessage);
+            var result = await TaskOrchestrator.CompleteTaskAndCascadeAsync(TaskId, _commitMessage);
+            if (result.Status == CompleteTaskStatus.ConflictResolutionDispatched)
+            {
+                var msg = string.Format(ConflictResolutionConstants.ConflictDispatchedToastMessageFormat, BaseBranch);
+                ToastService.Show(ConflictResolutionConstants.ConflictDispatchedToastTitle, msg, ToastLevel.Warning);
+                await Close();
+                await OnApproved.InvokeAsync();
+                return;
+            }
+
             ToastService.Show("Task Merged", $"ForgeTask #{TaskId} approved and merged to {BaseBranch}.", ToastLevel.Success);
             await OnApproved.InvokeAsync();
         }
-        catch (NightCodeForge.Core.Exceptions.BaseBranchNotFoundException ex)
+        catch (MirrorPushRejectedException ex)
+        {
+            ToastService.Show("Host Push Rejected", $"Push to host origin for '{ex.BaseBranch}' was rejected as non-fast-forward: {ex.RawGitOutput}", ToastLevel.Error);
+        }
+        catch (BaseBranchNotFoundException ex)
         {
             ToastService.Show("Base Branch Missing", $"Target base branch '{ex.BaseBranch}' does not exist: {ex.Message}", ToastLevel.Error);
         }
-        catch (NightCodeForge.Core.Exceptions.FeatureBranchNotFoundException ex)
+        catch (FeatureBranchNotFoundException ex)
         {
             ToastService.Show("Feature Branch Missing", $"Feature branch '{ex.FeatureBranch}' does not exist: {ex.Message}", ToastLevel.Error);
         }

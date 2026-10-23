@@ -92,4 +92,36 @@ public interface IGitWorkspaceManager
     /// </summary>
     Task RevertOrCleanAsync(Workspace workspace, CancellationToken cancellationToken = default) =>
         RevertOrCleanAsync(workspace, null, cancellationToken);
+
+    /// <summary>
+    /// Validates that the installed Git version satisfies the minimum version requirements (Git 2.38+).
+    /// </summary>
+    Task ValidateGitVersionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Synchronizes the task worktree from the base branch (git merge baseBranch with diff3).
+    /// Safe to call if merge is already in progress (resumes and enumerates unmerged files).
+    /// </summary>
+    Task<MergeSyncResult> SyncFromBaseBranchAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Performs a non-destructive read-only preview of merging feature/task-{id} into baseBranch via git merge-tree.
+    /// </summary>
+    Task<MergeabilityCheckResult> CheckMergeableAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Safely aborts an in-progress merge (git merge --abort) in the task worktree if MERGE_HEAD exists.
+    /// </summary>
+    Task AbortMergeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retrieves the current commit SHA of a branch in the canonical repository.
+    /// </summary>
+    Task<string> GetBranchShaAsync(Workspace workspace, string branchName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resets the specified branch in the canonical repository to a target commit SHA (hard reset).
+    /// </summary>
+    Task ResetCanonicalBranchAsync(Workspace workspace, string baseBranch, string targetSha, CancellationToken cancellationToken = default);
 }
+

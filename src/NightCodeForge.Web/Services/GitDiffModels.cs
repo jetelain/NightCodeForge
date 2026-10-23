@@ -20,7 +20,8 @@ public record TaskReviewSnapshot(
     MergeMode MergeMode,
     TaskOverallStatus Status,
     IReadOnlyList<FileDiffSummary> Files,
-    QualityGateMetrics GateMetrics);
+    QualityGateMetrics GateMetrics,
+    bool HasResolvedConflict = false);
 
 public record QualityGateMetrics(
     double BaselineCoverage,

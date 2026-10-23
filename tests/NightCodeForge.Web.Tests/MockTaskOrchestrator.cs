@@ -54,9 +54,21 @@ public class MockTaskOrchestrator : ITaskOrchestrator
         return Task.CompletedTask;
     }
 
-    public Task CompleteTaskAndCascadeAsync(int taskId, string finalCommitMessage, CancellationToken cancellationToken = default)
+    public CompleteTaskResult CompleteResult { get; set; } = new(CompleteTaskStatus.Completed);
+    public Exception? CompleteTaskException { get; set; }
+    public Func<int, string, CompleteTaskResult>? OnCompleteTaskAndCascade { get; set; }
+
+    public Task<CompleteTaskResult> CompleteTaskAndCascadeAsync(int taskId, string finalCommitMessage, CancellationToken cancellationToken = default)
     {
         LastCompleteTaskCall = (taskId, finalCommitMessage);
-        return Task.CompletedTask;
+        if (CompleteTaskException != null)
+        {
+            throw CompleteTaskException;
+        }
+        if (OnCompleteTaskAndCascade != null)
+        {
+            return Task.FromResult(OnCompleteTaskAndCascade(taskId, finalCommitMessage));
+        }
+        return Task.FromResult(CompleteResult);
     }
 }

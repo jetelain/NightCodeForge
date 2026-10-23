@@ -55,6 +55,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowStageRegistry, WorkflowStageRegistry>();
         services.TryAddScoped<IWorkflowStageFactory, WorkflowStageFactory>();
         services.TryAddScoped<IWorkflowPipelineProvider, DatabaseWorkflowPipelineProvider>();
+        services.TryAddScoped<IConflictResolutionVerifier, ConflictResolutionVerifier>();
         services.TryAddScoped<ITaskOrchestrator, TaskOrchestrator>();
         services.TryAddScoped<IStartupRecoveryService, StartupRecoveryService>();
 

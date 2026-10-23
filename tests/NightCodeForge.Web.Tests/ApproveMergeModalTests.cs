@@ -1,5 +1,7 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Components.Review;
 using NightCodeForge.Web.Services;
@@ -19,6 +21,7 @@ public class ApproveMergeModalTests : BunitContext
 
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
         Services.AddSingleton(_toastService);
+        Services.AddSingleton<ITaskMutationService>(new Moq.Mock<ITaskMutationService>().Object);
     }
 
     [Fact]
@@ -69,4 +72,55 @@ public class ApproveMergeModalTests : BunitContext
         cut.Find("#btn-cancel-approve").Click();
         Assert.True(closed);
     }
+
+    [Fact]
+    public void ApproveMergeModal_ConflictResolutionDispatched_ShowsToastAndClosesAndTriggersOnApproved()
+    {
+        bool approved = false;
+        bool closed = false;
+
+        _orchestrator.CompleteResult = new CompleteTaskResult(CompleteTaskStatus.ConflictResolutionDispatched);
+
+        var cut = Render<ApproveMergeModal>(parameters => parameters
+            .Add(p => p.TaskId, 77)
+            .Add(p => p.BaseBranch, "main")
+            .Add(p => p.TaskTitle, "Feature X")
+            .Add(p => p.OnApproved, () => approved = true)
+            .Add(p => p.OnClosed, () => closed = true));
+
+        cut.Find("#btn-confirm-approve-merge").Click();
+
+        Assert.True(approved);
+        Assert.True(closed);
+        Assert.Contains(_toastService.Toasts, t =>
+            t.Level == ToastLevel.Warning &&
+            t.Title == ConflictResolutionConstants.ConflictDispatchedToastTitle &&
+            t.Message.Contains("main"));
+    }
+
+    [Fact]
+    public void ApproveMergeModal_MirrorPushRejected_ShowsErrorToastAndDoesNotCloseOrApprove()
+    {
+        bool approved = false;
+        bool closed = false;
+
+        _orchestrator.CompleteTaskException = new MirrorPushRejectedException("main", "/test/repo", "[remote rejected] main -> main (fetch first)");
+
+        var cut = Render<ApproveMergeModal>(parameters => parameters
+            .Add(p => p.TaskId, 77)
+            .Add(p => p.BaseBranch, "main")
+            .Add(p => p.TaskTitle, "Feature X")
+            .Add(p => p.OnApproved, () => approved = true)
+            .Add(p => p.OnClosed, () => closed = true));
+
+        cut.Find("#btn-confirm-approve-merge").Click();
+
+        Assert.False(approved);
+        Assert.False(closed);
+        Assert.Contains(_toastService.Toasts, t =>
+            t.Level == ToastLevel.Error &&
+            t.Title == "Host Push Rejected" &&
+            t.Message.Contains("fetch first"));
+    }
 }
+

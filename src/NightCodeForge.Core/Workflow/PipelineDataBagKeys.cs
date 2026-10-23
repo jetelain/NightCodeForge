@@ -52,6 +52,13 @@ public static class PipelineDataBagKeys
     /// <summary>Conversation history rebuilt from database turns by startup recovery; consumed once by the orchestrator.</summary>
     public const string RecoveredSerializedMemory = "RecoveredSerializedMemory";
 
+    // Autonomous Git Conflict Management & Re-Review Lifecycle
+    public const string ConflictFiles = "conflict.files";
+    public const string ConflictBaseBranch = "conflict.base_branch";
+    public const string ConflictDetectedAt = "conflict.detected_at";
+    public const string ConflictResolutionAttempts = "conflict.resolution_attempts";
+    public const string HasResolvedConflict = "conflict.has_resolved";
+
     public static string StageSummary(string stageId) => $"StageSummary_{stageId}";
     public static string StageCommand(string stageId) => $"{stageId}.command";
     public static string StageOutput(string stageId) => $"{stageId}.output";

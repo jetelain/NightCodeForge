@@ -46,6 +46,8 @@ public partial class TaskReviewService : ITaskReviewService
 
         var metrics = ExtractGateMetrics(task);
         var files = await LoadChangedFilesAsync(task, baseBranch, cancellationToken);
+        var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
+        var hasResolvedConflict = bag.Get<bool?>(PipelineDataBagKeys.HasResolvedConflict) ?? false;
 
         return new TaskReviewSnapshot(
             TaskId: task.Id,
@@ -55,7 +57,8 @@ public partial class TaskReviewService : ITaskReviewService
             MergeMode: task.MergeMode,
             Status: task.Status,
             Files: files,
-            GateMetrics: metrics);
+            GateMetrics: metrics,
+            HasResolvedConflict: hasResolvedConflict);
     }
 
     public async Task<IReadOnlyList<TaskReviewSnapshot>> GetPendingReviewsAsync(int? workspaceId = null, CancellationToken cancellationToken = default)

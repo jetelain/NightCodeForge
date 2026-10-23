@@ -65,6 +65,17 @@ public static class DefaultBootstrapPromptBuilder
         var baseBranch = !string.IsNullOrWhiteSpace(task.BaseBranch) ? task.BaseBranch : "main";
         var branchName = !string.IsNullOrWhiteSpace(task.FeatureBranch) ? task.FeatureBranch : $"feature/task-{task.Id}";
 
+        var repoPath = !string.IsNullOrWhiteSpace(context.WorkingDirectory)
+            ? context.WorkingDirectory
+            : context.Workspace?.RepositoryPath;
+        var projectConfig = CodeStackPresets.ResolveConfig(repoPath, context.DataBag);
+        var buildCommand = !string.IsNullOrWhiteSpace(projectConfig.BuildCommand)
+            ? projectConfig.BuildCommand
+            : "dotnet build";
+        var testCommand = !string.IsNullOrWhiteSpace(projectConfig.TestCommand)
+            ? projectConfig.TestCommand
+            : "dotnet test";
+
         var model = new
         {
             task = new
@@ -91,7 +102,9 @@ public static class DefaultBootstrapPromptBuilder
                 failure_reason = testFailure ?? buildFailure,
                 build_failure_reason = string.IsNullOrWhiteSpace(buildFailure) ? null : buildFailure,
                 test_failure_reason = string.IsNullOrWhiteSpace(testFailure) ? null : testFailure,
-                answered_questions = answeredQuestions is { Count: > 0 } ? answeredQuestions : null
+                answered_questions = answeredQuestions is { Count: > 0 } ? answeredQuestions : null,
+                build_command = buildCommand,
+                test_command = testCommand
             }
         };
 
@@ -120,6 +133,22 @@ public static class DefaultBootstrapPromptBuilder
             rendered = $"{rendered}\n\n[Git Diff Summary]:\n```diff\n{reviewDiffStat}\n```\nTo inspect the diff of a specific file against base branch '{baseBranch}', run:\ngit diff {baseBranch}...{branchName} -- <file-path>".Trim();
         }
 
+        var conflictFiles = context.DataBag.Get<List<string>>(PipelineDataBagKeys.ConflictFiles);
+        if (conflictFiles is { Count: > 0 } && !rendered.Contains(ConflictResolutionConstants.ConflictDirectiveHeader))
+        {
+            var conflictBaseBranch = context.DataBag.Get<string>(PipelineDataBagKeys.ConflictBaseBranch) ?? baseBranch;
+            var fileListText = string.Join("\n", conflictFiles.Select(f => $"- {f}"));
+            var conflictDirective = string.Format(
+                ConflictResolutionConstants.ConflictDirectiveFormat,
+                conflictBaseBranch,
+                fileListText,
+                buildCommand,
+                testCommand).Trim();
+
+            rendered = $"{rendered}\n\n{conflictDirective}".Trim();
+        }
+
         return rendered;
     }
 }
+

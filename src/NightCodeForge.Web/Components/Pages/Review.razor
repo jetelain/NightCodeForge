@@ -50,6 +50,19 @@
             </div>
         }
 
+        @if (_snapshot.HasResolvedConflict)
+        {
+            <div class="alert alert-warning mb-3 p-3 d-flex align-items-center gap-3" id="alert-re-review-conflict" style="border-left: 4px solid var(--accent-amber, #f59e0b); background-color: rgba(245, 158, 11, 0.1); border-radius: var(--radius-sm, 4px);">
+                <span style="font-size: 1.5rem;">⚠️</span>
+                <div>
+                    <strong>@ConflictResolutionConstants.ReReviewBannerTitle</strong>
+                    <div style="font-size: 0.9rem; margin-top: 0.25rem;">
+                        @string.Format(ConflictResolutionConstants.ReReviewBannerMessageFormat, _snapshot.BaseBranch)
+                    </div>
+                </div>
+            </div>
+        }
+
         <!-- 1. Header & Quality Gate Summary Strip -->
         <div class="review-header card-surface mb-3" id="review-header-section">
             <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">

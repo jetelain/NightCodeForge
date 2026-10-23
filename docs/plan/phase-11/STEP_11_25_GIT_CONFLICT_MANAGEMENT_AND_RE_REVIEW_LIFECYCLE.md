@@ -255,7 +255,7 @@ In `CompleteTaskAndCascadeInternalAsync` (invoked from `ApproveMergeModal` or au
 - **Marker materialization:** when the Implementation stage starts and `ConflictFiles` is present, the job (holding the task lock) runs `SyncFromBaseBranchAsync` (which resumes if a merge is already in progress, see 3.1.1) so the conflict markers/merge-in-progress exist on disk before the agent runs. The file list stored in `ConflictFiles` is refreshed from this sync result, which is authoritative. If the sync unexpectedly succeeds (the conflict disappeared, e.g. base was reverted), clear the conflict keys and continue the normal pipeline.
 
 #### 3. Conflict Resolution Agent Directive
-When the Implementation Agent executes with `ConflictFiles` present, an authoritative directive is appended to its prompt (text lives in a constant/template resource):
+When the Implementation Agent executes with `ConflictFiles` present, an authoritative directive is appended to its prompt (text lives in a constant/template resource, configured with the workspace's configured build and test commands):
 
 ```markdown
 [CRITICAL: Autonomous Merge Conflict Resolution Required]
@@ -273,7 +273,7 @@ INSTRUCTIONS:
    >>>>>>> {{ context.conflict_base_branch }}   (incoming changes from base branch)
 2. Preserve the functionality of this task while integrating the incoming changes. Use 'edit' to replace each whole block with clean resolved code. NO conflict markers may remain.
 3. Non-textual conflicts (a file deleted on one side and modified on the other, or binary files) have no markers: decide explicitly and resolve with 'git rm <file>' or 'git add <file>'. For textual conflicts you do NOT need to stage anything; the orchestrator stages resolved files.
-4. Run 'dotnet build' and 'dotnet test' via 'bash' to verify.
+4. Run '{{ context.build_command }}' and '{{ context.test_command }}' via 'bash' to verify.
 5. DO NOT run 'git commit', 'git merge --abort' or 'git reset'. Finish your turn once the files are resolved and verified; the orchestrator completes the merge.
 ```
 
@@ -321,39 +321,39 @@ On success: reset the attempts counter, clear `ConflictFiles`, `ConflictBaseBran
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Domain & constants:
-  - [ ] `MergeConflictException`, `MirrorPushRejectedException`, `GitCommandException` usage for non-conflict failures.
-  - [ ] `CompleteTaskResult` record and `CompleteTaskStatus` enum (`Completed`, `ConflictResolutionDispatched`).
-  - [ ] New `PipelineDataBagKeys`: `ConflictFiles`, `ConflictBaseBranch`, `ConflictDetectedAt`, `ConflictResolutionAttempts`, `HasResolvedConflict`; constants for `MaxConflictResolutionAttempts`, `MaxPushRetries`, git arguments, audit messages and UI texts.
-  - [ ] Git version preflight (>= 2.38 for `merge-tree --write-tree --name-only`).
-- [ ] `IGitWorkspaceManager` and `GitWorkspaceManager`:
-  - [ ] `SyncFromBaseBranchAsync`: clean-tree precondition, diff3 merge in worktree, conflict detection leaving the merge in progress, idempotent, resume when `MERGE_HEAD` already present.
-  - [ ] `CheckMergeableAsync`: non-destructive, exit-code based `git merge-tree` preview with structured file list.
-  - [ ] `AbortMergeAsync`: cleanly aborts in-progress merge in worktree when `MERGE_HEAD` exists.
-  - [ ] `SquashAndMergeAsync`: pre-squash SHA captured before commit, atomic rollback (`git reset --hard HEAD`, no `git clean`, no blind `merge --abort`), conflicted files captured before reset, throws `MergeConflictException`.
-  - [ ] Worktree preservation: `wt/task-{id}` is NOT removed inside `SquashAndMergeAsync`; removed only after host push succeeds at `Closed` transition.
-  - [ ] All canonical operations under the workspace lock; all worktree operations under the task lock.
-- [ ] `IGitMirrorSyncService` & Host Push Race:
-  - [ ] `PushBaseBranchToHostAsync` classifies errors: non-fast-forward throws or returns non-fast-forward indicator (no blind `-ncf` push); dirty host tree triggers `-ncf` fallback.
-- [ ] `TaskOrchestrator`:
-  - [ ] Gate 1: commit Stage 1 output, sync base before Stage 2; unexpected conflict calls `AbortMergeAsync` (clean worktree) then is a hard error.
-  - [ ] Gate 2: commit pending output, refreshed mergeability check; merge + deterministic re-verification when base advanced; conflict routing otherwise.
-  - [ ] Gate 3: catch `MergeConflictException`, discard approval with history entry, trigger conflict resolution, return `CompleteTaskResult` to caller.
-  - [ ] Host push race retry: bounded retry (`MaxPushRetries = 1`) with canonical clone reset to `preSquashSha`, re-pull, and re-squash; removes silent `catch` block.
-  - [ ] `InitiateConflictResolutionAsync` (state + enqueue only) and marker materialization at Implementation start under the task lock.
-  - [ ] Retry budget with escalation to a human (no unbounded loop, including `Automatic` mode).
-  - [ ] `ConflictResolutionVerifier` (order: marker scan including `||||||| ` and `File.Exists` guard, stage, unmerged index check, orchestrator-owned merge commit) with `HasResolvedConflict` lifecycle.
-- [ ] Agent Directives & Prompts:
-  - [ ] Inject the conflict directive and file list into the Implementation prompt via `StandardWorkflowDefinitions` / `TaskOrchestrator` (including delete/modify and binary conflicts; agent must not commit/abort).
-- [ ] Web UI & Ergonomics:
-  - [ ] "Conflict Resolved by Agent" banner in `Review.razor` (logic outside `@code`).
-  - [ ] `ApproveMergeModal.razor` consumes `CompleteTaskResult` (dispatched feedback and push rejection error display).
-  - [ ] `ApproveMergeModal.razor` uses `ITaskMutationService.UpdateMergeModeAsync` instead of `ServiceProvider.GetService`.
-  - [ ] `TaskHistoryTimeline` entries for the new audit events.
-- [ ] Tests:
-  - [ ] `GitWorkspaceManagerTests`: `CheckMergeableAsync` (clean/conflict/error), `SyncFromBaseBranchAsync` (clean, conflict, dirty tree, idempotent), `AbortMergeAsync`, squash rollback post-conditions (no `MERGE_HEAD`, untracked files preserved, worktree preserved), push rejection retry.
-  - [ ] `TaskOrchestratorTests`: Gate 1 sync & abort, Gate 2 (clean no-advance, clean with advance + re-verification, conflict), Gate 3 loopback with approval discard, `Automatic` re-merge, retry cap escalation, dependents stay blocked.
-  - [ ] `ConflictResolutionVerifier` unit tests (leftover markers including `||||||| `, resolved-but-unstaged file passes, bare `=======` in Markdown not flagged, deleted files handled cleanly, unmerged entries, delete/modify conflicts, orchestrator commit).
-  - [ ] Resilience tests: Gate 1 conflict then retry leaves a clean worktree; resume with `MERGE_HEAD` present after crash; Gate 2 with uncommitted worktree changes; attempts-counter boundary (exactly `MaxConflictResolutionAttempts` consecutive failures escalate); no double enqueue on `Open` task.
-  - [ ] UI tests for the banner, `ApproveMergeModal` conflict feedback, and mutation service call.
-  - [ ] Run the fast suite (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`), then the **full suite including E2E/Acceptance** at the end of the step; all must pass.
+- [x] Domain & constants:
+  - [x] `MergeConflictException`, `MirrorPushRejectedException`, `GitCommandException` usage for non-conflict failures.
+  - [x] `CompleteTaskResult` record and `CompleteTaskStatus` enum (`Completed`, `ConflictResolutionDispatched`).
+  - [x] New `PipelineDataBagKeys`: `ConflictFiles`, `ConflictBaseBranch`, `ConflictDetectedAt`, `ConflictResolutionAttempts`, `HasResolvedConflict`; constants for `MaxConflictResolutionAttempts`, `MaxPushRetries`, git arguments, audit messages and UI texts.
+  - [x] Git version preflight (>= 2.38 for `merge-tree --write-tree --name-only`).
+- [x] `IGitWorkspaceManager` and `GitWorkspaceManager`:
+  - [x] `SyncFromBaseBranchAsync`: clean-tree precondition, diff3 merge in worktree, conflict detection leaving the merge in progress, idempotent, resume when `MERGE_HEAD` already present.
+  - [x] `CheckMergeableAsync`: non-destructive, exit-code based `git merge-tree` preview with structured file list.
+  - [x] `AbortMergeAsync`: cleanly aborts in-progress merge in worktree when `MERGE_HEAD` exists.
+  - [x] `SquashAndMergeAsync`: pre-squash SHA captured before commit, atomic rollback (`git reset --hard HEAD`, no `git clean`, no blind `merge --abort`), conflicted files captured before reset, throws `MergeConflictException`.
+  - [x] Worktree preservation: `wt/task-{id}` is NOT removed inside `SquashAndMergeAsync`; removed only after host push succeeds at `Closed` transition.
+  - [x] All canonical operations under the workspace lock; all worktree operations under the task lock.
+- [x] `IGitMirrorSyncService` & Host Push Race:
+  - [x] `PushBaseBranchToHostAsync` classifies errors: non-fast-forward throws or returns non-fast-forward indicator (no blind `-ncf` push); dirty host tree triggers `-ncf` fallback.
+- [x] `TaskOrchestrator`:
+  - [x] Gate 1: commit Stage 1 output, sync base before Stage 2; unexpected conflict calls `AbortMergeAsync` (clean worktree) then is a hard error.
+  - [x] Gate 2: commit pending output, refreshed mergeability check; merge + deterministic re-verification when base advanced; conflict routing otherwise.
+  - [x] Gate 3: catch `MergeConflictException`, discard approval with history entry, trigger conflict resolution, return `CompleteTaskResult` to caller.
+  - [x] Host push race retry: bounded retry (`MaxPushRetries = 1`) with canonical clone reset to `preSquashSha`, re-pull, and re-squash; removes silent `catch` block.
+  - [x] `InitiateConflictResolutionAsync` (state + enqueue only) and marker materialization at Implementation start under the task lock.
+  - [x] Retry budget with escalation to a human (no unbounded loop, including `Automatic` mode).
+  - [x] `ConflictResolutionVerifier` (order: marker scan including `||||||| ` and `File.Exists` guard, stage, unmerged index check, orchestrator-owned merge commit) with `HasResolvedConflict` lifecycle.
+- [x] Agent Directives & Prompts:
+  - [x] Inject the conflict directive and file list into the Implementation prompt via `DefaultBootstrapPromptBuilder` / `TaskOrchestrator` (configured with workspace build and test commands; includes delete/modify and binary conflicts; agent must not commit/abort).
+- [x] Web UI & Ergonomics:
+  - [x] "Conflict Resolved by Agent" banner in `Review.razor` (logic outside `@code`).
+  - [x] `ApproveMergeModal.razor` consumes `CompleteTaskResult` (dispatched feedback and push rejection error display).
+  - [x] `ApproveMergeModal.razor` uses `ITaskMutationService.UpdateMergeModeAsync` instead of `ServiceProvider.GetService`.
+  - [x] `TaskHistoryTimeline` entries for the new audit events.
+- [x] Tests:
+  - [x] `GitWorkspaceManagerTests`: `CheckMergeableAsync` (clean/conflict/error), `SyncFromBaseBranchAsync` (clean, conflict, dirty tree, idempotent), `AbortMergeAsync`, squash rollback post-conditions (no `MERGE_HEAD`, untracked files preserved, worktree preserved), push rejection retry.
+  - [x] `TaskOrchestratorTests`: Gate 1 sync & abort, Gate 2 (clean no-advance, clean with advance + re-verification, conflict), Gate 3 loopback with approval discard, `Automatic` re-merge, retry cap escalation, dependents stay blocked.
+  - [x] `ConflictResolutionVerifier` unit tests (leftover markers including `||||||| `, resolved-but-unstaged file passes, bare `=======` in Markdown not flagged, deleted files handled cleanly, unmerged entries, delete/modify conflicts, binary conflicts, orchestrator commit).
+  - [x] Resilience tests: Gate 1 conflict then retry leaves a clean worktree; resume with `MERGE_HEAD` present after crash; Gate 2 with uncommitted worktree changes; attempts-counter boundary (exactly `MaxConflictResolutionAttempts` consecutive failures escalate); no double enqueue on `Open` task.
+  - [x] UI tests for the banner, `ApproveMergeModal` conflict feedback, and mutation service call.
+  - [x] Run the fast suite (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`), then the **full suite including E2E/Acceptance** at the end of the step; all must pass.

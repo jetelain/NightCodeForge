@@ -30,6 +30,8 @@ public class GitWorkspaceManagerTests : IDisposable
             _runner,
             pathResolver,
             wslMeta,
+            new Mock<IGitMirrorSyncService>().Object,
+            new Mock<IWorkspaceLockProvider>().Object,
             NullLogger<GitWorkspaceManager>.Instance);
 
         // Initial base commit on main
@@ -196,8 +198,8 @@ public class GitWorkspaceManagerTests : IDisposable
         Assert.Contains("feature1.txt", commitDiff);
         Assert.Contains("feature2.txt", commitDiff);
 
-        // Ephemeral worktree has been removed
-        Assert.False(Directory.Exists(wtPath));
+        // Task worktree preserved per Step 11.25 worktree preservation rule (until Closed transition)
+        Assert.True(Directory.Exists(wtPath));
     }
 
     [Fact]
@@ -219,7 +221,9 @@ public class GitWorkspaceManagerTests : IDisposable
         // Assert: Squash succeeded, dirty changes removed, and quotes are NOT escaped with backslashes
         Assert.False(string.IsNullOrWhiteSpace(squashSha));
         Assert.Equal(40, squashSha.Length);
-        Assert.False(File.Exists(Path.Combine(_repo.RepositoryPath, "canonical_trash.tmp")));
+        // Step 11.25: clean -fd is forbidden, untracked files are preserved while tracked files are reset
+        Assert.True(File.Exists(Path.Combine(_repo.RepositoryPath, "canonical_trash.tmp")));
+        Assert.Contains("# Test Project", File.ReadAllText(Path.Combine(_repo.RepositoryPath, "README.md")));
 
         var log = await _runner.ExecuteAsync(_repo.RepositoryPath, ["log", "-1", "--pretty=%B"]);
         Assert.Contains(messageWithQuotes, log.StandardOutput);
@@ -385,6 +389,8 @@ public class GitWorkspaceManagerTests : IDisposable
             _runner,
             pathResolver,
             wslMetaMock.Object,
+            new Mock<IGitMirrorSyncService>().Object,
+            new Mock<IWorkspaceLockProvider>().Object,
             NullLogger<GitWorkspaceManager>.Instance);
 
         var wslWorkspace = new Workspace

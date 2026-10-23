@@ -15,17 +15,23 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     private readonly IGitCliRunner _gitCliRunner;
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IWslMetadataService _wslMetadataService;
+    private readonly IGitMirrorSyncService _gitMirrorSyncService;
+    private readonly IWorkspaceLockProvider _workspaceLockProvider;
     private readonly ILogger<GitWorkspaceManager> _logger;
 
     public GitWorkspaceManager(
         IGitCliRunner gitCliRunner,
         IWorkspacePathResolver pathResolver,
         IWslMetadataService wslMetadataService,
+        IGitMirrorSyncService gitMirrorSyncService,
+        IWorkspaceLockProvider workspaceLockProvider,
         ILogger<GitWorkspaceManager> logger)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _wslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
+        _gitMirrorSyncService = gitMirrorSyncService ?? throw new ArgumentNullException(nameof(gitMirrorSyncService));
+        _workspaceLockProvider = workspaceLockProvider ?? throw new ArgumentNullException(nameof(workspaceLockProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -616,7 +622,6 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         // 1. Checkout target base branch in canonical clone (ensuring clean state first)
         await _gitCliRunner.ExecuteAsync(canonicalPath, ["reset", "--hard", "HEAD"], cancellationToken: cancellationToken);
-        await _gitCliRunner.ExecuteAsync(canonicalPath, ["clean", "-fd"], cancellationToken: cancellationToken);
         try
         {
             await _gitCliRunner.ExecuteAsync(canonicalPath, ["checkout", baseBranch], cancellationToken: cancellationToken);
@@ -669,9 +674,35 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             }
         }
 
+        // Capture pre-squash SHA on base branch for deterministic rollback capability
+        var preRev = await _gitCliRunner.ExecuteAsync(canonicalPath, ["rev-parse", "HEAD"], cancellationToken: cancellationToken);
+        var preSquashSha = preRev.StandardOutput.Trim();
+
         // 2. Perform squash merge
-        await _gitCliRunner.ExecuteAsync(canonicalPath, ["clean", "-fd"], cancellationToken: cancellationToken);
-        await _gitCliRunner.ExecuteAsync(canonicalPath, ["merge", "--squash", branchName], cancellationToken: cancellationToken);
+        try
+        {
+            await _gitCliRunner.ExecuteAsync(canonicalPath, ["merge", "--squash", branchName], cancellationToken: cancellationToken);
+        }
+        catch (GitCommandException ex)
+        {
+            // Collect conflicted files before resetting canonical clone
+            var diffResult = await _gitCliRunner.ExecuteAsync(canonicalPath, ["diff", "--name-only", "--diff-filter=U"], cancellationToken: cancellationToken);
+            var conflictedFiles = diffResult.StandardOutput
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+
+            // Atomic rollback: restore canonical clone with git reset --hard HEAD (clean -fd is forbidden)
+            await _gitCliRunner.ExecuteAsync(canonicalPath, ["reset", "--hard", "HEAD"], cancellationToken: cancellationToken);
+
+            if (conflictedFiles.Count > 0)
+            {
+                _logger.LogWarning("Squash merge conflicted for ForgeTask #{TaskId} with '{BaseBranch}' in {Count} files: {Files}",
+                    taskId, baseBranch, conflictedFiles.Count, string.Join(", ", conflictedFiles));
+                throw new MergeConflictException(taskId, baseBranch, conflictedFiles, ex.StandardError + "\n" + ex.StandardOutput, innerException: ex);
+            }
+
+            throw;
+        }
 
         // 3. Commit squashed changeset
         await _gitCliRunner.ExecuteAsync(
@@ -684,11 +715,250 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         _logger.LogInformation("Squash merge completed for ForgeTask #{TaskId} on '{BaseBranch}' with SHA {Sha}", taskId, baseBranch, squashSha);
 
-        // 4. Remove the task's ephemeral worktree
-        await RemoveWorktreeAsync(workspace, taskId, cancellationToken);
-
+        // Worktree Preservation Rule: worktree remains intact until closed transition succeeds
         return squashSha;
     }
+
+    /// <inheritdoc />
+    public async Task ValidateGitVersionAsync(CancellationToken cancellationToken = default)
+    {
+        var canonicalOrGlobal = AppContext.BaseDirectory;
+        var result = await _gitCliRunner.ExecuteAsync(canonicalOrGlobal, ["--version"], cancellationToken: cancellationToken);
+        var match = System.Text.RegularExpressions.Regex.Match(result.StandardOutput, @"(\d+)\.(\d+)(?:\.(\d+))?");
+        if (!match.Success)
+        {
+            throw new InvalidOperationException(
+                $"Unable to determine the installed Git version from output '{result.StandardOutput.Trim()}'.");
+        }
+
+        var major = int.Parse(match.Groups[1].Value);
+        var minor = int.Parse(match.Groups[2].Value);
+        var build = match.Groups[3].Success ? int.Parse(match.Groups[3].Value) : 0;
+        var installedVersion = new Version(major, minor, build);
+        if (installedVersion < NightCodeForge.Core.Workflow.ConflictResolutionConstants.MinimumRequiredGitVersion)
+        {
+            throw new InvalidOperationException(
+                $"Installed Git version {installedVersion} is older than required minimum {NightCodeForge.Core.Workflow.ConflictResolutionConstants.MinimumRequiredGitVersion}. Please upgrade Git.");
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<MergeSyncResult> SyncFromBaseBranchAsync(
+        Workspace workspace,
+        int taskId,
+        string baseBranch,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseBranch);
+
+        var worktreePath = GetWorktreePath(workspace, taskId);
+        if (!WorktreeDirectoryExists(worktreePath))
+        {
+            await EnsureWorktreeAsync(workspace, taskId, baseBranch, cancellationToken);
+        }
+
+        // 1. Check if merge is already in progress (resuming)
+        var isMergeInProgress = await IsMergeInProgressAsync(worktreePath, cancellationToken);
+        if (isMergeInProgress)
+        {
+            _logger.LogInformation("Resuming existing in-progress merge in worktree '{WorktreePath}' for task #{TaskId}", worktreePath, taskId);
+            var unmergedResult = await _gitCliRunner.ExecuteAsync(worktreePath, ["diff", "--name-only", "--diff-filter=U"], cancellationToken: cancellationToken);
+            var unmergedFiles = unmergedResult.StandardOutput
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+
+            return new MergeSyncResult(
+                Success: false,
+                HasConflict: true,
+                ConflictedFiles: unmergedFiles,
+                MergeCommitSha: null);
+        }
+
+        // 2. Precondition: Worktree must be clean if merge is not in progress
+        var statusCheck = await _gitCliRunner.ExecuteAsync(worktreePath, ["status", "--porcelain"], cancellationToken: cancellationToken);
+        if (!string.IsNullOrWhiteSpace(statusCheck.StandardOutput))
+        {
+            throw new GitCommandException(
+                worktreePath,
+                ["status", "--porcelain"],
+                1,
+                statusCheck.StandardOutput,
+                $"Worktree for task #{taskId} is dirty with uncommitted changes. Cannot synchronize from base branch.");
+        }
+
+        // 3. Pull latest base branch in canonical clone / ext4 mirror under workspace lock
+        if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            using var wsLock = await _workspaceLockProvider.AcquireLockAsync(workspace.Id, cancellationToken);
+            await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, baseBranch, cancellationToken);
+        }
+
+        // 4. Merge baseBranch into worktree with diff3 conflict style
+        try
+        {
+            var mergeResult = await _gitCliRunner.ExecuteAsync(
+                worktreePath,
+                ["-c", "merge.conflictStyle=diff3", "merge", "--no-edit", baseBranch],
+                cancellationToken: cancellationToken);
+
+            var revParse = await _gitCliRunner.ExecuteAsync(worktreePath, ["rev-parse", "HEAD"], cancellationToken: cancellationToken);
+            var currentSha = revParse.StandardOutput.Trim();
+
+            _logger.LogInformation("Cleanly synchronized feature branch for task #{TaskId} with '{BaseBranch}' (SHA: {Sha})", taskId, baseBranch, currentSha);
+
+            return new MergeSyncResult(
+                Success: true,
+                HasConflict: false,
+                ConflictedFiles: Array.Empty<string>(),
+                MergeCommitSha: currentSha);
+        }
+        catch (GitCommandException)
+        {
+            // Enumerate conflicted files
+            var diffResult = await _gitCliRunner.ExecuteAsync(worktreePath, ["diff", "--name-only", "--diff-filter=U"], cancellationToken: cancellationToken);
+            var conflictedFiles = diffResult.StandardOutput
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+
+            if (conflictedFiles.Count > 0)
+            {
+                _logger.LogWarning("Merge conflict detected while synchronizing task #{TaskId} with '{BaseBranch}': {Files}",
+                    taskId, baseBranch, string.Join(", ", conflictedFiles));
+
+                return new MergeSyncResult(
+                    Success: false,
+                    HasConflict: true,
+                    ConflictedFiles: conflictedFiles,
+                    MergeCommitSha: null);
+            }
+
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<MergeabilityCheckResult> CheckMergeableAsync(
+        Workspace workspace,
+        int taskId,
+        string baseBranch,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseBranch);
+
+        var canonicalPath = GetCanonicalWorkingPath(workspace);
+        var branchName = $"feature/task-{taskId}";
+
+        var baseShaResult = await _gitCliRunner.ExecuteAsync(canonicalPath, ["rev-parse", baseBranch], cancellationToken: cancellationToken);
+        var baseSha = baseShaResult.StandardOutput.Trim();
+
+        var featureShaResult = await _gitCliRunner.ExecuteAsync(canonicalPath, ["rev-parse", branchName], cancellationToken: cancellationToken);
+        var featureSha = featureShaResult.StandardOutput.Trim();
+
+        GitCommandResult? mergeTreeResult = null;
+        string mergeTreeOutput = string.Empty;
+        bool hasConflict = false;
+
+        try
+        {
+            mergeTreeResult = await _gitCliRunner.ExecuteAsync(
+                canonicalPath,
+                ["merge-tree", "--write-tree", "--name-only", baseBranch, branchName],
+                cancellationToken: cancellationToken);
+            mergeTreeOutput = mergeTreeResult.StandardOutput;
+        }
+        catch (GitCommandException ex) when (ex.ExitCode == 1)
+        {
+            hasConflict = true;
+            mergeTreeOutput = ex.StandardOutput;
+        }
+
+        if (!hasConflict && mergeTreeResult?.ExitCode == 0)
+        {
+            return new MergeabilityCheckResult(
+                IsMergeable: true,
+                ConflictedFiles: Array.Empty<string>(),
+                BaseBranchSha: baseSha,
+                FeatureBranchSha: featureSha);
+        }
+
+        if (hasConflict || mergeTreeResult?.ExitCode == 1)
+        {
+            // Parse structured output: line 0 is tree hash; subsequent lines until empty line are conflicted files
+            var lines = mergeTreeOutput
+                .Split('\n')
+                .Select(l => l.Trim())
+                .ToList();
+
+            var conflictedFiles = new List<string>();
+            for (int i = 1; i < lines.Count; i++)
+            {
+                if (string.IsNullOrWhiteSpace(lines[i]))
+                {
+                    break;
+                }
+                conflictedFiles.Add(lines[i]);
+            }
+
+            return new MergeabilityCheckResult(
+                IsMergeable: false,
+                ConflictedFiles: conflictedFiles,
+                BaseBranchSha: baseSha,
+                FeatureBranchSha: featureSha);
+        }
+
+        throw new GitCommandException(
+            canonicalPath,
+            ["merge-tree", "--write-tree", "--name-only", baseBranch, branchName],
+            mergeTreeResult!.ExitCode,
+            mergeTreeResult.StandardOutput,
+            mergeTreeResult.StandardError);
+    }
+
+    /// <inheritdoc />
+    public async Task AbortMergeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        var worktreePath = GetWorktreePath(workspace, taskId);
+        if (!WorktreeDirectoryExists(worktreePath)) return;
+
+        if (await IsMergeInProgressAsync(worktreePath, cancellationToken))
+        {
+            _logger.LogInformation("Aborting in-progress merge for task #{TaskId} in '{WorktreePath}'", taskId, worktreePath);
+            await _gitCliRunner.ExecuteAsync(worktreePath, ["merge", "--abort"], cancellationToken: cancellationToken);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<string> GetBranchShaAsync(Workspace workspace, string branchName, CancellationToken cancellationToken = default)
+    {
+        var canonicalPath = GetCanonicalWorkingPath(workspace);
+        var result = await _gitCliRunner.ExecuteAsync(canonicalPath, ["rev-parse", branchName], cancellationToken: cancellationToken);
+        return result.StandardOutput.Trim();
+    }
+
+    /// <inheritdoc />
+    public async Task ResetCanonicalBranchAsync(Workspace workspace, string baseBranch, string targetSha, CancellationToken cancellationToken = default)
+    {
+        var canonicalPath = GetCanonicalWorkingPath(workspace);
+        await _gitCliRunner.ExecuteAsync(canonicalPath, ["checkout", baseBranch], cancellationToken: cancellationToken);
+        await _gitCliRunner.ExecuteAsync(canonicalPath, ["reset", "--hard", targetSha], cancellationToken: cancellationToken);
+    }
+
+    private async Task<bool> IsMergeInProgressAsync(string worktreePath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _gitCliRunner.ExecuteAsync(worktreePath, ["rev-parse", "-q", "--verify", "MERGE_HEAD"], cancellationToken: cancellationToken);
+            return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput);
+        }
+        catch (GitCommandException)
+        {
+            return false;
+        }
+    }
+
 
     /// <inheritdoc />
     public Task RevertOrCleanAsync(Workspace workspace, CancellationToken cancellationToken = default)
