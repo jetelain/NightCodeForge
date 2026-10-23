@@ -175,17 +175,21 @@ else if (!_isLoadingTasks)
 
     private void ResolveInitialInspectedTask()
     {
-        if (TaskId.HasValue && TaskId.Value > 0)
+        if (TaskId.HasValue && TaskId.Value > 0 && (_availableTasks.Any(t => t.Id == TaskId.Value) || !WorkspaceState.ActiveWorkspaceId.HasValue))
         {
             _inspectedTaskId = TaskId.Value;
         }
-        else if (WorkerState.Current.ActiveTaskId.HasValue && WorkerState.Current.ActiveTaskId.Value > 0)
+        else if (WorkerState.Current.ActiveTaskId.HasValue && WorkerState.Current.ActiveTaskId.Value > 0 && _availableTasks.Any(t => t.Id == WorkerState.Current.ActiveTaskId.Value))
         {
             _inspectedTaskId = WorkerState.Current.ActiveTaskId.Value;
         }
         else if (_availableTasks.Any())
         {
             _inspectedTaskId = _availableTasks[0].Id;
+        }
+        else
+        {
+            _inspectedTaskId = null;
         }
     }
 
@@ -218,9 +222,38 @@ else if (!_isLoadingTasks)
             if (_disposed) return;
             await LoadAvailableTasksAsync();
             if (_disposed) return;
-            ResolveInitialInspectedTask();
+            UpdateInspectedTaskAfterWorkspaceChange();
             StateHasChanged();
         });
+    }
+
+    private void UpdateInspectedTaskAfterWorkspaceChange()
+    {
+        if (_inspectedTaskId.HasValue && _availableTasks.Any(t => t.Id == _inspectedTaskId.Value))
+        {
+            return;
+        }
+
+        int? newTaskId = null;
+        if (WorkerState.Current.ActiveTaskId.HasValue && _availableTasks.Any(t => t.Id == WorkerState.Current.ActiveTaskId.Value))
+        {
+            newTaskId = WorkerState.Current.ActiveTaskId.Value;
+        }
+        else if (_availableTasks.Count > 0)
+        {
+            newTaskId = _availableTasks[0].Id;
+        }
+
+        _inspectedTaskId = newTaskId;
+
+        if (_inspectedTaskId.HasValue)
+        {
+            Navigation.NavigateTo($"/inspector/{_inspectedTaskId.Value}", replace: true);
+        }
+        else
+        {
+            Navigation.NavigateTo("/inspector", replace: true);
+        }
     }
 
     private void HandleWorkerStateChanged()

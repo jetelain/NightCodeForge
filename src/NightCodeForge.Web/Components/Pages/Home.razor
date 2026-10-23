@@ -1,7 +1,5 @@
 @page "/"
 @inject WorkspaceStateService WorkspaceState
-@inject WorkerStateService WorkerState
-@inject ToastService ToastService
 @implements IDisposable
 
 <PageTitle>Overview - NightCodeForge</PageTitle>
@@ -13,23 +11,13 @@
     }
 
     <!-- Welcome Banner & Quick Status -->
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
-        <div>
-            <h1>NightCodeForge Console</h1>
-            <p>Autonomous AI Software Engineering Forge with Human-in-the-Loop Orchestration.</p>
-        </div>
-        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-            <button class="forge-btn forge-btn-secondary" @onclick="TriggerInfoToast">
-                ℹ️ Test Info Toast
-            </button>
-            <button class="forge-btn forge-btn-primary" @onclick="TriggerSuccessToast">
-                ✅ Test Success Toast
-            </button>
-        </div>
+    <div>
+        <h1>NightCodeForge Console</h1>
+        <p>Autonomous AI Software Engineering Forge with Human-in-the-Loop Orchestration.</p>
     </div>
 
-    <!-- Active Workspace & Worker Summary Cards -->
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem;">
+    <!-- Active Workspace Card -->
+    <div>
         <!-- Workspace Card -->
         <div class="forge-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
@@ -49,41 +37,6 @@
                     <span class="forge-badge badge-agentic">Mode: @WorkspaceState.ActiveWorkspace.ExecutionMode</span>
                 </div>
             }
-        </div>
-
-        <!-- Worker Status Telemetry Card -->
-        <div class="forge-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-                <span style="font-size: 0.8rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Worker Telemetry</span>
-                <span class="forge-badge @(WorkerState.Current.Status == WorkerExecutionStatus.Running ? "badge-indigo" : (WorkerState.Current.Status == WorkerExecutionStatus.WaitingForHuman ? "badge-amber" : "badge-deterministic"))">
-                    @WorkerState.Current.Status
-                </span>
-            </div>
-            <div style="font-size: 1.3rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.6rem;">
-                <span class="status-dot @(WorkerState.Current.Status.ToString().ToLowerInvariant())"></span>
-                <span>@WorkerState.Current.HardwareTarget</span>
-            </div>
-            <div style="font-size: 0.85rem; color: var(--text-secondary);">
-                Stage: <span class="font-mono" style="color: var(--text-primary);">@(WorkerState.Current.StageKind ?? "Idle")</span>
-                @if (WorkerState.Current.ActiveTaskId.HasValue)
-                {
-                    <text> | Task: <span class="font-mono" style="color: var(--accent-indigo);">#@WorkerState.Current.ActiveTaskId</span></text>
-                }
-            </div>
-            <div style="margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                <button class="forge-btn forge-btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;" @onclick="SimulateWorkerIdle">
-                    Set Idle
-                </button>
-                <button class="forge-btn forge-btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;" @onclick="SimulateWorkerRunning">
-                    Set Running
-                </button>
-                <button class="forge-btn forge-btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;" @onclick="SimulateWorkerWaiting">
-                    Set Waiting
-                </button>
-                <button class="forge-btn forge-btn-secondary" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;" @onclick="IncrementQuestions">
-                    +1 Question (@WorkerState.Current.PendingQuestionCount)
-                </button>
-            </div>
         </div>
     </div>
 
@@ -156,57 +109,5 @@
     public void Dispose()
     {
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
-    }
-
-    private void TriggerInfoToast()
-    {
-        ToastService.Show("Workspace Telemetry", "Workspace state refreshed from local repository.", ToastLevel.Info);
-    }
-
-    private void TriggerSuccessToast()
-    {
-        ToastService.Show("Build Succeeded", "Deterministic test suite passed with 100% assertions green.", ToastLevel.Success);
-    }
-
-    private void SimulateWorkerIdle()
-    {
-        WorkerState.UpdateStatus(new WorkerStatusSnapshot(
-            WorkerExecutionStatus.Idle,
-            null,
-            null,
-            null,
-            null,
-            "Local GPU",
-            WorkerState.Current.PendingQuestionCount));
-    }
-
-    private void SimulateWorkerRunning()
-    {
-        WorkerState.UpdateStatus(new WorkerStatusSnapshot(
-            WorkerExecutionStatus.Running,
-            42,
-            "Step 5.1 Design System Verification",
-            "stage-impl-01",
-            "Implementation",
-            "NVIDIA RTX 4090",
-            WorkerState.Current.PendingQuestionCount));
-    }
-
-    private void SimulateWorkerWaiting()
-    {
-        WorkerState.UpdateStatus(new WorkerStatusSnapshot(
-            WorkerExecutionStatus.WaitingForHuman,
-            42,
-            "Step 5.1 Design System Verification",
-            "stage-review-01",
-            "ClarificationGate",
-            "NVIDIA RTX 4090",
-            Math.Max(1, WorkerState.Current.PendingQuestionCount)));
-    }
-
-    private void IncrementQuestions()
-    {
-        WorkerState.UpdatePendingQuestions(WorkerState.Current.PendingQuestionCount + 1);
-        ToastService.Show("New Clarification", "An agent submitted a new question in the Question Inbox.", ToastLevel.Warning);
     }
 }

@@ -3,7 +3,6 @@
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Services
 @inject ITaskOrchestrator TaskOrchestrator
-@inject ITaskMutationService TaskMutationService
 @inject ToastService ToastService
 
 <div class="forge-modal-backdrop" id="approve-merge-modal">
@@ -20,26 +19,7 @@
                 and unblock downstream DAG dependencies.
             </p>
 
-            <div class="form-group mb-3">
-                <label class="form-label mb-1">Merge Delivery Mode</label>
-                <div style="display: flex; gap: 0.5rem;">
-                    <button type="button"
-                            class="forge-btn btn-sm @(_selectedMergeMode == MergeMode.ManualReviewRequired ? "forge-btn-primary" : "forge-btn-secondary")"
-                            @onclick="() => SetMergeModeAsync(MergeMode.ManualReviewRequired)"
-                            id="btn-mergemode-manual">
-                        🔍 Manual Review Required
-                    </button>
-                    <button type="button"
-                            class="forge-btn btn-sm @(_selectedMergeMode == MergeMode.Automatic ? "forge-btn-primary" : "forge-btn-secondary")"
-                            @onclick="() => SetMergeModeAsync(MergeMode.Automatic)"
-                            id="btn-mergemode-auto">
-                        ⚡ Automatic Merge
-                    </button>
-                </div>
-                <small class="text-secondary" style="display: block; margin-top: 0.25rem; font-size: 0.78rem;">
-                    @MergeModeHelper.GetDescription(_selectedMergeMode)
-                </small>
-            </div>
+
 
             <div class="form-group mb-3">
                 <label class="form-label mb-1">Squash Commit Message</label>
@@ -70,44 +50,20 @@
     [Parameter] public int TaskId { get; set; }
     [Parameter] public string BaseBranch { get; set; } = "main";
     [Parameter] public string TaskTitle { get; set; } = string.Empty;
-    [Parameter] public MergeMode CurrentMergeMode { get; set; } = MergeMode.ManualReviewRequired;
-    [Parameter] public EventCallback<MergeMode> OnMergeModeChanged { get; set; }
     [Parameter] public EventCallback OnApproved { get; set; }
     [Parameter] public EventCallback OnClosed { get; set; }
 
     private string _commitMessage = string.Empty;
-    private MergeMode _selectedMergeMode = MergeMode.ManualReviewRequired;
     private bool _isSubmitting;
 
     protected override void OnParametersSet()
     {
-        _selectedMergeMode = CurrentMergeMode;
         if (string.IsNullOrWhiteSpace(_commitMessage))
         {
             _commitMessage = string.IsNullOrWhiteSpace(TaskTitle)
                 ? $"Merge task #{TaskId} into {BaseBranch}"
                 : $"Merge task #{TaskId}: {TaskTitle}";
         }
-    }
-
-    private async Task SetMergeModeAsync(MergeMode mode)
-    {
-        if (_selectedMergeMode == mode) return;
-        _selectedMergeMode = mode;
-
-        if (TaskId > 0)
-        {
-            try
-            {
-                await TaskMutationService.UpdateMergeModeAsync(TaskId, mode);
-            }
-            catch (Exception ex)
-            {
-                ToastService.Show("Notice", $"Failed to persist MergeMode: {ex.Message}", ToastLevel.Warning);
-            }
-        }
-
-        await OnMergeModeChanged.InvokeAsync(mode);
     }
 
     private async Task HandleApproveAsync()

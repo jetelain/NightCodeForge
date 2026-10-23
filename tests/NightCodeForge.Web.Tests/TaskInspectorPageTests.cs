@@ -245,6 +245,79 @@ public class TaskInspectorPageTests : BunitContext
         Assert.DoesNotContain(options, o => o.Contains("Unstarted Fresh Task"));
     }
 
+    [Fact]
+    public async Task TaskInspector_WhenWorkspaceChanged_UpdatesInspectedTaskToNewWorkspace()
+    {
+        var ws1 = new Workspace { Id = 1, Name = "Workspace Alpha", RepositoryPath = "/path/alpha" };
+        var ws2 = new Workspace { Id = 2, Name = "Workspace Beta", RepositoryPath = "/path/beta" };
+
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 601,
+            WorkspaceId = 1,
+            Title = "Alpha Workspace Task",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true
+        });
+
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 602,
+            WorkspaceId = 2,
+            Title = "Beta Workspace Task",
+            Status = TaskOverallStatus.Implemented,
+            HasExecutionRun = true
+        });
+
+        _workspaceState.SetActiveWorkspace(ws1);
+
+        var cut = Render<TaskInspector>(p => p.Add(x => x.TaskId, 601));
+        cut.WaitForState(() => cut.Markup.Contains("Alpha Workspace Task"));
+
+        Assert.Contains("Alpha Workspace Task", cut.Markup);
+        var nav = Services.GetRequiredService<NavigationManager>();
+
+        // Switch to Workspace 2
+        _workspaceState.SetActiveWorkspace(ws2);
+
+        cut.WaitForState(() => cut.Markup.Contains("Beta Workspace Task"));
+
+        Assert.Contains("Beta Workspace Task", cut.Markup);
+        Assert.DoesNotContain("Alpha Workspace Task", cut.Markup);
+        Assert.Contains("/inspector/602", nav.Uri);
+    }
+
+    [Fact]
+    public async Task TaskInspector_WhenWorkspaceChangedToEmptyWorkspace_DisplaysEmptyState()
+    {
+        var ws1 = new Workspace { Id = 1, Name = "Workspace Alpha", RepositoryPath = "/path/alpha" };
+        var ws2 = new Workspace { Id = 2, Name = "Workspace Empty", RepositoryPath = "/path/empty" };
+
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 701,
+            WorkspaceId = 1,
+            Title = "Alpha Active Task",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true
+        });
+
+        _workspaceState.SetActiveWorkspace(ws1);
+
+        var cut = Render<TaskInspector>(p => p.Add(x => x.TaskId, 701));
+        cut.WaitForState(() => cut.Markup.Contains("Alpha Active Task"));
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+
+        // Switch to Workspace 2 (which has no tasks)
+        _workspaceState.SetActiveWorkspace(ws2);
+
+        cut.WaitForState(() => cut.Find("#task-inspector-empty") != null);
+
+        Assert.NotNull(cut.Find("#task-inspector-empty"));
+        Assert.Contains("/inspector", nav.Uri);
+    }
+
     #region Fakes
 
     private class FakeDevQueueService : IDevQueueService

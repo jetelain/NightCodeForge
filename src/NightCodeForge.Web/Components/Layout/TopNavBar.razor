@@ -59,37 +59,6 @@
             <span class="pill-icon">📬</span>
             <span>@(pendingQuestions > 0 ? $"{pendingQuestions} Question{(pendingQuestions > 1 ? "s" : "")}" : "Inbox")</span>
         </NavLink>
-
-        <!-- Reactive GPU Inference Status Badge -->
-        <div class="worker-status-badge" title="Worker Hardware & Execution Status">
-            @switch (WorkerState.Current.Status)
-            {
-                case WorkerExecutionStatus.Running:
-                    <span class="status-dot running"></span>
-                    <span>
-                        Running: @(WorkerState.Current.StageKind ?? "Agent")
-                        @if (WorkerState.Current.ActiveTaskId.HasValue)
-                        {
-                            <text> - Task #@WorkerState.Current.ActiveTaskId</text>
-                        }
-                        (@WorkerState.Current.HardwareTarget)
-                    </span>
-                    break;
-                case WorkerExecutionStatus.WaitingForHuman:
-                    <span class="status-dot waiting"></span>
-                    <span>Waiting for Clarification</span>
-                    break;
-                case WorkerExecutionStatus.Blocked:
-                    <span class="status-dot blocked"></span>
-                    <span>Worker Blocked</span>
-                    break;
-                case WorkerExecutionStatus.Idle:
-                default:
-                    <span class="status-dot idle"></span>
-                    <span>GPU Idle (@WorkerState.Current.HardwareTarget)</span>
-                    break;
-            }
-        </div>
     </div>
 </header>
 
