@@ -1,7 +1,7 @@
-# 📜 Step 11.8: Custom Repository Scripts for Deterministic Steps (Bash, Python, PowerShell)
+# 📜 Step 12.9: Custom Repository Scripts for Deterministic Steps (Bash, Python, PowerShell)
 
-> **Phase 11 Implementation Step (Post-MVP)**  
-> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
+> **Phase 12 Implementation Step (Extend Features - Deep Integrations & Remote Experience)** *(formerly Step 11.8)*  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Core/Workflow/Stages`, `src/NightCodeForge.Core/Workflow`, `tests/NightCodeForge.Core.Tests` | *Status:* Planned
 
 ---

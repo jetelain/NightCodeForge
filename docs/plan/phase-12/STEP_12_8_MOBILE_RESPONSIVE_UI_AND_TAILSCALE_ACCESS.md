@@ -1,7 +1,7 @@
-# 📱 Step 11.6: Mobile-Responsive Web UI & Remote Tailscale Experience
+# 📱 Step 12.8: Mobile-Responsive Web UI & Remote Tailscale Experience
 
-> **Phase 11 Implementation Step (Post-MVP)**  
-> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
+> **Phase 12 Implementation Step (Extend Features - Deep Integrations & Remote Experience)** *(formerly Step 11.6)*  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 

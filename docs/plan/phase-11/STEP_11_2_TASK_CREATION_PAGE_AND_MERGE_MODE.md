@@ -29,7 +29,7 @@ With the underlying priority scheduling engine and Hangfire queues already compl
    - Supported local delivery options in [MergeMode](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/Enums.cs):
      - **`Automatic`:** Auto-squashes and merges to `BaseBranch` upon reaching `Ready`.
      - **`ManualReviewRequired` (Default):** Pauses at `Ready` for human review in the Review Room.
-     - *(Note: Remote GitHub PR delivery via `MergeMode.ExternalPullRequest` is deferred to [Step 11.10: GitHub Integration, Untrusted Issue Triage & PR Delivery](STEP_11_10_GITHUB_INTEGRATION_ISSUES_AND_PRS.md)).*
+     - *(Note: Remote GitHub PR delivery via `MergeMode.ExternalPullRequest` is deferred to [Step 12.11: GitHub Integration, Untrusted Issue Triage & PR Delivery](../phase-12/STEP_12_11_GITHUB_INTEGRATION_ISSUES_AND_PRS.md)).*
    - Interactive editing of `MergeMode` on existing tasks inside [TaskDetailDrawer.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) and [ApproveMergeModal.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Review/ApproveMergeModal.razor).
 
 ---
@@ -93,7 +93,7 @@ flowchart TD
   - Automatically creates corresponding [TaskDependency](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/TaskDependency.cs) records upon save.
 - **MergeMode Selector:**
   - Segmented card selection for `ManualReviewRequired` (default) and `Automatic`.
-  - *(Note: Remote PR delivery via `ExternalPullRequest` is deferred to [Step 11.10](STEP_11_10_GITHUB_INTEGRATION_ISSUES_AND_PRS.md)).*
+  - *(Note: Remote PR delivery via `ExternalPullRequest` is deferred to [Step 12.11](../phase-12/STEP_12_11_GITHUB_INTEGRATION_ISSUES_AND_PRS.md)).*
 
 ---
 
@@ -108,7 +108,7 @@ flowchart TD
   - Radio/dropdown offering:
     - 🔍 **Manual Review Required** (recommended default)
     - ⚡ **Automatic Merge**
-    - *(Note: `ExternalPullRequest` is deferred to [Step 11.10](STEP_11_10_GITHUB_INTEGRATION_ISSUES_AND_PRS.md)).*
+    - *(Note: `ExternalPullRequest` is deferred to [Step 12.11](../phase-12/STEP_12_11_GITHUB_INTEGRATION_ISSUES_AND_PRS.md)).*
 - **Save & Audit Trail:**
   - Updates `ForgeTask` in database.
   - Emits event callback (`OnTaskUpdated`) so parent views refresh immediately.
@@ -143,7 +143,7 @@ flowchart TD
   - [x] DAG cascade unblocking dispatches P1 tasks to `llm-urgent` and P2–P5 in `Priority ASC` order.
   - [x] DevQueue priority reordering in [DevQueueService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Services/DevQueueService.cs).
 - [x] **Domain Model & Helpers:**
-  - [x] Ensure `MergeMode` (`Automatic` and `ManualReviewRequired`) display labels and helper methods exist in `NightCodeForge.Core` *(Note: `ExternalPullRequest = 2` is deferred to [Step 11.10](STEP_11_10_GITHUB_INTEGRATION_ISSUES_AND_PRS.md))*.
+  - [x] Ensure `MergeMode` (`Automatic` and `ManualReviewRequired`) display labels and helper methods exist in `NightCodeForge.Core` *(Note: `ExternalPullRequest = 2` is deferred to [Step 12.11](../phase-12/STEP_12_11_GITHUB_INTEGRATION_ISSUES_AND_PRS.md))* .
   - [x] Ensure `TaskPriority` helper methods and display labels are fully leveraged across all Web components.
 - [x] **Dedicated Task Creation Page:**
   - [x] Create `CreateTask.razor` at `/tasks/new` and `/tasks/create` with responsive layout and live markdown preview.

@@ -1,0 +1,189 @@
+# 🧩 Phase 12: Extend Features & Integrations
+
+> **Architectural Specification & Implementation Roadmap**  
+> *Parent Plan:* [docs/PLAN.md](../PLAN.md) | *Dependencies:* Phase 4 (Harnesses & Sandboxing), Phase 5 (Web UI), Phase 8 (Database-Driven Workflows), Phase 9 (Codebase Remediation & Robustness), Phase 10 (MVP Final Polish), Phase 11 (Real-Project Onboarding, Hardening & Bug Fixes)  
+> *Status:* Active / In Progress | *Target Framework:* .NET 10 (C# 13)
+
+---
+
+## 1. Executive Summary & Strategic Prioritization
+
+Following the stabilization, real-project onboarding, and hardening completed in **Phase 11** (which delivered dedicated task creation, temporal state audit history, packaged agent skills, `ncf` CLI, priority scheduling, telemetry console, dynamic timeouts, worktree relative paths, task rejection, fine-grained workspace locks, autonomous Git conflict resolution, and container lifecycle cleanup), **Phase 12 (Extend Features & Integrations)** delivers advanced developer ergonomics, multi-task intelligence, and deep ecosystem integrations.
+
+The roadmap is prioritized into three strategic delivery tiers:
+
+1. **Tier 1: Real-Project Backlog Management & Dependencies (Top Priority):**
+   - **Step 12.1:** Intelligent Task Dependency Detection in Ideation & Review Agents (formerly Step 11.14) — lightweight backlog context injection, DAG relationship inference, cycle rejection, and prerequisite enforcement.
+   - **Step 12.2:** Task Attachments & Context Documents (formerly Step 11.16) — workspace-level read-only `attachments/` store (sibling of clone and task worktrees) populated from file drops, cited host paths, and URL captures (MarkItDown companions), citable by ideation (`@attachment:{id}`) and readable by workflow stage agents.
+   - **Step 12.3:** Conversational UI Unification, Review Room & Task Detail Ergonomics, Inspector Grouping & Running State Hygiene (formerly Step 11.19) — reusing `AgentQuestionTurnCard` across Question Inbox and Task Inspector; fixing stepper false "Pending" indicators during active runs; unifying chat bubble styling; sticky navigation, hierarchical directory tree view, and syntax highlighting in Review Room; in-flight task card in live telemetry; `<optgroup>` status grouping in Task Inspector (Running, Waiting for Slot, Waiting for Human, Closed); strictly filtering out closed/merged tasks in Review Room; dedicated "Changes" diff tab in Task Details with "Open in Review Room" action; Review Room link to Task Details; and clean pulsing running badges on Kanban cards mirroring the DAG view.
+   - **Step 12.4:** Ideation Quick Notes, Suggestions Backlog & Conversational Refinement (formerly Step 11.5) — quick notes backlog intake ("Think Now, Chat Later"); proposal card lifecycle (`Approve` $\rightarrow$ Open, `Keep as Suggestion` $\rightarrow$ Suggested, `Discard` $\rightarrow$ Delete); "Refine in Ideation" pre-seeded chat; scoped `edit_task` tools; 24h draft pruning.
+
+2. **Tier 2: Intelligence, Efficiency & Quality Gates:**
+   - **Step 12.5:** Heterogeneous Dual Model Role Configuration & Difficulty Escalation (formerly Step 11.1) — Architect/Reviewer model (e.g. Qwen 3.8 27B) for ideation, review, code review; Coder model (e.g. Qwen 3.6 35B A3B) for fast coding; dynamic difficulty escalation for difficult/expert tasks.
+   - **Step 12.6:** Smart CLI & Build Tool Output Filtering (Context Compression) (formerly Step 11.3) — compiler and test noise suppression for 95% token savings, workspace path relativization, and preserving raw transcripts on disk.
+   - **Step 12.7:** Free & Open-Source SAST Quality Gate via Microsoft DevSkim CLI (formerly Step 11.4) — deterministic SAST quality gate using Microsoft DevSkim CLI across C#, JS/TS, Python, Go; SARIF report parsing; and automatic loopback routing with diagnostics.
+
+3. **Tier 3: Deep Integrations & Remote Experience:**
+   - **Step 12.8:** Mobile-Responsive Web UI & Remote Tailscale Experience (formerly Step 11.6) — off-canvas hamburger navigation drawer, touch targets $\ge 44\text{px}$, bottom sheet drawer, and SignalR reconnect resilience over Tailscale.
+   - **Step 12.9:** Custom Repository Scripts for Deterministic Steps (Bash, Python, PowerShell) (formerly Step 11.8) — execution of custom repository scripts in `.nightcodeforge/scripts/` during deterministic stages with `PipelineDataBag` environment variable injection.
+   - **Step 12.10:** Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio (formerly Step 11.9) — first-class MCP tool discovery and execution via Microsoft Agent Framework standards (`ModelContextProtocol`), supporting streamable HTTP/SSE remote servers and isolated stdio MCP servers in `ContainerSandbox`.
+   - **Step 12.11:** GitHub Integration: Untrusted Intake Triage, PR Delivery & Task Mirroring (formerly Step 11.10) — modular GitHub integration: untrusted issue intake routed to sandboxed triage to generate proposals, Pull Request delivery mode with rich PR metadata, and bi-directional status mirroring.
+   - **Step 12.12:** Voice Support, Continuous Dictation & PWA Mobile Experience (formerly Step 11.11) — hands-free mobile voice operations via Web Speech API (`SpeechRecognition`) and Blazor JS Interop, continuous dictation with 1500ms silence detection, and PWA manifest for persistent mic permissions.
+
+---
+
+## 2. Implementation Steps Roadmap
+
+### Priority Tier 1: Real-Project Backlog Management & Dependencies (Top Priority)
+
+| Step | Specification | Focus & Key Deliverables | Status |
+| :--- | :--- | :--- | :--- |
+| **12.1** | [🔗 Step 12.1: Intelligent Task Dependency Detection in Ideation & Review Agents](phase-12/STEP_12_1_INTELLIGENT_TASK_DEPENDENCY_DETECTION.md) | Backlog context injection for Ideation and Stage 1 Review agents; system prompts requiring identification of prerequisites, shared interfaces, and ordering; auto-population of `dependsOnTitles` and DAG dependency chips in Kanban and Drawer. *(formerly Step 11.14)* | **Top Priority** |
+| **12.2** | [📎 Step 12.2: Task Attachments & Context Documents](phase-12/STEP_12_2_TASK_ATTACHMENTS_AND_CONTEXT_DOCS.md) | Workspace-level read-only `attachments/` directory (sibling of clone & worktrees): intake via file drop, cited host paths, and URL captures with MarkItDown markdown companions; SHA-256 dedup & reusability; `@attachment:{id}` citations in tasks; read-only `list_attachments`/`read_attachment` tools for ideation and the three workflow stage agents; attachments picker on `/tasks/new`. *(formerly Step 11.16)* | **Top Priority** |
+| **12.3** | [🎨 Step 12.3: Conversational UI Unification, Review Room & Task Detail Ergonomics, Inspector Grouping & Running State Hygiene](phase-12/STEP_12_3_CONVERSATIONAL_UI_UNIFICATION_AND_REVIEW_ERGONOMICS.md) | Reuse `AgentQuestionTurnCard` in `/inbox`, fix `PipelineStepper` false "Pending" state during active runs, unify `StageConversationViewer` with `Ideation` compact bubble layout, provide sticky file tree with `/inspector` and `/tasks/{id}` links, hierarchical tree view preventing path truncation, DiffViewer syntax highlighting, in-flight task display in live telemetry, `<optgroup>` status grouping in Task Inspector, strict pending reviews filtering in Review Room, dedicated "Changes" diff tab in Task Details with "Open in Review Room" button, and pulsing running markers on Kanban cards. *(formerly Step 11.19)* | **Top Priority** |
+| **12.4** | [💡 Step 12.4: Ideation Quick Notes, Suggestions & Conversational Refinement](phase-12/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md) | Quick notes backlog intake ("Think Now, Chat Later"); proposal card lifecycle (`Approve` $\rightarrow$ Open, `Keep as Suggestion` $\rightarrow$ Suggested, `Discard` $\rightarrow$ Delete); "Refine in Ideation" pre-seeded chat; scoped `edit_task` tools; 24h draft pruning. *(formerly Step 11.5)* | Planned |
+
+### Priority Tier 2: Intelligence, Efficiency & Quality Gates
+
+| Step | Specification | Focus & Key Deliverables | Status |
+| :--- | :--- | :--- | :--- |
+| **12.5** | [🧠 Step 12.5: Dual Model Role Configuration & Difficulty Escalation](phase-12/STEP_12_5_DUAL_MODEL_ROLE_CONFIGURATION_AND_DIFFICULTY_ESCALATION.md) | Heterogeneous model architecture: Architect/Reviewer model (e.g. Qwen 3.8 27B) for ideation, review, code review; Coder model (e.g. Qwen 3.6 35B A3B) for fast coding; dynamic difficulty escalation for difficult/expert tasks. *(formerly Step 11.1)* | Planned |
+| **12.6** | [🧹 Step 12.6: Smart CLI & Build Tool Output Filtering (Context Compression)](phase-12/STEP_12_6_SMART_CLI_AND_BASH_OUTPUT_FILTERING.md) | Semantic output filtering for verbose CLI tools (`dotnet build`, `dotnet test`, `npm`). Relativizes paths, strips SDK boilerplates, drops non-fatal warnings when errors exist, preserving raw transcripts on disk. *(formerly Step 11.3)* | Planned |
+| **12.7** | [🛡️ Step 12.7: Free & Open-Source SAST Quality Gate via Microsoft DevSkim CLI](phase-12/STEP_12_7_DEVSKIM_SAST_QUALITY_GATE.md) | Deterministic SAST quality gate using Microsoft DevSkim CLI across C#, JS/TS, Python, Go. SARIF report parsing, configurable severity thresholds, and automatic loopback routing with diagnostics. *(formerly Step 11.4)* | Planned |
+
+### Priority Tier 3: Deep Integrations & Remote Experience
+
+| Step | Specification | Focus & Key Deliverables | Status |
+| :--- | :--- | :--- | :--- |
+| **12.8** | [📱 Step 12.8: Mobile-Responsive Web UI & Remote Tailscale Experience](phase-12/STEP_12_8_MOBILE_RESPONSIVE_UI_AND_TAILSCALE_ACCESS.md) | First-class mobile/tablet responsiveness: off-canvas hamburger navigation drawer, touch targets $\ge 44\text{px}$, fixed-bottom ideation chat, mobile bottom sheet drawer, and SignalR reconnect resilience over Tailscale. *(formerly Step 11.6)* | Planned |
+| **12.9** | [📜 Step 12.9: Custom Repository Scripts for Deterministic Steps (Bash, Python, PowerShell)](phase-12/STEP_12_9_CUSTOM_SCRIPTS_FOR_DETERMINISTIC_STEPS.md) | Execution of custom repository scripts in `.nightcodeforge/scripts/` during deterministic stages across Bash, Python, and PowerShell. Injection of `PipelineDataBag` environment variables and output directives. *(formerly Step 11.8)* | Planned |
+| **12.10** | [⚡ Step 12.10: Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio](phase-12/STEP_12_10_MCP_HTTP_AND_CONTAINER_SANDBOX_INTEGRATION.md) | First-class MCP tool discovery and execution via Microsoft Agent Framework standards (`ModelContextProtocol`), streamable HTTP/SSE remote servers, and isolated stdio MCP servers in `ContainerSandbox`. *(formerly Step 11.9)* | Planned |
+| **12.11** | [🐙 Step 12.11: GitHub Integration (Untrusted Intake Triage, PR Delivery & Task Mirroring)](phase-12/STEP_12_11_GITHUB_INTEGRATION_ISSUES_AND_PRS.md) | Modular GitHub integration: untrusted issue intake routed to sandboxed triage to generate proposals, Pull Request delivery mode with rich PR metadata, and bi-directional status mirroring. *(formerly Step 11.10)* | Planned |
+| **12.12** | [🎙️ Step 12.12: Voice Support, Continuous Dictation & PWA Mobile Experience](phase-12/STEP_12_12_VOICE_SUPPORT_PWA_AND_MOBILE_SPEECH.md) | Hands-free mobile voice operations via Web Speech API (`SpeechRecognition`) and Blazor JS Interop. Continuous dictation with 1500ms silence detection and PWA configuration for persistent mic permissions. *(formerly Step 11.11)* | Planned |
+
+---
+
+## 3. High-Level Architecture Overview
+
+### 3.1 Step 12.1: Intelligent Task Dependency Detection
+```mermaid
+flowchart TD
+    BacklogContext["Inject <existing_workspace_tasks> Context Digest"] --> Ideation["Ideation Agent: Set dependsOnTitles"]
+    BacklogContext --> Stage1["Stage 1 Review Agent: Audit Prerequisites"]
+    Ideation --> AutoDAG["Create TaskDependency Records"]
+    Stage1 -- Prerequisite Missing --> AskHuman["Call 'ask' or block on unmerged prerequisite"]
+    AutoDAG --> DAGRun["DAG-Ordered Execution in Hangfire Queue"]
+```
+
+### 3.2 Step 12.2: Task Attachments & Context Documents
+```mermaid
+flowchart LR
+    subgraph Intake ["Intake Channels"]
+        Drop["File Drop / Web UI Upload"]
+        HostPath["Host Path Citation"]
+        UrlCap["URL Web Capture (MarkItDown)"]
+    end
+
+    subgraph Store ["Workspace Attachments Store (~/.nightcodeforge/wks/{id}/attachments)"]
+        Files["Immutable SHA-256 Storage"]
+        Meta["manifest.json & TaskAttachments Table"]
+    end
+
+    subgraph Agents ["Read-Only Agent Consumption"]
+        Ideation["Ideation Agent (@attachment:{id})"]
+        StageReview["Stage 1 Review Agent"]
+        StageImpl["Stage 2 Implementation Agent"]
+        StageFix["Stage 3 Code Review & Fix Agent"]
+    end
+
+    Intake --> Store
+    Store --> Agents
+```
+
+### 3.3 Step 12.5: Heterogeneous Dual Model Architecture
+```mermaid
+flowchart TD
+    TaskRouter{"Task Difficulty & Stage Classifier"}
+    TaskRouter -->|Ideation / Triage / Review / High Difficulty| ArchModel["Architect / Reviewer Model<br/>(e.g., Qwen 2.5 32B / 72B)"]
+    TaskRouter -->|Implementation / Fast Code Modifications| CoderModel["Coder Model<br/>(e.g., Qwen 2.5 Coder 32B)"]
+```
+
+### 3.4 Step 12.10: Model Context Protocol (MCP) Integration
+```mermaid
+flowchart LR
+    CrucibleHarness["Crucible Agent Harness"] --> MCPManager["McpClientManager"]
+    MCPManager -->|HTTP / SSE Transport| RemoteMcp["Remote MCP HTTP Servers"]
+    MCPManager -->|Stdio JSON-RPC Transport| ContainerMcp["Isolated Stdio MCP Servers<br/>(ContainerSandbox)"]
+    RemoteMcp --> Tools["Exported Tools (read/write/query)"]
+    ContainerMcp --> Tools
+```
+
+---
+
+## 4. Phase 12 Definition of Done (DoD) Checklist
+
+### Tier 1 Deliverables (Top Priority)
+- [ ] **Step 12.1 (Intelligent Task Dependency Detection):**
+  - [ ] Implement `IWorkspaceBacklogSummaryService` generating compact `<existing_workspace_tasks>` digests (excluding archived/closed tasks, capped to top 15–20 active tasks by priority order).
+  - [ ] Inject existing backlog digest into `IdeationService` system prompt with circular dependency prohibition.
+  - [ ] Inject existing backlog digest and dependency directives into Stage 1 Task Review directive in `CrucibleAgentHarness`.
+  - [ ] Direct Stage 1 Review Agent to populate `depends_on` in YAML frontmatter (with rationale under `## Dependencies`), enforce cycle rejection loopback, and verify `TaskMarkdownSyncService` dependency synchronization.
+  - [ ] Implement dynamic task suspension and full workflow reset in `TaskOrchestrator`: if Stage 1 reveals unclosed prerequisites, reset `task.Status = Open` and `CurrentStageId = TaskReview` to rerun full workflow once prerequisites close.
+  - [ ] Render clickable prerequisite and downstream dependency chips in `KanbanCard.razor` and `TaskDetailDrawer.razor`.
+
+- [ ] **Step 12.2 (Task Attachments & Context Documents):**
+  - [ ] Create `attachments/` store sibling to the canonical clone and task worktrees, with `manifest.json` registry and `TaskAttachments` / `TaskAttachmentLinks` EF Core tables.
+  - [ ] Implement `IAttachmentIntakeService`: file drop, cited host-path copy, and URL capture (SSRF-guarded) with MarkItDown markdown companions and SHA-256 deduplication.
+  - [ ] Register read-only `list_attachments` / `read_attachment` tools for ideation and the three workflow stage agents; inject attachments digests into ideation and stage prompts.
+  - [ ] Support `@attachment:{id}` citations in task descriptions, materialized as `TaskAttachmentLinks` on task creation (hard error on unknown IDs).
+  - [ ] Build Web UI: chat drop zone + attachment chips, workspace attachments panel with preview drawer, attachments picker on `/tasks/new`, and user-only delete.
+
+- [ ] **Step 12.3 (Conversational UI Unification, Review Room & Task Detail Ergonomics, Inspector Grouping & Running State Hygiene):**
+  - [ ] Enhance `AgentQuestionTurnCard.razor` with task metadata header (Task #Id, Title, Stage, Time) and reuse in `Inbox.razor` / `QuestionCard.razor`.
+  - [ ] Fix `PipelineStepper.razor` to preserve `StageExecutionStatus.Running` when `OverallStatus == TaskOverallStatus.InProgress` or stage conversation is running.
+  - [ ] Explicitly pass `CurrentStageStatus` in `TaskExecutionInspector.razor` to `<PipelineStepper>`.
+  - [ ] Unify `StageConversationViewer.razor` with `Ideation.razor` compact chat bubble architecture, avatar column, inline `<details class="think-trace">`, and compact `<details class="tool-trace">`.
+  - [ ] Style `.file-tree` in `Review.razor` with sticky positioning (`position: sticky; top: 1rem; max-height: calc(100vh - 2rem)`).
+  - [ ] Add deep link buttons to `/inspector/@_snapshot.TaskId` and `/tasks/@_snapshot.TaskId` in `Review.razor` header.
+  - [ ] Update `TaskReviewService.GetPendingReviewsAsync` and `Review.razor` to strictly filter out closed and merged tasks (`Status != TaskOverallStatus.Closed`).
+  - [ ] Implement `ReviewFileTreeBuilder` helper class in `NightCodeForge.Web.Services` creating hierarchical `ReviewFileTreeNode` tree with folder grouping and single-child compression.
+  - [ ] Update `Review.razor` left panel to render hierarchical tree view ensuring filename is always visible.
+  - [ ] Implement `ISyntaxHighlightingService` / `SimpleSyntaxHighlighter` tokenizing C#, TS/JS, Python, JSON, XML, Shell code lines into safe HTML spans.
+  - [ ] Integrate syntax highlighting in `DiffViewer.razor` for both Side-by-Side and Unified views.
+  - [ ] Implement `TaskInspectorGroupingHelper` in `NightCodeForge.Web.Services` and update `TaskExecutionInspector.razor` dropdown with `<optgroup>` categories (Running, In Flight waiting for slot, Waiting for Human, Closed) sorted by priority.
+  - [ ] Add an In-Flight Task Card / Banner in `ActiveOperationsHero.razor` on `/monitoring` showing active task metadata, active stage, and direct navigation links.
+  - [ ] Implement `ITaskDiffService` and add a "Changes" (Diff) tab in `TaskDetail.razor` embedding `DiffViewer.razor` for both active and closed/merged tasks.
+  - [ ] Add a prominent `🔍 Open in Review Room` primary action button in `TaskDetail.razor` header when `task.Status == TaskOverallStatus.Ready`.
+  - [ ] Add explicit running indicator badges (`● Running` with pulse glow animation) and active stage styling on `KanbanCard.razor` matching the DAG view in-flight indicator.
+
+- [ ] **Step 12.4 (Ideation Quick Notes & Suggestions):**
+  - [ ] Quick notes intake bar with instant save to `Suggested` state.
+  - [ ] Proposal card tri-state actions (`Approve`, `Keep as Suggestion`, `Discard`).
+  - [ ] "Refine in Ideation" action pre-seeding context and questions.
+  - [ ] Scoped `edit_task` agent tools.
+  - [ ] 24-hour draft pruning.
+
+### Tier 2 Deliverables (Intelligence, Efficiency & Quality Gates)
+- [ ] **Step 12.5 (Dual Model Role Configuration):**
+  - [ ] Architect/Reviewer model vs Coder model configuration in `AgentProfile`.
+  - [ ] Dynamic escalation on difficult tasks.
+- [ ] **Step 12.6 (Smart CLI Output Filtering):**
+  - [ ] Compiler and test noise suppression for verbose tools (`dotnet build`, `dotnet test`, `npm`).
+  - [ ] Workspace path relativization.
+- [ ] **Step 12.7 (DevSkim SAST Quality Gate):**
+  - [ ] Microsoft DevSkim CLI integration with SARIF report parsing.
+  - [ ] Loopback diagnostics on security violations.
+
+### Tier 3 Deliverables (Deep Integrations & Remote Experience)
+- [ ] **Step 12.8 (Mobile Responsive UI & Tailscale):**
+  - [ ] Off-canvas navigation drawer and touch targets $\ge 44\text{px}$.
+  - [ ] Mobile bottom sheet drawer and SignalR reconnect resilience.
+- [ ] **Step 12.9 (Custom Repository Scripts):**
+  - [ ] Support `.nightcodeforge/scripts/` (.sh, .py, .ps1).
+  - [ ] PipelineDataBag environment variable injection.
+- [ ] **Step 12.10 (MCP Integration):**
+  - [ ] Streamable HTTP/SSE and containerized stdio MCP transports.
+- [ ] **Step 12.11 (GitHub Integration):**
+  - [ ] Sandboxed issue triage, Pull Request delivery, and bi-directional status mirroring.
+- [ ] **Step 12.12 (Voice Support & PWA):**
+  - [ ] Web Speech API JS interop, 1500ms silence detection, and PWA manifest.

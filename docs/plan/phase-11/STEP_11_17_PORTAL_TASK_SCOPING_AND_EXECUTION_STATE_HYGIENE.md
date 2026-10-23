@@ -113,7 +113,7 @@ To distinguish between tasks originating from untrusted bug reports, conversatio
 ### 3.2 Executed Task Filtering for Inspector & Review Room (`HasExecutionRun` Flag)
 
 #### 3.2.1 Problem Analysis: Status Ambiguity & Rollback Scenarios
-In [Step 11.14 (Intelligent Task Dependency Detection)](phase-11/STEP_11_14_INTELLIGENT_TASK_DEPENDENCY_DETECTION.md), when the Stage 1 Task Review agent discovers unmerged prerequisite dependencies, the orchestrator suspends the task and **resets its status back to `TaskOverallStatus.Open`** until the prerequisites complete.
+In [Step 12.1 (Intelligent Task Dependency Detection)](../phase-12/STEP_12_1_INTELLIGENT_TASK_DEPENDENCY_DETECTION.md), when the Stage 1 Task Review agent discovers unmerged prerequisite dependencies, the orchestrator suspends the task and **resets its status back to `TaskOverallStatus.Open`** until the prerequisites complete.
 
 If task inspection were filtered merely by status (e.g. `Status != Open`), a rolled-back task would disappear from the inspector, preventing the developer from inspecting the Stage 1 conversation transcript, architectural reasoning, and dependency findings that caused the suspension.
 

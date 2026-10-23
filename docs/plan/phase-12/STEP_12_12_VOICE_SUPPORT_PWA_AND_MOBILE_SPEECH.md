@@ -1,7 +1,7 @@
-# 🎙️ Step 11.11: Voice Support, Continuous Dictation & PWA Mobile Experience
+# 🎙️ Step 12.12: Voice Support, Continuous Dictation & PWA Mobile Experience
 
-> **Phase 11 Implementation Step (Post-MVP)**  
-> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
+> **Phase 12 Implementation Step (Extend Features - Deep Integrations & Remote Experience)** *(formerly Step 11.11)*  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
@@ -18,7 +18,7 @@ Enable a fluid, hands-free voice interaction experience on mobile devices (smart
    - Support continuous stream listening, interim transcript feedback, and automatic silence detection (1500ms debounce) to auto-dispatch spoken prompts directly to the AI agent or capture quick notes without manual tapping.
 2. **First-Class Voice Integration across Core Workflows:**
    - **Ideation Chat ([Ideation.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Ideation.razor)):** Voice-dictate architectural ideas, questions, and feature requests directly into the LLM conversation loop.
-   - **Quick Notes & Backlog Intake ([Step 11.5](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-11/STEP_11_5_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)):** Instant one-tap voice memo capture saving spoken thoughts as `Suggested` tasks in the backlog.
+   - **Quick Notes & Backlog Intake ([Step 12.4](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)):** Instant one-tap voice memo capture saving spoken thoughts as `Suggested` tasks in the backlog.
    - **Human Question Inbox ([Inbox.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Inbox.razor)):** Answer pending agent clarification questions on the go without typing on mobile keyboards.
 3. **Progressive Web App (PWA) for Permission Persistence & Fullscreen UX:**
    - Configure a Web App Manifest (`manifest.webmanifest`) and Service Worker (`service-worker.js`) in [NightCodeForge.Web](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/NightCodeForge.Web.csproj).
@@ -32,7 +32,7 @@ Enable a fluid, hands-free voice interaction experience on mobile devices (smart
 ## 2. Problem Statement & Motivation
 
 ### 2.1 The Friction of Mobile Keyboard Input
-- Software developers often formulate ideas, review running tasks, or respond to agent questions while commuting, walking, or away from their workstation desk ([Step 11.6](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-11/STEP_11_6_MOBILE_RESPONSIVE_UI_AND_TAILSCALE_ACCESS.md)).
+- Software developers often formulate ideas, review running tasks, or respond to agent questions while commuting, walking, or away from their workstation desk ([Step 12.8](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_8_MOBILE_RESPONSIVE_UI_AND_TAILSCALE_ACCESS.md)).
 - Typing long technical requirements or explanatory answers on a smartphone soft keyboard is error-prone, slow, and frustrating.
 - Natural speech dictation is 3–4x faster than thumb typing and matches the conversational paradigm of the Ideation agent and human clarification triage.
 
@@ -217,7 +217,7 @@ A compact, versatile microphone button designed for inclusion into any text bar 
    - When listening, an animated live transcription pill floats above the input:  
      `[🎙️ "Ajoute une route API pour lister les tâches en cours..."]`
    - Upon silence timeout, automatically submits the question/instruction to `IIdeationService.SendPromptAsync(...)` without touching the screen.
-2. **Quick Notes Capture ([Step 11.5](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-11/STEP_11_5_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)):**
+2. **Quick Notes Capture ([Step 12.4](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)):**
    - Embedded in the top navigation bar quick-note action modal or floating action button.
    - Dictating a spontaneous idea immediately creates a `Suggested` task in the database with the transcribed text as the title/description.
 3. **Human Clarification Inbox ([QuestionCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Inbox/QuestionCard.razor)):**
@@ -486,7 +486,7 @@ flowchart TD
   - [ ] Create `VoiceInputButton.razor` with `OnSentenceCaptured`, `OnInterimChanged`, and `IAsyncDisposable` lifecycle.
   - [ ] Add CSS keyframe pulse animation and visual transcription badge to `app.css` / `theme.css`.
   - [ ] Integrate `VoiceInputButton` into [Ideation.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Ideation.razor) input bar with auto-submit capability.
-  - [ ] Integrate voice button into Quick Note capture bar / modal ([Step 11.5](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-11/STEP_11_5_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)).
+  - [ ] Integrate voice button into Quick Note capture bar / modal ([Step 12.4](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)).
   - [ ] Integrate voice button into [QuestionCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Inbox/QuestionCard.razor) in [Inbox.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Inbox.razor).
 - [ ] **PWA Configuration (Blazor Web App):**
   - [ ] Create `wwwroot/manifest.webmanifest` defining `standalone` mode, colors, and application icons.

@@ -1,7 +1,7 @@
-# 🔗 Step 11.14: Intelligent Task Dependency Detection in Ideation & Review Agents
+# 🔗 Step 12.1: Intelligent Task Dependency Detection in Ideation & Review Agents
 
-> **Phase 11 Implementation Step (Post-MVP)**  
-> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
+> **Phase 12 Implementation Step (Extend Features - Backlog Management & Dependencies)** *(formerly Step 11.14)*  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
 > *Target Components:* `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Crucible`, `src/NightCodeForge.Core/Workflow`, `src/NightCodeForge.Web/Components/Backlog` | *Status:* Planned
 
 ---

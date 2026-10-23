@@ -1,9 +1,9 @@
-# 📎 Step 11.16: Task Attachments & Context Documents (POCs, External Docs, URL Captures)
+# 📎 Step 12.2: Task Attachments & Context Documents (POCs, External Docs, URL Captures)
 
-> **Phase 11 Implementation Step (Post-MVP)**  
-> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
+> **Phase 12 Implementation Step (Extend Features - Backlog Management & Dependencies)** *(formerly Step 11.16)*  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
 > *Target Components:* `src/NightCodeForge.Core` (Domain, Interfaces, Repositories, Services), `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Tools`, `src/NightCodeForge.Web/Components/Ideation`, `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Infrastructure/Data` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
-> *Related Steps:* [Step 11.2 (Task Creation Page)](STEP_11_2_TASK_CREATION_PAGE_AND_MERGE_MODE.md), [Step 11.5 (Ideation Quick Notes & Refinement)](STEP_11_5_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)
+> *Related Steps:* [Step 11.2 (Task Creation Page)](../phase-11/STEP_11_2_TASK_CREATION_PAGE_AND_MERGE_MODE.md), [Step 12.4 (Ideation Quick Notes & Refinement)](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
