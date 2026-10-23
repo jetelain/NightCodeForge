@@ -265,6 +265,37 @@ public class OperationsTelemetryService : IOperationsTelemetryService
         }
     }
 
+    private readonly object _taskLock = new();
+    private ActiveTaskSummary? _activeTask;
+
+    public void RecordActiveTask(ActiveTaskSummary summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        lock (_taskLock)
+        {
+            _activeTask = summary;
+        }
+    }
+
+    public void ClearActiveTask(int? taskId = null)
+    {
+        lock (_taskLock)
+        {
+            if (taskId == null || _activeTask?.TaskId == taskId.Value)
+            {
+                _activeTask = null;
+            }
+        }
+    }
+
+    public ActiveTaskSummary? GetActiveTask()
+    {
+        lock (_taskLock)
+        {
+            return _activeTask;
+        }
+    }
+
     private static string AppendPreview(string? existing, string chunk, int maxLength)
     {
         if (string.IsNullOrEmpty(existing))

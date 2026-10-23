@@ -19,6 +19,7 @@ public class OperationsTelemetryUiService : IDisposable
 
     public LlmCallRecord? ActiveLlmCall { get; private set; }
     public ShellCommandRecord? ActiveShellCommand { get; private set; }
+    public ActiveTaskSummary? ActiveTask { get; private set; }
 
     public IReadOnlyList<LlmCallRecord> RecentLlmCalls { get; private set; } = Array.Empty<LlmCallRecord>();
     public IReadOnlyList<ShellCommandRecord> RecentShellCommands { get; private set; } = Array.Empty<ShellCommandRecord>();
@@ -61,6 +62,17 @@ public class OperationsTelemetryUiService : IDisposable
             _recentShellCommands.AddRange(_telemetryService.GetRecentShellCommands(50));
             RecentShellCommands = _recentShellCommands.ToArray();
             ActiveShellCommand = _telemetryService.GetActiveShellCommand() ?? RecentShellCommands.FirstOrDefault(c => c.Status == ShellCommandStatus.Running);
+
+            ActiveTask = _telemetryService.GetActiveTask();
+        }
+        NotifyStateChanged();
+    }
+
+    public void SetActiveTask(ActiveTaskSummary? task)
+    {
+        lock (_lock)
+        {
+            ActiveTask = task;
         }
         NotifyStateChanged();
     }

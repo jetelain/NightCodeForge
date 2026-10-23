@@ -1,7 +1,10 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Streaming;
+using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Hubs;
+using NightCodeForge.Infrastructure.Telemetry;
 using Xunit;
 
 namespace NightCodeForge.Infrastructure.Tests.Hubs;
@@ -15,6 +18,7 @@ public class SignalRActivityBridgeServiceTests
         var bridge = new SignalRActivityBridgeService(
             new InMemoryAgentActivityStreamer(),
             fakeHubContext,
+            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
             NullLogger<SignalRActivityBridgeService>.Instance);
 
         var evt = new AgentActivityEvent(
@@ -42,6 +46,7 @@ public class SignalRActivityBridgeServiceTests
         var bridge = new SignalRActivityBridgeService(
             new InMemoryAgentActivityStreamer(),
             fakeHubContext,
+            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
             NullLogger<SignalRActivityBridgeService>.Instance);
 
         var evt = new AgentActivityEvent(
@@ -68,6 +73,7 @@ public class SignalRActivityBridgeServiceTests
         var bridge = new SignalRActivityBridgeService(
             new InMemoryAgentActivityStreamer(),
             fakeHubContext,
+            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
             NullLogger<SignalRActivityBridgeService>.Instance);
 
         var startedEvt = new AgentActivityEvent(
@@ -117,6 +123,7 @@ public class SignalRActivityBridgeServiceTests
         var bridge = new SignalRActivityBridgeService(
             new InMemoryAgentActivityStreamer(),
             fakeHubContext,
+            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
             NullLogger<SignalRActivityBridgeService>.Instance);
 
         var stageEvt = new AgentActivityEvent(
@@ -159,6 +166,7 @@ public class SignalRActivityBridgeServiceTests
         var bridge = new SignalRActivityBridgeService(
             new InMemoryAgentActivityStreamer(),
             fakeHubContext,
+            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
             NullLogger<SignalRActivityBridgeService>.Instance);
 
         var evt = new AgentActivityEvent(
@@ -192,6 +200,7 @@ public class SignalRActivityBridgeServiceTests
         var bridge = new SignalRActivityBridgeService(
             new InMemoryAgentActivityStreamer(),
             fakeHubContext,
+            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
             NullLogger<SignalRActivityBridgeService>.Instance);
 
         var now = DateTime.UtcNow;
@@ -220,6 +229,7 @@ public class SignalRActivityBridgeServiceTests
         var bridge = new SignalRActivityBridgeService(
             streamer,
             fakeHubContext,
+            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
             NullLogger<SignalRActivityBridgeService>.Instance);
 
         using var cts = new CancellationTokenSource();
@@ -261,6 +271,111 @@ public class SignalRActivityBridgeServiceTests
         await cts.CancelAsync();
         await bridge.StopAsync(CancellationToken.None);
         await bridgeTask;
+    }
+
+    [Fact]
+    public async Task DispatchActivityEventAsync_StageStartedAndCompleted_RecordsAndClearsActiveTaskInTelemetry()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
+        var bridge = new SignalRActivityBridgeService(
+            new InMemoryAgentActivityStreamer(),
+            fakeHubContext,
+            telemetry,
+            NullLogger<SignalRActivityBridgeService>.Instance);
+
+        var startedEvt = new AgentActivityEvent(
+            SessionId: "sess-telemetry",
+            TaskId: 88,
+            StageId: "stage-implementation",
+            Kind: AgentActivityKind.StageStarted,
+            Content: "Starting stage",
+            Timestamp: DateTime.UtcNow,
+            Metadata: new Dictionary<string, object?>
+            {
+                ["StageKind"] = "Agentic",
+                ["TaskTitle"] = "Add In-Flight Telemetry",
+                ["Priority"] = 2,
+                ["QueueName"] = "llm-inference"
+            });
+
+        await bridge.DispatchActivityEventAsync(startedEvt);
+
+        var active = telemetry.GetActiveTask();
+        Assert.NotNull(active);
+        Assert.Equal(88, active.TaskId);
+        Assert.Equal("Add In-Flight Telemetry", active.TaskTitle);
+        Assert.Equal("stage-implementation", active.CurrentStageId);
+        Assert.Equal(2, active.Priority);
+        Assert.Equal("llm-inference", active.QueueName);
+
+        var intermediateCompletedEvt = new AgentActivityEvent(
+            SessionId: "sess-telemetry",
+            TaskId: 88,
+            StageId: "stage-implementation",
+            Kind: AgentActivityKind.StageCompleted,
+            Content: "Stage complete",
+            Timestamp: DateTime.UtcNow);
+
+        await bridge.DispatchActivityEventAsync(intermediateCompletedEvt);
+
+        // Intermediate stage completion preserves active task in telemetry
+        Assert.NotNull(telemetry.GetActiveTask());
+        Assert.Equal(88, telemetry.GetActiveTask()!.TaskId);
+
+        // Terminal stage completion clears active task and transitions worker to Idle
+        var terminalCompletedEvt = new AgentActivityEvent(
+            SessionId: "sess-telemetry",
+            TaskId: 88,
+            StageId: StandardStageIds.Merge,
+            Kind: AgentActivityKind.StageCompleted,
+            Content: "Task merged and completed",
+            Timestamp: DateTime.UtcNow);
+
+        await bridge.DispatchActivityEventAsync(terminalCompletedEvt);
+
+        Assert.Null(telemetry.GetActiveTask());
+    }
+
+    [Fact]
+    public async Task DispatchActivityEventAsync_SecondStageOfSameTask_PreservesStartedAt()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
+        var bridge = new SignalRActivityBridgeService(
+            new InMemoryAgentActivityStreamer(),
+            fakeHubContext,
+            telemetry,
+            NullLogger<SignalRActivityBridgeService>.Instance);
+
+        var firstStart = DateTime.UtcNow.AddMinutes(-10);
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 7, "stage-a", AgentActivityKind.StageStarted, "go", firstStart));
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 7, "stage-b", AgentActivityKind.StageStarted, "go", DateTime.UtcNow));
+
+        var active = telemetry.GetActiveTask();
+        Assert.NotNull(active);
+        Assert.Equal("stage-b", active.CurrentStageId);
+        Assert.Equal(firstStart, active.StartedAt);
+    }
+
+    [Fact]
+    public async Task DispatchActivityEventAsync_ErrorAndInterrupted_ClearActiveTask()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
+        var bridge = new SignalRActivityBridgeService(
+            new InMemoryAgentActivityStreamer(),
+            fakeHubContext,
+            telemetry,
+            NullLogger<SignalRActivityBridgeService>.Instance);
+
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 8, "stage-a", AgentActivityKind.StageStarted, "go", DateTime.UtcNow));
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 8, "stage-a", AgentActivityKind.Error, "boom", DateTime.UtcNow));
+        Assert.Null(telemetry.GetActiveTask());
+
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 9, "stage-a", AgentActivityKind.StageStarted, "go", DateTime.UtcNow));
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 9, "stage-a", AgentActivityKind.Interrupted, "ask", DateTime.UtcNow));
+        Assert.Null(telemetry.GetActiveTask());
     }
 
     private class FakeHubContext : IHubContext<OrchestratorHub, IOrchestratorHubClient>

@@ -33,7 +33,7 @@ public class BacklogPageTests : BunitContext
         _dependencyEngine = new DependencyResolutionEngine(_depStore);
         _markdownSync = new MockTaskMarkdownSyncService();
         _orchestrator = new MockTaskOrchestrator();
-        _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        _hubConnection = TestHubConnectionHelper.Create();
         _toastService = TestServices.CreateToastService();
         _diskSyncCoordinator = new MockTaskDiskSyncCoordinator();
 
@@ -50,6 +50,9 @@ public class BacklogPageTests : BunitContext
         Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
         Services.AddSingleton<ITaskDiskSyncCoordinator>(_diskSyncCoordinator);
         Services.AddSingleton<IDagLayoutEngine, DagLayoutEngine>();
+        var telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
+        var workerStateService = new WorkerStateService(telemetryMock.Object);
+        Services.AddSingleton(workerStateService);
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),

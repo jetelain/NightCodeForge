@@ -20,7 +20,7 @@ public enum BacklogKanbanColumn
 /// </summary>
 public static class BacklogStatusClassifier
 {
-    public static BacklogKanbanColumn GetColumn(ForgeTask task)
+    public static BacklogKanbanColumn GetColumn(ForgeTask task, int? activeTaskId = null)
     {
         ArgumentNullException.ThrowIfNull(task);
 
@@ -33,12 +33,16 @@ public static class BacklogStatusClassifier
         if (task.Status is TaskOverallStatus.Closed or TaskOverallStatus.Rejected or TaskOverallStatus.Failed or TaskOverallStatus.Cancelled)
             return BacklogKanbanColumn.Closed;
 
+        // An actively executing task is In-Flight, unless it already reached a terminal/review state above.
+        if (activeTaskId.HasValue && task.Id == activeTaskId.Value)
+            return BacklogKanbanColumn.InFlight;
+
         if (task.Status is TaskOverallStatus.Reviewed or TaskOverallStatus.Implemented)
             return BacklogKanbanColumn.InFlight;
 
         if (task.Status == TaskOverallStatus.Open)
         {
-            // An Open task is only In-Flight if it has actually started execution
+            // An Open task is only In-Flight if it has actually started execution or is actively running
             if (task.HasExecutionRun && !string.IsNullOrWhiteSpace(task.CurrentStageId))
             {
                 return BacklogKanbanColumn.InFlight;
@@ -50,6 +54,6 @@ public static class BacklogStatusClassifier
         return BacklogKanbanColumn.Open;
     }
 
-    public static bool IsInFlight(ForgeTask task) => GetColumn(task) == BacklogKanbanColumn.InFlight;
-    public static bool IsOpenBacklog(ForgeTask task) => GetColumn(task) == BacklogKanbanColumn.Open;
+    public static bool IsInFlight(ForgeTask task, int? activeTaskId = null) => GetColumn(task, activeTaskId) == BacklogKanbanColumn.InFlight;
+    public static bool IsOpenBacklog(ForgeTask task, int? activeTaskId = null) => GetColumn(task, activeTaskId) == BacklogKanbanColumn.Open;
 }

@@ -18,7 +18,7 @@ public class QuestionCardTests : BunitContext
     {
         _orchestrator = new MockTaskOrchestrator();
         _toastService = TestServices.CreateToastService();
-        _workerState = new WorkerStateService();
+        _workerState = new WorkerStateService(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object);
 
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
         Services.AddSingleton(_toastService);
@@ -163,5 +163,38 @@ public class QuestionCardTests : BunitContext
 
         // Callback invoked
         Assert.Equal(42, submittedQuestionId);
+    }
+
+    private static IReadOnlyList<Question> CreateBatch() => new List<Question>
+    {
+        new() { Id = 101, TaskId = 20, BatchId = "b1", Prompt = "First?" },
+        new() { Id = 102, TaskId = 20, BatchId = "b1", Prompt = "Second?" }
+    };
+
+    [Fact]
+    public void BatchSubmit_WithPartialAnswers_ShowsWarning_AndDoesNotCallOrchestrator()
+    {
+        var cut = Render<QuestionCard>(p => p.Add(c => c.Questions, CreateBatch()));
+
+        cut.Find("#clarification-input-101").Input("only first");
+        cut.Find("#submit-all-btn-b1").Click();
+
+        Assert.Null(_orchestrator.LastSubmitAnswersCall);
+        Assert.Contains(_toastService.Toasts, t => t.Title == "Incomplete Answers");
+    }
+
+    [Fact]
+    public void BatchSubmit_WithAllAnswers_CallsOrchestratorWithAllQuestionIds()
+    {
+        var cut = Render<QuestionCard>(p => p.Add(c => c.Questions, CreateBatch()));
+
+        cut.Find("#clarification-input-101").Input("a1");
+        cut.Find("#clarification-input-102").Input("a2");
+        cut.Find("#submit-all-btn-b1").Click();
+
+        Assert.NotNull(_orchestrator.LastSubmitAnswersCall);
+        Assert.Equal(20, _orchestrator.LastSubmitAnswersCall.Value.TaskId);
+        Assert.Equal("a1", _orchestrator.LastSubmitAnswersCall.Value.Answers[101]);
+        Assert.Equal("a2", _orchestrator.LastSubmitAnswersCall.Value.Answers[102]);
     }
 }

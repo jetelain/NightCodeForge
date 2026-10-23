@@ -25,12 +25,12 @@ public class MonitoringPageTests : BunitContext
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
 
-        _workerState = new WorkerStateService();
-        _workspaceState = new WorkspaceStateService();
-        _taskRepository = new InMemoryTaskRepository();
-        _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
         _mockTelemetryService = new Mock<IOperationsTelemetryService>();
         _mockGatewayService = new Mock<IOllamaRouterGatewayService>();
+        _workerState = new WorkerStateService(_mockTelemetryService.Object);
+        _workspaceState = new WorkspaceStateService();
+        _taskRepository = new InMemoryTaskRepository();
+        _hubConnection = TestHubConnectionHelper.Create(workerStateService: _workerState);
 
         _mockTelemetryService.Setup(t => t.GetRecentLlmCalls(It.IsAny<int>())).Returns(new List<LlmCallRecord>());
         _mockTelemetryService.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(new List<ShellCommandRecord>());
@@ -545,5 +545,31 @@ public class MonitoringPageTests : BunitContext
         var cut = Render<Monitoring>();
         var table = cut.Find("#llm-calls-history");
         Assert.Contains("Tokens (Context / Output)", table.TextContent);
+    }
+
+    [Fact]
+    public void ActiveOperationsHero_RendersActiveTaskCard_WhenIdleAndWhenRunning()
+    {
+        // 1. Initial idle state
+        var cut = Render<ActiveOperationsHero>();
+        var card = cut.Find("#active-task-card");
+        Assert.NotNull(card);
+        Assert.Contains("In-Flight Autonomous Task", card.TextContent);
+        Assert.Contains("Idle", card.TextContent);
+
+        // 2. Active running task set
+        _uiService.SetActiveTask(new ActiveTaskSummary(
+            42,
+            "Refactor Telemetry Pipeline",
+            "implementation",
+            1,
+            "InferenceQueue",
+            DateTime.UtcNow));
+
+        cut.WaitForState(() => cut.Find("#badge-active-task-running") != null);
+        Assert.Contains("#42", cut.Find("#active-task-card").TextContent);
+        Assert.Contains("Refactor Telemetry Pipeline", cut.Find("#active-task-card").TextContent);
+        Assert.Contains("implementation", cut.Find("#active-task-card").TextContent);
+        Assert.NotNull(cut.Find("#badge-active-task-running"));
     }
 }

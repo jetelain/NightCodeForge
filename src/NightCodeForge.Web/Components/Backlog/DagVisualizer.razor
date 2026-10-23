@@ -23,6 +23,7 @@
 
     <!-- Legend -->
     <div class="dag-legend">
+        <div class="legend-item"><span class="legend-dot status-running" style="background: #10b981; box-shadow: 0 0 6px #10b981;"></span><span>Running</span></div>
         <div class="legend-item"><span class="legend-dot status-suggested"></span><span>Suggested</span></div>
         <div class="legend-item"><span class="legend-dot status-ready-run"></span><span>Open (Ready)</span></div>
         <div class="legend-item"><span class="legend-dot status-blocked"></span><span>Open (Blocked)</span></div>
@@ -74,7 +75,7 @@
                     {
                         var task = node.Task;
 
-                        <g class="dag-node-group status-@task.Status.ToString().ToLowerInvariant() @(node.IsBlocked ? "node-blocked" : "") @(node.IsReadyToExecute ? "node-ready" : "") @(node.IsInFlight ? "node-inflight" : "")"
+                        <g class="dag-node-group status-@task.Status.ToString().ToLowerInvariant() @(node.IsRunning ? "node-running" : "") @(node.IsBlocked ? "node-blocked" : "") @(node.IsReadyToExecute ? "node-ready" : "") @(node.IsInFlight ? "node-inflight" : "")"
                            transform="@node.Transform"
                            @onclick="() => HandleNodeClick(task)"
                            style="cursor: pointer;">
@@ -86,7 +87,7 @@
                                   ry="8"
                                   fill="@node.FillColor"
                                   stroke="@node.StrokeColor"
-                                  stroke-width="@(node.IsReadyToExecute || task.IsWaitingForHuman || node.IsInFlight ? "2" : "1.2")"
+                                  stroke-width="@(node.IsRunning || node.IsReadyToExecute || task.IsWaitingForHuman || node.IsInFlight ? "2" : "1.2")"
                                   class="dag-node-box" />
 
                             <!-- Task ID -->
@@ -103,7 +104,12 @@
                             @SvgText(12, 42, node.TruncatedTitle, className: "dag-node-title", fill: "#f8fafc", fontSize: 12, fontWeight: "600")
 
                             <!-- Status Footer Badge -->
-                            @if (task.IsWaitingForHuman)
+                            @if (node.IsRunning)
+                            {
+                                <rect x="12" y="52" width="86" height="16" rx="3" fill="rgba(16, 185, 129, 0.35)" stroke="#10b981" stroke-width="1.2" />
+                                @SvgText(18, 64, "🚀 Running", fill: "#6ee7b7", fontSize: 10, fontWeight: "700")
+                            }
+                            else if (task.IsWaitingForHuman)
                             {
                                 <rect x="12" y="52" width="118" height="16" rx="3" fill="rgba(245, 158, 11, 0.25)" stroke="#f59e0b" stroke-width="0.8" />
                                 @SvgText(18, 64, "⚠️ Waiting Human", fill: "#fde68a", fontSize: 10, fontWeight: "600")
@@ -133,6 +139,7 @@
 @code {
     [Parameter] public IReadOnlyList<ForgeTask> Tasks { get; set; } = Array.Empty<ForgeTask>();
     [Parameter] public IReadOnlyList<(int TaskId, int DependsOnTaskId)> Dependencies { get; set; } = Array.Empty<(int, int)>();
+    [Parameter] public int? ActiveTaskId { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnTaskSelected { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnLinkDependencies { get; set; }
 
@@ -144,7 +151,7 @@
 
     protected override void OnParametersSet()
     {
-        _graphLayout = LayoutEngine.ComputeLayout(Tasks, Dependencies);
+        _graphLayout = LayoutEngine.ComputeLayout(Tasks, Dependencies, ActiveTaskId);
     }
 
     private void ZoomIn() => _zoomScale = Math.Min(2.0f, _zoomScale + 0.15f);

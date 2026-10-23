@@ -53,6 +53,8 @@ builder.Services.AddScoped<ITaskMutationService, TaskMutationService>();
 builder.Services.AddScoped<ITaskDiskSyncCoordinator, TaskDiskSyncCoordinator>();
 builder.Services.AddSingleton<IDagLayoutEngine, DagLayoutEngine>();
 builder.Services.AddScoped<OperationsTelemetryUiService>();
+builder.Services.AddSingleton<ISyntaxHighlightingService, SimpleSyntaxHighlighter>();
+builder.Services.AddScoped<ITaskDiffService, TaskDiffService>();
 
 // Register NightCodeForge domain and infrastructure services
 var defaultConnStr = builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=nightcodeforge.db;";

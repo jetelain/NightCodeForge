@@ -70,8 +70,7 @@ public partial class TaskReviewService : ITaskReviewService
             candidateTasks = wsTasks
                 .Where(t => t.HasExecutionRun && t.Status is TaskOverallStatus.Ready 
                                                          or TaskOverallStatus.Implemented 
-                                                         or TaskOverallStatus.Reviewed 
-                                                         or TaskOverallStatus.Closed)
+                                                         or TaskOverallStatus.Reviewed)
                 .OrderByDescending(t => t.UpdatedAt)
                 .ToList();
         }
@@ -80,8 +79,7 @@ public partial class TaskReviewService : ITaskReviewService
             var readyTasks = await _taskRepository.GetByStatusAsync(TaskOverallStatus.Ready, cancellationToken);
             var implementedTasks = await _taskRepository.GetByStatusAsync(TaskOverallStatus.Implemented, cancellationToken);
             var reviewedTasks = await _taskRepository.GetByStatusAsync(TaskOverallStatus.Reviewed, cancellationToken);
-            var closedTasks = await _taskRepository.GetByStatusAsync(TaskOverallStatus.Closed, cancellationToken);
-            candidateTasks = readyTasks.Concat(implementedTasks).Concat(reviewedTasks).Concat(closedTasks)
+            candidateTasks = readyTasks.Concat(implementedTasks).Concat(reviewedTasks)
                 .Where(t => t.HasExecutionRun)
                 .OrderByDescending(t => t.UpdatedAt)
                 .ToList();

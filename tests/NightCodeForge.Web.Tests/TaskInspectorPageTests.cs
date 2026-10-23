@@ -27,9 +27,9 @@ public class TaskInspectorPageTests : BunitContext
 
         _taskRepository = new InMemoryTaskRepository();
         _workflowRepository = new InMemoryWorkflowRepository(new[] { TestWorkflowFixtures.CreateStandardWorkflow() });
-        _workerState = new WorkerStateService();
+        _workerState = new WorkerStateService(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object);
         _workspaceState = new WorkspaceStateService();
-        _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        _hubConnection = TestHubConnectionHelper.Create(workerStateService: _workerState);
         _devQueueService = new FakeDevQueueService();
         _taskReviewService = new FakeTaskReviewService();
 
@@ -42,6 +42,7 @@ public class TaskInspectorPageTests : BunitContext
         Services.AddSingleton<IDevQueueService>(_devQueueService);
         Services.AddSingleton<ITaskReviewService>(_taskReviewService);
         Services.AddSingleton<ReviewCommentStateService>();
+        Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
     }
 
     [Fact]

@@ -18,7 +18,8 @@ public class DagLayoutEngine : IDagLayoutEngine
 
     public DagGraphLayout ComputeLayout(
         IReadOnlyList<ForgeTask> tasks,
-        IReadOnlyList<(int TaskId, int DependsOnTaskId)> dependencies)
+        IReadOnlyList<(int TaskId, int DependsOnTaskId)> dependencies,
+        int? activeTaskId = null)
     {
         var layout = new DagGraphLayout();
         if (tasks == null || tasks.Count == 0)
@@ -121,7 +122,7 @@ public class DagLayoutEngine : IDagLayoutEngine
                     if (x + NodeWidth > currentMaxX) currentMaxX = x + NodeWidth;
                     if (y + NodeHeight > currentMaxY) currentMaxY = y + NodeHeight;
 
-                    var node = CreateLayoutNode(t, x, y, rank, prereqMap[t.Id], taskMap);
+                    var node = CreateLayoutNode(t, x, y, rank, prereqMap[t.Id], taskMap, activeTaskId);
                     layout.Nodes.Add(node);
                 }
             }
@@ -160,7 +161,7 @@ public class DagLayoutEngine : IDagLayoutEngine
                 if (x + NodeWidth > currentMaxX) currentMaxX = x + NodeWidth;
                 if (y + NodeHeight > currentMaxY) currentMaxY = y + NodeHeight;
 
-                var node = CreateLayoutNode(t, x, y, 0, Array.Empty<int>(), taskMap);
+                var node = CreateLayoutNode(t, x, y, 0, Array.Empty<int>(), taskMap, activeTaskId);
                 layout.Nodes.Add(node);
             }
         }
@@ -229,10 +230,12 @@ public class DagLayoutEngine : IDagLayoutEngine
         double y,
         int rank,
         IReadOnlyList<int> prereqIds,
-        Dictionary<int, ForgeTask> taskMap)
+        Dictionary<int, ForgeTask> taskMap,
+        int? activeTaskId = null)
     {
         var blockers = prereqIds.Count(p => taskMap.TryGetValue(p, out var pt) && pt.Status != TaskOverallStatus.Closed);
-        var isInFlight = IsInFlight(task);
+        var isRunning = activeTaskId.HasValue && task.Id == activeTaskId.Value;
+        var isInFlight = isRunning || IsInFlight(task, activeTaskId);
         var isBlocked = task.Status == TaskOverallStatus.Open && !isInFlight && blockers > 0;
         var isReadyToExecute = task.Status == TaskOverallStatus.Open && !isInFlight && blockers == 0;
 
@@ -246,21 +249,23 @@ public class DagLayoutEngine : IDagLayoutEngine
             IsBlocked = isBlocked,
             BlockerCount = blockers,
             IsInFlight = isInFlight,
+            IsRunning = isRunning,
             IsReadyToExecute = isReadyToExecute,
-            FillColor = GetNodeFillColor(task, isBlocked, isInFlight),
-            StrokeColor = GetNodeStrokeColor(task, isBlocked, isInFlight),
-            StatusTextColor = GetStatusTextColor(task, isInFlight),
-            StatusLabel = GetStatusLabel(task, isBlocked, isReadyToExecute, blockers),
+            FillColor = GetNodeFillColor(task, isBlocked, isInFlight, isRunning),
+            StrokeColor = GetNodeStrokeColor(task, isBlocked, isInFlight, isRunning),
+            StatusTextColor = isRunning ? "#6ee7b7" : GetStatusTextColor(task, isInFlight),
+            StatusLabel = isRunning ? "🚀 Running" : GetStatusLabel(task, isBlocked, isReadyToExecute, blockers),
             PriorityBg = GetPriorityBg(task.Priority),
             PriorityText = GetPriorityText(task.Priority),
             TruncatedTitle = TruncateText(task.Title, 26)
         };
     }
 
-    public static bool IsInFlight(ForgeTask task) => BacklogStatusClassifier.IsInFlight(task);
+    public static bool IsInFlight(ForgeTask task, int? activeTaskId = null) => BacklogStatusClassifier.IsInFlight(task, activeTaskId);
 
-    public static string GetNodeFillColor(ForgeTask task, bool isBlocked, bool isInFlight)
+    public static string GetNodeFillColor(ForgeTask task, bool isBlocked, bool isInFlight, bool isRunning = false)
     {
+        if (isRunning) return "#064e3b";
         if (isBlocked) return "#241e2b";
         if (isInFlight) return "#2e1b4d";
         return task.Status switch
@@ -274,8 +279,9 @@ public class DagLayoutEngine : IDagLayoutEngine
         };
     }
 
-    public static string GetNodeStrokeColor(ForgeTask task, bool isBlocked, bool isInFlight)
+    public static string GetNodeStrokeColor(ForgeTask task, bool isBlocked, bool isInFlight, bool isRunning = false)
     {
+        if (isRunning) return "#10b981";
         if (isBlocked) return "#f59e0b";
         if (isInFlight) return "#a855f7";
         return task.Status switch

@@ -1,13 +1,19 @@
+using Moq;
+using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Services;
 
 namespace NightCodeForge.Web.Tests;
 
 public class WorkerStateServiceTests
 {
+    private readonly Mock<IOperationsTelemetryService> _telemetryMock = new();
+
     [Fact]
-    public void InitialState_ShouldBeIdleWithZeroPendingQuestions()
+    public void InitialState_WhenNoActiveTask_ShouldBeIdleWithZeroPendingQuestions()
     {
-        var service = new WorkerStateService();
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns((ActiveTaskSummary?)null);
+        var service = new WorkerStateService(_telemetryMock.Object);
 
         Assert.Equal(WorkerExecutionStatus.Idle, service.Current.Status);
         Assert.Null(service.Current.ActiveTaskId);
@@ -19,9 +25,36 @@ public class WorkerStateServiceTests
     }
 
     [Fact]
+    public void InitialState_WhenActiveTaskInTelemetry_ShouldHydrateRunningState()
+    {
+        var started = DateTime.UtcNow.AddMinutes(-5);
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(42, "Refactor Parser", "execution-stage", 1, "default", started));
+        var service = new WorkerStateService(_telemetryMock.Object);
+
+        Assert.Equal(WorkerExecutionStatus.Running, service.Current.Status);
+        Assert.Equal(42, service.Current.ActiveTaskId);
+        Assert.Equal("Refactor Parser", service.Current.ActiveTaskTitle);
+        Assert.Equal("execution-stage", service.Current.StageId);
+        Assert.Equal(started, service.Current.StartedAt);
+    }
+
+    [Fact]
+    public void Current_WhenInitialIdleButActiveTaskAppears_ShouldHydrateFromTelemetry()
+    {
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns((ActiveTaskSummary?)null);
+        var service = new WorkerStateService(_telemetryMock.Object);
+        Assert.Equal(WorkerExecutionStatus.Idle, service.Current.Status);
+
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(99, "Late Task", "stage-1", 1, "default", DateTime.UtcNow));
+        Assert.Equal(WorkerExecutionStatus.Running, service.Current.Status);
+        Assert.Equal(99, service.Current.ActiveTaskId);
+        Assert.Equal("Late Task", service.Current.ActiveTaskTitle);
+    }
+
+    [Fact]
     public void UpdateStatus_ShouldUpdateSnapshotAndNotify()
     {
-        var service = new WorkerStateService();
+        var service = new WorkerStateService(_telemetryMock.Object);
         var snapshot = new WorkerStatusSnapshot(
             WorkerExecutionStatus.Running,
             101,
@@ -49,7 +82,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void UpdateStatus_WhenNull_ShouldThrowArgumentNullException()
     {
-        var service = new WorkerStateService();
+        var service = new WorkerStateService(_telemetryMock.Object);
 
         Assert.Throws<ArgumentNullException>(() => service.UpdateStatus(null!));
     }
@@ -57,7 +90,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void UpdatePendingQuestions_ShouldPreserveSnapshotAndNotify()
     {
-        var service = new WorkerStateService();
+        var service = new WorkerStateService(_telemetryMock.Object);
         var initialSnapshot = new WorkerStatusSnapshot(
             WorkerExecutionStatus.WaitingForHuman,
             50,
@@ -78,5 +111,78 @@ public class WorkerStateServiceTests
         Assert.Equal(50, service.Current.ActiveTaskId);
         Assert.Equal("HumanClarificationGate", service.Current.StageKind);
         Assert.True(eventFired);
+    }
+
+    [Fact]
+    public void HandleWorkerStatus_Running_ShouldUpdateExecutionAndFireEvent()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+        var eventFired = false;
+        service.OnWorkerStateChanged += () => eventFired = true;
+
+        service.HandleWorkerStatus("running", 5, "stage-exec", "A100", "Run task 5", "task/5");
+
+        Assert.Equal(WorkerExecutionStatus.Running, service.Current.Status);
+        Assert.Equal(5, service.Current.ActiveTaskId);
+        Assert.Equal("Run task 5", service.Current.ActiveTaskTitle);
+        Assert.Equal("stage-exec", service.Current.StageId);
+        Assert.Equal("A100", service.Current.HardwareTarget);
+        Assert.Equal("task/5", service.Current.BranchName);
+        Assert.NotNull(service.Current.StartedAt);
+        Assert.True(eventFired);
+    }
+
+    [Fact]
+    public void HandleWorkerStatus_Idle_ShouldResetActiveTask()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+        service.HandleWorkerStatus("running", 5, "stage-exec", "A100", "Run task 5", "task/5");
+        Assert.Equal(5, service.Current.ActiveTaskId);
+
+        service.HandleWorkerStatus("idle", null, null, "A100");
+
+        Assert.Equal(WorkerExecutionStatus.Idle, service.Current.Status);
+        Assert.Null(service.Current.ActiveTaskId);
+        Assert.Null(service.Current.ActiveTaskTitle);
+        Assert.Null(service.Current.StageId);
+    }
+
+    [Fact]
+    public void Current_AfterExplicitIdle_ShouldNotResurrectStaleTelemetryTask()
+    {
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(5, "Stale", "s", 1, "q", DateTime.UtcNow));
+        var service = new WorkerStateService(_telemetryMock.Object);
+
+        service.HandleWorkerStatus("idle", null, null, "Local GPU");
+
+        Assert.Equal(WorkerExecutionStatus.Idle, service.Current.Status);
+        Assert.Null(service.Current.ActiveTaskId);
+    }
+
+    [Fact]
+    public void HandleWorkerStatus_DifferentTask_ShouldNotCarryOverPreviousTitleOrBranch()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+        service.HandleWorkerStatus("running", 5, "stage-a", "Local GPU", "Task five", "task/5");
+
+        service.HandleWorkerStatus("running", 6, "stage-a", "Local GPU");
+
+        Assert.Equal(6, service.Current.ActiveTaskId);
+        Assert.Null(service.Current.ActiveTaskTitle);
+        Assert.Null(service.Current.BranchName);
+    }
+
+    [Fact]
+    public void HandleWorkerStatus_SameTaskNextStage_ShouldKeepTitleAndStartTime()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+        service.HandleWorkerStatus("running", 5, "stage-a", "Local GPU", "Task five", "task/5");
+        var started = service.Current.StartedAt;
+
+        service.HandleWorkerStatus("running", 5, "stage-b", "Local GPU");
+
+        Assert.Equal("Task five", service.Current.ActiveTaskTitle);
+        Assert.Equal(started, service.Current.StartedAt);
+        Assert.Equal("stage-b", service.Current.StageId);
     }
 }

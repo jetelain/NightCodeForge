@@ -12,7 +12,8 @@ public interface IDagLayoutEngine
     /// </summary>
     DagGraphLayout ComputeLayout(
         IReadOnlyList<ForgeTask> tasks,
-        IReadOnlyList<(int TaskId, int DependsOnTaskId)> dependencies);
+        IReadOnlyList<(int TaskId, int DependsOnTaskId)> dependencies,
+        int? activeTaskId = null);
 }
 
 /// <summary>
@@ -46,6 +47,7 @@ public class DagLayoutNode
     public bool IsBlocked { get; set; }
     public int BlockerCount { get; set; }
     public bool IsInFlight { get; set; }
+    public bool IsRunning { get; set; }
     public bool IsReadyToExecute { get; set; }
 
     public string FillColor { get; set; } = "#162238";

@@ -1,6 +1,7 @@
 @page "/inspector"
 @page "/inspector/{TaskId:int?}"
 @implements IDisposable
+@using NightCodeForge.Web.Services
 @inject ITaskRepository TaskRepository
 @inject WorkerStateService WorkerState
 @inject WorkspaceStateService WorkspaceState
@@ -49,9 +50,17 @@
             {
                 <option value="0">No executed tasks found</option>
             }
-            @foreach (var t in _availableTasks)
+            else
             {
-                <option value="@t.Id">#@t.Id - @t.Title (@t.Status)</option>
+                @foreach (var group in GroupedTasks)
+                {
+                    <optgroup label="@group.Label">
+                        @foreach (var t in group.Tasks)
+                        {
+                            <option value="@t.Id">#@t.Id - @t.Title (@t.Status)</option>
+                        }
+                    </optgroup>
+                }
             }
         </select>
     </div>
@@ -89,6 +98,9 @@ else if (!_isLoadingTasks)
     private List<ForgeTask> _availableTasks = new();
     private bool _isLoadingTasks = true;
     private bool _disposed;
+
+    private IReadOnlyList<TaskInspectorGroup> GroupedTasks =>
+        TaskInspectorGroupingHelper.GroupTasks(_availableTasks, activeTaskId: WorkerState.Current.ActiveTaskId);
 
     protected override async Task OnInitializedAsync()
     {

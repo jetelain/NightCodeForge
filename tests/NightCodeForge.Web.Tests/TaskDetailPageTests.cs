@@ -2,6 +2,7 @@ using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
@@ -33,7 +34,7 @@ public class TaskDetailPageTests : BunitContext
         _devQueueService = new MockDevQueueService();
         _toastService = TestServices.CreateToastService();
         _workspaceState = new WorkspaceStateService();
-        _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        _hubConnection = TestHubConnectionHelper.Create();
         _orchestrator = new MockTaskOrchestrator();
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
         _mutationService = new TaskMutationService(
@@ -54,6 +55,15 @@ public class TaskDetailPageTests : BunitContext
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
         Services.AddSingleton<ITaskMutationService>(_mutationService);
+        var reviewService = new TaskReviewService(
+            _taskRepository,
+            _workspaceRepository,
+            new Moq.Mock<IGitWorkspaceManager>().Object,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskReviewService>.Instance);
+        Services.AddSingleton<ITaskReviewService>(reviewService);
+        Services.AddSingleton<ITaskDiffService>(new TaskDiffService(reviewService));
+        Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
+        Services.AddSingleton<ReviewCommentStateService>(new ReviewCommentStateService());
     }
 
     [Fact]
@@ -263,5 +273,51 @@ public class TaskDetailPageTests : BunitContext
         Assert.NotNull(_orchestrator.LastRejectCall);
         Assert.Equal(30, _orchestrator.LastRejectCall.Value.TaskId);
         Assert.Equal("Not viable anymore", _orchestrator.LastRejectCall.Value.Reason);
+    }
+
+    [Fact]
+    public async Task TaskDetail_WhenStatusReady_RendersOpenInReviewRoomButton()
+    {
+        var task = new ForgeTask { Id = 35, WorkspaceId = 1, Title = "Ready Task for Review", Status = TaskOverallStatus.Ready };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskDetail>(p => p.Add(t => t.TaskId, 35));
+
+        var reviewBtn = cut.Find("#btn-open-review-room");
+        Assert.NotNull(reviewBtn);
+        Assert.Contains("Open in Review Room", reviewBtn.TextContent);
+        Assert.Equal("/review/35", reviewBtn.GetAttribute("href"));
+    }
+
+    [Fact]
+    public async Task TaskDetail_WhenChangesTabClicked_LoadsAndRendersDiffViewer()
+    {
+        var bag = new PipelineDataBag();
+        var files = new List<FileDiffSummary>
+        {
+            new("src/Engine.cs", FileChangeType.Modified, 2, 1, "var a = 1;", "var a = 2;")
+        };
+        bag.Set(PipelineDataBagKeys.ReviewFiles, files);
+
+        var task = new ForgeTask
+        {
+            Id = 40,
+            WorkspaceId = 1,
+            Title = "Task with Diffs",
+            Status = TaskOverallStatus.Implemented,
+            PipelineDataJson = bag.ToJson()
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskDetail>(p => p.Add(t => t.TaskId, 40));
+
+        var changesTabBtn = cut.Find("#tab-btn-changes");
+        await changesTabBtn.ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        cut.WaitForState(() => cut.Find("#task-changes-panel") != null);
+        Assert.NotNull(cut.Find("#task-changes-panel"));
+        Assert.NotNull(cut.Find(".review-dir-node"));
+        Assert.NotNull(cut.Find(".review-file-node"));
+        Assert.Contains("Engine.cs", cut.Find("#task-changes-panel").TextContent);
     }
 }

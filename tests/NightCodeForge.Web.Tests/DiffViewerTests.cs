@@ -14,6 +14,7 @@ public class DiffViewerTests : BunitContext
     {
         _commentState = new ReviewCommentStateService();
         Services.AddSingleton(_commentState);
+        Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
     }
 
     [Fact]

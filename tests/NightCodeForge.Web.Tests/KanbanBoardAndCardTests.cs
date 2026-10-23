@@ -166,4 +166,55 @@ public class KanbanBoardAndCardTests : BunitContext
         // In-Flight column has 1 task (Executing Item)
         Assert.Equal("1", columns[2].QuerySelector(".column-count-badge")?.TextContent);
     }
+
+    [Fact]
+    public void KanbanCard_WhenRunning_RendersRunningBadgeAndGlowingBorder()
+    {
+        var task = new ForgeTask
+        {
+            Id = 99,
+            Title = "Active GPU Task",
+            Status = TaskOverallStatus.Open
+        };
+
+        var cut = Render<KanbanCard>(p => p
+            .Add(c => c.Task, task)
+            .Add(c => c.IsRunning, true));
+
+        // Check running card class
+        var card = cut.Find(".kanban-card");
+        Assert.Contains("card-running", card.ClassName);
+
+        // Check running badge and pulse dot
+        var badge = cut.Find(".badge-running");
+        Assert.NotNull(badge);
+        Assert.Contains("Running", badge.TextContent);
+        Assert.NotNull(badge.QuerySelector(".pulse-dot"));
+    }
+
+    [Fact]
+    public void KanbanCard_WhenRunning_RendersRunningBadgeStageNameAndBorder()
+    {
+        var task = new ForgeTask
+        {
+            Id = 101,
+            Title = "In-Flight Implementation Task",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "stage-codegen"
+        };
+
+        var cut = Render<KanbanCard>(p => p
+            .Add(c => c.Task, task)
+            .Add(c => c.IsRunning, true));
+
+        var card = cut.Find(".kanban-card");
+        Assert.Contains("card-running", card.ClassName);
+
+        var badge = cut.Find(".badge-running");
+        Assert.NotNull(badge);
+        Assert.Contains("Running", badge.TextContent);
+
+        // Stage badge rendered
+        Assert.Contains("Stage: stage-codegen", card.TextContent);
+    }
 }

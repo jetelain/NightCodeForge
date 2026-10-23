@@ -57,4 +57,19 @@ public interface IOperationsTelemetryService
     /// Retrieves the currently active in-flight shell command, if any.
     /// </summary>
     ShellCommandRecord? GetActiveShellCommand();
+
+    /// <summary>
+    /// Records an active task currently executing in the system.
+    /// </summary>
+    void RecordActiveTask(ActiveTaskSummary summary);
+
+    /// <summary>
+    /// Clears the active task, optionally verifying the task ID.
+    /// </summary>
+    void ClearActiveTask(int? taskId = null);
+
+    /// <summary>
+    /// Retrieves the currently active task summary, if any.
+    /// </summary>
+    ActiveTaskSummary? GetActiveTask();
 }

@@ -30,7 +30,7 @@ public class BacklogPrioritySortingAndFilteringTests : BunitContext
         _dependencyEngine = new DependencyResolutionEngine(_depStore);
         _markdownSync = new MockTaskMarkdownSyncService();
         _orchestrator = new MockTaskOrchestrator();
-        _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        _hubConnection = TestHubConnectionHelper.Create();
         _toastService = TestServices.CreateToastService();
 
         Services.AddSingleton(_workspaceState);
@@ -45,6 +45,9 @@ public class BacklogPrioritySortingAndFilteringTests : BunitContext
         Services.AddSingleton(_toastService);
         Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
         Services.AddSingleton<ITaskDiskSyncCoordinator>(new MockTaskDiskSyncCoordinator());
+        Services.AddSingleton<IDagLayoutEngine, DagLayoutEngine>();
+        var telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
+        Services.AddSingleton(new WorkerStateService(telemetryMock.Object));
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),

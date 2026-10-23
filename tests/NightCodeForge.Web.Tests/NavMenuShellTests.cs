@@ -10,7 +10,7 @@ public class NavMenuShellTests : BunitContext
 {
     public NavMenuShellTests()
     {
-        Services.AddSingleton(new WorkerStateService());
+        Services.AddSingleton(new WorkerStateService(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object));
     }
 
     [Fact]

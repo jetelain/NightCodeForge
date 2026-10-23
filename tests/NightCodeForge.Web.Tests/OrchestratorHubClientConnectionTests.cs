@@ -9,14 +9,14 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public void ConnectionState_DefaultsToDisconnected()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         Assert.Equal(HubConnectionState.Disconnected, connection.State);
     }
 
     [Fact]
     public void TriggerTokenDelta_InvokesEventDelegate()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         int receivedTaskId = 0;
         string receivedToken = "";
         bool receivedIsThinking = false;
@@ -38,7 +38,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public void TriggerToolExecution_InvokesEventDelegate()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         int receivedTaskId = 0;
         string receivedTool = "";
         string receivedArgs = "";
@@ -66,7 +66,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public void TriggerGitProgress_InvokesEventDelegate()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         int receivedTaskId = 0;
         string receivedOp = "";
         string receivedMsg = "";
@@ -88,7 +88,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public void TriggerWorkerStatus_InvokesEventDelegate()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         string receivedStatus = "";
         int? receivedTaskId = null;
         string? receivedStageId = null;
@@ -113,7 +113,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public void TriggerStageTransition_InvokesEventDelegate()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         int receivedTaskId = 0;
         string receivedStage = "";
         string receivedKind = "";
@@ -138,7 +138,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public void TriggerDeterministicGateResult_InvokesEventDelegate()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         int receivedTaskId = 0;
         string receivedGate = "";
         bool receivedPassed = false;
@@ -163,7 +163,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public void TriggerHostDirtyAlert_InvokesEventDelegate()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         int receivedTaskId = 0;
         string receivedBranch = "";
 
@@ -182,7 +182,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public void TriggerExecutionLog_InvokesEventDelegate()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         int receivedTaskId = 0;
         string receivedStage = "";
         string receivedLvl = "";
@@ -211,7 +211,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public void TriggerConnectionStateChanged_InvokesEventDelegate()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         HubConnectionState receivedState = HubConnectionState.Disconnected;
 
         connection.OnConnectionStateChanged += state => receivedState = state;
@@ -224,7 +224,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public async Task JoinAndLeaveTaskGroup_WhenDisconnected_DoNotThrow()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
 
         var exJoin = await Record.ExceptionAsync(() => connection.JoinTaskGroupAsync(10));
         var exLeave = await Record.ExceptionAsync(() => connection.LeaveTaskGroupAsync(10));
@@ -236,7 +236,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public async Task JoinTaskGroupAsync_TracksActiveTaskGroup()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         Assert.Empty(connection.ActiveTaskGroups);
 
         await connection.JoinTaskGroupAsync(42);
@@ -252,7 +252,7 @@ public class OrchestratorHubClientConnectionTests
     [InlineData(-1)]
     public async Task JoinTaskGroupAsync_WithNonPositiveTaskId_DoesNotTrackGroup(int invalidTaskId)
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         await connection.JoinTaskGroupAsync(invalidTaskId);
 
         Assert.Empty(connection.ActiveTaskGroups);
@@ -261,7 +261,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public async Task LeaveTaskGroupAsync_RemovesActiveTaskGroup()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         await connection.JoinTaskGroupAsync(42);
         await connection.JoinTaskGroupAsync(99);
 
@@ -275,7 +275,7 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public async Task DisposeAsync_WhenUninitialized_DoesNotThrow()
     {
-        var connection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        var connection = TestHubConnectionHelper.Create();
         var ex = await Record.ExceptionAsync(async () => await connection.DisposeAsync());
         Assert.Null(ex);
     }
@@ -283,22 +283,15 @@ public class OrchestratorHubClientConnectionTests
     [Fact]
     public void Constructor_EnforcesDependencies_FailsFastOnNull()
     {
-        var nav = new TestNavManager();
-        Assert.Throws<ArgumentNullException>(() => new OrchestratorHubClientConnection(null!, Moq.Mock.Of<Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection>>()));
-        Assert.Throws<ArgumentNullException>(() => new OrchestratorHubClientConnection(nav, null!));
+        var nav = new TestNavigationManager();
+        var logger = Moq.Mock.Of<Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection>>();
+        var workerState = new WorkerStateService(Moq.Mock.Of<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>());
 
-        var valid = new OrchestratorHubClientConnection(nav, Moq.Mock.Of<Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection>>());
+        Assert.Throws<ArgumentNullException>(() => new OrchestratorHubClientConnection(null!, logger, workerState));
+        Assert.Throws<ArgumentNullException>(() => new OrchestratorHubClientConnection(nav, null!, workerState));
+        Assert.Throws<ArgumentNullException>(() => new OrchestratorHubClientConnection(nav, logger, null!));
+
+        var valid = new OrchestratorHubClientConnection(nav, logger, workerState);
         Assert.NotNull(valid);
-
-        var singleParam = new OrchestratorHubClientConnection(nav);
-        Assert.NotNull(singleParam);
-    }
-
-    private sealed class TestNavManager : Microsoft.AspNetCore.Components.NavigationManager
-    {
-        public TestNavManager()
-        {
-            Initialize("http://localhost/", "http://localhost/");
-        }
     }
 }

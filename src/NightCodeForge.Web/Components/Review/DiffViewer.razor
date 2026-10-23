@@ -3,6 +3,7 @@
 @using DiffPlex.DiffBuilder.Model
 @using NightCodeForge.Web.Services
 @inject ReviewCommentStateService CommentState
+@inject ISyntaxHighlightingService SyntaxHighlighter
 @implements IDisposable
 
 <div class="diff-pane font-mono">
@@ -46,7 +47,7 @@
                         <tr class="diff-row">
                             <!-- Left: Old Side -->
                             <td class="diff-num old-num @GetLineTypeClass(oldLine?.Type)">@(oldLine?.Position?.ToString() ?? "")</td>
-                            <td class="diff-text old-text @GetLineTypeClass(oldLine?.Type)">@(oldLine?.Text ?? "")</td>
+                            <td class="diff-text old-text @GetLineTypeClass(oldLine?.Type)">@((MarkupString)SyntaxHighlighter.HighlightLine(oldLine?.Text ?? "", File.Path))</td>
 
                             <!-- Right: New Side with comment action -->
                             <td class="diff-action-cell">
@@ -56,7 +57,7 @@
                                 </button>
                             </td>
                             <td class="diff-num new-num @GetLineTypeClass(newLine?.Type)">@(newLine?.Position?.ToString() ?? "")</td>
-                            <td class="diff-text new-text @GetLineTypeClass(newLine?.Type)">@(newLine?.Text ?? "")</td>
+                            <td class="diff-text new-text @GetLineTypeClass(newLine?.Type)">@((MarkupString)SyntaxHighlighter.HighlightLine(newLine?.Text ?? "", File.Path))</td>
                         </tr>
 
                         @if (commentsOnLine.Any() || _activeInputLine == lineNum)
@@ -123,7 +124,7 @@
                             <td class="diff-num old-num">@(line.OldLineNumber?.ToString() ?? "")</td>
                             <td class="diff-num new-num">@(line.NewLineNumber?.ToString() ?? "")</td>
                             <td class="diff-prefix">@GetDiffPrefix(line.Type)</td>
-                            <td class="diff-text">@line.Text</td>
+                            <td class="diff-text">@((MarkupString)SyntaxHighlighter.HighlightLine(line.Text, File.Path))</td>
                         </tr>
 
                         @if (commentsOnLine.Any() || _activeInputLine == lineNum)

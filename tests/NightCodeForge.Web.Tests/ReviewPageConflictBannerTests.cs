@@ -46,6 +46,7 @@ public class ReviewPageConflictBannerTests : BunitContext
         Services.AddSingleton(_commentState);
         Services.AddSingleton(_toastService);
         Services.AddSingleton(_workspaceState);
+        Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
     }
 
     [Fact]

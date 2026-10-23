@@ -35,7 +35,7 @@ public class TranscriptComponentTests : BunitContext
             .Add(p => p.Trace, trace)
             .Add(p => p.InitiallyExpanded, false));
 
-        Assert.Contains("Agent Cognitive Reasoning Trace", cut.Markup);
+        Assert.Contains("Reasoning Trace", cut.Markup);
         Assert.Contains("tokens", cut.Markup);
         Assert.Empty(cut.FindAll(".think-content"));
 

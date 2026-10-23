@@ -278,7 +278,13 @@ public class TaskOrchestrator : ITaskOrchestrator
                 Streaming.AgentActivityKind.StageStarted,
                 $"Starting stage '{stage.StageId}'",
                 DateTime.UtcNow,
-                new Dictionary<string, object?> { ["StageKind"] = stage.Kind.ToString() }), cancellationToken);
+                new Dictionary<string, object?>
+                {
+                    ["StageKind"] = stage.Kind.ToString(),
+                    ["TaskTitle"] = task.Title,
+                    ["Priority"] = task.Priority,
+                    ["QueueName"] = stage.Kind == WorkflowStageKind.Deterministic ? "cpu-deterministic" : "llm-inference"
+                }), cancellationToken);
         }
         catch (Exception sex)
         {

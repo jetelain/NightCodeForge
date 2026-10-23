@@ -24,7 +24,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
 
         _taskRepository = new InMemoryTaskRepository();
         _workflowRepository = new InMemoryWorkflowRepository(new[] { TestWorkflowFixtures.CreateStandardWorkflow() });
-        _hubConnection = new OrchestratorHubClientConnection("/hubs/orchestrator");
+        _hubConnection = TestHubConnectionHelper.Create();
         _devQueueService = new FakeDevQueueService();
         _taskReviewService = new FakeTaskReviewService();
 
@@ -36,6 +36,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         Services.AddSingleton<ITaskReviewService>(_taskReviewService);
         Services.AddSingleton<ReviewCommentStateService>();
         Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
+        Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
     }
 
     [Fact]
@@ -649,6 +650,37 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             Assert.Contains("Revision History", cut.Markup);
             Assert.Contains("Version 1", cut.Markup);
             Assert.Contains("Created baseline", cut.Markup);
+        });
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_WhenActiveConversationRunning_RendersRunningStageStatusInStepper()
+    {
+        var task = new ForgeTask
+        {
+            Id = 106,
+            WorkspaceId = 1,
+            Title = "Active Stage Task",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            Conversations = new List<Conversation>
+            {
+                new()
+                {
+                    TaskId = 106,
+                    StageId = StandardStageIds.Implementation,
+                    Status = StageExecutionStatus.Running,
+                    StartedAt = DateTime.UtcNow
+                }
+            }
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 106));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(cut.Find(".spinner-pulse"));
         });
     }
 

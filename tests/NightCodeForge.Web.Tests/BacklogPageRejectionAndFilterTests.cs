@@ -58,7 +58,10 @@ public class BacklogPageRejectionAndFilterTests : BunitContext
         Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
         Services.AddSingleton<ITaskDiskSyncCoordinator>(new MockTaskDiskSyncCoordinator());
         Services.AddSingleton<IDagLayoutEngine, DagLayoutEngine>();
-        Services.AddSingleton(new OrchestratorHubClientConnection("/hubs/orchestrator"));
+        var telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
+        var workerState = new WorkerStateService(telemetryMock.Object);
+        Services.AddSingleton(workerState);
+        Services.AddSingleton(TestHubConnectionHelper.Create(workerStateService: workerState));
     }
 
     [Fact]

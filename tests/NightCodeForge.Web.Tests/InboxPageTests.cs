@@ -21,7 +21,7 @@ public class InboxPageTests : BunitContext
     {
         _taskRepository = new InMemoryTaskRepository();
         _workspaceState = new WorkspaceStateService();
-        _workerState = new WorkerStateService();
+        _workerState = new WorkerStateService(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object);
         _toastService = TestServices.CreateToastService();
         _orchestrator = new MockTaskOrchestrator();
 

@@ -209,10 +209,26 @@
 
         if (!string.IsNullOrEmpty(CurrentStageId) && OverallStatus != TaskOverallStatus.Closed && OverallStatus != TaskOverallStatus.Ready && OverallStatus != TaskOverallStatus.Failed)
         {
-            var effectiveStatus = CurrentStageStatus ?? StageExecutionStatus.Pending;
+            var order = ResolveStageOrder(CurrentStageId);
+            var existingStage = Stages.FirstOrDefault(s => s.SequenceOrder == order);
+            var existingStatus = existingStage?.Status;
+
+            StageExecutionStatus effectiveStatus;
             if (IsWaitingForHuman || CurrentStageStatus == StageExecutionStatus.WaitingForHuman)
             {
                 effectiveStatus = StageExecutionStatus.WaitingForHuman;
+            }
+            else if (CurrentStageStatus.HasValue)
+            {
+                effectiveStatus = CurrentStageStatus.Value;
+            }
+            else if (existingStatus.HasValue && existingStatus.Value != StageExecutionStatus.Pending)
+            {
+                effectiveStatus = existingStatus.Value;
+            }
+            else
+            {
+                effectiveStatus = StageExecutionStatus.Pending;
             }
             ApplyStageTransition(CurrentStageId, effectiveStatus);
         }

@@ -3,8 +3,48 @@
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Web.Services
 
-<div class="agent-question-turn-card @(IsWaitingForAnswer ? "waiting" : "answered")">
-    <!-- Header -->
+@{
+    var items = Questions?.Count > 0 ? Questions : new[] { new QuestionItem("Agent requested clarification.") };
+    var isMulti = items.Count > 1;
+}
+
+<div class="agent-question-turn-card question-card @(isMulti ? "batch-card" : "") @(IsWaitingForAnswer ? "waiting" : "answered")" id="@CardDomId">
+    <!-- Optional External Task Context Header -->
+    @if (HasExternalTaskContext)
+    {
+        <div class="question-card-header agent-question-task-context" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.85rem; padding-bottom: 0.65rem; border-bottom: 1px solid var(--border-subtle);">
+            <div class="header-left" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                @if (!string.IsNullOrWhiteSpace(StageId))
+                {
+                    <span class="badge-stage forge-badge badge-purple" id="badge-stage-@(QuestionId ?? TaskId ?? 0)">@StageId</span>
+                }
+                @if (!string.IsNullOrWhiteSpace(AgentProfileId))
+                {
+                    <span class="badge-profile forge-badge badge-indigo" id="badge-profile-@(QuestionId ?? TaskId ?? 0)">🤖 @AgentProfileId</span>
+                }
+                @if (TaskId.HasValue)
+                {
+                    <a href="/inspector/@TaskId.Value" class="task-link" id="task-link-@(QuestionId ?? TaskId.Value)" style="color: var(--accent-indigo); text-decoration: none; font-weight: 600; font-size: 0.88rem;">
+                        ForgeTask #@TaskId.Value: @(TaskTitle ?? $"Task #{TaskId.Value}")
+                    </a>
+                }
+                @if (!string.IsNullOrWhiteSpace(WorkspaceName))
+                {
+                    <span class="badge-workspace font-mono forge-badge badge-gray">📁 @WorkspaceName</span>
+                }
+                @if (isMulti || !string.IsNullOrWhiteSpace(BatchIdentifier))
+                {
+                    <span class="badge font-mono bg-info text-dark">📦 Batch (@items.Count questions)</span>
+                }
+            </div>
+            @if (AskedAt.HasValue)
+            {
+                <span class="timestamp font-mono text-muted" style="font-size: 0.78rem;">@AskedAt.Value.ToString("g")</span>
+            }
+        </div>
+    }
+
+    <!-- Card Header -->
     <div class="agent-question-header">
         <div class="agent-question-title-group">
             <span>❓</span>
@@ -29,33 +69,33 @@
     </div>
 
     <!-- Questions List -->
-    @{
-        var items = Questions?.Count > 0 ? Questions : new[] { new QuestionItem("Agent requested clarification.") };
-    }
-
     @for (int i = 0; i < items.Count; i++)
     {
         var index = i;
         var q = items[i];
-        var isMulti = items.Count > 1;
+        var curQId = QuestionIds != null && index < QuestionIds.Count ? QuestionIds[index] : (QuestionId ?? (index + 1));
 
-        <div class="agent-question-item-card">
-            <div class="agent-question-prompt">
-                @(isMulti ? $"{index + 1}. " : "")@q.Prompt
+        <div class="agent-question-item-card" id="batch-question-@curQId">
+            <div class="prompt-title agent-question-prompt d-flex align-items-center mb-1">
+                @if (isMulti)
+                {
+                    <span class="badge bg-secondary me-2">Q@(index + 1)</span>
+                }
+                <span>@q.Prompt</span>
             </div>
 
             @if (!string.IsNullOrWhiteSpace(q.Rationale))
             {
-                <div class="agent-question-rationale">
-                    <span>💡 <strong>Context:</strong> @q.Rationale</span>
+                <div class="rationale-text agent-question-rationale">
+                    <span>💡 <strong>Context / Rationale:</strong> @q.Rationale</span>
                 </div>
             }
 
             @if (q.Options is { Count: > 0 })
             {
-                <div class="agent-question-options-group">
+                <div class="agent-question-options-group options-container">
                     <span class="agent-question-options-label">Suggested Options:</span>
-                    <div class="agent-question-chips">
+                    <div class="agent-question-chips option-buttons">
                         @for (int optIdx = 0; optIdx < q.Options.Count; optIdx++)
                         {
                             var optionIndex = optIdx;
@@ -64,7 +104,7 @@
                             var isAnsweredSelected = !IsWaitingForAnswer && IsOptionSelected(index, optionIndex, optionText);
 
                             <button type="button"
-                                    class="agent-option-chip @(isSelected ? "selected" : "") @(isAnsweredSelected ? "answered-selected" : "")"
+                                    class="agent-option-chip option-btn @(isSelected ? "selected active" : "") @(isAnsweredSelected ? "answered-selected" : "")"
                                     disabled="@(!IsWaitingForAnswer)"
                                     @onclick="() => SelectOption(index, optionText)">
                                 @optionText
@@ -76,9 +116,20 @@
 
             @if (IsWaitingForAnswer)
             {
-                <div class="agent-question-input-row">
-                    <textarea class="agent-question-input"
-                              placeholder="Type your response or select an option above..."
+                <div class="agent-question-input-row form-group">
+                    <div class="form-label-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                        <span style="font-size: 0.8rem; color: var(--text-secondary);">Your Response / Clarification@(isMulti ? $" to Q{index + 1}" : ""):</span>
+                        <button type="button" 
+                                class="btn btn-sm btn-subtle snippet-helper-btn forge-btn forge-btn-secondary"
+                                style="font-size: 0.75rem; padding: 0.2rem 0.5rem;"
+                                title="Insert code snippet block"
+                                @onclick="() => InsertCodeSnippet(index)">
+                            💻 + Code Snippet
+                        </button>
+                    </div>
+                    <textarea id="clarification-input-@curQId"
+                              class="agent-question-input form-control-dark font-sans question-textarea"
+                              placeholder="@(isMulti ? $"Type your answer for question #{index + 1}..." : "Type your response or select an option above...")"
                               value="@_answerTexts.GetValueOrDefault(index, string.Empty)"
                               @oninput="(e) => OnInputChanged(index, e.Value?.ToString())"></textarea>
                 </div>
@@ -101,18 +152,30 @@
 
     @if (IsWaitingForAnswer)
     {
-        <div class="agent-question-actions">
+        var submitBtnId = !string.IsNullOrWhiteSpace(BatchIdentifier)
+            ? $"submit-all-btn-{BatchIdentifier}"
+            : $"submit-answer-btn-{(QuestionId ?? TaskId ?? 0)}";
+
+        <div class="agent-question-actions question-card-footer" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+            <div class="text-muted small" style="font-size: 0.78rem;">
+                ⚡ Submitting will resume autonomous execution on <code>llm-urgent</code>.
+            </div>
             <button type="button"
-                    class="forge-btn forge-btn-primary"
+                    class="forge-btn forge-btn-primary submit-answer-btn @(isMulti ? "submit-all-btn" : "")"
+                    id="@submitBtnId"
                     disabled="@(!CanSubmit || _isSubmitting)"
                     @onclick="SubmitClarificationAsync">
                 @if (_isSubmitting)
                 {
                     <span>Submitting...</span>
                 }
+                else if (isMulti)
+                {
+                    <span>Submit All Clarifications (@items.Count) ➔</span>
+                }
                 else
                 {
-                    <span>✓ Submit Clarification</span>
+                    <span>Submit &amp; Resume ForgeTask ➔</span>
                 }
             </button>
         </div>
@@ -126,6 +189,24 @@
     [Parameter] public bool IsWaitingForAnswer { get; set; }
     [Parameter] public EventCallback<string> OnAnswerSubmitted { get; set; }
     [Parameter] public EventCallback<IReadOnlyDictionary<int, string>> OnBatchAnswersSubmitted { get; set; }
+
+    // External task header context metadata
+    [Parameter] public int? TaskId { get; set; }
+    [Parameter] public string? TaskTitle { get; set; }
+    [Parameter] public string? WorkspaceName { get; set; }
+    [Parameter] public string? StageId { get; set; }
+    [Parameter] public string? AgentProfileId { get; set; }
+    [Parameter] public DateTime? AskedAt { get; set; }
+    [Parameter] public int? QuestionId { get; set; }
+    [Parameter] public IReadOnlyList<int>? QuestionIds { get; set; }
+    [Parameter] public string? BatchIdentifier { get; set; }
+
+    private bool HasExternalTaskContext =>
+        TaskId.HasValue || !string.IsNullOrWhiteSpace(TaskTitle) || !string.IsNullOrWhiteSpace(StageId) || !string.IsNullOrWhiteSpace(WorkspaceName);
+
+    private string CardDomId => !string.IsNullOrWhiteSpace(BatchIdentifier) 
+        ? $"question-card-batch-{BatchIdentifier}"
+        : (QuestionId.HasValue ? $"question-card-{QuestionId.Value}" : (TaskId.HasValue ? $"question-card-task-{TaskId.Value}" : "agent-question-card"));
 
     private readonly Dictionary<int, string> _selectedOptions = new();
     private readonly Dictionary<int, string> _answerTexts = new();
@@ -162,6 +243,14 @@
     {
         _selectedOptions[questionIndex] = option;
         _answerTexts[questionIndex] = option;
+    }
+
+    private void InsertCodeSnippet(int questionIndex)
+    {
+        var existing = _answerTexts.GetValueOrDefault(questionIndex, string.Empty);
+        var snippet = "```csharp\n// your code here\n```\n";
+        _answerTexts[questionIndex] = string.IsNullOrWhiteSpace(existing) ? snippet : $"{existing}\n{snippet}";
+        StateHasChanged();
     }
 
     private void OnInputChanged(int questionIndex, string? value)

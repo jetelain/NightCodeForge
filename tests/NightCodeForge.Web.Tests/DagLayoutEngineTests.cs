@@ -204,4 +204,18 @@ public class DagLayoutEngineTests
         Assert.Equal("#2a151b", nodeFailed.FillColor);
         Assert.Equal("#ef4444", nodeFailed.StrokeColor);
     }
+
+    [Fact]
+    public void ComputeLayout_WhenActiveTaskIdMatches_NodeIsRunningAndHighlighted()
+    {
+        var task5 = new ForgeTask { Id = 5, Title = "Active Task", Status = TaskOverallStatus.Open };
+        var layout = _engine.ComputeLayout(new[] { task5 }, Array.Empty<(int, int)>(), activeTaskId: 5);
+
+        var node5 = layout.Nodes.First(n => n.Task.Id == 5);
+        Assert.True(node5.IsRunning);
+        Assert.True(node5.IsInFlight);
+        Assert.Equal("🚀 Running", node5.StatusLabel);
+        Assert.Equal("#064e3b", node5.FillColor);
+        Assert.Equal("#10b981", node5.StrokeColor);
+    }
 }

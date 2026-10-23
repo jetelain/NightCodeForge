@@ -142,7 +142,7 @@
                 <!-- Tab 1: Dialogue -->
                 @if (_activeTab == "dialogue")
                 {
-                    <div class="transcript-dialogue">
+                    <div class="transcript-dialogue chat-messages-container" style="display: flex; flex-direction: column; gap: 0.75rem;">
                         @if (_selectedTranscriptDetail.Turns.Count == 0)
                         {
                             <!-- Fallback to rendered HTML from raw markdown if turn markers weren't present -->
@@ -154,55 +154,41 @@
                         {
                             @foreach (var turn in _selectedTranscriptDetail.Turns)
                             {
-                                var roleUpper = turn.Role.ToUpperInvariant();
-                                var bubbleClass = roleUpper switch
-                                {
-                                    "USER" => "user-turn",
-                                    "ASSISTANT" => "assistant-turn",
-                                    "TOOL_ERROR" => "tool-error-turn",
-                                    "TOOL" or "TOOL_RESULT" => "tool-turn",
-                                    _ => ""
-                                };
+                                var roleClass = ChatPresentationHelper.GetRoleBubbleClass(turn.Role);
+                                var avatarIcon = ChatPresentationHelper.GetRoleIcon(turn.Role);
+                                var authorName = ChatPresentationHelper.GetRoleAuthor(turn.Role);
 
-                                var roleIcon = roleUpper switch
-                                {
-                                    "USER" => "🧑 USER",
-                                    "ASSISTANT" => "🤖 ASSISTANT",
-                                    "THINKING" => "💭 COGNITIVE DELIBERATION",
-                                    "TOOL" => "🔧 TOOL INVOCATION",
-                                    "TOOL_RESULT" => "↳ TOOL RESULT",
-                                    "TOOL_ERROR" => "❌ TOOL ERROR",
-                                    "COMPACTION" => "✂️ CONTEXT COMPACTION",
-                                    _ => roleUpper
-                                };
-
-                                <div class="turn-bubble @bubbleClass">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                                            <strong style="font-size: 0.9rem; color: var(--text-primary);">@roleIcon</strong>
+                                <div class="chat-bubble @roleClass">
+                                    <div class="chat-avatar">@avatarIcon</div>
+                                    <div class="chat-bubble-body">
+                                        <div class="chat-bubble-header">
+                                            <span class="chat-author">@authorName</span>
+                                            @if (!string.IsNullOrWhiteSpace(turn.Offset))
+                                            {
+                                                <span class="chat-timestamp font-mono">@turn.Offset</span>
+                                            }
                                         </div>
-                                        <span class="badge-tag" style="margin: 0; font-size: 0.72rem;">@turn.Offset</span>
+
+                                        @if (!string.IsNullOrWhiteSpace(turn.ThinkingTrace))
+                                        {
+                                            <ThinkingTraceViewer Trace="@turn.ThinkingTrace" />
+                                        }
+
+                                        @if (turn.IsTool || !string.IsNullOrWhiteSpace(turn.ToolName))
+                                        {
+                                            <ToolCallCard ToolName="@turn.ToolName"
+                                                          Arguments="@turn.ToolArguments"
+                                                          Result="@(turn.ToolResult ?? turn.Content)"
+                                                          IsError="@turn.IsError"
+                                                          Offset="@turn.Offset" />
+                                        }
+                                        else if (!string.IsNullOrWhiteSpace(turn.Content))
+                                        {
+                                            <div class="chat-content-wrap forge-markdown turn-content-markdown" style="font-size: 0.88rem; line-height: 1.6;">
+                                                @MarkdownHelper.ToMarkupString(turn.Content)
+                                            </div>
+                                        }
                                     </div>
-
-                                    @if (!string.IsNullOrWhiteSpace(turn.ThinkingTrace))
-                                    {
-                                        <ThinkingTraceViewer Trace="@turn.ThinkingTrace" />
-                                    }
-
-                                    @if (turn.IsTool || !string.IsNullOrWhiteSpace(turn.ToolName))
-                                    {
-                                        <ToolCallCard ToolName="@turn.ToolName"
-                                                      Arguments="@turn.ToolArguments"
-                                                      Result="@(turn.ToolResult ?? turn.Content)"
-                                                      IsError="@turn.IsError"
-                                                      Offset="@turn.Offset" />
-                                    }
-                                    else if (!string.IsNullOrWhiteSpace(turn.Content))
-                                    {
-                                        <div class="turn-markdown" style="font-size: 0.92rem; line-height: 1.6; color: var(--text-primary);">
-                                            @MarkdownHelper.ToMarkupString(turn.Content)
-                                        </div>
-                                    }
                                 </div>
                             }
                         }

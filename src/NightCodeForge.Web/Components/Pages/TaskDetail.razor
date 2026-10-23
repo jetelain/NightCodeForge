@@ -4,13 +4,16 @@
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Repositories
 @using NightCodeForge.Core.Services
+@using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Components.Backlog
+@using NightCodeForge.Web.Components.Review
 @using NightCodeForge.Web.Services
 @inject ITaskRepository TaskRepository
 @inject ITaskDependencyStore DependencyStore
 @inject IWorkspaceRepository WorkspaceRepository
 @inject ITaskMutationService TaskMutationService
 @inject IDevQueueService DevQueueService
+@inject ITaskDiffService TaskDiffService
 @inject ToastService ToastService
 @inject NavigationManager Navigation
 @inject WorkspaceStateService WorkspaceState
@@ -102,6 +105,12 @@
 
                 <!-- Action Bar -->
                 <div class="header-action-bar" style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                    @if (_task.Status == TaskOverallStatus.Ready)
+                    {
+                        <a href="/review/@_task.Id" class="forge-btn forge-btn-primary" id="btn-open-review-room" style="text-decoration: none;">
+                            🔍 Open in Review Room
+                        </a>
+                    }
                     @if (_task.Status == TaskOverallStatus.Suggested)
                     {
                         <button type="button" class="forge-btn forge-btn-primary" @onclick="() => _showPromoteModal = true">
@@ -172,6 +181,13 @@
                             style="padding: 0.45rem 1rem; font-size: 0.88rem;"
                             @onclick='() => _activeTab = "execution"'>
                         ⚡ Execution Logs (@(_task.ExecutionRecords?.Count ?? 0) runs)
+                    </button>
+                    <button type="button"
+                            class="forge-btn @(_activeTab == "changes" ? "forge-btn-primary" : "forge-btn-secondary") btn-sm"
+                            id="tab-btn-changes"
+                            style="padding: 0.45rem 1rem; font-size: 0.88rem;"
+                            @onclick='SelectChangesTabAsync'>
+                        🔀 Changes
                     </button>
                 </div>
 
@@ -335,6 +351,61 @@
                                         <span>@log.Message</span>
                                     </div>
                                 }
+                            </div>
+                        }
+                    </div>
+                }
+
+                <!-- Tab 4: Changes (Diff) -->
+                @if (_activeTab == "changes")
+                {
+                    <div class="forge-card card-glass task-changes-card" style="padding: 1.5rem; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); background: var(--bg-card);" id="task-changes-panel">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border-subtle);">
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">
+                                    Code Changes &amp; Review Diff
+                                </h3>
+                                @if (_task.Status == TaskOverallStatus.Ready)
+                                {
+                                    <a href="/review/@_task.Id" class="forge-btn forge-btn-primary btn-xs" style="text-decoration: none; padding: 0.2rem 0.6rem; font-size: 0.78rem;">
+                                        🔍 Full Review Room
+                                    </a>
+                                }
+                            </div>
+                            <span class="text-secondary" style="font-size: 0.8rem;">@_diffFiles.Count files modified</span>
+                        </div>
+
+                        @if (_isLoadingChanges)
+                        {
+                            <div class="p-4 text-center text-muted" id="changes-loading-state">
+                                <span>Loading task code diff...</span>
+                            </div>
+                        }
+                        else if (_diffFiles.Count == 0)
+                        {
+                            <div class="p-4 text-center text-muted" id="diff-empty-state">
+                                <div style="font-size: 2rem; margin-bottom: 0.5rem;">📄</div>
+                                <p style="margin: 0;">No file modifications recorded in diff for this task.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="diff-workspace-grid" style="display: grid; grid-template-columns: 240px 1fr; gap: 1rem; align-items: start;">
+                                <div class="file-tree card-surface" style="padding: 0.75rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-md);">
+                                    <h4 style="font-size: 0.85rem; margin: 0 0 0.5rem 0; color: var(--text-secondary);">Changed Files (@_diffFiles.Count)</h4>
+                                    <div class="file-list" id="file-list">
+                                        @foreach (var node in _diffTreeNodes)
+                                        {
+                                            @RenderDiffTreeNode(node)
+                                        }
+                                    </div>
+                                </div>
+                                <div class="diff-viewer-panel card-surface" style="min-width: 0;" id="diff-viewer-panel">
+                                    @if (_selectedDiffFile != null)
+                                    {
+                                        <DiffViewer File="_selectedDiffFile" />
+                                    }
+                                </div>
                             </div>
                         }
                     </div>
@@ -549,6 +620,12 @@
     private bool _disposed;
     private string _activeTab = "spec";
 
+    // Changes Diff state
+    private IReadOnlyList<FileDiffSummary> _diffFiles = Array.Empty<FileDiffSummary>();
+    private List<ReviewFileTreeNode> _diffTreeNodes = new();
+    private FileDiffSummary? _selectedDiffFile;
+    private bool _isLoadingChanges;
+
     // Edit Title state
     private bool _isEditingTitle;
     private bool _isSavingTitle;
@@ -587,7 +664,14 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        _diffFiles = Array.Empty<FileDiffSummary>();
+        _diffTreeNodes = new();
+        _selectedDiffFile = null;
         await LoadTaskDataAsync();
+        if (_activeTab == "changes")
+        {
+            await LoadDiffFilesAsync();
+        }
     }
 
     private async Task LoadTaskDataAsync()
@@ -623,9 +707,122 @@
         }
     }
 
+    private async Task SelectChangesTabAsync()
+    {
+        _activeTab = "changes";
+        if (_task != null && _diffFiles.Count == 0)
+        {
+            await LoadDiffFilesAsync();
+        }
+    }
+
+    private async Task LoadDiffFilesAsync()
+    {
+        if (_task == null) return;
+        _isLoadingChanges = true;
+        try
+        {
+            var previousPath = _selectedDiffFile?.Path;
+            _diffFiles = await TaskDiffService.GetTaskDiffFilesAsync(_task.Id);
+            _diffTreeNodes = ReviewFileTreeBuilder.BuildTree(_diffFiles);
+            _selectedDiffFile = _diffFiles.FirstOrDefault(f => f.Path == previousPath) ?? _diffFiles.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load diff files for Task #{TaskId}", _task.Id);
+            _diffFiles = Array.Empty<FileDiffSummary>();
+            _diffTreeNodes = new();
+            _selectedDiffFile = null;
+        }
+        finally
+        {
+            _isLoadingChanges = false;
+        }
+    }
+
+    private RenderFragment RenderDiffTreeNode(ReviewFileTreeNode node) => builder =>
+    {
+        if (node.IsDirectory)
+        {
+            builder.OpenElement(0, "div");
+            builder.AddAttribute(1, "class", "review-dir-node");
+
+            builder.OpenElement(2, "div");
+            builder.AddAttribute(3, "class", "review-dir-header");
+            builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => node.IsExpanded = !node.IsExpanded));
+
+            builder.OpenElement(5, "span");
+            builder.AddAttribute(6, "class", "review-dir-chevron");
+            builder.AddContent(7, node.IsExpanded ? "▼" : "▶");
+            builder.CloseElement();
+
+            builder.OpenElement(8, "span");
+            builder.AddAttribute(9, "class", "review-dir-icon");
+            builder.AddContent(10, "📁 ");
+            builder.CloseElement();
+
+            builder.OpenElement(11, "span");
+            builder.AddAttribute(12, "class", "review-dir-name");
+            builder.AddContent(13, node.Name);
+            builder.CloseElement();
+
+            if (node.TotalAdditions > 0 || node.TotalDeletions > 0)
+            {
+                builder.OpenElement(14, "span");
+                builder.AddAttribute(15, "class", "file-counts ms-auto text-muted small");
+                builder.AddContent(16, $"+{node.TotalAdditions} -{node.TotalDeletions}");
+                builder.CloseElement();
+            }
+
+            builder.CloseElement(); // review-dir-header
+
+            if (node.IsExpanded)
+            {
+                builder.OpenElement(17, "div");
+                builder.AddAttribute(18, "class", "review-dir-children");
+                foreach (var child in node.Children)
+                {
+                    builder.AddContent(19, RenderDiffTreeNode(child));
+                }
+                builder.CloseElement();
+            }
+
+            builder.CloseElement(); // review-dir-node
+        }
+        else
+        {
+            var isSelected = _selectedDiffFile?.Path == node.File?.Path;
+            builder.OpenElement(0, "div");
+            builder.AddAttribute(1, "class", $"review-file-node file-item {(isSelected ? "active" : "")}");
+            builder.AddAttribute(2, "onclick", EventCallback.Factory.Create(this, () => _selectedDiffFile = node.File));
+
+            builder.OpenElement(3, "span");
+            builder.AddAttribute(4, "class", $"file-type badge-{node.File?.ChangeType.ToString().ToLowerInvariant()}");
+            builder.AddContent(5, node.File?.ChangeType.ToString()[0].ToString());
+            builder.CloseElement();
+
+            builder.OpenElement(6, "span");
+            builder.AddAttribute(7, "class", "review-file-name file-path");
+            builder.AddAttribute(8, "title", node.File?.Path);
+            builder.AddContent(9, node.Name);
+            builder.CloseElement();
+
+            builder.OpenElement(10, "span");
+            builder.AddAttribute(11, "class", "file-counts text-muted small");
+            builder.AddContent(12, $"+{node.File?.Additions} -{node.File?.Deletions}");
+            builder.CloseElement();
+
+            builder.CloseElement(); // review-file-node
+        }
+    };
+
     private async Task ReloadTaskAsync()
     {
         await LoadTaskDataAsync();
+        if (_activeTab == "changes")
+        {
+            await LoadDiffFilesAsync();
+        }
         StateHasChanged();
     }
 

@@ -2,7 +2,9 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Infrastructure.Hubs;
 
@@ -14,16 +16,19 @@ public class SignalRActivityBridgeService : BackgroundService
 {
     private readonly IAgentActivityStreamer _streamer;
     private readonly IHubContext<OrchestratorHub, IOrchestratorHubClient> _hubContext;
+    private readonly IOperationsTelemetryService _telemetryService;
     private readonly ILogger<SignalRActivityBridgeService> _logger;
 
     public SignalRActivityBridgeService(
         IAgentActivityStreamer streamer,
         IHubContext<OrchestratorHub, IOrchestratorHubClient> hubContext,
+        IOperationsTelemetryService telemetryService,
         ILogger<SignalRActivityBridgeService> logger)
     {
-        _streamer = streamer;
-        _hubContext = hubContext;
-        _logger = logger;
+        _streamer = streamer ?? throw new ArgumentNullException(nameof(streamer));
+        _hubContext = hubContext ?? throw new ArgumentNullException(nameof(hubContext));
+        _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -122,21 +127,39 @@ public class SignalRActivityBridgeService : BackgroundService
                     {
                         await _hubContext.Clients.All
                             .ReceiveWorkerStatus("Running", evt.TaskId, evt.StageId, kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU");
+
+                        var title = evt.Metadata?.TryGetValue("TaskTitle", out var tObj) == true && tObj != null ? tObj.ToString()! : $"Task #{evt.TaskId}";
+                        var priority = evt.Metadata?.TryGetValue("Priority", out var pObj) == true && int.TryParse(pObj?.ToString(), out var pVal) ? pVal : 1;
+                        var queue = evt.Metadata?.TryGetValue("QueueName", out var qObj) == true && qObj != null ? qObj.ToString()! : (kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "cpu-deterministic" : "llm-inference");
+                        var existing = _telemetryService.GetActiveTask();
+                        var startedAt = existing != null && existing.TaskId == evt.TaskId ? existing.StartedAt : evt.Timestamp;
+                        _telemetryService.RecordActiveTask(new ActiveTaskSummary(
+                            evt.TaskId,
+                            title,
+                            evt.StageId,
+                            priority,
+                            queue,
+                            startedAt));
                     }
                     else if (string.Equals(evt.StageId, StandardStageIds.Merge, StringComparison.OrdinalIgnoreCase) ||
                              string.Equals(evt.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
                     {
+                        _telemetryService.ClearActiveTask(evt.TaskId);
                         await _hubContext.Clients.All
                             .ReceiveWorkerStatus("Idle", null, null, "Local GPU");
                     }
                     break;
 
                 case AgentActivityKind.Interrupted:
+                    _telemetryService.ClearActiveTask(evt.TaskId);
                     await _hubContext.Clients.All
                         .ReceiveWorkerStatus("WaitingForHuman", evt.TaskId, evt.StageId, "Local GPU");
                     break;
 
                 case AgentActivityKind.Error:
+                    _telemetryService.ClearActiveTask(evt.TaskId);
+                    await _hubContext.Clients.All
+                        .ReceiveWorkerStatus("Idle", null, null, "Local GPU");
                     await _hubContext.Clients.Group(groupName)
                         .ReceiveExecutionLog(evt.TaskId, evt.StageId, "Error", evt.Content, evt.Timestamp);
                     break;

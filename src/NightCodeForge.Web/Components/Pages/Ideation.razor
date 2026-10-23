@@ -8,6 +8,8 @@
 @inject ToastService ToastService
 @inject IdeationSessionState Session
 @inject IJSRuntime JS
+@using NightCodeForge.Web.Components.Transcripts
+@using NightCodeForge.Web.Services
 @implements IDisposable
 
 <PageTitle>Ideation Chat - NightCodeForge</PageTitle>
@@ -232,41 +234,11 @@
                                     else if (part is ToolCallContentPart tcp)
                                     {
                                         var tool = tcp.ToolCall;
-                                        <details class="tool-trace @(tool.IsError ? "error" : "completed")" open="@tool.IsError">
-                                            <summary>
-                                                <span class="tool-trace-title">
-                                                    <span>@(GetToolIcon(tool.ToolName))</span>
-                                                    <span class="font-mono font-semibold">@tool.ToolName</span>
-                                                    <span class="text-muted font-mono tool-summary-text">@GetToolSummary(tool.Arguments)</span>
-                                                </span>
-                                                <span class="tool-trace-status">
-                                                    @if (tool.IsError)
-                                                    {
-                                                        <span class="forge-badge badge-danger tool-trace-badge">Failed</span>
-                                                    }
-                                                    else
-                                                    {
-                                                        <span class="forge-badge badge-success tool-trace-badge">✓ @(tool.DurationMs)ms</span>
-                                                    }
-                                                </span>
-                                            </summary>
-                                            <div class="tool-trace-content">
-                                                @if (!string.IsNullOrWhiteSpace(tool.Arguments))
-                                                {
-                                                    <div class="tool-trace-block">
-                                                        <span class="tool-trace-label">Parameters</span>
-                                                        <pre class="tool-trace-pre font-mono">@tool.Arguments</pre>
-                                                    </div>
-                                                }
-                                                @if (!string.IsNullOrWhiteSpace(tool.Result))
-                                                {
-                                                    <div class="tool-trace-block">
-                                                        <span class="tool-trace-label">Result @(tool.IsError ? "(Error)" : "")</span>
-                                                        <pre class="tool-trace-pre font-mono @(tool.IsError ? "result-error" : "")">@tool.Result</pre>
-                                                    </div>
-                                                }
-                                            </div>
-                                        </details>
+                                        <ToolCallCard ToolName="@tool.ToolName"
+                                                      Arguments="@tool.Arguments"
+                                                      Result="@tool.Result"
+                                                      IsError="@tool.IsError"
+                                                      Offset="@($"{tool.DurationMs}ms")" />
                                     }
                                     else if (part is QuestionContentPart qp)
                                     {
@@ -336,41 +308,11 @@
                                     <div class="tool-calls-list">
                                         @foreach (var tool in msg.ToolCalls)
                                         {
-                                            <details class="tool-trace @(tool.IsError ? "error" : "completed")" open="@tool.IsError">
-                                                <summary>
-                                                    <span class="tool-trace-title">
-                                                        <span>@(GetToolIcon(tool.ToolName))</span>
-                                                        <span class="font-mono font-semibold">@tool.ToolName</span>
-                                                        <span class="text-muted font-mono tool-summary-text">@GetToolSummary(tool.Arguments)</span>
-                                                    </span>
-                                                    <span class="tool-trace-status">
-                                                        @if (tool.IsError)
-                                                        {
-                                                            <span class="forge-badge badge-danger tool-trace-badge">Failed</span>
-                                                        }
-                                                        else
-                                                        {
-                                                            <span class="forge-badge badge-success tool-trace-badge">✓ @(tool.DurationMs)ms</span>
-                                                        }
-                                                    </span>
-                                                </summary>
-                                                <div class="tool-trace-content">
-                                                    @if (!string.IsNullOrWhiteSpace(tool.Arguments))
-                                                    {
-                                                        <div class="tool-trace-block">
-                                                            <span class="tool-trace-label">Parameters</span>
-                                                            <pre class="tool-trace-pre font-mono">@tool.Arguments</pre>
-                                                        </div>
-                                                    }
-                                                    @if (!string.IsNullOrWhiteSpace(tool.Result))
-                                                    {
-                                                        <div class="tool-trace-block">
-                                                            <span class="tool-trace-label">Result @(tool.IsError ? "(Error)" : "")</span>
-                                                            <pre class="tool-trace-pre font-mono @(tool.IsError ? "result-error" : "")">@tool.Result</pre>
-                                                        </div>
-                                                    }
-                                                </div>
-                                            </details>
+                                            <ToolCallCard ToolName="@tool.ToolName"
+                                                          Arguments="@tool.Arguments"
+                                                          Result="@tool.Result"
+                                                          IsError="@tool.IsError"
+                                                          Offset="@($"{tool.DurationMs}ms")" />
                                         }
                                     </div>
                                 }
@@ -417,46 +359,12 @@
                                     else if (part is ToolCallContentPart toolPart)
                                     {
                                         var tool = toolPart.ToolCall;
-                                        <details class="tool-trace @(tool.IsError ? "error" : (tool.IsCompleted ? "completed" : "running"))" open="@(tool.IsError || !tool.IsCompleted)">
-                                            <summary>
-                                                <span class="tool-trace-title">
-                                                    <span>@(GetToolIcon(tool.ToolName))</span>
-                                                    <span class="font-mono font-semibold">@tool.ToolName</span>
-                                                    <span class="text-muted font-mono tool-summary-text">@GetToolSummary(tool.Arguments)</span>
-                                                </span>
-                                                <span class="tool-trace-status">
-                                                    @if (!tool.IsCompleted)
-                                                    {
-                                                        <span class="status-dot running" style="margin-right: 0.35rem;"></span>
-                                                        <span class="forge-badge badge-indigo tool-trace-badge">Running</span>
-                                                    }
-                                                    else if (tool.IsError)
-                                                    {
-                                                        <span class="forge-badge badge-danger tool-trace-badge">Failed</span>
-                                                    }
-                                                    else
-                                                    {
-                                                        <span class="forge-badge badge-success tool-trace-badge">✓ @(tool.DurationMs)ms</span>
-                                                    }
-                                                </span>
-                                            </summary>
-                                            <div class="tool-trace-content">
-                                                @if (!string.IsNullOrWhiteSpace(tool.Arguments))
-                                                {
-                                                    <div class="tool-trace-block">
-                                                        <span class="tool-trace-label">Parameters</span>
-                                                        <pre class="tool-trace-pre font-mono">@tool.Arguments</pre>
-                                                    </div>
-                                                }
-                                                @if (!string.IsNullOrWhiteSpace(tool.Result))
-                                                {
-                                                    <div class="tool-trace-block">
-                                                        <span class="tool-trace-label">Result @(tool.IsError ? "(Error)" : "")</span>
-                                                        <pre class="tool-trace-pre font-mono @(tool.IsError ? "result-error" : "")">@tool.Result</pre>
-                                                    </div>
-                                                }
-                                            </div>
-                                        </details>
+                                        <ToolCallCard ToolName="@tool.ToolName"
+                                                      Arguments="@tool.Arguments"
+                                                      Result="@tool.Result"
+                                                      IsError="@tool.IsError"
+                                                      IsRunning="@(!tool.IsCompleted)"
+                                                      Offset="@($"{tool.DurationMs}ms")" />
                                     }
                                     else if (part is QuestionContentPart qp)
                                     {
@@ -974,7 +882,7 @@
         {
             var newConv = await TaskRepository.StartIdeationConversationAsync(
                 ws.Id,
-                title: TruncateString(prompt, 50));
+                title: ChatPresentationHelper.Truncate(prompt, 50));
             Session.ActiveConversationId = newConv.Id;
             Session.ActiveConversationTitle = newConv.Title;
             _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(ws.Id);
@@ -1485,46 +1393,7 @@
         }
     }
 
-    private static string GetToolIcon(string toolName) => toolName.ToLowerInvariant() switch
-    {
-        "bash" or "run_command" or "exec" or "cmd" => "⚡",
-        "read" or "read_file" or "view_file" or "cat" => "📄",
-        "write" or "edit" or "write_file" or "replace_file_content" => "✏️",
-        "grep_search" or "find_files" or "find" => "🔍",
-        "list_dir" or "ls" => "📁",
-        "web_search" => "🌐",
-        "propose_tasks" => "📋",
-        "ask" => "❓",
-        _ => "⚙️"
-    };
 
-    private static string GetToolSummary(string? argumentsJson)
-    {
-        if (string.IsNullOrWhiteSpace(argumentsJson)) return string.Empty;
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(argumentsJson);
-            var root = doc.RootElement;
-            if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
-            {
-                if (root.TryGetProperty("command", out var cmd)) return $"({TruncateString(cmd.GetString(), 45)})";
-                if (root.TryGetProperty("path", out var path)) return $"({TruncateString(path.GetString(), 45)})";
-                if (root.TryGetProperty("query", out var query)) return $"(\"{TruncateString(query.GetString(), 35)}\")";
-                if (root.TryGetProperty("prompt", out var prompt)) return $"(\"{TruncateString(prompt.GetString(), 35)}\")";
-            }
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            // If tool call arguments are incomplete or malformed JSON during streaming, return empty preview
-        }
-        return string.Empty;
-    }
-
-    private static string TruncateString(string? value, int maxLen)
-    {
-        if (string.IsNullOrEmpty(value)) return string.Empty;
-        return value.Length <= maxLen ? value : value[..maxLen] + "...";
-    }
 
     public void Dispose()
     {

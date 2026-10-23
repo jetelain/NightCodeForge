@@ -1,6 +1,8 @@
+@namespace NightCodeForge.Web.Components.Inbox
 @using System.Text.Json
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Components.Monitoring
 @inject ITaskOrchestrator TaskOrchestrator
 @inject ToastService ToastService
 @inject WorkerStateService WorkerState
@@ -8,191 +10,37 @@
 @if (IsSingleQuestion)
 {
     var singleQ = EffectiveQuestions[0];
-    <div class="question-card card-surface mb-4" id="question-card-@singleQ.Id">
-        <div class="question-card-header">
-            <div class="header-left">
-                <span class="badge-stage" id="badge-stage-@singleQ.Id">@singleQ.StageId</span>
-                <span class="badge-profile" id="badge-profile-@singleQ.Id">🤖 @(singleQ.AgentProfileId ?? "Default Profile")</span>
-                <a href="/inspector/@singleQ.TaskId" class="task-link" id="task-link-@singleQ.Id">
-                    ForgeTask #@singleQ.TaskId: @(singleQ.ForgeTask?.Title ?? $"Task #{singleQ.TaskId}")
-                </a>
-                @if (!string.IsNullOrWhiteSpace(singleQ.ForgeTask?.Workspace?.Name))
-                {
-                    <span class="badge-workspace font-mono">📁 @singleQ.ForgeTask.Workspace.Name</span>
-                }
-            </div>
-            <span class="timestamp font-mono">@singleQ.AskedAt.ToString("g")</span>
-        </div>
-
-        <div class="question-card-body">
-            <div class="prompt-box">
-                <h4 class="prompt-title">@singleQ.Prompt</h4>
-                @if (!string.IsNullOrWhiteSpace(singleQ.Rationale))
-                {
-                    <div class="rationale-text text-secondary mt-2">
-                        <strong>Context / Rationale:</strong> @singleQ.Rationale
-                    </div>
-                }
-            </div>
-
-            @{
-                var opts = GetOptions(singleQ);
-            }
-            @if (opts.Any())
-            {
-                <div class="options-container mb-3">
-                    <label class="form-label text-muted">Suggested Options:</label>
-                    <div class="option-buttons">
-                        @foreach (var opt in opts)
-                        {
-                            <button type="button"
-                                    class="btn btn-outline-indigo option-btn @(GetSelectedAnswer(singleQ.Id) == opt ? "active" : "")"
-                                    @onclick="() => SelectOption(singleQ.Id, opt)">
-                                @opt
-                            </button>
-                        }
-                    </div>
-                </div>
-            }
-
-            <div class="form-group mb-3">
-                <div class="form-label-row">
-                    <label class="form-label" for="clarification-input-@singleQ.Id">Your Response / Clarification:</label>
-                    <button type="button" 
-                            class="btn btn-sm btn-subtle snippet-helper-btn"
-                            title="Insert code snippet block"
-                            @onclick="() => InsertCodeSnippetFor(singleQ.Id)">
-                        💻 + Code Snippet
-                    </button>
-                </div>
-                <textarea id="clarification-input-@singleQ.Id"
-                          class="form-control-dark font-sans question-textarea" 
-                          rows="3"
-                          placeholder="Type your answer, guidance, or decision here..."
-                          value="@GetAnswerText(singleQ.Id)"
-                          @oninput="(e) => SetAnswerText(singleQ.Id, e.Value?.ToString() ?? string.Empty)"></textarea>
-            </div>
-        </div>
-
-        <div class="question-card-footer">
-            <div class="text-muted small">
-                ⚡ Submitting will immediately enqueue to <code>llm-urgent</code> with the original agent profile.
-            </div>
-            <button class="btn btn-primary submit-answer-btn" 
-                    id="submit-answer-btn-@singleQ.Id"
-                    disabled="@(string.IsNullOrWhiteSpace(GetEffectiveAnswer(singleQ.Id)) || _isSubmitting)"
-                    @onclick="() => SubmitSingleAnswerAsync(singleQ)">
-                @if (_isSubmitting)
-                {
-                    <span>Submitting...</span>
-                }
-                else
-                {
-                    <span>Submit &amp; Resume ForgeTask ➔</span>
-                }
-            </button>
-        </div>
-    </div>
+    <AgentQuestionTurnCard Questions="@(new[] { new QuestionItem(singleQ.Prompt, singleQ.Rationale, GetOptions(singleQ)) })"
+                           QuestionIds="@(new[] { singleQ.Id })"
+                           TaskId="@singleQ.TaskId"
+                           TaskTitle="@(singleQ.ForgeTask?.Title ?? $"Task #{singleQ.TaskId}")"
+                           WorkspaceName="@singleQ.ForgeTask?.Workspace?.Name"
+                           StageId="@singleQ.StageId"
+                           AgentProfileId="@singleQ.AgentProfileId"
+                           AskedAt="@singleQ.AskedAt"
+                           QuestionId="@singleQ.Id"
+                           IsWaitingForAnswer="true"
+                           OnAnswerSubmitted="(ans) => SubmitSingleAnswerAsync(singleQ, ans)" />
 }
 else if (EffectiveQuestions.Count > 1)
 {
     var firstQ = EffectiveQuestions[0];
     var batchIdentifier = firstQ.BatchId ?? firstQ.TaskId.ToString();
-    <div class="question-card batch-card card-surface mb-4" id="question-card-batch-@batchIdentifier">
-        <div class="question-card-header">
-            <div class="header-left">
-                <span class="badge-stage" id="badge-stage-@firstQ.Id">@firstQ.StageId</span>
-                <span class="badge-profile" id="badge-profile-@firstQ.Id">🤖 @(firstQ.AgentProfileId ?? "Default Profile")</span>
-                <a href="/inspector/@firstQ.TaskId" class="task-link" id="task-link-@firstQ.Id">
-                    ForgeTask #@firstQ.TaskId: @(firstQ.ForgeTask?.Title ?? $"Task #{firstQ.TaskId}")
-                </a>
-                @if (!string.IsNullOrWhiteSpace(firstQ.ForgeTask?.Workspace?.Name))
-                {
-                    <span class="badge-workspace font-mono">📁 @firstQ.ForgeTask.Workspace.Name</span>
-                }
-                <span class="badge font-mono bg-info text-dark">📦 Batch (@EffectiveQuestions.Count questions)</span>
-            </div>
-            <span class="timestamp font-mono">@firstQ.AskedAt.ToString("g")</span>
-        </div>
+    var batchItems = EffectiveQuestions.Select(q => new QuestionItem(q.Prompt, q.Rationale, GetOptions(q))).ToList();
+    var qIds = EffectiveQuestions.Select(q => q.Id).ToList();
 
-        <div class="question-card-body">
-            @for (int i = 0; i < EffectiveQuestions.Count; i++)
-            {
-                var q = EffectiveQuestions[i];
-                var qIdx = i + 1;
-                var qOpts = GetOptions(q);
-
-                <div class="batch-question-item mb-4 pb-3 border-bottom border-secondary border-opacity-25" id="batch-question-@q.Id">
-                    <div class="prompt-box mb-2">
-                        <div class="d-flex align-items-center mb-1">
-                            <span class="badge bg-secondary me-2">Q@(qIdx)</span>
-                            <h4 class="prompt-title mb-0">@q.Prompt</h4>
-                        </div>
-                        @if (!string.IsNullOrWhiteSpace(q.Rationale))
-                        {
-                            <div class="rationale-text text-secondary mt-1">
-                                <strong>Context / Rationale:</strong> @q.Rationale
-                            </div>
-                        }
-                    </div>
-
-                    @if (qOpts.Any())
-                    {
-                        <div class="options-container mb-3">
-                            <label class="form-label text-muted small">Suggested Options:</label>
-                            <div class="option-buttons">
-                                @foreach (var opt in qOpts)
-                                {
-                                    <button type="button"
-                                            class="btn btn-sm btn-outline-indigo option-btn @(GetSelectedAnswer(q.Id) == opt ? "active" : "")"
-                                            @onclick="() => SelectOption(q.Id, opt)">
-                                        @opt
-                                    </button>
-                                }
-                            </div>
-                        </div>
-                    }
-
-                    <div class="form-group mb-2">
-                        <div class="form-label-row">
-                            <label class="form-label small" for="clarification-input-@q.Id">Your Response to Q@(qIdx):</label>
-                            <button type="button" 
-                                    class="btn btn-sm btn-subtle snippet-helper-btn"
-                                    title="Insert code snippet block"
-                                    @onclick="() => InsertCodeSnippetFor(q.Id)">
-                                💻 + Code Snippet
-                            </button>
-                        </div>
-                        <textarea id="clarification-input-@q.Id"
-                                  class="form-control-dark font-sans question-textarea" 
-                                  rows="2"
-                                  placeholder="Type your answer for question #@qIdx..."
-                                  value="@GetAnswerText(q.Id)"
-                                  @oninput="(e) => SetAnswerText(q.Id, e.Value?.ToString() ?? string.Empty)"></textarea>
-                    </div>
-                </div>
-            }
-        </div>
-
-        <div class="question-card-footer">
-            <div class="text-muted small">
-                ⚡ Submitting all answers will resume ForgeTask #@firstQ.TaskId on <code>llm-urgent</code>.
-            </div>
-            <button class="btn btn-primary submit-answer-btn submit-all-btn" 
-                    id="submit-all-btn-@batchIdentifier"
-                    disabled="@(!CanSubmitBatch || _isSubmitting)"
-                    @onclick="SubmitBatchAsync">
-                @if (_isSubmitting)
-                {
-                    <span>Submitting Answers...</span>
-                }
-                else
-                {
-                    <span>Submit All Clarifications (@EffectiveQuestions.Count) ➔</span>
-                }
-            </button>
-        </div>
-    </div>
+    <AgentQuestionTurnCard Questions="@batchItems"
+                           QuestionIds="@qIds"
+                           BatchIdentifier="@batchIdentifier"
+                           TaskId="@firstQ.TaskId"
+                           TaskTitle="@(firstQ.ForgeTask?.Title ?? $"Task #{firstQ.TaskId}")"
+                           WorkspaceName="@firstQ.ForgeTask?.Workspace?.Name"
+                           StageId="@firstQ.StageId"
+                           AgentProfileId="@firstQ.AgentProfileId"
+                           AskedAt="@firstQ.AskedAt"
+                           QuestionId="@firstQ.Id"
+                           IsWaitingForAnswer="true"
+                           OnBatchAnswersSubmitted="SubmitBatchAnswersAsync" />
 }
 
 @code {
@@ -200,10 +48,6 @@ else if (EffectiveQuestions.Count > 1)
     [Parameter] public IReadOnlyList<Question>? Questions { get; set; }
     [Parameter] public EventCallback<int> OnAnswerSubmitted { get; set; }
     [Parameter] public EventCallback<IReadOnlyList<int>> OnBatchSubmitted { get; set; }
-
-    private readonly Dictionary<int, string> _answers = new();
-    private readonly Dictionary<int, string> _selectedAnswers = new();
-    private bool _isSubmitting;
 
     private IReadOnlyList<Question> EffectiveQuestions
     {
@@ -216,27 +60,6 @@ else if (EffectiveQuestions.Count > 1)
     }
 
     private bool IsSingleQuestion => EffectiveQuestions.Count == 1;
-
-    private bool CanSubmitBatch => EffectiveQuestions.Count > 0 &&
-        EffectiveQuestions.All(q => !string.IsNullOrWhiteSpace(GetEffectiveAnswer(q.Id)));
-
-    private string GetAnswerText(int questionId) =>
-        _answers.TryGetValue(questionId, out var text) ? text : string.Empty;
-
-    private void SetAnswerText(int questionId, string text)
-    {
-        _answers[questionId] = text;
-    }
-
-    private string? GetSelectedAnswer(int questionId) =>
-        _selectedAnswers.TryGetValue(questionId, out var sel) ? sel : null;
-
-    private string GetEffectiveAnswer(int questionId)
-    {
-        var text = GetAnswerText(questionId);
-        if (!string.IsNullOrWhiteSpace(text)) return text;
-        return GetSelectedAnswer(questionId) ?? string.Empty;
-    }
 
     private List<string> GetOptions(Question q)
     {
@@ -253,32 +76,10 @@ else if (EffectiveQuestions.Count > 1)
         }
     }
 
-    private void SelectOption(int questionId, string option)
+    private async Task SubmitSingleAnswerAsync(Question q, string answer)
     {
-        _selectedAnswers[questionId] = option;
-        _answers[questionId] = option;
-    }
-
-    private void InsertCodeSnippetFor(int questionId)
-    {
-        var snippetTemplate = "\n```csharp\n// Insert code snippet or patch\n```\n";
-        var current = GetAnswerText(questionId);
-        if (string.IsNullOrWhiteSpace(current))
-        {
-            _answers[questionId] = snippetTemplate.TrimStart();
-        }
-        else
-        {
-            _answers[questionId] = current + snippetTemplate;
-        }
-    }
-
-    private async Task SubmitSingleAnswerAsync(Question q)
-    {
-        var answer = GetEffectiveAnswer(q.Id);
         if (string.IsNullOrWhiteSpace(answer)) return;
 
-        _isSubmitting = true;
         try
         {
             await TaskOrchestrator.SubmitHumanAnswerAsync(q.Id, answer);
@@ -290,27 +91,36 @@ else if (EffectiveQuestions.Count > 1)
         {
             ToastService.Show("Submission Failed", $"Error submitting answer: {ex.Message}", ToastLevel.Error);
         }
-        finally
-        {
-            _isSubmitting = false;
-        }
     }
 
-    private async Task SubmitBatchAsync()
+    private async Task SubmitBatchAnswersAsync(IReadOnlyDictionary<int, string> batchAnswers)
     {
-        if (!CanSubmitBatch) return;
+        if (EffectiveQuestions.Count == 0) return;
 
-        _isSubmitting = true;
         try
         {
             var firstQ = EffectiveQuestions[0];
-            var dict = EffectiveQuestions.ToDictionary(q => q.Id, q => GetEffectiveAnswer(q.Id));
+            var dict = new Dictionary<int, string>();
+            for (int i = 0; i < EffectiveQuestions.Count; i++)
+            {
+                var q = EffectiveQuestions[i];
+                if (batchAnswers.TryGetValue(i, out var ans) && !string.IsNullOrWhiteSpace(ans))
+                {
+                    dict[q.Id] = ans;
+                }
+            }
+
+            if (dict.Count < EffectiveQuestions.Count)
+            {
+                ToastService.Show("Incomplete Answers", "Please answer all clarification questions in the batch before submitting.", ToastLevel.Warning);
+                return;
+            }
 
             await TaskOrchestrator.SubmitAnswersAsync(firstQ.TaskId, dict);
             ToastService.Show("Clarification Submitted", $"ForgeTask #{firstQ.TaskId} resumed on llm-urgent queue.", ToastLevel.Success);
             WorkerState.UpdatePendingQuestions(Math.Max(0, WorkerState.Current.PendingQuestionCount - EffectiveQuestions.Count));
 
-            var submittedIds = EffectiveQuestions.Select(q => q.Id).ToList();
+            var submittedIds = dict.Keys.ToList();
             await OnBatchSubmitted.InvokeAsync(submittedIds);
             foreach (var id in submittedIds)
             {
@@ -320,10 +130,6 @@ else if (EffectiveQuestions.Count > 1)
         catch (Exception ex)
         {
             ToastService.Show("Submission Failed", $"Error submitting answers: {ex.Message}", ToastLevel.Error);
-        }
-        finally
-        {
-            _isSubmitting = false;
         }
     }
 }

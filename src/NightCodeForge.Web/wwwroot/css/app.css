@@ -6140,6 +6140,150 @@ div.spinner-pulse {
     font-weight: 600;
 }
 
+/* ==========================================================================
+   Step 12.3: Conversational UI Unification, Review Ergonomics, Syntax Highlighting
+   ========================================================================== */
+
+/* Syntax Highlighting Tokens */
+.tok-keyword {
+    color: #818cf8; /* Indigo accent */
+    font-weight: 600;
+}
+
+.tok-type {
+    color: #38bdf8; /* Light sky blue */
+}
+
+.tok-string {
+    color: #34d399; /* Emerald/green */
+}
+
+.tok-comment {
+    color: #94a3b8; /* Muted slate */
+    font-style: italic;
+}
+
+.tok-number {
+    color: #fb923c; /* Warm orange */
+}
+
+.tok-punct {
+    color: #cbd5e1; /* Subtle slate */
+}
+
+/* Kanban Active Running Markers & Pulse Animation */
+.card-running {
+    border-color: var(--accent-teal, #14b8a6) !important;
+    box-shadow: 0 0 14px rgba(20, 184, 166, 0.28) !important;
+}
+
+.badge-running {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: rgba(20, 184, 166, 0.15);
+    border: 1px solid var(--accent-teal, #14b8a6);
+    color: #5eead4;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    border-radius: var(--radius-sm);
+}
+
+.pulse-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--accent-teal, #14b8a6);
+    box-shadow: 0 0 8px var(--accent-teal, #14b8a6);
+    animation: runningPulse 1.4s infinite ease-in-out;
+}
+
+@keyframes runningPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.35; transform: scale(1.35); }
+}
+
+/* Review Room: Sticky File Tree */
+.file-tree {
+    position: sticky;
+    top: 1rem;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+}
+
+/* Review Room: Hierarchical Directory Tree View */
+.review-dir-node {
+    margin-bottom: 0.25rem;
+}
+
+.review-dir-header {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.5rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    user-select: none;
+    transition: background 0.15s ease;
+}
+
+.review-dir-header:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+}
+
+.review-dir-chevron {
+    font-size: 0.65rem;
+    width: 12px;
+    display: inline-block;
+    color: var(--text-muted);
+}
+
+.review-dir-children {
+    padding-left: 0.85rem;
+    border-left: 1px dashed var(--border-subtle);
+    margin-left: 0.5rem;
+    margin-top: 0.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.review-file-node {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.3rem 0.5rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    transition: background 0.15s ease;
+}
+
+.review-file-node:hover {
+    background: rgba(99, 102, 241, 0.12);
+}
+
+.review-file-node.active {
+    background: rgba(99, 102, 241, 0.25);
+    border-left: 3px solid var(--accent-indigo);
+    font-weight: 600;
+}
+
+.review-file-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+
 
 
 

@@ -1,3 +1,5 @@
+using NightCodeForge.Core.Interfaces;
+
 namespace NightCodeForge.Web.Services;
 
 public enum WorkerExecutionStatus
@@ -26,23 +28,78 @@ public record WorkerStatusSnapshot(
 /// </summary>
 public class WorkerStateService
 {
-    private WorkerStatusSnapshot _current = new(
-        WorkerExecutionStatus.Idle,
-        null,
-        null,
-        null,
-        null,
-        "Local GPU",
-        0);
+    private readonly IOperationsTelemetryService _telemetryService;
+    private readonly object _lock = new();
+    private WorkerStatusSnapshot _current;
+    private bool _hasAuthoritativeStatus;
 
-    public WorkerStatusSnapshot Current => _current;
+    public WorkerStateService(IOperationsTelemetryService telemetryService)
+    {
+        _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+        var active = _telemetryService.GetActiveTask();
+        if (active != null)
+        {
+            _current = new WorkerStatusSnapshot(
+                WorkerExecutionStatus.Running,
+                active.TaskId,
+                active.TaskTitle,
+                active.CurrentStageId,
+                null,
+                "Local GPU",
+                0,
+                StartedAt: active.StartedAt);
+        }
+        else
+        {
+            _current = new WorkerStatusSnapshot(
+                WorkerExecutionStatus.Idle,
+                null,
+                null,
+                null,
+                null,
+                "Local GPU",
+                0);
+        }
+    }
+
+    public WorkerStatusSnapshot Current
+    {
+        get
+        {
+            lock (_lock)
+            {
+                // Telemetry is only a fallback until the hub reports an authoritative status;
+                // afterwards an explicit Idle must not be overridden by stale telemetry.
+                if (!_hasAuthoritativeStatus && _current.ActiveTaskId == null)
+                {
+                    var active = _telemetryService.GetActiveTask();
+                    if (active != null)
+                    {
+                        _current = _current with
+                        {
+                            Status = WorkerExecutionStatus.Running,
+                            ActiveTaskId = active.TaskId,
+                            ActiveTaskTitle = active.TaskTitle,
+                            StageId = active.CurrentStageId,
+                            StartedAt = active.StartedAt
+                        };
+                    }
+                }
+                return _current;
+            }
+        }
+    }
 
     public event Action? OnWorkerStateChanged;
 
     public void UpdateStatus(WorkerStatusSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        _current = snapshot;
+        lock (_lock)
+        {
+            _current = snapshot;
+            _hasAuthoritativeStatus = true;
+        }
         OnWorkerStateChanged?.Invoke();
     }
 
@@ -62,20 +119,32 @@ public class WorkerStateService
             _ => WorkerExecutionStatus.Idle
         };
 
-        var startedAt = execStatus == WorkerExecutionStatus.Running
-            ? (_current.Status == WorkerExecutionStatus.Running && _current.StartedAt.HasValue ? _current.StartedAt : DateTime.UtcNow)
-            : (DateTime?)null;
-
-        _current = _current with
+        lock (_lock)
         {
-            Status = execStatus,
-            ActiveTaskId = activeTaskId ?? (execStatus == WorkerExecutionStatus.Idle ? null : _current.ActiveTaskId),
-            ActiveTaskTitle = taskTitle ?? (execStatus == WorkerExecutionStatus.Idle ? null : _current.ActiveTaskTitle),
-            StageId = stageId ?? (execStatus == WorkerExecutionStatus.Idle ? null : _current.StageId),
-            HardwareTarget = string.IsNullOrWhiteSpace(hardwareTarget) ? _current.HardwareTarget : hardwareTarget,
-            BranchName = branchName ?? (execStatus == WorkerExecutionStatus.Idle ? null : _current.BranchName),
-            StartedAt = startedAt
-        };
+            var startedAt = execStatus == WorkerExecutionStatus.Running
+                ? (_current.Status == WorkerExecutionStatus.Running && _current.StartedAt.HasValue ? _current.StartedAt : DateTime.UtcNow)
+                : (DateTime?)null;
+
+            var taskChanged = activeTaskId.HasValue && activeTaskId != _current.ActiveTaskId;
+            if (taskChanged)
+            {
+                // A different task started: never carry over the previous task's title/branch/start time.
+                startedAt = execStatus == WorkerExecutionStatus.Running ? DateTime.UtcNow : null;
+            }
+            var keepPrevious = execStatus != WorkerExecutionStatus.Idle && !taskChanged;
+
+            _current = _current with
+            {
+                Status = execStatus,
+                ActiveTaskId = activeTaskId ?? (execStatus == WorkerExecutionStatus.Idle ? null : _current.ActiveTaskId),
+                ActiveTaskTitle = taskTitle ?? (keepPrevious ? _current.ActiveTaskTitle : null),
+                StageId = stageId ?? (execStatus == WorkerExecutionStatus.Idle ? null : _current.StageId),
+                HardwareTarget = string.IsNullOrWhiteSpace(hardwareTarget) ? _current.HardwareTarget : hardwareTarget,
+                BranchName = branchName ?? (keepPrevious ? _current.BranchName : null),
+                StartedAt = startedAt
+            };
+            _hasAuthoritativeStatus = true;
+        }
 
         OnWorkerStateChanged?.Invoke();
     }

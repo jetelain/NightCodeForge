@@ -107,6 +107,7 @@
                              TaskId="_task!.Id"
                              WorkflowStages="_workflowStages"
                              CurrentStageId="@_task.CurrentStageId"
+                             CurrentStageStatus="@CurrentStageStatus"
                              OverallStatus="_task.Status"
                              IsWaitingForHuman="_task.IsWaitingForHuman"
                              Conversations="_conversations"
@@ -362,6 +363,22 @@
     private TerminalConsole? _terminalRef;
     private PipelineStepper? _stepperRef;
 
+    private StageExecutionStatus? CurrentStageStatus
+    {
+        get
+        {
+            if (_task == null) return null;
+            if (_task.IsWaitingForHuman) return StageExecutionStatus.WaitingForHuman;
+            var activeConv = _conversations.LastOrDefault(c => string.Equals(c.StageId, _task.CurrentStageId, StringComparison.OrdinalIgnoreCase));
+            if (activeConv != null) return activeConv.Status;
+            if (WorkerState?.Current.ActiveTaskId == _task.Id) return StageExecutionStatus.Running;
+            if (_task.Status == TaskOverallStatus.Ready || _task.Status == TaskOverallStatus.Closed) return StageExecutionStatus.Completed;
+            if (_task.Status == TaskOverallStatus.Failed) return StageExecutionStatus.Failed;
+            return null;
+        }
+    }
+
+    private WorkerStateService? WorkerState => ServiceProvider.GetService<WorkerStateService>();
     private ITaskReviewService? TaskReviewService => ServiceProvider.GetService<ITaskReviewService>();
     private IDevQueueService? DevQueueService => ServiceProvider.GetService<IDevQueueService>();
 

@@ -5,7 +5,7 @@
 @using NightCodeForge.Web.Services
 @inject IServiceProvider ServiceProvider
 
-<div class="kanban-card task-card card-glass @(Task.IsWaitingForHuman ? "card-waiting-human" : "")"
+<div class="kanban-card task-card card-glass @(Task.IsWaitingForHuman ? "card-waiting-human" : "") @(CheckIsRunning() ? "card-running" : "")"
      @onclick="HandleClick"
      role="button"
      tabindex="0"
@@ -75,6 +75,19 @@
                 <span class="pulse-dot-amber"></span>
                 <span>Waiting for Human</span>
             </span>
+        }
+        else if (CheckIsRunning())
+        {
+            <span class="badge-running" id="badge-running-@Task.Id" title="Task actively running inference or execution">
+                <span class="pulse-dot"></span>
+                <span>Running</span>
+            </span>
+            @if (!string.IsNullOrWhiteSpace(Task.CurrentStageId))
+            {
+                <span class="forge-badge badge-purple" style="font-size: 0.75rem;">
+                    Stage: @Task.CurrentStageId
+                </span>
+            }
         }
         else if (Task.Status == TaskOverallStatus.Closed)
         {
@@ -166,6 +179,7 @@
     [Parameter, EditorRequired] public ForgeTask Task { get; set; } = default!;
     [Parameter] public IReadOnlyList<ForgeTask> AllTasks { get; set; } = Array.Empty<ForgeTask>();
     [Parameter] public IReadOnlyList<int> PrerequisiteIds { get; set; } = Array.Empty<int>();
+    [Parameter] public bool IsRunning { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnClick { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnPromote { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnReject { get; set; }
@@ -173,6 +187,14 @@
     [Parameter] public EventCallback<(ForgeTask Task, int NewPriority)> OnPriorityChanged { get; set; }
 
     private bool _showPriorityMenu;
+
+    private bool CheckIsRunning()
+    {
+        if (IsRunning) return true;
+        var workerState = ServiceProvider?.GetService<WorkerStateService>();
+        if (workerState?.Current?.ActiveTaskId == Task.Id) return true;
+        return false;
+    }
 
     private void TogglePriorityMenu()
     {

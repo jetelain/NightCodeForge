@@ -186,4 +186,32 @@ public class OperationsTelemetryServiceTests
         var finalRecent = _service.GetRecentLlmCalls(10);
         Assert.True(finalRecent.Count <= 5);
     }
+
+    [Fact]
+    public void RecordActiveTask_AndClear_ManagesActiveTaskState()
+    {
+        var summary = new ActiveTaskSummary(
+            TaskId: 42,
+            TaskTitle: "Implement In-Flight Hero",
+            CurrentStageId: "stage-implementation",
+            Priority: 1,
+            QueueName: "llm-urgent",
+            StartedAt: DateTime.UtcNow);
+
+        _service.RecordActiveTask(summary);
+
+        var active = _service.GetActiveTask();
+        Assert.NotNull(active);
+        Assert.Equal(42, active.TaskId);
+        Assert.Equal("Implement In-Flight Hero", active.TaskTitle);
+        Assert.Equal("stage-implementation", active.CurrentStageId);
+
+        // Clearing with mismatched ID does not clear
+        _service.ClearActiveTask(99);
+        Assert.NotNull(_service.GetActiveTask());
+
+        // Clearing with matching ID clears
+        _service.ClearActiveTask(42);
+        Assert.Null(_service.GetActiveTask());
+    }
 }

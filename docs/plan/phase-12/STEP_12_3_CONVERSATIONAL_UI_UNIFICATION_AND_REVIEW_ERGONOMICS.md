@@ -15,14 +15,14 @@ User feedback across real-world project trials highlighted key UX inconsistencie
    The Question Inbox (`/inbox` via `QuestionCard.razor`) and the Task Execution Inspector (`AgentQuestionTurnCard.razor`) implemented two divergent visual designs and interaction models for the exact same human-in-the-loop clarification workflow. `AgentQuestionTurnCard` provides a significantly cleaner experience (pulsing "Waiting for Answer" badge, suggested option chips, inline response area, and clear resolution state), whereas `QuestionCard` relies on bulky legacy styling.  
    *Resolution:* Unify the clarification UI by reusing `AgentQuestionTurnCard` across both the Question Inbox and Task Inspector, wrapping it in an inbox-friendly task/workspace header badge.
 
-2. **Pipeline Stepper False "Pending" State for Running Stages:**
+2. **Pipeline Stepper & Running Stage State Resolution:**
    In `TaskExecutionInspector.razor`, when a task is actively executing (e.g. stage "ForgeTask Review" with conversation status `Running`), the stepper erroneously displayed `Pending` instead of `Running` (with active pulse animation). The conversation viewer below correctly showed `Running`.  
    *Root Cause:* `TaskExecutionInspector.razor` passed `Conversations` and `CurrentStageId` to `PipelineStepper`, but omitted `CurrentStageStatus` (defaulting it to `null`). While `Conversations` initially updated the stage status to `Running`, subsequent logic in `PipelineStepper.OnParametersSet` evaluated `CurrentStageStatus ?? StageExecutionStatus.Pending`, invoking `ApplyStageTransition(CurrentStageId, StageExecutionStatus.Pending)` and overwriting the stage status back to `Pending`.  
-   *Resolution:* Fix stage status resolution in `PipelineStepper` and `TaskExecutionInspector` so running tasks (`TaskOverallStatus.InProgress` or active conversation `StageExecutionStatus.Running`) maintain authoritative `Running` status without being clobbered by fallback defaults.
+   *Resolution:* Fix stage status resolution in `PipelineStepper` and `TaskExecutionInspector` so running tasks (where `activeTaskId == task.Id` or active conversation `StageExecutionStatus.Running`) maintain authoritative `Running` status without being clobbered by fallback defaults.
 
-3. **Inconsistent Conversation Density (Ideation Chat vs. Task Inspector):**
-   The Ideation Chat (`Ideation.razor`) and Task Inspector (`StageConversationViewer.razor`) both present agent-human conversations, but their presentation is radically disjointed. Ideation Chat is compact, sleek, and highly readable with user/agent avatar chips, inline collapsible reasoning traces (`<details class="think-trace">`), and collapsible tool execution pills (`<details class="tool-trace">`). In contrast, `StageConversationViewer` uses large cards with heavy padding that force excessive vertical scrolling.  
-   *Resolution:* Unify the conversation presentation style across both pages: port the compact bubble layout, avatar gutter, inline reasoning collapsible summaries, and tool summary pills to `StageConversationViewer`, standardizing on a cohesive conversation design language.
+3. **Inconsistent Conversation Density (Ideation Chat vs. Task Inspector vs. Transcripts):**
+   The Ideation Chat (`Ideation.razor`), Task Inspector (`StageConversationViewer.razor`), and Session Transcripts (`Transcripts.razor`) all present agent-human conversations and tool traces, but their presentation is radically disjointed. Ideation Chat is compact, sleek, and highly readable with user/agent avatar chips, inline collapsible reasoning traces (`<details class="think-trace">`), and collapsible tool execution pills (`<details class="tool-trace">`). In contrast, `StageConversationViewer` and `Transcripts` used bulky cards (`.tool-callout`, `.turn-bubble`) with heavy padding that forced excessive vertical scrolling.  
+   *Resolution:* Unify the conversation presentation style across all three surfaces: port the compact bubble layout, avatar gutter, inline reasoning collapsible summaries (`<details class="think-trace">`), and compact collapsible tool pills (`ToolCallCard` as `<details class="tool-trace">`) across Ideation, Task Inspector, and Transcripts, standardizing on a cohesive conversation design language.
 
 4. **Review Room File List Stickiness & Navigation Links:**
    In `/review` (`Review.razor`), the changed files tree scrolls out of view when reviewing large file diffs, forcing maintainers to scroll all the way back to the top to switch files. Furthermore, maintainers in the review room lacked direct links to view the task execution inspector and the task details page.  
@@ -40,10 +40,10 @@ User feedback across real-world project trials highlighted key UX inconsistencie
    In `/monitoring` (`ActiveOperationsHero.razor`), the operations hero prominently highlights live LLM calls and live shell commands, but omits high-level task context. Maintainers observing running GPU inference cannot immediately see which specific task is in flight, its title, active stage, and worker queue.  
    *Resolution:* Embed an **In-Flight Task Card** in `ActiveOperationsHero.razor` displaying the currently running task (Task #ID, Title, Current Stage, Worker Queue, Priority, and direct links to `/inspector/{id}` and `/tasks/{id}`), or a clean "Worker Idle" state when no task is executing.
 
-8. **Task Inspector Grouped Dropdown by Status:**
-   In `/inspector` (`TaskExecutionInspector.razor` / `TaskInspector.razor`), selecting a task from a flat list of 20+ items becomes cumbersome. Maintainers struggle to locate active vs queued vs blocked tasks.  
-   *Resolution:* Group the task dropdown using structured `<optgroup>` sections:
-     - 🚀 **Running** (actively executing a stage)
+8. **Task Inspector Grouped Dropdown & Active Running State Synchronization:**
+   In `/inspector` (`TaskExecutionInspector.razor` / `TaskInspector.razor`), selecting a task from a flat list of 20+ items becomes cumbersome. In addition, when a task is actively running, it previously misclassified into "Waiting for Slot" because `WorkerStateService` had not synchronized the active running task ID from `IOperationsTelemetryService` / SignalR.  
+   *Resolution:* Synchronize `WorkerStateService` with `IOperationsTelemetryService.GetActiveTask()` and SignalR `ReceiveWorkerStatus`. Group the task dropdown using structured `<optgroup>` sections:
+     - 🚀 **Running** (`activeTaskId == task.Id` or in `runningTaskIds`)
      - ⏳ **In Flight (Waiting for Slot)** (queued in DevQueue/Hangfire awaiting GPU inference)
      - 💬 **Waiting for Human** (`IsWaitingForHuman == true`, pending clarification)
      - 📋 **Backlog / Open** (un-queued open tasks)
@@ -58,9 +58,12 @@ User feedback across real-world project trials highlighted key UX inconsistencie
     Maintainers viewing `/tasks/{id}` (`TaskDetail.razor`) cannot inspect code changes or diffs without navigating away to the review room; once a task is merged, there is no way to inspect what changes it introduced on the task page itself. Furthermore, when a task is waiting for manual review (`Status == Ready`), there is no prominent action button to navigate directly to the review room.  
     *Resolution:* Add a dedicated **"Changes" (Diff) tab** in `TaskDetail.razor` that embeds `DiffViewer.razor` (powered by `ITaskDiffService` for both in-progress worktree diffs and committed squash diffs for closed tasks). When `task.Status == TaskOverallStatus.Ready`, display a prominent primary header button `🔍 Open in Review Room` navigating to `/review?taskId={task.Id}`.
 
-11. **Kanban Active Running Visual Distinction:**
-    In `KanbanBoard.razor` and `KanbanCard.razor`, tasks in the "In-Flight" column appear identical whether they are actively executing on the GPU or merely queued waiting for an inference slot. In contrast, the DAG view (`DependencyGraph.razor`) provides a clean visual indicator for running nodes.  
-    *Resolution:* Add an explicit running indicator badge (`● Running` with pulse glow animation and active stage badge) and glowing border accent on `KanbanCard.razor` whenever `task.Status == TaskOverallStatus.InProgress`, mirroring the clean visual indicator from the DAG view.
+11. **Kanban & DAG Active Running Visual Distinction:**
+    In `KanbanBoard.razor`, `KanbanCard.razor`, and `DagVisualizer.razor`, running tasks previously appeared identical to idle queued tasks in the "In-Flight" column, and the DAG view lacked live active execution highlighting.  
+    *Resolution:* Synchronize active running state via `WorkerStateService` across both views:
+    - In Kanban: add an explicit running indicator badge (`● Running` with pulse glow animation and active stage badge) and glowing border accent (`card-running`) on `KanbanCard.razor` whenever `workerState.Current.ActiveTaskId == task.Id`.
+    - In DAG (`DagVisualizer.razor` and `DagLayoutEngine.cs`): compute `IsRunning` on layout nodes when `task.Id == activeTaskId`, styling the running node with glowing teal borders, active pulse animation, and a prominent `● Running` node badge and legend entry.
+    - In `SignalRActivityBridgeService`: ensure active task state is preserved across intermediate stage transitions and only cleared when the task completes its final stage, is interrupted, or errors out.
 
 ---
 
@@ -128,9 +131,12 @@ flowchart TD
 2. In `PipelineStepper.razor`, determine stage running state authoritatively: if `OverallStatus == TaskOverallStatus.InProgress` and stage matches `CurrentStageId`, status is `Running` (active pulse spinner).
 3. Do not fall back to `Pending` when active stage conversation exists.
 
-### 3.3 Compact Conversation Bubble Architecture
-1. Port the compact bubble layout, avatar gutter (`👤 User`, `🤖 Assistant`, `⚙️ System / Harness`), inline reasoning collapsible summaries (`<details class="think-trace">`), and tool summary pills (`<details class="tool-trace">`) from `Ideation.razor` into `StageConversationViewer.razor`.
-2. Standardize conversation spacing, typography, and scroll behavior across Ideation and Task Inspector.
+### 3.3 Compact Conversation Bubble Architecture & Component Unification
+1. Port the compact bubble layout, avatar gutter (`👤 User`, `🤖 Assistant`, `⚙️ System / Harness`, `❓ Question`), inline reasoning collapsible summaries (`<details class="think-trace">`), and tool summary pills (`<details class="tool-trace">`) from `Ideation.razor` across both `StageConversationViewer.razor` and `Transcripts.razor`.
+2. Standardize conversation spacing, typography, and scroll behavior across Ideation, Task Inspector, and Transcripts.
+3. Unify tool call presentation into `ToolCallCard.razor` as a compact `<details class="tool-trace">` component, supporting arguments copy, result copy, formatted parameters, and execution outcome badges.
+4. Extract shared chat presentation logic (such as tool icons, truncated argument summaries, and role metadata) into `ChatPresentationHelper` in `NightCodeForge.Web.Services` adhering to presentation separation principles.
+5. In `Transcripts.razor`, modernize turn rendering from legacy `.turn-bubble` card styles to the standard `.chat-bubble` layout with avatar gutter, inline `<details class="think-trace">`, and `ToolCallCard`.
 
 ### 3.4 Review Room Ergonomics, Tree View & Syntax Highlighting
 1. **Sticky File Tree:**
@@ -191,13 +197,24 @@ flowchart TD
    - Provides direct links: `🔍 Inspector` (`/inspector/{TaskId}`) and `📄 Details` (`/tasks/{TaskId}`).
    - Renders a clean "GPU Queue Idle — No active task executing" message when no task is running.
 
-### 3.8 Kanban Active Running Visual Distinction
-1. In `KanbanCard.razor` and `KanbanBoard.razor`:
-   - Add an active running visual treatment whenever `task.Status == TaskOverallStatus.InProgress`:
+### 3.8 Kanban & DAG Active Running Visual Distinction & State Propagation
+1. In `SignalRActivityBridgeService.cs`:
+   - Preserve active task summary across intermediate stage completions; only clear active task on terminal pipeline completion (Merge / PostReviewVerification), Interrupted, or Error.
+2. In `WorkerStateService.cs`:
+   - Inject `IOperationsTelemetryService` to hydrate initial active running state upon startup and provide authoritative active task fallback if not yet set by SignalR.
+3. In `OrchestratorHubClientConnection.cs`:
+   - Inject `WorkerStateService` and route live `ReceiveWorkerStatus` events directly into `WorkerStateService.HandleWorkerStatus(...)`.
+4. In `BacklogStatusClassifier.cs`:
+   - Support `activeTaskId` in `GetColumn(ForgeTask task, int? activeTaskId = null)` so that actively executing tasks (even with Status = Open) correctly map to `BacklogKanbanColumn.InFlight`.
+5. In `KanbanCard.razor` and `KanbanBoard.razor`:
+   - Add an active running visual treatment whenever `task.Status == TaskOverallStatus.InProgress` or `workerState.Current.ActiveTaskId == task.Id`:
      - Animated pulsing indicator badge: `<span class="badge-running"><span class="pulse-dot"></span> Running</span>`
-     - Glowing border accent matching the active running node styling in the DAG view (`DependencyGraph.razor`).
+     - Glowing border accent matching the active running node styling in the DAG view (`card-running`).
      - Display current running stage name (e.g. `Stage: Implementation`).
    - Clearly separates actively executing tasks from idle tasks waiting in the "In-Flight" or "Open" columns.
+6. In `DagLayoutEngine.cs` and `DagVisualizer.razor`:
+   - Add `IsRunning` to `DagLayoutNode`. Set `IsRunning = true` when `task.Id == activeTaskId`.
+   - Render glowing border accent, pulsing "● Running" badge on running nodes, and add a Running item to the graph legend.
 
 ---
 

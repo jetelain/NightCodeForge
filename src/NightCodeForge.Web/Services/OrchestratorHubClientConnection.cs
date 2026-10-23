@@ -9,9 +9,9 @@ namespace NightCodeForge.Web.Services;
 /// </summary>
 public class OrchestratorHubClientConnection : IAsyncDisposable
 {
-    private readonly NavigationManager? _navigationManager;
-    private readonly string? _configuredHubUrl;
-    private readonly Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection>? _logger;
+    private readonly NavigationManager _navigationManager;
+    private readonly Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection> _logger;
+    private readonly WorkerStateService _workerStateService;
     private readonly HashSet<int> _activeTaskGroups = new();
     private readonly object _taskGroupsLock = new();
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
@@ -49,36 +49,15 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
 
     public OrchestratorHubClientConnection(
         NavigationManager navigationManager,
-        Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection> logger)
+        Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection> logger,
+        WorkerStateService workerStateService)
     {
         _navigationManager = navigationManager ?? throw new ArgumentNullException(nameof(navigationManager));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _workerStateService = workerStateService ?? throw new ArgumentNullException(nameof(workerStateService));
     }
 
-    public OrchestratorHubClientConnection(NavigationManager navigationManager)
-        : this(navigationManager, Microsoft.Extensions.Logging.Abstractions.NullLogger<OrchestratorHubClientConnection>.Instance)
-    {
-    }
-
-    public OrchestratorHubClientConnection(string hubUrl)
-    {
-        _configuredHubUrl = hubUrl;
-    }
-
-    public OrchestratorHubClientConnection(HubConnection hubConnection)
-    {
-        _hubConnection = hubConnection;
-        RegisterHandlers(_hubConnection);
-        _hubConnection.Reconnecting += _ => { OnConnectionStateChanged?.Invoke(HubConnectionState.Reconnecting); return Task.CompletedTask; };
-        _hubConnection.Reconnected += async _ =>
-        {
-            OnConnectionStateChanged?.Invoke(HubConnectionState.Connected);
-            await RejoinActiveTaskGroupsAsync();
-        };
-        _hubConnection.Closed += _ => { OnConnectionStateChanged?.Invoke(HubConnectionState.Disconnected); return Task.CompletedTask; };
-    }
-
-    public async Task StartAsync()
+    public virtual async Task StartAsync()
     {
         await _connectionGate.WaitAsync();
         try
@@ -99,19 +78,7 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
 
             if (_hubConnection == null)
             {
-                Uri hubUri;
-                if (!string.IsNullOrEmpty(_configuredHubUrl))
-                {
-                    hubUri = new Uri(_configuredHubUrl, UriKind.RelativeOrAbsolute);
-                }
-                else if (_navigationManager != null)
-                {
-                    hubUri = _navigationManager.ToAbsoluteUri("/hubs/orchestrator");
-                }
-                else
-                {
-                    hubUri = new Uri("/hubs/orchestrator", UriKind.Relative);
-                }
+                var hubUri = _navigationManager.ToAbsoluteUri("/hubs/orchestrator");
 
                 _hubConnection = new HubConnectionBuilder()
                     .WithUrl(hubUri)
@@ -173,7 +140,7 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
             catch (Exception ex)
             {
                 // Silently avoid breaking caller if hub connection is in flight; reconnect handler will catch it
-                _logger?.LogDebug(ex, "Failed to join task group {TaskId}; will retry on reconnect.", taskId);
+                _logger.LogDebug(ex, "Failed to join task group {TaskId}; will retry on reconnect.", taskId);
             }
         }
     }
@@ -196,7 +163,7 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
             catch (Exception ex)
             {
                 // Best-effort cleanup
-                _logger?.LogDebug(ex, "Failed to leave task group {TaskId}", taskId);
+                _logger.LogDebug(ex, "Failed to leave task group {TaskId}", taskId);
             }
         }
     }
@@ -220,7 +187,7 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
             catch (Exception ex)
             {
                 // Non-fatal if one group join fails during batch reconnection
-                _logger?.LogDebug(ex, "Failed to rejoin task group {TaskId} on reconnect.", taskId);
+                _logger.LogDebug(ex, "Failed to rejoin task group {TaskId} on reconnect.", taskId);
             }
         }
     }
@@ -253,8 +220,11 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
     public void TriggerGitProgress(int taskId, string operation, string message) =>
         OnGitProgressReceived?.Invoke(taskId, operation, message);
 
-    public void TriggerWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget) =>
+    public void TriggerWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget)
+    {
+        _workerStateService.HandleWorkerStatus(status, activeTaskId, stageId, hardwareTarget);
         OnWorkerStatusReceived?.Invoke(status, activeTaskId, stageId, hardwareTarget);
+    }
 
     public void TriggerStageTransition(int taskId, string stageId, string stageKind, string status) =>
         OnStageTransitionReceived?.Invoke(taskId, stageId, stageKind, status);

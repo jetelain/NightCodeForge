@@ -43,6 +43,7 @@ public class ReviewPageTests : BunitContext
         Services.AddSingleton(_toastService);
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskMutationService>(new Mock<ITaskMutationService>().Object);
+        Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
     }
 
     [Fact]
