@@ -47,6 +47,7 @@ public class TestCrucibleHarnessBuilder
     public IGlobalOptimizationSettingsService GlobalOptimizationSettings { get; set; } = new Mock<IGlobalOptimizationSettingsService>().Object;
     public ITaskRepository TaskRepository { get; set; } = new InMemoryTaskRepository();
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
+    public IOptions<NightCodeForge.Core.Resilience.RetryPolicyOptions> RetryOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
     public ILogger<CrucibleAgentHarness> Logger { get; set; } = NullLogger<CrucibleAgentHarness>.Instance;
     public ILogger<CanonicalTools> CanonicalToolsLogger { get; set; } = NullLogger<CanonicalTools>.Instance;
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
@@ -76,6 +77,7 @@ public class TestCrucibleHarnessBuilder
             GlobalOptimizationSettings,
             TaskRepository,
             LlmOptions,
+            RetryOptions,
             Logger,
             CanonicalToolsLogger,
             TimeProvider);

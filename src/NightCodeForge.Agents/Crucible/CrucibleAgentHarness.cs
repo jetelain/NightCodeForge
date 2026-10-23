@@ -18,6 +18,7 @@ using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 
@@ -42,6 +43,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly ILogger<CrucibleAgentHarness> _logger;
     private readonly ILogger<CanonicalTools> _canonicalToolsLogger;
     private readonly LlmProviderOptions _llmOptions;
+    private readonly RetryPolicyOptions _retryOptions;
     private readonly TimeProvider _timeProvider;
 
     public string HarnessId => StandardHarnessIds.Crucible;
@@ -62,6 +64,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         IGlobalOptimizationSettingsService globalOptimizationSettings,
         NightCodeForge.Core.Repositories.ITaskRepository taskRepository,
         Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
+        Microsoft.Extensions.Options.IOptions<RetryPolicyOptions> retryOptions,
         ILogger<CrucibleAgentHarness> logger,
         ILogger<CanonicalTools> canonicalToolsLogger,
         TimeProvider timeProvider)
@@ -82,6 +85,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         ArgumentNullException.ThrowIfNull(llmOptions);
         _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
+        ArgumentNullException.ThrowIfNull(retryOptions);
+        _retryOptions = retryOptions.Value ?? throw new ArgumentNullException(nameof(retryOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _canonicalToolsLogger = canonicalToolsLogger ?? throw new ArgumentNullException(nameof(canonicalToolsLogger));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
@@ -911,6 +916,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         // The agent receives a copy: the persisting middleware rewrites chatHistory in place on every model call.
         var historySnapshot = chatHistory.ToList();
+        var maxTransientRetries = _retryOptions.MaxRetries;
+        int streamRetryCount = 0;
+
         var enumerator = agent.RunStreamingAsync(historySnapshot.ToList(), session, cancellationToken: interruptionCts.Token)
             .GetAsyncEnumerator(interruptionCts.Token);
         try
@@ -948,6 +956,36 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     await AbortOnCancellationAsync();
                     throw;
                 }
+                catch (Exception ex) when (TransientErrorDetector.IsTransient(ex) && streamRetryCount < maxTransientRetries)
+                {
+                    streamRetryCount++;
+                    var delay = ResilienceJitterHelper.CalculateJitteredDelay(streamRetryCount, _retryOptions.BaseDelay, _retryOptions.MaxDelay);
+                    var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
+
+                    _logger.LogWarning(
+                        ex,
+                        "Crucible streaming LLM invocation encountered transient network error on attempt {Attempt}/{MaxRetries}: {ErrorMessage}. Retrying after {DelayMs}ms delay...",
+                        streamRetryCount, maxTransientRetries, errorMsg, delay.TotalMilliseconds);
+
+                    await BroadcastAsync(
+                        sessionId,
+                        context.ForgeTask.Id,
+                        context.StageId,
+                        AgentActivityKind.Notice,
+                        $"Transient network error: {errorMsg}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {streamRetryCount}/{maxTransientRetries})...",
+                        cancellationToken);
+
+                    accumulatedText.Clear();
+                    accumulatedReasoning.Clear();
+
+                    await enumerator.DisposeAsync();
+                    await Task.Delay(delay, _timeProvider, cancellationToken);
+
+                    session = await agent.CreateSessionAsync(cancellationToken);
+                    enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token)
+                        .GetAsyncEnumerator(interruptionCts.Token);
+                    continue;
+                }
                 catch (Exception ex)
                 {
                     var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
@@ -956,6 +994,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 }
 
                 if (!hasMore) break;
+
+                // Reset streamRetryCount upon successful chunk receipt so subsequent turns have their full retry budget
+                streamRetryCount = 0;
 
                 if (await ProcessUpdateAsync(enumerator.Current, streaming: true))
                 {
@@ -985,39 +1026,70 @@ public partial class CrucibleAgentHarness : IAgentHarness
             chatHistory.Clear();
             chatHistory.AddRange(historySnapshot);
 
-            try
+            int nonStreamingRetries = 0;
+            while (true)
             {
-                var response = await agent.RunAsync(historySnapshot.ToList(), session, cancellationToken: interruptionCts.Token);
-                foreach (var update in response.ToAgentResponseUpdates())
+                try
                 {
-                    await ProcessUpdateAsync(update, streaming: false);
+                    var response = await agent.RunAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token);
+                    foreach (var update in response.ToAgentResponseUpdates())
+                    {
+                        await ProcessUpdateAsync(update, streaming: false);
+                    }
+                    break;
                 }
-            }
-            catch (RequestChangesException reqChange)
-            {
-                return await CompleteWithRequestChangesAsync(reqChange);
-            }
-            catch (HumanInterruptionException interruption)
-            {
-                return await CompleteWithInterruptionAsync(interruption);
-            }
-            catch (OperationCanceledException)
-            {
-                if (capturedInterruption != null)
+                catch (RequestChangesException reqChange)
                 {
-                    return await CompleteWithInterruptionAsync(capturedInterruption);
+                    return await CompleteWithRequestChangesAsync(reqChange);
                 }
-                if (capturedRequestChanges != null)
+                catch (HumanInterruptionException interruption)
                 {
-                    return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                    return await CompleteWithInterruptionAsync(interruption);
                 }
-                await AbortOnCancellationAsync();
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error during Crucible non-streaming LLM invocation");
-                return await FailAsync(ex.Message);
+                catch (OperationCanceledException)
+                {
+                    if (capturedInterruption != null)
+                    {
+                        return await CompleteWithInterruptionAsync(capturedInterruption);
+                    }
+                    if (capturedRequestChanges != null)
+                    {
+                        return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                    }
+                    await AbortOnCancellationAsync();
+                    throw;
+                }
+                catch (Exception ex) when (TransientErrorDetector.IsTransient(ex) && nonStreamingRetries < maxTransientRetries)
+                {
+                    nonStreamingRetries++;
+                    var delay = ResilienceJitterHelper.CalculateJitteredDelay(nonStreamingRetries, _retryOptions.BaseDelay, _retryOptions.MaxDelay);
+                    var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
+
+                    _logger.LogWarning(
+                        ex,
+                        "Crucible non-streaming LLM invocation encountered transient network error on attempt {Attempt}/{MaxRetries}: {ErrorMessage}. Retrying after {DelayMs}ms delay...",
+                        nonStreamingRetries, maxTransientRetries, errorMsg, delay.TotalMilliseconds);
+
+                    await BroadcastAsync(
+                        sessionId,
+                        context.ForgeTask.Id,
+                        context.StageId,
+                        AgentActivityKind.Notice,
+                        $"Transient network error: {errorMsg}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {nonStreamingRetries}/{maxTransientRetries})...",
+                        cancellationToken);
+
+                    accumulatedText.Clear();
+                    accumulatedReasoning.Clear();
+
+                    await Task.Delay(delay, _timeProvider, cancellationToken);
+                    session = await agent.CreateSessionAsync(cancellationToken);
+                    continue;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error during Crucible non-streaming LLM invocation");
+                    return await FailAsync(ex.Message);
+                }
             }
 
             if (capturedInterruption != null)

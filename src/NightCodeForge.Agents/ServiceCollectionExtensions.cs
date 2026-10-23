@@ -13,8 +13,10 @@ using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
+using NightCodeForge.Infrastructure.Resilience;
 
 namespace NightCodeForge.Agents;
 
@@ -28,11 +30,13 @@ public static class ServiceCollectionExtensions
         // 1. Streaming & Realtime Telemetry
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IAgentActivityStreamer, InMemoryAgentActivityStreamer>();
+        services.AddOptions<RetryPolicyOptions>();
 
         // 2. Canonical Tools & Context Services
         services.TryAddSingleton<IEditorConfigService, EditorConfigService>();
         services.TryAddSingleton<IEditorConfigFileApplier, EditorConfigFileApplier>();
-        services.AddHttpClient<OllamaWebSearchService>();
+        services.AddHttpClient<OllamaWebSearchService>()
+            .AddTransientHttpErrorRetry();
         services.TryAddScoped<IWebSearchService>(sp => sp.GetRequiredService<OllamaWebSearchService>());
         services.TryAddSingleton<IWorkspaceSymbolService, RoslynSymbolIndexProvider>();
         services.TryAddSingleton<SkillsService>();

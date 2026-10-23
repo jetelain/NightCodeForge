@@ -12,6 +12,7 @@ using NightCodeForge.Infrastructure.BackgroundJobs;
 using NightCodeForge.Infrastructure.Data;
 using NightCodeForge.Infrastructure.Data.Repositories;
 using NightCodeForge.Infrastructure.Git;
+using NightCodeForge.Infrastructure.Resilience;
 
 namespace NightCodeForge.Infrastructure;
 
@@ -82,9 +83,12 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IExecutionEnvironmentProvider, Execution.ExecutionEnvironmentProvider>();
 
         // 7. OllamaRouter Services
-        services.AddHttpClient<IOllamaModelCatalogService, Inference.OllamaModelCatalogService>();
-        services.AddHttpClient<IOllamaModelPreloadService, Inference.OllamaModelPreloadService>();
-        services.AddHttpClient<IOllamaRouterGatewayService, Inference.OllamaRouterGatewayService>();
+        services.AddHttpClient<IOllamaModelCatalogService, Inference.OllamaModelCatalogService>()
+            .AddTransientHttpErrorRetry();
+        services.AddHttpClient<IOllamaModelPreloadService, Inference.OllamaModelPreloadService>()
+            .AddTransientHttpErrorRetry();
+        services.AddHttpClient<IOllamaRouterGatewayService, Inference.OllamaRouterGatewayService>()
+            .AddTransientHttpErrorRetry();
 
         // 8. Markdown ForgeTask Mirroring
         services.TryAddSingleton<ITaskMarkdownSyncService>(sp =>

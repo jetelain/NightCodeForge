@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 
@@ -178,6 +179,11 @@ public class SignalRActivityBridgeService : BackgroundService
                         : 0;
                     await _hubContext.Clients.Group(groupName)
                         .ReceiveOptimizationAction(evt.TaskId, evt.StageId, actionType, evt.Content, tokensSaved, evt.Timestamp);
+                    break;
+
+                case AgentActivityKind.Notice:
+                    await _hubContext.Clients.Group(groupName)
+                        .ReceiveExecutionLog(evt.TaskId, evt.StageId, ResilienceConstants.LogLevelWarning, evt.Content, evt.Timestamp);
                     break;
             }
         }

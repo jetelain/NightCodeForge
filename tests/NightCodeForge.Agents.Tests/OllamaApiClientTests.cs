@@ -21,6 +21,15 @@ public class OllamaApiClientTests
         Assert.IsAssignableFrom<IChatClient>(client);
     }
 
+    private static IChatClient CreateTestClient(LlmProviderOptions options, string? modelId = null) =>
+        OllamaChatClientFactory.CreateOllama(
+            options,
+            modelId,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            TimeProvider.System,
+            new NightCodeForge.Core.Resilience.RetryPolicyOptions(),
+            OllamaRoutingTarget.Auto);
+
     [Fact]
     public void OllamaChatClientFactory_CreatesClient_WithCustomTimeoutAndEndpoint()
     {
@@ -31,7 +40,7 @@ public class OllamaApiClientTests
             RequestTimeoutMinutes = 25
         };
 
-        var client = OllamaChatClientFactory.CreateOllama(options);
+        var client = CreateTestClient(options);
         Assert.NotNull(client);
         Assert.IsAssignableFrom<IChatClient>(client);
     }
@@ -52,7 +61,7 @@ public class OllamaApiClientTests
             ModelName = "deepseek-r1:14b"
         };
 
-        var clientForProfile = OllamaChatClientFactory.CreateOllama(defaultOptions, profileWithModel.ModelName);
+        var clientForProfile = CreateTestClient(defaultOptions, profileWithModel.ModelName);
         Assert.NotNull(clientForProfile);
 
         // When profile does NOT specify a model (empty/null), fallback to appsettings ModelId
@@ -62,7 +71,7 @@ public class OllamaApiClientTests
             ModelName = ""
         };
 
-        var clientDefault = OllamaChatClientFactory.CreateOllama(defaultOptions, profileWithoutModel.ModelName);
+        var clientDefault = CreateTestClient(defaultOptions, profileWithoutModel.ModelName);
         Assert.NotNull(clientDefault);
     }
 
@@ -76,7 +85,13 @@ public class OllamaApiClientTests
         });
 
         var mockTelemetry = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object;
-        var factory = new DefaultOllamaChatClientFactory(options, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance, mockTelemetry);
+        var retryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
+        var factory = new DefaultOllamaChatClientFactory(
+            options,
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            mockTelemetry,
+            TimeProvider.System,
+            retryOptions);
 
         var profileCoder = new Core.Domain.AgentProfile { Name = "Coder", ModelName = "qwen2.5-coder:32b" };
         var client1 = factory.CreateClient(profileCoder);
@@ -104,7 +119,13 @@ public class OllamaApiClientTests
         });
 
         var mockTelemetry = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object;
-        var factory = new DefaultOllamaChatClientFactory(options, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance, mockTelemetry);
+        var retryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
+        var factory = new DefaultOllamaChatClientFactory(
+            options,
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            mockTelemetry,
+            TimeProvider.System,
+            retryOptions);
 
         var clientCloud1 = factory.CreateClient("model-x", OllamaRoutingTarget.Cloud);
         var clientCloud2 = factory.CreateClient("model-x", OllamaRoutingTarget.Cloud);
