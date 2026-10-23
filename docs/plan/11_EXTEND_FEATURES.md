@@ -30,6 +30,7 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
    - **Step 11.21:** Dynamic Tool Timeouts, Container ICU & User Permissions, and Review Rejection Test Mandate — dynamic bash timeout formula $\max(300\text{s}, \text{build} + \text{test})$, full `libicu-dev` & locales in container base image fixing `NETSDK1188`, preserving host user name and group (`-u $(id -u):$(id -g)`) to eliminate workspace file permission conflicts, and mandatory automated regression test authoring contract on Review rejection.
    - **Step 11.22:** Container Git Worktree Relative Paths & Cross-Environment Portability — bidirectional relative Git worktree pointer normalization (`<worktree>/.git` and `<clone>/.git/worktrees/.../gitdir`) with Windows WSL UNC path resolution and `worktree.useRelativePaths = true`, resolving Exit Code 128 "fatal: not a git repository" errors in container sandboxes.
    - **Step 11.24:** Fine-Grained Workspace Concurrency & Non-Blocking Git Merge Operations — decoupling long-running agent LLM loops from the workspace reader lock, keeping atomic mutual exclusion on the shared canonical Git clone (< 500ms), and enabling instantaneous Squash & Merge in the Review Room while background tasks execute.
+   - **Step 11.25:** Autonomous Git Conflict Management, Baseline Synchronization & Re-Review Lifecycle — zero-conflict synchronization of task feature branches from main at Stage 2 Pre-Implementation Baseline, non-destructive merge preview and conflict detection at Stage 6 / Review Room entry, atomic rollback on Squash & Merge failure, and autonomous conflict resolution by the Implementation Agent with re-review audit trail.
    - **Step 11.5:** Ideation Quick Notes, Suggestions Backlog & Conversational Refinement.
    - **Step 11.1:** Heterogeneous Dual Model Architecture (Reviewer vs Coder models) and difficulty escalation.
    - **Step 11.3:** Smart CLI Output Filtering (compiler and test noise suppression for 95% token savings).
@@ -69,6 +70,7 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
 | **11.21** | [🛡️ Step 11.21: Dynamic Tool Timeouts, Container ICU & User Permissions, and Review Rejection Test Mandate](phase-11/STEP_11_21_CONTAINER_ICU_DYNAMIC_TIMEOUTS_AND_REVIEW_TEST_MANDATE.md) | Dynamic bash tool timeout $\max(300\text{s}, \text{build} + \text{test})$, install `libicu-dev` & locales in base container image (resolving `NETSDK1188`), preserve host user/group permissions (`-u $(id -u):$(id -g)`), and mandate automated test creation for each bug upon review rejection. | Completed |
 | **11.22** | [🌳 Step 11.22: Container Git Worktree Relative Paths & Cross-Environment Portability](phase-11/STEP_11_22_CONTAINER_GIT_WORKTREE_RELATIVE_PATHS_AND_PORTABILITY.md) | Enforce bidirectional relative Git worktree pointers (`<worktree>/.git` and `<clone>/.git/worktrees/.../gitdir`), resolve Windows WSL UNC paths via `ResolveHostAccessiblePath`, set `worktree.useRelativePaths = true`, and add startup legacy worktree repair. | Complete |
 | **11.24** | [🔒 Step 11.24: Fine-Grained Workspace Concurrency & Non-Blocking Git Merge Operations](phase-11/STEP_11_24_FINE_GRAINED_WORKSPACE_LOCKING_AND_NON_BLOCKING_MERGE.md) | Decouple long-running agent LLM loops from the workspace reader lock, keep atomic mutual exclusion on the shared canonical Git clone (< 500ms), and enable instantaneous Review Room Squash & Merge without waiting for background dev-queue tasks. | Completed |
+| **11.25** | [🔀 Step 11.25: Autonomous Git Conflict Management, Baseline Synchronization & Re-Review Lifecycle](phase-11/STEP_11_25_GIT_CONFLICT_MANAGEMENT_AND_RE_REVIEW_LIFECYCLE.md) | Synchronize task branch from main prior to Stage 2 Pre-Implementation Baseline (conflict-free), non-destructive mergeability preview (`git merge-tree`) before entering Ready, atomic canonical rollback on squash conflict with `MergeConflictException`, and autonomous conflict resolution by Implementation Agent with re-review alert banner in Review Room. | **Top Priority** |
 | **11.5** | [💡 Step 11.5: Ideation Quick Notes, Suggestions & Conversational Refinement](phase-11/STEP_11_5_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md) | Quick notes backlog intake ("Think Now, Chat Later"); proposal card lifecycle (`Approve` $\rightarrow$ Open, `Keep as Suggestion` $\rightarrow$ Suggested, `Discard` $\rightarrow$ Delete); "Refine in Ideation" pre-seeded chat; scoped `edit_task` tools; 24h draft pruning. | Planned |
 | **11.1** | [🧠 Step 11.1: Dual Model Role Configuration & Difficulty Escalation](phase-11/STEP_11_1_DUAL_MODEL_ROLE_CONFIGURATION_AND_DIFFICULTY_ESCALATION.md) | Heterogeneous model architecture: Architect/Reviewer model (e.g. Qwen 3.8 27B) for ideation, review, code review; Coder model (e.g. Qwen 3.6 35B A3B) for fast coding; dynamic difficulty escalation for difficult/expert tasks. | Planned |
 | **11.3** | [🧹 Step 11.3: Smart CLI & Build Tool Output Filtering (Context Compression)](phase-11/STEP_11_3_SMART_CLI_AND_BASH_OUTPUT_FILTERING.md) | Semantic output filtering for verbose CLI tools (`dotnet build`, `dotnet test`, `npm`). Relativizes paths, strips SDK boilerplates, drops non-fatal warnings when errors exist, preserving raw transcripts on disk. | Planned |
@@ -176,6 +178,33 @@ flowchart LR
     WorktreeGit <-->|Bidirectional Relative Traversal| WorktreesMeta
     HostAndWsl --> ResolvesHost["Resolves seamlessly on Host (Windows UNC & Linux)"]
     HostAndWsl --> ResolvesContainer["Resolves seamlessly inside Container (/workspace)"]
+```
+
+### 3.9 Step 11.25: Autonomous Git Conflict Management & Re-Review Lifecycle
+```mermaid
+flowchart TD
+    subgraph S1 ["Gate 1: Pre-Impl Baseline"]
+        SyncBase["SyncFromBaseBranchAsync (git merge baseBranch into wt/task-id)"]
+        BaseRun["Stage 2 Baseline Build & Test (100% current main)"]
+        SyncBase --> BaseRun
+    end
+
+    subgraph S2 ["Gate 2 & 3: Conflict Detection & Recovery"]
+        VerifyDone["Stages 3 - 6 Complete"] --> CheckMerge["CheckMergeableAsync (git merge-tree preview)"]
+        CheckMerge -->|Clean| Ready["Status = Ready (Review Room)"]
+        CheckMerge -->|Conflict| RouteConflict["Route to Conflict Resolution Turn"]
+        Ready --> SquashMerge{"Squash & Merge Execution"}
+        SquashMerge -->|Success| Closed["Status = Closed (Merged & Pushed)"]
+        SquashMerge -->|Conflict| Abort["Atomic Rollback (git reset --hard on canonical clone)"]
+        Abort --> RouteConflict
+    end
+
+    subgraph S3 ["Autonomous Resolution Loop"]
+        RouteConflict --> Markers["In wt/task-id: git merge baseBranch (inserts <<<<<<< markers)"]
+        Markers --> AgentResolve["Implementation Agent Turn: Resolve markers, run build & test"]
+        AgentResolve --> GatePass["Stage 4 & 6 Quality Gates Pass"]
+        GatePass --> ReReview["Status = Ready (Re-Review Banner in Review Room)"]
+    end
 ```
 
 ---
@@ -287,6 +316,23 @@ flowchart LR
   - [x] Integrate worktree relative path verification into `ExecutionEnvironmentProvider` and container pre-flight.
   - [x] Update `StartupRecoveryService` to migrate legacy absolute worktree pointers on startup.
   - [x] Author unit tests in `GitWorkspaceManagerTests` verifying relative forward/reverse pointers, UNC path resolution, idempotency, and clean Git CLI execution.
+- [x] **Step 11.24 (Fine-Grained Workspace Concurrency & Non-Blocking Git Merge Operations):**
+  - [x] Decouple task execution semaphore (`taskSem`) from workspace active reader count in `WorkspaceLockProvider`.
+  - [x] Ensure `AcquireTaskLockAsync` maintains task-level execution exclusivity without blocking canonical `AcquireLockAsync`.
+  - [x] Keep atomic workspace lock on canonical Git operations (`CheckoutTaskBranchAsync`, `SquashAndMergeAsync`, mirror push/pull) lasting $< 500\text{ms}$.
+  - [x] Enable immediate Review Room Squash & Merge while background tasks actively infer on the GPU.
+- [ ] **Step 11.25 (Autonomous Git Conflict Management, Baseline Synchronization & Re-Review Lifecycle):**
+  - [ ] Implement `SyncFromBaseBranchAsync` on `IGitWorkspaceManager` and `GitWorkspaceManager` performing worktree merge of `baseBranch` with conflict detection.
+  - [ ] Implement `CheckMergeableAsync` on `IGitWorkspaceManager` and `GitWorkspaceManager` performing non-destructive `git merge-tree` preview.
+  - [ ] Update `SquashAndMergeAsync` with atomic rollback (`git reset --hard HEAD` on the canonical clone; no `git clean`) throwing `MergeConflictException`, plus bounded host push-race retry (`MirrorPushRejectedException`).
+  - [ ] Gate 2 re-runs deterministic build/test verification when the base merge brought new changes; conflict resolution has a bounded retry budget with human escalation and a deterministic `ConflictResolutionVerifier` (orchestrator-owned merge commit).
+  - [ ] Gate 1: Synchronize task feature branch from latest base branch at start of Stage 2 (`PreImplementationBaseline`).
+  - [ ] Gate 2: Verify mergeability prior to setting `Ready` state; route to conflict resolution if conflicts exist.
+  - [ ] Gate 3: Catch `MergeConflictException` in `CompleteTaskAndCascadeInternalAsync` and trigger automated conflict resolution.
+  - [ ] Implement `InitiateConflictResolutionAsync` in `TaskOrchestrator` routing task back to Implementation Agent with conflict metadata.
+  - [ ] Update `StandardWorkflowDefinitions` and `TaskOrchestrator` to inject conflict resolution directives and file lists into implementation prompt when conflicts exist.
+  - [ ] Display "Conflict Resolved by Agent" warning banner in `Review.razor` when `HasResolvedConflict` is true.
+  - [ ] Handle `MergeConflictException` cleanly in `ApproveMergeModal.razor` with informative feedback.
 - [ ] **Step 11.23 (Backlog Task Rejection Lifecycle, Kanban State Hygiene & Shell UI Polish):**
   - [ ] Add `RejectTaskAsync` to `ITaskOrchestrator` and `ITaskMutationService` enabling rejection of non-terminal backlog tasks with immutable audit history, DevQueue/Hangfire job cancellation, and markdown synchronization.
   - [ ] Add `🗑️ Reject Task` action buttons in `TaskDetailDrawer.razor`, `TaskDetail.razor`, and `KanbanCard.razor`.
