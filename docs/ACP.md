@@ -6,7 +6,7 @@ This document defines the architectural integration, protocol contract, and mode
 
 ## 1. Executive Summary & Value Proposition
 
-While **Crucible** provides a native in-process C# engine (.NET 9/10 with Microsoft Agent Framework) and **Pi** provides a minimalist Node.js/Bun fallback, **ACP** provides a vendor-neutral, protocol-level adapter:
+While **Crucible** provides a native in-process C# engine (.NET 10 with Microsoft Agent Framework) and **Pi** provides a minimalist Node.js/Bun fallback, **ACP** provides a vendor-neutral, protocol-level adapter:
 
 1. **Ecosystem Portability:** Any external AI agent implementing the [Agent Client Protocol](https://agentclientprotocol.com/) runs within NightCodeForge without custom adapter code.
 2. **Sandboxed Tool Delegation:** Even though external ACP agents run as standalone executables, NightCodeForge acts as the **ACP Client**, intercepting file and terminal requests and executing them inside `NightCodeForgeContainerExecutor` (Docker Sentinel REPL) or WSL2.
@@ -21,7 +21,7 @@ NightCodeForge operates as an **ACP Client Host**, managing the lifecycle of ext
 
 ```mermaid
 flowchart TD
-    subgraph Host ["NightCodeForge Host Process (.NET 9/10)"]
+    subgraph Host ["NightCodeForge Host Process (.NET 10)"]
         Orchestrator["Workflow Orchestrator (Hangfire Queue)"]
         Harness["AcpAgentHarness : IAgentHarness"]
         Conn["ClientSideConnection (AgentClientProtocol)"]
@@ -77,7 +77,7 @@ The local checkout `C:\Users\Julien\source\repos\acp-csharp-main` provides a fun
 * Clean separation between `IAcpClient` (methods called by agent) and `IAcpAgent` (methods called by client).
 * Asynchronous `ClientSideConnection` and `AgentSideConnection` using `System.Text.Json` source generation (`AcpJsonSerializerContext.cs`).
 * Existing implementations of `InitializeRequest`, `NewSessionRequest`, `PromptRequest`, `RequestPermissionRequest`, and terminal contracts.
-* Fast compilation with zero warnings on .NET 9 and 10.
+* Fast compilation with zero warnings on .NET 10.
 
 ### 4.2 Required Modernizations for NightCodeForge
 1. **Source Generation & Polymorphic JSON Resilience:**
@@ -344,7 +344,7 @@ sequenceDiagram
 
 | Dimension | Crucible Harness (`CrucibleAgent`) | Pi Harness (`PiRpcAgentHarness`) | ACP Harness (`AcpAgentHarness`) |
 | :--- | :--- | :--- | :--- |
-| **Execution Model** | Native In-Process C# (.NET 9/10) | External Node.js/Bun Subprocess | Any External ACP-Compliant Binary |
+| **Execution Model** | Native In-Process C# (.NET 10) | External Node.js/Bun Subprocess | Any External ACP-Compliant Binary |
 | **Foundation** | Microsoft Agent Framework & `Microsoft.Extensions.AI` | Pi Agent Core (`@earendil-works/pi-agent-core`) | Agent Client Protocol (`AgentClientProtocol` C# SDK) |
 | **Communication** | In-Memory Method Calls & Delegates | JSON-RPC over `stdio` (JSON Lines) | JSON-RPC over `stdio` or WebSocket |
 | **Tool Execution** | Direct sandboxed tools (`read`, `edit`, `write`, `bash`) | Forwarded tools via RPC (`read`, `edit`, `write`, `bash`) | Intercepted client tools (`fs/*`, `terminal/*`) + host `mcpServers` |

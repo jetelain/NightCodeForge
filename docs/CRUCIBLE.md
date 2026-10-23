@@ -12,7 +12,7 @@ flowchart TD
     subgraph Forge ["NightCodeForge Orchestrator"]
         Queue["Hangfire Dev-Queue\n(WorkerCount = 1)"]
         Sandbox["Execution Sandboxing\n(IExecutionEnvironment)"]
-        GitMgr["Git CLI Subsystem\n(WIP Commits, Ext4 Mirror)"]
+        GitMgr["Git CLI Subsystem\n(WIP Commits, Ext4 Mirror, Worktrees)"]
         DB[("AppDbContext\n(Checkpoints & Metrics)")]
     end
 
@@ -22,7 +22,7 @@ flowchart TD
         Dispatcher["LenientToolDispatcher\n(Tolerance Engine & Aliasing)"]
         ToolRegistry["Stage-Scoped Tool Registry"]
         EditorConfigApplier["EditorConfig Applier\n(EOL, Tab/Space, Trim, Charset)"]
-        Compaction["ToolResultCompactionStrategy\n(In-Loop Token Minimization)"]
+        Compaction["PiStyleCrucibleCompactionStrategy\n(Lossless Context Compaction)"]
         McpMgr["IMcpClientManager\n(Microsoft.Agents.AI.Mcp)"]
         Persistence["PerServiceCall Persistence\n& AgentSession Serialization"]
     end
@@ -46,29 +46,33 @@ flowchart TD
 ```
 
 ### 1.2 Core Technology Foundation (Official NuGet Releases)
-Crucible is built in pure C# targeting .NET 9/.NET 10, consuming official **NuGet release packages** without custom source forks:
+Crucible is built in pure C# targeting **.NET 10 (C# 13)**, consuming official **NuGet release packages** without custom source forks:
 * **`Microsoft.Agents.AI`:** Core agent abstractions, chat history management, and context providers.
 * **`Microsoft.Agents.AI.Harness`:** Pre-configured `HarnessAgent` orchestrator assembling function-invocation loops, automatic per-service-call persistence, and `LoopAgent` evaluator decorators.
 * **`Microsoft.Agents.AI.Abstractions`:** `AIAgent`, `AgentSession`, `AgentRunContext`, and JSON session serialization/deserialization contracts.
 * **`Microsoft.Agents.AI.Mcp`:** Native Model Context Protocol (MCP) host integration for stdio and SSE tools.
 * **`Microsoft.Extensions.AI`:** The standard .NET AI abstraction layer for `IChatClient`, function definitions, streaming, and OpenTelemetry instrumentation.
 * **`editorconfig`:** Official .NET EditorConfig parser library for hierarchical directory traversal and glob rule matching.
-* **`OllamaRouter` Compatibility:** Native HTTP communication with local Ollama, vLLM, LM Studio, or OpenAI-compatible endpoints with dynamic GPU routing.
+* **`OllamaSharp` & `OllamaRouter` Compatibility:** Native HTTP communication with local Ollama, vLLM, LM Studio, or OpenAI-compatible endpoints with dynamic GPU routing.
 
 ### 1.3 Cross-Platform Execution Model & Windows WSL2 Bridge
-Crucible is "special" because it is embedded directly in the NightCodeForge host process. However, autonomous coding agents operate **strictly on Unix**.
+Crucible is embedded directly in the NightCodeForge host process. However, autonomous coding agents operate **strictly on Unix**.
 
-* **Windows Host & WSL2 Requirement:** When NightCodeForge runs on Windows, **WSL2 is strictly required**. Crucible interacts with the agent working clone at `~/.nightcodeforge/wks/{workspaceId}`:
+* **Windows Host & WSL2 Requirement:** When NightCodeForge runs on Windows, **WSL2 is strictly required**. Crucible interacts with the workspace directory structure at `~/.nightcodeforge/wks/{workspaceId}`:
+  - **Canonical Clone:** `~/.nightcodeforge/wks/{workspaceId}/clone/` (permanent repository clone tracking `main`/`master`, used by read-only discovery, intake triage, and squash-and-merge).
+  - **Task Worktrees:** `~/.nightcodeforge/wks/{workspaceId}/task-{taskId}/` (ephemeral Git worktrees allocated per active task for multi-stage isolated execution).
+  - **Workspace Attachments:** `~/.nightcodeforge/wks/{workspaceId}/attachments/` (persistent store for context documents, diagrams, and files attached to tasks).
   - **Direct File I/O Bridge:** Crucible file tools (`read`, `write`, `edit`) execute directly from the Windows host via the high-speed UNC share:
     ```text
-    \\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{workspaceId}\
+    \\wsl.localhost\{distrib}\home\{username}\.nightcodeforge\wks\{workspaceId}\task-{taskId}\
     ```
-  - **Bare Mode Shell Execution:** In Bare Mode, the `bash` tool executes directly inside WSL2 via `wsl.exe -d <distrib> -- bash -c "cd ~/.nightcodeforge/wks/{id} && ..."`. PowerShell or CMD are never used for agent commands.
-* **Linux/macOS Host:** Crucible tools access `$HOME/.nightcodeforge/wks/{workspaceId}` directly, with `bash` delegating to `/bin/bash`.
+  - **Bare Mode Shell Execution:** In Bare Mode, the `bash` tool executes directly inside WSL2 via `wsl.exe -d <distrib> -- bash -c "cd ~/.nightcodeforge/wks/{id}/task-{taskId} && ..."`. PowerShell or CMD are never used for agent commands.
+* **Linux/macOS Host:** Crucible tools access `$HOME/.nightcodeforge/wks/{workspaceId}/task-{taskId}` directly, with `bash` delegating to `/bin/bash`.
 * **Container Mode & `/workspace` Virtual Path Remapping:**
-  - Inside the container, the agent sees only `/workspace` (which is volume-mounted from `~/.nightcodeforge/wks/{id}`).
-  - Because Crucible tools operate outside the container on the host/WSL filesystem, the tool dispatcher transparently strips `/workspace` and remaps all file operations to the real filesystem path.
-* **On-the-Fly Slim Container Images:** NightCodeForge generates a minimal, lightweight container image on the fly, bind-mounting persistent host package caches (`~/.nuget/packages`, `~/.npm`, `~/.cache/uv`) to prevent downloading dependencies repeatedly.
+  - Inside the task container, the agent sees only `/workspace` (which is volume-mounted from `~/.nightcodeforge/wks/{id}/task-{taskId}`).
+  - The canonical clone is mounted at `/clone:ro` (read-only) with `/clone/.git` (read-write for worktree references).
+  - Because Crucible tools operate outside the container on the host/WSL filesystem, the tool dispatcher transparently strips `/workspace` and remaps all file operations to the real task worktree path via `IWorkspacePathResolver.ResolveCruciblePath(workspaceId, path, taskId)`.
+* **On-the-Fly Slim Container Images:** NightCodeForge generates a minimal, lightweight container image (`ncf-agent-base:latest`) on the fly, bind-mounting persistent host package caches (`~/.nuget/packages`, `~/.npm`, `~/.cache/uv`) to prevent downloading dependencies repeatedly.
 
 ---
 
@@ -80,18 +84,27 @@ Every execution stage in a workflow pipeline binds to an **Agent Profile** (`Age
 ```csharp
 public class AgentProfile
 {
-    public string Id { get; set; } = default!;          // e.g. "triage-guard", "deep-analyst", "fast-coder", "strict-auditor"
-    public string Name { get; set; } = default!;
-    public string HarnessId { get; set; } = "crucible"; // Triage strictly requires Crucible
-    public string ModelName { get; set; } = default!;    // e.g. "deepseek-r1:32b", "qwen2.5-coder:32b"
-    public ThinkingEffort ThinkingEffort { get; set; }  // None, Low, Medium, High, CustomBudget
+    public const int DefaultMaxTurns = 500;
+
+    public string Id { get; set; } = string.Empty;          // e.g. "triage-guard", "deep-analyst", "fast-coder", "strict-auditor"
+    public int? WorkspaceId { get; set; }               // Nullable: workspace override
+    public string Name { get; set; } = string.Empty;
+    public string HarnessId { get; set; } = StandardHarnessIds.Crucible;
+    public string ModelName { get; set; } = string.Empty;    // e.g. "qwen2.5-coder:32b", "deepseek-r1:32b"
+    public ThinkingEffort ThinkingEffort { get; set; } = ThinkingEffort.None;
     public int? ThinkingTokenBudget { get; set; }
     public double? Temperature { get; set; }
     public string? HarnessConfigurationJson { get; set; } // Custom runtime options
     public LocalOptimizationFlags? OptimizationFlags { get; set; } // Opt-out flags for A/B testing
     public IReadOnlyList<string>? PermittedTools { get; set; } // Whitelist: null = all stage tools; ["read", "propose_tasks"]
-    public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard; // Standard vs RestrictedReadOnly
-    public int? WorkspaceId { get; set; }               // Nullable: workspace override
+    public Dictionary<string, string>? StageDirectives { get; set; }
+    public AgentMode Mode { get; set; } = AgentMode.Full;
+    public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard;
+    public string? SystemPrompt { get; set; }
+    public int? MaxTurns { get; set; } = DefaultMaxTurns;
+    public bool AllowNoTests { get; set; }
+    public int? ContextWindowTokens { get; set; }        // Token capacity for Pi-style compaction budgeting
+    public OllamaRoutingTarget RoutingTarget { get; set; } = OllamaRoutingTarget.Auto; // Auto, Local, Remote, Cloud
 }
 
 public enum SandboxSecurityTier
@@ -102,36 +115,62 @@ public enum SandboxSecurityTier
 ```
 
 ### 2.2 Stage Persona Prompts & Behavioral Directives
-Crucible specializes agent behavior per stage using tailored System Personas and dynamic Bootstrap Prompts:
+Crucible specializes agent behavior per stage using tailored System Personas and dynamic Bootstrap Prompts across the 6-stage default workflow, intake triage, and interactive ideation:
 
-0. **Stage 0: Automated Triage (`TriageStage` - Untrusted ForgeTask Intake):**
+0. **Stage 0: Automated Triage (`TriageStage` - Untrusted Intake):**
    * **System Persona:** Untrusted ForgeTask Triage & Bug Reproducibility Analyst.
-   * **Mission:** Automatically evaluate incoming tasks from external trackers (e.g. GitHub tasks, Jira, webhooks) directly on the base branch (`main` or `master`). Verify technical relevance, inspect candidate files, extract reproduction steps and acceptance criteria, and propose structured backlog items via `propose_tasks`.
+   * **Mission:** Automatically evaluate incoming tasks from external trackers (e.g. GitHub issues, Jira, webhooks) directly on the base branch (`main` or `master`). Verify technical relevance, inspect candidate files, extract reproduction steps and acceptance criteria, and propose structured backlog items via `propose_tasks`.
    * **Security Posture & Untrusted Content Guardrails:**
      - External task text may contain malicious **indirect prompt injections**.
      - Tool access is strictly locked down: only `read` and `propose_tasks` are registered.
      - `write` and `edit` are **strictly prohibited** to prevent working tree tampering.
      - `ask` is **prohibited** to prevent external inputs from blocking the human dev-queue.
      - `web_search` is **prohibited** to eliminate SSRF and data exfiltration channels.
-     - Runs exclusively in a **Restricted Read-Only Container Sandbox** (`--network none`, `:ro` workspace mount, `--read-only`, `--cap-drop=ALL`) on `main`/`master`.
+     - Runs exclusively in a **Restricted Read-Only Container Sandbox** (`--network none`, `:ro` workspace mount, `--read-only`, `--cap-drop=ALL`) on canonical `main`/`master`.
      - *Crucible Exclusive:* Pi and ACP harnesses cannot be used for triage because their static tool architectures do not support fine-grained runtime tool restriction.
    * **Directive:** *"Analyze the reported task against the repository base branch. Determine affected files and acceptance criteria. Call propose_tasks to recommend structured backlog items. You have read-only access and cannot modify code or access external networks."*
    * **Output:** Structured backlog proposal(s) awaiting human confirmation in the Web UI.
-1. **Stage 1: ForgeTask Review (`TaskReviewStage`):**
-   * **System Persona:** Architectural Analyst & Requirements Investigator.
+
+* **Interactive Ideation (`IdeationService` - Codebase Discovery Chat):**
+   * **System Persona:** Ideation & Codebase Discovery Agent.
+   * **Mission:** Explore the codebase, discuss architectural features, and help the developer plan new tasks directly from the UI chat.
+   * **Scope & Granularity:** Proposes cohesive, PR-sized tasks with autonomous build, test, and code review gates; avoids micro-fragmentation. Uses `read`, `bash` (inspection), `web_search`, and `propose_tasks`.
+
+1. **Stage 1: Task Review (`TaskReviewStage` - Agentic):**
+   * **System Persona:** Staff Software Architect & Requirements Investigator.
    * **Mission:** Deeply inspect the codebase against the task request *before* coding. Proactively uncover ambiguities, implicit assumptions, and architectural conflicts.
-   * **Directive:** *"If any requirement or design decision is ambiguous or has multiple valid alternatives, invoke `ask` immediately to clarify. Do not guess."*
-   * **Output:** Approved Technical Specification & Execution Plan.
-2. **Stage 2: Implementation (`ImplementationStage`):**
+   * **Mandatory Spec Update:** The agent must inspect and edit the task specification document on disk under `docs/tasks/*.md` using `edit` (or `write`), enriching it with the approved technical architecture, affected files/classes, step-by-step implementation plan, and testable acceptance criteria while preserving the top YAML frontmatter block. The system automatically reads back the file upon stage completion.
+   * **Directive:** *"Gather all questions and ambiguities into a single ask call using the question list, expecting all answers at once. Follow-up asks are permitted only for newly discovered blockers. Do not guess. Do not write production code in this stage."*
+   * **Output:** Approved Technical Specification on disk (`docs/tasks/*.md`) and execution plan.
+
+2. **Stage 2: Pre-Implementation Baseline (`PreImplementationBaseline` - Deterministic):**
+   * **Kind:** Deterministic Composite (`DeterministicBuildStage` + `DeterministicTestStage`).
+   * **Mission:** Execute baseline build and test-with-coverage on the initial branch state without AI intervention (CPU only, zero token cost).
+   * **Output:** Captures baseline compiler diagnostic status, test counts, and line/branch coverage metrics into the `PipelineDataBag` to serve as a comparative floor.
+
+3. **Stage 3: Implementation (`ImplementationStage` - Agentic):**
    * **System Persona:** Senior Software Engineer & TDD Practitioner.
-   * **Mission:** Implement clean, robust code according to the approved Stage 1 plan. Run builds (`dotnet build`), run tests, and fix errors incrementally.
-   * **Directive:** *"Write working code and verify with build tools. If unexpected blockers or breaking changes arise, call `ask`."*
-   * **Output:** Working implementation on the feature branch.
-3. **Stage 3: Code Review and Fixes (`CodeReviewAndFixStage`):**
-   * **System Persona:** Critical Code Auditor & QA Specialist.
-   * **Mission:** Review the full changeset against the base branch. Identify regressions, edge cases, missing unit tests, or lint violations, and make targeted fixes directly.
-   * **Directive:** *"Inspect the diff line-by-line. If you find bugs or gaps, use `edit` to fix them directly. When confident, summarize findings."*
-   * **Output:** Polished, review-ready code diff.
+   * **Mission:** Implement clean, robust, and maintainable code adhering to the task specification document in `docs/tasks/`, the approved plan, human answers, and prior reviewer feedback.
+   * **Directive:** *"Keep the blast radius minimal: avoid unnecessary refactoring outside approved scope. Apply precision edits with edit (or write for new files) following repository .editorconfig standards. Continuously verify changes: execute builds and tests incrementally with bash. Fix all compiler errors and test failures. Write comprehensive unit tests covering all new logic and edge cases. If unexpected blockers arise, invoke ask."*
+   * **Output:** Working implementation with green tests in the ephemeral task worktree.
+
+4. **Stage 4: Post-Implementation Quality Gates (`PostImplementationGates` - Deterministic):**
+   * **Kind:** Deterministic Composite Quality Gates.
+   * **Mission:** Execute automated code format check, build verification, unit tests with coverage regression analysis, and DevSkim SAST security scanning.
+   * **Loopback Policy:** If compilation fails, tests fail, coverage regresses below baseline, or critical SAST vulnerabilities are flagged, the orchestrator records diagnostics in `PipelineDataBag` and automatically routes the task back to Stage 3 (`ImplementationStage`) for remediation.
+
+5. **Stage 5: Code Review & Fix (`CodeReviewAndFixStage` - Agentic):**
+   * **System Persona:** Principal Code Reviewer & Quality Gatekeeper.
+   * **Mission:** Review the full changeset against the base branch using `git diff` and `git status`. Verify that implementation matches the `docs/tasks/` specification.
+   * **Two-Tier Review Strategy:**
+     - **Tier 1 (Minor Polish):** If the implementation is fundamentally sound and only requires minor edge-case fixes, code style cleanup, variable renames, or documentation additions, apply precision fixes directly using `edit` and verify with `bash` (build and test).
+     - **Tier 2 (Rejection Gate):** If core acceptance criteria are unfulfilled, if nothing has been implemented, if tests fundamentally fail requiring architectural redesign, or if entire modules are missing, the reviewer rejects the implementation by emitting a `<request_changes>` block (or `request_changes` tool). The task loops back to Stage 3 (`ImplementationStage`) with mandatory test creation requirements.
+   * **Output:** Polished, review-ready code diff or structured rework directive.
+
+6. **Stage 6: Post-Review Verification (`PostReviewVerification` - Deterministic):**
+   * **Kind:** Final Deterministic Verification Composite (`DeterministicBuildStage` + `DeterministicTestStage`).
+   * **Mission:** Perform a final clean build and full test suite run to verify that Stage 5 review fixes did not introduce new compilation errors or test regressions.
+   * **Output:** Verification complete; task transitions to `TaskOverallStatus.Ready` for squash-and-merge.
 
 ---
 
@@ -418,13 +457,16 @@ To avoid wasting prompt tokens on unused tool definitions, Crucible exposes only
 
 | Stage | Permitted Tools | Excluded / Prohibited | Rationale |
 | :--- | :--- | :--- | :--- |
-| **Stage 0: Automated Triage** *(Untrusted Intake)* | `read`, `propose_tasks` | `write`, `edit`, `ask`, `web_search`, `bash` | Pre-analyses untrusted GitHub/GitLab tasks directly on `main`/`master`. Strictly read-only; eliminates file mutations, human queue blocking (`ask`), and data exfiltration channels (`web_search`, `bash`). |
-| **Stage 1: ForgeTask Review** | `read`, `bash`, `web_search`, `ask` | `write`, `edit`, `propose_tasks` | Requirements and architectural analysis. `bash` is restricted by system persona to inspection only (`ls`, `find`, `rg`, `git log`). Code edits are prohibited. |
-| **Stage 2: Implementation** | `read`, `edit`, `write`, `bash`, `web_search`, `ask` | `propose_tasks` | Full engineering tools for coding, building, running tests, and looking up API/compiler solutions. |
-| **Stage 3: Review & Fix** | `read`, `edit`, `bash`, `ask` | `write`, `web_search`, `propose_tasks` | Code auditing and precision patching; strictly focused on internal diffs without external search distraction. |
-| **Ideation / Discovery** | `read`, `bash`, `web_search`, `propose_tasks` | `write`, `edit` | Read-only codebase exploration + web research to propose structured backlog tasks. |
+| **Stage 0: Automated Triage** *(Untrusted Intake)* | `read`, `propose_tasks` | `write`, `edit`, `ask`, `web_search`, `bash` | Pre-analyses untrusted GitHub/GitLab tasks directly on canonical `main`/`master`. Strictly read-only; eliminates code mutations, human queue blocking (`ask`), and data exfiltration channels (`web_search`, `bash`). |
+| **Stage 1: Task Review** *(Agentic)* | `read`, `edit`, `write` *(for `docs/tasks/*.md` spec)*, `bash` *(read-only inspection: `ls`, `find`, `rg`)*, `web_search`, `ask` | `propose_tasks` | Requirements and architectural analysis. The agent is required to update the task specification document in `docs/tasks/` with architecture and acceptance criteria before concluding. Code edits to production code are prohibited by persona. |
+| **Stage 2: Pre-Implementation Baseline** *(Deterministic)* | *None (Deterministic CPU Stage)* | *All LLM Tools* | Automated build and test-with-coverage baseline capture executed via CLI; zero LLM token consumption. |
+| **Stage 3: Implementation** *(Agentic)* | `read`, `edit`, `write`, `bash`, `web_search`, `ask` | `propose_tasks` | Full engineering tools for coding, building, running tests, and looking up API/compiler solutions. |
+| **Stage 4: Post-Implementation Quality Gates** *(Deterministic)* | *None (Deterministic CPU Stage)* | *All LLM Tools* | Automated format, build, test coverage regression gate, and DevSkim SAST scans; loops back to Stage 3 on failure. |
+| **Stage 5: Code Review & Fix** *(Agentic)* | `read`, `edit`, `bash`, `ask` | `write`, `web_search`, `propose_tasks` | Code auditing, diff inspection, and precision patching; strictly focused on internal diffs without external search distraction. Emits `<request_changes>` if major rework is needed. |
+| **Stage 6: Post-Review Verification** *(Deterministic)* | *None (Deterministic CPU Stage)* | *All LLM Tools* | Final clean build and full test suite run ensuring review fixes did not break compilation or test suites. |
+| **Ideation / Discovery** *(Interactive Chat)* | `read`, `bash` *(inspection)*, `web_search`, `propose_tasks` | `write`, `edit` | Read-only codebase exploration + web research to discuss features and propose cohesive PR-sized backlog tasks. |
 
-*Token Impact:* Reduces static tool schema overhead in the system prompt by **60%–70%** on every turn.
+*Token Impact:* Reduces static tool schema overhead in the system prompt by **60%–70%** on every turn while strictly eliminating unauthorized capabilities.
 
 ### 5.1 Dynamic Tool Whitelisting vs. External Harness Limitations
 
@@ -472,20 +514,39 @@ In local LLM workflows, token consumption directly impacts generation speed, VRA
   `[System Prompt] ➔ [AGENTS.md Guidelines] ➔ [Tool Schemas] ➔ [Active Skills] ➔ [ForgeTask Task Prompt] ➔ [Turn History]`
 * **Zero-Jitter Rule:** Never inject dynamic data (such as system clocks, volatile counters, or changing tool orders) into the system prompt or early prefix. Keeping top-level prefix tokens byte-identical allows Ollama to achieve immediate cache hits, cutting turn latency from seconds to milliseconds.
 
-### 6.2 Ephemeral Tool Output Eviction (`ToolResultCompactionStrategy`)
-In an 8-turn implementation loop, old file reads and directory listings linger in the prompt history, causing quadratic token inflation. Crucible configures the native `ToolResultCompactionStrategy` from `Microsoft.Agents.AI.Compaction` directly in the `HarnessAgentOptions`:
+### 6.2 Pi-Style Context Compaction Engine (`PiStyleCrucibleCompactionStrategy`)
+In an extended multi-turn implementation loop, old file reads, compiler outputs, and directory listings linger in prompt history, causing quadratic token inflation and exceeding context limits.
 
-```csharp
-var compactionStrategy = new ToolResultCompactionStrategy(
-    trigger: CompactionTriggers.TokenThreshold(tokenThreshold: 24_000),
-    minimumPreservedGroups: 3, // Hard floor: keep last 3 turns completely uncompacted
-    formatter: CrucibleToolCallFormatter.FormatCompactSummary
-);
+Crucible replaces Microsoft Agent Framework's (MAF) default arbitrary percentage thresholds with a battle-tested, non-destructive **Pi-Style Context Compaction Engine** (`NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy`). For full mathematical and architectural details, refer to **[CRUCIBLE_CONTEXT_COMPACTION.md](CRUCIBLE_CONTEXT_COMPACTION.md)**.
+
+```mermaid
+flowchart TD
+    TurnReq["Incoming Turn Request"] --> Check{"Tokens > ContextWindow - ReserveTokens?"}
+    Check -- No --> Pruner["Historical Reasoning Pruner\n(HistoricalReasoningCompactionChatClient)"]
+    Pruner --> Invocation["Model Inference"]
+    Check -- Yes --> Strategy["PiStyleCrucibleCompactionStrategy"]
+    Strategy --> Anchor["1. Anchor Initial User Prompt (messages[0])"]
+    Strategy --> CutPoint["2. Calculate Cut Point (keepRecentTokens)"]
+    Strategy --> FileOps["3. Lossless File Ops Extraction\n(<read-files> & <modified-files>)"]
+    Strategy --> Clamp["4. Pre-Serialization\n(2,000 Char Tool Clamping)"]
+    Strategy --> Summary["5. Structured Summary Generation\n(Goal, Progress, Decisions, Next Steps)"]
+    Strategy --> Replace["6. Replace History in CompactionMessageIndex"]
+    Replace --> Pruner
 ```
 
-* **Behavior:** Tool call groups outside the protected recent window (`minimumPreservedGroups = 3`) are collapsed into concise assistant summary stubs (e.g. `[read: src/Program.cs (84 lines read)]` or `[bash: ls src/ (12 files)]`).
-* **Preservation:** The complete, uncompacted output remains permanently archived in the on-disk markdown transcripts (`docs/transcripts/`), but the live GPU context window stays bounded and nimble.
-* **Pipeline Combination:** When necessary for larger tasks, `ToolResultCompactionStrategy` is chained with `SlidingWindowCompactionStrategy` via `PipelineCompactionStrategy`.
+#### Key Architecture Principles:
+1. **Dynamic Headroom Budgeting (`ReserveTokens`):**
+   Triggers when:
+   $$\text{TotalTokens} > \text{ContextWindowTokens} - \text{ReserveTokens}$$
+   Configured per model profile (e.g. 225k production window with 16k reserve vs. 32k small budget with 8k reserve).
+2. **Immutable Task Anchor:**
+   The initial User prompt (`messages[0]`) containing task instructions, acceptance criteria, and project constraints is permanently marked as the **Task Anchor** and is **never truncated or evicted**.
+3. **Lossless File Operation Extraction (`FileOperationTracker`):**
+   Scans historical tool calls (`read`, `write`, `edit`), categorizing read-only versus modified files. Appends structured XML blocks (`<read-files>` and `<modified-files>`) that are carried forward across successive compactions via `SeedFromSummaryXml`.
+4. **Pre-Serialization Tool Clamping (`ConversationSerializer`):**
+   Clamps tool outputs in the summarization transcript to 2,000 characters (`[... {N} more characters truncated]`) and strips raw `<think>` blocks, preventing summarization prompt overflow.
+5. **Structured Checkpoint Schema:**
+   Summarizes evicted turns into a structured markdown card covering: Goal, Progress & Completed Steps, Key Decisions & Discoveries, and Next Steps.
 
 ### 6.3 Bounded Output Streaming (`HeadTailBuffer`) & Smart Diagnostic Extraction
 Commands like `dotnet build` or `dotnet test` can generate thousands of lines of stdout. To protect the LLM context:
@@ -502,7 +563,7 @@ Commands like `dotnet build` or `dotnet test` can generate thousands of lines of
    * Reduces 3,000 lines of build noise down to ~50 tokens of actionable signal.
 
 ### 6.4 Noise-Filtered Git Diffs
-In Stage 3 (Code Review), the `{{GitDiff}}` changeset automatically excludes lock files (`package-lock.json`, `pnpm-lock.yaml`), auto-generated designer files (`*.Designer.cs`, `*.g.cs`), and minified assets, and uses compact `-U2` context lines to minimize diff token consumption.
+In Stage 5 (Code Review), the `{{GitDiff}}` changeset automatically excludes lock files (`package-lock.json`, `pnpm-lock.yaml`), auto-generated designer files (`*.Designer.cs`, `*.g.cs`), and minified assets, and uses compact `-U2` context lines to minimize diff token consumption.
 
 ### 6.5 Synthetic Conversation Priming (Pre-Seeded Tool State)
 Local LLMs (7B–32B) typically have a strong training bias to call `bash("dotnet build")` or `bash("dotnet test")` at the start of a coding turn to "see the current status," wasting an entire inference round-trip and GPU compute.
@@ -532,8 +593,8 @@ When advancing from a successful `DeterministicTestStage` to `CodeReviewAndFixSt
 * Pre-seeds a synthetic `dotnet test` execution returning: `Test run successful. Total: 42. Passed: 42. Failed: 0.`
 * The Code Review agent recognizes that tests are already green and focuses immediately on diff analysis, code quality, and security rather than wasting turns re-running the test suite.
 
-### 6.6 Thinking Trace Compaction (`ThinkingTraceCompactionChatClient`)
-For reasoning models (DeepSeek-R1, QwQ), chain-of-thought `<think>...</think>` monologues are streamed live via SignalR to the developer console, but pruned or summarized in historical assistant turns when persisted to memory.
+### 6.6 Thinking Trace Compaction (`HistoricalReasoningCompactionChatClient`)
+For reasoning models (DeepSeek-R1, QwQ, Qwen-Thinking), chain-of-thought `<think>...</think>` monologues and `TextReasoningContent` blocks are streamed live via SignalR to the developer console via `ThinkingAndActivityTracingChatClient`, but pruned or summarized in historical assistant turns via `HistoricalReasoningCompactionChatClient` when persisted to memory or sent back to the model.
 * **Gating Flag:** Controlled by `LocalOptimizationFlags.ThinkingTraceCompaction` (default: `true`).
 * **Opt-Out Benefit:** When toggled to `false`, the exact verbatim `<think>` blocks are preserved for debugging or uncompressed benchmark comparisons.
 

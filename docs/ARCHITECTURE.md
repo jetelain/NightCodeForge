@@ -42,7 +42,7 @@ flowchart TB
 
     subgraph Core ["Orchestration & Workflow Engine"]
         DepEngine["Dependency Graph & Resolution Engine (DAG)"]
-        PipelineEngine["Extensible Workflow Pipeline Engine\n(Stages: Review ➔ Implement ➔ Verify & Fix)"]
+        PipelineEngine["Extensible Workflow Pipeline Engine\n(Stages: Review ➔ Baseline ➔ Implement ➔ Quality Gates ➔ Review & Fix ➔ Verification)"]
         HangfireEngine["Hangfire Background Processing"]
         QueueUrgent["Queue: llm-urgent (Priority = 1)"]
         QueueStandard["Queue: llm-inference (Priority = 2)"]
@@ -53,6 +53,7 @@ flowchart TB
         IHarness["<<interface>>\nIAgentHarness"]
         Crucible["Crucible\n(Microsoft Agent Framework & Extensions.AI)"]
         PiRpc["Pi Agent via JSON-RPC\n(External Process Fallback)"]
+        Acp["ACP Protocol Adapter\n(Open Standard Client)"]
     end
 
     subgraph Gateway ["Inference Gateway Layer (OllamaRouter)"]
@@ -63,10 +64,11 @@ flowchart TB
     end
 
     subgraph Workspaces ["Workspace & Storage Layer"]
-        GitCli["Git CLI Engine (CliWrap)\n- Worktrees: task-{id}\n- WIP Commits & Diff -U2"]
+        GitCli["Git CLI Engine (CliWrap)\n- Ext4 Mirror & Container Reuse\n- Worktrees: task-{id}\n- WIP Commits & Diff -U2"]
         EFCore["Entity Framework Core (SQLite/PostgreSQL)"]
-        CanonicalClone["Canonical Clone on main/master\n(Read-Only Ideation & Triage)"]
+        CanonicalClone["Canonical Clone on main/master\n(~/.nightcodeforge/wks/{id}/clone)"]
         Worktrees["Ephemeral ForgeTask Worktrees\n(~/.nightcodeforge/wks/{id}/task-{id})"]
+        Attachments["Workspace Attachments Store\n(~/.nightcodeforge/wks/{id}/attachments)"]
     end
 
     UI --> SignalR
@@ -85,6 +87,7 @@ flowchart TB
 
     IHarness -.->|Primary Target| Crucible
     IHarness -.->|Fallback Engine| PiRpc
+    IHarness -.->|Open Standard| Acp
 
     Crucible --> Router
     Router --> HostGPU
@@ -95,6 +98,7 @@ flowchart TB
     IHarness --> GitCli
     GitCli --> CanonicalClone
     GitCli --> Worktrees
+    GitCli --> Attachments
     PipelineEngine --> EFCore
 ```
 
@@ -291,27 +295,40 @@ Each step in a workflow pipeline is associated with an **Agent Profile** (`Agent
 
 | Stage | Typical Profile Needs | Example Configuration |
 | :--- | :--- | :--- |
-| **0. Automated Triage** *(Untrusted Intake)* | Autonomous pre-analysis of external tasks/webhooks on `main`/`master`, strictly read-only, indirect injection defense. | **Harness:** `Crucible` *(Exclusive - Pi/ACP unsupported)*<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `Medium`<br>**Permitted Tools:** `["read", "propose_tasks"]`<br>**Security:** `RestrictedReadOnly` (`--network none`, `:ro`) |
-| **1. ForgeTask Review** | High reasoning capability, deep codebase comprehension, proactively questioning edge cases. | **Harness:** `Crucible` (or `PiRpc`)<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `High`<br>**Config:** `{ "proactiveAmbiguityCheck": true }` |
-| **2. Implementation** | Rapid tool execution, fast code generation, test iteration. | **Harness:** `Crucible`<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium` (or `Low`)<br>**Config:** `{ "autoCompile": true, "maxTestRetries": 3 }` |
-| **3. Code Review & Fixes** | Strict gap analysis, linting, regression auditing. | **Harness:** `Acp` (or `Crucible`)<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium`<br>**Config:** `{ "strictLinting": true, "temperature": 0.1 }` |
+| **0. Automated Triage** *(Untrusted Intake)* | Autonomous pre-analysis of external tasks/webhooks on canonical `main`/`master`, strictly read-only, indirect injection defense. | **Harness:** `Crucible` *(Exclusive - Pi/ACP unsupported)*<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `Medium`<br>**Permitted Tools:** `["read", "propose_tasks"]`<br>**Security:** `RestrictedReadOnly` (`--network none`, `:ro`) |
+| **Interactive Ideation** *(Discovery Chat)* | Open conversational exploration of codebase architecture, proposing PR-sized backlog tasks. | **Harness:** `Crucible`<br>**Model:** `qwen2.5-coder:32b`<br>**Mode:** `ReadOnly`<br>**Permitted Tools:** `["read", "bash", "web_search", "propose_tasks"]` |
+| **1. Task Review** *(Agentic)* | High reasoning capability, deep codebase comprehension, proactively questioning edge cases and updating `docs/tasks/*.md`. | **Harness:** `Crucible` (or `PiRpc`)<br>**Model:** `deepseek-r1:32b`<br>**Thinking Effort:** `High`<br>**Permitted Tools:** `["read", "edit", "write", "bash", "web_search", "ask"]` |
+| **2. Pre-Implementation Baseline** *(Deterministic)* | Pure CLI compilation and test execution on CPU (zero tokens). | *Deterministic Stage (No LLM Profile required)* |
+| **3. Implementation** *(Agentic)* | Rapid tool execution, fast code generation, TDD iteration with compiler/test feedback. | **Harness:** `Crucible` (or `PiRpc`)<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium`<br>**Permitted Tools:** `["read", "edit", "write", "bash", "web_search", "ask"]` |
+| **4. Post-Implementation Quality Gates** *(Deterministic)* | Automated format check, build verification, coverage regression gate, and DevSkim SAST scan. | *Deterministic Composite Stage (No LLM Profile required)* |
+| **5. Code Review & Fixes** *(Agentic)* | Strict gap analysis against spec, diff review, minor polish edits, or `<request_changes>` rejection gate. | **Harness:** `Crucible` (or `Acp`)<br>**Model:** `qwen2.5-coder:32b`<br>**Thinking Effort:** `Medium`<br>**Permitted Tools:** `["read", "edit", "bash", "ask"]` |
+| **6. Post-Review Verification** *(Deterministic)* | Final clean build and full test suite verification of review edits. | *Deterministic Composite Stage (No LLM Profile required)* |
 
 #### Agent Profile Definition
 ```csharp
 public class AgentProfile
 {
-    public string Id { get; set; } = default!;          // e.g. "triage-guard", "deep-analyst", "fast-coder", "acp-auditor"
-    public string Name { get; set; } = default!;
-    public string HarnessId { get; set; } = default!;    // "crucible", "pi-rpc", or "acp"
-    public string ModelName { get; set; } = default!;    // e.g. "deepseek-r1:32b", "qwen2.5-coder:32b"
-    public ThinkingEffort ThinkingEffort { get; set; }  // None, Low, Medium, High, CustomBudget
+    public const int DefaultMaxTurns = 500;
+
+    public string Id { get; set; } = string.Empty;          // e.g. "triage-guard", "deep-analyst", "fast-coder", "acp-auditor"
+    public int? WorkspaceId { get; set; }               // Nullable: global profile or workspace override
+    public string Name { get; set; } = string.Empty;
+    public string HarnessId { get; set; } = StandardHarnessIds.Crucible; // "crucible", "pi-rpc", or "acp"
+    public string ModelName { get; set; } = string.Empty;    // e.g. "qwen2.5-coder:32b", "deepseek-r1:32b"
+    public ThinkingEffort ThinkingEffort { get; set; } = ThinkingEffort.None;
     public int? ThinkingTokenBudget { get; set; }
     public double? Temperature { get; set; }
     public string? HarnessConfigurationJson { get; set; } // Harness-specific launch/runtime JSON options
     public LocalOptimizationFlags? OptimizationFlags { get; set; } // Opt-out optimization flags for A/B testing
     public IReadOnlyList<string>? PermittedTools { get; set; } // Whitelist: null = all stage tools; ["read", "propose_tasks"]
+    public Dictionary<string, string>? StageDirectives { get; set; }
+    public AgentMode Mode { get; set; } = AgentMode.Full;
     public SandboxSecurityTier SecurityTier { get; set; } = SandboxSecurityTier.Standard; // Standard vs RestrictedReadOnly
-    public int? WorkspaceId { get; set; }               // Nullable: global profile or workspace override
+    public string? SystemPrompt { get; set; }
+    public int? MaxTurns { get; set; } = DefaultMaxTurns;
+    public bool AllowNoTests { get; set; }
+    public int? ContextWindowTokens { get; set; }        // Token capacity for Pi-style compaction budgeting
+    public OllamaRoutingTarget RoutingTarget { get; set; } = OllamaRoutingTarget.Auto; // Auto, Local, Remote, Cloud
 }
 
 public enum SandboxSecurityTier
@@ -579,16 +596,16 @@ Complex features and refactoring tasks naturally break down into interdependent 
 
 ### 4.1 Dependency Rules & State Propagation
 * A task can declare one or more prerequisite tasks (`DependsOnTaskIds`).
-* **Execution Gate:** A task with unsatisfied dependencies remains in status `WaitingOnDependencies` and **will not be enqueued** to Hangfire.
-* **Cascade Activation:** When a task reaches `Completed` state, the orchestrator evaluates all dependent tasks. If all dependencies of a dependent task are satisfied, its state automatically transitions to `Pending` and it enters the Hangfire queue.
+* **Execution Gate:** A task with `Status == TaskOverallStatus.Open` and unsatisfied dependencies (i.e. one or more prerequisites do not have `Status == TaskOverallStatus.Closed`) is marked as dependency-blocked in the UI and **will not be enqueued** to Hangfire until all dependencies are met.
+* **Cascade Activation:** When a task reaches the terminal `TaskOverallStatus.Closed` state (squashed and merged into the base branch), the orchestrator triggers cascade unblocking (`CascadeUnblockAsync`). Any dependent task whose prerequisites are now all `Closed` is automatically enqueued to the `llm-inference` queue for autonomous execution.
 * **Cycle Prevention:** When creating or modifying dependencies, the `DependencyResolutionEngine` performs topological sorting to detect and reject circular references (cycles).
 
 ```mermaid
 flowchart TD
-    Task101["ForgeTask #101: Core Data Models\n(Status: Completed)"]
-    Task102["ForgeTask #102: Git CLI Engine\n(Status: Running Stage 2)"]
-    Task103["ForgeTask #103: Agent Harness\n(Status: Pending in Queue)"]
-    Task104["ForgeTask #104: Web Dashboard\n(Status: Waiting on Dependencies)"]
+    Task101["ForgeTask #101: Core Data Models\n(Status: Closed - Merged)"]
+    Task102["ForgeTask #102: Git CLI Engine\n(Status: Implemented - Stage 4)"]
+    Task103["ForgeTask #103: Agent Harness\n(Status: Open - In Flight)"]
+    Task104["ForgeTask #104: Web Dashboard\n(Status: Open - Blocked on #102, #103)"]
 
     Task101 --> Task102
     Task101 --> Task103
@@ -1089,50 +1106,59 @@ NightCodeForge decouples orchestration from the underlying agent runtime via an 
 public interface IAgentHarness
 {
     string HarnessId { get; }
-    string DisplayName { get; }
-    
-    Task<AgentRunResult> ExecuteSessionAsync(
-        AgentSessionContext sessionContext,
-        Func<AgentTelemetryEvent, Task> onTelemetry,
-        CancellationToken cancellationToken);
+    Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default);
 }
 
-public record AgentSessionContext(
-    int WorkspaceId,
-    int TaskId,
-    string StageId,
-    AgentProfile Profile,
-    string StageSystemPrompt,
-    string TaskPrompt,
-    string WorkingDirectory,
-    string? SerializedState,
-    IReadOnlyList<QuestionAnswerPair> PriorAnswers);
+public class AgentSessionContext
+{
+    public required ForgeTask ForgeTask { get; init; }
+    public Workspace? Workspace { get; init; }
+    public required AgentProfile Profile { get; init; }
+    public PipelineContext? PipelineContext { get; init; }
+    public LocalOptimizationFlags? OptimizationFlags { get; set; }
+    public string StageId { get; init; } = string.Empty;
+    public string StageDirective { get; init; } = string.Empty;
+    public AgentMode RequiredMode { get; init; } = AgentMode.Full;
+    public string BootstrapPrompt { get; init; } = string.Empty;
+    public string? SerializedStateJson { get; init; }
+    public string WorkspacePath { get; init; } = string.Empty;
+    public string? PendingHumanAnswer { get; init; }
+    public string? PendingHumanAnswerJson { get; init; }
+    public IReadOnlyList<string>? DiscoveredSymbols { get; init; }
+
+    // --- Promoted Typed Properties ---
+    public string? TaskMarkdownPath { get; init; }
+    public string? ReviewDiffStat { get; init; }
+    public string? ApprovedPlan { get; init; }
+    public string? ReviewerFeedback { get; init; }
+    public IReadOnlyList<string>? PriorDiagnostics { get; init; }
+}
+
+public record AgentRunMetrics(
+    long DurationMs = 0,
+    long PromptTokens = 0,
+    long CompletionTokens = 0,
+    long TotalTokens = 0);
 
 public record AgentRunResult(
     AgentRunStatus Status,
-    string? UpdatedState,
-    QuestionPrompt? PendingQuestion,
-    string? Summary,
-    StepExecutionMetrics Metrics,
-    Exception? Error);
-
-public record StepExecutionMetrics(
-    DateTime StartedAt,
-    DateTime CompletedAt,
-    TimeSpan Duration,
-    int PromptTokens,
-    int CompletionTokens,
-    int TotalTokens,
-    string? AgentProfileId,
-    string? ModelName,
-    string? TargetRouting); // e.g. "Local GPU", "Remote Server", "Cloud"
+    AgentRunMetrics Metrics,
+    string? CommitHash = null,
+    string? UpdatedState = null,
+    IReadOnlyList<Question>? PendingQuestions = null,
+    string? Summary = null,
+    string? Error = null,
+    IReadOnlyDictionary<string, string>? DiagnosticArtifacts = null,
+    string? TargetRouting = null,
+    string? ReviewerFeedback = null,
+    IReadOnlyList<TaskProposal>? Proposals = null);
 
 public enum AgentRunStatus
 {
-    Completed,
-    WaitingForHuman,
-    Failed,
-    Cancelled
+    Completed = 0,
+    WaitingForHuman = 1,
+    Failed = 2,
+    Cancelled = 3
 }
 ```
 
@@ -1190,10 +1216,11 @@ For the complete technical specification of the native Crucible harness—includ
 * **Canonical Tool Suite (Pi-Harmonized):** (`read`, `edit`, `write`, `bash`, `web_search`, `ask`, `propose_tasks` - with `list_dir` / `grep_search` / `get_file_outline` mapped to `bash` / `read`)
 * **The "Forgiving" Tool Dispatcher:** Tool name aliasing, parameter normalization, markdown code fence stripping, and indentation tolerance
 * **EditorConfig Enforcement for File Operations:** Automatic application of `.editorconfig` rules (`end_of_line` [LF/CRLF], `indent_style`, `indent_size`, `insert_final_newline`, `trim_trailing_whitespace`, `charset`) on `write` and `edit` to prevent cross-platform line ending churn and formatting diff noise
-* **Stage-Scoped Tool Visibility Matrix:** Gating tool schemas per stage to reduce static prompt overhead
-* **Local LLM Token Minimization:** Prompt prefix stabilization for KV cache reuse, ephemeral tool output eviction, compiler error extraction, and noise-filtered git diffs
+* **Stage-Scoped Tool Visibility Matrix:** Gating tool schemas across all 6 stages of the default workflow to reduce static prompt overhead
+* **Pi-Style Context Compaction Engine:** Non-destructive context compaction (`PiStyleCrucibleCompactionStrategy`) with dynamic headroom budgeting, immutable task anchor (`messages[0]`), lossless file operation tracking (`<read-files>`, `<modified-files>`), 2,000-character tool clamping, and historical reasoning trace pruning (`HistoricalReasoningCompactionChatClient`)
+* **Local LLM Token Minimization:** Prompt prefix stabilization for KV cache reuse, compiler error extraction, synthetic conversation priming, and noise-filtered git diffs
 
-Please refer directly to the dedicated specification document: **[CRUCIBLE.md](CRUCIBLE.md)**.
+Please refer directly to the dedicated specification documents: **[CRUCIBLE.md](CRUCIBLE.md)** and **[CRUCIBLE_CONTEXT_COMPACTION.md](CRUCIBLE_CONTEXT_COMPACTION.md)**.
 
 ---
 
@@ -1563,18 +1590,19 @@ erDiagram
    - Interactive task proposal cards with one-click creation into backlog.
 2. **Backlog & Dependency DAG:**
    - Visual Kanban and dependency graph view showing tasks and blocking links.
-   - Status indicators: `Waiting on Dependencies`, `Pending`, `Running [Stage]`, `Blocked`, `Review`, `Completed`.
+   - Status indicators: `Suggested`, `Open` (with dependency/in-flight markers), `Running [Stage]`, `Waiting for Human` (`IsWaitingForHuman`), `Ready` (awaiting merge), `Closed`.
    - Manual priority adjustment and dependency linking.
 3. **Monitoring & Terminal:**
    - Real-time streaming of active agent reasoning, tool invocations, compiler logs, and Git operations via SignalR.
-   - Visual stage progression indicator (`Review ➔ Implement ➔ Fixes`).
+   - Visual stage progression indicator (`Task Review ➔ Pre-Impl Baseline ➔ Implementation ➔ Quality Gates ➔ Review & Fix ➔ Verification`).
    - Hardware routing badge (Local GPU vs Remote Server) and real-time token/timing metrics.
 4. **Inbox (Human-in-the-Loop):**
    - Central view for all pending questions across blocked tasks.
    - Rich answer form supporting freeform text, code snippets, or multiple-choice options.
 5. **Review Room:**
    - Visual side-by-side / unified `git diff` against base branch.
-   - Action buttons: "Approve & Merge" (squashes WIP commits into base branch and triggers cascade unblocking) or "Request Changes" (opens revision notes input modal and routes task back to Stage 2 `ImplementationStage` with highest priority via `llm-urgent`).
+   - Displays pending tasks awaiting manual review.
+   - Action buttons: "Approve & Merge" (squashes WIP commits into base branch and triggers cascade unblocking) or "Request Changes" (opens revision notes input modal and routes task back to Stage 3 `ImplementationStage` with highest priority via `llm-urgent`).
 6. **Workspace, Profiles & MCP Settings:**
    - Manage target repositories, configure MCP servers (`mcp_config.json`), and tune Agent Profiles per stage.
 7. **Session Transcripts & Cloud AI Diagnostics:**

@@ -325,7 +325,7 @@ public class PiRpcAgentHarness : IAgentHarness, IAsyncDisposable
 
 | Dimension | Crucible Harness (`CrucibleAgent`) | Pi Harness (`PiRpcAgentHarness`) |
 | :--- | :--- | :--- |
-| **Execution Model** | Native In-Process C# (.NET 9/10) | External Node.js/Bun Subprocess |
+| **Execution Model** | Native In-Process C# (.NET 10) | External Node.js/Bun Subprocess |
 | **Foundation** | Microsoft Agent Framework & `Microsoft.Extensions.AI` | Pi Agent Core (`@earendil-works/pi-agent-core`) |
 | **Communication** | Direct in-memory C# method calls & delegates | JSON-RPC over `stdio` pipes (JSON Lines) |
 | **Core Toolset** | `read`, `edit`, `write`, `bash`, `ask`, `web_search` | `read`, `edit`, `write`, `bash` |
