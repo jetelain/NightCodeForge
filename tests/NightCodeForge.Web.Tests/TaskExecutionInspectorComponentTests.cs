@@ -247,6 +247,27 @@ public class TaskExecutionInspectorComponentTests : BunitContext
     }
 
     [Fact]
+    public async Task TaskExecutionInspector_ConversationsTab_StageRunSelectorContainerIsSticky()
+    {
+        var task = new ForgeTask
+        {
+            Id = 88,
+            WorkspaceId = 1,
+            Title = "Sticky Test Task",
+            Status = TaskOverallStatus.Open
+        };
+
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 88));
+
+        var selector = cut.FindComponent<StageRunSelector>();
+        Assert.NotNull(selector);
+        Assert.Contains("position: sticky", cut.Markup);
+        Assert.Contains("Pipeline Stages &amp; Runs", cut.Markup);
+    }
+
+    [Fact]
     public void OptimizationMarkerCard_WithTokensUnit_RendersTokensLabel()
     {
         var cut = Render<OptimizationMarkerCard>(p => p

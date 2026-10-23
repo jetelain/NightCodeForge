@@ -156,7 +156,7 @@
                                     <button type="button" 
                                             class="forge-btn @(isApplied ? "forge-btn-secondary" : "forge-btn-primary")" 
                                             style="padding: 0.45rem 1rem; font-size: 0.85rem; white-space: nowrap;"
-                                            disabled="isApplied || _isApplying"
+                                            disabled="@(isApplied || _isApplying)"
                                             @onclick="() => ApplyActionAsync(action)">
                                         @(isApplied ? "✓ Applied" : "Apply Action")
                                     </button>

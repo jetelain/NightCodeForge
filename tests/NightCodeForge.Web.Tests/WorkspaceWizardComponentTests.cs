@@ -88,6 +88,26 @@ public class WorkspaceWizardComponentTests : BunitContext
     }
 
     [Fact]
+    public void WorkspaceCreationWizardModal_Step4_PassesEvaluatedParameters()
+    {
+        var cut = Render<WorkspaceCreationWizardModal>(parameters => parameters.Add(p => p.IsOpen, true));
+
+        var stepField = typeof(WorkspaceCreationWizardModal).GetField("_currentStep", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var msgField = typeof(WorkspaceCreationWizardModal).GetField("_provisioningMessage", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+
+        stepField.SetValue(cut.Instance, 4);
+        msgField.SetValue(cut.Instance, "Setting up Git workspace mirror...");
+        cut.Render();
+
+        var step4 = cut.FindComponent<WizardStep4Provisioning>();
+        Assert.NotNull(step4);
+        Assert.Equal("Setting up Git workspace mirror...", step4.Instance.ProgressMessage);
+        Assert.Null(step4.Instance.ErrorMessage);
+        Assert.DoesNotContain("_provisioningError", cut.Markup);
+        Assert.DoesNotContain("_provisioningMessage", cut.Markup);
+    }
+
+    [Fact]
     public void WizardStep4Provisioning_WhenCompletedWithWorkspace_RendersSuccessCard()
     {
         var testWorkspace = new Workspace

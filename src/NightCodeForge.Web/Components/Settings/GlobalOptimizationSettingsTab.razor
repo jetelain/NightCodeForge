@@ -18,10 +18,10 @@
             </p>
         </div>
         <div style="display: flex; gap: 0.75rem;">
-            <button type="button" class="forge-btn forge-btn-outline" @onclick="ResetToDefaults" disabled="_isSaving">
+            <button type="button" class="forge-btn forge-btn-outline" @onclick="ResetToDefaults" disabled="@_isSaving">
                 ↺ Reset to Defaults
             </button>
-            <button type="button" class="forge-btn forge-btn-primary" @onclick="SaveSettingsAsync" disabled="_isSaving">
+            <button type="button" class="forge-btn forge-btn-primary" @onclick="SaveSettingsAsync" disabled="@_isSaving">
                 @if (_isSaving)
                 {
                     <span>Saving...</span>

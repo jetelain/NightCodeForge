@@ -53,24 +53,24 @@
                 @switch (_currentStep)
                 {
                     case 1:
-                        <WizardStep1PathProbe Model="_model" 
-                                              ProbeResult="_probeResult" 
-                                              IsProbing="_isProbing"
+                        <WizardStep1PathProbe Model="@_model" 
+                                              ProbeResult="@_probeResult" 
+                                              IsProbing="@_isProbing"
                                               OnProbeRequested="HandleProbeAsync" 
                                               OnInitGitRequested="HandleInitGitAsync" />
                         break;
                     case 2:
-                        <WizardStep2StackBranch Model="_model" 
-                                                ProbeResult="_probeResult" />
+                        <WizardStep2StackBranch Model="@_model" 
+                                                ProbeResult="@_probeResult" />
                         break;
                     case 3:
-                        <WizardStep3Environment Model="_model" />
+                        <WizardStep3Environment Model="@_model" />
                         break;
                     case 4:
-                        <WizardStep4Provisioning ProgressMessage="_provisioningMessage" 
-                                                 IsComplete="_isProvisioningComplete"
-                                                 CreatedWorkspace="_createdWorkspace"
-                                                 ErrorMessage="_provisioningError" />
+                        <WizardStep4Provisioning ProgressMessage="@_provisioningMessage" 
+                                                 IsComplete="@_isProvisioningComplete"
+                                                 CreatedWorkspace="@_createdWorkspace"
+                                                 ErrorMessage="@_provisioningError" />
                         break;
                 }
             </div>

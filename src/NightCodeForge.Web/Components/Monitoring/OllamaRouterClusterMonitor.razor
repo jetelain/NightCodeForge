@@ -34,10 +34,10 @@
             <a href="http://localhost:11434/monitor" target="_blank" class="forge-btn forge-btn-outline" style="padding: 0.5rem 1rem; font-size: 0.85rem;">
                 ↗ Gateway Monitor
             </a>
-            <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.5rem 1rem; font-size: 0.85rem;" @onclick="RefreshAsync" disabled="_isLoading">
+            <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.5rem 1rem; font-size: 0.85rem;" @onclick="RefreshAsync" disabled="@_isLoading">
                 @(_isLoading ? "Refreshing..." : "🔄 Refresh")
             </button>
-            <button id="reclaim-vram-btn" type="button" class="forge-btn forge-btn-primary" style="padding: 0.5rem 1.15rem; font-size: 0.85rem; font-weight: 600;" @onclick="ReclaimVramAsync" disabled="_isReclaiming">
+            <button id="reclaim-vram-btn" type="button" class="forge-btn forge-btn-primary" style="padding: 0.5rem 1.15rem; font-size: 0.85rem; font-weight: 600;" @onclick="ReclaimVramAsync" disabled="@_isReclaiming">
                 @(_isReclaiming ? "Reclaiming VRAM..." : "🧹 Reclaim GPU VRAM")
             </button>
         </div>

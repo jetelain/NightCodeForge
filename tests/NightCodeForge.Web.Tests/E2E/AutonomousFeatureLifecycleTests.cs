@@ -357,14 +357,6 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
         }
 
         var webProj = FindWebProjectPath();
-        var webDir = Path.GetDirectoryName(webProj);
-        if (!string.IsNullOrWhiteSpace(webDir) && Directory.Exists(webDir))
-        {
-            foreach (var db in Directory.GetFiles(webDir, "nightcodeforge*.db*"))
-            {
-                try { File.Delete(db); } catch { }
-            }
-        }
 
         var psi = new ProcessStartInfo("dotnet", $"run --project \"{webProj}\" --no-build --urls {_baseUrl}")
         {

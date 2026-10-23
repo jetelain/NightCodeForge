@@ -87,6 +87,7 @@ Body text
 
         var summary = TranscriptBrowserService.ParseSummaryFromContent("test.md", content);
 
+        Assert.NotNull(summary);
         Assert.Equal(105, summary.TaskId);
         Assert.Equal("stage-review", summary.StageId);
         Assert.Equal("ReviewerExpert", summary.AgentProfile);
@@ -113,9 +114,61 @@ Just raw discussion";
 
         var summary = TranscriptBrowserService.ParseSummaryFromContent("2026-10-15-task-42-unit-tests-failed.md", content);
 
+        Assert.NotNull(summary);
         Assert.Equal(42, summary.TaskId);
         Assert.Equal("unit-tests", summary.StageId);
         Assert.Equal("failed", summary.Status);
+    }
+
+    [Fact]
+    public void ParseSummaryFromContent_AgentsMdOrNonTranscript_ReturnsNull()
+    {
+        var content = @"# Project Guidelines (AGENTS.md)
+Rules for agent execution:
+- Do not make silent failures
+- Follow clean break policy";
+
+        var summary = TranscriptBrowserService.ParseSummaryFromContent("AGENTS.md", content);
+
+        Assert.Null(summary);
+    }
+
+    [Fact]
+    public async Task GetTranscriptsAsync_IgnoresRootFiles_DiscoversDocsAndWorktreeTranscripts()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf_transcripts_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            // Root file: AGENTS.md (must be ignored)
+            await File.WriteAllTextAsync(Path.Combine(tempDir, "AGENTS.md"), "# Guidelines\nDo not fail");
+
+            // docs/transcripts file
+            var docsDir = Path.Combine(tempDir, "docs", "transcripts");
+            Directory.CreateDirectory(docsDir);
+            await File.WriteAllTextAsync(Path.Combine(docsDir, "2026-10-23-task-10-implementation-completed.md"), "---\ntask_id: 10\nstage_id: implementation\nstatus: Completed\n---\n# Transcript");
+
+            // .nightcodeforge/worktrees/task-12/docs/transcripts file
+            var wtDir = Path.Combine(tempDir, ".nightcodeforge", "worktrees", "task-12", "docs", "transcripts");
+            Directory.CreateDirectory(wtDir);
+            await File.WriteAllTextAsync(Path.Combine(wtDir, "2026-10-23-task-12-task_review-completed.md"), "---\ntask_id: 12\nstage_id: task_review\nstatus: Completed\n---\n# Worktree Transcript");
+
+            var service = CreateService();
+            var results = await service.GetTranscriptsAsync(tempDir);
+
+            Assert.Equal(2, results.Count);
+            Assert.DoesNotContain(results, t => t.FileName == "AGENTS.md");
+            Assert.Contains(results, t => t.TaskId == 10 && t.StageId == "implementation");
+            Assert.Contains(results, t => t.TaskId == 12 && t.StageId == "task_review");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
     }
 
     [Fact]

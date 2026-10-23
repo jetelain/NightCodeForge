@@ -127,4 +127,32 @@ public class ReviewPageConflictBannerTests : BunitContext
         Assert.True(approvedInvoked);
         Assert.True(closedInvoked);
     }
+
+    [Fact]
+    public async Task ReviewRoom_ApproveModal_PassesEvaluatedTaskTitle()
+    {
+        var task = new ForgeTask
+        {
+            Id = 57,
+            WorkspaceId = 1,
+            Title = "Real Evaluated Title",
+            Status = TaskOverallStatus.Ready,
+            BaseBranch = "main",
+            FeatureBranch = "feature/task-57"
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<Review>(parameters => parameters.Add(p => p.TaskId, 57));
+
+        var approveBtn = cut.Find("#btn-approve-merge");
+        approveBtn.Click();
+
+        var modal = cut.FindComponent<ApproveMergeModal>();
+        Assert.NotNull(modal);
+        Assert.Equal("Real Evaluated Title", modal.Instance.TaskTitle);
+        Assert.Equal("main", modal.Instance.BaseBranch);
+        Assert.DoesNotContain("_snapshot.Title", cut.Markup);
+        Assert.DoesNotContain("_snapshot.BaseBranch", cut.Markup);
+        Assert.Contains("Merge task #57: Real Evaluated Title", cut.Markup);
+    }
 }

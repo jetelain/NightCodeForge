@@ -16,7 +16,7 @@
                 Probed SDK directories, environment variables, and command binaries discovered on the host system (WSL2 or Bare Host). These directories are mounted read-only into execution containers to enable instant toolchain availability without bloating container images.
             </p>
         </div>
-        <button type="button" class="forge-btn forge-btn-outline" @onclick="RefreshSdksAsync" disabled="_isProbing">
+        <button type="button" class="forge-btn forge-btn-outline" @onclick="RefreshSdksAsync" disabled="@_isProbing">
             @if (_isProbing)
             {
                 <span>Probing Host...</span>

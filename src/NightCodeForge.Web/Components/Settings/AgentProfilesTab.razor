@@ -34,18 +34,18 @@
             {
                 @if (_hasDedicatedProfiles)
                 {
-                    <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 600;" @onclick="RevertToGlobalProfilesAsync" disabled="_isSaving">
+                    <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 600;" @onclick="RevertToGlobalProfilesAsync" disabled="@_isSaving">
                         ↺ Revert to Global Profiles
                     </button>
                 }
                 else
                 {
-                    <button type="button" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 600;" @onclick="CreateDedicatedProfilesAsync" disabled="_isSaving">
+                    <button type="button" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 600;" @onclick="CreateDedicatedProfilesAsync" disabled="@_isSaving">
                         ⚡ Create Dedicated Workspace Profiles
                     </button>
                 }
             }
-            <button type="button" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;" @onclick="SaveProfilesAsync" disabled="_isSaving || (Scope == ProfileScope.Workspace && !_hasDedicatedProfiles)">
+            <button type="button" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;" @onclick="SaveProfilesAsync" disabled="@(_isSaving || _isLoading || (Scope == ProfileScope.Workspace && !_hasDedicatedProfiles))">
                 @(_isSaving ? "Saving..." : "💾 Save Profiles")
             </button>
         </div>
@@ -61,7 +61,7 @@
                     : "Gateway unreachable at http://localhost:11434 - fallback to manual model entry")
             </span>
         </div>
-        <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="RefreshOllamaModelsAsync" disabled="_isLoadingModels">
+        <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="RefreshOllamaModelsAsync" disabled="@_isLoadingModels">
             @(_isLoadingModels ? "Refreshing..." : "🔄 Refresh Models")
         </button>
     </div>
@@ -125,15 +125,27 @@
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; font-size: 0.92rem;">
                         <!-- 1. Ollama Model Dropdown -->
                         <div>
-                            <label class="forge-field-label">Ollama Model</label>
-                            @if (_availableModels.Count > 0)
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                                <label class="forge-field-label" style="margin: 0;">Ollama Model</label>
+                                @if (_availableModels.Count > 0)
+                                {
+                                    <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;"
+                                            @onclick="() => ToggleCustomModel(profile.Id)">
+                                        @(IsCustomModel(profile.Id) ? "Select from list" : "Enter custom name")
+                                    </button>
+                                }
+                            </div>
+                            @if (_availableModels.Count > 0 && !IsCustomModel(profile.Id))
                             {
                                 <select class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName">
+                                    @if (!string.IsNullOrWhiteSpace(profile.ModelName) && !_availableModels.Any(m => string.Equals(m.Name, profile.ModelName, StringComparison.OrdinalIgnoreCase)))
+                                    {
+                                        <option value="@profile.ModelName">@profile.ModelName (Configured)</option>
+                                    }
                                     @foreach (var m in _availableModels)
                                     {
                                         <option value="@m.Name">@m.Name (@FormatBytes(m.Size))</option>
                                     }
-                                    <option value="__custom__">Manual / Custom...</option>
                                 </select>
                             }
                             else
@@ -167,6 +179,14 @@
                                 <option value="@ThinkingEffort.CustomBudget">Custom Token Budget</option>
                             </select>
                         </div>
+
+                        @if (profile.ThinkingEffort == ThinkingEffort.CustomBudget)
+                        {
+                            <div>
+                                <label class="forge-field-label">Custom Thinking Token Budget</label>
+                                <input type="number" min="100" max="64000" step="500" class="forge-input font-mono" style="width: 100%;" @bind="profile.ThinkingTokenBudget" placeholder="e.g. 8192" />
+                            </div>
+                        }
 
                         <!-- 4. Max Turns Budget (Generous for Full Autonomy) -->
                         <div>
@@ -453,6 +473,11 @@
                     existing.SecurityTier = p.SecurityTier;
                     existing.SystemPrompt = p.SystemPrompt;
                     existing.OptimizationFlags = p.OptimizationFlags;
+                    db.Entry(existing).State = EntityState.Modified;
+                }
+                else
+                {
+                    db.AgentProfiles.Add(p);
                 }
             }
 
@@ -466,6 +491,28 @@
         finally
         {
             _isSaving = false;
+        }
+    }
+
+    private readonly HashSet<string> _customModelProfiles = new(StringComparer.OrdinalIgnoreCase);
+
+    private bool IsCustomModel(string profileId)
+    {
+        if (_customModelProfiles.Contains(profileId)) return true;
+        var p = _profiles.FirstOrDefault(x => x.Id == profileId);
+        return p != null && p.ModelName == "__custom__";
+    }
+
+    private void ToggleCustomModel(string profileId)
+    {
+        if (!_customModelProfiles.Remove(profileId))
+        {
+            _customModelProfiles.Add(profileId);
+            var p = _profiles.FirstOrDefault(x => x.Id == profileId);
+            if (p != null && p.ModelName == "__custom__")
+            {
+                p.ModelName = string.Empty;
+            }
         }
     }
 

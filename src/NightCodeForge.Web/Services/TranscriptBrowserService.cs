@@ -99,6 +99,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
 
         var content = await File.ReadAllTextAsync(filePath, cancellationToken);
         var summary = ParseSummaryFromContent(filePath, content);
+        if (summary == null) return null;
 
         return ParseDetail(summary, content);
     }
@@ -375,7 +376,28 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         if (!string.IsNullOrWhiteSpace(workspacePath))
         {
             dirs.Add(Path.Combine(workspacePath, "docs", "transcripts"));
-            dirs.Add(workspacePath);
+            dirs.Add(Path.Combine(workspacePath, ".nightcodeforge", "transcripts"));
+
+            // Check any active or existing worktrees under .nightcodeforge/worktrees
+            var worktreesRoot = Path.Combine(workspacePath, ".nightcodeforge", "worktrees");
+            if (Directory.Exists(worktreesRoot))
+            {
+                try
+                {
+                    foreach (var wt in Directory.GetDirectories(worktreesRoot))
+                    {
+                        var wtTranscripts = Path.Combine(wt, "docs", "transcripts");
+                        if (Directory.Exists(wtTranscripts))
+                        {
+                            dirs.Add(wtTranscripts);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to scan worktrees for transcripts under {WorktreesRoot}", worktreesRoot);
+                }
+            }
         }
 
         var cwd = Directory.GetCurrentDirectory();
@@ -408,7 +430,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         return ParseSummaryFromContent(filePath, content);
     }
 
-    public static TranscriptSummary ParseSummaryFromContent(string filePath, string content)
+    public static TranscriptSummary? ParseSummaryFromContent(string filePath, string content)
     {
         var fileName = Path.GetFileName(filePath);
         var fileInfo = new FileInfo(filePath);
@@ -424,6 +446,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         string status = "Unknown";
         double? kvCacheHitRate = null;
         var optimizations = new LocalOptimizationFlags();
+        bool hasValidTranscriptData = false;
 
         var fmMatch = FrontmatterRegex().Match(content);
         if (fmMatch.Success)
@@ -478,13 +501,15 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                         switch (key)
                         {
                             case "task_id":
-                                if (int.TryParse(val, out var tid)) taskId = tid;
+                                if (int.TryParse(val, out var tid)) { taskId = tid; hasValidTranscriptData = true; }
                                 break;
                             case "stage_id":
                                 stageId = val;
+                                hasValidTranscriptData = true;
                                 break;
                             case "agent_profile":
                                 agentProfile = val;
+                                hasValidTranscriptData = true;
                                 break;
                             case "model":
                                 modelName = val;
@@ -494,6 +519,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                                 break;
                             case "status":
                                 status = val;
+                                hasValidTranscriptData = true;
                                 break;
                             case "kv_cache_hit_rate":
                                 if (double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out var kv)) kvCacheHitRate = kv;
@@ -512,7 +538,13 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                 if (int.TryParse(fnMatch.Groups["taskId"].Value, out var tid)) taskId = tid;
                 stageId = fnMatch.Groups["stage"].Value;
                 status = fnMatch.Groups["status"].Value;
+                hasValidTranscriptData = true;
             }
+        }
+
+        if (!hasValidTranscriptData)
+        {
+            return null;
         }
 
         // Try extracting timestamp from filename (e.g. 2026-10-15-task...)

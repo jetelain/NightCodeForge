@@ -1175,7 +1175,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     ModelCalls: tracingClient?.ModelCalls,
                     AttemptIndex: attemptIndex);
 
-                var transcriptDir = Path.Combine(workspacePath, "docs", "transcripts");
+                var repoRoot = context.Workspace?.RepositoryPath ?? workspacePath;
+                var transcriptDir = Path.Combine(repoRoot, "docs", "transcripts");
                 var savedPath = await _transcriptService.SaveTranscriptAsync(meta, entries, transcriptDir, cancellationToken);
                 transcriptFileName = Path.GetFileName(savedPath);
             }

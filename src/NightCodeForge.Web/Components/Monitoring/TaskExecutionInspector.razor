@@ -154,8 +154,8 @@
         @if (_activeTab == "conversations")
         {
             <div style="display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 1.25rem; align-items: start;">
-                <!-- Left: Stage and Run Selector -->
-                <div>
+                <!-- Left: Stage and Run Selector (Sticky) -->
+                <div style="position: sticky; top: 1rem; align-self: start; max-height: calc(100vh - 2.5rem); overflow-y: auto;">
                     <StageRunSelector Conversations="@_conversations"
                                       SelectedConversation="@_selectedConversation"
                                       WorkflowStages="@_workflowStages"

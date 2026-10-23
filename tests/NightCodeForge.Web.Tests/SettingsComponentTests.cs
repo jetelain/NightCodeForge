@@ -296,13 +296,14 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
     private class MockModelCatalogService : IOllamaModelCatalogService
     {
+        public List<OllamaModelInfo> Models { get; set; } = new()
+        {
+            new("qwen2.5-coder:32b", "qwen2.5-coder:32b", 19800000000, DateTime.UtcNow, "sha256:abc")
+        };
+
         public Task<IReadOnlyList<OllamaModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
         {
-            IReadOnlyList<OllamaModelInfo> list = new List<OllamaModelInfo>
-            {
-                new("qwen2.5-coder:32b", "qwen2.5-coder:32b", 19800000000, DateTime.UtcNow, "sha256:abc")
-            };
-            return Task.FromResult(list);
+            return Task.FromResult<IReadOnlyList<OllamaModelInfo>>(Models);
         }
     }
 
@@ -435,6 +436,53 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
         // Verify settings were persisted
         Assert.Equal("ollama_pasted_key_12345", _webSearchSettingsService.CurrentSettings.ApiKey);
+    }
+
+    [Fact]
+    public void AgentProfilesTab_GlobalScope_SaveProfilesButtonIsEnabledAndSavesChanges()
+    {
+        var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
+
+        // Find "Save Profiles" button
+        var saveBtn = cut.FindAll("button").FirstOrDefault(b => b.TextContent.Contains("Save Profiles"));
+        Assert.NotNull(saveBtn);
+        Assert.False(saveBtn.HasAttribute("disabled"), "Save Profiles button must be enabled in Global scope");
+
+        // Find a MaxTurns input
+        var maxTurnsInput = cut.Find("input[type='number']");
+        Assert.NotNull(maxTurnsInput);
+        maxTurnsInput.Change(750);
+
+        // Click Save Profiles
+        saveBtn.Click();
+
+        // Verify in DB that MaxTurns was persisted
+        using var db = new AppDbContext(_dbOptions);
+        var updatedProfile = db.AgentProfiles.FirstOrDefault(p => p.WorkspaceId == null);
+        Assert.NotNull(updatedProfile);
+        Assert.Equal(750, updatedProfile.MaxTurns);
+    }
+
+    [Fact]
+    public void AgentProfilesTab_CustomModelToggle_SwitchesBetweenDropdownAndInput()
+    {
+        // Add a mock model to catalog
+        _catalogService.Models = new List<OllamaModelInfo>
+        {
+            new("llama3:8b", "llama3:8b", 4_000_000_000, DateTime.UtcNow, "sha256:123")
+        };
+
+        var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
+
+        // Find "Enter custom name" button
+        var customBtn = cut.FindAll("button").FirstOrDefault(b => b.TextContent.Contains("Enter custom name"));
+        Assert.NotNull(customBtn);
+
+        // Click it to switch to manual input
+        customBtn.Click();
+
+        // Verify button text changed to "Select from list"
+        Assert.Contains("Select from list", cut.Markup);
     }
 
     #endregion
