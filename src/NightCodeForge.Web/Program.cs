@@ -60,8 +60,18 @@ builder.Services.AddScoped<ITaskDiffService, TaskDiffService>();
 var defaultConnStr = builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=nightcodeforge.db;";
 var hangfireConnStr = builder.Configuration.GetConnectionString("HangfireConnection") ?? "Data Source=nightcodeforge_hangfire.db;";
 
-var dbConnection = NormalizeSqliteConnectionString(defaultConnStr, AppContext.BaseDirectory);
-var hangfireConnection = NormalizeSqliteConnectionString(hangfireConnStr, AppContext.BaseDirectory);
+var baseDbDir = AppContext.BaseDirectory;
+if (builder.Environment.IsDevelopment())
+{
+    var projectDir = FindWebProjectDirectory(AppContext.BaseDirectory);
+    if (!string.IsNullOrWhiteSpace(projectDir))
+    {
+        baseDbDir = projectDir;
+    }
+}
+
+var dbConnection = NormalizeSqliteConnectionString(defaultConnStr, baseDbDir);
+var hangfireConnection = NormalizeSqliteConnectionString(hangfireConnStr, baseDbDir);
 
 EnsureSqliteDirectoryExists(dbConnection);
 EnsureSqliteDirectoryExists(hangfireConnection);
@@ -192,6 +202,20 @@ static string NormalizeSqliteConnectionString(string? connectionString, string b
         }
     }
     return modified ? string.Join(";", parts) + ";" : connectionString;
+}
+
+static string? FindWebProjectDirectory(string baseDirectory)
+{
+    var current = new DirectoryInfo(baseDirectory);
+    while (current != null)
+    {
+        if (File.Exists(Path.Combine(current.FullName, "NightCodeForge.Web.csproj")))
+        {
+            return current.FullName;
+        }
+        current = current.Parent;
+    }
+    return null;
 }
 
 
