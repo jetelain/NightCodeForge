@@ -68,11 +68,18 @@ public class MockDevQueueService : IDevQueueService
 
     public int? LastRescheduledTaskId { get; private set; }
     public bool? LastRescheduledRestartPipeline { get; private set; }
+    public int? LastRetriedTaskId { get; private set; }
+    public (int TaskId, Core.Domain.TaskRestartGitMode GitMode)? LastRestartPipelineCall { get; private set; }
 
-    public Task<bool> RescheduleTaskAsync(int taskId, bool restartPipeline = false, CancellationToken cancellationToken = default)
+    public Task<bool> RetryCurrentStageAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        LastRescheduledTaskId = taskId;
-        LastRescheduledRestartPipeline = restartPipeline;
+        LastRetriedTaskId = taskId;
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> RestartPipelineAsync(int taskId, Core.Domain.TaskRestartGitMode gitMode = Core.Domain.TaskRestartGitMode.PreserveWork, CancellationToken cancellationToken = default)
+    {
+        LastRestartPipelineCall = (taskId, gitMode);
         return Task.FromResult(true);
     }
 

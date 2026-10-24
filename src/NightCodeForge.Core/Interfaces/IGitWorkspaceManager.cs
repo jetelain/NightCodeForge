@@ -123,5 +123,15 @@ public interface IGitWorkspaceManager
     /// Resets the specified branch in the canonical repository to a target commit SHA (hard reset).
     /// </summary>
     Task ResetCanonicalBranchAsync(Workspace workspace, string baseBranch, string targetSha, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Discards all uncommitted changes and commits on feature/task-{id}, hard-resetting
+    /// the branch directly to the head of the specified baseBranch.
+    /// </summary>
+    Task ResetTaskBranchToBaseAsync(
+        Workspace workspace,
+        int taskId,
+        string baseBranch,
+        CancellationToken cancellationToken = default);
 }
 

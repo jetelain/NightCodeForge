@@ -118,16 +118,35 @@ public class TaskOrchestrator : ITaskOrchestrator
             return;
         }
 
+        var initialJobId = task.LastHangfireJobId;
+
         // 2. ForgeTask Lock Acquisition (Enables concurrent execution of different tasks on the same workspace)
         using var lockReleaser = await _workspaceLockProvider.AcquireTaskLockAsync(task.WorkspaceId, task.Id, cancellationToken);
 
-        // The task may have been cancelled while this job was waiting for the lock.
-        var persistedStatus = await _taskRepository.GetStatusAsync(task.Id, cancellationToken);
-        if (persistedStatus == TaskOverallStatus.Cancelled || persistedStatus == TaskOverallStatus.Closed || persistedStatus == TaskOverallStatus.Rejected)
+        // Re-read task state after acquiring the lock to guarantee we have the latest persisted state
+        var reloadedTask = await _taskRepository.GetByIdAsync(task.Id, cancellationToken);
+        if (reloadedTask == null)
         {
-            _logger.LogInformation("ForgeTask #{TaskId} is now in {Status} status; aborting execution.", taskId, persistedStatus);
+            _logger.LogError("ForgeTask #{TaskId} not found after acquiring lock.", taskId);
             return;
         }
+
+        // The task may have been cancelled, closed, or rejected while waiting for the lock.
+        if (reloadedTask.Status == TaskOverallStatus.Cancelled || reloadedTask.Status == TaskOverallStatus.Closed || reloadedTask.Status == TaskOverallStatus.Rejected)
+        {
+            _logger.LogInformation("ForgeTask #{TaskId} is now in {Status} status; aborting execution.", taskId, reloadedTask.Status);
+            return;
+        }
+
+        // Detect if this execution was superseded by a restart or re-enqueue while waiting for the lock.
+        if (!string.IsNullOrWhiteSpace(initialJobId) && !string.IsNullOrWhiteSpace(reloadedTask.LastHangfireJobId) && !string.Equals(reloadedTask.LastHangfireJobId, initialJobId, StringComparison.Ordinal))
+        {
+            _logger.LogInformation("ForgeTask #{TaskId} execution was superseded while waiting for lock (Old JobId: '{OldJobId}', New JobId: '{NewJobId}'); aborting stale execution.",
+                taskId, initialJobId, reloadedTask.LastHangfireJobId);
+            return;
+        }
+
+        task = reloadedTask;
 
         taskCts = _cancellationManager.Register(task.Id, cancellationToken);
         cancellationToken = taskCts.Token;
@@ -2376,5 +2395,163 @@ public class TaskOrchestrator : ITaskOrchestrator
                 _logger.LogWarning(ex, "Failed pushing ext4 mirror changes for task #{TaskId} to host repository", task.Id);
             }
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> RestartTaskPipelineAsync(
+        int taskId,
+        TaskRestartGitMode gitMode = TaskRestartGitMode.PreserveWork,
+        CancellationToken cancellationToken = default)
+    {
+        // 1. Initial snapshot check
+        var initialSnapshot = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Task #{taskId} not found.");
+
+        if (initialSnapshot.SquashCommitSha != null || initialSnapshot.Status == TaskOverallStatus.Closed)
+        {
+            throw new InvalidOperationException("Cannot restart a task that has already been merged.");
+        }
+
+        // 2. Active execution cancellation: signal if currently registered before awaiting release
+        if (_cancellationManager.IsRegistered(taskId))
+        {
+            _cancellationManager.Cancel(taskId);
+        }
+
+        // 3. Workspace / Task Mutual Exclusion Lock: awaits release of any running worker
+        using var lockReleaser = await _workspaceLockProvider.AcquireTaskLockAsync(initialSnapshot.WorkspaceId, taskId, cancellationToken);
+
+        // 4. Reload task entity after acquiring lock to guarantee fresh state
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Task #{taskId} not found.");
+
+        if (task.SquashCommitSha != null || task.Status == TaskOverallStatus.Closed)
+        {
+            throw new InvalidOperationException("Cannot restart a task that has already been merged.");
+        }
+
+        // 5. Delete lingering Hangfire job if present
+        if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
+        {
+            _jobQueue.Delete(task.LastHangfireJobId);
+        }
+
+        var workspace = task.Workspace ?? await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken);
+        if (workspace == null)
+        {
+            throw new InvalidOperationException($"Workspace #{task.WorkspaceId} not found for task #{taskId}.");
+        }
+
+        // 6. Hard Reset Path: Container teardown FIRST, then Git reset
+        if (gitMode == TaskRestartGitMode.HardResetToBaseBranch)
+        {
+            try
+            {
+                await _environmentProvider.CleanupTaskContainerAsync(workspace, task.Id, cancellationToken);
+                await _gitWorkspaceManager.ResetTaskBranchToBaseAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed resetting workspace and Git state during pipeline restart for Task #{TaskId}", task.Id);
+                task.Status = TaskOverallStatus.Failed;
+                await _taskRepository.UpdateWithHistoryAsync(
+                    task,
+                    dependsOn: null,
+                    changedBy: AuditActors.TaskOrchestrator,
+                    reason: $"Pipeline restart failed: {ex.Message}",
+                    cancellationToken: cancellationToken);
+                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
+                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                {
+                    TaskId = task.Id,
+                    Level = LogLevel.Error,
+                    Message = $"Pipeline restart failed during environment/Git reset: {ex.Message}",
+                    Timestamp = DateTime.UtcNow
+                }, cancellationToken);
+                throw;
+            }
+
+            // Purge pipeline execution data bag and execution run flag only on HardReset
+            task.PipelineDataJson = "{}";
+            task.HasExecutionRun = false;
+            task.MaxExecutedStageOrder = 0;
+        }
+
+        // 7. Reset Task State
+        task.Status = TaskOverallStatus.Open;
+        task.SquashCommitSha = null;
+        task.IsWaitingForHuman = false;
+        task.InterruptedStageId = null;
+        task.InterruptedAgentProfileId = null;
+        task.UpdatedAt = DateTime.UtcNow;
+
+        // 8. Stage Conversations - mark active or pending as Superseded
+        var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+        foreach (var c in convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman || c.Status == StageExecutionStatus.Pending))
+        {
+            await _taskRepository.CompleteConversationAsync(c.Id, StageExecutionStatus.Superseded, summary: "Pipeline restarted; previous conversation superseded.", cancellationToken: cancellationToken);
+        }
+
+        // 7. Resolve Initial Stage
+        var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
+        var initialStage = pipeline.InitialStage ?? throw new InvalidOperationException($"Task #{task.Id} has no initial workflow stage.");
+        task.CurrentStageId = initialStage.StageId;
+
+        // 8. Update DB Record with History
+        var changeReason = gitMode == TaskRestartGitMode.HardResetToBaseBranch
+            ? $"Pipeline restarted from Stage 1 with Hard Reset to '{task.BaseBranch}' (discards previous work)"
+            : "Pipeline restarted from Stage 1 with preserved worktree changes";
+
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.User,
+            reason: changeReason,
+            cancellationToken: cancellationToken);
+
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
+
+        // 9. Execution Log
+        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+        {
+            TaskId = task.Id,
+            Level = LogLevel.Information,
+            Message = changeReason,
+            Timestamp = DateTime.UtcNow
+        }, cancellationToken);
+
+        // 10. SignalR Telemetry Event
+        try
+        {
+            await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                Guid.NewGuid().ToString("N"),
+                task.Id,
+                initialStage.StageId,
+                Streaming.AgentActivityKind.StageStarted,
+                $"Restarting pipeline for task #{task.Id} from stage '{initialStage.StageId}'",
+                DateTime.UtcNow,
+                new Dictionary<string, object?>
+                {
+                    ["IsRestart"] = true,
+                    ["RestartMode"] = gitMode.ToString()
+                }), cancellationToken);
+        }
+        catch (Exception sex)
+        {
+            _logger.LogDebug(sex, "Failed broadcasting stage restarted event for task #{TaskId}", task.Id);
+        }
+
+        // 11. Re-enqueue Initial Stage
+        var newJobId = _jobQueue.EnqueueStage(task.Id, initialStage.QueueTier, task.Priority);
+        task.LastHangfireJobId = newJobId;
+        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+
+        // 12. Markdown Sync
+        await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+
+        _logger.LogInformation("Successfully restarted pipeline for Task #{TaskId} (Mode: {GitMode}, InitialStage: {StageId}, JobId: {JobId})",
+            taskId, gitMode, initialStage.StageId, newJobId);
+
+        return true;
     }
 }

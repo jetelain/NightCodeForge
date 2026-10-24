@@ -3,7 +3,7 @@
 > **Phase 11 Implementation Step (Post-MVP - Pipeline Management, Git Worktree Hygiene & Developer Ergonomics)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
-> *Status:* Proposed / Specified | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 ---
 
@@ -382,17 +382,17 @@ In accordance with the project rule on UI and presentation separation (keeping R
 
 ## 5. Acceptance Criteria Checklist
 
-- [ ] `TaskRestartGitMode` enum defined in `NightCodeForge.Core.Domain` (`PreserveWork = 0`, `HardResetToBaseBranch = 1`).
-- [ ] `StageExecutionStatus.Superseded` defined in `NightCodeForge.Core.Domain.Enums`.
-- [ ] `ITaskOrchestrator.RestartTaskPipelineAsync` defined and implemented in `Core`, owning the restart workflow.
-- [ ] Restart rejected with `InvalidOperationException` if task is already merged or closed (`SquashCommitSha != null || Status == Closed`).
-- [ ] Active running tasks are cancelled and dangling Hangfire jobs deleted (`_jobQueue.Delete`) prior to reset.
-- [ ] Sandbox container recycled (`CleanupTaskContainerAsync`) strictly BEFORE Git reset operations.
-- [ ] `IGitWorkspaceManager.ResetTaskBranchToBaseAsync` implemented in `GitWorkspaceManager` with hard reset, untracked file purge (`git clean -fdx`), relative path normalization, and safe remote reconciliation.
-- [ ] Pipeline data bag execution artifacts and interruption keys fully purged on hard reset.
-- [ ] Active stage conversations marked with `StageExecutionStatus.Superseded`.
-- [ ] Task re-enqueued via `TaskJobQueue.EnqueueStage` using initial workflow stage's declared `QueueTier`.
-- [ ] `IDevQueueService` updated with dedicated `RetryCurrentStageAsync` and `RestartPipelineAsync` methods.
-- [ ] `RestartPipelineModal.razor` created with clear card options, destructive warning banner, and cancellation support.
-- [ ] `TaskExecutionInspector.razor` updated to open modal on restart and use `RetryCurrentStageAsync` on retry.
-- [ ] All tests passing with `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] `TaskRestartGitMode` enum defined in `NightCodeForge.Core.Domain` (`PreserveWork = 0`, `HardResetToBaseBranch = 1`).
+- [x] `StageExecutionStatus.Superseded` defined in `NightCodeForge.Core.Domain.Enums`.
+- [x] `ITaskOrchestrator.RestartTaskPipelineAsync` defined and implemented in `Core`, owning the restart workflow.
+- [x] Restart rejected with `InvalidOperationException` if task is already merged or closed (`SquashCommitSha != null || Status == Closed`).
+- [x] Active running tasks are cancelled and dangling Hangfire jobs deleted (`_jobQueue.Delete`) prior to reset.
+- [x] Sandbox container recycled (`CleanupTaskContainerAsync`) strictly BEFORE Git reset operations.
+- [x] `IGitWorkspaceManager.ResetTaskBranchToBaseAsync` implemented in `GitWorkspaceManager` with hard reset, untracked file purge (`git clean -fdx`), relative path normalization, and safe remote reconciliation.
+- [x] Pipeline data bag execution artifacts and interruption keys fully purged on hard reset.
+- [x] Active stage conversations marked with `StageExecutionStatus.Superseded`.
+- [x] Task re-enqueued via `TaskJobQueue.EnqueueStage` using initial workflow stage's declared `QueueTier`.
+- [x] `IDevQueueService` updated with dedicated `RetryCurrentStageAsync` and `RestartPipelineAsync` methods.
+- [x] `RestartPipelineModal.razor` created with clear card options, destructive warning banner, and cancellation support.
+- [x] `TaskExecutionInspector.razor` updated to open modal on restart and use `RetryCurrentStageAsync` on retry.
+- [x] All tests passing with `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

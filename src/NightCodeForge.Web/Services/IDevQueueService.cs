@@ -38,9 +38,20 @@ public interface IDevQueueService
     Task<bool> EmergencyReleaseLockAsync(int workspaceId, int? taskId = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Reschedules a task to run again, either retrying the current stage or restarting the entire pipeline from scratch.
+    /// Retries or re-enqueues the current stage of a task without resetting pipeline progress.
     /// </summary>
-    Task<bool> RescheduleTaskAsync(int taskId, bool restartPipeline = false, CancellationToken cancellationToken = default);
+    Task<bool> RetryCurrentStageAsync(
+        int taskId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Restarts the task workflow from Stage 1 using the specified Git worktree strategy,
+    /// delegating to ITaskOrchestrator.RestartTaskPipelineAsync.
+    /// </summary>
+    Task<bool> RestartPipelineAsync(
+        int taskId,
+        Core.Domain.TaskRestartGitMode gitMode = Core.Domain.TaskRestartGitMode.PreserveWork,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Re-sequences waiting jobs in the Hangfire inference queue strictly by Priority ASC (1 Highest -> 5 Lowest),

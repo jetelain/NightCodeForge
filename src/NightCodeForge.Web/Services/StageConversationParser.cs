@@ -114,6 +114,7 @@ public static class StageConversationParser
             StageExecutionStatus.Failed => "badge-crimson",
             StageExecutionStatus.Skipped => "badge-zinc",
             StageExecutionStatus.Pending => "badge-zinc",
+            StageExecutionStatus.Superseded => "badge-zinc",
             _ => "badge-zinc"
         };
     }

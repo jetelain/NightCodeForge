@@ -490,6 +490,103 @@ public class GitWorkspaceManagerTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task ResetTaskBranchToBaseAsync_WhenBranchHasCommits_ResetsHeadToBaseBranchCommit()
+    {
+        // Arrange: Create worktree on feature/task-201 and commit a file
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 201, "main");
+        _repo.CreateFile("task201_work.txt", "Some work on feature branch", wtPath);
+        await _manager.CreateWipCheckpointAsync(_workspace, 201, "Stage1", "WIP Checkpoint");
+
+        // Advance main with a new commit
+        _repo.CreateFile("main_update.txt", "New update on main");
+        _repo.CommitAll("Advance main with new commit");
+        var mainRev = await _runner.ExecuteAsync(_repo.RepositoryPath, ["rev-parse", "HEAD"]);
+        var expectedMainSha = mainRev.StandardOutput.Trim();
+
+        // Act
+        await _manager.ResetTaskBranchToBaseAsync(_workspace, 201, "main");
+
+        // Assert
+        var wtRev = await _runner.ExecuteAsync(wtPath, ["rev-parse", "HEAD"]);
+        Assert.Equal(expectedMainSha, wtRev.StandardOutput.Trim());
+
+        // Previous branch file should be gone, and main_update.txt should be present
+        Assert.False(File.Exists(Path.Combine(wtPath, "task201_work.txt")));
+        Assert.True(File.Exists(Path.Combine(wtPath, "main_update.txt")));
+    }
+
+    [Fact]
+    public async Task ResetTaskBranchToBaseAsync_WithUntrackedAndDirtyFiles_CleansWorkingTree()
+    {
+        // Arrange
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 202, "main");
+        _repo.CreateFile("README.md", "# Modified in worktree", wtPath);
+        _repo.CreateFile("untracked.txt", "dirty untracked file", wtPath);
+        var subDir = Path.Combine(wtPath, "bin", "Debug");
+        Directory.CreateDirectory(subDir);
+        await File.WriteAllTextAsync(Path.Combine(subDir, "app.dll"), "fake binary");
+
+        // Act
+        await _manager.ResetTaskBranchToBaseAsync(_workspace, 202, "main");
+
+        // Assert
+        var status = await _runner.ExecuteAsync(wtPath, ["status", "--porcelain"]);
+        Assert.True(string.IsNullOrWhiteSpace(status.StandardOutput.Trim()), $"Expected clean status but got: {status.StandardOutput}");
+        Assert.False(File.Exists(Path.Combine(wtPath, "untracked.txt")));
+        Assert.False(Directory.Exists(Path.Combine(wtPath, "bin")));
+    }
+
+    [Fact]
+    public async Task ResetTaskBranchToBaseAsync_StandaloneLocalRepoWithoutRemote_SucceedsWithoutThrowing()
+    {
+        // Arrange: _repo is a standalone local repository with no host-origin or origin remotes configured
+        var remotes = await _runner.ExecuteAsync(_repo.RepositoryPath, ["remote"]);
+        Assert.Empty(remotes.StandardOutput.Trim());
+
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 203, "main");
+        _repo.CreateFile("wip.txt", "local wip", wtPath);
+        await _manager.CreateWipCheckpointAsync(_workspace, 203, "Stage1", "Local WIP");
+
+        // Act & Assert (must not throw even with no remote configured)
+        await _manager.ResetTaskBranchToBaseAsync(_workspace, 203, "main");
+
+        var status = await _runner.ExecuteAsync(wtPath, ["status", "--porcelain"]);
+        Assert.True(string.IsNullOrWhiteSpace(status.StandardOutput.Trim()));
+    }
+
+    [Fact]
+    public async Task ResetTaskBranchToBaseAsync_WithRemoteOrigin_FetchesAndResetsToLatestRemoteCommit()
+    {
+        // 1. Arrange: create an upstream origin repo
+        using var upstreamRepo = new TestGitRepository("main");
+        upstreamRepo.CreateFile("readme.txt", "upstream version 1");
+        upstreamRepo.CommitAll("initial upstream commit");
+
+        // 2. Configure origin in _repo pointing to upstreamRepo.RepositoryPath
+        var upstreamUrl = upstreamRepo.RepositoryPath.Replace('\\', '/');
+        await _runner.ExecuteAsync(_repo.RepositoryPath, ["remote", "add", "origin", upstreamUrl]);
+
+        // 3. Create a worktree for task 204 based on main
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 204, "main");
+        _repo.CreateFile("wip.txt", "wip code", wtPath);
+        await _manager.CreateWipCheckpointAsync(_workspace, 204, "Stage1", "WIP on old main");
+
+        // 4. Advance main on upstream origin with a new commit
+        upstreamRepo.CreateFile("new_feature.txt", "fresh upstream code");
+        upstreamRepo.CommitAll("advance upstream main commit");
+        var upstreamHead = (await _runner.ExecuteAsync(upstreamRepo.RepositoryPath, ["rev-parse", "HEAD"])).StandardOutput.Trim();
+
+        // 5. Act: ResetTaskBranchToBaseAsync
+        await _manager.ResetTaskBranchToBaseAsync(_workspace, 204, "main");
+
+        // 6. Assert: task worktree is now reset directly to the fresh upstream HEAD
+        var wtHead = (await _runner.ExecuteAsync(wtPath, ["rev-parse", "HEAD"])).StandardOutput.Trim();
+        Assert.Equal(upstreamHead, wtHead);
+        Assert.True(File.Exists(Path.Combine(wtPath, "new_feature.txt")));
+        Assert.False(File.Exists(Path.Combine(wtPath, "wip.txt")));
+    }
+
     public void Dispose()
     {
         _repo.Dispose();

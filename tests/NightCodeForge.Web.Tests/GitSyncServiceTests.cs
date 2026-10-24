@@ -265,6 +265,7 @@ public class GitSyncServiceTests
         public Task AbortMergeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<string> GetBranchShaAsync(Workspace workspace, string branchName, CancellationToken cancellationToken = default) => Task.FromResult("sha");
         public Task ResetCanonicalBranchAsync(Workspace workspace, string branchName, string targetSha, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ResetTaskBranchToBaseAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private class MockGitMirrorSyncService : IGitMirrorSyncService

@@ -30,6 +30,7 @@ public class DevQueueService : IDevQueueService
     private readonly ITaskCancellationManager _cancellationManager;
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IDevQueueSkippedJobRegistry _skippedJobRegistry;
+    private readonly ITaskOrchestrator _taskOrchestrator;
     private readonly ILogger<DevQueueService> _logger;
 
     public DevQueueService(
@@ -41,6 +42,7 @@ public class DevQueueService : IDevQueueService
         ITaskCancellationManager cancellationManager,
         IWorkspacePathResolver pathResolver,
         IDevQueueSkippedJobRegistry skippedJobRegistry,
+        ITaskOrchestrator taskOrchestrator,
         ILogger<DevQueueService> logger)
     {
         _lockProvider = lockProvider ?? throw new ArgumentNullException(nameof(lockProvider));
@@ -51,6 +53,7 @@ public class DevQueueService : IDevQueueService
         _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _skippedJobRegistry = skippedJobRegistry ?? throw new ArgumentNullException(nameof(skippedJobRegistry));
+        _taskOrchestrator = taskOrchestrator ?? throw new ArgumentNullException(nameof(taskOrchestrator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -367,66 +370,59 @@ public class DevQueueService : IDevQueueService
         }
     }
 
-    public async Task<bool> RescheduleTaskAsync(int taskId, bool restartPipeline = false, CancellationToken cancellationToken = default)
+    public async Task<bool> RetryCurrentStageAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        try
+        using var scope = _scopeFactory.CreateScope();
+        var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+        var task = await taskRepo.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Task #{taskId} not found.");
+
+        if (task.Status == TaskOverallStatus.Failed || task.Status == TaskOverallStatus.Cancelled)
         {
-            using var scope = _scopeFactory.CreateScope();
-            var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
-            var task = await taskRepo.GetByIdAsync(taskId, cancellationToken);
-            if (task == null)
-            {
-                _logger.LogWarning("Cannot reschedule Task #{TaskId}: task not found", taskId);
-                return false;
-            }
-
-            if (restartPipeline)
-            {
-                task.CurrentStageId = string.Empty;
-                task.Status = TaskOverallStatus.Open;
-                task.SquashCommitSha = null;
-            }
-            else
-            {
-                if (task.Status == TaskOverallStatus.Failed || task.Status == TaskOverallStatus.Cancelled)
-                {
-                    task.Status = TaskOverallStatus.Open;
-                }
-            }
-
-            task.IsWaitingForHuman = false;
-            task.InterruptedAgentProfileId = null;
-            task.InterruptedStageId = null;
-            task.UpdatedAt = DateTime.UtcNow;
-
-            var rescheduleReason = restartPipeline
-                ? "Pipeline restarted from beginning via DevQueue"
-                : $"Rescheduled task execution via DevQueue (Status: {task.Status})";
-
-            await taskRepo.UpdateWithHistoryAsync(
-                task,
-                dependsOn: null,
-                changedBy: AuditActors.User,
-                reason: rescheduleReason,
-                cancellationToken: cancellationToken);
-
-            var pipelineProvider = scope.ServiceProvider.GetRequiredService<IWorkflowPipelineProvider>();
-            var pipeline = await pipelineProvider.GetPipelineAsync(task, cancellationToken);
-            var stage = (!string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null)
-                ?? pipeline.InitialStage
-                ?? throw new InvalidOperationException($"Task #{task.Id} has no initial or active stage.");
-
-            var jobId = _taskJobQueue.EnqueueStage(taskId, stage.QueueTier, task.Priority);
-            task.LastHangfireJobId = jobId;
-            await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);
-            _logger.LogInformation("Rescheduled Task #{TaskId} (RestartPipeline={RestartPipeline}, JobId={JobId}, Tier={Tier})", taskId, restartPipeline, jobId, stage.QueueTier);
-            return true;
+            task.Status = TaskOverallStatus.Open;
         }
-        catch (Exception ex)
+
+        task.IsWaitingForHuman = false;
+        task.InterruptedAgentProfileId = null;
+        task.InterruptedStageId = null;
+        task.UpdatedAt = DateTime.UtcNow;
+
+        var rescheduleReason = $"Rescheduled task execution via DevQueue (Status: {task.Status})";
+
+        await taskRepo.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.User,
+            reason: rescheduleReason,
+            cancellationToken: cancellationToken);
+
+        var pipelineProvider = scope.ServiceProvider.GetRequiredService<IWorkflowPipelineProvider>();
+        var pipeline = await pipelineProvider.GetPipelineAsync(task, cancellationToken);
+        var stage = (!string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null)
+            ?? pipeline.InitialStage
+            ?? throw new InvalidOperationException($"Task #{task.Id} has no initial or active stage.");
+
+        // Delete dangling/previous Hangfire job before enqueuing to prevent double execution
+        if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
         {
-            _logger.LogError(ex, "Failed to reschedule Task #{TaskId}", taskId);
-            return false;
+            _taskJobQueue.Delete(task.LastHangfireJobId);
         }
+
+        var jobId = _taskJobQueue.EnqueueStage(taskId, stage.QueueTier, task.Priority);
+        task.LastHangfireJobId = jobId;
+        await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);
+        _logger.LogInformation("Retried stage for Task #{TaskId} (Stage: {StageId}, JobId: {JobId}, Tier: {Tier})",
+            taskId, stage.StageId, jobId, stage.QueueTier);
+        return true;
+    }
+
+    public async Task<bool> RestartPipelineAsync(
+        int taskId,
+        TaskRestartGitMode gitMode = TaskRestartGitMode.PreserveWork,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Delegating pipeline restart for Task #{TaskId} (Mode: {GitMode}) to TaskOrchestrator", taskId, gitMode);
+        return await _taskOrchestrator.RestartTaskPipelineAsync(taskId, gitMode, cancellationToken);
     }
 
     public async Task<int> ReorderInferenceQueueByPriorityAsync(CancellationToken cancellationToken = default)

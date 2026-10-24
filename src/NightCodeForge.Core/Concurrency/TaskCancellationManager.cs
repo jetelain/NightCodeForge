@@ -73,6 +73,11 @@ public class TaskCancellationManager : ITaskCancellationManager
         return _registrations.TryGetValue(taskId, out var registration) && registration.ExplicitCancelRequested;
     }
 
+    public bool IsRegistered(int taskId)
+    {
+        return _registrations.ContainsKey(taskId);
+    }
+
     public void Unregister(int taskId, CancellationTokenSource source)
     {
         ArgumentNullException.ThrowIfNull(source);

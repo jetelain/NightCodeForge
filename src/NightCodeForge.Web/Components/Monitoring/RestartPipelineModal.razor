@@ -1,0 +1,165 @@
+@namespace NightCodeForge.Web.Components.Monitoring
+@using NightCodeForge.Core.Domain
+
+<div class="forge-modal-backdrop" @onclick="HandleCancel" role="dialog" aria-modal="true" style="position: fixed; inset: 0; background: rgba(8, 10, 15, 0.85); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 1.5rem;">
+    <div class="forge-modal forge-modal-content card-glass" style="background: var(--bg-card); border: 1px solid var(--border-accent); border-radius: var(--radius-xl); box-shadow: 0 25px 60px rgba(0, 0, 0, 0.85); max-width: 680px; width: 92vw; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden;" @onclick:stopPropagation="true">
+        <!-- Modal Header -->
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border-subtle); background: var(--bg-card);">
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                <span style="font-size: 1.3rem;">⏮</span>
+                <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--text-primary);">
+                    Restart Workflow Pipeline - Task #@TaskId
+                </h3>
+            </div>
+            <button type="button" class="forge-btn-icon" @onclick="HandleCancel" title="Close" disabled="@IsLoading" style="background: none; border: none; font-size: 1.25rem; color: var(--text-muted); cursor: pointer;">
+                ✕
+            </button>
+        </div>
+
+        <!-- Modal Body -->
+        <div style="padding: 1.5rem; overflow-y: auto; flex: 1; background: var(--bg-card); display: flex; flex-direction: column; gap: 1rem;">
+            <p style="margin: 0; font-size: 0.88rem; color: var(--text-secondary); line-height: 1.5;">
+                Select how you would like to handle the Git branch and working tree state when re-running the workflow pipeline from Stage 1:
+            </p>
+
+            <!-- Mode Selection Cards -->
+            <div style="display: flex; flex-direction: column; gap: 0.85rem;">
+                <!-- Option 1: Soft Restart -->
+                <div class="restart-option-card @(_selectedMode == TaskRestartGitMode.PreserveWork ? "selected" : "")"
+                     style="padding: 1.1rem; border-radius: var(--radius-lg); border: 2px solid @(_selectedMode == TaskRestartGitMode.PreserveWork ? "var(--accent-teal)" : "var(--border-subtle)"); background: @(_selectedMode == TaskRestartGitMode.PreserveWork ? "rgba(20, 184, 166, 0.08)" : "var(--bg-input)"); cursor: pointer; transition: all 0.2s ease;"
+                     @onclick="() => SelectMode(TaskRestartGitMode.PreserveWork)">
+                    <div style="display: flex; align-items: flex-start; gap: 0.85rem;">
+                        <input type="radio"
+                               id="radio-soft-restart"
+                               name="restartGitMode"
+                               checked="@(_selectedMode == TaskRestartGitMode.PreserveWork)"
+                               @onchange="() => SelectMode(TaskRestartGitMode.PreserveWork)"
+                               style="margin-top: 0.25rem; cursor: pointer; accent-color: var(--accent-teal);" />
+                        <div style="flex: 1;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; flex-wrap: wrap; gap: 0.5rem;">
+                                <label for="radio-soft-restart" style="margin: 0; font-weight: 700; font-size: 0.95rem; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 0.4rem;">
+                                    <span>🔄</span> Soft Restart (Keep Existing Work)
+                                </label>
+                                <span class="forge-badge badge-teal" style="font-size: 0.72rem;">
+                                    Recommended for Iteration
+                                </span>
+                            </div>
+                            <p style="margin: 0; font-size: 0.82rem; color: var(--text-secondary); line-height: 1.45;">
+                                Re-runs the pipeline starting from the initial stage while keeping all existing commits and code changes on branch <code>feature/task-@TaskId</code>. Ideal for retrying review, tuning prompts, or continuing work.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Option 2: Clean Hard Reset & Rebase -->
+                <div class="restart-option-card @(_selectedMode == TaskRestartGitMode.HardResetToBaseBranch ? "selected-danger" : "")"
+                     style="padding: 1.1rem; border-radius: var(--radius-lg); border: 2px solid @(_selectedMode == TaskRestartGitMode.HardResetToBaseBranch ? "#f59e0b" : "var(--border-subtle)"); background: @(_selectedMode == TaskRestartGitMode.HardResetToBaseBranch ? "rgba(245, 158, 11, 0.08)" : "var(--bg-input)"); cursor: pointer; transition: all 0.2s ease;"
+                     @onclick="() => SelectMode(TaskRestartGitMode.HardResetToBaseBranch)">
+                    <div style="display: flex; align-items: flex-start; gap: 0.85rem;">
+                        <input type="radio"
+                               id="radio-hard-reset"
+                               name="restartGitMode"
+                               checked="@(_selectedMode == TaskRestartGitMode.HardResetToBaseBranch)"
+                               @onchange="() => SelectMode(TaskRestartGitMode.HardResetToBaseBranch)"
+                               style="margin-top: 0.25rem; cursor: pointer; accent-color: #f59e0b;" />
+                        <div style="flex: 1;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; flex-wrap: wrap; gap: 0.5rem;">
+                                <label for="radio-hard-reset" style="margin: 0; font-weight: 700; font-size: 0.95rem; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 0.4rem;">
+                                    <span>⚡</span> Clean Hard Reset &amp; Rebase on @DisplayBaseBranch
+                                </label>
+                                <span class="forge-badge badge-amber" style="font-size: 0.72rem;">
+                                    Destructive / Clean Baseline
+                                </span>
+                            </div>
+                            <p style="margin: 0; font-size: 0.82rem; color: var(--text-secondary); line-height: 1.45;">
+                                Completely wipes all commits and uncommitted changes on <code>feature/task-@TaskId</code>, aligns the branch directly to the latest commit of <code>@DisplayBaseBranch</code>, recycles the container sandbox, and restarts the workflow on a pristine working tree.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Safeguard Alert when Hard Reset is selected -->
+            @if (_selectedMode == TaskRestartGitMode.HardResetToBaseBranch)
+            {
+                <div class="safeguard-alert" style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: var(--radius-md); padding: 0.85rem 1rem; color: #fbbf24; font-size: 0.82rem; display: flex; gap: 0.65rem; align-items: flex-start; line-height: 1.45;">
+                    <span style="font-size: 1.1rem; line-height: 1;">⚠️</span>
+                    <div>
+                        <strong>Warning:</strong> All commits and untracked files on branch <code>feature/task-@TaskId</code> will be permanently discarded. Any local untracked configs or test outputs will be wiped via <code>git clean -fdx</code>.
+                    </div>
+                </div>
+            }
+        </div>
+
+        <!-- Modal Footer -->
+        <div style="display: flex; justify-content: flex-end; align-items: center; gap: 0.75rem; padding: 1rem 1.5rem; border-top: 1px solid var(--border-subtle); background: var(--bg-card);">
+            <button type="button"
+                    id="cancel-restart-btn"
+                    class="forge-btn forge-btn-secondary"
+                    @onclick="HandleCancel"
+                    disabled="@IsLoading">
+                Cancel
+            </button>
+            <button type="button"
+                    id="confirm-restart-btn"
+                    class="forge-btn @(_selectedMode == TaskRestartGitMode.HardResetToBaseBranch ? "forge-btn-danger" : "forge-btn-primary")"
+                    style="@(_selectedMode == TaskRestartGitMode.HardResetToBaseBranch ? "background-color: #b45309; border-color: #d97706; color: #fff;" : "")"
+                    @onclick="HandleConfirm"
+                    disabled="@IsLoading">
+                @if (IsLoading)
+                {
+                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="margin-right: 0.4rem;"></span>
+                    <span>Restarting...</span>
+                }
+                else
+                {
+                    <span>Confirm Restart</span>
+                }
+            </button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public int TaskId { get; set; }
+
+    [Parameter]
+    public string BaseBranch { get; set; } = "main";
+
+    private string DisplayBaseBranch => string.IsNullOrWhiteSpace(BaseBranch) ? "main" : BaseBranch;
+
+    [Parameter]
+    public bool IsLoading { get; set; }
+
+    [Parameter]
+    public EventCallback<TaskRestartGitMode> OnConfirm { get; set; }
+
+    [Parameter]
+    public EventCallback OnCancel { get; set; }
+
+    private TaskRestartGitMode _selectedMode = TaskRestartGitMode.PreserveWork;
+
+    private void SelectMode(TaskRestartGitMode mode)
+    {
+        _selectedMode = mode;
+    }
+
+    private async Task HandleConfirm()
+    {
+        if (IsLoading) return;
+        if (OnConfirm.HasDelegate)
+        {
+            await OnConfirm.InvokeAsync(_selectedMode);
+        }
+    }
+
+    private async Task HandleCancel()
+    {
+        if (IsLoading) return;
+        if (OnCancel.HasDelegate)
+        {
+            await OnCancel.InvokeAsync();
+        }
+    }
+}

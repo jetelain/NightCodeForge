@@ -84,9 +84,9 @@
                 <button type="button"
                         class="forge-btn forge-btn-secondary"
                         style="padding: 0.35rem 0.75rem; font-size: 0.8rem;"
-                        disabled="@_isActionInProgress"
+                        disabled="@(_isActionInProgress || _task?.Status == TaskOverallStatus.Closed || _task?.SquashCommitSha != null)"
                         @onclick="RestartPipelineAsync"
-                        title="Restart the entire workflow pipeline from stage 1">
+                        title="@(_task?.SquashCommitSha != null ? "Cannot restart a task that has already been merged" : "Restart the entire workflow pipeline from stage 1")">
                     ⏮ Restart Pipeline
                 </button>
 
@@ -337,6 +337,15 @@
             </div>
         }
     }
+
+    @if (_showRestartModal && _task != null)
+    {
+        <RestartPipelineModal TaskId="_task.Id"
+                              BaseBranch="@_task.BaseBranch"
+                              IsLoading="_isActionInProgress"
+                              OnConfirm="HandleRestartConfirmedAsync"
+                              OnCancel="() => _showRestartModal = false" />
+    }
 </div>
 
 @code {
@@ -353,6 +362,7 @@
     private bool _isLoading = true;
     private bool _isLoadingDiff = false;
     private bool _isActionInProgress = false;
+    private bool _showRestartModal = false;
     private string? _actionMessage;
     private string? _liveStreamingThinking;
     private string? _liveStreamingMessage;
@@ -619,7 +629,7 @@
         _actionMessage = "Rescheduling stage...";
         try
         {
-            var ok = await DevQueueService.RescheduleTaskAsync(_task.Id, restartPipeline: false);
+            var ok = await DevQueueService.RetryCurrentStageAsync(_task.Id);
             _actionMessage = ok ? "Stage queued for execution!" : "Failed to reschedule stage.";
             await RefreshTaskAsync();
         }
@@ -629,16 +639,29 @@
         }
     }
 
-    private async Task RestartPipelineAsync()
+    private void RestartPipelineAsync()
+    {
+        _showRestartModal = true;
+    }
+
+    private async Task HandleRestartConfirmedAsync(TaskRestartGitMode gitMode)
     {
         if (_task == null || _isActionInProgress || DevQueueService == null) return;
         _isActionInProgress = true;
-        _actionMessage = "Restarting pipeline from Stage 1...";
+        _actionMessage = gitMode == TaskRestartGitMode.HardResetToBaseBranch
+            ? "Hard-resetting worktree and restarting pipeline..."
+            : "Restarting pipeline from Stage 1...";
         try
         {
-            var ok = await DevQueueService.RescheduleTaskAsync(_task.Id, restartPipeline: true);
+            var ok = await DevQueueService.RestartPipelineAsync(_task.Id, gitMode);
             _actionMessage = ok ? "Pipeline restarted and queued!" : "Failed to restart pipeline.";
+            _showRestartModal = false;
             await RefreshTaskAsync();
+        }
+        catch (Exception ex)
+        {
+            _showRestartModal = false;
+            _actionMessage = $"Error restarting pipeline: {ex.Message}";
         }
         finally
         {

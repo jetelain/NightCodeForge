@@ -11,7 +11,20 @@ public class MockTaskOrchestrator : ITaskOrchestrator
     public (int TaskId, string RevisionNotes)? LastRequestChangesCall { get; private set; }
     public (int TaskId, string FinalCommitMessage)? LastCompleteTaskCall { get; private set; }
     public (int TaskId, string? Reason)? LastRejectCall { get; private set; }
+    public (int TaskId, TaskRestartGitMode GitMode)? LastRestartPipelineCall { get; private set; }
+    public bool RestartPipelineResult { get; set; } = true;
+    public Exception? RestartPipelineException { get; set; }
     public int? LastProcessedTaskId { get; private set; }
+
+    public Task<bool> RestartTaskPipelineAsync(int taskId, TaskRestartGitMode gitMode = TaskRestartGitMode.PreserveWork, CancellationToken cancellationToken = default)
+    {
+        LastRestartPipelineCall = (taskId, gitMode);
+        if (RestartPipelineException != null)
+        {
+            throw RestartPipelineException;
+        }
+        return Task.FromResult(RestartPipelineResult);
+    }
 
     public Task RejectTaskAsync(int taskId, string? reason = null, CancellationToken cancellationToken = default)
     {

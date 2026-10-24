@@ -25,6 +25,11 @@ public interface ITaskCancellationManager
     bool IsCancelRequested(int taskId);
 
     /// <summary>
+    /// Returns true if an active execution registration currently exists for the specified task.
+    /// </summary>
+    bool IsRegistered(int taskId);
+
+    /// <summary>
     /// Unregisters the task execution owned by <paramref name="source"/>, cleaning up tracking state.
     /// No-op if a newer registration has replaced it.
     /// </summary>

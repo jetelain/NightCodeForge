@@ -47,4 +47,13 @@ public interface ITaskOrchestrator
     /// records user audit history, updates dependency graph, and syncs markdown frontmatter to disk.
     /// </summary>
     Task RejectTaskAsync(int taskId, string? reason = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Restarts execution of a task from the initial stage of its workflow,
+    /// applying the specified Git branch reset strategy and recycling resources.
+    /// </summary>
+    Task<bool> RestartTaskPipelineAsync(
+        int taskId,
+        Domain.TaskRestartGitMode gitMode = Domain.TaskRestartGitMode.PreserveWork,
+        CancellationToken cancellationToken = default);
 }

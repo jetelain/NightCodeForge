@@ -27,6 +27,7 @@ public class DevQueueServiceTests : IDisposable
     private readonly TestDevQueueMarkdownSyncService _markdownSync;
     private readonly Mock<ITaskCancellationManager> _cancellationManager;
     private readonly Mock<IWorkspacePathResolver> _pathResolver;
+    private readonly Mock<ITaskOrchestrator> _taskOrchestrator;
     private readonly IDevQueueSkippedJobRegistry _skippedJobRegistry = new DevQueueSkippedJobRegistry();
     private readonly ServiceProvider _serviceProvider;
     private readonly JobStorage _jobStorage = new MemoryStorage();
@@ -42,6 +43,7 @@ public class DevQueueServiceTests : IDisposable
         _markdownSync = new TestDevQueueMarkdownSyncService();
         _cancellationManager = new Mock<ITaskCancellationManager>();
         _pathResolver = new Mock<IWorkspacePathResolver>();
+        _taskOrchestrator = new Mock<ITaskOrchestrator>();
 
         var services = new ServiceCollection();
         services.AddSingleton<ITaskRepository>(_taskRepo);
@@ -98,6 +100,7 @@ public class DevQueueServiceTests : IDisposable
         _cancellationManager.Object,
         _pathResolver.Object,
         registry ?? _skippedJobRegistry,
+        _taskOrchestrator.Object,
         NullLogger<DevQueueService>.Instance);
 
     [Fact]
@@ -316,41 +319,27 @@ public class DevQueueServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task RescheduleTaskAsync_RestartPipelineTrue_ResetsSquashCommitShaAndStatusAndStage()
+    public async Task RestartPipelineAsync_DelegatesToTaskOrchestrator_AndPropagatesException()
     {
-        var task = new ForgeTask
-        {
-            Id = 301,
-            WorkspaceId = 1,
-            Title = "Failed Task Restart",
-            Status = TaskOverallStatus.Failed,
-            CurrentStageId = "deterministic-post-impl",
-            SquashCommitSha = "deadbeef1234567890abcdef1234567890abcdef",
-            Priority = TaskPriority.Normal
-        };
-        await _taskRepo.CreateAsync(task);
+        _taskOrchestrator.Setup(o => o.RestartTaskPipelineAsync(301, TaskRestartGitMode.HardResetToBaseBranch, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         var service = CreateService();
 
-        var result = await service.RescheduleTaskAsync(301, restartPipeline: true);
+        var result = await service.RestartPipelineAsync(301, TaskRestartGitMode.HardResetToBaseBranch);
 
         Assert.True(result);
-        var reloaded = await _taskRepo.GetByIdAsync(301);
-        Assert.NotNull(reloaded);
-        Assert.Null(reloaded.SquashCommitSha);
-        Assert.Equal(string.Empty, reloaded.CurrentStageId);
-        Assert.Equal(TaskOverallStatus.Open, reloaded.Status);
-        Assert.Equal(301, _jobQueue.LastEnqueuedInferenceTaskId);
+        _taskOrchestrator.Verify(o => o.RestartTaskPipelineAsync(301, TaskRestartGitMode.HardResetToBaseBranch, It.IsAny<CancellationToken>()), Times.Once);
 
-        var history = await _taskRepo.GetHistoryAsync(301);
-        Assert.Equal(2, history.Count);
-        Assert.Equal(2, history[1].Version);
-        Assert.Equal(AuditActors.User, history[1].ChangedBy);
-        Assert.Contains("Pipeline restarted from beginning via DevQueue", history[1].ChangeReason);
+        // Verify exception propagates without being swallowed
+        _taskOrchestrator.Setup(o => o.RestartTaskPipelineAsync(301, TaskRestartGitMode.HardResetToBaseBranch, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Cannot restart a task that has already been merged."));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RestartPipelineAsync(301, TaskRestartGitMode.HardResetToBaseBranch));
     }
 
     [Fact]
-    public async Task RescheduleTaskAsync_RestartPipelineFalse_PreservesSquashCommitShaAndStage()
+    public async Task RetryCurrentStageAsync_PreservesSquashCommitShaAndDeletesLingeringJob()
     {
         var task = new ForgeTask
         {
@@ -360,27 +349,38 @@ public class DevQueueServiceTests : IDisposable
             Status = TaskOverallStatus.Failed,
             CurrentStageId = "deterministic-post-impl",
             SquashCommitSha = "c0ffee1234567890abcdef1234567890abcdef",
-            Priority = TaskPriority.Normal
+            Priority = TaskPriority.Normal,
+            LastHangfireJobId = "old-hangfire-job-302"
         };
         await _taskRepo.CreateAsync(task);
 
         var service = CreateService();
 
-        var result = await service.RescheduleTaskAsync(302, restartPipeline: false);
+        var result = await service.RetryCurrentStageAsync(302);
 
         Assert.True(result);
+        Assert.Contains("old-hangfire-job-302", _jobQueue.DeletedJobs);
+
         var reloaded = await _taskRepo.GetByIdAsync(302);
         Assert.NotNull(reloaded);
         Assert.Equal("c0ffee1234567890abcdef1234567890abcdef", reloaded.SquashCommitSha);
         Assert.Equal("deterministic-post-impl", reloaded.CurrentStageId);
         Assert.Equal(TaskOverallStatus.Open, reloaded.Status);
         Assert.Equal(302, _jobQueue.LastEnqueuedInferenceTaskId);
+        Assert.NotEqual("old-hangfire-job-302", reloaded.LastHangfireJobId);
 
         var history = await _taskRepo.GetHistoryAsync(302);
         Assert.Equal(2, history.Count);
         Assert.Equal(2, history[1].Version);
         Assert.Equal(AuditActors.User, history[1].ChangedBy);
         Assert.Contains("Rescheduled task execution via DevQueue", history[1].ChangeReason);
+    }
+
+    [Fact]
+    public async Task RetryCurrentStageAsync_WhenTaskNotFound_ThrowsKeyNotFoundException()
+    {
+        var service = CreateService();
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => service.RetryCurrentStageAsync(9999));
     }
 
     [Fact]
@@ -822,6 +822,7 @@ public class DevQueueServiceTests : IDisposable
             _cancellationManager.Object,
             _pathResolver.Object,
             _skippedJobRegistry,
+            _taskOrchestrator.Object,
             NullLogger<DevQueueService>.Instance);
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.ReorderInferenceQueueByPriorityAsync());
@@ -892,6 +893,7 @@ public class DevQueueServiceTests : IDisposable
             _cancellationManager.Object,
             _pathResolver.Object,
             _skippedJobRegistry,
+            _taskOrchestrator.Object,
             NullLogger<DevQueueService>.Instance);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.ReorderInferenceQueueByPriorityAsync());
@@ -993,6 +995,54 @@ public class DevQueueServiceTests : IDisposable
                 _ = ex.Message;
             }
         }
+    }
+
+    [Fact]
+    public async Task RestartPipelineAsync_DelegatesToTaskOrchestratorWithSelectedMode()
+    {
+        // Arrange
+        _taskOrchestrator.Setup(o => o.RestartTaskPipelineAsync(456, TaskRestartGitMode.HardResetToBaseBranch, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var service = CreateService();
+
+        // Act
+        var result = await service.RestartPipelineAsync(456, TaskRestartGitMode.HardResetToBaseBranch);
+
+        // Assert
+        Assert.True(result);
+        _taskOrchestrator.Verify(o => o.RestartTaskPipelineAsync(456, TaskRestartGitMode.HardResetToBaseBranch, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RetryCurrentStageAsync_ReEnqueuesCurrentStageWithoutRestart()
+    {
+        // Arrange
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 457,
+            WorkspaceId = 1,
+            Title = "Task with Stage to Retry",
+            Status = TaskOverallStatus.Failed,
+            CurrentStageId = "deterministic-post-impl",
+            Priority = TaskPriority.Normal
+        });
+
+        var service = CreateService();
+
+        // Act
+        var result = await service.RetryCurrentStageAsync(task.Id);
+
+        // Assert
+        Assert.True(result);
+        var updated = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updated);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
+        Assert.Equal("deterministic-post-impl", updated.CurrentStageId);
+        Assert.False(updated.IsWaitingForHuman);
+        Assert.NotNull(updated.LastHangfireJobId);
+
+        _taskOrchestrator.Verify(o => o.RestartTaskPipelineAsync(It.IsAny<int>(), It.IsAny<TaskRestartGitMode>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     #region Mock Implementations
@@ -1139,7 +1189,13 @@ public class DevQueueServiceTests : IDisposable
             return $"job-{tier.ToString().ToLowerInvariant()}-{taskId}";
         }
 
-        public bool Delete(string jobId) => true;
+        public List<string> DeletedJobs { get; } = new();
+
+        public bool Delete(string jobId)
+        {
+            DeletedJobs.Add(jobId);
+            return true;
+        }
     }
 
     private class TestDevQueueMarkdownSyncService : ITaskMarkdownSyncService

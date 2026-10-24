@@ -242,6 +242,9 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         var restartBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Restart Pipeline"));
         restartBtn.Click();
 
+        var confirmBtn = cut.Find("#confirm-restart-btn");
+        confirmBtn.Click();
+
         Assert.Equal(60, _devQueueService.LastRescheduledTaskId);
         Assert.True(_devQueueService.LastRescheduledRestartPipeline);
     }
@@ -705,12 +708,175 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         });
     }
 
+    [Fact]
+    public async Task ClickingRestartButton_OpensRestartPipelineModal()
+    {
+        var task = new ForgeTask
+        {
+            Id = 107,
+            WorkspaceId = 1,
+            Title = "Task to test restart modal",
+            Status = TaskOverallStatus.Open,
+            BaseBranch = "main"
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 107));
+
+        var restartBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Restart Pipeline"));
+        restartBtn.Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Restart Workflow Pipeline - Task #107", cut.Markup);
+            Assert.NotNull(cut.Find("#confirm-restart-btn"));
+            Assert.NotNull(cut.Find("#cancel-restart-btn"));
+        });
+    }
+
+    [Fact]
+    public async Task ConfirmingHardReset_InvokesDevQueueServiceWithHardResetMode()
+    {
+        var task = new ForgeTask
+        {
+            Id = 108,
+            WorkspaceId = 1,
+            Title = "Task to hard reset",
+            Status = TaskOverallStatus.Failed,
+            BaseBranch = "main"
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 108));
+
+        var restartBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Restart Pipeline"));
+        restartBtn.Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(cut.Find("#radio-hard-reset"));
+        });
+
+        var hardResetRadio = cut.Find("#radio-hard-reset");
+        hardResetRadio.Change(true);
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("permanently discarded", cut.Markup);
+        });
+
+        var confirmBtn = cut.Find("#confirm-restart-btn");
+        confirmBtn.Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(_devQueueService.LastRestartPipelineCall);
+            Assert.Equal(108, _devQueueService.LastRestartPipelineCall.Value.TaskId);
+            Assert.Equal(TaskRestartGitMode.HardResetToBaseBranch, _devQueueService.LastRestartPipelineCall.Value.GitMode);
+        });
+    }
+
+    [Fact]
+    public async Task ConfirmingSoftRestart_InvokesDevQueueServiceWithPreserveWorkMode()
+    {
+        var task = new ForgeTask
+        {
+            Id = 109,
+            WorkspaceId = 1,
+            Title = "Task to soft restart",
+            Status = TaskOverallStatus.Failed,
+            BaseBranch = "main"
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 109));
+
+        var restartBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Restart Pipeline"));
+        restartBtn.Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(cut.Find("#confirm-restart-btn"));
+        });
+
+        var confirmBtn = cut.Find("#confirm-restart-btn");
+        confirmBtn.Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(_devQueueService.LastRestartPipelineCall);
+            Assert.Equal(109, _devQueueService.LastRestartPipelineCall.Value.TaskId);
+            Assert.Equal(TaskRestartGitMode.PreserveWork, _devQueueService.LastRestartPipelineCall.Value.GitMode);
+        });
+    }
+
+    [Fact]
+    public async Task RestartPipelineButton_WhenTaskHasSquashCommitSha_IsDisabled()
+    {
+        var task = new ForgeTask
+        {
+            Id = 110,
+            WorkspaceId = 1,
+            Title = "Merged Task with SquashCommitSha",
+            Status = TaskOverallStatus.Ready,
+            SquashCommitSha = "c0ffee1234567890abcdef1234567890abcdef",
+            BaseBranch = "main"
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 110));
+
+        var restartBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Restart Pipeline"));
+        Assert.True(restartBtn.HasAttribute("disabled"));
+        Assert.Contains("Cannot restart a task that has already been merged", restartBtn.GetAttribute("title"));
+    }
+
+    [Fact]
+    public async Task ConfirmingRestart_WhenServiceThrowsException_ClosesModalAndDisplaysErrorMessage()
+    {
+        var task = new ForgeTask
+        {
+            Id = 111,
+            WorkspaceId = 1,
+            Title = "Task triggering restart exception",
+            Status = TaskOverallStatus.Failed,
+            BaseBranch = "main"
+        };
+        await _taskRepository.CreateAsync(task);
+
+        _devQueueService.RestartExceptionToThrow = new InvalidOperationException("Simulated reset failure");
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 111));
+
+        var restartBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Restart Pipeline"));
+        restartBtn.Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(cut.Find("#confirm-restart-btn"));
+        });
+
+        var confirmBtn = cut.Find("#confirm-restart-btn");
+        confirmBtn.Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            // Modal must be dismissed
+            Assert.Empty(cut.FindAll("#confirm-restart-btn"));
+            // Error message must be visible on the inspector
+            Assert.Contains("Error restarting pipeline: Simulated reset failure", cut.Markup);
+        });
+    }
+
     #region Fakes
 
     private class FakeDevQueueService : IDevQueueService
     {
         public int? LastRescheduledTaskId { get; private set; }
         public bool? LastRescheduledRestartPipeline { get; private set; }
+        public (int TaskId, TaskRestartGitMode GitMode)? LastRestartPipelineCall { get; private set; }
+        public int? LastRetriedTaskId { get; private set; }
+        public Exception? RestartExceptionToThrow { get; set; }
 
         public Task<DevQueueSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(new DevQueueSnapshot(
@@ -736,10 +902,23 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         public Task<bool> EmergencyReleaseLockAsync(int workspaceId, int? taskId = null, CancellationToken cancellationToken = default)
             => Task.FromResult(true);
 
-        public Task<bool> RescheduleTaskAsync(int taskId, bool restartPipeline = false, CancellationToken cancellationToken = default)
+        public Task<bool> RetryCurrentStageAsync(int taskId, CancellationToken cancellationToken = default)
         {
+            LastRetriedTaskId = taskId;
             LastRescheduledTaskId = taskId;
-            LastRescheduledRestartPipeline = restartPipeline;
+            LastRescheduledRestartPipeline = false;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> RestartPipelineAsync(int taskId, TaskRestartGitMode gitMode = TaskRestartGitMode.PreserveWork, CancellationToken cancellationToken = default)
+        {
+            if (RestartExceptionToThrow != null)
+            {
+                throw RestartExceptionToThrow;
+            }
+            LastRestartPipelineCall = (taskId, gitMode);
+            LastRescheduledTaskId = taskId;
+            LastRescheduledRestartPipeline = true;
             return Task.FromResult(true);
         }
 

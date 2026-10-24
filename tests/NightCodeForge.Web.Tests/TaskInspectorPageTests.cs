@@ -346,7 +346,10 @@ public class TaskInspectorPageTests : BunitContext
         public Task<bool> EmergencyReleaseLockAsync(int workspaceId, int? taskId = null, CancellationToken cancellationToken = default)
             => Task.FromResult(true);
 
-        public Task<bool> RescheduleTaskAsync(int taskId, bool restartPipeline = false, CancellationToken cancellationToken = default)
+        public Task<bool> RetryCurrentStageAsync(int taskId, CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+
+        public Task<bool> RestartPipelineAsync(int taskId, TaskRestartGitMode gitMode = TaskRestartGitMode.PreserveWork, CancellationToken cancellationToken = default)
             => Task.FromResult(true);
 
         public Task<int> ReorderInferenceQueueByPriorityAsync(CancellationToken cancellationToken = default)

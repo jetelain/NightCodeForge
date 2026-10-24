@@ -178,6 +178,14 @@ public class FakeGitWorkspaceManager : IGitWorkspaceManager
         return Task.FromResult("branch-sha");
     }
 
+    public List<(int TaskId, string BaseBranch)> ResetBranches { get; } = new();
+
+    public Task ResetTaskBranchToBaseAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default)
+    {
+        ResetBranches.Add((taskId, baseBranch));
+        return Task.CompletedTask;
+    }
+
     public Task ResetCanonicalBranchAsync(Workspace workspace, string branchName, string targetSha, CancellationToken cancellationToken = default)
     {
         return Task.CompletedTask;

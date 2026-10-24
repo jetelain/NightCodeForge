@@ -975,6 +975,107 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         await _gitCliRunner.ExecuteAsync(workingPath, ["clean", "-fd"], cancellationToken: cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task ResetTaskBranchToBaseAsync(
+        Workspace workspace,
+        int taskId,
+        string baseBranch,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseBranch);
+
+        var canonicalPath = GetCanonicalWorkingPath(workspace);
+        var worktreePath = GetWorktreePath(workspace, taskId);
+        var branchName = $"feature/task-{taskId}";
+
+        _logger.LogInformation("Hard-resetting branch '{BranchName}' to base branch '{BaseBranch}' for task #{TaskId}",
+            branchName, baseBranch, taskId);
+
+        // 1. Upstream Base Branch Synchronization
+        if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, baseBranch, cancellationToken);
+        }
+
+        var remotesResult = await _gitCliRunner.ExecuteAsync(canonicalPath, ["remote"], cancellationToken: cancellationToken);
+        var remotes = remotesResult.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var primaryRemote = remotes.FirstOrDefault(r => string.Equals(r, "host-origin", StringComparison.OrdinalIgnoreCase))
+            ?? remotes.FirstOrDefault(r => string.Equals(r, "origin", StringComparison.OrdinalIgnoreCase));
+
+        string targetResetRef = baseBranch;
+        if (primaryRemote != null)
+        {
+            // Upstream remote configured: fetch latest commits from remote base branch and reset to remote ref
+            await _gitCliRunner.ExecuteAsync(canonicalPath, ["fetch", primaryRemote, baseBranch], cancellationToken: cancellationToken);
+            targetResetRef = $"{primaryRemote}/{baseBranch}";
+        }
+
+        // 2. Worktree Clean and Reset
+        bool isWorktreeRegistered = false;
+        try
+        {
+            var worktreeListResult = await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "list", "--porcelain"], cancellationToken: cancellationToken);
+            var normWorktreePath = worktreePath.Replace('\\', '/').TrimEnd('/');
+            isWorktreeRegistered = worktreeListResult.StandardOutput
+                .Split('\n')
+                .Any(line => line.StartsWith("worktree ", StringComparison.OrdinalIgnoreCase) &&
+                             line[9..].Trim().Replace('\\', '/').TrimEnd('/').Equals(normWorktreePath, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to list worktrees in '{CanonicalPath}'", canonicalPath);
+        }
+
+        bool worktreeExistsOnDisk = WorktreeDirectoryExists(worktreePath);
+
+        if (isWorktreeRegistered && worktreeExistsOnDisk)
+        {
+            // Case A: Worktree Exists & Is Registered
+            // Spec ordering: Clean and purge untracked files FIRST, then hard reset to base branch ref
+            await _gitCliRunner.ExecuteAsync(worktreePath, ["reset", "--hard", "HEAD"], cancellationToken: cancellationToken);
+            await _gitCliRunner.ExecuteAsync(worktreePath, ["clean", "-fdx"], cancellationToken: cancellationToken);
+            await _gitCliRunner.ExecuteAsync(worktreePath, ["reset", "--hard", targetResetRef], cancellationToken: cancellationToken);
+
+            await EnsureWorktreeRelativePathsAsync(workspace, taskId, cancellationToken);
+        }
+        else
+        {
+            // Case B: Worktree Does Not Exist or Is Corrupted
+            try
+            {
+                await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "prune"], cancellationToken: cancellationToken);
+            }
+            catch (GitCommandException ex)
+            {
+                _logger.LogDebug(ex, "Worktree prune failed in '{CanonicalPath}'", canonicalPath);
+            }
+
+            if (worktreeExistsOnDisk && !isWorktreeRegistered)
+            {
+                DeleteDirectorySafe(worktreePath);
+            }
+
+            await _gitCliRunner.ExecuteAsync(canonicalPath, ["branch", "-f", branchName, targetResetRef], cancellationToken: cancellationToken);
+            await EnsureWorktreeAsync(workspace, taskId, baseBranch, cancellationToken);
+        }
+
+        // 3. Remote Branch Reconciliation
+        foreach (var targetRemote in new[] { "host-origin", "origin" })
+        {
+            if (remotes.Contains(targetRemote, StringComparer.OrdinalIgnoreCase))
+            {
+                var lsRemote = await _gitCliRunner.ExecuteAsync(canonicalPath, ["ls-remote", "--heads", targetRemote, branchName], cancellationToken: cancellationToken);
+                if (!string.IsNullOrWhiteSpace(lsRemote.StandardOutput) && lsRemote.StandardOutput.Contains(branchName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation("Reconciling remote branch '{BranchName}' on '{Remote}' after hard reset", branchName, targetRemote);
+                    await _gitCliRunner.ExecuteAsync(canonicalPath, ["push", "--force", targetRemote, branchName], cancellationToken: cancellationToken);
+                }
+            }
+        }
+    }
+
     private string GetWorkingPath(Workspace workspace, int? taskId = null)
     {
         if (taskId.HasValue)
