@@ -46,7 +46,7 @@
                         @foreach (var conv in runs)
                         {
                             var isSelected = SelectedConversation?.Id == conv.Id;
-                            var statusBadge = GetStatusBadge(conv.Status);
+                            var statusBadge = GetStatusBadge(conv);
                             var modelTag = !string.IsNullOrWhiteSpace(conv.ModelName) ? conv.ModelName : conv.AgentProfileId;
 
                             <button type="button"
@@ -73,6 +73,7 @@
     [Parameter] public Conversation? SelectedConversation { get; set; }
     [Parameter] public EventCallback<Conversation> OnConversationSelected { get; set; }
     [Parameter] public IReadOnlyList<StageDefinition>? WorkflowStages { get; set; }
+    [Parameter] public ForgeTask? Task { get; set; }
 
     private async Task SelectConversation(Conversation conversation)
     {
@@ -120,9 +121,18 @@
         };
     }
 
-    private static (string Icon, string CssClass) GetStatusBadge(StageExecutionStatus status)
+    private (string Icon, string CssClass) GetStatusBadge(Conversation conv)
     {
-        return status switch
+        if (conv.Status == StageExecutionStatus.WaitingForHuman)
+        {
+            if (Task != null && !Task.IsWaitingForHuman && Task.Id == conv.TaskId &&
+                (string.IsNullOrEmpty(conv.StageId) || string.Equals(conv.StageId, Task.CurrentStageId, StringComparison.OrdinalIgnoreCase)))
+            {
+                return ("✓", "badge-teal");
+            }
+        }
+
+        return conv.Status switch
         {
             StageExecutionStatus.Completed => ("✅", "badge-emerald"),
             StageExecutionStatus.Running => ("⏳", "badge-amber"),

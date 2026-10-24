@@ -7,6 +7,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow.Stages;
 
 namespace NightCodeForge.Core.Workflow;
@@ -1856,6 +1857,88 @@ public class TaskOrchestrator : ITaskOrchestrator
         var blockedStage = (!string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null)
             ?? pipeline.InitialStage
             ?? throw new WorkflowValidationException($"No active or initial stage found for task #{task.Id}.");
+
+        // Persist ToolResult turn immediately in the waiting conversation so Task Inspector and conversation history
+        // reflect the user's answers without having to wait for the worker to schedule and execute the agent.
+        var questionStageId = batchQuestions.FirstOrDefault()?.StageId;
+        var waitingConv = !string.IsNullOrWhiteSpace(questionStageId)
+            ? await _taskRepository.GetWaitingConversationAsync(task.Id, questionStageId, cancellationToken)
+            : null;
+
+        if (waitingConv == null)
+        {
+            waitingConv = await _taskRepository.GetWaitingConversationAsync(task.Id, blockedStage.StageId, cancellationToken);
+        }
+        if (waitingConv == null && !string.IsNullOrWhiteSpace(task.CurrentStageId))
+        {
+            waitingConv = await _taskRepository.GetWaitingConversationAsync(task.Id, task.CurrentStageId, cancellationToken);
+        }
+        if (waitingConv == null)
+        {
+            var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+            var candidate = convs.LastOrDefault(c => c.Status == StageExecutionStatus.WaitingForHuman)
+                ?? convs.LastOrDefault(c => !string.IsNullOrWhiteSpace(questionStageId) && string.Equals(c.StageId, questionStageId, StringComparison.OrdinalIgnoreCase))
+                ?? convs.LastOrDefault(c => !string.IsNullOrWhiteSpace(task.CurrentStageId) && string.Equals(c.StageId, task.CurrentStageId, StringComparison.OrdinalIgnoreCase))
+                ?? convs.LastOrDefault();
+            if (candidate != null)
+            {
+                waitingConv = await _taskRepository.GetConversationWithTurnsAsync(candidate.Id, cancellationToken);
+            }
+        }
+
+        if (waitingConv != null)
+        {
+            var askTurn = waitingConv.Turns?.LastOrDefault(t => t.Role == StageTurnRole.Tool && string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase));
+            var callId = ConversationHistorySerializer.ExtractCallId(askTurn?.MetadataJson);
+            if (string.IsNullOrEmpty(callId))
+            {
+                callId = Guid.NewGuid().ToString("N");
+            }
+
+            bool alreadyHasToolResult = waitingConv.Turns != null && waitingConv.Turns.Any(t =>
+                t.Role == StageTurnRole.ToolResult &&
+                string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase) &&
+                ((t.MetadataJson != null && t.MetadataJson.Contains(callId)) || (string.IsNullOrEmpty(t.MetadataJson) && t.ToolResult == formattedQna)));
+
+            if (!alreadyHasToolResult)
+            {
+                var metaDict = new Dictionary<string, object?> { ["CallId"] = callId };
+                if (!string.IsNullOrWhiteSpace(structuredJson))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(structuredJson);
+                        metaDict["Answers"] = doc.RootElement.Clone();
+                    }
+                    catch (JsonException)
+                    {
+                        // Ignore malformed JSON
+                    }
+                }
+                var meta = JsonSerializer.Serialize(metaDict);
+
+                await _taskRepository.AddConversationTurnAsync(
+                    waitingConv.Id,
+                    StageTurnRole.ToolResult,
+                    toolName: CanonicalToolNames.Ask,
+                    toolResult: formattedQna,
+                    metadataJson: meta,
+                    cancellationToken: cancellationToken);
+            }
+        }
+
+        await _streamer.BroadcastAsync(new AgentActivityEvent(
+            SessionId: Guid.NewGuid().ToString("N"),
+            TaskId: task.Id,
+            StageId: blockedStage.StageId,
+            Kind: AgentActivityKind.ToolCompleted,
+            Content: formattedQna,
+            Timestamp: DateTime.UtcNow,
+            Metadata: new Dictionary<string, object?>
+            {
+                [AgentActivityMetadataKeys.ToolName] = CanonicalToolNames.Ask
+            }
+        ), cancellationToken);
 
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
         {

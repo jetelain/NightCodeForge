@@ -159,12 +159,14 @@
                     <StageRunSelector Conversations="@_conversations"
                                       SelectedConversation="@_selectedConversation"
                                       WorkflowStages="@_workflowStages"
+                                      Task="@_task"
                                       OnConversationSelected="HandleConversationSelected" />
                 </div>
 
                 <!-- Right: Active / Selected Conversation Viewer -->
                 <div>
                     <StageConversationViewer Conversation="@_selectedConversation"
+                                             Task="@_task"
                                              WorkflowStages="@_workflowStages"
                                              IsActiveStage="@IsStageActive(_selectedConversation?.StageId)"
                                              LiveStreamingThinking="@_liveStreamingThinking"
@@ -380,7 +382,14 @@
             if (_task == null) return null;
             if (_task.IsWaitingForHuman) return StageExecutionStatus.WaitingForHuman;
             var activeConv = _conversations.LastOrDefault(c => string.Equals(c.StageId, _task.CurrentStageId, StringComparison.OrdinalIgnoreCase));
-            if (activeConv != null) return activeConv.Status;
+            if (activeConv != null)
+            {
+                if (activeConv.Status == StageExecutionStatus.WaitingForHuman && !_task.IsWaitingForHuman)
+                {
+                    return StageExecutionStatus.Running;
+                }
+                return activeConv.Status;
+            }
             if (WorkerState?.Current.ActiveTaskId == _task.Id) return StageExecutionStatus.Running;
             if (_task.Status == TaskOverallStatus.Ready || _task.Status == TaskOverallStatus.Closed) return StageExecutionStatus.Completed;
             if (_task.Status == TaskOverallStatus.Failed) return StageExecutionStatus.Failed;
@@ -742,7 +751,14 @@
 
             // A model response just ended: surface what was persisted (thinking, tool call, tool result).
             await ReloadSelectedTurnsAsync();
-            if (!_disposed) StateHasChanged();
+            if (string.Equals(toolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
+            {
+                await LoadTaskDataAsync();
+            }
+            else if (!_disposed)
+            {
+                StateHasChanged();
+            }
         });
     }
 

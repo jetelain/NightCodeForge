@@ -402,7 +402,7 @@ public static class ConversationHistorySerializer
         return sb.ToString().TrimEnd();
     }
 
-    private static string? ExtractCallId(string? metadataJson)
+    public static string? ExtractCallId(string? metadataJson)
     {
         if (string.IsNullOrWhiteSpace(metadataJson))
         {
@@ -426,4 +426,6 @@ public static class ConversationHistorySerializer
 
         return null;
     }
+
+    public static string? ExtractCallId(ConversationTurn? turn) => ExtractCallId(turn?.MetadataJson);
 }

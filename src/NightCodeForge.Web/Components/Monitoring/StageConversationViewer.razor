@@ -36,9 +36,23 @@
                             <span class="forge-badge @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "badge-teal" : "badge-indigo")" style="font-size: 0.72rem;">
                                 @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "Deterministic CPU" : "Agentic GPU")
                             </span>
-                            <span class="forge-badge @StageConversationParser.GetStatusClass(Conversation.Status)" style="font-size: 0.72rem;">
-                                @(Conversation.Status == StageExecutionStatus.WaitingForHuman ? "Waiting for Answer" : Conversation.Status.ToString())
-                            </span>
+                            @if (Conversation.Status == StageExecutionStatus.WaitingForHuman)
+                            {
+                                @if (IsStageWaitingForAnswer)
+                                {
+                                    <span class="forge-badge badge-amber" style="font-size: 0.72rem;">Waiting for Answer</span>
+                                }
+                                else
+                                {
+                                    <span class="forge-badge badge-teal" style="font-size: 0.72rem;">Clarification Provided (Queued)</span>
+                                }
+                            }
+                            else
+                            {
+                                <span class="forge-badge @StageConversationParser.GetStatusClass(Conversation.Status)" style="font-size: 0.72rem;">
+                                    @Conversation.Status.ToString()
+                                </span>
+                            }
                         }
                         @if (IsActiveStage && (Conversation == null || Conversation.Status == StageExecutionStatus.Running || !string.IsNullOrEmpty(LiveStreamingThinking) || !string.IsNullOrEmpty(LiveStreamingMessage)))
                         {
@@ -160,7 +174,18 @@
                                 var questions = StageConversationParser.ExtractQuestions(turn);
                                 var answer = pairedResult?.ToolResult ?? turn.ToolResult;
                                 var metadataJson = pairedResult?.MetadataJson ?? turn.MetadataJson;
-                                var isWaiting = Conversation?.Status == StageExecutionStatus.WaitingForHuman && string.IsNullOrWhiteSpace(answer);
+
+                                if (string.IsNullOrWhiteSpace(answer) && Task != null)
+                                {
+                                    var (fallbackAnswer, fallbackMeta) = StageConversationParser.ResolveAnswerFromTask(Task, Conversation?.StageId, questions);
+                                    if (!string.IsNullOrWhiteSpace(fallbackAnswer))
+                                    {
+                                        answer = fallbackAnswer;
+                                        metadataJson = fallbackMeta;
+                                    }
+                                }
+
+                                var isWaiting = StageConversationParser.IsWaitingForHumanAnswer(Conversation, Task, answer);
                                 <div class="chat-bubble assistant turn-ask-tool">
                                     <div class="chat-avatar">❓</div>
                                     <div class="chat-bubble-body" style="width: 100%;">
@@ -279,11 +304,14 @@
 
 @code {
     [Parameter] public Conversation? Conversation { get; set; }
+    [Parameter] public ForgeTask? Task { get; set; }
     [Parameter] public bool IsActiveStage { get; set; }
     [Parameter] public string? LiveStreamingThinking { get; set; }
     [Parameter] public string? LiveStreamingMessage { get; set; }
     [Parameter] public IReadOnlyList<StageDefinition>? WorkflowStages { get; set; }
     [Parameter] public EventCallback OnConversationUpdated { get; set; }
+
+    private bool IsStageWaitingForAnswer => StageConversationParser.IsStageWaitingForAnswer(Conversation, Task);
 
     private async Task HandleBatchAnswersSubmittedAsync(IReadOnlyDictionary<int, string> answersByIndex)
     {

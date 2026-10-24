@@ -562,4 +562,192 @@ public class StageConversationParserTests
     }
 
     #endregion
+
+    #region ResolveAnswerFromTask & IsStageWaitingForAnswer Tests
+
+    [Fact]
+    public void ResolveAnswerFromTask_WhenDifferentStageHasAnsweredQuestions_ReturnsNull()
+    {
+        var task = new ForgeTask
+        {
+            Id = 1,
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 10,
+                    StageId = "task-review",
+                    Prompt = "Choose database:",
+                    Answer = "PostgreSQL",
+                    Status = QuestionStatus.Answered
+                }
+            }
+        };
+
+        // When resolving for a different stage (e.g. implementation), it must NOT pick up task-review's answer
+        var (answer, meta) = StageConversationParser.ResolveAnswerFromTask(task, "implementation");
+        Assert.Null(answer);
+        Assert.Null(meta);
+    }
+
+    [Fact]
+    public void ResolveAnswerFromTask_WhenStageHasPendingQuestions_ReturnsNull()
+    {
+        var task = new ForgeTask
+        {
+            Id = 2,
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 20,
+                    StageId = "task-review",
+                    Prompt = "Choose database:",
+                    Answer = "PostgreSQL",
+                    Status = QuestionStatus.Answered
+                },
+                new()
+                {
+                    Id = 21,
+                    StageId = "task-review",
+                    Prompt = "Choose cache:",
+                    Status = QuestionStatus.Pending
+                }
+            }
+        };
+
+        // Without turn-specific questions, if the stage has ANY pending questions, it is actively waiting
+        var (answer, meta) = StageConversationParser.ResolveAnswerFromTask(task, "task-review");
+        Assert.Null(answer);
+        Assert.Null(meta);
+    }
+
+    [Fact]
+    public void ResolveAnswerFromTask_WhenTurnQuestionsMatchAnsweredQuestions_ReturnsFormattedAnswers()
+    {
+        var task = new ForgeTask
+        {
+            Id = 3,
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 30,
+                    StageId = "task-review",
+                    Prompt = "Choose database:",
+                    Answer = "PostgreSQL",
+                    OptionsJson = "[\"PostgreSQL\",\"SQLite\"]",
+                    Status = QuestionStatus.Answered
+                },
+                new()
+                {
+                    Id = 31,
+                    StageId = "task-review",
+                    Prompt = "Choose cache:",
+                    Status = QuestionStatus.Pending
+                }
+            }
+        };
+
+        var turnQuestions = new List<QuestionItem>
+        {
+            new("Choose database:", null, new[] { "PostgreSQL", "SQLite" })
+        };
+
+        // When turn question specifically matches the answered question, it resolves cleanly
+        var (answer, meta) = StageConversationParser.ResolveAnswerFromTask(task, "task-review", turnQuestions);
+        Assert.Equal("PostgreSQL", answer);
+        Assert.NotNull(meta);
+        Assert.Contains("PostgreSQL", meta);
+    }
+
+    [Fact]
+    public void ResolveAnswerFromTask_WhenTurnQuestionPromptDoesNotMatchAnsweredPrompt_ReturnsNull()
+    {
+        var task = new ForgeTask
+        {
+            Id = 4,
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 40,
+                    StageId = "task-review",
+                    Prompt = "Choose database:",
+                    Answer = "PostgreSQL",
+                    Status = QuestionStatus.Answered
+                }
+            }
+        };
+
+        var pendingTurnQuestions = new List<QuestionItem>
+        {
+            new("Choose cache:", null, new[] { "Redis", "Memory" })
+        };
+
+        // Asking about cache when only database was answered must return null
+        var (answer, meta) = StageConversationParser.ResolveAnswerFromTask(task, "task-review", pendingTurnQuestions);
+        Assert.Null(answer);
+        Assert.Null(meta);
+    }
+
+    [Fact]
+    public void IsStageWaitingForAnswer_WhenConversationNotWaiting_ReturnsFalse()
+    {
+        var conv = new Conversation { Status = StageExecutionStatus.Completed };
+        var task = new ForgeTask { IsWaitingForHuman = false };
+
+        Assert.False(StageConversationParser.IsStageWaitingForAnswer(conv, task));
+    }
+
+    [Fact]
+    public void IsStageWaitingForAnswer_WhenTaskNotWaitingForHuman_ReturnsFalse()
+    {
+        var conv = new Conversation { Status = StageExecutionStatus.WaitingForHuman };
+        var task = new ForgeTask { IsWaitingForHuman = false };
+
+        Assert.False(StageConversationParser.IsStageWaitingForAnswer(conv, task));
+    }
+
+    [Fact]
+    public void IsStageWaitingForAnswer_WhenTaskHasPendingQuestions_ReturnsTrue()
+    {
+        var conv = new Conversation
+        {
+            Status = StageExecutionStatus.WaitingForHuman,
+            StageId = "task-review"
+        };
+        var task = new ForgeTask
+        {
+            IsWaitingForHuman = true,
+            Questions = new List<Question>
+            {
+                new() { StageId = "task-review", Status = QuestionStatus.Pending }
+            }
+        };
+
+        Assert.True(StageConversationParser.IsStageWaitingForAnswer(conv, task));
+    }
+
+    [Fact]
+    public void IsStageWaitingForAnswer_WhenLastAskTurnHasNoMatchingToolResult_EvenIfPreviousAskHadResult_ReturnsTrue()
+    {
+        var conv = new Conversation
+        {
+            Status = StageExecutionStatus.WaitingForHuman,
+            StageId = "task-review",
+            Turns = new List<ConversationTurn>
+            {
+                new() { TurnIndex = 0, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Ask, MetadataJson = "{\"CallId\":\"call-1\"}" },
+                new() { TurnIndex = 1, Role = StageTurnRole.ToolResult, ToolName = CanonicalToolNames.Ask, ToolResult = "Answer 1", MetadataJson = "{\"CallId\":\"call-1\"}" },
+                new() { TurnIndex = 2, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Ask, MetadataJson = "{\"CallId\":\"call-2\"}" }
+            }
+        };
+        var task = new ForgeTask { IsWaitingForHuman = true };
+
+        // Last ask turn (call-2) does NOT have a matching ToolResult turn, so must be waiting
+        Assert.True(StageConversationParser.IsStageWaitingForAnswer(conv, task));
+    }
+
+    #endregion
 }

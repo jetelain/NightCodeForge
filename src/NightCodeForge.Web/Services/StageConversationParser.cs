@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Workflow;
@@ -442,6 +443,210 @@ public static class StageConversationParser
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Resolves answered human clarification answers from a ForgeTask's Questions collection,
+    /// serving as a fallback when a ToolResult conversation turn has not yet been paired.
+    /// </summary>
+    public static (string? Answer, string? MetadataJson) ResolveAnswerFromTask(
+        ForgeTask? task,
+        string? stageId,
+        IReadOnlyList<QuestionItem>? turnQuestions = null)
+    {
+        if (task == null) return (null, null);
+
+        // 1. Check Questions collection
+        if (task.Questions != null && task.Questions.Any(q => q.Status == QuestionStatus.Answered && !string.IsNullOrWhiteSpace(q.Answer)))
+        {
+            // CRITICAL: Strictly filter by stageId if provided. Never fall back to questions from other stages!
+            var stageQuestions = !string.IsNullOrEmpty(stageId)
+                ? task.Questions.Where(q => string.Equals(q.StageId, stageId, StringComparison.OrdinalIgnoreCase)).OrderBy(q => q.Id).ToList()
+                : task.Questions.OrderBy(q => q.Id).ToList();
+
+            if (stageQuestions.Count == 0)
+            {
+                return (null, null);
+            }
+
+            List<Question> matchingAnsweredQuestions;
+            if (turnQuestions != null && turnQuestions.Count > 0)
+            {
+                matchingAnsweredQuestions = new List<Question>();
+                foreach (var tq in turnQuestions)
+                {
+                    var match = stageQuestions.FirstOrDefault(q =>
+                        string.Equals(q.Prompt?.Trim(), tq.Prompt?.Trim(), StringComparison.OrdinalIgnoreCase));
+                    if (match != null && match.Status == QuestionStatus.Answered && !string.IsNullOrWhiteSpace(match.Answer))
+                    {
+                        matchingAnsweredQuestions.Add(match);
+                    }
+                    else
+                    {
+                        // Any question in this turn is pending or not answered
+                        return (null, null);
+                    }
+                }
+            }
+            else
+            {
+                // If any question in this stage is still Pending, the stage is actively waiting
+                if (stageQuestions.Any(q => q.Status == QuestionStatus.Pending))
+                {
+                    return (null, null);
+                }
+
+                matchingAnsweredQuestions = stageQuestions
+                    .Where(q => q.Status == QuestionStatus.Answered && !string.IsNullOrWhiteSpace(q.Answer))
+                    .ToList();
+            }
+
+            if (matchingAnsweredQuestions.Count > 0)
+            {
+                var sb = new StringBuilder();
+                for (int i = 0; i < matchingAnsweredQuestions.Count; i++)
+                {
+                    if (i > 0) sb.AppendLine();
+                    if (matchingAnsweredQuestions.Count > 1)
+                    {
+                        sb.AppendLine($"{i + 1}. Question: {matchingAnsweredQuestions[i].Prompt}");
+                        sb.AppendLine($"   Answer: {matchingAnsweredQuestions[i].Answer}");
+                    }
+                    else
+                    {
+                        sb.Append(matchingAnsweredQuestions[i].Answer);
+                    }
+                }
+                var formatted = sb.ToString().TrimEnd();
+
+                var answerEntries = new List<QuestionAnswerEntry>();
+                for (int i = 0; i < matchingAnsweredQuestions.Count; i++)
+                {
+                    var q = matchingAnsweredQuestions[i];
+                    var ans = q.Answer ?? string.Empty;
+                    int? selectedOptionIndex = null;
+                    string? selectedOption = null;
+
+                    if (!string.IsNullOrWhiteSpace(q.OptionsJson))
+                    {
+                        try
+                        {
+                            var options = JsonSerializer.Deserialize<List<string>>(q.OptionsJson);
+                            if (options != null)
+                            {
+                                for (int optIdx = 0; optIdx < options.Count; optIdx++)
+                                {
+                                    if (string.Equals(options[optIdx]?.Trim(), ans.Trim(), StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        selectedOptionIndex = optIdx;
+                                        selectedOption = options[optIdx];
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        catch (JsonException)
+                        {
+                            // Ignore malformed options JSON
+                        }
+                    }
+
+                    answerEntries.Add(new QuestionAnswerEntry(
+                        QuestionIndex: i,
+                        QuestionId: q.Id,
+                        SelectedOptionIndex: selectedOptionIndex,
+                        SelectedOption: selectedOption,
+                        AnswerText: ans));
+                }
+
+                var metaDict = new Dictionary<string, object?>
+                {
+                    ["CallId"] = Guid.NewGuid().ToString("N"),
+                    ["Answers"] = answerEntries
+                };
+
+                return (formatted, JsonSerializer.Serialize(metaDict));
+            }
+        }
+
+        return (null, null);
+    }
+
+    /// <summary>
+    /// Determines whether the given stage execution or conversation is actively waiting for human clarification.
+    /// Returns false if answers were provided (task resumed/queued) or all stage questions are answered.
+    /// </summary>
+    public static bool IsStageWaitingForAnswer(Conversation? conversation, ForgeTask? task)
+    {
+        if (conversation == null || conversation.Status != StageExecutionStatus.WaitingForHuman)
+        {
+            return false;
+        }
+
+        if (task != null && !task.IsWaitingForHuman)
+        {
+            return false;
+        }
+
+        if (task?.Questions != null)
+        {
+            var stageQuestions = !string.IsNullOrEmpty(conversation.StageId)
+                ? task.Questions.Where(q => string.Equals(q.StageId, conversation.StageId, StringComparison.OrdinalIgnoreCase)).ToList()
+                : task.Questions.ToList();
+
+            if (stageQuestions.Any(q => q.Status == QuestionStatus.Pending))
+            {
+                return true;
+            }
+
+            if (stageQuestions.Count > 0 && stageQuestions.All(q => q.Status == QuestionStatus.Answered))
+            {
+                return false;
+            }
+        }
+
+        var lastAskTurn = conversation.Turns?
+            .LastOrDefault(t => t.Role == StageTurnRole.Tool && string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase));
+
+        if (lastAskTurn != null)
+        {
+            var lastAskCallId = ConversationHistorySerializer.ExtractCallId(lastAskTurn);
+            bool hasResultForLastAsk = conversation.Turns != null && conversation.Turns.Any(t =>
+                t.Role == StageTurnRole.ToolResult &&
+                string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase) &&
+                t.TurnIndex > lastAskTurn.TurnIndex &&
+                (!string.IsNullOrEmpty(lastAskCallId)
+                    ? (t.MetadataJson != null && t.MetadataJson.Contains(lastAskCallId))
+                    : true));
+
+            if (hasResultForLastAsk)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        return conversation.Status == StageExecutionStatus.WaitingForHuman;
+    }
+
+    /// <summary>
+    /// Determines whether a specific ask interruption turn is actively waiting for a human answer.
+    /// Returns false if an answer is already present or if the task is no longer waiting for human.
+    /// </summary>
+    public static bool IsWaitingForHumanAnswer(Conversation? conversation, ForgeTask? task, string? answer)
+    {
+        if (!string.IsNullOrWhiteSpace(answer))
+        {
+            return false;
+        }
+
+        if (task != null && !task.IsWaitingForHuman)
+        {
+            return false;
+        }
+
+        return conversation?.Status == StageExecutionStatus.WaitingForHuman;
     }
 }
 

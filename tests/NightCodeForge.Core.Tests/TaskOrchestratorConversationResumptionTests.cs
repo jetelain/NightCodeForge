@@ -369,4 +369,114 @@ public class TaskOrchestratorConversationResumptionTests
         Assert.Null(entries[1].SelectedOption);
         Assert.Equal("custom-secret-key", entries[1].AnswerText);
     }
+
+    [Fact]
+    public async Task SubmitAnswersAsync_ImmediatelyPersistsToolResultTurnInWaitingConversationAndBroadcastsToolCompleted()
+    {
+        var repo = new InMemoryTaskRepository();
+        var jobQueue = new FakeTaskJobQueue();
+        var streamer = new InMemoryAgentActivityStreamer();
+        var builder = new TestOrchestratorBuilder
+        {
+            TaskRepository = repo,
+            JobQueue = jobQueue,
+            Streamer = streamer
+        };
+        var orchestrator = builder.Build();
+
+        var ws = new Workspace { Id = 1, Name = "Test WS", RepositoryPath = "C:\\test" };
+        await builder.WorkspaceRepository.CreateAsync(ws);
+
+        var task = new ForgeTask
+        {
+            Id = 60,
+            WorkspaceId = 1,
+            Title = "Task with waiting conversation",
+            Status = TaskOverallStatus.Open,
+            IsWaitingForHuman = true,
+            CurrentStageId = "task-review"
+        };
+        await repo.CreateAsync(task);
+
+        var q = new Question
+        {
+            Id = 601,
+            TaskId = task.Id,
+            StageId = "task-review",
+            Prompt = "Choose architecture:",
+            OptionsJson = "[\"Monolith\",\"Microservices\"]",
+            Status = QuestionStatus.Pending
+        };
+        task.Questions.Add(q);
+        repo.AddQuestion(q);
+
+        var conv = await repo.StartConversationAsync(
+            task.Id,
+            "task-review",
+            WorkflowStageKind.Agentic,
+            1,
+            "agent-profile-1",
+            "crucible",
+            "deepseek-r1");
+        conv.Status = StageExecutionStatus.WaitingForHuman;
+
+        await repo.AddConversationTurnAsync(
+            conv.Id,
+            StageTurnRole.Tool,
+            toolName: CanonicalToolNames.Ask,
+            toolArguments: "{\"questions\":[{\"prompt\":\"Choose architecture:\",\"options\":[\"Monolith\",\"Microservices\"]}]}",
+            metadataJson: "{\"CallId\":\"call-arch-1\"}");
+
+        // Subscribe to activity streamer before submission to catch broadcasts
+        var capturedEvents = new List<AgentActivityEvent>();
+        using var cts = new CancellationTokenSource();
+        var eventReceivedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var streamTask = Task.Run(async () =>
+        {
+            await foreach (var evt in streamer.SubscribeAsync(cancellationToken: cts.Token))
+            {
+                capturedEvents.Add(evt);
+                if (evt.Kind == AgentActivityKind.ToolCompleted)
+                {
+                    eventReceivedTcs.TrySetResult();
+                }
+            }
+        });
+
+        // Ensure background stream subscription is registered
+        while (streamer.ActiveSubscriptionsCount == 0)
+        {
+            await Task.Yield();
+        }
+
+        // Submit answer from Question Inbox
+        await orchestrator.SubmitAnswersAsync(task.Id, new Dictionary<int, string>
+        {
+            [601] = "Monolith"
+        });
+
+        // Await event broadcast
+        await Task.WhenAny(eventReceivedTcs.Task, Task.Delay(2000));
+
+        // 1. ToolResult turn must be persisted in database immediately (no need to wait for worker)
+        var updatedConv = await repo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(updatedConv);
+        var toolResultTurn = updatedConv.Turns.FirstOrDefault(t => t.Role == StageTurnRole.ToolResult);
+        Assert.NotNull(toolResultTurn);
+        Assert.Equal(CanonicalToolNames.Ask, toolResultTurn.ToolName);
+        Assert.Contains("Monolith", toolResultTurn.ToolResult);
+        Assert.NotNull(toolResultTurn.MetadataJson);
+        Assert.Contains("call-arch-1", toolResultTurn.MetadataJson);
+        Assert.Contains("Monolith", toolResultTurn.MetadataJson);
+
+        // 2. Broadcast must have been dispatched for ToolCompleted
+        cts.Cancel();
+        try { await streamTask; } catch (OperationCanceledException) { }
+
+        Assert.Contains(capturedEvents, e =>
+            e.Kind == AgentActivityKind.ToolCompleted &&
+            e.TaskId == task.Id &&
+            e.Metadata?.GetValueOrDefault(AgentActivityMetadataKeys.ToolName)?.ToString() == CanonicalToolNames.Ask);
+    }
 }

@@ -502,4 +502,286 @@ public class StageConversationViewerAskToolTests : BunitContext
         Assert.Contains("answered-selected", stagingChip.ClassName);
         Assert.DoesNotContain("answered-selected", prodChip.ClassName);
     }
+
+    [Fact]
+    public void StageConversationViewer_WhenTaskQuestionsAnsweredInInbox_RendersClarificationProvidedAndHidesForm()
+    {
+        var conv = new Conversation
+        {
+            Id = 6,
+            TaskId = 20,
+            StageId = "task-review",
+            Status = StageExecutionStatus.WaitingForHuman,
+            Turns = new List<ConversationTurn>
+            {
+                new()
+                {
+                    Id = 601,
+                    TurnIndex = 0,
+                    Role = StageTurnRole.Tool,
+                    ToolName = CanonicalToolNames.Ask,
+                    ToolArguments = "{\"questions\":[{\"prompt\":\"Choose a database:\",\"options\":[\"PostgreSQL\",\"SQLite\"]}]}",
+                    MetadataJson = "{\"CallId\":\"call-db-99\"}"
+                }
+            }
+        };
+
+        var task = new ForgeTask
+        {
+            Id = 20,
+            Title = "Task with answered questions in Inbox",
+            IsWaitingForHuman = false,
+            CurrentStageId = "task-review",
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 991,
+                    TaskId = 20,
+                    StageId = "task-review",
+                    Prompt = "Choose a database:",
+                    Answer = "PostgreSQL",
+                    OptionsJson = "[\"PostgreSQL\",\"SQLite\"]",
+                    Status = QuestionStatus.Answered
+                }
+            }
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.Task, task)
+            .Add(x => x.IsActiveStage, false));
+
+        // Must NOT render input textarea or submit button
+        Assert.Empty(cut.FindAll("textarea.agent-question-input"));
+        Assert.Empty(cut.FindAll("button.submit-answer-btn"));
+
+        // Header badge must reflect answered/queued state
+        Assert.DoesNotContain("Waiting for Answer", cut.Markup);
+        Assert.Contains("Clarification Provided (Queued)", cut.Markup);
+
+        // Turn card must display Clarification Provided and user response
+        Assert.Contains("Clarification Provided", cut.Markup);
+        Assert.Contains("User Response", cut.Markup);
+        Assert.Contains("PostgreSQL", cut.Markup);
+
+        // Option chip must be selected
+        var chips = cut.FindAll("button.agent-option-chip");
+        var pgChip = chips.First(c => c.TextContent.Trim() == "PostgreSQL");
+        Assert.Contains("answered-selected", pgChip.ClassName);
+    }
+
+    [Fact]
+    public void StageConversationViewer_WithPersistedToolResultTurn_EvenIfWaitingForHuman_RendersAnsweredState()
+    {
+        var conv = new Conversation
+        {
+            Id = 7,
+            TaskId = 25,
+            StageId = "task-review",
+            Status = StageExecutionStatus.WaitingForHuman,
+            Turns = new List<ConversationTurn>
+            {
+                new()
+                {
+                    Id = 701,
+                    TurnIndex = 0,
+                    Role = StageTurnRole.Tool,
+                    ToolName = CanonicalToolNames.Ask,
+                    ToolArguments = "{\"questions\":[{\"prompt\":\"Choose cache:\",\"options\":[\"Redis\",\"Memory\"]}]}",
+                    MetadataJson = "{\"CallId\":\"call-cache-77\"}"
+                },
+                new()
+                {
+                    Id = 702,
+                    TurnIndex = 1,
+                    Role = StageTurnRole.ToolResult,
+                    ToolName = CanonicalToolNames.Ask,
+                    ToolResult = "Redis",
+                    MetadataJson = "{\"CallId\":\"call-cache-77\",\"Answers\":[{\"QuestionIndex\":0,\"SelectedOptionIndex\":0,\"SelectedOption\":\"Redis\",\"AnswerText\":\"Redis\"}]}"
+                }
+            }
+        };
+
+        var task = new ForgeTask
+        {
+            Id = 25,
+            Title = "Task with persisted ToolResult turn",
+            IsWaitingForHuman = false,
+            CurrentStageId = "task-review"
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.Task, task)
+            .Add(x => x.IsActiveStage, false));
+
+        // Must NOT render input textarea or submit button
+        Assert.Empty(cut.FindAll("textarea.agent-question-input"));
+        Assert.Empty(cut.FindAll("button.submit-answer-btn"));
+
+        // Header badge must reflect answered/queued state
+        Assert.DoesNotContain("Waiting for Answer", cut.Markup);
+        Assert.Contains("Clarification Provided (Queued)", cut.Markup);
+
+        // Turn card must display Clarification Provided and user response
+        Assert.Contains("Clarification Provided", cut.Markup);
+        Assert.Contains("User Response", cut.Markup);
+        Assert.Contains("Redis", cut.Markup);
+
+        var chips = cut.FindAll("button.agent-option-chip");
+        var redisChip = chips.First(c => c.TextContent.Trim() == "Redis");
+        Assert.Contains("answered-selected", redisChip.ClassName);
+    }
+
+    [Fact]
+    public void StageConversationViewer_WhenDifferentStageHasAnsweredQuestions_NewStagePendingQuestionRendersInputForm()
+    {
+        var conv = new Conversation
+        {
+            Id = 8,
+            TaskId = 30,
+            StageId = "implementation",
+            Status = StageExecutionStatus.WaitingForHuman,
+            Turns = new List<ConversationTurn>
+            {
+                new()
+                {
+                    Id = 801,
+                    TurnIndex = 0,
+                    Role = StageTurnRole.Tool,
+                    ToolName = CanonicalToolNames.Ask,
+                    ToolArguments = "{\"questions\":[{\"prompt\":\"Choose message broker:\",\"options\":[\"RabbitMQ\",\"Kafka\"]}]}",
+                    MetadataJson = "{\"CallId\":\"call-broker-1\"}"
+                }
+            }
+        };
+
+        var task = new ForgeTask
+        {
+            Id = 30,
+            Title = "Task with answered questions in prior stage",
+            IsWaitingForHuman = true,
+            CurrentStageId = "implementation",
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 991,
+                    TaskId = 30,
+                    StageId = "task-review",
+                    Prompt = "Choose a database:",
+                    Answer = "PostgreSQL",
+                    OptionsJson = "[\"PostgreSQL\",\"SQLite\"]",
+                    Status = QuestionStatus.Answered
+                },
+                new()
+                {
+                    Id = 992,
+                    TaskId = 30,
+                    StageId = "implementation",
+                    Prompt = "Choose message broker:",
+                    OptionsJson = "[\"RabbitMQ\",\"Kafka\"]",
+                    Status = QuestionStatus.Pending
+                }
+            }
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.Task, task)
+            .Add(x => x.IsActiveStage, true));
+
+        // Must render input textarea and submit button because implementation question is pending
+        Assert.NotEmpty(cut.FindAll("textarea.agent-question-input"));
+        Assert.NotEmpty(cut.FindAll("button.submit-answer-btn"));
+
+        // Header badge must reflect active waiting state
+        Assert.Contains("Waiting for Answer", cut.Markup);
+        Assert.DoesNotContain("Clarification Provided (Queued)", cut.Markup);
+        Assert.DoesNotContain("PostgreSQL", cut.Markup);
+    }
+
+    [Fact]
+    public void StageConversationViewer_WhenSameStageHasSubsequentPendingQuestion_RendersInputForm()
+    {
+        var conv = new Conversation
+        {
+            Id = 9,
+            TaskId = 35,
+            StageId = "task-review",
+            Status = StageExecutionStatus.WaitingForHuman,
+            Turns = new List<ConversationTurn>
+            {
+                new()
+                {
+                    Id = 901,
+                    TurnIndex = 0,
+                    Role = StageTurnRole.Tool,
+                    ToolName = CanonicalToolNames.Ask,
+                    ToolArguments = "{\"questions\":[{\"prompt\":\"Choose database:\",\"options\":[\"PostgreSQL\",\"SQLite\"]}]}",
+                    MetadataJson = "{\"CallId\":\"call-db-1\"}"
+                },
+                new()
+                {
+                    Id = 902,
+                    TurnIndex = 1,
+                    Role = StageTurnRole.ToolResult,
+                    ToolName = CanonicalToolNames.Ask,
+                    ToolResult = "PostgreSQL",
+                    MetadataJson = "{\"CallId\":\"call-db-1\",\"Answers\":[{\"QuestionIndex\":0,\"SelectedOptionIndex\":0,\"SelectedOption\":\"PostgreSQL\",\"AnswerText\":\"PostgreSQL\"}]}"
+                },
+                new()
+                {
+                    Id = 903,
+                    TurnIndex = 2,
+                    Role = StageTurnRole.Tool,
+                    ToolName = CanonicalToolNames.Ask,
+                    ToolArguments = "{\"questions\":[{\"prompt\":\"Choose cache:\",\"options\":[\"Redis\",\"Memory\"]}]}",
+                    MetadataJson = "{\"CallId\":\"call-cache-2\"}"
+                }
+            }
+        };
+
+        var task = new ForgeTask
+        {
+            Id = 35,
+            Title = "Task with second pending question in same stage",
+            IsWaitingForHuman = true,
+            CurrentStageId = "task-review",
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 951,
+                    TaskId = 35,
+                    StageId = "task-review",
+                    Prompt = "Choose database:",
+                    Answer = "PostgreSQL",
+                    Status = QuestionStatus.Answered
+                },
+                new()
+                {
+                    Id = 952,
+                    TaskId = 35,
+                    StageId = "task-review",
+                    Prompt = "Choose cache:",
+                    Status = QuestionStatus.Pending
+                }
+            }
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.Task, task)
+            .Add(x => x.IsActiveStage, true));
+
+        // The second pending question must render input textarea and submit button
+        Assert.NotEmpty(cut.FindAll("textarea.agent-question-input"));
+        Assert.NotEmpty(cut.FindAll("button.submit-answer-btn"));
+
+        // Header badge must reflect waiting state
+        Assert.Contains("Waiting for Answer", cut.Markup);
+        Assert.DoesNotContain("Clarification Provided (Queued)", cut.Markup);
+    }
 }
