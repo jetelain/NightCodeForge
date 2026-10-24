@@ -51,13 +51,13 @@ flowchart TD
         OpenModal["Display Restart Pipeline Modal<br/>(RestartPipelineModal.razor)"]
         SelectMode{"Select Restart Git Mode"}
         SoftOption["Option 1: Soft Restart<br/>- Keep existing branch commits<br/>- Preserve worktree files<br/>- Reset pipeline to Stage 1"]
-        HardOption["Option 2: Hard Reset & Rebase<br/>- Discard all WIP commits & files<br/>- Reset branch to latest baseBranch (main)<br/>- Teardown sandbox container first<br/>- Clear conflict & pipeline bags<br/>- Force-push/align host-origin<br/>- Start Stage 1 on clean baseline"]
+        HardOption["Option 2: Hard Reset & Rebase<br/>- Discard all WIP commits & files<br/>- Reset branch to latest baseBranch<br/>- Teardown sandbox container first<br/>- Purge pipeline execution data bag<br/>- Force-push remote (if remote exists)<br/>- Start Stage 1 on clean baseline"]
     end
 
     subgraph ServiceLayer ["Core Orchestration Layer (TaskOrchestrator)"]
         CallRestart["TaskOrchestrator.RestartTaskPipelineAsync<br/>(taskId, gitMode)"]
-        GuardMerged{"Is task merged?<br/>(SquashCommitSha != null)"}
-        RejectMerged["Throw InvalidOperationException<br/>(Merged tasks cannot be restarted)"]
+        GuardMerged{"Is task merged or closed?<br/>(SquashCommitSha != null || Status == Closed)"}
+        RejectMerged["Throw InvalidOperationException<br/>(Merged / Closed tasks cannot be restarted)"]
         HandleActive{"Is task active or queued?"}
         CancelActive["1. Cancel running execution via ITaskCancellationManager<br/>2. Delete enqueued job via ITaskJobQueue.Delete(LastHangfireJobId)"]
         AcquireLock["Acquire Workspace Mutual Exclusion Lock"]
@@ -65,12 +65,12 @@ flowchart TD
         
         subgraph HardResetPath ["Hard Reset & Clean Baseline Operations (Container-First Order)"]
             CleanContainer["1. Teardown Sandbox Container<br/>(CleanupTaskContainerAsync releases file locks)"]
-            FetchBase["2. Fetch latest baseBranch from origin<br/>(git fetch host-origin {baseBranch})"]
-            ResetGit["3. GitWorkspaceManager.ResetTaskBranchToBaseAsync<br/>- Discard dirty edits & untracked files (git clean -fdx)<br/>- Hard reset branch to origin/{baseBranch}<br/>- Re-verify relative paths"]
-            SyncRemote["4. Reconcile remote branch<br/>(git push --force host-origin feature/task-{id})"]
+            FetchBase["2. Synchronize baseBranch from upstream / mirror (if configured)"]
+            ResetGit["3. GitWorkspaceManager.ResetTaskBranchToBaseAsync<br/>- Discard dirty edits & untracked files (git clean -fdx)<br/>- Hard reset branch to baseBranch<br/>- Re-verify relative paths"]
+            SyncRemote["4. Reconcile remote branch<br/>(If remote configured: git push --force host-origin feature/task-{id})"]
         end
         
-        UpdateDB["Reset Task DB Record & History<br/>- Clear all conflict & interrupted keys in PipelineDataJson<br/>- Set HasExecutionRun = false<br/>- Mark active conversations as Superseded<br/>- Status = Open, CurrentStageId = initialStage.StageId"]
+        UpdateDB["Reset Task DB Record & Data Bag<br/>- Purge execution artifacts from PipelineDataJson<br/>- Set HasExecutionRun = false<br/>- Mark active conversations as Superseded<br/>- Status = Open, CurrentStageId = initialStage.StageId"]
         Enqueue["TaskJobQueue.EnqueueStage<br/>(Enqueue initialStage using initialStage.QueueTier)"]
     end
 
@@ -126,19 +126,35 @@ flowchart TD
 
        /// <summary>
        /// Hard-resets the task's feature branch to the latest commit of its base branch (e.g. main),
-       /// cleans uncommitted files, recycles any running sandbox container, clears conflict states,
-       /// force-aligns remote branch, and starts the workflow fresh.
+       /// cleans uncommitted files, recycles any running sandbox container, clears pipeline bags,
+       /// aligns remote branch if present, and starts the workflow fresh.
        /// </summary>
        HardResetToBaseBranch = 1
    }
    ```
 
-2. **Core Layer Orchestration Contract (`ITaskOrchestrator.cs`):**
+2. **`StageExecutionStatus.Superseded` Addition:**
+   Extend [StageExecutionStatus](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/Enums.cs#L92-L101) to represent conversation runs that were closed because the workflow was restarted or recovered:
+   ```csharp
+   public enum StageExecutionStatus
+   {
+       Pending = 0,
+       Running = 1,
+       Completed = 2,
+       Failed = 3,
+       Skipped = 4,
+       WaitingForHuman = 5,
+       Cancelled = 6,
+       Superseded = 7
+   }
+   ```
+
+3. **Core Layer Orchestration Contract (`ITaskOrchestrator.cs`):**
    In accordance with the project rule on architectural layering, task pipeline restart orchestration belongs in the `Core` workflow domain, not directly inside Web services:
    ```csharp
    namespace NightCodeForge.Core.Workflow;
 
-   public partial interface ITaskOrchestrator
+   public interface ITaskOrchestrator
    {
        /// <summary>
        /// Restarts execution of a task from the initial stage of its workflow,
@@ -151,16 +167,41 @@ flowchart TD
    }
    ```
 
-3. **Web Layer Contract (`IDevQueueService.cs`):**
-   Update [IDevQueueService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Services/IDevQueueService.cs) to delegate to `TaskOrchestrator.RestartTaskPipelineAsync` when restarting:
+4. **Web Layer Contract (`IDevQueueService.cs`):**
+   Update [IDevQueueService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Services/IDevQueueService.cs) to provide dedicated, self-describing methods for stage retry vs. pipeline restart:
    ```csharp
-   Task<bool> RescheduleTaskAsync(
-       int taskId,
-       TaskRestartGitMode gitMode = TaskRestartGitMode.PreserveWork,
-       CancellationToken cancellationToken = default);
+   namespace NightCodeForge.Web.Services;
+
+   public interface IDevQueueService
+   {
+       /// <summary>
+       /// Retries or re-enqueues the current stage of a task without resetting pipeline progress.
+       /// </summary>
+       Task<bool> RetryCurrentStageAsync(
+           int taskId,
+           CancellationToken cancellationToken = default);
+
+       /// <summary>
+       /// Restarts the task workflow from Stage 1 using the specified Git worktree strategy,
+       /// delegating to ITaskOrchestrator.RestartTaskPipelineAsync.
+       /// </summary>
+       Task<bool> RestartPipelineAsync(
+           int taskId,
+           TaskRestartGitMode gitMode = TaskRestartGitMode.PreserveWork,
+           CancellationToken cancellationToken = default);
+
+       /// <summary>
+       /// Legacy entry point maintained for compatibility; delegates to RetryCurrentStageAsync (restartPipeline: false)
+       /// or RestartPipelineAsync (restartPipeline: true).
+       /// </summary>
+       Task<bool> RescheduleTaskAsync(
+           int taskId,
+           bool restartPipeline = false,
+           CancellationToken cancellationToken = default);
+   }
    ```
 
-4. **`IGitWorkspaceManager` Contract Extension:**
+5. **`IGitWorkspaceManager` Contract Extension:**
    Add a dedicated branch reset method to [IGitWorkspaceManager.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Interfaces/IGitWorkspaceManager.cs):
    ```csharp
    /// <summary>
@@ -181,16 +222,17 @@ flowchart TD
 When `HardResetToBaseBranch` is triggered, operations execute in strict sequence under workspace mutual exclusion:
 
 1. **Precondition & Invariant Checks:**
-   - **Protection for Merged Tasks:** If `task.SquashCommitSha != null` or `task.Status == TaskOverallStatus.Merged`, throw `InvalidOperationException("Cannot restart a task that has already been merged.")`.
+   - **Protection for Merged / Closed Tasks:** If `task.SquashCommitSha != null || task.Status == TaskOverallStatus.Closed`, throw `InvalidOperationException("Cannot restart a task that has already been merged.")`.
    - **Active Task Cancellation:** If the task is running (`WorkerStateService.ActiveTaskId == taskId` or `_cancellationManager.IsRegistered(taskId)`), request cancellation and await release.
-   - **Dangling Hangfire Job Deletion:** If `task.LastHangfireJobId` is non-empty, call `_taskJobQueue.Delete(task.LastHangfireJobId)` before resetting Git or re-enqueuing.
+   - **Dangling Hangfire Job Deletion:** If `task.LastHangfireJobId` is non-empty, call `_jobQueue.Delete(task.LastHangfireJobId)` before resetting Git or re-enqueuing.
 
 2. **Container Teardown (First Step before Git Commands):**
-   - Recycles any existing Docker container for this task via `_executionEnvironmentProvider.CleanupTaskContainerAsync(workspace, taskId, cancellationToken)`.
+   - Recycles any existing Docker container for this task via `_environmentProvider.CleanupTaskContainerAsync(workspace, taskId, cancellationToken)`.
    - This releases all open file handles, file-system locks, and container volume bindings that would otherwise cause `git clean -fdx` or file deletion to fail on Windows / WSL mounts.
 
 3. **Upstream Base Branch Synchronization:**
-   - Always execute `git fetch host-origin {baseBranch}` (or `_gitMirrorSyncService.PullFromHostAsync` if mirror is enabled) to guarantee the local base branch reference matches the latest upstream commit.
+   - If Ext4 mirror sync is enabled for the workspace (`workspace.Ext4MirrorPath` configured), synchronize via `_gitMirrorSyncService.PullFromHostAsync(workspace, baseBranch, cancellationToken)`.
+   - For remote-backed repositories, fetch upstream commits (`git fetch origin {baseBranch}`). For standalone local repositories without remotes, gracefully proceed with the local base branch commit.
 
 4. **Worktree Clean and Reset:**
    Determine the task worktree path via `GetWorktreePath(workspace, taskId)`.
@@ -198,20 +240,20 @@ When `HardResetToBaseBranch` is triggered, operations execute in strict sequence
      1. Discard uncommitted edits and purge untracked files:
         `git -C <worktreePath> reset --hard HEAD`
         `git -C <worktreePath> clean -fdx`
-     2. Hard-reset the branch reference to the target base branch:
-        `git -C <worktreePath> reset --hard host-origin/<baseBranch>`
+     2. Hard-reset the branch reference directly to the target base branch:
+        `git -C <worktreePath> reset --hard <baseBranch>`
      3. Verify bidirectional relative path pointers via `EnsureWorktreeRelativePathsAsync` to ensure container/WSL mount integrity.
    - **Case B: Worktree Does Not Exist or Is Corrupted:**
      1. Prune stale worktrees: `git worktree prune`.
-     2. Forcefully re-point the branch to `host-origin/<baseBranch>`:
-        `git branch -f feature/task-{taskId} host-origin/<baseBranch>`
+     2. Forcefully re-point the branch to `<baseBranch>`:
+        `git branch -f feature/task-{taskId} <baseBranch>`
      3. Invoke `EnsureWorktreeAsync(workspace, taskId, baseBranch, cancellationToken)`.
 
 5. **Remote Branch Reconciliation:**
-   - Check if remote branch `feature/task-{taskId}` exists on `host-origin`.
-   - If present, force push the reset branch:
-     `git push --force host-origin feature/task-{taskId}`
-     (or delete the remote branch so subsequent stages create and push it cleanly).
+   - Inspect existing remotes via `git remote`.
+   - If `host-origin` or `origin` remote is configured, check if `feature/task-{taskId}` exists on the remote. If present, force push the reset branch:
+     `git push --force <remote> feature/task-{taskId}`
+   - If no remote is configured (e.g. standalone local repository in test fixtures or offline environments), remote push is safely skipped.
    - This ensures that subsequent pushes in conflict resolution or merge gates do not fail due to rejected non-fast-forward updates.
 
 6. **No Silent Failures:**
@@ -222,16 +264,9 @@ When `HardResetToBaseBranch` is triggered, operations execute in strict sequence
 ### 3.3 Database State & Pipeline Bag Sanitization
 
 When performing `HardResetToBaseBranch`:
-1. **Pipeline Data Bag Reset:**
-   Completely purge all conflict resolution, compiler diagnostics, and interruption artifacts from `task.PipelineDataJson`:
-   - Remove `PipelineDataBagKeys.ConflictFiles`
-   - Remove `PipelineDataBagKeys.ConflictBaseBranch`
-   - Remove `PipelineDataBagKeys.ConflictDetectedAt`
-   - Reset `PipelineDataBagKeys.ConflictResolutionAttempts = 0`
-   - Reset `PipelineDataBagKeys.TotalConflictResolutionAttempts = 0`
-   - Reset `PipelineDataBagKeys.LifetimeConflictDetections = 0`
-   - Reset `PipelineDataBagKeys.HasResolvedConflict = false`
-   - Remove `PipelineDataBagKeys.CompilerErrors`
+1. **Pipeline Data Bag Sanitization:**
+   Completely purge all prior run artifacts from `task.PipelineDataJson`.
+   Reset `task.PipelineDataJson = "{}"` (or clear conflict resolution keys, diagnostics, `ApprovedPlan`, `ReviewerFeedback`, `FailedTests`, all stage failure reasons, and retry counters `RetryCount`, `StageRetries`), ensuring no stale plan or error diagnostics pollute Stage 1.
 2. **Task Record Attributes:**
    - `task.Status = TaskOverallStatus.Open`
    - `task.CurrentStageId = initialStage.StageId`
@@ -242,10 +277,10 @@ When performing `HardResetToBaseBranch`:
    - `task.InterruptedAgentProfileId = null`
    - `task.UpdatedAt = DateTime.UtcNow`
 3. **Stage Conversations:**
-   Mark any existing active or running conversations for this task with `StageExecutionStatus.Superseded`, ensuring historical runs are closed and telemetry reflects a fresh execution session.
+   Query `_taskRepository.GetConversationsAsync(task.Id)` and mark any active or running conversations for this task with `StageExecutionStatus.Superseded`, ensuring historical runs are closed and telemetry reflects a fresh execution session.
 4. **Stage Dispatch:**
    Enqueue the task using the initial workflow stage's declared tier via:
-   `_taskJobQueue.EnqueueStage(task.Id, initialStage.QueueTier, task.Priority);`
+   `_jobQueue.EnqueueStage(task.Id, initialStage.QueueTier, task.Priority);`
 
 ---
 
@@ -260,7 +295,9 @@ When performing `HardResetToBaseBranch`:
 2. **Execution Logs:**
    Write an `ExecutionLog` record documenting the restart mode, previous stage, and timestamp.
 3. **SignalR Telemetry Event:**
-   Broadcast an `AgentActivityEvent` indicating `AgentActivityKind.TaskRestarted` (or `AgentActivityKind.StageStarted`) with metadata `["RestartMode"] = gitMode.ToString()`.
+   Broadcast an `AgentActivityEvent` indicating `AgentActivityKind.StageStarted` with metadata:
+   - `["IsRestart"] = true`
+   - `["RestartMode"] = gitMode.ToString()`
 
 ---
 
@@ -269,8 +306,8 @@ When performing `HardResetToBaseBranch`:
 In accordance with the project rule on UI and presentation separation (keeping Razor components focused strictly on presentation and user interaction, delegating logic to services):
 
 1. **Action Trigger in `TaskExecutionInspector.razor`:**
-   - Clicking **"⏮ Restart Pipeline"** no longer triggers an immediate background mutation.
-   - Instead, it sets a modal visibility flag: `_showRestartModal = true`.
+   - Clicking **"⏮ Restart Pipeline"** sets `_showRestartModal = true`.
+   - Clicking **"↻ Retry Stage"** calls `DevQueueService.RetryCurrentStageAsync(_task.Id)`.
 
 2. **Dedicated Modal Component (`RestartPipelineModal.razor`):**
    Create `src/NightCodeForge.Web/Components/Monitoring/RestartPipelineModal.razor` with rich visual design:
@@ -288,7 +325,7 @@ In accordance with the project rule on UI and presentation separation (keeping R
          > *"⚠️ Warning: All commits and untracked files on branch `feature/task-{TaskId}` will be permanently discarded. Any local untracked configs or test outputs will be wiped via `git clean -fdx`."*
    - **Action Buttons:**
      - **Cancel:** Closes modal without action.
-     - **Confirm Restart:** Executes `DevQueueService.RescheduleTaskAsync(taskId, selectedGitMode)` and displays a loading spinner during execution.
+     - **Confirm Restart:** Executes `DevQueueService.RestartPipelineAsync(taskId, selectedGitMode)` and displays a loading spinner during execution.
 
 ---
 
@@ -307,24 +344,29 @@ In accordance with the project rule on UI and presentation separation (keeping R
      - Create dirty uncommitted files and untracked directories in worktree.
      - Invoke `ResetTaskBranchToBaseAsync`.
      - Assert `git status --porcelain` is completely clean.
+   - `ResetTaskBranchToBaseAsync_StandaloneLocalRepoWithoutRemote_SucceedsWithoutThrowing`:
+     - Run on repo without `host-origin` remote; assert successful hard reset to local base branch.
 
 2. **`NightCodeForge.Core.Tests/TaskOrchestratorRestartTests.cs`:**
-   - `RestartTaskPipelineAsync_WhenTaskIsMerged_ThrowsInvalidOperationException`:
-     - Given a task with `SquashCommitSha != null`.
+   - `RestartTaskPipelineAsync_WhenTaskIsClosedOrMerged_ThrowsInvalidOperationException`:
+     - Given a task with `SquashCommitSha != null` or `Status == TaskOverallStatus.Closed`.
      - Calling `RestartTaskPipelineAsync` throws `InvalidOperationException`.
    - `RestartTaskPipelineAsync_WhenTaskIsRunning_CancelsRunningExecutionAndDeletesHangfireJob`:
      - Verify `_cancellationManager.Cancel(taskId)` is invoked.
-     - Verify `_taskJobQueue.Delete(lastJobId)` is called before Git operations.
+     - Verify `_jobQueue.Delete(lastJobId)` is called before Git operations.
    - `RestartTaskPipelineAsync_HardReset_RecyclesContainerBeforeGitReset`:
      - Verify invocation sequence: `CleanupTaskContainerAsync` occurs before `ResetTaskBranchToBaseAsync`.
-   - `RestartTaskPipelineAsync_HardReset_ClearsPipelineDataBagKeysAndFlags`:
-     - Verify `ConflictFiles`, `HasResolvedConflict`, `CompilerErrors`, and `InterruptedStageId` are wiped.
+   - `RestartTaskPipelineAsync_HardReset_ClearsPipelineDataBagAndResetsState`:
+     - Verify `PipelineDataJson` is wiped or cleared of prior run artifacts.
      - Verify `HasExecutionRun == false`.
+     - Verify active conversations are marked `StageExecutionStatus.Superseded`.
      - Verify task is re-enqueued via `EnqueueStage` with the initial stage's tier.
 
 3. **`NightCodeForge.Web.Tests/DevQueueServiceTests.cs`:**
-   - `RescheduleTaskAsync_DelegatesToTaskOrchestratorWithSelectedMode`:
-     - Verify `DevQueueService.RescheduleTaskAsync` delegates to `TaskOrchestrator.RestartTaskPipelineAsync`.
+   - `RestartPipelineAsync_DelegatesToTaskOrchestratorWithSelectedMode`:
+     - Verify `DevQueueService.RestartPipelineAsync` delegates to `TaskOrchestrator.RestartTaskPipelineAsync`.
+   - `RetryCurrentStageAsync_ReEnqueuesCurrentStageWithoutRestart`:
+     - Verify current stage and WIP commits are retained.
 
 4. **`NightCodeForge.Web.Tests/TaskExecutionInspectorComponentTests.cs`:**
    - `ClickingRestartButton_OpensRestartPipelineModal`:
@@ -334,21 +376,23 @@ In accordance with the project rule on UI and presentation separation (keeping R
    - `ConfirmingHardReset_InvokesDevQueueServiceWithHardResetMode`:
      - Select Hard Reset option in modal.
      - Click Confirm.
-     - Assert `RescheduleTaskAsync` is called with `TaskRestartGitMode.HardResetToBaseBranch`.
+     - Assert `RestartPipelineAsync` is called with `TaskRestartGitMode.HardResetToBaseBranch`.
 
 ---
 
 ## 5. Acceptance Criteria Checklist
 
 - [ ] `TaskRestartGitMode` enum defined in `NightCodeForge.Core.Domain` (`PreserveWork = 0`, `HardResetToBaseBranch = 1`).
+- [ ] `StageExecutionStatus.Superseded` defined in `NightCodeForge.Core.Domain.Enums`.
 - [ ] `ITaskOrchestrator.RestartTaskPipelineAsync` defined and implemented in `Core`, owning the restart workflow.
-- [ ] Restart rejected with `InvalidOperationException` if task is already merged (`SquashCommitSha != null`).
-- [ ] Active running tasks are cancelled and dangling Hangfire jobs deleted (`_taskJobQueue.Delete`) prior to reset.
+- [ ] Restart rejected with `InvalidOperationException` if task is already merged or closed (`SquashCommitSha != null || Status == Closed`).
+- [ ] Active running tasks are cancelled and dangling Hangfire jobs deleted (`_jobQueue.Delete`) prior to reset.
 - [ ] Sandbox container recycled (`CleanupTaskContainerAsync`) strictly BEFORE Git reset operations.
-- [ ] `IGitWorkspaceManager.ResetTaskBranchToBaseAsync` implemented in `GitWorkspaceManager` with hard reset, untracked file purge (`git clean -fdx`), relative path normalization, and remote branch force-push.
-- [ ] Pipeline data bag keys for conflict resolution and interruption fully purged on hard reset.
+- [ ] `IGitWorkspaceManager.ResetTaskBranchToBaseAsync` implemented in `GitWorkspaceManager` with hard reset, untracked file purge (`git clean -fdx`), relative path normalization, and safe remote reconciliation.
+- [ ] Pipeline data bag execution artifacts and interruption keys fully purged on hard reset.
+- [ ] Active stage conversations marked with `StageExecutionStatus.Superseded`.
 - [ ] Task re-enqueued via `TaskJobQueue.EnqueueStage` using initial workflow stage's declared `QueueTier`.
-- [ ] `IDevQueueService.RescheduleTaskAsync` updated to accept `TaskRestartGitMode` and delegate to Core.
+- [ ] `IDevQueueService` updated with dedicated `RetryCurrentStageAsync` and `RestartPipelineAsync` methods.
 - [ ] `RestartPipelineModal.razor` created with clear card options, destructive warning banner, and cancellation support.
-- [ ] `TaskExecutionInspector.razor` updated to open modal instead of executing immediate soft restart.
+- [ ] `TaskExecutionInspector.razor` updated to open modal on restart and use `RetryCurrentStageAsync` on retry.
 - [ ] All tests passing with `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

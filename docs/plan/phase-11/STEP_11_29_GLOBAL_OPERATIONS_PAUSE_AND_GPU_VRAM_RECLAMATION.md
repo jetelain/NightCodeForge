@@ -101,22 +101,64 @@ flowchart TD
 
 ### 3.1 Domain Contracts & Service Abstractions
 
-1. **`OperationsReclaimStatus` Enum:**
-   Add domain enum in `src/NightCodeForge.Core/Domain/OperationsReclaimStatus.cs`:
-   ```csharp
-   namespace NightCodeForge.Core.Domain;
+1. **Domain Enums & Extensions:**
+   - **`OperationsReclaimStatus` Enum:**
+     Add domain enum in `src/NightCodeForge.Core/Domain/OperationsReclaimStatus.cs`:
+     ```csharp
+     namespace NightCodeForge.Core.Domain;
 
-   public enum OperationsReclaimStatus
+     public enum OperationsReclaimStatus
+     {
+         Idle = 0,
+         Evicting = 1,
+         Evicted = 2,
+         Failed = 3
+     }
+     ```
+   - **`StageExecutionStatus.Interrupted`:**
+     Extend [StageExecutionStatus](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/Enums.cs#L92-L101) to support pause-interrupted stage sessions without marking them `Failed`:
+     ```csharp
+     public enum StageExecutionStatus
+     {
+         Pending = 0,
+         Running = 1,
+         Completed = 2,
+         Failed = 3,
+         Skipped = 4,
+         WaitingForHuman = 5,
+         Cancelled = 6,
+         Superseded = 7,
+         Interrupted = 8
+     }
+     ```
+   - **`AgentRunStatus.Interrupted`:**
+     Extend [AgentRunStatus](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/AgentRunResult.cs#L6-L12):
+     ```csharp
+     public enum AgentRunStatus
+     {
+         Completed = 0,
+         WaitingForHuman = 1,
+         Failed = 2,
+         Cancelled = 3,
+         Interrupted = 4
+     }
+     ```
+
+2. **Persistence Abstraction (`IOperationsStateStore.cs`):**
+   In accordance with the clean architecture layering rule (`NightCodeForge.Core` has no direct EF Core dependency), define a state store contract in `src/NightCodeForge.Core/Interfaces/IOperationsStateStore.cs`:
+   ```csharp
+   namespace NightCodeForge.Core.Interfaces;
+
+   public interface IOperationsStateStore
    {
-       Idle = 0,
-       Evicting = 1,
-       Evicted = 2,
-       Failed = 3
+       Task<bool> GetIsPausedAsync(CancellationToken cancellationToken = default);
+       Task SetIsPausedAsync(bool isPaused, CancellationToken cancellationToken = default);
    }
    ```
+   Implemented in `src/NightCodeForge.Infrastructure/Data/OperationsStateStore.cs` using `IDbContextFactory<AppDbContext>` to persist into the existing `SystemSettings` table with key `"Operations.IsPaused"`.
 
-2. **`IOperationsControlService` Interface:**
-   Add a dedicated domain interface in `src/NightCodeForge.Core/Interfaces/IOperationsControlService.cs`:
+3. **`IOperationsControlService` Interface:**
+   Add domain interface in `src/NightCodeForge.Core/Interfaces/IOperationsControlService.cs`:
    ```csharp
    namespace NightCodeForge.Core.Interfaces;
 
@@ -158,13 +200,14 @@ flowchart TD
    }
    ```
 
-3. **`OperationsControlService` Concrete Implementation:**
+4. **`OperationsControlService` Concrete Implementation:**
    Implement in `src/NightCodeForge.Core/Services/OperationsControlService.cs`, registered as a **Singleton**:
    - Thread-safe state using lock or `volatile bool _isPaused`.
-   - Persists state in the database settings (`SystemSettingsRepository`) so that if the application or server restarts while paused, operations remain paused until explicitly resumed.
+   - Injects `IOperationsStateStore` to persist state across server restarts.
+   - **Constructor Rule Adherence:** All service dependencies (`IOperationsStateStore`, `IOllamaRouterGatewayService`, `IWorkerStateService`, `ITaskCancellationManager`, `ITaskRepository`, `IWorkflowPipelineProvider`, `ITaskJobQueue`, `IDependencyResolutionEngine`, `IExecutionEnvironmentProvider`, `ILogger`) are **required parameters** with null-checks; optional parameters or fallback default values are strictly forbidden.
    - **Startup Recovery Interplay:**
-     In [StartupRecoveryService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/StartupRecoveryService.cs), check `_operationsControlService.IsPaused` before dispatching tasks:
-     If the server boots while operations are paused, Git locks and Ext4 mirrors are reconciled normally, but active/orphaned tasks are checkpointed with `InterruptedStageId` and held in `Open` status without enqueuing to Hangfire. They will be dispatched when `ResumeOperationsAsync` is called.
+     In [StartupRecoveryService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/StartupRecoveryService.cs), inject `IOperationsControlService` as a required constructor dependency.
+     If `_operationsControlService.IsPaused` is true on boot, Git locks, Ext4 mirrors, and container cleanup are reconciled normally, but active/orphaned tasks are checkpointed with `InterruptedStageId` and held in `Open` status without enqueuing to Hangfire. They will be dispatched when `ResumeOperationsAsync` is called.
    - **Blazor UI Lifecycle & Disposal Rule:**
      Components subscribing to `OnOperationsStateChanged` must dispatch UI updates using `await InvokeAsync(StateHasChanged)` and must implement `IDisposable` to unsubscribe when torn down.
 
@@ -181,6 +224,7 @@ flowchart TD
    ```
 
 2. **Cancellation vs. Pause Precedence in `TaskOrchestrator.ProcessTaskAsync`:**
+   Inject `IOperationsControlService` as a required constructor dependency of `TaskOrchestrator`.
    When catching `OperationCanceledException`:
    ```csharp
    if (_cancellationManager.IsCancelRequested(taskId))
@@ -225,7 +269,7 @@ When an active task is suspended mid-flight in [CrucibleAgentHarness.cs](file://
 1. **Pause vs. Cancellation Distinction:**
    - Detect `_cancellationManager.IsPauseRequested(taskId)` or `_operationsControlService.IsPaused`.
    - When paused, invoke `SuspendOnPauseAsync()` instead of `AbortOnCancellationAsync()`.
-   - Mark the conversation with `StageExecutionStatus.Interrupted`.
+   - Mark the conversation with `StageExecutionStatus.Interrupted` and save run as `AgentRunStatus.Interrupted`.
    - Broadcast `AgentActivityKind.Interrupted` (never `AgentActivityKind.Error`).
 
 2. **In-Flight Turn Sanitization (Clean Rollback):**
@@ -235,7 +279,7 @@ When an active task is suspended mid-flight in [CrucibleAgentHarness.cs](file://
      - When the task resumes, the agent starts cleanly from the prior prompt turn and re-evaluates the action without orphan `tool_call_id` syntax errors.
 
 3. **Subprocess & Container Process Termination:**
-   - To ensure host CPU and memory are 100% freed for gaming, long-running processes (tests, builds) inside the task sandbox must be terminated.
+   - To ensure host CPU and memory are 100% freed for gaming and the worker releases immediately, long-running processes (tests, builds) inside the task sandbox must be actively aborted.
    - The harness signals `interruptionCts.Cancel()` to the local runner, and for container executions, terminates the container process tree (e.g. `docker kill --signal=SIGTERM` or stops the container) before concluding suspension.
 
 4. **Inference Socket Teardown Timing:**
@@ -253,7 +297,7 @@ When an active task is suspended mid-flight in [CrucibleAgentHarness.cs](file://
    ReclaimStatus = OperationsReclaimStatus.Evicting;
    OnOperationsStateChanged?.Invoke(true);
 
-   // 2. Signal pause to any active task
+   // 2. Signal pause to any active task and abort running processes
    var activeTaskId = _workerStateService.ActiveTaskId;
    if (activeTaskId.HasValue)
    {
@@ -321,10 +365,11 @@ To guarantee models are not accidentally re-loaded into GPU VRAM while the opera
    When the user clicks **"▶️ Resume Operations"**:
    - Set `_isPaused = false` and `ReclaimStatus = OperationsReclaimStatus.Idle`.
    - Clear all pause flags via `_cancellationManager.ClearPause(taskId)`.
-   - **Re-enqueue Orphaned / Interrupted Tasks:**
+   - **Re-enqueue Orphaned / Interrupted Tasks with DAG Validation:**
      Query `taskRepository` for all tasks where:
      `t.Status == TaskOverallStatus.Open && !t.IsWaitingForHuman && (t.InterruptedStageId != null || t.CurrentStageId != null)`
-     For each eligible task:
+     For each candidate task:
+     - Verify DAG readiness via `await _dependencyEngine.IsReadyForExecutionAsync(task.Id, cancellationToken)`. If dependencies are still pending, do not dispatch to Hangfire.
      - Resolve target stage definition from workflow (using `InterruptedStageId` or `CurrentStageId`, or initial stage if blank).
      - Enqueue via `_taskJobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority)`.
    - Broadcast SignalR activity event to update all client views.
@@ -366,10 +411,11 @@ To guarantee models are not accidentally re-loaded into GPU VRAM while the opera
    - `PauseOperationsAsync_WhenReclaimFails_SetsStatusFailedWithoutSilentDrop`:
      - Mock `ReclaimVramAsync` failure.
      - Assert `ReclaimStatus == OperationsReclaimStatus.Failed` and `LastReclaimError` is populated.
-   - `ResumeOperationsAsync_ReEnqueuesOpenTasks_ViaStageQueueTier`:
+   - `ResumeOperationsAsync_ReEnqueuesOpenTasks_OnlyWhenDagReady`:
      - Set up tasks in `Open` status with `InterruptedStageId`.
+     - Mock `_dependencyEngine.IsReadyForExecutionAsync` returning `true` for task A and `false` for task B (dependencies unmerged).
      - Call `ResumeOperationsAsync`.
-     - Verify each task is re-enqueued via `ITaskJobQueue.EnqueueStage` with correct tier and priority.
+     - Verify only task A is re-enqueued via `ITaskJobQueue.EnqueueStage` with correct tier and priority.
      - Verify `ClearPause` is invoked.
 
 2. **`NightCodeForge.Core.Tests/TaskOrchestratorPauseTests.cs`:**
@@ -379,14 +425,14 @@ To guarantee models are not accidentally re-loaded into GPU VRAM while the opera
      - Trigger pause.
      - Assert `task.Status == TaskOverallStatus.Open`.
      - Assert `task.InterruptedStageId` equals the active stage.
-     - Assert conversation marked as `Interrupted`.
+     - Assert conversation marked as `StageExecutionStatus.Interrupted`.
    - `CriticalGitSection_DoesNotAbortMidCommit_OnPause`:
      - Verify Git commit/merge operations execute to completion before pause suspension.
 
 3. **`NightCodeForge.Agents.Tests/Crucible/CrucibleAgentHarnessPauseTests.cs`:**
    - `RunStageAsync_WhenPauseRequested_SavesInterruptedStatusWithoutError`:
      - Verify `AgentActivityKind.Interrupted` broadcast (not `AgentActivityKind.Error`).
-     - Verify conversation status is saved as `Interrupted`.
+     - Verify conversation status is saved as `StageExecutionStatus.Interrupted` and run as `AgentRunStatus.Interrupted`.
    - `RunStageAsync_WhenPausedMidToolCall_RollsBackIncompleteAssistantTurn`:
      - Trigger pause while assistant has streamed `tool_calls` without tool results.
      - Assert incomplete assistant message is rolled back from saved chat history.
@@ -413,8 +459,12 @@ To guarantee models are not accidentally re-loaded into GPU VRAM while the opera
 ## 5. Acceptance Criteria Checklist
 
 - [ ] `OperationsReclaimStatus` enum defined in `NightCodeForge.Core.Domain`.
+- [ ] `StageExecutionStatus.Interrupted` defined in `NightCodeForge.Core.Domain.Enums`.
+- [ ] `AgentRunStatus.Interrupted` defined in `NightCodeForge.Core.Domain.AgentRunResult`.
 - [ ] `OperationsPausedException` defined in `NightCodeForge.Core.Exceptions`.
-- [ ] `IOperationsControlService` defined and implemented in Core as a Singleton with persistent database backing.
+- [ ] `IOperationsStateStore` contract defined in Core and implemented in Infrastructure using `SystemSettings`.
+- [ ] `IOperationsControlService` defined and implemented in Core as a Singleton with persistent state store backing.
+- [ ] Primary constructor injection used without optional parameters across `TaskOrchestrator` and `StartupRecoveryService`.
 - [ ] `ITaskCancellationManager` extended with `RequestPause`, `IsPauseRequested`, and `ClearPause`.
 - [ ] Precedence logic in `TaskOrchestrator`: explicit cancellation sets `Cancelled`; pause checkpoints `InterruptedStageId` with `Open`.
 - [ ] Atomic non-cancellable wrapper protects critical Git operations (merge, commit, squash).
@@ -423,9 +473,10 @@ To guarantee models are not accidentally re-loaded into GPU VRAM while the opera
 - [ ] Streaming inference sockets closed before GPU VRAM unload begins.
 - [ ] VRAM eviction triggered via `ReclaimVramAsync`; failures captured and surfaced in UI.
 - [ ] Global inference client gate throws `OperationsPausedException` when paused, preventing out-of-band model reloads.
-- [ ] `ResumeOperationsAsync` reconciles and re-enqueues all waiting/interrupted tasks via `TaskJobQueue.EnqueueStage`.
+- [ ] `ResumeOperationsAsync` verifies DAG readiness via `IDependencyResolutionEngine` before re-enqueuing to `TaskJobQueue.EnqueueStage`.
 - [ ] `StartupRecoveryService` respects `IsPaused` on boot without dispatching active tasks.
 - [ ] `TopNavBar.razor` displays one-click toggle with visual pulse, and surfaces reclaim failure alerts.
 - [ ] Razor components marshal state updates via `InvokeAsync` and implement `IDisposable`.
 - [ ] All unit and integration tests passing (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`).
+
 
