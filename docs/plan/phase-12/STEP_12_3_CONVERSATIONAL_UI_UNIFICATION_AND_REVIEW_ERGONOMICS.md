@@ -3,7 +3,7 @@
 > **Phase 12 Implementation Step (Extend Features - Developer Ergonomics & UI Polish)** *(formerly Step 11.19)*  
 > *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Web/Components/Inbox`, `src/NightCodeForge.Web/Components/Monitoring`, `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Web/Components/Review`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Services`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 ---
 
@@ -235,3 +235,25 @@ flowchart TD
    - Open `/review`: verify closed/merged tasks do not appear in the pending reviews list; verify sticky file tree; verify `📄 Task Details` header link.
    - Open `/tasks/{id}`: verify the "Changes" tab renders diffs for both active and closed tasks, and verify the `🔍 Open in Review Room` button appears when `Status == Ready`.
    - Open `/backlog`: verify the Kanban board displays a clear, pulsing `● Running` badge on the actively executing task, matching the DAG view.
+
+---
+
+## 5. Acceptance Criteria Checklist
+
+- [x] `AgentQuestionTurnCard.razor` enhanced with task metadata header (Task #Id, Title, Stage, Time) and reused in `Inbox.razor` / `QuestionCard.razor`.
+- [x] `PipelineStepper.razor` fixed to preserve `StageExecutionStatus.Running` when `OverallStatus == TaskOverallStatus.InProgress` or stage conversation is running.
+- [x] Explicitly pass `CurrentStageStatus` in `TaskExecutionInspector.razor` to `<PipelineStepper>`.
+- [x] `StageConversationViewer.razor` unified with `Ideation.razor` compact chat bubble architecture, avatar column, inline `<details class="think-trace">`, and compact `<details class="tool-trace">`.
+- [x] Styled `.file-tree` in `Review.razor` with sticky positioning (`position: sticky; top: 1rem; max-height: calc(100vh - 2rem)`).
+- [x] Added deep link buttons to `/inspector/@_snapshot.TaskId` and `/tasks/@_snapshot.TaskId` in `Review.razor` header.
+- [x] Updated `TaskReviewService.GetPendingReviewsAsync` and `Review.razor` to strictly filter out closed and merged tasks (`Status != TaskOverallStatus.Closed`).
+- [x] Implemented `ReviewFileTreeBuilder` helper class in `NightCodeForge.Web.Services` creating hierarchical `ReviewFileTreeNode` tree with folder grouping and single-child compression.
+- [x] Updated `Review.razor` left panel to render hierarchical tree view ensuring filename is always visible.
+- [x] Implemented `ISyntaxHighlightingService` / `SimpleSyntaxHighlighter` tokenizing C#, TS/JS, Python, JSON, XML, Shell code lines into safe HTML spans.
+- [x] Integrated syntax highlighting in `DiffViewer.razor` for both Side-by-Side and Unified views.
+- [x] Implemented `TaskInspectorGroupingHelper` in `NightCodeForge.Web.Services` and updated `TaskExecutionInspector.razor` dropdown with `<optgroup>` categories (Running, In Flight waiting for slot, Waiting for Human, Closed) sorted by priority.
+- [x] Added an In-Flight Task Card / Banner in `ActiveOperationsHero.razor` on `/monitoring` showing active task metadata, active stage, and direct navigation links.
+- [x] Implemented `ITaskDiffService` and added a "Changes" (Diff) tab in `TaskDetail.razor` embedding `DiffViewer.razor` for both active and closed/merged tasks.
+- [x] Added a prominent `🔍 Open in Review Room` primary action button in `TaskDetail.razor` header when `task.Status == TaskOverallStatus.Ready`.
+- [x] Added explicit running indicator badges (`● Running` with pulse glow animation) and active stage styling on `KanbanCard.razor` matching the DAG view in-flight indicator.
+- [x] All unit and integration tests passing (`NightCodeForge.Web.Tests`).

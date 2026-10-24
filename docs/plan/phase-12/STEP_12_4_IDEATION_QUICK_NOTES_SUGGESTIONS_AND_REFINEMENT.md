@@ -18,7 +18,7 @@ Transform the Ideation experience into a full-lifecycle feature discovery and re
    - **Keep as Suggestion (`Draft` $\rightarrow$ `Suggested`):** Preserves the task in the Ideation Backlog / Suggestions tab for future evaluation without queuing it for autonomous execution.
    - **Discard (Delete):** Permanently purges the draft item from the database.
 3. **Conversational Refinement on Suggested Tasks:** Allow maintainers to click **"Refine in Ideation"** on any suggested task or quick note. This launches an Ideation chat session pre-seeded with the task's context, description, and open questions, allowing developer and agent to iteratively polish the specification before approving it.
-4. **Immediate Database Drafts & Scoped Agent Tools:** Write proposed tasks to SQLite immediately as [TaskOverallStatus.Draft](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/Enums.cs) so subsequent tasks have concrete integer IDs (`depends_on: [104]`). Equip the read-only ideation agent with scoped `edit_task` and `remove_task` tools restricted strictly to unapproved draft/suggested tasks.
+4. **Immediate Database Drafts & Scoped Agent Tools:** Write proposed tasks to SQLite immediately as [TaskOverallStatus.Draft](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/Enums.cs) so subsequent tasks have concrete integer IDs (`depends_on: [104]`). Equip the read-only ideation agent with scoped `edit_task` and `remove_task` tools (with full backlog management and priority reworking specified in [Step 12.13](STEP_12_13_IDEATION_BACKLOG_MANAGEMENT_AND_TASK_MUTATION_TOOLS.md)).
 5. **Automated TTL Pruning for Drafts:** Purge unapproved, unpromoted `Draft` tasks older than 24 hours via a background Hangfire recurring job (`IdeationDraftPruningService`), while `Suggested` tasks are preserved indefinitely.
 
 ---
@@ -131,8 +131,8 @@ When the agent proposes tasks during chat, `IdeationProposalCard.razor` renders 
      Your objective is to inspect relevant files, discuss technical trade-offs, answer developer questions, and use the 'edit_task' tool to update the title, description, dependencies, or acceptance criteria based on the conversation.
      ```
 2. **Agent Scoped Tooling:**
-   The ideation agent has access to:
-   - `edit_task(task_id, title?, description?, priority?, depends_on_ids?)`: Updates the target task. Throws hard domain exception if `task_id` is already approved (`Open`, `Reviewed`, etc.).
+   The ideation agent has access to scoped mutation tools (see [Step 12.13](STEP_12_13_IDEATION_BACKLOG_MANAGEMENT_AND_TASK_MUTATION_TOOLS.md) for full backlog management specification):
+   - `edit_task(task_id, title?, description?, priority?, depends_on_ids?)`: Updates the target task. Throws hard domain exception if `task_id` is currently in-progress (`InProgress`) or closed.
    - `remove_task(task_id)`: Removes the task if the user requests deletion during chat.
    - `propose_tasks(...)`: Allows proposing additional sub-tasks or follow-up items linked via DAG dependencies.
 
@@ -160,12 +160,12 @@ When the agent proposes tasks during chat, `IdeationProposalCard.razor` renders 
 - [ ] **Conversational Refinement Engine:**
   - [ ] Support `refineTaskId` query parameter in `Ideation.razor`.
   - [ ] Pre-seed agent prompt context with task details when refining.
-  - [ ] Implement `edit_task` and `remove_task` tools in `IdeationService` scoped strictly to `Draft` and `Suggested` tasks.
+  - [ ] Integrate with `edit_task` and `remove_task` tools (specified in [Step 12.13](STEP_12_13_IDEATION_BACKLOG_MANAGEMENT_AND_TASK_MUTATION_TOOLS.md)).
 - [ ] **Background Pruning:**
   - [ ] Implement Hangfire recurring job `IdeationDraftPruningService` purging `Draft` tasks older than 24h.
   - [ ] Verify `Suggested` tasks are immune to TTL pruning.
 - [ ] **Automated Tests:**
-  - [ ] Unit test: `edit_task` modifies `Draft` and `Suggested` tasks, fails on `Open` tasks.
+  - [ ] Unit test: `edit_task` modifies `Draft` and `Suggested` tasks; fails when task is `InProgress` or `Closed`.
   - [ ] Unit test: "Keep as Suggestion" sets `Status = Suggested`.
   - [ ] Unit test: `IdeationDraftPruningService` deletes stale drafts and preserves suggestions.
   - [ ] Run test suite: `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

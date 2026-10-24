@@ -31,6 +31,9 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
    - **Step 11.24:** Fine-Grained Workspace Concurrency & Non-Blocking Git Merge Operations — decoupling long-running agent LLM loops from the workspace reader lock, keeping atomic mutual exclusion on the shared canonical Git clone (< 500ms), and enabling instantaneous Squash & Merge in the Review Room while background tasks execute.
    - **Step 11.25:** Autonomous Git Conflict Management, Baseline Synchronization & Re-Review Lifecycle — zero-conflict synchronization of task feature branches from main at Stage 2 Pre-Implementation Baseline, non-destructive merge preview and conflict detection at Stage 6 / Review Room entry, atomic rollback on Squash & Merge failure, and autonomous conflict resolution by the Implementation Agent with re-review audit trail.
    - **Step 11.26:** Container Reuse Validation & Task Lifecycle Sandbox Cleanup — comprehensive volume mount and image drift detection during container reuse in `EnsureContainerRunning` (eliminating permission denied errors from stale mounts), task terminal state container teardown (`Closed`, `Rejected`), and startup/background orphan container reconciliation sweeps.
+   - **Step 11.27:** Stage-Priority Inference Queue Scheduling & Conflict Resolution Lifecycle Hardening — stage-priority queue hierarchy treating each task "as a whole" (`code-review-fix` -> `implementation` -> `task-review`), mandatory compilation/build verification in `ConflictResolutionVerifier` before creating merge commits, mandatory re-traversal of all downstream gates (`deterministic-post-impl`, `code-review-fix`, `deterministic-post-review`, Gate 2), prompt mandate block prepended at top of prompt, and Review Room state hygiene restricting review actions and banners strictly to `Ready` tasks.
+   - **Step 11.28:** Pipeline Restart Git Options: Soft Resume vs Hard Reset & Base Branch Rebase — first-class operator choice in Task Execution Inspector between Soft Restart (preserving existing worktree/branch commits) and Clean Hard Reset (discarding WIP commits, rebasing/hard-resetting feature branch onto latest base branch, recycling sandbox container, and starting Stage 1 on a clean baseline).
+   - **Step 11.29:** Global Operations Pause & GPU VRAM Eviction (Gamer / Dedicated Workload Mode) — first-class global pause toggle (`TopNavBar.razor`, operations telemetry) that suspends all background queues, checkpoints in-flight tasks gracefully without failure, and instantly evicts resident LLM models from GPU VRAM via `IOllamaRouterGatewayService.ReclaimVramAsync` so the host GPU is 100% free for gaming or dedicated workloads.
 
 > [!NOTE]
 > **Subsequent Feature Roadmap:** Non-completed exploratory and feature expansion steps (including Intelligent Task Dependency Detection, Task Attachments, Dual Model Routing, CLI Output Compression, DevSkim SAST, Mobile UI, MCP, and GitHub Integration) have been moved to **[Phase 12: Extend Features & Integrations](12_EXTEND_FEATURES.md)**.  
@@ -56,6 +59,9 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
 | **11.24** | [🔒 Step 11.24: Fine-Grained Workspace Concurrency & Non-Blocking Git Merge Operations](phase-11/STEP_11_24_FINE_GRAINED_WORKSPACE_LOCKING_AND_NON_BLOCKING_MERGE.md) | Decouple long-running agent LLM loops from the workspace reader lock, keep atomic mutual exclusion on the shared canonical Git clone (< 500ms), and enable instantaneous Review Room Squash & Merge without waiting for background dev-queue tasks. | Completed |
 | **11.25** | [🔀 Step 11.25: Autonomous Git Conflict Management, Baseline Synchronization & Re-Review Lifecycle](phase-11/STEP_11_25_GIT_CONFLICT_MANAGEMENT_AND_RE_REVIEW_LIFECYCLE.md) | Synchronize task branch from main prior to Stage 2 Pre-Implementation Baseline (conflict-free), non-destructive mergeability preview (`git merge-tree`) before entering Ready, atomic canonical rollback on squash conflict with `MergeConflictException`, and autonomous conflict resolution by Implementation Agent with re-review alert banner in Review Room. | Completed |
 | **11.26** | [🐳 Step 11.26: Container Reuse Validation & Task Lifecycle Sandbox Cleanup](phase-11/STEP_11_26_CONTAINER_REUSE_VALIDATION_AND_TASK_LIFECYCLE_CLEANUP.md) | Complete volume mount and image drift detection during container reuse in `EnsureContainerRunning` (eliminating root permission errors from stale mounts), task terminal state container teardown (`Closed`, `Rejected`), and startup/background orphan container reconciliation sweeps. | Completed |
+| **11.27** | [🎯 Step 11.27: Stage-Priority Inference Queue Scheduling & Conflict Resolution Lifecycle Hardening](phase-11/STEP_11_27_STAGE_PRIORITY_SCHEDULING_AND_CONFLICT_RESOLUTION_HARDENING.md) | Stage-priority queue scheduling hierarchy (`code-review-fix` -> `implementation` -> `task-review`) treating tasks "as a whole", mandatory compilation/build verification in `ConflictResolutionVerifier` before creating merge commits, mandatory re-traversal of all downstream gates (`deterministic-post-impl`, `code-review-fix`, `deterministic-post-review`, Gate 2), prompt mandate block prepended at top of prompt, and Review Room state hygiene restricting review actions and banners strictly to `Ready` tasks. | Proposed |
+| **11.28** | [🔄 Step 11.28: Pipeline Restart Git Options: Soft Resume vs Hard Reset & Base Branch Rebase](phase-11/STEP_11_28_PIPELINE_RESTART_GIT_RESET_AND_REBASE_OPTIONS.md) | First-class operator choice when restarting pipelines: Soft Restart (preserve commits/worktree) vs Clean Hard Reset (discard changes, hard reset/rebase to latest base branch, teardown task container, and restart Stage 1 fresh). | Proposed |
+| **11.29** | [⏸️ Step 11.29: Global Operations Pause & GPU VRAM Eviction (Gamer / Dedicated Workload Mode)](phase-11/STEP_11_29_GLOBAL_OPERATIONS_PAUSE_AND_GPU_VRAM_RECLAMATION.md) | One-click global operations pause: gracefully suspend in-flight tasks, defer Hangfire inference queues, and immediately evict resident models from GPU VRAM (`keep_alive: 0`) to free the GPU for gaming or 3D applications. | Proposed |
 
 ---
 
@@ -191,6 +197,34 @@ flowchart TD
     end
 ```
 
+### 3.10 Step 11.27: Stage-Priority Inference Queue Scheduling & Conflict Resolution Hardening
+```mermaid
+flowchart TD
+    subgraph StagePriorityQueue ["Single GPU Inference Queue (WorkerCount = 1)"]
+        Worker["NCF-LLM-Inference-Worker<br/>Strict Sequential Queue Checking: [Q1 -> Q2 -> Q3 -> Q4 -> Q5]"]
+        Q1["1. llm-urgent (P1 Critical, Manual Promotion, Human 'ask' Replies)"]
+        Q2["2. llm-code-review (Code Review & Fix, Post-Review Verification)"]
+        Q3["3. llm-implementation (Implementation, Pre/Post Gates, Conflict Turns)"]
+        Q4["4. llm-task-review (Task Review Intake & Architecture Spec)"]
+        Q5["5. llm-inference (Legacy / Fallback Queue)"]
+        Q1 --> Worker
+        Q2 --> Worker
+        Q3 --> Worker
+        Q4 --> Worker
+        Q5 --> Worker
+    end
+
+    subgraph ConflictHardening ["Hardened Conflict Resolution & Gate Re-Traversal"]
+        Conflict["Merge Conflict at Gate 2 / Gate 3"] --> Directive["Prepend Mandate Block at Top of Prompt"]
+        Directive --> AgentTurn["Agent Turn: Reconcile Code & Signatures"]
+        AgentTurn --> Verifier["ConflictResolutionVerifier:<br/>1. Marker Scan<br/>2. Stage Conflicted Files<br/>3. Unmerged Index Check<br/>4. Mandatory workspace.BuildCommand Execution"]
+        Verifier -->|Build Pass| MergeCommit["Create Git Merge Commit"]
+        Verifier -->|Build Fail| Loopback["DO NOT COMMIT. Feedback to Agent (Attempts++)"]
+        MergeCommit --> Gates["Mandatory Re-Traversal of All Downstream Gates:<br/>deterministic-post-impl -> code-review-fix -> deterministic-post-review -> Gate 2"]
+        Gates --> Ready["Status = Ready (Review Room Banner & Actions Enabled)"]
+    end
+```
+
 ---
 
 ## 4. Phase 11 Definition of Done (DoD) Checklist
@@ -312,3 +346,15 @@ flowchart TD
   - [x] Hook container teardown into `TaskOrchestrator` on task squash-merge (`Closed`), task rejection (`Rejected`), and task deletion.
   - [x] Implement orphan container reconciliation sweep in `StartupRecoveryService` and `GitSyncService` to reap running containers belonging to closed/missing tasks.
   - [x] Author unit and integration tests verifying mount drift detection, container recreation, and lifecycle cleanup.
+
+- [ ] **Step 11.27 (Stage-Priority Inference Queue Scheduling & Conflict Resolution Lifecycle Hardening):**
+  - [ ] Add `HangfireQueues.LlmCodeReview`, `HangfireQueues.LlmImplementation`, `HangfireQueues.LlmTaskReview` and configure `NCF-LLM-Inference-Worker` polling sequence (`LlmUrgent` -> `LlmCodeReview` -> `LlmImplementation` -> `LlmTaskReview` -> `LlmInference`).
+  - [ ] Update `ITaskJobQueue` with `EnqueueStage(taskId, stageId, priority)` and update all dispatchers across `TaskOrchestrator`, `CreateTask.razor`, and `DevQueueService`.
+  - [ ] Update `DevQueueService` snapshot and re-ordering logic to prioritize by stage tier first, then task priority (P1 -> P5), then FIFO.
+  - [ ] Inject `IExecutionEnvironmentProvider` into `ConflictResolutionVerifier` and execute `workspace.BuildCommand` deterministically; fail fast without creating merge commit on compiler errors.
+  - [ ] Prepend conflict resolution mandate block at the very top of the prompt in `DefaultBootstrapPromptBuilder.cs` with explicit instructions on constructor/interface reconciliation and compiler diagnostic injection.
+  - [ ] Enforce mandatory full pipeline re-traversal (`PostImplementationGates` -> `CodeReviewAndFix` -> `PostReviewVerification` -> Gate 2) after conflict resolution.
+  - [ ] Restrict `TaskReviewService.GetPendingReviewsAsync` strictly to `Status == TaskOverallStatus.Ready` (eliminating `Implemented` and `Reviewed` tasks).
+  - [ ] Restrict Review Room actions (`Approve & Merge`, `Request Changes`) and `Autonomous Conflict Resolution Completed` banner strictly to `Ready` status.
+  - [ ] Author unit tests in `HangfireQueuePriorityTests`, `ConflictResolutionVerifierTests`, `DefaultBootstrapPromptBuilderTests`, and `TaskReviewServiceTests`.
+

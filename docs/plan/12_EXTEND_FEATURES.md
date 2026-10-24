@@ -17,6 +17,7 @@ The roadmap is prioritized into three strategic delivery tiers:
    - **Step 12.2:** Task Attachments & Context Documents (formerly Step 11.16) — workspace-level read-only `attachments/` store (sibling of clone and task worktrees) populated from file drops, cited host paths, and URL captures (MarkItDown companions), citable by ideation (`@attachment:{id}`) and readable by workflow stage agents.
    - **Step 12.3:** Conversational UI Unification, Review Room & Task Detail Ergonomics, Inspector Grouping & Running State Hygiene (formerly Step 11.19) — reusing `AgentQuestionTurnCard` across Question Inbox and Task Inspector; fixing stepper false "Pending" indicators during active runs; unifying chat bubble styling; sticky navigation, hierarchical directory tree view, and syntax highlighting in Review Room; in-flight task card in live telemetry; `<optgroup>` status grouping in Task Inspector (Running, Waiting for Slot, Waiting for Human, Closed); strictly filtering out closed/merged tasks in Review Room; dedicated "Changes" diff tab in Task Details with "Open in Review Room" action; Review Room link to Task Details; and clean pulsing running badges on Kanban cards mirroring the DAG view.
    - **Step 12.4:** Ideation Quick Notes, Suggestions Backlog & Conversational Refinement (formerly Step 11.5) — quick notes backlog intake ("Think Now, Chat Later"); proposal card lifecycle (`Approve` $\rightarrow$ Open, `Keep as Suggestion` $\rightarrow$ Suggested, `Discard` $\rightarrow$ Delete); "Refine in Ideation" pre-seeded chat; scoped `edit_task` tools; 24h draft pruning.
+   - **Step 12.13:** Conversational Backlog Management, Task Refinement & Scoped Mutation Tools in Ideation — enabling the ideation agent to inspect existing tasks on demand (`get_task`), enrich details, sub-tasks, and scope without prompt bloat (`edit_task`), rework priorities across the backlog (`set_task_priority`, `rework_priorities`), and safely remove unstarted tasks (`remove_task`) with DAG cycle checks, audit attribution, and markdown synchronization while preserving the strictly read-only workspace filesystem invariant.
 
 2. **Tier 2: Intelligence, Efficiency & Quality Gates:**
    - **Step 12.5:** Heterogeneous Dual Model Role Configuration & Difficulty Escalation (formerly Step 11.1) — Architect/Reviewer model (e.g. Qwen 3.8 27B) for ideation, review, code review; Coder model (e.g. Qwen 3.6 35B A3B) for fast coding; dynamic difficulty escalation for difficult/expert tasks.
@@ -40,8 +41,9 @@ The roadmap is prioritized into three strategic delivery tiers:
 | :--- | :--- | :--- | :--- |
 | **12.1** | [🔗 Step 12.1: Intelligent Task Dependency Detection in Ideation & Review Agents](phase-12/STEP_12_1_INTELLIGENT_TASK_DEPENDENCY_DETECTION.md) | Backlog context injection for Ideation and Stage 1 Review agents; system prompts requiring identification of prerequisites, shared interfaces, and ordering; auto-population of `dependsOnTitles` and DAG dependency chips in Kanban and Drawer. *(formerly Step 11.14)* | **Top Priority** |
 | **12.2** | [📎 Step 12.2: Task Attachments & Context Documents](phase-12/STEP_12_2_TASK_ATTACHMENTS_AND_CONTEXT_DOCS.md) | Workspace-level read-only `attachments/` directory (sibling of clone & worktrees): intake via file drop, cited host paths, and URL captures with Pmad.Markitdown markdown companions; SHA-256 dedup & reusability; `@attachment:{id}` citations in tasks; read-only `list_attachments`/`read_attachment` tools for ideation and the three workflow stage agents; attachments picker on `/tasks/new`. *(formerly Step 11.16)* | **Top Priority** |
-| **12.3** | [🎨 Step 12.3: Conversational UI Unification, Review Room & Task Detail Ergonomics, Inspector Grouping & Running State Hygiene](phase-12/STEP_12_3_CONVERSATIONAL_UI_UNIFICATION_AND_REVIEW_ERGONOMICS.md) | Reuse `AgentQuestionTurnCard` in `/inbox`, fix `PipelineStepper` false "Pending" state during active runs, unify `StageConversationViewer` with `Ideation` compact bubble layout, provide sticky file tree with `/inspector` and `/tasks/{id}` links, hierarchical tree view preventing path truncation, DiffViewer syntax highlighting, in-flight task display in live telemetry, `<optgroup>` status grouping in Task Inspector, strict pending reviews filtering in Review Room, dedicated "Changes" diff tab in Task Details with "Open in Review Room" button, and pulsing running markers on Kanban cards. *(formerly Step 11.19)* | **Top Priority** |
+| **12.3** | [🎨 Step 12.3: Conversational UI Unification, Review Room & Task Detail Ergonomics, Inspector Grouping & Running State Hygiene](phase-12/STEP_12_3_CONVERSATIONAL_UI_UNIFICATION_AND_REVIEW_ERGONOMICS.md) | Reuse `AgentQuestionTurnCard` in `/inbox`, fix `PipelineStepper` false "Pending" state during active runs, unify `StageConversationViewer` with `Ideation` compact bubble layout, provide sticky file tree with `/inspector` and `/tasks/{id}` links, hierarchical tree view preventing path truncation, DiffViewer syntax highlighting, in-flight task display in live telemetry, `<optgroup>` status grouping in Task Inspector, strict pending reviews filtering in Review Room, dedicated "Changes" diff tab in Task Details with "Open in Review Room" button, and pulsing running markers on Kanban cards. *(formerly Step 11.19)* | Completed |
 | **12.4** | [💡 Step 12.4: Ideation Quick Notes, Suggestions & Conversational Refinement](phase-12/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md) | Quick notes backlog intake ("Think Now, Chat Later"); proposal card lifecycle (`Approve` $\rightarrow$ Open, `Keep as Suggestion` $\rightarrow$ Suggested, `Discard` $\rightarrow$ Delete); "Refine in Ideation" pre-seeded chat; scoped `edit_task` tools; 24h draft pruning. *(formerly Step 11.5)* | Planned |
+| **12.13** | [📋 Step 12.13: Conversational Backlog Management, Task Refinement & Scoped Mutation Tools in Ideation](phase-12/STEP_12_13_IDEATION_BACKLOG_MANAGEMENT_AND_TASK_MUTATION_TOOLS.md) | Equips read-only ideation agent with scoped host-level tools (`get_task`, `edit_task`, `set_task_priority`, `rework_priorities`, `remove_task`) to inspect, refine details/sub-tasks, rework priorities, and remove unstarted tasks (`Draft`, `Suggested`, `Open`) while enforcing read-only workspace safety, DAG cycle validation, audit logging, and markdown disk sync. | Planned |
 
 ### Priority Tier 2: Intelligence, Efficiency & Quality Gates
 
@@ -138,23 +140,23 @@ flowchart LR
   - [ ] Support `@attachment:{id}` citations in task descriptions, materialized as `TaskAttachmentLinks` on task creation (hard error on unknown IDs).
   - [ ] Build Web UI: chat drop zone + attachment chips, workspace attachments panel with preview drawer, attachments picker on `/tasks/new`, and user-only delete.
 
-- [ ] **Step 12.3 (Conversational UI Unification, Review Room & Task Detail Ergonomics, Inspector Grouping & Running State Hygiene):**
-  - [ ] Enhance `AgentQuestionTurnCard.razor` with task metadata header (Task #Id, Title, Stage, Time) and reuse in `Inbox.razor` / `QuestionCard.razor`.
-  - [ ] Fix `PipelineStepper.razor` to preserve `StageExecutionStatus.Running` when `OverallStatus == TaskOverallStatus.InProgress` or stage conversation is running.
-  - [ ] Explicitly pass `CurrentStageStatus` in `TaskExecutionInspector.razor` to `<PipelineStepper>`.
-  - [ ] Unify `StageConversationViewer.razor` with `Ideation.razor` compact chat bubble architecture, avatar column, inline `<details class="think-trace">`, and compact `<details class="tool-trace">`.
-  - [ ] Style `.file-tree` in `Review.razor` with sticky positioning (`position: sticky; top: 1rem; max-height: calc(100vh - 2rem)`).
-  - [ ] Add deep link buttons to `/inspector/@_snapshot.TaskId` and `/tasks/@_snapshot.TaskId` in `Review.razor` header.
-  - [ ] Update `TaskReviewService.GetPendingReviewsAsync` and `Review.razor` to strictly filter out closed and merged tasks (`Status != TaskOverallStatus.Closed`).
-  - [ ] Implement `ReviewFileTreeBuilder` helper class in `NightCodeForge.Web.Services` creating hierarchical `ReviewFileTreeNode` tree with folder grouping and single-child compression.
-  - [ ] Update `Review.razor` left panel to render hierarchical tree view ensuring filename is always visible.
-  - [ ] Implement `ISyntaxHighlightingService` / `SimpleSyntaxHighlighter` tokenizing C#, TS/JS, Python, JSON, XML, Shell code lines into safe HTML spans.
-  - [ ] Integrate syntax highlighting in `DiffViewer.razor` for both Side-by-Side and Unified views.
-  - [ ] Implement `TaskInspectorGroupingHelper` in `NightCodeForge.Web.Services` and update `TaskExecutionInspector.razor` dropdown with `<optgroup>` categories (Running, In Flight waiting for slot, Waiting for Human, Closed) sorted by priority.
-  - [ ] Add an In-Flight Task Card / Banner in `ActiveOperationsHero.razor` on `/monitoring` showing active task metadata, active stage, and direct navigation links.
-  - [ ] Implement `ITaskDiffService` and add a "Changes" (Diff) tab in `TaskDetail.razor` embedding `DiffViewer.razor` for both active and closed/merged tasks.
-  - [ ] Add a prominent `🔍 Open in Review Room` primary action button in `TaskDetail.razor` header when `task.Status == TaskOverallStatus.Ready`.
-  - [ ] Add explicit running indicator badges (`● Running` with pulse glow animation) and active stage styling on `KanbanCard.razor` matching the DAG view in-flight indicator.
+- [x] **Step 12.3 (Conversational UI Unification, Review Room & Task Detail Ergonomics, Inspector Grouping & Running State Hygiene):**
+  - [x] Enhance `AgentQuestionTurnCard.razor` with task metadata header (Task #Id, Title, Stage, Time) and reuse in `Inbox.razor` / `QuestionCard.razor`.
+  - [x] Fix `PipelineStepper.razor` to preserve `StageExecutionStatus.Running` when `OverallStatus == TaskOverallStatus.InProgress` or stage conversation is running.
+  - [x] Explicitly pass `CurrentStageStatus` in `TaskExecutionInspector.razor` to `<PipelineStepper>`.
+  - [x] Unify `StageConversationViewer.razor` with `Ideation.razor` compact chat bubble architecture, avatar column, inline `<details class="think-trace">`, and compact `<details class="tool-trace">`.
+  - [x] Style `.file-tree` in `Review.razor` with sticky positioning (`position: sticky; top: 1rem; max-height: calc(100vh - 2rem)`).
+  - [x] Add deep link buttons to `/inspector/@_snapshot.TaskId` and `/tasks/@_snapshot.TaskId` in `Review.razor` header.
+  - [x] Update `TaskReviewService.GetPendingReviewsAsync` and `Review.razor` to strictly filter out closed and merged tasks (`Status != TaskOverallStatus.Closed`).
+  - [x] Implement `ReviewFileTreeBuilder` helper class in `NightCodeForge.Web.Services` creating hierarchical `ReviewFileTreeNode` tree with folder grouping and single-child compression.
+  - [x] Update `Review.razor` left panel to render hierarchical tree view ensuring filename is always visible.
+  - [x] Implement `ISyntaxHighlightingService` / `SimpleSyntaxHighlighter` tokenizing C#, TS/JS, Python, JSON, XML, Shell code lines into safe HTML spans.
+  - [x] Integrate syntax highlighting in `DiffViewer.razor` for both Side-by-Side and Unified views.
+  - [x] Implement `TaskInspectorGroupingHelper` in `NightCodeForge.Web.Services` and update `TaskExecutionInspector.razor` dropdown with `<optgroup>` categories (Running, In Flight waiting for slot, Waiting for Human, Closed) sorted by priority.
+  - [x] Add an In-Flight Task Card / Banner in `ActiveOperationsHero.razor` on `/monitoring` showing active task metadata, active stage, and direct navigation links.
+  - [x] Implement `ITaskDiffService` and add a "Changes" (Diff) tab in `TaskDetail.razor` embedding `DiffViewer.razor` for both active and closed/merged tasks.
+  - [x] Add a prominent `🔍 Open in Review Room` primary action button in `TaskDetail.razor` header when `task.Status == TaskOverallStatus.Ready`.
+  - [x] Add explicit running indicator badges (`● Running` with pulse glow animation) and active stage styling on `KanbanCard.razor` matching the DAG view in-flight indicator.
 
 - [ ] **Step 12.4 (Ideation Quick Notes & Suggestions):**
   - [ ] Quick notes intake bar with instant save to `Suggested` state.
@@ -162,6 +164,15 @@ flowchart LR
   - [ ] "Refine in Ideation" action pre-seeding context and questions.
   - [ ] Scoped `edit_task` agent tools.
   - [ ] 24-hour draft pruning.
+
+- [ ] **Step 12.13 (Conversational Backlog Management & Mutation Tools):**
+  - [ ] Define `TaskCannotBeModifiedException` and enforce fail-fast hard errors on in-progress or closed tasks.
+  - [ ] Implement `get_task` tool fetching full task specifications on demand.
+  - [ ] Implement `edit_task` tool updating title, description, sub-tasks, priority, and dependencies for unstarted tasks (`Draft`, `Suggested`, `Open`).
+  - [ ] Implement `set_task_priority` and `rework_priorities` tools for conversational backlog reordering.
+  - [ ] Implement `remove_task` tool with active dependent validation.
+  - [ ] Enforce audit logging via `AuditActors.IdeationAgent` and markdown disk synchronization via `ITaskMarkdownSyncService`.
+  - [ ] Inject `<backlog_management_guidelines>` into `IdeationService` system prompt.
 
 ### Tier 2 Deliverables (Intelligence, Efficiency & Quality Gates)
 - [ ] **Step 12.5 (Dual Model Role Configuration):**
