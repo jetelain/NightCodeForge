@@ -235,9 +235,61 @@ public class WorkerStateServiceTests
         var service = new WorkerStateService(_telemetryMock.Object);
         Assert.Equal("Deterministic CPU", service.Current.HardwareTarget);
 
-        _telemetryMock.Raise(t => t.OnActiveTaskChanged += null, new ActiveTaskSummary(
-            13, "GPU Task", "impl", 1, "llm-inference", DateTime.UtcNow, "Local GPU"));
+        var task13 = new ActiveTaskSummary(
+            13, "GPU Task", "impl", 1, "llm-inference", DateTime.UtcNow, "Local GPU");
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(task13);
+        _telemetryMock.Raise(t => t.OnActiveTaskChanged += null, task13);
 
         Assert.Equal("Local GPU", service.Current.HardwareTarget);
     }
+
+    [Fact]
+    public void Current_WhenActiveTaskAdvancesStageInTelemetry_UpdatesCurrentStageId()
+    {
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
+            15, "Advancing Task", "stage-1", 1, "llm-inference", DateTime.UtcNow, "Local GPU"));
+
+        var service = new WorkerStateService(_telemetryMock.Object);
+        Assert.Equal("stage-1", service.Current.StageId);
+
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
+            15, "Advancing Task", "stage-2", 1, "cpu-deterministic", DateTime.UtcNow, "Deterministic CPU"));
+
+        Assert.Equal("stage-2", service.Current.StageId);
+        Assert.Equal("Deterministic CPU", service.Current.HardwareTarget);
+    }
+
+    [Fact]
+    public void Current_WhenActiveTaskIdChangesInTelemetry_ReconcilesToNewTask()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+        service.HandleWorkerStatus("running", 10, "stage-1", "Local GPU", "Task 10", "task/10");
+        Assert.Equal(10, service.Current.ActiveTaskId);
+
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
+            12, "Task 12", "stage-review", 1, "llm-inference", DateTime.UtcNow, "Local GPU"));
+
+        Assert.Equal(12, service.Current.ActiveTaskId);
+        Assert.Equal("Task 12", service.Current.ActiveTaskTitle);
+        Assert.Equal("stage-review", service.Current.StageId);
+        Assert.Equal(WorkerExecutionStatus.Running, service.Current.Status);
+    }
+
+    [Fact]
+    public void WhenActiveTaskClearsInTelemetry_ReconcilesToIdle()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+        service.HandleWorkerStatus("running", 10, "stage-1", "Local GPU", "Task 10", "task/10");
+        Assert.Equal(WorkerExecutionStatus.Running, service.Current.Status);
+        Assert.Equal(10, service.Current.ActiveTaskId);
+
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns((ActiveTaskSummary)null!);
+        _telemetryMock.Raise(t => t.OnActiveTaskChanged += null, (ActiveTaskSummary)null!);
+
+        Assert.Equal(WorkerExecutionStatus.Idle, service.Current.Status);
+        Assert.Null(service.Current.ActiveTaskId);
+        Assert.Null(service.Current.ActiveTaskTitle);
+        Assert.Null(service.Current.StageId);
+    }
 }
+

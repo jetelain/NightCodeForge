@@ -101,6 +101,7 @@ public class TestOrchestratorBuilder
     public ITaskCancellationManager CancellationManager { get; set; } = new TaskCancellationManager(NullLogger<TaskCancellationManager>.Instance);
     public IConflictResolutionVerifier ConflictResolutionVerifier { get; set; } = new Mock<IConflictResolutionVerifier>().Object;
     public IOperationsControlService OperationsControlService { get; set; } = CreateDefaultOperationsControlService();
+    public IOperationsTelemetryService TelemetryService { get; set; } = new Mock<IOperationsTelemetryService>().Object;
     public ILogger<TaskOrchestrator> Logger { get; set; } = NullLogger<TaskOrchestrator>.Instance;
 
     private static IOperationsControlService CreateDefaultOperationsControlService()
@@ -130,5 +131,6 @@ public class TestOrchestratorBuilder
         CancellationManager,
         ConflictResolutionVerifier,
         OperationsControlService,
+        TelemetryService,
         Logger);
 }

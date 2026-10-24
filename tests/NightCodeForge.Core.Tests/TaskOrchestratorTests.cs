@@ -2,6 +2,7 @@ using Moq;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
@@ -581,5 +582,95 @@ public class TaskOrchestratorTests
         var completedEvt = broadcastEvents.FirstOrDefault(e => e.Kind == AgentActivityKind.StageCompleted && e.StageId == "stage-1");
         Assert.NotNull(completedEvt);
         Assert.Equal(92, completedEvt.TaskId);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_AuthoritativelyRegistersAndClearsActiveTaskInTelemetry()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 95,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            Title = "Telemetry Sync Test",
+            Priority = TaskPriority.Critical,
+            BaseBranch = "main"
+        });
+        _depStore.AddTask(95, 1, TaskOverallStatus.Open);
+
+        ActiveTaskSummary? capturedDuringExecution = null;
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+        telemetryMock
+            .Setup(t => t.RecordActiveTask(It.IsAny<ActiveTaskSummary>()))
+            .Callback<ActiveTaskSummary>(s => capturedDuringExecution = s);
+
+        var stage = new TestWorkflowStage(StandardStageIds.TaskReview, WorkflowStageKind.Agentic)
+        {
+            Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success())
+        };
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
+
+        var orchestrator = new Fixtures.TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            TelemetryService = telemetryMock.Object
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        Assert.NotNull(capturedDuringExecution);
+        Assert.Equal(95, capturedDuringExecution.TaskId);
+        Assert.Equal("Telemetry Sync Test", capturedDuringExecution.TaskTitle);
+        Assert.Equal(StandardStageIds.TaskReview, capturedDuringExecution.CurrentStageId);
+        Assert.Equal(TaskPriority.Critical, capturedDuringExecution.Priority);
+        Assert.Equal("Local GPU", capturedDuringExecution.HardwareTarget);
+
+        telemetryMock.Verify(t => t.ClearActiveTask(95), Times.Once);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenExecutionThrows_ClearsActiveTaskInFinally()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 96,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            Title = "Telemetry Throwing Test",
+            Priority = TaskPriority.High,
+            BaseBranch = "main"
+        });
+        _depStore.AddTask(96, 1, TaskOverallStatus.Open);
+
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+
+        var failingPipelineProvider = new Mock<IWorkflowPipelineProvider>();
+        failingPipelineProvider
+            .Setup(p => p.GetPipelineAsync(It.IsAny<ForgeTask>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Simulated unexpected pipeline failure"));
+
+        var orchestrator = new Fixtures.TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            PipelineProvider = failingPipelineProvider.Object,
+            TelemetryService = telemetryMock.Object
+        }.Build();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.ProcessTaskAsync(task.Id));
+
+        telemetryMock.Verify(t => t.ClearActiveTask(96), Times.Once);
     }
 }

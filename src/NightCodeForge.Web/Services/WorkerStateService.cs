@@ -108,9 +108,9 @@ public class WorkerStateService : IWorkerStateService, IDisposable
         {
             lock (_lock)
             {
+                var active = _telemetryService.GetActiveTask();
                 if (_current.ActiveTaskId == null)
                 {
-                    var active = _telemetryService.GetActiveTask();
                     if (active != null && active.TaskId != _lastIdleTaskId)
                     {
                         _current = _current with
@@ -123,6 +123,26 @@ public class WorkerStateService : IWorkerStateService, IDisposable
                             StartedAt = active.StartedAt
                         };
                     }
+                }
+                else if (active != null && active.TaskId != _current.ActiveTaskId)
+                {
+                    _current = _current with
+                    {
+                        Status = WorkerExecutionStatus.Running,
+                        ActiveTaskId = active.TaskId,
+                        ActiveTaskTitle = active.TaskTitle,
+                        StageId = active.CurrentStageId,
+                        HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
+                        StartedAt = active.StartedAt
+                    };
+                }
+                else if (active != null && active.TaskId == _current.ActiveTaskId && !string.Equals(active.CurrentStageId, _current.StageId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _current = _current with
+                    {
+                        StageId = active.CurrentStageId,
+                        HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget
+                    };
                 }
                 return _current;
             }

@@ -35,6 +35,7 @@ public class TaskOrchestrator : ITaskOrchestrator
     private readonly ITaskCancellationManager _cancellationManager;
     private readonly IConflictResolutionVerifier _conflictResolutionVerifier;
     private readonly IOperationsControlService _operationsControlService;
+    private readonly IOperationsTelemetryService _telemetryService;
     private readonly ILogger<TaskOrchestrator> _logger;
 
     private static readonly TimeSpan PauseAbortTimeout = TimeSpan.FromSeconds(5);
@@ -57,6 +58,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         ITaskCancellationManager cancellationManager,
         IConflictResolutionVerifier conflictResolutionVerifier,
         IOperationsControlService operationsControlService,
+        IOperationsTelemetryService telemetryService,
         ILogger<TaskOrchestrator> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -76,6 +78,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
         _conflictResolutionVerifier = conflictResolutionVerifier ?? throw new ArgumentNullException(nameof(conflictResolutionVerifier));
         _operationsControlService = operationsControlService ?? throw new ArgumentNullException(nameof(operationsControlService));
+        _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -323,6 +326,22 @@ public class TaskOrchestrator : ITaskOrchestrator
         task.HasExecutionRun = true;
         task.MaxExecutedStageOrder = Math.Max(task.MaxExecutedStageOrder, stageOrder);
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+
+        // Record active executing task authoritatively in telemetry
+        var isDeterministic = stage.Kind == WorkflowStageKind.Deterministic;
+        var queueName = isDeterministic
+            ? DeterministicStageConstants.CpuDeterministicQueue
+            : DeterministicStageConstants.LlmInferenceQueue;
+        var hardwareTarget = isDeterministic ? "Deterministic CPU" : "Local GPU";
+
+        _telemetryService.RecordActiveTask(new ActiveTaskSummary(
+            task.Id,
+            task.Title,
+            stage.StageId,
+            task.Priority,
+            queueName,
+            DateTime.UtcNow,
+            hardwareTarget));
 
         // Resolve Agent Profile matching interrupted profile or current stage, or fallback to first
         AgentProfile? profile = null;
@@ -1940,6 +1959,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
         finally
         {
+            _telemetryService.ClearActiveTask(taskId);
             if (taskCts != null)
             {
                 _cancellationManager.Unregister(taskId, taskCts);
@@ -3084,13 +3104,19 @@ public class TaskOrchestrator : ITaskOrchestrator
                 Guid.NewGuid().ToString("N"),
                 task.Id,
                 initialStage.StageId,
-                Streaming.AgentActivityKind.StageStarted,
-                $"Restarting pipeline for task #{task.Id} from stage '{initialStage.StageId}'",
+                Streaming.AgentActivityKind.Notice,
+                $"Pipeline restarted for task #{task.Id} from stage '{initialStage.StageId}' ({gitMode})",
                 DateTime.UtcNow,
                 new Dictionary<string, object?>
                 {
                     ["IsRestart"] = true,
-                    ["RestartMode"] = gitMode.ToString()
+                    ["RestartMode"] = gitMode.ToString(),
+                    [Streaming.AgentActivityMetadataKeys.TaskTitle] = task.Title,
+                    [Streaming.AgentActivityMetadataKeys.Priority] = task.Priority,
+                    [Streaming.AgentActivityMetadataKeys.StageKind] = initialStage.Kind.ToString(),
+                    [Streaming.AgentActivityMetadataKeys.QueueType] = initialStage.Kind == WorkflowStageKind.Deterministic
+                        ? DeterministicStageConstants.CpuDeterministicQueue
+                        : DeterministicStageConstants.LlmInferenceQueue
                 }), cancellationToken);
         }
         catch (Exception sex)

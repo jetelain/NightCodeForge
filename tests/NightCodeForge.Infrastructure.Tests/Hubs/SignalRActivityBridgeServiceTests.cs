@@ -160,6 +160,48 @@ public class SignalRActivityBridgeServiceTests
         Assert.Equal(7, allClient.WorkerStatuses[1].ActiveTaskId);
     }
 
+    [Theory]
+    [InlineData(TaskPriority.Critical, 1)]
+    [InlineData("P2", 2)]
+    [InlineData("High", 2)]
+    [InlineData("Normal", 3)]
+    [InlineData("P4", 4)]
+    [InlineData("Lowest", 5)]
+    [InlineData(null, 3)]
+    public async Task DispatchActivityEventAsync_StageStarted_ParsesPriorityVariantsAccurately(object? inputPriority, int expectedPriority)
+    {
+        var fakeHubContext = new FakeHubContext();
+        var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, telemetryService: telemetry);
+
+        var metadata = new Dictionary<string, object?>
+        {
+            [AgentActivityMetadataKeys.TaskTitle] = "Priority Test Task",
+            [AgentActivityMetadataKeys.StageKind] = "Agentic",
+            [AgentActivityMetadataKeys.QueueType] = "llm-inference"
+        };
+        if (inputPriority != null)
+        {
+            metadata[AgentActivityMetadataKeys.Priority] = inputPriority;
+        }
+
+        var evt = new AgentActivityEvent(
+            SessionId: "sess-p",
+            TaskId: 88,
+            StageId: "impl",
+            Kind: AgentActivityKind.StageStarted,
+            Content: "Starting stage with priority",
+            Timestamp: DateTime.UtcNow,
+            Metadata: metadata);
+
+        await bridge.DispatchActivityEventAsync(evt);
+
+        var active = telemetry.GetActiveTask();
+        Assert.NotNull(active);
+        Assert.Equal(88, active.TaskId);
+        Assert.Equal(expectedPriority, active.Priority);
+    }
+
     [Fact]
     public async Task DispatchActivityEventAsync_OptimizationAction_RoutesToTaskGroup()
     {

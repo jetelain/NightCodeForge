@@ -152,13 +152,20 @@ public class SignalRActivityBridgeService : BackgroundService
                         .ReceiveStageTransition(evt.TaskId, evt.StageId, kind, status);
                     if (evt.Kind == AgentActivityKind.StageStarted)
                     {
+                        var isRestart = evt.Metadata?.TryGetValue("IsRestart", out var irObj) == true && irObj is bool ir && ir;
+                        if (isRestart)
+                        {
+                            break;
+                        }
+
                         var existing = _telemetryService.GetActiveTask();
                         var title = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.TaskTitle, out var tObj) == true && tObj != null
                             ? tObj.ToString()!
                             : (existing != null && existing.TaskId == evt.TaskId ? existing.TaskTitle : $"Task #{evt.TaskId}");
-                        var priority = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.Priority, out var pObj) == true && int.TryParse(pObj?.ToString(), out var pVal)
-                            ? pVal
-                            : (existing != null && existing.TaskId == evt.TaskId ? existing.Priority : 1);
+                        var defaultPriority = existing != null && existing.TaskId == evt.TaskId ? existing.Priority : TaskPriority.Normal;
+                        object? pObj = null;
+                        evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.Priority, out pObj);
+                        int priority = TaskPriority.ParseOrDefault(pObj, defaultPriority);
                         var queue = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.QueueType, out var qObj) == true && qObj != null
                             ? qObj.ToString()!
                             : (evt.Metadata?.TryGetValue("QueueName", out var oldQObj) == true && oldQObj != null

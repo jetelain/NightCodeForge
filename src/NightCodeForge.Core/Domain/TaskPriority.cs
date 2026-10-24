@@ -86,4 +86,135 @@ public static class TaskPriority
         Trivial => "#475569",
         _ => "#64748b"
     };
+
+    /// <summary>
+    /// Attempts to parse a priority value from an object (e.g. int, "P1"-"P5", "Priority 1", "Critical", "Urgent", "Critical / Urgent", "High", "Normal", "Low", "Trivial").
+    /// </summary>
+    public static bool TryParse(object? value, out int priority)
+    {
+        if (value == null)
+        {
+            priority = default;
+            return false;
+        }
+
+        if (value is int intVal)
+        {
+            if (intVal >= Critical && intVal <= Trivial)
+            {
+                priority = intVal;
+                return true;
+            }
+            priority = default;
+            return false;
+        }
+
+        if (value is System.Text.Json.JsonElement jsonElement)
+        {
+            if (jsonElement.ValueKind == System.Text.Json.JsonValueKind.Number && jsonElement.TryGetInt32(out var jInt))
+            {
+                if (jInt >= Critical && jInt <= Trivial)
+                {
+                    priority = jInt;
+                    return true;
+                }
+                priority = default;
+                return false;
+            }
+
+            if (jsonElement.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                return TryParse(jsonElement.GetString(), out priority);
+            }
+
+            priority = default;
+            return false;
+        }
+
+        var str = value.ToString()?.Trim();
+        if (string.IsNullOrEmpty(str))
+        {
+            priority = default;
+            return false;
+        }
+
+        if (int.TryParse(str, out var parsedInt))
+        {
+            if (parsedInt >= Critical && parsedInt <= Trivial)
+            {
+                priority = parsedInt;
+                return true;
+            }
+            priority = default;
+            return false;
+        }
+
+        if (str.StartsWith("Priority", StringComparison.OrdinalIgnoreCase))
+        {
+            var remainder = str["Priority".Length..].Trim();
+            if (!string.IsNullOrEmpty(remainder))
+            {
+                return TryParse(remainder, out priority);
+            }
+        }
+
+        if (str.StartsWith("P", StringComparison.OrdinalIgnoreCase) && int.TryParse(str[1..].Trim(), out var pCode))
+        {
+            if (pCode >= Critical && pCode <= Trivial)
+            {
+                priority = pCode;
+                return true;
+            }
+            priority = default;
+            return false;
+        }
+
+        if (string.Equals(str, "Critical", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(str, "Urgent", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(str, "Critical / Urgent", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(str, "Critical/Urgent", StringComparison.OrdinalIgnoreCase))
+        {
+            priority = Critical;
+            return true;
+        }
+
+        if (string.Equals(str, "High", StringComparison.OrdinalIgnoreCase))
+        {
+            priority = High;
+            return true;
+        }
+
+        if (string.Equals(str, "Normal", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(str, "Medium", StringComparison.OrdinalIgnoreCase))
+        {
+            priority = Normal;
+            return true;
+        }
+
+        if (string.Equals(str, "Low", StringComparison.OrdinalIgnoreCase))
+        {
+            priority = Low;
+            return true;
+        }
+
+        if (string.Equals(str, "Lowest", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(str, "Trivial", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(str, "Lowest / Trivial", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(str, "Lowest/Trivial", StringComparison.OrdinalIgnoreCase))
+        {
+            priority = Trivial;
+            return true;
+        }
+
+        priority = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Parses a priority from an object value, falling back to a default priority if unrecognized or null.
+    /// </summary>
+    public static int ParseOrDefault(object? value, int defaultPriority = Normal)
+    {
+        return TryParse(value, out var parsed) ? parsed : defaultPriority;
+    }
 }
