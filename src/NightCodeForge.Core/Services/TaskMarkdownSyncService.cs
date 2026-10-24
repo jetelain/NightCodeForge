@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
@@ -29,6 +31,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IWorkspacePathResolver _pathResolver;
+    private readonly ILogger<TaskMarkdownSyncService> _logger;
     private readonly IDeserializer _yamlDeserializer;
     private readonly ISerializer _yamlSerializer;
     private readonly ConcurrentDictionary<string, byte> _suppressedHashes = new();
@@ -39,10 +42,12 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     [ActivatorUtilitiesConstructor]
     public TaskMarkdownSyncService(
         IServiceScopeFactory scopeFactory,
-        IWorkspacePathResolver pathResolver)
+        IWorkspacePathResolver pathResolver,
+        ILogger<TaskMarkdownSyncService> logger)
     {
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _yamlDeserializer = CreateYamlDeserializer();
         _yamlSerializer = CreateYamlSerializer();
     }
@@ -767,21 +772,39 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         }
                     }
 
-                    // Protected status check. When a baseline exists the reference is the status written
-                    // before the agent ran, so a workflow status change made meanwhile (e.g. user cancel)
-                    // is not mistaken for an agent edit.
+                    // Protected status check: When syncing from an agent worktree (baselineSnapshot != null),
+                    // status transitions are strictly governed by workflow gates and the orchestrator, not the agent.
+                    // If an agent modified the frontmatter status (e.g. setting 'In_Review' or 'Completed'),
+                    // we ignore the frontmatter status change rather than aborting the pipeline execution.
+                    // For direct manual host edits (baselineSnapshot == null), status cannot be altered via markdown.
                     if (!string.IsNullOrWhiteSpace(item.Frontmatter.Status))
                     {
-                        var referenceStatus = baselineSnapshot != null && baselineSnapshot.TryGetValue(taskId, out var statusBaseline) &&
-                                              !string.IsNullOrWhiteSpace(statusBaseline.Frontmatter.Status)
-                            ? statusBaseline.Frontmatter.Status.Trim()
-                            : dbTask.Status.ToString();
-                        if (!string.Equals(item.Frontmatter.Status.Trim(), referenceStatus, StringComparison.OrdinalIgnoreCase))
+                        if (baselineSnapshot == null)
                         {
-                            throw new TaskMarkdownSyncException(
-                                $"Modifying task status via markdown is forbidden. Task #{taskId} status is '{referenceStatus}', but markdown specifies '{item.Frontmatter.Status}'. Status transitions must go through workflow gates.",
-                                item.FilePath,
-                                taskId);
+                            var referenceStatus = dbTask.Status.ToString();
+                            if (!string.Equals(item.Frontmatter.Status.Trim(), referenceStatus, StringComparison.OrdinalIgnoreCase))
+                            {
+                                throw new TaskMarkdownSyncException(
+                                    $"Modifying task status via markdown is forbidden. Task #{taskId} status is '{referenceStatus}', but markdown specifies '{item.Frontmatter.Status}'. Status transitions must go through workflow gates.",
+                                    item.FilePath,
+                                    taskId);
+                            }
+                        }
+                        else
+                        {
+                            var referenceStatus = baselineSnapshot.TryGetValue(taskId, out var statusBaseline) &&
+                                                  !string.IsNullOrWhiteSpace(statusBaseline.Frontmatter.Status)
+                                ? statusBaseline.Frontmatter.Status.Trim()
+                                : dbTask.Status.ToString();
+
+                            if (!string.Equals(item.Frontmatter.Status.Trim(), referenceStatus, StringComparison.OrdinalIgnoreCase))
+                            {
+                                _logger.LogInformation(
+                                    "Task #{TaskId} markdown frontmatter specifies status '{MarkdownStatus}', which differs from authoritative status '{DbStatus}'. Ignoring frontmatter status as workflow gates govern lifecycle.",
+                                    taskId,
+                                    item.Frontmatter.Status.Trim(),
+                                    referenceStatus);
+                            }
                         }
                     }
                 }
@@ -1201,14 +1224,27 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         cancellationToken);
                 }
 
-                // In-place normalization for existing files if depends_on changed
-                if (finalDepIds != null)
+                // In-place normalization for existing files if depends_on changed or agent tampered with status
+                bool statusTampered = baselineSnapshot != null &&
+                                      !string.IsNullOrWhiteSpace(item.Frontmatter.Status) &&
+                                      !string.Equals(item.Frontmatter.Status.Trim(), task.Status.ToString(), StringComparison.OrdinalIgnoreCase);
+
+                if (finalDepIds != null || statusTampered)
                 {
-                    item.Frontmatter.DependsOn = new TaskDependencyReferenceList(finalDepIds);
-                    var normalizedMarkdown = GenerateMarkdown(task, finalDepIds, item.Frontmatter.AgentProfile);
+                    var effectiveDeps = finalDepIds ?? task.Dependencies?.Select(d => d.DependsOnTaskId).ToList() ?? new List<int>();
+                    item.Frontmatter.DependsOn = new TaskDependencyReferenceList(effectiveDeps);
+                    item.Frontmatter.Status = task.Status.ToString();
+                    var normalizedMarkdown = GenerateMarkdown(task, effectiveDeps, item.Frontmatter.AgentProfile);
                     var normHash = ComputeContentHash(normalizedMarkdown);
                     _suppressedHashes[normHash] = 1;
                     await File.WriteAllTextAsync(item.FilePath, normalizedMarkdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
+
+                    if (hostTasksDir != null)
+                    {
+                        var hostFile = Path.Combine(hostTasksDir, Path.GetFileName(item.FilePath));
+                        _suppressedHashes[normHash] = 1;
+                        await File.WriteAllTextAsync(hostFile, normalizedMarkdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);
+                    }
                 }
                 else if (hostTasksDir != null)
                 {

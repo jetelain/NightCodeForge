@@ -1902,6 +1902,42 @@ public class TaskOrchestrator : ITaskOrchestrator
                 _logger.LogWarning(cex, "Failed to update active conversation and status during cancellation/pause for task #{TaskId}", taskId);
             }
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ForgeTask #{TaskId} execution failed with an unhandled exception.", taskId);
+            try
+            {
+                await CloseActiveConversationsAsync(taskId, StageExecutionStatus.Failed, $"Pipeline failed unexpectedly: {ex.Message}", CancellationToken.None);
+
+                var failedTask = await _taskRepository.GetByIdAsync(taskId, CancellationToken.None);
+                if (failedTask != null && failedTask.Status != TaskOverallStatus.Closed && failedTask.Status != TaskOverallStatus.Rejected && failedTask.Status != TaskOverallStatus.Cancelled)
+                {
+                    failedTask.Status = TaskOverallStatus.Failed;
+                    failedTask.IsWaitingForHuman = false;
+                    await _taskRepository.UpdateWithHistoryAsync(
+                        failedTask,
+                        dependsOn: null,
+                        changedBy: AuditActors.TaskOrchestrator,
+                        reason: $"Unexpected pipeline failure: {ex.Message}",
+                        cancellationToken: CancellationToken.None);
+                    await _dependencyStore.UpdateTaskStatusAsync(taskId, TaskOverallStatus.Failed, CancellationToken.None);
+                    await _dependencyStore.SetWaitingForHumanAsync(taskId, false, CancellationToken.None);
+                }
+
+                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                {
+                    TaskId = taskId,
+                    Level = LogLevel.Error,
+                    Message = $"Pipeline failed unexpectedly: {ex.Message}",
+                    Timestamp = DateTime.UtcNow
+                }, CancellationToken.None);
+            }
+            catch (Exception fallbackEx)
+            {
+                _logger.LogError(fallbackEx, "Failed recording unhandled exception failure state for task #{TaskId}", taskId);
+            }
+            throw;
+        }
         finally
         {
             if (taskCts != null)

@@ -137,7 +137,8 @@ public class TaskReviewDiskReadBackTests : IDisposable
         var syncSp = syncServices.BuildServiceProvider();
         var syncService = new TaskMarkdownSyncService(
             syncSp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
-            new Mock<IWorkspacePathResolver>().Object);
+            new Mock<IWorkspacePathResolver>().Object,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMarkdownSyncService>.Instance);
 
         var harness = new TestHarness();
         var harnessRegistry = new TestHarnessRegistry(harness);

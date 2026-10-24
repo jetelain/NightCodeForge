@@ -53,7 +53,8 @@ public class TaskSyncHygieneAndAuditTrailTests : IDisposable
 
         var syncService = new TaskMarkdownSyncService(
             sp.GetRequiredService<IServiceScopeFactory>(),
-            new Mock<IWorkspacePathResolver>().Object);
+            new Mock<IWorkspacePathResolver>().Object,
+            NullLogger<TaskMarkdownSyncService>.Instance);
         return (syncService, taskRepo, depEngine, depStore);
     }
 
@@ -341,17 +342,78 @@ status: Implemented
 # Tampered status
 ");
 
+        // Direct host edit (baselineSnapshot == null) triggers status tamper guard
         var ex = await Assert.ThrowsAsync<TaskMarkdownSyncException>(() =>
             sync.SyncAllTasksFromDiskAsync(
                 workspace,
                 _tempWorkspaceDir,
                 _tempHostDir,
-                syncResult.Baseline,
+                null,
                 AuditActors.GetActorForStage("task-review"),
-                "Read-back"));
+                "Host-Sync"));
 
         Assert.Contains("forbidden", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("workflow gates", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SyncAllTasksFromDisk_WhenAgentWorktreeModifiesStatus_IgnoresStatusAndPreservesDbStatus()
+    {
+        var (sync, repo, _, depStore) = CreateTestEnvironment();
+        var workspace = new Workspace { Id = 1, Name = "Repo1", RepositoryPath = _tempHostDir };
+
+        var task = new ForgeTask { Id = 7, WorkspaceId = 1, Title = "Agent Status Task", Status = TaskOverallStatus.Open };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Initial");
+        depStore.AddTask(7, 1);
+
+        var syncResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, _tempHostDir);
+
+        var taskFile = syncResult.WrittenPaths[7];
+        await File.WriteAllTextAsync(taskFile, @"---
+id: 7
+title: Agent Status Task
+status: In_Review
+---
+# Updated by agent
+");
+
+        // Agent worktree sync (baselineSnapshot != null) ignores status change and preserves authoritative DB status
+        var refreshed = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            _tempHostDir,
+            syncResult.Baseline,
+            AuditActors.GetActorForStage("implementation"),
+            "Agent completion");
+
+        var refreshedTask = Assert.Single(refreshed);
+        Assert.Equal(7, refreshedTask.Id);
+        Assert.Equal(TaskOverallStatus.Open, refreshedTask.Status);
+
+        // Verify the file on disk was normalized to the authoritative status
+        var worktreeContent = await File.ReadAllTextAsync(taskFile);
+        Assert.Contains("status: Open", worktreeContent);
+        Assert.DoesNotContain("status: In_Review", worktreeContent);
+
+        // Verify host mirrored file was also normalized to authoritative status
+        var hostFile = Path.Combine(_tempHostDir, "docs", "tasks", Path.GetFileName(taskFile));
+        Assert.True(File.Exists(hostFile));
+        var hostContent = await File.ReadAllTextAsync(hostFile);
+        Assert.Contains("status: Open", hostContent);
+        Assert.DoesNotContain("status: In_Review", hostContent);
+
+        // A subsequent direct host sync (baselineSnapshot == null) must now succeed cleanly without tamper error
+        var hostSyncResult = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempHostDir,
+            null,
+            null,
+            AuditActors.User,
+            "Subsequent host sync");
+
+        var hostSyncedTask = Assert.Single(hostSyncResult);
+        Assert.Equal(7, hostSyncedTask.Id);
+        Assert.Equal(TaskOverallStatus.Open, hostSyncedTask.Status);
     }
 
     [Fact]

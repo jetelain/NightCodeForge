@@ -42,7 +42,8 @@ public class CoreCoverageTests : IDisposable
         var sp = services.BuildServiceProvider();
         return new TaskMarkdownSyncService(
             sp.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
-            new Mock<IWorkspacePathResolver>().Object);
+            new Mock<IWorkspacePathResolver>().Object,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMarkdownSyncService>.Instance);
     }
 
     [Fact]

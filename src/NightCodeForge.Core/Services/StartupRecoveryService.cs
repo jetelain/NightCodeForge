@@ -161,7 +161,8 @@ public class StartupRecoveryService : IStartupRecoveryService
             }
         }
 
-        var reconciledCount = 0;
+        var resolvedCandidates = new List<(ForgeTask Task, IWorkflowPipeline Pipeline, IWorkflowStage Stage, int StageIndex)>();
+
         foreach (var task in candidateTasks)
         {
             var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
@@ -204,6 +205,25 @@ public class StartupRecoveryService : IStartupRecoveryService
                 task.CurrentStageId = stage.StageId;
             }
 
+            var stageIndex = pipeline.Stages.ToList().FindIndex(s => string.Equals(s.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase));
+            resolvedCandidates.Add((task, pipeline, stage, stageIndex));
+        }
+
+        // Order candidates so tasks already furthest along in the pipeline are enqueued first:
+        // 1. Priority ascending (P1 Urgent first, P2, P3...)
+        // 2. QueueTier descending (CodeReview = 3 first, Implementation = 2, TaskReview = 1)
+        // 3. StageIndex descending (later stages first within same queue tier, ensuring a task is completed before earlier ones)
+        // 4. UpdatedAt ascending (earlier modified first)
+        var orderedCandidates = resolvedCandidates
+            .OrderBy(c => c.Task.Priority)
+            .ThenByDescending(c => c.Stage.QueueTier)
+            .ThenByDescending(c => c.StageIndex)
+            .ThenBy(c => c.Task.UpdatedAt)
+            .ToList();
+
+        var reconciledCount = 0;
+        foreach (var (task, pipeline, stage, _) in orderedCandidates)
+        {
             var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
 
             if (stage.Kind == WorkflowStageKind.Agentic)

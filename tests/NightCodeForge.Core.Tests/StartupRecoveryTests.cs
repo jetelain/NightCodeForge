@@ -345,4 +345,87 @@ public class StartupRecoveryTests : IDisposable
 
         await Assert.ThrowsAsync<WorkflowValidationException>(() => recovery.ReconcileWorkspacesAsync());
     }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_OrdersCandidateTasks_FurtherAlongStageFirst()
+    {
+        await _workspaceRepo.CreateAsync(new Workspace { Id = 15, Name = "Ordering Workspace", RepositoryPath = _tempDir });
+
+        var stage1Mock = new Moq.Mock<IWorkflowStage>();
+        stage1Mock.SetupGet(s => s.StageId).Returns(StandardStageIds.TaskReview);
+        stage1Mock.SetupProperty(s => s.QueueTier, StageQueueTier.TaskReview);
+
+        var stage2Mock = new Moq.Mock<IWorkflowStage>();
+        stage2Mock.SetupGet(s => s.StageId).Returns(StandardStageIds.PreImplementationBaseline);
+        stage2Mock.SetupProperty(s => s.QueueTier, StageQueueTier.Implementation);
+
+        var stage3Mock = new Moq.Mock<IWorkflowStage>();
+        stage3Mock.SetupGet(s => s.StageId).Returns(StandardStageIds.Implementation);
+        stage3Mock.SetupProperty(s => s.QueueTier, StageQueueTier.Implementation);
+
+        var stage4Mock = new Moq.Mock<IWorkflowStage>();
+        stage4Mock.SetupGet(s => s.StageId).Returns(StandardStageIds.PostImplementationGates);
+        stage4Mock.SetupProperty(s => s.QueueTier, StageQueueTier.Implementation);
+
+        var stage5Mock = new Moq.Mock<IWorkflowStage>();
+        stage5Mock.SetupGet(s => s.StageId).Returns(StandardStageIds.CodeReviewAndFix);
+        stage5Mock.SetupProperty(s => s.QueueTier, StageQueueTier.CodeReview);
+
+        var pipeline = new WorkflowPipeline(new[] { stage1Mock.Object, stage2Mock.Object, stage3Mock.Object, stage4Mock.Object, stage5Mock.Object });
+
+        // Task A is at Stage 1 (task-review)
+        await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 1,
+            WorkspaceId = 15,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.TaskReview,
+            Priority = TaskPriority.Normal,
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-20)
+        });
+
+        // Task B is at Stage 3 (implementation), created earlier
+        await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 8,
+            WorkspaceId = 15,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            Priority = TaskPriority.Normal,
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-10)
+        });
+
+        // Task C is at Stage 4 (deterministic-post-impl), created later
+        await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 10,
+            WorkspaceId = 15,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.PostImplementationGates,
+            Priority = TaskPriority.Normal,
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-5)
+        });
+
+        // Task D is at Stage 5 (code-review)
+        await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 12,
+            WorkspaceId = 15,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.CodeReviewAndFix,
+            Priority = TaskPriority.Normal,
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-2)
+        });
+
+        var recovery = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline));
+        await recovery.ReconcileWorkspacesAsync();
+
+        // Candidates must be enqueued furthest along first:
+        // 1. Task 12 (CodeReview tier)
+        // 2. Task 10 (Implementation tier, stage 4)
+        // 3. Task 8 (Implementation tier, stage 3)
+        // 4. Task 1 (TaskReview tier, stage 1)
+        var enqueuedIds = _jobQueue.EnqueuedStages.Select(e => e.TaskId).ToList();
+        Assert.Equal(new[] { 12, 10, 8, 1 }, enqueuedIds);
+    }
 }

@@ -369,6 +369,43 @@ public class TaskOrchestratorTests
     }
 
     [Fact]
+    public async Task ProcessTaskAsync_WhenUnhandledExceptionThrown_ClosesActiveConversationsAndMarksFailed()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 61,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "crash-stage"
+        });
+        _depStore.AddTask(61, 1, TaskOverallStatus.Open);
+
+        var conv = await _taskRepo.StartConversationAsync(61, "crash-stage", WorkflowStageKind.Agentic, 1, cancellationToken: CancellationToken.None);
+
+        var mockPipelineProvider = new Moq.Mock<IWorkflowPipelineProvider>();
+        mockPipelineProvider.Setup(p => p.GetPipelineAsync(Moq.It.IsAny<ForgeTask>(), Moq.It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Catastrophic hardware failure"));
+
+        var orchestrator = CreateOrchestrator(mockPipelineProvider.Object);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.ProcessTaskAsync(task.Id));
+        Assert.Equal("Catastrophic hardware failure", ex.Message);
+
+        var updated = await _taskRepo.GetByIdAsync(61);
+        Assert.NotNull(updated);
+        Assert.Equal(TaskOverallStatus.Failed, updated.Status);
+        Assert.False(updated.IsWaitingForHuman);
+
+        var isWaitingInStore = await _depStore.IsTaskWaitingForHumanAsync(61, CancellationToken.None);
+        Assert.False(isWaitingInStore);
+
+        var convs = await _taskRepo.GetConversationsAsync(61, CancellationToken.None);
+        var activeConv = Assert.Single(convs);
+        Assert.Equal(StageExecutionStatus.Failed, activeConv.Status);
+        Assert.Contains("Catastrophic hardware failure", activeConv.Summary);
+    }
+
+    [Fact]
     public async Task ProcessTaskAsync_CapturesExecutionMetricsAndTokens()
     {
         var task = await _taskRepo.CreateAsync(new ForgeTask

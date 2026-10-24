@@ -98,7 +98,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ITaskMarkdownSyncService>(sp =>
             new TaskMarkdownSyncService(
                 sp.GetRequiredService<IServiceScopeFactory>(),
-                sp.GetRequiredService<IWorkspacePathResolver>()));
+                sp.GetRequiredService<IWorkspacePathResolver>(),
+                sp.GetRequiredService<ILogger<TaskMarkdownSyncService>>()));
 
         // 9. Deterministic Quality Gate Stages
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicBuildStage>();
