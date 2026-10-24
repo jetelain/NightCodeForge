@@ -46,6 +46,7 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
     public event Action<string, string, bool>? OnShellCommandOutput;
     public event Action<NightCodeForge.Core.Workflow.ShellCommandRecord>? OnShellCommandCompleted;
     public event Action<bool, string?, string?>? OnOperationsStatusChanged;
+    public event Action<NightCodeForge.Core.Workflow.ActiveTaskSummary?>? OnActiveTaskReceived;
     public event Action<HubConnectionState>? OnConnectionStateChanged;
 
     public OrchestratorHubClientConnection(
@@ -73,7 +74,23 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
 
                 if (_hubConnection.State == HubConnectionState.Connecting || _hubConnection.State == HubConnectionState.Reconnecting)
                 {
-                    return;
+                    var waited = 0;
+                    while ((_hubConnection.State == HubConnectionState.Connecting || _hubConnection.State == HubConnectionState.Reconnecting) && waited < 3000)
+                    {
+                        await Task.Delay(100);
+                        waited += 100;
+                    }
+
+                    if (_hubConnection.State == HubConnectionState.Connected)
+                    {
+                        await RejoinActiveTaskGroupsAsync();
+                        return;
+                    }
+
+                    if (_hubConnection.State == HubConnectionState.Connecting || _hubConnection.State == HubConnectionState.Reconnecting)
+                    {
+                        return;
+                    }
                 }
             }
 
@@ -130,6 +147,18 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
         lock (_taskGroupsLock)
         {
             _activeTaskGroups.Add(taskId);
+        }
+
+        if (_hubConnection == null || _hubConnection.State != HubConnectionState.Connected)
+        {
+            try
+            {
+                await StartAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to start hub connection when joining task group {TaskId}.", taskId);
+            }
         }
 
         if (_hubConnection?.State == HubConnectionState.Connected)
@@ -211,6 +240,23 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
         hub.On<string, string, bool>("ReceiveShellCommandOutput", TriggerShellCommandOutput);
         hub.On<NightCodeForge.Core.Workflow.ShellCommandRecord>("ReceiveShellCommandCompleted", TriggerShellCommandCompleted);
         hub.On<bool, string?, string?>("ReceiveOperationsStatusChanged", TriggerOperationsStatusChanged);
+        hub.On<NightCodeForge.Core.Workflow.ActiveTaskSummary?>("ReceiveActiveTask", TriggerActiveTask);
+    }
+
+    public void TriggerActiveTask(NightCodeForge.Core.Workflow.ActiveTaskSummary? activeTask)
+    {
+        if (activeTask != null)
+        {
+            _workerStateService.HandleWorkerStatus("running", activeTask.TaskId, activeTask.CurrentStageId, activeTask.HardwareTarget, activeTask.TaskTitle);
+        }
+        else
+        {
+            if (_workerStateService.Current.Status == WorkerExecutionStatus.Running)
+            {
+                _workerStateService.HandleWorkerStatus("idle", null, null, "Local GPU");
+            }
+        }
+        OnActiveTaskReceived?.Invoke(activeTask);
     }
 
     public void TriggerTokenDelta(int taskId, string token, bool isThinking) =>

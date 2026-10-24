@@ -195,8 +195,16 @@ public class OperationsTelemetryServiceTests
             TaskTitle: "Implement In-Flight Hero",
             CurrentStageId: "stage-implementation",
             Priority: 1,
-            QueueName: "llm-urgent",
+            QueueType: "llm-urgent",
             StartedAt: DateTime.UtcNow);
+
+        ActiveTaskSummary? eventPayload = null;
+        int eventFiredCount = 0;
+        _service.OnActiveTaskChanged += s =>
+        {
+            eventPayload = s;
+            eventFiredCount++;
+        };
 
         _service.RecordActiveTask(summary);
 
@@ -205,13 +213,21 @@ public class OperationsTelemetryServiceTests
         Assert.Equal(42, active.TaskId);
         Assert.Equal("Implement In-Flight Hero", active.TaskTitle);
         Assert.Equal("stage-implementation", active.CurrentStageId);
+        Assert.Equal(1, eventFiredCount);
+        Assert.True(SpinWait.SpinUntil(() => _mockHubClient.Invocations.Any(i => i.Method.Name == nameof(IOrchestratorHubClient.ReceiveActiveTask)), 2000));
+        _mockHubClient.Verify(c => c.ReceiveActiveTask(summary), Times.Once);
 
         // Clearing with mismatched ID does not clear
         _service.ClearActiveTask(99);
         Assert.NotNull(_service.GetActiveTask());
+        Assert.Equal(1, eventFiredCount);
 
         // Clearing with matching ID clears
         _service.ClearActiveTask(42);
         Assert.Null(_service.GetActiveTask());
+        Assert.Equal(2, eventFiredCount);
+        Assert.Null(eventPayload);
+        Assert.True(SpinWait.SpinUntil(() => _mockHubClient.Invocations.Count(i => i.Method.Name == nameof(IOrchestratorHubClient.ReceiveActiveTask)) >= 2, 2000));
+        _mockHubClient.Verify(c => c.ReceiveActiveTask(null), Times.Once);
     }
 }

@@ -115,7 +115,7 @@ public class SignalRActivityBridgeService : BackgroundService
                     break;
 
                 case AgentActivityKind.ToolStarted:
-                    var toolName = evt.Metadata?.TryGetValue("ToolName", out var tn) == true && tn != null
+                    var toolName = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.ToolName, out var tn) == true && tn != null
                         ? tn.ToString()!
                         : (evt.Content.Contains(':') ? evt.Content.Split(':')[0].Trim() : "tool");
                     await _hubContext.Clients.Group(groupName)
@@ -123,11 +123,11 @@ public class SignalRActivityBridgeService : BackgroundService
                     break;
 
                 case AgentActivityKind.ToolCompleted:
-                    var completedTool = evt.Metadata?.TryGetValue("ToolName", out var ctn) == true && ctn != null
+                    var completedTool = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.ToolName, out var ctn) == true && ctn != null
                         ? ctn.ToString()!
                         : (evt.Content.Contains(':') ? evt.Content.Split(':')[0].Trim() : "tool");
                     int? durationMs = null;
-                    if (evt.Metadata?.TryGetValue("DurationMs", out var dur) == true && dur != null)
+                    if (evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.DurationMs, out var dur) == true && dur != null)
                     {
                         if (dur is int iVal)
                         {
@@ -145,28 +145,39 @@ public class SignalRActivityBridgeService : BackgroundService
                 case AgentActivityKind.StageStarted:
                 case AgentActivityKind.StageCompleted:
                     var status = evt.Kind == AgentActivityKind.StageStarted ? "Running" : "Completed";
-                    var kind = evt.Metadata?.TryGetValue("StageKind", out var sk) == true && sk != null
+                    var kind = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.StageKind, out var sk) == true && sk != null
                         ? sk.ToString()!
                         : "Agentic";
                     await _hubContext.Clients.All
                         .ReceiveStageTransition(evt.TaskId, evt.StageId, kind, status);
                     if (evt.Kind == AgentActivityKind.StageStarted)
                     {
-                        await _hubContext.Clients.All
-                            .ReceiveWorkerStatus("Running", evt.TaskId, evt.StageId, kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU");
-
-                        var title = evt.Metadata?.TryGetValue("TaskTitle", out var tObj) == true && tObj != null ? tObj.ToString()! : $"Task #{evt.TaskId}";
-                        var priority = evt.Metadata?.TryGetValue("Priority", out var pObj) == true && int.TryParse(pObj?.ToString(), out var pVal) ? pVal : 1;
-                        var queue = evt.Metadata?.TryGetValue("QueueName", out var qObj) == true && qObj != null ? qObj.ToString()! : (kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "cpu-deterministic" : "llm-inference");
                         var existing = _telemetryService.GetActiveTask();
+                        var title = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.TaskTitle, out var tObj) == true && tObj != null
+                            ? tObj.ToString()!
+                            : (existing != null && existing.TaskId == evt.TaskId ? existing.TaskTitle : $"Task #{evt.TaskId}");
+                        var priority = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.Priority, out var pObj) == true && int.TryParse(pObj?.ToString(), out var pVal)
+                            ? pVal
+                            : (existing != null && existing.TaskId == evt.TaskId ? existing.Priority : 1);
+                        var queue = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.QueueType, out var qObj) == true && qObj != null
+                            ? qObj.ToString()!
+                            : (evt.Metadata?.TryGetValue("QueueName", out var oldQObj) == true && oldQObj != null
+                                ? oldQObj.ToString()!
+                                : (existing != null && existing.TaskId == evt.TaskId ? existing.QueueType : (kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "cpu-deterministic" : "llm-inference")));
                         var startedAt = existing != null && existing.TaskId == evt.TaskId ? existing.StartedAt : evt.Timestamp;
+                        var hardwareTarget = kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU";
+
                         _telemetryService.RecordActiveTask(new ActiveTaskSummary(
                             evt.TaskId,
                             title,
                             evt.StageId,
                             priority,
                             queue,
-                            startedAt));
+                            startedAt,
+                            hardwareTarget));
+
+                        await _hubContext.Clients.All
+                            .ReceiveWorkerStatus("Running", evt.TaskId, evt.StageId, hardwareTarget);
                     }
                     else if (string.Equals(evt.StageId, StandardStageIds.Merge, StringComparison.OrdinalIgnoreCase) ||
                              string.Equals(evt.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
@@ -197,12 +208,14 @@ public class SignalRActivityBridgeService : BackgroundService
                     break;
 
                 case AgentActivityKind.OptimizationAction:
-                    var actionType = evt.Metadata?.TryGetValue("ActionType", out var at) == true && at != null
+                    var actionType = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.ActionType, out var at) == true && at != null
                         ? at.ToString()!
                         : "Compaction";
-                    var tokensSaved = evt.Metadata?.TryGetValue("TokensSaved", out var ts) == true && ts != null && int.TryParse(ts.ToString(), out var parsedTs)
+                    var tokensSaved = (evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.TokensSaved, out var ts) == true && ts != null && int.TryParse(ts.ToString(), out var parsedTs))
                         ? parsedTs
-                        : 0;
+                        : ((evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.TokensOrBytesSaved, out var tobs) == true && tobs != null && int.TryParse(tobs.ToString(), out var parsedTobs))
+                            ? parsedTobs
+                            : 0);
                     await _hubContext.Clients.Group(groupName)
                         .ReceiveOptimizationAction(evt.TaskId, evt.StageId, actionType, evt.Content, tokensSaved, evt.Timestamp);
                     break;

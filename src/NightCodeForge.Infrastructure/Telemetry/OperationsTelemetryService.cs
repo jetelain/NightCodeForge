@@ -268,6 +268,8 @@ public class OperationsTelemetryService : IOperationsTelemetryService
     private readonly object _taskLock = new();
     private ActiveTaskSummary? _activeTask;
 
+    public event Action<ActiveTaskSummary?>? OnActiveTaskChanged;
+
     public void RecordActiveTask(ActiveTaskSummary summary)
     {
         ArgumentNullException.ThrowIfNull(summary);
@@ -275,16 +277,49 @@ public class OperationsTelemetryService : IOperationsTelemetryService
         {
             _activeTask = summary;
         }
+
+        OnActiveTaskChanged?.Invoke(summary);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _hubContext.Clients.All.ReceiveActiveTask(summary);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to broadcast ReceiveActiveTask for task #{TaskId}", summary.TaskId);
+            }
+        });
     }
 
     public void ClearActiveTask(int? taskId = null)
     {
+        bool cleared = false;
         lock (_taskLock)
         {
-            if (taskId == null || _activeTask?.TaskId == taskId.Value)
+            if (_activeTask != null && (taskId == null || _activeTask.TaskId == taskId.Value))
             {
                 _activeTask = null;
+                cleared = true;
             }
+        }
+
+        if (cleared)
+        {
+            OnActiveTaskChanged?.Invoke(null);
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _hubContext.Clients.All.ReceiveActiveTask(null);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to broadcast ReceiveActiveTask (cleared)");
+                }
+            });
         }
     }
 

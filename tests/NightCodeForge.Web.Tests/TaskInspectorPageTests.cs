@@ -15,6 +15,7 @@ public class TaskInspectorPageTests : BunitContext
 {
     private readonly InMemoryTaskRepository _taskRepository;
     private readonly InMemoryWorkflowRepository _workflowRepository;
+    private readonly Moq.Mock<IOperationsTelemetryService> _telemetryMock;
     private readonly WorkerStateService _workerState;
     private readonly WorkspaceStateService _workspaceState;
     private readonly OrchestratorHubClientConnection _hubConnection;
@@ -27,7 +28,8 @@ public class TaskInspectorPageTests : BunitContext
 
         _taskRepository = new InMemoryTaskRepository();
         _workflowRepository = new InMemoryWorkflowRepository(new[] { TestWorkflowFixtures.CreateStandardWorkflow() });
-        _workerState = new WorkerStateService(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object);
+        _telemetryMock = new Moq.Mock<IOperationsTelemetryService>();
+        _workerState = new WorkerStateService(_telemetryMock.Object);
         _workspaceState = new WorkspaceStateService();
         _hubConnection = TestHubConnectionHelper.Create(workerStateService: _workerState);
         _devQueueService = new FakeDevQueueService();
@@ -43,6 +45,7 @@ public class TaskInspectorPageTests : BunitContext
         Services.AddSingleton<ITaskReviewService>(_taskReviewService);
         Services.AddSingleton<ReviewCommentStateService>();
         Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
+        Services.AddSingleton<IOperationsTelemetryService>(_telemetryMock.Object);
     }
 
     [Fact]
@@ -316,6 +319,31 @@ public class TaskInspectorPageTests : BunitContext
 
         Assert.NotNull(cut.Find("#task-inspector-empty"));
         Assert.Contains("/inspector", nav.Uri);
+    }
+
+    [Fact]
+    public async Task TaskInspector_WhenTaskRunningInTelemetry_GroupsUnderRunningOptgroup()
+    {
+        var task7 = new ForgeTask
+        {
+            Id = 7,
+            WorkspaceId = 1,
+            Title = "Autonomous Task Seven",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true,
+            CurrentStageId = "impl"
+        };
+        await _taskRepository.CreateAsync(task7);
+
+        // Telemetry has Task 7 active
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
+            7, "Autonomous Task Seven", "impl", 1, "llm-inference", DateTime.UtcNow));
+
+        var cut = Render<TaskInspector>();
+        cut.WaitForState(() => cut.Markup.Contains("Autonomous Task Seven"));
+
+        var optgroup = cut.Find("optgroup");
+        Assert.Equal(TaskInspectorGroupingHelper.GroupRunning, optgroup.GetAttribute("label"));
     }
 
     #region Fakes

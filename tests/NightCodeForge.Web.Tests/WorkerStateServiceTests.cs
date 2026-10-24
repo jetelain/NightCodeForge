@@ -185,4 +185,59 @@ public class WorkerStateServiceTests
         Assert.Equal(started, service.Current.StartedAt);
         Assert.Equal("stage-b", service.Current.StageId);
     }
+
+    [Fact]
+    public void Current_WhenNewActiveTaskStartsInTelemetryAfterPreviousIdle_HydratesNewActiveTask()
+    {
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(5, "Stale", "s", 1, "q", DateTime.UtcNow));
+        var service = new WorkerStateService(_telemetryMock.Object);
+
+        service.HandleWorkerStatus("idle", null, null, "Local GPU");
+        Assert.Equal(WorkerExecutionStatus.Idle, service.Current.Status);
+        Assert.Null(service.Current.ActiveTaskId);
+
+        // A new task #7 is now active in telemetry
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(7, "New Task", "impl", 1, "q", DateTime.UtcNow));
+
+        Assert.Equal(WorkerExecutionStatus.Running, service.Current.Status);
+        Assert.Equal(7, service.Current.ActiveTaskId);
+        Assert.Equal("New Task", service.Current.ActiveTaskTitle);
+    }
+
+    [Fact]
+    public void HandleTelemetryActiveTaskChanged_UpdatesStatusAndRaisesEvent()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+        bool eventFired = false;
+        service.OnWorkerStateChanged += () => eventFired = true;
+
+        _telemetryMock.Raise(t => t.OnActiveTaskChanged += null, new ActiveTaskSummary(7, "Event Task", "impl", 1, "q", DateTime.UtcNow));
+
+        Assert.True(eventFired);
+        Assert.Equal(WorkerExecutionStatus.Running, service.Current.Status);
+        Assert.Equal(7, service.Current.ActiveTaskId);
+        Assert.Equal("Event Task", service.Current.ActiveTaskTitle);
+
+        eventFired = false;
+        _telemetryMock.Raise(t => t.OnActiveTaskChanged += null, (ActiveTaskSummary)null!);
+
+        Assert.True(eventFired);
+        Assert.Equal(WorkerExecutionStatus.Idle, service.Current.Status);
+        Assert.Null(service.Current.ActiveTaskId);
+    }
+
+    [Fact]
+    public void HardwareTarget_WhenActiveTaskProvidesDeterministicCpu_PropagatesToCurrent()
+    {
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
+            12, "Deterministic Task", "gate-1", 1, "cpu-deterministic", DateTime.UtcNow, "Deterministic CPU"));
+
+        var service = new WorkerStateService(_telemetryMock.Object);
+        Assert.Equal("Deterministic CPU", service.Current.HardwareTarget);
+
+        _telemetryMock.Raise(t => t.OnActiveTaskChanged += null, new ActiveTaskSummary(
+            13, "GPU Task", "impl", 1, "llm-inference", DateTime.UtcNow, "Local GPU"));
+
+        Assert.Equal("Local GPU", service.Current.HardwareTarget);
+    }
 }

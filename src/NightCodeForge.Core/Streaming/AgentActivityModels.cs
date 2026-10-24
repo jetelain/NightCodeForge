@@ -38,3 +38,20 @@ public interface IAgentActivityStreamer
     Task BroadcastAsync(AgentActivityEvent activityEvent, CancellationToken cancellationToken = default);
     IAsyncEnumerable<AgentActivityEvent> SubscribeAsync(int? taskId = null, CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// Canonical metadata key constants used in <see cref="AgentActivityEvent.Metadata"/>.
+/// </summary>
+public static class AgentActivityMetadataKeys
+{
+    public const string TaskTitle = "TaskTitle";
+    public const string Priority = "Priority";
+    public const string QueueType = "QueueType";
+    public const string StageKind = "StageKind";
+    public const string ToolName = "ToolName";
+    public const string DurationMs = "DurationMs";
+    public const string ActionType = "ActionType";
+    public const string TokensSaved = "TokensSaved";
+    public const string TokensOrBytesSaved = "TokensOrBytesSaved";
+    public const string BranchName = "BranchName";
+}

@@ -11,7 +11,7 @@
 @inject ITaskOrchestrator TaskOrchestrator
 
 <div class="stage-conversation-viewer card-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem;">
-    @if (Conversation == null)
+    @if (Conversation == null && string.IsNullOrEmpty(LiveStreamingThinking) && string.IsNullOrEmpty(LiveStreamingMessage))
     {
         <div style="text-align: center; color: var(--text-muted); padding: 2rem 0;">
             <span style="font-size: 1.5rem; display: block; margin-bottom: 0.5rem;">💬</span>
@@ -26,18 +26,21 @@
                 <div>
                     <div style="display: flex; align-items: center; gap: 0.65rem; margin-bottom: 0.25rem;">
                         <h3 style="margin: 0; font-size: 1.15rem; color: var(--text-primary);">
-                            @StageConversationParser.FormatStageName(Conversation.StageId, WorkflowStages)
+                            @(Conversation != null ? StageConversationParser.FormatStageName(Conversation.StageId, WorkflowStages) : "Active Stage Execution")
                         </h3>
-                        <span class="forge-badge badge-indigo" style="font-size: 0.72rem;">
-                            Run #@Conversation.AttemptIndex
-                        </span>
-                        <span class="forge-badge @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "badge-teal" : "badge-indigo")" style="font-size: 0.72rem;">
-                            @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "Deterministic CPU" : "Agentic GPU")
-                        </span>
-                        <span class="forge-badge @StageConversationParser.GetStatusClass(Conversation.Status)" style="font-size: 0.72rem;">
-                            @(Conversation.Status == StageExecutionStatus.WaitingForHuman ? "Waiting for Answer" : Conversation.Status.ToString())
-                        </span>
-                        @if (IsActiveStage)
+                        @if (Conversation != null)
+                        {
+                            <span class="forge-badge badge-indigo" style="font-size: 0.72rem;">
+                                Run #@Conversation.AttemptIndex
+                            </span>
+                            <span class="forge-badge @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "badge-teal" : "badge-indigo")" style="font-size: 0.72rem;">
+                                @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "Deterministic CPU" : "Agentic GPU")
+                            </span>
+                            <span class="forge-badge @StageConversationParser.GetStatusClass(Conversation.Status)" style="font-size: 0.72rem;">
+                                @(Conversation.Status == StageExecutionStatus.WaitingForHuman ? "Waiting for Answer" : Conversation.Status.ToString())
+                            </span>
+                        }
+                        @if (IsActiveStage && (Conversation == null || Conversation.Status == StageExecutionStatus.Running || !string.IsNullOrEmpty(LiveStreamingThinking) || !string.IsNullOrEmpty(LiveStreamingMessage)))
                         {
                             <span class="step-badge badge-gpu" style="font-size: 0.68rem;">
                                 LIVE STREAMING
@@ -46,29 +49,32 @@
                         }
                     </div>
 
-                    <div style="font-size: 0.78rem; color: var(--text-secondary); display: flex; align-items: center; flex-wrap: wrap; gap: 1rem;">
-                        @if (!string.IsNullOrWhiteSpace(Conversation.ModelName))
-                        {
-                            <span>🧠 Model: <strong>@Conversation.ModelName</strong></span>
-                        }
-                        @if (!string.IsNullOrWhiteSpace(Conversation.HarnessId))
-                        {
-                            <span>⚙️ Harness: <strong>@Conversation.HarnessId</strong></span>
-                        }
-                        <span>🕒 Started: <strong>@Conversation.StartedAt.ToLocalTime().ToString("HH:mm:ss")</strong></span>
-                        @if (Conversation.CompletedAt.HasValue)
-                        {
-                            <span>🏁 Finished: <strong>@Conversation.CompletedAt.Value.ToLocalTime().ToString("HH:mm:ss")</strong></span>
-                            <span>⏱ Duration: <strong>@((Conversation.CompletedAt.Value - Conversation.StartedAt).TotalSeconds.ToString("F1"))s</strong></span>
-                        }
-                        @if (!string.IsNullOrWhiteSpace(Conversation.TranscriptFileName))
-                        {
-                            <span>📄 File: <code>@Conversation.TranscriptFileName</code></span>
-                        }
-                    </div>
+                    @if (Conversation != null)
+                    {
+                        <div style="font-size: 0.78rem; color: var(--text-secondary); display: flex; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                            @if (!string.IsNullOrWhiteSpace(Conversation.ModelName))
+                            {
+                                <span>🧠 Model: <strong>@Conversation.ModelName</strong></span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(Conversation.HarnessId))
+                            {
+                                <span>⚙️ Harness: <strong>@Conversation.HarnessId</strong></span>
+                            }
+                            <span>🕒 Started: <strong>@Conversation.StartedAt.ToLocalTime().ToString("HH:mm:ss")</strong></span>
+                            @if (Conversation.CompletedAt.HasValue)
+                            {
+                                <span>🏁 Finished: <strong>@Conversation.CompletedAt.Value.ToLocalTime().ToString("HH:mm:ss")</strong></span>
+                                <span>⏱ Duration: <strong>@((Conversation.CompletedAt.Value - Conversation.StartedAt).TotalSeconds.ToString("F1"))s</strong></span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(Conversation.TranscriptFileName))
+                            {
+                                <span>📄 File: <code>@Conversation.TranscriptFileName</code></span>
+                            }
+                        </div>
+                    }
                 </div>
 
-                @if (!string.IsNullOrWhiteSpace(Conversation.Summary))
+                @if (Conversation != null && !string.IsNullOrWhiteSpace(Conversation.Summary))
                 {
                     <div class="stage-summary-box" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem 0.85rem; font-size: 0.82rem; max-width: 480px; flex: 1 1 300px;">
                         <span style="color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; font-weight: 600; display: block; margin-bottom: 0.25rem;">Summary</span>
@@ -83,11 +89,11 @@
         <!-- Turns Stream -->
         <div class="conversation-turns-list chat-messages-container" style="display: flex; flex-direction: column; gap: 0.85rem;">
             @{
-                var turns = Conversation.Turns?.OrderBy(t => t.TurnIndex).ToList() ?? new List<ConversationTurn>();
+                var turns = Conversation?.Turns?.OrderBy(t => t.TurnIndex).ToList() ?? new List<ConversationTurn>();
                 var (mergedResults, hiddenResults) = StageConversationParser.PairToolResults(turns);
             }
 
-            @if (!turns.Any() && !IsActiveStage)
+            @if (!turns.Any() && !IsActiveStage && Conversation != null && string.IsNullOrEmpty(LiveStreamingThinking) && string.IsNullOrEmpty(LiveStreamingMessage))
             {
                 <div style="color: var(--text-muted); font-style: italic; font-size: 0.84rem;">
                     No turns recorded for this stage run.
@@ -154,7 +160,7 @@
                                 var questions = StageConversationParser.ExtractQuestions(turn);
                                 var answer = pairedResult?.ToolResult ?? turn.ToolResult;
                                 var metadataJson = pairedResult?.MetadataJson ?? turn.MetadataJson;
-                                var isWaiting = Conversation.Status == StageExecutionStatus.WaitingForHuman && string.IsNullOrWhiteSpace(answer);
+                                var isWaiting = Conversation?.Status == StageExecutionStatus.WaitingForHuman && string.IsNullOrWhiteSpace(answer);
                                 <div class="chat-bubble assistant turn-ask-tool">
                                     <div class="chat-avatar">❓</div>
                                     <div class="chat-bubble-body" style="width: 100%;">
@@ -228,7 +234,7 @@
                 </div>
             }
 
-            @if (IsActiveStage && !string.IsNullOrEmpty(LiveStreamingThinking))
+            @if (IsActiveStage && (Conversation == null || Conversation.Status == StageExecutionStatus.Running) && !string.IsNullOrEmpty(LiveStreamingThinking))
             {
                 <div class="chat-bubble assistant turn-live-thinking">
                     <div class="chat-avatar">🧠</div>
@@ -251,7 +257,7 @@
                 </div>
             }
 
-            @if (IsActiveStage && !string.IsNullOrEmpty(LiveStreamingMessage))
+            @if (IsActiveStage && (Conversation == null || Conversation.Status == StageExecutionStatus.Running) && !string.IsNullOrEmpty(LiveStreamingMessage))
             {
                 <div class="chat-bubble assistant streaming turn-live-message">
                     <div class="chat-avatar">🤖</div>

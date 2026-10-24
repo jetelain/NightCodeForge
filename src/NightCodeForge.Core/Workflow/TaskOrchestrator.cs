@@ -334,10 +334,10 @@ public class TaskOrchestrator : ITaskOrchestrator
                 DateTime.UtcNow,
                 new Dictionary<string, object?>
                 {
-                    ["StageKind"] = stage.Kind.ToString(),
-                    ["TaskTitle"] = task.Title,
-                    ["Priority"] = task.Priority,
-                    ["QueueName"] = stage.Kind == WorkflowStageKind.Deterministic ? "cpu-deterministic" : "llm-inference"
+                    [Streaming.AgentActivityMetadataKeys.StageKind] = stage.Kind.ToString(),
+                    [Streaming.AgentActivityMetadataKeys.TaskTitle] = task.Title,
+                    [Streaming.AgentActivityMetadataKeys.Priority] = task.Priority,
+                    [Streaming.AgentActivityMetadataKeys.QueueType] = stage.Kind == WorkflowStageKind.Deterministic ? "cpu-deterministic" : "llm-inference"
                 }), cancellationToken);
         }
         catch (Exception sex)

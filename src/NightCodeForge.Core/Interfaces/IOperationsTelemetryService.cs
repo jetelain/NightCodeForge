@@ -72,4 +72,9 @@ public interface IOperationsTelemetryService
     /// Retrieves the currently active task summary, if any.
     /// </summary>
     ActiveTaskSummary? GetActiveTask();
+
+    /// <summary>
+    /// Event fired whenever the active task changes (starts, advances, or clears).
+    /// </summary>
+    event Action<ActiveTaskSummary?>? OnActiveTaskChanged;
 }

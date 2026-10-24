@@ -7,6 +7,7 @@
 @inject WorkspaceStateService WorkspaceState
 @inject NavigationManager Navigation
 @inject OrchestratorHubClientConnection HubClient
+@inject NightCodeForge.Core.Interfaces.IOperationsTelemetryService TelemetryService
 
 <PageTitle>Task Inspector - NightCodeForge</PageTitle>
 
@@ -65,10 +66,10 @@
         </select>
     </div>
 
-    @if (_inspectedTaskId.HasValue && WorkerState.Current.ActiveTaskId.HasValue && _inspectedTaskId.Value != WorkerState.Current.ActiveTaskId.Value)
+    @if (_inspectedTaskId.HasValue && EffectiveActiveTaskId.HasValue && _inspectedTaskId.Value != EffectiveActiveTaskId.Value)
     {
         <button type="button" class="forge-btn forge-btn-secondary" id="switch-to-active-task-btn" style="padding: 0.25rem 0.65rem; font-size: 0.78rem;" @onclick="SwitchToActiveTask">
-            ⚡ Switch to Running Task (#@WorkerState.Current.ActiveTaskId.Value)
+            ⚡ Switch to Running Task (#@EffectiveActiveTaskId.Value)
         </button>
     }
 </div>
@@ -99,17 +100,30 @@ else if (!_isLoadingTasks)
     private bool _isLoadingTasks = true;
     private bool _disposed;
 
-    private IReadOnlyList<TaskInspectorGroup> GroupedTasks =>
-        TaskInspectorGroupingHelper.GroupTasks(_availableTasks, activeTaskId: WorkerState.Current.ActiveTaskId);
+    private int? EffectiveActiveTaskId =>
+        WorkerState.Current.ActiveTaskId ?? TelemetryService.GetActiveTask()?.TaskId;
+
+    private IReadOnlyList<TaskInspectorGroup> GroupedTasks
+    {
+        get
+        {
+            var activeId = EffectiveActiveTaskId;
+            var runningIds = activeId.HasValue ? new HashSet<int> { activeId.Value } : null;
+            return TaskInspectorGroupingHelper.GroupTasks(_availableTasks, activeTaskId: activeId, runningTaskIds: runningIds);
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
         WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
+        TelemetryService.OnActiveTaskChanged += HandleActiveTaskChanged;
 
         if (HubClient != null)
         {
             HubClient.OnStageTransitionReceived += HandleStageTransition;
+            HubClient.OnWorkerStatusReceived += HandleWorkerStatusReceived;
+            HubClient.OnActiveTaskReceived += HandleActiveTaskChanged;
             try
             {
                 await HubClient.StartAsync();
@@ -179,9 +193,9 @@ else if (!_isLoadingTasks)
         {
             _inspectedTaskId = TaskId.Value;
         }
-        else if (WorkerState.Current.ActiveTaskId.HasValue && WorkerState.Current.ActiveTaskId.Value > 0 && _availableTasks.Any(t => t.Id == WorkerState.Current.ActiveTaskId.Value))
+        else if (EffectiveActiveTaskId.HasValue && EffectiveActiveTaskId.Value > 0 && _availableTasks.Any(t => t.Id == EffectiveActiveTaskId.Value))
         {
-            _inspectedTaskId = WorkerState.Current.ActiveTaskId.Value;
+            _inspectedTaskId = EffectiveActiveTaskId.Value;
         }
         else if (_availableTasks.Any())
         {
@@ -205,9 +219,9 @@ else if (!_isLoadingTasks)
 
     private void SwitchToActiveTask()
     {
-        if (WorkerState.Current.ActiveTaskId.HasValue)
+        if (EffectiveActiveTaskId.HasValue)
         {
-            var activeId = WorkerState.Current.ActiveTaskId.Value;
+            var activeId = EffectiveActiveTaskId.Value;
             _inspectedTaskId = activeId;
             Navigation.NavigateTo($"/inspector/{activeId}", replace: false);
             StateHasChanged();
@@ -235,9 +249,9 @@ else if (!_isLoadingTasks)
         }
 
         int? newTaskId = null;
-        if (WorkerState.Current.ActiveTaskId.HasValue && _availableTasks.Any(t => t.Id == WorkerState.Current.ActiveTaskId.Value))
+        if (EffectiveActiveTaskId.HasValue && _availableTasks.Any(t => t.Id == EffectiveActiveTaskId.Value))
         {
-            newTaskId = WorkerState.Current.ActiveTaskId.Value;
+            newTaskId = EffectiveActiveTaskId.Value;
         }
         else if (_availableTasks.Count > 0)
         {
@@ -257,6 +271,24 @@ else if (!_isLoadingTasks)
     }
 
     private void HandleWorkerStateChanged()
+    {
+        if (_disposed) return;
+        InvokeAsync(() =>
+        {
+            if (!_disposed) StateHasChanged();
+        });
+    }
+
+    private void HandleActiveTaskChanged(NightCodeForge.Core.Workflow.ActiveTaskSummary? _)
+    {
+        if (_disposed) return;
+        InvokeAsync(() =>
+        {
+            if (!_disposed) StateHasChanged();
+        });
+    }
+
+    private void HandleWorkerStatusReceived(string status, int? activeTaskId, string? stageId, string hardwareTarget)
     {
         if (_disposed) return;
         InvokeAsync(() =>
@@ -295,9 +327,12 @@ else if (!_isLoadingTasks)
 
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
         WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
+        TelemetryService.OnActiveTaskChanged -= HandleActiveTaskChanged;
         if (HubClient != null)
         {
             HubClient.OnStageTransitionReceived -= HandleStageTransition;
+            HubClient.OnWorkerStatusReceived -= HandleWorkerStatusReceived;
+            HubClient.OnActiveTaskReceived -= HandleActiveTaskChanged;
         }
     }
 }

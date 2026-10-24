@@ -153,7 +153,14 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
 
         // Announced once the conversation record exists so a live UI can find and follow it.
-        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
+        var stageMetadata = new Dictionary<string, object?>
+        {
+            [AgentActivityMetadataKeys.TaskTitle] = context.ForgeTask.Title,
+            [AgentActivityMetadataKeys.Priority] = context.ForgeTask.Priority,
+            [AgentActivityMetadataKeys.QueueType] = "llm-inference",
+            [AgentActivityMetadataKeys.StageKind] = "Agentic"
+        };
+        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken, stageMetadata);
 
         var workspacePath = !string.IsNullOrEmpty(context.WorkspacePath)
             ? context.WorkspacePath
@@ -836,7 +843,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                             toolNamesByCallId[fc.CallId] = fc.Name;
                         }
                         var argsJson = fc.Arguments != null ? JsonSerializer.Serialize(fc.Arguments) : "{}";
-                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken, new Dictionary<string, object?> { ["ToolName"] = canonicalName });
+                        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken, new Dictionary<string, object?> { [AgentActivityMetadataKeys.ToolName] = canonicalName });
                     }
                     else if (content is FunctionResultContent frc)
                     {
@@ -901,7 +908,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                             AgentActivityKind.ToolCompleted,
                             resultStr,
                             cancellationToken,
-                            new Dictionary<string, object?> { ["ToolName"] = resultToolName ?? "tool" });
+                            new Dictionary<string, object?> { [AgentActivityMetadataKeys.ToolName] = resultToolName ?? "tool" });
                     }
                     else if (content is TextReasoningContent reasoning && !string.IsNullOrEmpty(reasoning.Text))
                     {

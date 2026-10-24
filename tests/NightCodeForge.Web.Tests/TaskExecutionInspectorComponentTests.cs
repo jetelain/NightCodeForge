@@ -868,6 +868,60 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         });
     }
 
+    [Fact]
+    public void StageConversationViewer_WhenConversationNull_AndLiveStreamingThinkingPresent_RendersLiveStreamingAccordion()
+    {
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, null)
+            .Add(x => x.IsActiveStage, true)
+            .Add(x => x.LiveStreamingThinking, "Deliberating on the architectural boundaries...")
+            .Add(x => x.LiveStreamingMessage, "Drafting initial controller"));
+
+        Assert.Contains("Active Stage Execution", cut.Markup);
+        Assert.Contains("LIVE STREAMING", cut.Markup);
+        Assert.Contains("Deliberating on the architectural boundaries...", cut.Markup);
+        Assert.Contains("Reasoning Deliberation", cut.Markup);
+        Assert.Contains("Drafting initial controller", cut.Markup);
+    }
+
+    [Fact]
+    public void StageConversationViewer_WhenConversationNull_AndNoStreaming_RendersNoConversationSelected()
+    {
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, null)
+            .Add(x => x.IsActiveStage, false)
+            .Add(x => x.LiveStreamingThinking, null)
+            .Add(x => x.LiveStreamingMessage, null));
+
+        Assert.Contains("No stage conversation selected", cut.Markup);
+        Assert.DoesNotContain("LIVE STREAMING", cut.Markup);
+    }
+
+    [Fact]
+    public void StageConversationViewer_WhenConversationCompleted_DoesNotRenderLiveStreamingBadge()
+    {
+        var conv = new Conversation
+        {
+            Id = 1,
+            TaskId = 10,
+            StageId = "implementation",
+            StageKind = WorkflowStageKind.Agentic,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-5),
+            CompletedAt = DateTime.UtcNow
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.IsActiveStage, true)
+            .Add(x => x.LiveStreamingThinking, null)
+            .Add(x => x.LiveStreamingMessage, null));
+
+        Assert.Contains("Completed", cut.Markup);
+        Assert.DoesNotContain("LIVE STREAMING", cut.Markup);
+    }
+
     #region Fakes
 
     private class FakeDevQueueService : IDevQueueService

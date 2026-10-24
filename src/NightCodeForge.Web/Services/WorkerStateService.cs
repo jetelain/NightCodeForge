@@ -26,12 +26,12 @@ public record WorkerStatusSnapshot(
 /// <summary>
 /// Singleton service providing real-time snapshot and event dispatch for worker execution state and questions.
 /// </summary>
-public class WorkerStateService : IWorkerStateService
+public class WorkerStateService : IWorkerStateService, IDisposable
 {
     private readonly IOperationsTelemetryService _telemetryService;
     private readonly object _lock = new();
     private WorkerStatusSnapshot _current;
-    private bool _hasAuthoritativeStatus;
+    private int? _lastIdleTaskId;
 
     public int? ActiveTaskId => Current.ActiveTaskId;
     public bool IsRunning => Current.Status == WorkerExecutionStatus.Running;
@@ -39,6 +39,8 @@ public class WorkerStateService : IWorkerStateService
     public WorkerStateService(IOperationsTelemetryService telemetryService)
     {
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+        _telemetryService.OnActiveTaskChanged += HandleTelemetryActiveTaskChanged;
+
         var active = _telemetryService.GetActiveTask();
         if (active != null)
         {
@@ -48,7 +50,7 @@ public class WorkerStateService : IWorkerStateService
                 active.TaskTitle,
                 active.CurrentStageId,
                 null,
-                "Local GPU",
+                string.IsNullOrWhiteSpace(active.HardwareTarget) ? "Local GPU" : active.HardwareTarget,
                 0,
                 StartedAt: active.StartedAt);
         }
@@ -65,18 +67,51 @@ public class WorkerStateService : IWorkerStateService
         }
     }
 
+    private void HandleTelemetryActiveTaskChanged(NightCodeForge.Core.Workflow.ActiveTaskSummary? active)
+    {
+        lock (_lock)
+        {
+            if (active != null)
+            {
+                _lastIdleTaskId = null;
+                _current = _current with
+                {
+                    Status = WorkerExecutionStatus.Running,
+                    ActiveTaskId = active.TaskId,
+                    ActiveTaskTitle = active.TaskTitle,
+                    StageId = active.CurrentStageId,
+                    HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
+                    StartedAt = active.StartedAt
+                };
+            }
+            else
+            {
+                if (_current.Status == WorkerExecutionStatus.Running)
+                {
+                    _current = _current with
+                    {
+                        Status = WorkerExecutionStatus.Idle,
+                        ActiveTaskId = null,
+                        ActiveTaskTitle = null,
+                        StageId = null,
+                        StartedAt = null
+                    };
+                }
+            }
+        }
+        OnWorkerStateChanged?.Invoke();
+    }
+
     public WorkerStatusSnapshot Current
     {
         get
         {
             lock (_lock)
             {
-                // Telemetry is only a fallback until the hub reports an authoritative status;
-                // afterwards an explicit Idle must not be overridden by stale telemetry.
-                if (!_hasAuthoritativeStatus && _current.ActiveTaskId == null)
+                if (_current.ActiveTaskId == null)
                 {
                     var active = _telemetryService.GetActiveTask();
-                    if (active != null)
+                    if (active != null && active.TaskId != _lastIdleTaskId)
                     {
                         _current = _current with
                         {
@@ -84,6 +119,7 @@ public class WorkerStateService : IWorkerStateService
                             ActiveTaskId = active.TaskId,
                             ActiveTaskTitle = active.TaskTitle,
                             StageId = active.CurrentStageId,
+                            HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
                             StartedAt = active.StartedAt
                         };
                     }
@@ -101,7 +137,14 @@ public class WorkerStateService : IWorkerStateService
         lock (_lock)
         {
             _current = snapshot;
-            _hasAuthoritativeStatus = true;
+            if (snapshot.Status == WorkerExecutionStatus.Idle)
+            {
+                _lastIdleTaskId = snapshot.ActiveTaskId ?? _telemetryService.GetActiveTask()?.TaskId;
+            }
+            else if (snapshot.Status == WorkerExecutionStatus.Running)
+            {
+                _lastIdleTaskId = null;
+            }
         }
         OnWorkerStateChanged?.Invoke();
     }
@@ -124,6 +167,15 @@ public class WorkerStateService : IWorkerStateService
 
         lock (_lock)
         {
+            if (execStatus == WorkerExecutionStatus.Idle)
+            {
+                _lastIdleTaskId = activeTaskId ?? _current.ActiveTaskId ?? _telemetryService.GetActiveTask()?.TaskId;
+            }
+            else if (execStatus == WorkerExecutionStatus.Running)
+            {
+                _lastIdleTaskId = null;
+            }
+
             var startedAt = execStatus == WorkerExecutionStatus.Running
                 ? (_current.Status == WorkerExecutionStatus.Running && _current.StartedAt.HasValue ? _current.StartedAt : DateTime.UtcNow)
                 : (DateTime?)null;
@@ -146,9 +198,13 @@ public class WorkerStateService : IWorkerStateService
                 BranchName = branchName ?? (keepPrevious ? _current.BranchName : null),
                 StartedAt = startedAt
             };
-            _hasAuthoritativeStatus = true;
         }
 
         OnWorkerStateChanged?.Invoke();
+    }
+
+    public void Dispose()
+    {
+        _telemetryService.OnActiveTaskChanged -= HandleTelemetryActiveTaskChanged;
     }
 }

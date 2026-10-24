@@ -616,8 +616,36 @@
 
     private bool IsStageActive(string? stageId)
     {
-        if (_task == null || string.IsNullOrWhiteSpace(stageId)) return false;
-        return string.Equals(_task.CurrentStageId, stageId, StringComparison.OrdinalIgnoreCase) &&
+        if (_task == null) return false;
+
+        // If a conversation is explicitly selected and is not running, it is not an active live stage run
+        if (_selectedConversation != null && _selectedConversation.Status != StageExecutionStatus.Running)
+        {
+            return false;
+        }
+
+        // If live tokens are actively streaming, it is active
+        if (!string.IsNullOrEmpty(_liveStreamingThinking) || !string.IsNullOrEmpty(_liveStreamingMessage))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(stageId))
+        {
+            return _task.Status != TaskOverallStatus.Closed &&
+                   _task.Status != TaskOverallStatus.Failed;
+        }
+
+        var isConvRunning = _selectedConversation != null &&
+                            _selectedConversation.Status == StageExecutionStatus.Running &&
+                            string.Equals(_selectedConversation.StageId, stageId, StringComparison.OrdinalIgnoreCase);
+
+        var isWorkerRunningStage = WorkerState != null &&
+                                   WorkerState.ActiveTaskId == _task.Id &&
+                                   WorkerState.IsRunning &&
+                                   string.Equals(WorkerState.Current.StageId, stageId, StringComparison.OrdinalIgnoreCase);
+
+        return (isConvRunning || isWorkerRunningStage) &&
                _task.Status != TaskOverallStatus.Closed &&
                _task.Status != TaskOverallStatus.Failed;
     }
@@ -697,6 +725,7 @@
             {
                 _liveStreamingMessage = (_liveStreamingMessage ?? "") + token;
             }
+
             StateHasChanged();
         });
     }
@@ -754,7 +783,11 @@
             _stepperRef?.ApplyStageTransition(stageId, status);
             if (status.Equals("Running", StringComparison.OrdinalIgnoreCase))
             {
-                // A stage run just started: follow the live conversation.
+                // A stage run just started: update current stage id and follow the live conversation.
+                if (_task != null)
+                {
+                    _task.CurrentStageId = stageId;
+                }
                 _selectedConversation = null;
             }
             await RefreshTaskAsync();

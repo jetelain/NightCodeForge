@@ -602,4 +602,60 @@ public class MonitoringPageTests : BunitContext
         await retryBtn.ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
         _mockOperationsControlService.Verify(m => m.ResumeOperationsAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public void ActiveOperationsHero_WhenSignalRActiveTaskReceived_UpdatesLiveHeroCard()
+    {
+        var cut = Render<ActiveOperationsHero>();
+        Assert.Contains("Idle", cut.Find("#active-task-card").TextContent);
+
+        _hubConnection.TriggerActiveTask(new ActiveTaskSummary(
+            7,
+            "Autonomous Optimization Flow",
+            "impl",
+            1,
+            "default",
+            DateTime.UtcNow));
+
+        cut.WaitForState(() => cut.Find("#badge-active-task-running") != null);
+        Assert.Contains("#7", cut.Find("#active-task-card").TextContent);
+        Assert.Contains("Autonomous Optimization Flow", cut.Find("#active-task-card").TextContent);
+        Assert.Contains("impl", cut.Find("#active-task-card").TextContent);
+
+        _hubConnection.TriggerActiveTask(null);
+        cut.WaitForState(() => cut.Find("#active-task-card").TextContent.Contains("Idle"));
+    }
+
+    [Fact]
+    public void ActiveOperationsHero_WhenTelemetryOnActiveTaskChangedFired_UpdatesLiveHeroCard()
+    {
+        var cut = Render<ActiveOperationsHero>();
+        Assert.Contains("Idle", cut.Find("#active-task-card").TextContent);
+
+        _mockTelemetryService.Raise(t => t.OnActiveTaskChanged += null, new ActiveTaskSummary(
+            7,
+            "Live Telemetry Task",
+            "review",
+            1,
+            "default",
+            DateTime.UtcNow));
+
+        cut.WaitForState(() => cut.Find("#badge-active-task-running") != null);
+        Assert.Contains("#7", cut.Find("#active-task-card").TextContent);
+        Assert.Contains("Live Telemetry Task", cut.Find("#active-task-card").TextContent);
+    }
+
+    [Fact]
+    public void ActiveOperationsHero_WhenWorkerStatusWaitingForHumanReceived_ClearsActiveHeroCard()
+    {
+        var cut = Render<ActiveOperationsHero>();
+
+        _hubConnection.TriggerActiveTask(new ActiveTaskSummary(
+            7, "Autonomous Flow", "impl", 1, "default", DateTime.UtcNow));
+        cut.WaitForState(() => cut.Find("#badge-active-task-running") != null);
+
+        _hubConnection.TriggerWorkerStatus("WaitingForHuman", 7, "impl", "Local GPU");
+        cut.WaitForState(() => cut.Find("#active-task-card").TextContent.Contains("Idle"));
+        Assert.Null(cut.FindAll("#badge-active-task-running").FirstOrDefault());
+    }
 }

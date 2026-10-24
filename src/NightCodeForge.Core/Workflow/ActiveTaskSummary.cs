@@ -8,5 +8,6 @@ public record ActiveTaskSummary(
     string TaskTitle,
     string CurrentStageId,
     int Priority,
-    string QueueName,
-    DateTime StartedAt);
+    string QueueType,
+    DateTime StartedAt,
+    string HardwareTarget = "Local GPU");

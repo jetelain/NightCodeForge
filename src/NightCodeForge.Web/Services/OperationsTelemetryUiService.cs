@@ -39,7 +39,7 @@ public class OperationsTelemetryUiService : IDisposable
         // Hydrate initial snapshots
         HydrateFromService();
 
-        // Subscribe to live SignalR events
+        // Subscribe to live SignalR and telemetry events
         _hubConnection.OnLlmCallStarted += HandleLlmCallStarted;
         _hubConnection.OnLlmCallProgress += HandleLlmCallProgress;
         _hubConnection.OnLlmCallCompleted += HandleLlmCallCompleted;
@@ -47,6 +47,10 @@ public class OperationsTelemetryUiService : IDisposable
         _hubConnection.OnShellCommandStarted += HandleShellCommandStarted;
         _hubConnection.OnShellCommandOutput += HandleShellCommandOutput;
         _hubConnection.OnShellCommandCompleted += HandleShellCommandCompleted;
+
+        _hubConnection.OnActiveTaskReceived += HandleActiveTaskChanged;
+        _hubConnection.OnWorkerStatusReceived += HandleWorkerStatusReceived;
+        _telemetryService.OnActiveTaskChanged += HandleActiveTaskChanged;
     }
 
     public void HydrateFromService()
@@ -359,6 +363,55 @@ public class OperationsTelemetryUiService : IDisposable
         return exitCode.Value == 0 ? "badge-teal" : "badge-crimson";
     }
 
+    private void HandleActiveTaskChanged(ActiveTaskSummary? task)
+    {
+        lock (_lock)
+        {
+            ActiveTask = task;
+        }
+        NotifyStateChanged();
+    }
+
+    private void HandleWorkerStatusReceived(string status, int? activeTaskId, string? stageId, string hardwareTarget)
+    {
+        lock (_lock)
+        {
+            if (string.IsNullOrWhiteSpace(status) ||
+                status.Equals("idle", StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("waitingforhuman", StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("waiting_for_human", StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("waiting", StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("blocked", StringComparison.OrdinalIgnoreCase))
+            {
+                ActiveTask = null;
+            }
+            else if (status.Equals("running", StringComparison.OrdinalIgnoreCase) && activeTaskId.HasValue && (ActiveTask == null || ActiveTask.TaskId != activeTaskId.Value))
+            {
+                var telemetryActive = _telemetryService.GetActiveTask();
+                if (telemetryActive != null && telemetryActive.TaskId == activeTaskId.Value)
+                {
+                    ActiveTask = telemetryActive;
+                }
+                else
+                {
+                    ActiveTask = new ActiveTaskSummary(
+                        activeTaskId.Value,
+                        $"Task #{activeTaskId.Value}",
+                        stageId ?? "Executing",
+                        1,
+                        "default",
+                        DateTime.UtcNow,
+                        hardwareTarget);
+                }
+            }
+            else if (ActiveTask != null && stageId != null)
+            {
+                ActiveTask = ActiveTask with { CurrentStageId = stageId, HardwareTarget = hardwareTarget };
+            }
+        }
+        NotifyStateChanged();
+    }
+
     private void NotifyStateChanged()
     {
         OnChange?.Invoke();
@@ -373,5 +426,9 @@ public class OperationsTelemetryUiService : IDisposable
         _hubConnection.OnShellCommandStarted -= HandleShellCommandStarted;
         _hubConnection.OnShellCommandOutput -= HandleShellCommandOutput;
         _hubConnection.OnShellCommandCompleted -= HandleShellCommandCompleted;
+
+        _hubConnection.OnActiveTaskReceived -= HandleActiveTaskChanged;
+        _hubConnection.OnWorkerStatusReceived -= HandleWorkerStatusReceived;
+        _telemetryService.OnActiveTaskChanged -= HandleActiveTaskChanged;
     }
 }

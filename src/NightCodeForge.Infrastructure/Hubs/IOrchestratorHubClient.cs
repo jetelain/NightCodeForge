@@ -84,4 +84,9 @@ public interface IOrchestratorHubClient
     /// Global operations pause / resume status change or GPU VRAM reclaim update.
     /// </summary>
     Task ReceiveOperationsStatusChanged(bool isPaused, string? reclaimStatus, string? lastReclaimError);
+
+    /// <summary>
+    /// Live operations telemetry: an autonomous task is currently active or cleared.
+    /// </summary>
+    Task ReceiveActiveTask(NightCodeForge.Core.Workflow.ActiveTaskSummary? activeTask);
 }

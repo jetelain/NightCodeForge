@@ -88,7 +88,7 @@ public class SignalRActivityBridgeServiceTests
             Kind: AgentActivityKind.ToolStarted,
             Content: "{\"path\":\"file.cs\"}",
             Timestamp: DateTime.UtcNow,
-            Metadata: new Dictionary<string, object?> { ["ToolName"] = "edit_file" });
+            Metadata: new Dictionary<string, object?> { [AgentActivityMetadataKeys.ToolName] = "edit_file" });
 
         var completedEvt = new AgentActivityEvent(
             SessionId: "sess-1",
@@ -99,8 +99,8 @@ public class SignalRActivityBridgeServiceTests
             Timestamp: DateTime.UtcNow,
             Metadata: new Dictionary<string, object?>
             {
-                ["ToolName"] = "edit_file",
-                ["DurationMs"] = 142
+                [AgentActivityMetadataKeys.ToolName] = "edit_file",
+                [AgentActivityMetadataKeys.DurationMs] = 142
             });
 
         await bridge.DispatchActivityEventAsync(startedEvt);
@@ -134,7 +134,7 @@ public class SignalRActivityBridgeServiceTests
             Kind: AgentActivityKind.StageStarted,
             Content: "Stage starting",
             Timestamp: DateTime.UtcNow,
-            Metadata: new Dictionary<string, object?> { ["StageKind"] = "Deterministic" });
+            Metadata: new Dictionary<string, object?> { [AgentActivityMetadataKeys.StageKind] = "Deterministic" });
 
         var interruptedEvt = new AgentActivityEvent(
             SessionId: "sess-1",
@@ -175,8 +175,8 @@ public class SignalRActivityBridgeServiceTests
             Timestamp: DateTime.UtcNow,
             Metadata: new Dictionary<string, object?>
             {
-                ["ActionType"] = "ToolResultCompaction",
-                ["TokensSaved"] = 1200
+                [AgentActivityMetadataKeys.ActionType] = "ToolResultCompaction",
+                [AgentActivityMetadataKeys.TokensSaved] = 1200
             });
 
         await bridge.DispatchActivityEventAsync(evt);
@@ -278,10 +278,10 @@ public class SignalRActivityBridgeServiceTests
             Timestamp: DateTime.UtcNow,
             Metadata: new Dictionary<string, object?>
             {
-                ["StageKind"] = "Agentic",
-                ["TaskTitle"] = "Add In-Flight Telemetry",
-                ["Priority"] = 2,
-                ["QueueName"] = "llm-inference"
+                [AgentActivityMetadataKeys.StageKind] = "Agentic",
+                [AgentActivityMetadataKeys.TaskTitle] = "Add In-Flight Telemetry",
+                [AgentActivityMetadataKeys.Priority] = 2,
+                [AgentActivityMetadataKeys.QueueType] = "llm-inference"
             });
 
         await bridge.DispatchActivityEventAsync(startedEvt);
@@ -292,7 +292,7 @@ public class SignalRActivityBridgeServiceTests
         Assert.Equal("Add In-Flight Telemetry", active.TaskTitle);
         Assert.Equal("stage-implementation", active.CurrentStageId);
         Assert.Equal(2, active.Priority);
-        Assert.Equal("llm-inference", active.QueueName);
+        Assert.Equal("llm-inference", active.QueueType);
 
         var intermediateCompletedEvt = new AgentActivityEvent(
             SessionId: "sess-telemetry",
@@ -320,6 +320,46 @@ public class SignalRActivityBridgeServiceTests
         await bridge.DispatchActivityEventAsync(terminalCompletedEvt);
 
         Assert.Null(telemetry.GetActiveTask());
+    }
+
+    [Fact]
+    public async Task DispatchActivityEventAsync_PostReviewVerificationCompleted_ClearsActiveTaskAndTransitionsToIdle()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, telemetryService: telemetry);
+
+        var startedEvt = new AgentActivityEvent(
+            SessionId: "sess-pvr",
+            TaskId: 91,
+            StageId: StandardStageIds.PostReviewVerification,
+            Kind: AgentActivityKind.StageStarted,
+            Content: "Starting post review verification",
+            Timestamp: DateTime.UtcNow,
+            Metadata: new Dictionary<string, object?>
+            {
+                [AgentActivityMetadataKeys.StageKind] = "Deterministic",
+                [AgentActivityMetadataKeys.TaskTitle] = "Post-Review Task",
+                [AgentActivityMetadataKeys.Priority] = 1,
+                [AgentActivityMetadataKeys.QueueType] = "cpu-deterministic"
+            });
+
+        await bridge.DispatchActivityEventAsync(startedEvt);
+        Assert.NotNull(telemetry.GetActiveTask());
+        Assert.Equal(91, telemetry.GetActiveTask()!.TaskId);
+
+        var completedEvt = new AgentActivityEvent(
+            SessionId: "sess-pvr",
+            TaskId: 91,
+            StageId: StandardStageIds.PostReviewVerification,
+            Kind: AgentActivityKind.StageCompleted,
+            Content: "Post-review verification succeeded",
+            Timestamp: DateTime.UtcNow);
+
+        await bridge.DispatchActivityEventAsync(completedEvt);
+
+        Assert.Null(telemetry.GetActiveTask());
+        Assert.Contains(fakeHubContext.AllClient.WorkerStatuses, ws => ws.Status == "Idle" && ws.ActiveTaskId == null);
     }
 
     [Fact]
@@ -487,6 +527,13 @@ public class SignalRActivityBridgeServiceTests
         public Task ReceiveShellCommandOutput(string commandId, string outputChunk, bool isError) => Task.CompletedTask;
         public Task ReceiveShellCommandCompleted(NightCodeForge.Core.Workflow.ShellCommandRecord command) => Task.CompletedTask;
         public List<(bool IsPaused, string? ReclaimStatus, string? LastReclaimError)> OperationsStatusChanges { get; } = new();
+        public List<NightCodeForge.Core.Workflow.ActiveTaskSummary?> ActiveTasks { get; } = new();
+
+        public Task ReceiveActiveTask(NightCodeForge.Core.Workflow.ActiveTaskSummary? activeTask)
+        {
+            ActiveTasks.Add(activeTask);
+            return Task.CompletedTask;
+        }
 
         public Task ReceiveOperationsStatusChanged(bool isPaused, string? reclaimStatus, string? lastReclaimError)
         {
