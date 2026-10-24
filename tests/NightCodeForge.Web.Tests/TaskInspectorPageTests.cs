@@ -131,7 +131,7 @@ public class TaskInspectorPageTests : BunitContext
             HasExecutionRun = true
         });
 
-        _workerState.HandleWorkerStatus("Running", 202, "implementation", "Local GPU", "Active Running Task", "feature/task-202");
+        _workerState.HandleWorkerStatus(WorkerStatusConstants.Running, 202, "implementation", "Local GPU", "Active Running Task", "feature/task-202");
 
         var cut = Render<TaskInspector>(p => p.Add(x => x.TaskId, 201));
 

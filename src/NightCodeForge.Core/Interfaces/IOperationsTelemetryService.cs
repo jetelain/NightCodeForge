@@ -69,9 +69,10 @@ public interface IOperationsTelemetryService
     void ClearActiveTask(int? taskId = null);
 
     /// <summary>
-    /// Retrieves the currently active task summary, if any.
+    /// Retrieves the active task summary, optionally querying for a specific task ID.
+    /// If no task ID is specified, returns the most recently started active task.
     /// </summary>
-    ActiveTaskSummary? GetActiveTask();
+    ActiveTaskSummary? GetActiveTask(int? taskId = null);
 
     /// <summary>
     /// Event fired whenever the active task changes (starts, advances, or clears).

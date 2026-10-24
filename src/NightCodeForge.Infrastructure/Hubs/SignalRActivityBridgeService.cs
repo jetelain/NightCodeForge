@@ -158,11 +158,11 @@ public class SignalRActivityBridgeService : BackgroundService
                             break;
                         }
 
-                        var existing = _telemetryService.GetActiveTask();
+                        var existing = _telemetryService.GetActiveTask(evt.TaskId);
                         var title = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.TaskTitle, out var tObj) == true && tObj != null
                             ? tObj.ToString()!
-                            : (existing != null && existing.TaskId == evt.TaskId ? existing.TaskTitle : $"Task #{evt.TaskId}");
-                        var defaultPriority = existing != null && existing.TaskId == evt.TaskId ? existing.Priority : TaskPriority.Normal;
+                            : (existing != null ? existing.TaskTitle : $"Task #{evt.TaskId}");
+                        var defaultPriority = existing != null ? existing.Priority : TaskPriority.Normal;
                         object? pObj = null;
                         evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.Priority, out pObj);
                         int priority = TaskPriority.ParseOrDefault(pObj, defaultPriority);
@@ -170,8 +170,8 @@ public class SignalRActivityBridgeService : BackgroundService
                             ? qObj.ToString()!
                             : (evt.Metadata?.TryGetValue("QueueName", out var oldQObj) == true && oldQObj != null
                                 ? oldQObj.ToString()!
-                                : (existing != null && existing.TaskId == evt.TaskId ? existing.QueueType : (kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "cpu-deterministic" : "llm-inference")));
-                        var startedAt = existing != null && existing.TaskId == evt.TaskId ? existing.StartedAt : evt.Timestamp;
+                                : (existing != null ? existing.QueueType : (kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "cpu-deterministic" : "llm-inference")));
+                        var startedAt = existing != null ? existing.StartedAt : evt.Timestamp;
                         var hardwareTarget = kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU";
 
                         _telemetryService.RecordActiveTask(new ActiveTaskSummary(
@@ -184,27 +184,54 @@ public class SignalRActivityBridgeService : BackgroundService
                             hardwareTarget));
 
                         await _hubContext.Clients.All
-                            .ReceiveWorkerStatus("Running", evt.TaskId, evt.StageId, hardwareTarget);
+                            .ReceiveWorkerStatus(WorkerStatusConstants.Running, evt.TaskId, evt.StageId, hardwareTarget);
                     }
                     else if (string.Equals(evt.StageId, StandardStageIds.Merge, StringComparison.OrdinalIgnoreCase) ||
                              string.Equals(evt.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
                     {
                         _telemetryService.ClearActiveTask(evt.TaskId);
-                        await _hubContext.Clients.All
-                            .ReceiveWorkerStatus("Idle", null, null, "Local GPU");
+                        var remainingActive = _telemetryService.GetActiveTask();
+                        if (remainingActive != null)
+                        {
+                            await _hubContext.Clients.All
+                                .ReceiveWorkerStatus(WorkerStatusConstants.Running, remainingActive.TaskId, remainingActive.CurrentStageId, remainingActive.HardwareTarget);
+                        }
+                        else
+                        {
+                            await _hubContext.Clients.All
+                                .ReceiveWorkerStatus(WorkerStatusConstants.Idle, null, null, "Local GPU");
+                        }
                     }
                     break;
 
                 case AgentActivityKind.Interrupted:
                     _telemetryService.ClearActiveTask(evt.TaskId);
-                    await _hubContext.Clients.All
-                        .ReceiveWorkerStatus("WaitingForHuman", evt.TaskId, evt.StageId, "Local GPU");
+                    var remainingAfterInterrupted = _telemetryService.GetActiveTask();
+                    if (remainingAfterInterrupted != null)
+                    {
+                        await _hubContext.Clients.All
+                            .ReceiveWorkerStatus(WorkerStatusConstants.Running, remainingAfterInterrupted.TaskId, remainingAfterInterrupted.CurrentStageId, remainingAfterInterrupted.HardwareTarget);
+                    }
+                    else
+                    {
+                        await _hubContext.Clients.All
+                            .ReceiveWorkerStatus(WorkerStatusConstants.WaitingForHuman, evt.TaskId, evt.StageId, "Local GPU");
+                    }
                     break;
 
                 case AgentActivityKind.Error:
                     _telemetryService.ClearActiveTask(evt.TaskId);
-                    await _hubContext.Clients.All
-                        .ReceiveWorkerStatus("Idle", null, null, "Local GPU");
+                    var remainingAfterError = _telemetryService.GetActiveTask();
+                    if (remainingAfterError != null)
+                    {
+                        await _hubContext.Clients.All
+                            .ReceiveWorkerStatus(WorkerStatusConstants.Running, remainingAfterError.TaskId, remainingAfterError.CurrentStageId, remainingAfterError.HardwareTarget);
+                    }
+                    else
+                    {
+                        await _hubContext.Clients.All
+                            .ReceiveWorkerStatus(WorkerStatusConstants.Idle, null, null, "Local GPU");
+                    }
                     await _hubContext.Clients.Group(groupName)
                         .ReceiveExecutionLog(evt.TaskId, evt.StageId, "Error", evt.Content, evt.Timestamp);
                     break;

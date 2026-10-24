@@ -266,7 +266,7 @@ public class OperationsTelemetryService : IOperationsTelemetryService
     }
 
     private readonly object _taskLock = new();
-    private ActiveTaskSummary? _activeTask;
+    private readonly Dictionary<int, ActiveTaskSummary> _activeTasks = new();
 
     public event Action<ActiveTaskSummary?>? OnActiveTaskChanged;
 
@@ -275,7 +275,7 @@ public class OperationsTelemetryService : IOperationsTelemetryService
         ArgumentNullException.ThrowIfNull(summary);
         lock (_taskLock)
         {
-            _activeTask = summary;
+            _activeTasks[summary.TaskId] = summary;
         }
 
         OnActiveTaskChanged?.Invoke(summary);
@@ -296,24 +296,31 @@ public class OperationsTelemetryService : IOperationsTelemetryService
     public void ClearActiveTask(int? taskId = null)
     {
         bool cleared = false;
+        ActiveTaskSummary? remaining = null;
         lock (_taskLock)
         {
-            if (_activeTask != null && (taskId == null || _activeTask.TaskId == taskId.Value))
+            if (taskId.HasValue)
             {
-                _activeTask = null;
-                cleared = true;
+                cleared = _activeTasks.Remove(taskId.Value);
             }
+            else
+            {
+                cleared = _activeTasks.Count > 0;
+                _activeTasks.Clear();
+            }
+
+            remaining = _activeTasks.Values.MaxBy(t => t.StartedAt);
         }
 
         if (cleared)
         {
-            OnActiveTaskChanged?.Invoke(null);
+            OnActiveTaskChanged?.Invoke(remaining);
 
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await _hubContext.Clients.All.ReceiveActiveTask(null);
+                    await _hubContext.Clients.All.ReceiveActiveTask(remaining);
                 }
                 catch (Exception ex)
                 {
@@ -323,11 +330,16 @@ public class OperationsTelemetryService : IOperationsTelemetryService
         }
     }
 
-    public ActiveTaskSummary? GetActiveTask()
+    public ActiveTaskSummary? GetActiveTask(int? taskId = null)
     {
         lock (_taskLock)
         {
-            return _activeTask;
+            if (taskId.HasValue)
+            {
+                return _activeTasks.GetValueOrDefault(taskId.Value);
+            }
+
+            return _activeTasks.Values.MaxBy(t => t.StartedAt);
         }
     }
 

@@ -1,4 +1,5 @@
 using System.Globalization;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 
@@ -376,16 +377,21 @@ public class OperationsTelemetryUiService : IDisposable
     {
         lock (_lock)
         {
-            if (string.IsNullOrWhiteSpace(status) ||
-                status.Equals("idle", StringComparison.OrdinalIgnoreCase) ||
-                status.Equals("waitingforhuman", StringComparison.OrdinalIgnoreCase) ||
-                status.Equals("waiting_for_human", StringComparison.OrdinalIgnoreCase) ||
-                status.Equals("waiting", StringComparison.OrdinalIgnoreCase) ||
-                status.Equals("blocked", StringComparison.OrdinalIgnoreCase))
+            if (WorkerStatusConstants.IsIdle(status) ||
+                WorkerStatusConstants.IsWaitingForHuman(status) ||
+                WorkerStatusConstants.IsBlocked(status))
             {
-                ActiveTask = null;
+                var currentActive = _telemetryService.GetActiveTask();
+                if (activeTaskId.HasValue && currentActive != null && currentActive.TaskId != activeTaskId.Value)
+                {
+                    ActiveTask = currentActive;
+                }
+                else
+                {
+                    ActiveTask = null;
+                }
             }
-            else if (status.Equals("running", StringComparison.OrdinalIgnoreCase) && activeTaskId.HasValue && (ActiveTask == null || ActiveTask.TaskId != activeTaskId.Value))
+            else if (WorkerStatusConstants.IsRunning(status) && activeTaskId.HasValue && (ActiveTask == null || ActiveTask.TaskId != activeTaskId.Value))
             {
                 var telemetryActive = _telemetryService.GetActiveTask();
                 if (telemetryActive != null && telemetryActive.TaskId == activeTaskId.Value)

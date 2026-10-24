@@ -112,11 +112,11 @@
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Open ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Open)">
                 <span class="stat-chip-label">📂 Open</span>
-                <span class="stat-chip-val text-indigo">@_allTasks.Count(t => BacklogStatusClassifier.IsOpenBacklog(t))</span>
+                <span class="stat-chip-val text-indigo">@_allTasks.Count(t => BacklogStatusClassifier.IsOpenBacklog(t, WorkerState.Current.ActiveTaskId))</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Reviewed ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Reviewed)">
                 <span class="stat-chip-label">⚡ In-Flight</span>
-                <span class="stat-chip-val text-purple">@_allTasks.Count(t => BacklogStatusClassifier.IsInFlight(t))</span>
+                <span class="stat-chip-val text-purple">@_allTasks.Count(t => BacklogStatusClassifier.IsInFlight(t, WorkerState.Current.ActiveTaskId))</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Ready ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Ready)">
                 <span class="stat-chip-label">🔍 Ready</span>
@@ -526,11 +526,11 @@
             if (_statusFilter == TaskOverallStatus.Reviewed || _statusFilter == TaskOverallStatus.Implemented)
             {
                 // Group In-Flight stages
-                query = query.Where(t => BacklogStatusClassifier.IsInFlight(t));
+                query = query.Where(t => BacklogStatusClassifier.IsInFlight(t, WorkerState.Current.ActiveTaskId));
             }
             else if (_statusFilter == TaskOverallStatus.Open)
             {
-                query = query.Where(t => BacklogStatusClassifier.IsOpenBacklog(t));
+                query = query.Where(t => BacklogStatusClassifier.IsOpenBacklog(t, WorkerState.Current.ActiveTaskId));
             }
             else
             {

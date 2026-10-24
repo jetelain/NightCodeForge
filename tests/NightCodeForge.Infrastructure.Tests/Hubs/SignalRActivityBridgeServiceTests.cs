@@ -401,7 +401,7 @@ public class SignalRActivityBridgeServiceTests
         await bridge.DispatchActivityEventAsync(completedEvt);
 
         Assert.Null(telemetry.GetActiveTask());
-        Assert.Contains(fakeHubContext.AllClient.WorkerStatuses, ws => ws.Status == "Idle" && ws.ActiveTaskId == null);
+        Assert.Contains(fakeHubContext.AllClient.WorkerStatuses, ws => ws.Status == WorkerStatusConstants.Idle && ws.ActiveTaskId == null);
     }
 
     [Fact]
@@ -435,6 +435,35 @@ public class SignalRActivityBridgeServiceTests
         await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 9, "stage-a", AgentActivityKind.StageStarted, "go", DateTime.UtcNow));
         await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 9, "stage-a", AgentActivityKind.Interrupted, "ask", DateTime.UtcNow));
         Assert.Null(telemetry.GetActiveTask());
+    }
+
+    [Fact]
+    public async Task DispatchActivityEventAsync_MergeCompleted_WhenOtherTaskActiveInTelemetry_BroadcastsRunningForOtherTask()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, telemetryService: telemetry);
+
+        // Task 8 is actively running in telemetry
+        telemetry.RecordActiveTask(new ActiveTaskSummary(8, "Task 8", "impl", 3, "default", DateTime.UtcNow, "Local GPU"));
+
+        // Task 10 merge completes
+        var mergeEvt = new AgentActivityEvent(
+            "sess-1",
+            10,
+            StandardStageIds.Merge,
+            AgentActivityKind.StageCompleted,
+            "Task 10 merged",
+            DateTime.UtcNow);
+
+        await bridge.DispatchActivityEventAsync(mergeEvt);
+
+        Assert.NotNull(telemetry.GetActiveTask());
+        Assert.Equal(8, telemetry.GetActiveTask()!.TaskId);
+
+        var lastStatus = fakeHubContext.AllClient.WorkerStatuses.LastOrDefault();
+        Assert.Equal(WorkerStatusConstants.Running, lastStatus.Status);
+        Assert.Equal(8, lastStatus.ActiveTaskId);
     }
 
     [Fact]

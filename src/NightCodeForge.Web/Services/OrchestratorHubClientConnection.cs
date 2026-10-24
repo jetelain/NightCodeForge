@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.SignalR.Client;
+using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Web.Services;
 
@@ -247,13 +248,13 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
     {
         if (activeTask != null)
         {
-            _workerStateService.HandleWorkerStatus("running", activeTask.TaskId, activeTask.CurrentStageId, activeTask.HardwareTarget, activeTask.TaskTitle);
+            _workerStateService.HandleWorkerStatus(WorkerStatusConstants.Running, activeTask.TaskId, activeTask.CurrentStageId, activeTask.HardwareTarget, activeTask.TaskTitle);
         }
         else
         {
             if (_workerStateService.Current.Status == WorkerExecutionStatus.Running)
             {
-                _workerStateService.HandleWorkerStatus("idle", null, null, "Local GPU");
+                _workerStateService.HandleWorkerStatus(WorkerStatusConstants.Idle, null, null, "Local GPU");
             }
         }
         OnActiveTaskReceived?.Invoke(activeTask);

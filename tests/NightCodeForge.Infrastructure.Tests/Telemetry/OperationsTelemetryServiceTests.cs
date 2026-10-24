@@ -230,4 +230,31 @@ public class OperationsTelemetryServiceTests
         Assert.True(SpinWait.SpinUntil(() => _mockHubClient.Invocations.Count(i => i.Method.Name == nameof(IOrchestratorHubClient.ReceiveActiveTask)) >= 2, 2000));
         _mockHubClient.Verify(c => c.ReceiveActiveTask(null), Times.Once);
     }
+
+    [Fact]
+    public void RecordActiveTask_MultipleTasks_DeterministicSelectionByStartedAt_AndQueryByTaskId()
+    {
+        var t1 = DateTime.UtcNow.AddMinutes(-10);
+        var t2 = DateTime.UtcNow.AddMinutes(-5);
+
+        var task1 = new ActiveTaskSummary(1, "Task 1", "stage-1", 1, "default", t1);
+        var task2 = new ActiveTaskSummary(2, "Task 2", "stage-2", 2, "default", t2);
+
+        _service.RecordActiveTask(task1);
+        _service.RecordActiveTask(task2);
+
+        // GetActiveTask() without taskId returns the one with latest StartedAt
+        var active = _service.GetActiveTask();
+        Assert.NotNull(active);
+        Assert.Equal(2, active.TaskId);
+
+        // Specific taskId queries
+        Assert.Equal("Task 1", _service.GetActiveTask(1)?.TaskTitle);
+        Assert.Equal("Task 2", _service.GetActiveTask(2)?.TaskTitle);
+        Assert.Null(_service.GetActiveTask(999));
+
+        // When task 2 is cleared, task 1 remains and becomes active
+        _service.ClearActiveTask(2);
+        Assert.Equal(1, _service.GetActiveTask()?.TaskId);
+    }
 }

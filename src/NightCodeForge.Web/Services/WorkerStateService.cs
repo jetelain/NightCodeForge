@@ -1,3 +1,4 @@
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Web.Services;
@@ -177,18 +178,25 @@ public class WorkerStateService : IWorkerStateService, IDisposable
 
     public void HandleWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget, string? taskTitle = null, string? branchName = null)
     {
-        var execStatus = status?.ToLowerInvariant() switch
-        {
-            "running" => WorkerExecutionStatus.Running,
-            "waitingforhuman" or "waiting_for_human" or "waiting" => WorkerExecutionStatus.WaitingForHuman,
-            "blocked" => WorkerExecutionStatus.Blocked,
-            _ => WorkerExecutionStatus.Idle
-        };
+        var execStatus = WorkerStatusConstants.IsRunning(status)
+            ? WorkerExecutionStatus.Running
+            : WorkerStatusConstants.IsWaitingForHuman(status)
+                ? WorkerExecutionStatus.WaitingForHuman
+                : WorkerStatusConstants.IsBlocked(status)
+                    ? WorkerExecutionStatus.Blocked
+                    : WorkerExecutionStatus.Idle;
 
         lock (_lock)
         {
             if (execStatus == WorkerExecutionStatus.Idle)
             {
+                // If this idle event is targeted at a specific task that is NOT the currently running task,
+                // ignore it so that a completion of another task (e.g. merge of task 10) does not clobber task 8.
+                if (activeTaskId.HasValue && _current.Status == WorkerExecutionStatus.Running && _current.ActiveTaskId.HasValue && activeTaskId.Value != _current.ActiveTaskId.Value)
+                {
+                    return;
+                }
+
                 _lastIdleTaskId = activeTaskId ?? _current.ActiveTaskId ?? _telemetryService.GetActiveTask()?.TaskId;
             }
             else if (execStatus == WorkerExecutionStatus.Running)
@@ -196,16 +204,10 @@ public class WorkerStateService : IWorkerStateService, IDisposable
                 _lastIdleTaskId = null;
             }
 
-            var startedAt = execStatus == WorkerExecutionStatus.Running
-                ? (_current.Status == WorkerExecutionStatus.Running && _current.StartedAt.HasValue ? _current.StartedAt : DateTime.UtcNow)
-                : (DateTime?)null;
-
             var taskChanged = activeTaskId.HasValue && activeTaskId != _current.ActiveTaskId;
-            if (taskChanged)
-            {
-                // A different task started: never carry over the previous task's title/branch/start time.
-                startedAt = execStatus == WorkerExecutionStatus.Running ? DateTime.UtcNow : null;
-            }
+            var startedAt = execStatus == WorkerExecutionStatus.Running
+                ? (taskChanged ? DateTime.UtcNow : (_current.StartedAt ?? DateTime.UtcNow))
+                : (DateTime?)null;
             var keepPrevious = execStatus != WorkerExecutionStatus.Idle && !taskChanged;
 
             _current = _current with

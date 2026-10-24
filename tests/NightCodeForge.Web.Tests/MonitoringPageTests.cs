@@ -1,6 +1,7 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
@@ -657,5 +658,38 @@ public class MonitoringPageTests : BunitContext
         _hubConnection.TriggerWorkerStatus("WaitingForHuman", 7, "impl", "Local GPU");
         cut.WaitForState(() => cut.Find("#active-task-card").TextContent.Contains("Idle"));
         Assert.Null(cut.FindAll("#badge-active-task-running").FirstOrDefault());
+    }
+
+    [Fact]
+    public void OperationsTelemetryUiService_WhenGlobalIdleReceived_ClearsActiveTaskEvenIfTelemetryActive()
+    {
+        _mockTelemetryService.Setup(t => t.GetActiveTask(null)).Returns(new ActiveTaskSummary(
+            42, "Telemetry Active", "impl", 1, "default", DateTime.UtcNow));
+
+        _hubConnection.TriggerActiveTask(new ActiveTaskSummary(
+            42, "Telemetry Active", "impl", 1, "default", DateTime.UtcNow));
+        Assert.NotNull(_uiService.ActiveTask);
+
+        // Global idle received (activeTaskId is null)
+        _hubConnection.TriggerWorkerStatus(WorkerStatusConstants.Idle, null, null, "Local GPU");
+
+        Assert.Null(_uiService.ActiveTask);
+    }
+
+    [Fact]
+    public void OperationsTelemetryUiService_WhenTargetedIdleReceivedForOtherTask_PreservesActiveTask()
+    {
+        var task8 = new ActiveTaskSummary(8, "Task 8 Running", "impl", 1, "default", DateTime.UtcNow);
+        _mockTelemetryService.Setup(t => t.GetActiveTask(null)).Returns(task8);
+
+        _hubConnection.TriggerActiveTask(task8);
+        Assert.NotNull(_uiService.ActiveTask);
+        Assert.Equal(8, _uiService.ActiveTask.TaskId);
+
+        // Targeted idle received for task 10 (e.g. merge of task 10 completed)
+        _hubConnection.TriggerWorkerStatus(WorkerStatusConstants.Idle, 10, null, "Local GPU");
+
+        Assert.NotNull(_uiService.ActiveTask);
+        Assert.Equal(8, _uiService.ActiveTask.TaskId);
     }
 }
