@@ -141,6 +141,11 @@ Dependencies define the execution DAG (Directed Acyclic Graph):
    - Do NOT emit standalone tasks for trivial items (e.g. "Add config key", "Create empty interface", "Fix typo"). Group related sub-tasks into a cohesive feature task.
 3. **Never Create Monolithic Epics:**
    - Break large features into milestone-sized PRs where each milestone compiles, has passing tests, and leaves the codebase in a healthy state.
+4. **Zero-Surprise Scheduling (Mandatory Upfront Functional & Business Resolution):**
+   - Tasks must **never** be created with unresolved functional "Open Questions", vague placeholders, or hand-waving "TBD" notes.
+   - Conduct an interactive interview with the maintainer to resolve all functional goals, business rules, edge cases, and acceptance criteria **before** authoring the task file.
+   - **No requirement for exhaustive technical impact mapping:** You are **not** mandated to identify all technical impacts (e.g. exhaustively listing files or designing low-level plumbing). Technical file mapping and symbol scoping belong to downstream Stage 1 (Task Review). Mentioning files is optional if obvious, but not required.
+   - When a task is synchronized and scheduled, all obvious functional and business questions must already be solved. Downstream autonomous execution stages (such as Stage 1 Task Review) act as technical verification and drift guards and will unlikely need to pause for human clarification.
 
 ---
 
@@ -149,22 +154,25 @@ Dependencies define the execution DAG (Directed Acyclic Graph):
 Use this mode when a developer wants to brainstorm, design, or decompose a brand new capability or major refactoring:
 
 ### Step 1: Codebase Exploration
-- Examine repository layout, project manifests (`.csproj`, `package.json`, etc.), and `.nightcodeforge/config.json`.
-- Inspect existing classes, domain models, services, and test patterns to identify reusable code and avoid duplication.
+- Examine high-level repository layout, project manifests (`.csproj`, `package.json`, etc.), and `.nightcodeforge/config.json`.
+- Inspect existing classes, domain models, services, and test patterns to understand capabilities and avoid duplication.
 - Check existing `docs/tasks/` to ensure the proposed work does not overlap with existing tasks.
 
-### Step 2: Interactive Interview
-Engage the developer with focused, clarifying questions:
-- *"What is the main user problem, capability, or architectural goal being targeted?"*
-- *"Are there existing classes, abstractions, or services in the repository that should be extended rather than rebuilt?"*
-- *"What test harness exists (unit tests, CLI invocation, integration tests) and what is the testing strategy?"*
-- *"Are there specific non-functional constraints (e.g., performance budgets, thread safety, backward compatibility)?"*
+### Step 2: Mandatory Interactive Interview & Functional Resolution
+Engage the developer with focused, clarifying questions to solve all functional and business unknowns before drafting:
+- *"What is the main user problem, capability, or business goal being targeted?"*
+- *"What are the expected functional behaviors, inputs/outputs, and user workflows?"*
+- *"What business rules, edge-case scenarios, or error handling behaviors must be covered?"*
+- *"What is the functional scope (what is included in this task vs deferred to follow-ups)?"*
+- *"What are the verifiable functional acceptance criteria?"*
+- *Note:* Do not get bogged down enumerating every single file path or low-level implementation detail; focus squarely on resolving all functional and business questions.
 
-### Step 3: Architectural Synthesis & Task Decomposition
-Synthesize the requirements into sequential, PR-sized tasks following the contract in §3.
+### Step 3: Functional Synthesis & Task Decomposition
+Synthesize the requirements into sequential, PR-sized tasks following the contract in §3. Ensure each task has concrete functional checklists and verifiable acceptance criteria. **Do not create tasks with unresolved functional open questions.** (Listing `Affected Files` is optional in ideation; downstream Stage 1 Task Review performs deep symbol analysis and file identification).
 
-### Step 4: Write Task Markdown Files
-Create the markdown files directly in `docs/tasks/` with YAML frontmatter. NightCodeForge will immediately synchronize them into the database and assign task IDs.
+### Step 4: Write Task Markdown Files (or Refine Existing Tasks)
+- **New Tasks:** Create the markdown files directly in `docs/tasks/` with YAML frontmatter. NightCodeForge will immediately synchronize them into the database and assign task IDs.
+- **Refining Existing Tasks:** When refining an existing backlog task (e.g. from NightCodeForge's "Refine in Ideation" entry point), inspect current requirements, resolve missing functional details with the maintainer, and update the existing task specification in-place.
 
 ---
 
