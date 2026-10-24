@@ -117,6 +117,9 @@ public class TaskContainerLifecycleTests
         gitRunner.Setup(g => g.ExecuteAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitCommandResult(0, string.Empty, string.Empty, TimeSpan.Zero));
 
+        var mockOps = new Mock<IOperationsControlService>();
+        mockOps.Setup(m => m.IsPaused).Returns(false);
+
         var service = new StartupRecoveryService(
             _workspaceRepo,
             _taskRepo,
@@ -127,6 +130,7 @@ public class TaskContainerLifecycleTests
             new Mock<IWorkspacePathResolver>().Object,
             new Mock<IProcessRunner>().Object,
             provider.Object,
+            mockOps.Object,
             NullLogger<StartupRecoveryService>.Instance);
 
         await service.ReconcileWorkspacesAsync();
@@ -162,6 +166,9 @@ public class TaskContainerLifecycleTests
         gitRunner.Setup(g => g.ExecuteAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitCommandResult(0, string.Empty, string.Empty, TimeSpan.Zero));
 
+        var mockOps = new Mock<IOperationsControlService>();
+        mockOps.Setup(m => m.IsPaused).Returns(false);
+
         var service = new StartupRecoveryService(
             _workspaceRepo,
             _taskRepo,
@@ -172,6 +179,7 @@ public class TaskContainerLifecycleTests
             new Mock<IWorkspacePathResolver>().Object,
             new Mock<IProcessRunner>().Object,
             provider.Object,
+            mockOps.Object,
             NullLogger<StartupRecoveryService>.Instance);
 
         // Does not throw even though workspace 1 fails

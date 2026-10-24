@@ -16,6 +16,7 @@
 @inject NavigationManager Navigation
 @inject ILogger<Backlog> Logger
 @inject WorkerStateService WorkerState
+@inject NightCodeForge.Core.Interfaces.IOperationsControlService OperationsControl
 @implements IDisposable
 
 <PageTitle>Backlog &amp; DAG - NightCodeForge</PageTitle>
@@ -27,6 +28,16 @@
     }
     else
     {
+        @if (OperationsControl.IsPaused)
+        {
+            <div class="alert alert-warning d-flex align-items-center mb-3" role="alert" id="backlog-paused-banner" style="background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); color: #fbbf24; border-radius: var(--radius-md); padding: 0.75rem 1rem;">
+                <span class="me-2" style="font-size: 1.25rem;">⏸️</span>
+                <div>
+                    <strong>Global Operations Paused (Gamer / Dedicated Workload Mode):</strong> Task execution and queue advancement are currently suspended. Host GPU VRAM is reclaimed. Click "Resume Operations" in the top bar to resume execution.
+                </div>
+            </div>
+        }
+
         <!-- Page Header & Action Controls -->
         <div class="backlog-header">
             <div class="backlog-header-left">
@@ -298,6 +309,7 @@
         HubConnection.OnStageTransitionReceived += HandleStageTransition;
         HubConnection.OnDeterministicGateResultReceived += HandleGateResult;
         HubConnection.OnWorkerStatusReceived += HandleWorkerStatus;
+        OperationsControl.OnOperationsStateChanged += HandleOperationsStateChanged;
 
         try
         {
@@ -620,6 +632,12 @@
         await ReloadTasksAsync();
     }
 
+    private void HandleOperationsStateChanged(bool isPaused)
+    {
+        if (_disposed) return;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
     public void Dispose()
     {
         _disposed = true;
@@ -628,5 +646,6 @@
         HubConnection.OnStageTransitionReceived -= HandleStageTransition;
         HubConnection.OnDeterministicGateResultReceived -= HandleGateResult;
         HubConnection.OnWorkerStatusReceived -= HandleWorkerStatus;
+        OperationsControl.OnOperationsStateChanged -= HandleOperationsStateChanged;
     }
 }

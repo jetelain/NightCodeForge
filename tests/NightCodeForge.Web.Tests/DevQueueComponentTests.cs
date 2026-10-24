@@ -22,6 +22,7 @@ public class DevQueueComponentTests : BunitContext
 
         Services.AddSingleton<IDevQueueService>(_queueService);
         Services.AddSingleton(_toastService);
+        Services.AddSingleton(TestServices.CreateOperationsControlService());
         Services.AddSingleton<IBackgroundTaskRunner>(new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance));
         Services.AddSingleton<Microsoft.Extensions.Logging.ILogger<DevQueue>>(Microsoft.Extensions.Logging.Abstractions.NullLogger<DevQueue>.Instance);
     }

@@ -79,4 +79,9 @@ public interface IOrchestratorHubClient
     /// Live operations telemetry: a shell command execution has completed or failed.
     /// </summary>
     Task ReceiveShellCommandCompleted(NightCodeForge.Core.Workflow.ShellCommandRecord command);
+
+    /// <summary>
+    /// Global operations pause / resume status change or GPU VRAM reclaim update.
+    /// </summary>
+    Task ReceiveOperationsStatusChanged(bool isPaused, string? reclaimStatus, string? lastReclaimError);
 }

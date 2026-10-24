@@ -19,6 +19,7 @@ public class MonitoringPageTests : BunitContext
     private readonly OrchestratorHubClientConnection _hubConnection;
     private readonly Mock<IOperationsTelemetryService> _mockTelemetryService;
     private readonly Mock<IOllamaRouterGatewayService> _mockGatewayService;
+    private readonly Mock<IOperationsControlService> _mockOperationsControlService = new();
     private readonly OperationsTelemetryUiService _uiService;
 
     public MonitoringPageTests()
@@ -62,11 +63,16 @@ public class MonitoringPageTests : BunitContext
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<IWorkflowRepository>(new InMemoryWorkflowRepository(new[] { TestWorkflowFixtures.CreateStandardWorkflow() }));
+        _mockOperationsControlService.Setup(m => m.IsPaused).Returns(false);
+        _mockOperationsControlService.Setup(m => m.ReclaimStatus).Returns(NightCodeForge.Core.Domain.OperationsReclaimStatus.Idle);
+        _mockOperationsControlService.Setup(m => m.GetDeferredTaskCountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0);
+
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton<IOperationsTelemetryService>(_mockTelemetryService.Object);
         Services.AddSingleton<IOllamaRouterGatewayService>(_mockGatewayService.Object);
         Services.AddSingleton(_uiService);
         Services.AddSingleton(TestServices.CreateToastService());
+        Services.AddSingleton<IOperationsControlService>(_mockOperationsControlService.Object);
     }
 
     [Fact]
@@ -571,5 +577,29 @@ public class MonitoringPageTests : BunitContext
         Assert.Contains("Refactor Telemetry Pipeline", cut.Find("#active-task-card").TextContent);
         Assert.Contains("implementation", cut.Find("#active-task-card").TextContent);
         Assert.NotNull(cut.Find("#badge-active-task-running"));
+    }
+
+    [Fact]
+    public async Task ActiveOperationsHero_WhenRunningWithDeferredTasks_RendersRetryCard()
+    {
+        _mockOperationsControlService.Setup(m => m.IsPaused).Returns(false);
+        _mockOperationsControlService.Setup(m => m.ReclaimStatus).Returns(NightCodeForge.Core.Domain.OperationsReclaimStatus.Idle);
+        _mockOperationsControlService.Setup(m => m.GetDeferredTaskCountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(2);
+        _mockOperationsControlService.Setup(m => m.ResumeOperationsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var cut = Render<ActiveOperationsHero>();
+
+        cut.WaitForState(() => cut.Find("#deferred-tasks-retry-card") != null);
+        var retryCard = cut.Find("#deferred-tasks-retry-card");
+        Assert.NotNull(retryCard);
+        Assert.Contains("2 Deferred Task(s) Pending Dispatch", retryCard.TextContent);
+        Assert.Contains("Retry Needed", retryCard.TextContent);
+
+        var retryBtn = cut.Find("#btn-hero-retry-deferred");
+        Assert.NotNull(retryBtn);
+        Assert.Contains("Retry Dispatch (2)", retryBtn.TextContent);
+
+        await retryBtn.ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        _mockOperationsControlService.Verify(m => m.ResumeOperationsAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 }

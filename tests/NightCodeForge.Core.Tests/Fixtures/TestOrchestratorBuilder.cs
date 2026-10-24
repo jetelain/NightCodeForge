@@ -100,7 +100,17 @@ public class TestOrchestratorBuilder
     public IAgentActivityStreamer Streamer { get; set; } = new InMemoryAgentActivityStreamer();
     public ITaskCancellationManager CancellationManager { get; set; } = new TaskCancellationManager(NullLogger<TaskCancellationManager>.Instance);
     public IConflictResolutionVerifier ConflictResolutionVerifier { get; set; } = new Mock<IConflictResolutionVerifier>().Object;
+    public IOperationsControlService OperationsControlService { get; set; } = CreateDefaultOperationsControlService();
     public ILogger<TaskOrchestrator> Logger { get; set; } = NullLogger<TaskOrchestrator>.Instance;
+
+    private static IOperationsControlService CreateDefaultOperationsControlService()
+    {
+        var mock = new Mock<IOperationsControlService>();
+        mock.Setup(m => m.IsPaused).Returns(false);
+        mock.Setup(m => m.ReclaimStatus).Returns(OperationsReclaimStatus.Idle);
+        mock.Setup(m => m.GetDeferredTaskCountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0);
+        return mock.Object;
+    }
 
     public TaskOrchestrator Build() => new(
         TaskRepository,
@@ -119,5 +129,6 @@ public class TestOrchestratorBuilder
         Streamer,
         CancellationManager,
         ConflictResolutionVerifier,
+        OperationsControlService,
         Logger);
 }

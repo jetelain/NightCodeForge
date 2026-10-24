@@ -5607,6 +5607,22 @@ div.spinner-pulse {
     transform: translateY(-1px);
 }
 
+@keyframes amberPulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
+    }
+    70% {
+        box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+    }
+}
+
+.btn-pulse-amber {
+    animation: amberPulse 2s infinite ease-in-out;
+}
+
 .btn-sm, .forge-btn-sm {
     padding: 0.35rem 0.75rem;
     font-size: 0.82rem;

@@ -51,6 +51,9 @@ public class ResilientCrashRecoveryTests
 
     private StartupRecoveryService CreateRecoveryService(IWorkflowPipelineProvider pipelineProvider)
     {
+        var mockOps = new Mock<IOperationsControlService>();
+        mockOps.Setup(m => m.IsPaused).Returns(false);
+
         return new StartupRecoveryService(
             _workspaceRepo,
             _taskRepo,
@@ -61,6 +64,7 @@ public class ResilientCrashRecoveryTests
             new Mock<IWorkspacePathResolver>().Object,
             new Mock<IProcessRunner>().Object,
             new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
+            mockOps.Object,
             NullLogger<StartupRecoveryService>.Instance);
     }
 

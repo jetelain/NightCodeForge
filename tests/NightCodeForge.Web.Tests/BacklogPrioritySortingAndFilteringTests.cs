@@ -48,6 +48,7 @@ public class BacklogPrioritySortingAndFilteringTests : BunitContext
         Services.AddSingleton<IDagLayoutEngine, DagLayoutEngine>();
         var telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
         Services.AddSingleton(new WorkerStateService(telemetryMock.Object));
+        Services.AddSingleton(TestServices.CreateOperationsControlService());
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),

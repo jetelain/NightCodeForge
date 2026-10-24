@@ -85,11 +85,13 @@ public class OllamaApiClientTests
         });
 
         var mockTelemetry = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object;
+        var mockOps = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsControlService>().Object;
         var retryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
         var factory = new DefaultOllamaChatClientFactory(
             options,
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             mockTelemetry,
+            mockOps,
             TimeProvider.System,
             retryOptions);
 
@@ -119,11 +121,13 @@ public class OllamaApiClientTests
         });
 
         var mockTelemetry = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object;
+        var mockOps = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsControlService>().Object;
         var retryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
         var factory = new DefaultOllamaChatClientFactory(
             options,
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             mockTelemetry,
+            mockOps,
             TimeProvider.System,
             retryOptions);
 

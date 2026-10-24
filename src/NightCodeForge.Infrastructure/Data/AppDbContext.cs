@@ -137,6 +137,7 @@ public class AppDbContext : DbContext
             b.Property(i => i.MaxExecutedStageOrder).HasDefaultValue(0);
             b.Property(i => i.MergeMode).HasConversion<int>();
             b.Property(i => i.IsWaitingForHuman).HasDefaultValue(false);
+            b.Property(i => i.IsDeferredByPause).HasDefaultValue(false);
             b.Property(i => i.InterruptedAgentProfileId).HasMaxLength(128);
             b.Property(i => i.InterruptedStageId).HasMaxLength(128);
             b.Property(i => i.CurrentStageId).HasMaxLength(128);
@@ -409,6 +410,11 @@ public class AppDbContext : DbContext
     public const string AddStageQueueTierMigrationId = "20261024032000_AddStageQueueTier";
 
     /// <summary>
+    /// Migration identifier for task deferred by pause flag.
+    /// </summary>
+    public const string AddIsDeferredByPauseToForgeTaskMigrationId = "20261024100331_AddIsDeferredByPauseToForgeTask";
+
+    /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
     /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
@@ -513,6 +519,17 @@ VALUES ('" + AddAgentProfileContextWindowTokensMigrationId + @"', '10.0.12');";
                 {
                     cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + AddStageQueueTierMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Tasks') WHERE name = 'IsDeferredByPause';";
+                var hasIsDeferredByPauseColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasIsDeferredByPauseColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddIsDeferredByPauseToForgeTaskMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }

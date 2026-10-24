@@ -322,6 +322,7 @@ public class DevQueueService : IDevQueueService
                         ?? pipeline.InitialStage
                         ?? throw new InvalidOperationException($"Task #{task.Id} has no initial or active stage.");
 
+                    task.IsDeferredByPause = false;
                     var newJobId = _taskJobQueue.EnqueueStage(task.Id, stage.QueueTier, task.Priority);
                     task.LastHangfireJobId = newJobId;
                     await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);
@@ -408,6 +409,7 @@ public class DevQueueService : IDevQueueService
             _taskJobQueue.Delete(task.LastHangfireJobId);
         }
 
+        task.IsDeferredByPause = false;
         var jobId = _taskJobQueue.EnqueueStage(taskId, stage.QueueTier, task.Priority);
         task.LastHangfireJobId = jobId;
         await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);

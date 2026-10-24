@@ -30,9 +30,10 @@ public static class ServiceCollectionExtensions
     {
         // 1. Database & SignalR Core
         services.AddSignalR();
-        services.AddDbContext<AppDbContext>(options =>
+        services.AddDbContextFactory<AppDbContext>(options =>
             options.UseSqlite(dbConnectionString, sqliteOptions =>
                 sqliteOptions.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)));
+        services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext());
 
         // 2. Repositories & Stores
         services.TryAddScoped<ITaskRepository, EfCoreTaskRepository>();
@@ -41,6 +42,9 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<ITaskDependencyStore, EfCoreTaskDependencyStore>();
         services.TryAddSingleton<IGlobalOptimizationSettingsService, GlobalOptimizationSettingsService>();
         services.TryAddSingleton<IWebSearchSettingsService, WebSearchSettingsService>();
+        services.TryAddSingleton<IOperationsStateStore, OperationsStateStore>();
+        services.TryAddSingleton<IWorkerStateService, Telemetry.TelemetryWorkerStateService>();
+        services.TryAddSingleton<IOperationsControlService, OperationsControlService>();
 
         // 3. Concurrency & DAG Engine
         services.TryAddSingleton<IWorkspaceLockProvider, WorkspaceLockProvider>();

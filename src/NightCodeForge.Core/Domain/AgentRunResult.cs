@@ -8,7 +8,8 @@ public enum AgentRunStatus
     Completed = 0,
     WaitingForHuman = 1,
     Failed = 2,
-    Cancelled = 3
+    Cancelled = 3,
+    Interrupted = 4
 }
 
 /// <summary>
@@ -76,4 +77,11 @@ public record AgentRunResult(
         string? summary = null,
         IReadOnlyDictionary<string, string>? artifacts = null) =>
         new(AgentRunStatus.Cancelled, metrics, null, updatedState, null, summary, error, artifacts);
+
+    public static AgentRunResult Interrupted(
+        string summary,
+        AgentRunMetrics metrics,
+        string? updatedState = null,
+        IReadOnlyDictionary<string, string>? artifacts = null) =>
+        new(AgentRunStatus.Interrupted, metrics, null, updatedState, null, summary, null, artifacts);
 }

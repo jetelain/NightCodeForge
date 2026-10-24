@@ -22,9 +22,11 @@ public class TaskCancellationManager : ITaskCancellationManager
         public CancellationTokenSource Source { get; }
 
         public volatile bool ExplicitCancelRequested;
+        public volatile bool ExplicitPauseRequested;
     }
 
     private readonly ConcurrentDictionary<int, Registration> _registrations = new();
+    private readonly ConcurrentDictionary<int, bool> _pausedTasks = new();
     private readonly ILogger<TaskCancellationManager> _logger;
 
     public TaskCancellationManager(ILogger<TaskCancellationManager> logger)
@@ -38,8 +40,22 @@ public class TaskCancellationManager : ITaskCancellationManager
             ? CancellationTokenSource.CreateLinkedTokenSource(parentToken)
             : new CancellationTokenSource();
 
+        var registration = new Registration(cts);
+        if (_pausedTasks.ContainsKey(taskId))
+        {
+            registration.ExplicitPauseRequested = true;
+            try
+            {
+                cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Justification: CTS was already disposed if parent token was cancelled and disposed.
+            }
+        }
+
         // The previous owner (if any) is still responsible for its own source and removes it conditionally on Unregister.
-        _registrations[taskId] = new Registration(cts);
+        _registrations[taskId] = registration;
 
         _logger.LogDebug("Registered cancellation source for Task #{TaskId}", taskId);
         return cts;
@@ -86,7 +102,66 @@ public class TaskCancellationManager : ITaskCancellationManager
             && ReferenceEquals(registration.Source, source)
             && _registrations.TryRemove(new KeyValuePair<int, Registration>(taskId, registration)))
         {
+            _pausedTasks.TryRemove(taskId, out _);
             _logger.LogDebug("Unregistered cancellation source for Task #{TaskId}", taskId);
         }
+    }
+
+    public void RequestPause(int taskId)
+    {
+        _pausedTasks[taskId] = true;
+
+        if (_registrations.TryGetValue(taskId, out var registration))
+        {
+            try
+            {
+                registration.ExplicitPauseRequested = true;
+                registration.Source.Cancel();
+                _logger.LogInformation("Signaled pause for active Task #{TaskId}", taskId);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Justification: Target CTS was already disposed upon task completion.
+                _logger.LogDebug("Task #{TaskId} cancellation source was already disposed during pause request", taskId);
+            }
+        }
+        else
+        {
+            _logger.LogDebug("Recorded pause request for Task #{TaskId} (no active registration found)", taskId);
+        }
+    }
+
+    public bool IsPauseRequested(int taskId)
+    {
+        if (_registrations.TryGetValue(taskId, out var registration) && registration.ExplicitPauseRequested)
+        {
+            return true;
+        }
+
+        return _pausedTasks.ContainsKey(taskId);
+    }
+
+    public void ClearPause(int taskId)
+    {
+        _pausedTasks.TryRemove(taskId, out _);
+
+        if (_registrations.TryGetValue(taskId, out var registration))
+        {
+            registration.ExplicitPauseRequested = false;
+        }
+
+        _logger.LogDebug("Cleared pause state for Task #{TaskId}", taskId);
+    }
+
+    public void ClearAllPauses()
+    {
+        _pausedTasks.Clear();
+
+        foreach (var registration in _registrations.Values)
+        {
+            registration.ExplicitPauseRequested = false;
+        }
+
+        _logger.LogDebug("Cleared pause state across all tasks.");
     }
 }

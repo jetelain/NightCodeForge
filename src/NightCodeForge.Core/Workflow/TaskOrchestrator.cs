@@ -33,7 +33,10 @@ public class TaskOrchestrator : ITaskOrchestrator
     private readonly Streaming.IAgentActivityStreamer _streamer;
     private readonly ITaskCancellationManager _cancellationManager;
     private readonly IConflictResolutionVerifier _conflictResolutionVerifier;
+    private readonly IOperationsControlService _operationsControlService;
     private readonly ILogger<TaskOrchestrator> _logger;
+
+    private static readonly TimeSpan PauseAbortTimeout = TimeSpan.FromSeconds(5);
 
     public TaskOrchestrator(
         ITaskRepository taskRepository,
@@ -52,6 +55,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         Streaming.IAgentActivityStreamer streamer,
         ITaskCancellationManager cancellationManager,
         IConflictResolutionVerifier conflictResolutionVerifier,
+        IOperationsControlService operationsControlService,
         ILogger<TaskOrchestrator> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -70,6 +74,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         _streamer = streamer ?? throw new ArgumentNullException(nameof(streamer));
         _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
         _conflictResolutionVerifier = conflictResolutionVerifier ?? throw new ArgumentNullException(nameof(conflictResolutionVerifier));
+        _operationsControlService = operationsControlService ?? throw new ArgumentNullException(nameof(operationsControlService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -89,9 +94,22 @@ public class TaskOrchestrator : ITaskOrchestrator
             return;
         }
 
+        if (_operationsControlService.IsPaused)
+        {
+            _logger.LogInformation("Task #{TaskId} execution deferred: operations are globally paused.", taskId);
+            if (task.Status == TaskOverallStatus.Open)
+            {
+                task.IsDeferredByPause = true;
+                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            }
+            return;
+        }
+
         // The cancellation source is registered only once the task lock is held, so that a duplicate job
         // waiting on the lock can never cancel the execution that is already running.
         CancellationTokenSource? taskCts = null;
+        IWorkflowStage? currentExecutingStage = null;
+        AgentProfile? currentExecutingProfile = null;
 
         try
         {
@@ -147,6 +165,17 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         task = reloadedTask;
+
+        if (_operationsControlService.IsPaused)
+        {
+            _logger.LogInformation("Task #{TaskId} execution deferred after acquiring lock: operations are globally paused.", taskId);
+            if (task.Status == TaskOverallStatus.Open)
+            {
+                task.IsDeferredByPause = true;
+                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            }
+            return;
+        }
 
         taskCts = _cancellationManager.Register(task.Id, cancellationToken);
         cancellationToken = taskCts.Token;
@@ -221,6 +250,10 @@ public class TaskOrchestrator : ITaskOrchestrator
                 await _gitWorkspaceManager.CheckoutTaskBranchAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
             }
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed checking out feature branch for task #{TaskId}", taskId);
@@ -281,6 +314,8 @@ public class TaskOrchestrator : ITaskOrchestrator
             return;
         }
 
+        currentExecutingStage = stage;
+
         // Persist current stage immediately so UI / Kanban / DAG shows task is actively executing
         var stageIndex = pipeline.Stages.ToList().FindIndex(s => string.Equals(s.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase));
         var stageOrder = stageIndex >= 0 ? stageIndex + 1 : 1;
@@ -331,6 +366,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                 (p.StageDirectives != null && p.StageDirectives.ContainsKey(stage.StageId)));
         }
 
+        currentExecutingProfile = profile;
+
         if (stage.Kind == WorkflowStageKind.Agentic && !HasCustomHandler(stage))
         {
             if (profile == null)
@@ -366,6 +403,11 @@ public class TaskOrchestrator : ITaskOrchestrator
         if (!string.IsNullOrWhiteSpace(task.InterruptedStageId))
         {
             task.InterruptedStageId = null;
+        }
+        if (task.IsDeferredByPause)
+        {
+            task.IsDeferredByPause = false;
+            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
         }
 
         var taskWorkingPath = _gitWorkspaceManager.GetWorktreePath(workspace, task.Id);
@@ -653,6 +695,11 @@ public class TaskOrchestrator : ITaskOrchestrator
             _logger.LogInformation("Stage '{StageId}' triggered HumanInterruptionException: {Prompt}", stage.StageId, summaryPrompt);
             result = StageExecutionResult.WaitingForHuman(hex.Questions);
         }
+        catch (NightCodeForge.Core.Exceptions.OperationsPausedException opex)
+        {
+            _logger.LogInformation(opex, "Stage '{StageId}' for task #{TaskId} was paused by global operations pause.", stage.StageId, taskId);
+            result = StageExecutionResult.Cancelled("Operations paused by user (GPU VRAM reclaimed).");
+        }
         catch (OperationCanceledException ocex)
         {
             _logger.LogInformation(ocex, "Stage '{StageId}' for task #{TaskId} was cancelled.", stage.StageId, taskId);
@@ -918,12 +965,48 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         // 5. Result Evaluation
-        if (result.IsCancelled || cancellationToken.IsCancellationRequested)
+        if (result.IsCancelled || (cancellationToken.IsCancellationRequested && !result.IsSuccess))
         {
-            _logger.LogInformation("Processing of task #{TaskId} at stage '{StageId}' was cancelled.", task.Id, stage.StageId);
+            _logger.LogInformation("Processing of task #{TaskId} at stage '{StageId}' was cancelled or paused.", task.Id, stage.StageId);
 
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var timeoutCts = new CancellationTokenSource(PauseAbortTimeout);
             var ct = timeoutCts.Token;
+
+            var isPause = _cancellationManager.IsPauseRequested(task.Id) || _operationsControlService.IsPaused;
+            if (isPause)
+            {
+                _logger.LogInformation("Task #{TaskId} paused at stage '{StageId}' due to global operations suspension.", task.Id, stage.StageId);
+                await CloseActiveConversationsAsync(task.Id, StageExecutionStatus.Interrupted, "Operations paused by user (GPU VRAM reclaimed).", ct);
+
+                var currentTask = await _taskRepository.GetByIdAsync(task.Id, ct);
+                if (currentTask != null && currentTask.Status != TaskOverallStatus.Closed && currentTask.Status != TaskOverallStatus.Rejected)
+                {
+                    currentTask.Status = TaskOverallStatus.Open;
+                    currentTask.InterruptedStageId = stage.StageId;
+                    currentTask.InterruptedAgentProfileId = profile?.Id ?? currentTask.InterruptedAgentProfileId;
+                    currentTask.IsWaitingForHuman = false;
+                    currentTask.IsDeferredByPause = true;
+
+                    pipelineContext.SyncDataBagToTask();
+                    await _taskRepository.UpdateWithHistoryAsync(
+                        currentTask,
+                        dependsOn: null,
+                        changedBy: AuditActors.User,
+                        reason: "Operations paused by user (GPU reclaimed).",
+                        cancellationToken: ct);
+                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, ct);
+                }
+
+                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                {
+                    TaskId = task.Id,
+                    Level = LogLevel.Information,
+                    Message = $"Stage '{stage.StageId}' was paused.",
+                    Timestamp = DateTime.UtcNow
+                }, ct);
+
+                return;
+            }
 
             try
             {
@@ -1065,6 +1148,38 @@ public class TaskOrchestrator : ITaskOrchestrator
                         reason: $"Execution cancelled after stage '{stage.StageId}'.",
                         cancellationToken: CancellationToken.None);
                     await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
+                }
+                return;
+            }
+
+            if (_cancellationManager.IsPauseRequested(task.Id) || _operationsControlService.IsPaused)
+            {
+                var persistedStatusAfterStage = await _taskRepository.GetStatusAsync(task.Id, CancellationToken.None);
+                if (persistedStatusAfterStage != TaskOverallStatus.Closed && persistedStatusAfterStage != TaskOverallStatus.Rejected)
+                {
+                    task.Status = TaskOverallStatus.Open;
+                    if (!result.IsSuccess)
+                    {
+                        task.InterruptedStageId = stage.StageId;
+                        task.InterruptedAgentProfileId = profile?.Id;
+                    }
+                    else
+                    {
+                        var nextStage = !string.IsNullOrWhiteSpace(result.TargetRoutingStageId)
+                            ? pipeline.GetStage(result.TargetRoutingStageId)
+                            : pipeline.GetNextStage(stage.StageId);
+                        task.InterruptedStageId = nextStage?.StageId;
+                        task.InterruptedAgentProfileId = null;
+                    }
+                    task.IsWaitingForHuman = false;
+                    task.IsDeferredByPause = true;
+                    await _taskRepository.UpdateWithHistoryAsync(
+                        task,
+                        dependsOn: null,
+                        changedBy: AuditActors.User,
+                        reason: $"Execution paused after stage '{stage.StageId}'.",
+                        cancellationToken: CancellationToken.None);
+                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, CancellationToken.None);
                 }
                 return;
             }
@@ -1437,28 +1552,18 @@ public class TaskOrchestrator : ITaskOrchestrator
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
         }
-        catch (OperationCanceledException ocex)
+        catch (Exception ocex) when (ocex is OperationCanceledException or NightCodeForge.Core.Exceptions.OperationsPausedException)
         {
-            _logger.LogInformation(ocex, "ForgeTask #{TaskId} processing was cancelled.", taskId);
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            _logger.LogInformation(ocex, "ForgeTask #{TaskId} processing was cancelled or interrupted.", taskId);
+            using var timeoutCts = new CancellationTokenSource(PauseAbortTimeout);
             var ct = timeoutCts.Token;
-            var explicitCancel = _cancellationManager.IsCancelRequested(taskId);
             try
             {
-                var convs = await _taskRepository.GetConversationsAsync(taskId, ct);
-                var activeConvs = convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman).ToList();
-                foreach (var activeConv in activeConvs)
+                if (_cancellationManager.IsCancelRequested(taskId))
                 {
-                    await _taskRepository.CompleteConversationAsync(
-                        activeConv.Id,
-                        StageExecutionStatus.Cancelled,
-                        summary: "Execution was cancelled.",
-                        cancellationToken: ct);
-                }
+                    _logger.LogInformation("Task #{TaskId} execution cancelled by user.", taskId);
+                    await CloseActiveConversationsAsync(taskId, StageExecutionStatus.Cancelled, "Task cancelled by user.", ct);
 
-                // Only an explicit cancel request is terminal; parent cancellation (e.g. shutdown) leaves the task recoverable.
-                if (explicitCancel)
-                {
                     var currentTask = await _taskRepository.GetByIdAsync(taskId, ct);
                     if (currentTask != null && currentTask.Status != TaskOverallStatus.Closed && currentTask.Status != TaskOverallStatus.Rejected)
                     {
@@ -1468,15 +1573,45 @@ public class TaskOrchestrator : ITaskOrchestrator
                             currentTask,
                             dependsOn: null,
                             changedBy: AuditActors.User,
-                            reason: "Execution was cancelled.",
+                            reason: "Cancelled by user.",
                             cancellationToken: ct);
                         await _dependencyStore.UpdateTaskStatusAsync(taskId, TaskOverallStatus.Cancelled, ct);
                     }
+                    return;
                 }
+
+                if (_cancellationManager.IsPauseRequested(taskId) || _operationsControlService.IsPaused)
+                {
+                    _logger.LogInformation("Task #{TaskId} paused due to global operations suspension.", taskId);
+
+                    await CloseActiveConversationsAsync(taskId, StageExecutionStatus.Interrupted, "Operations paused by user (GPU VRAM reclaimed).", ct);
+
+                    var currentTask = await _taskRepository.GetByIdAsync(taskId, ct);
+                    if (currentTask != null && currentTask.Status != TaskOverallStatus.Closed && currentTask.Status != TaskOverallStatus.Rejected)
+                    {
+                        currentTask.Status = TaskOverallStatus.Open;
+                        currentTask.InterruptedStageId = currentExecutingStage?.StageId ?? currentTask.InterruptedStageId ?? currentTask.CurrentStageId;
+                        currentTask.InterruptedAgentProfileId = currentExecutingProfile?.Id ?? currentTask.InterruptedAgentProfileId;
+                        currentTask.IsWaitingForHuman = false;
+                        currentTask.IsDeferredByPause = true;
+
+                        await _taskRepository.UpdateWithHistoryAsync(
+                            currentTask,
+                            dependsOn: null,
+                            changedBy: AuditActors.User,
+                            reason: "Operations paused by user (GPU reclaimed).",
+                            cancellationToken: ct);
+                        await _dependencyStore.UpdateTaskStatusAsync(taskId, TaskOverallStatus.Open, ct);
+                    }
+                    return;
+                }
+
+                // Parent cancellation (e.g. shutdown or external token): close conversations as Cancelled and leave status untouched
+                await CloseActiveConversationsAsync(taskId, StageExecutionStatus.Cancelled, "Execution interrupted by application shutdown or cancellation token.", ct);
             }
             catch (Exception cex)
             {
-                _logger.LogWarning(cex, "Failed to mark active conversation and status as Cancelled for task #{TaskId}", taskId);
+                _logger.LogWarning(cex, "Failed to update active conversation and status during cancellation/pause for task #{TaskId}", taskId);
             }
         }
         finally
@@ -1486,6 +1621,20 @@ public class TaskOrchestrator : ITaskOrchestrator
                 _cancellationManager.Unregister(taskId, taskCts);
                 taskCts.Dispose();
             }
+        }
+    }
+
+    private async Task CloseActiveConversationsAsync(int taskId, StageExecutionStatus status, string summary, CancellationToken cancellationToken)
+    {
+        var convs = await _taskRepository.GetConversationsAsync(taskId, cancellationToken);
+        var activeConvs = convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman).ToList();
+        foreach (var activeConv in activeConvs)
+        {
+            await _taskRepository.CompleteConversationAsync(
+                activeConv.Id,
+                status,
+                summary: summary,
+                cancellationToken: cancellationToken);
         }
     }
 
@@ -1955,12 +2104,13 @@ public class TaskOrchestrator : ITaskOrchestrator
             string squashSha;
             try
             {
+                // Critical Section: SquashAndMerge must be atomic and non-cancellable by pause
                 squashSha = await _gitWorkspaceManager.SquashAndMergeAsync(
                     workspace,
                     task.Id,
                     task.BaseBranch,
                     finalCommitMessage,
-                    cancellationToken);
+                    CancellationToken.None);
             }
             catch (MergeConflictException ex)
             {
@@ -1979,7 +2129,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 var pushResult = await _gitMirrorSyncService.PushBaseBranchToHostAsync(
                     workspace.Ext4MirrorPath,
                     task.BaseBranch,
-                    cancellationToken);
+                    CancellationToken.None);
 
                 if (pushResult.IsNonFastForward)
                 {
@@ -1991,9 +2141,9 @@ public class TaskOrchestrator : ITaskOrchestrator
 
                         if (!string.IsNullOrEmpty(preSquashSha))
                         {
-                            await _gitWorkspaceManager.ResetCanonicalBranchAsync(workspace, task.BaseBranch, preSquashSha, cancellationToken);
+                            await _gitWorkspaceManager.ResetCanonicalBranchAsync(workspace, task.BaseBranch, preSquashSha, CancellationToken.None);
                         }
-                        await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, task.BaseBranch, cancellationToken);
+                        await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, task.BaseBranch, CancellationToken.None);
                         continue;
                     }
 
@@ -2001,7 +2151,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                         ConflictResolutionConstants.MaxPushRetries, task.Id);
                     if (!string.IsNullOrEmpty(preSquashSha))
                     {
-                        await _gitWorkspaceManager.ResetCanonicalBranchAsync(workspace, task.BaseBranch, preSquashSha, cancellationToken);
+                        await _gitWorkspaceManager.ResetCanonicalBranchAsync(workspace, task.BaseBranch, preSquashSha, CancellationToken.None);
                     }
                     throw new MirrorPushRejectedException(task.BaseBranch, workspace.Ext4MirrorPath, pushResult.WarningMessage ?? "Non-fast-forward push rejection.");
                 }
@@ -2009,7 +2159,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 {
                     if (!string.IsNullOrEmpty(preSquashSha))
                     {
-                        await _gitWorkspaceManager.ResetCanonicalBranchAsync(workspace, task.BaseBranch, preSquashSha, cancellationToken);
+                        await _gitWorkspaceManager.ResetCanonicalBranchAsync(workspace, task.BaseBranch, preSquashSha, CancellationToken.None);
                     }
                     throw new GitCommandException(workspace.Ext4MirrorPath, new[] { "push", "host-origin", task.BaseBranch }, 1, string.Empty, pushResult.WarningMessage ?? "Push failed");
                 }
@@ -2020,7 +2170,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             // Push succeeded! Remove task worktree now
             try
             {
-                await _gitWorkspaceManager.RemoveWorktreeAsync(workspace, task.Id, cancellationToken);
+                await _gitWorkspaceManager.RemoveWorktreeAsync(workspace, task.Id, CancellationToken.None);
             }
             catch (Exception wex)
             {
@@ -2109,6 +2259,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 var unblockedPipeline = await _pipelineProvider.GetPipelineAsync(unblockedTask, cancellationToken);
                 var initialStage = unblockedPipeline.InitialStage
                     ?? throw new WorkflowValidationException($"Workflow does not contain an initial stage for unblocked task #{unblockedTask.Id}.");
+                unblockedTask.IsDeferredByPause = false;
                 unblockedTask.LastHangfireJobId = _jobQueue.EnqueueStage(unblockedTask.Id, initialStage.QueueTier, unblockedTask.Priority);
                 await _taskRepository.UpdateAsync(unblockedTask, cancellationToken: cancellationToken);
             }
@@ -2542,6 +2693,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         // 11. Re-enqueue Initial Stage
+        task.IsDeferredByPause = false;
         var newJobId = _jobQueue.EnqueueStage(task.Id, initialStage.QueueTier, task.Priority);
         task.LastHangfireJobId = newJobId;
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);

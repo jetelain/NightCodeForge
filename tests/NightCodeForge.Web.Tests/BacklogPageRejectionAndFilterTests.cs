@@ -61,6 +61,7 @@ public class BacklogPageRejectionAndFilterTests : BunitContext
         var telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
         var workerState = new WorkerStateService(telemetryMock.Object);
         Services.AddSingleton(workerState);
+        Services.AddSingleton(TestServices.CreateOperationsControlService());
         Services.AddSingleton(TestHubConnectionHelper.Create(workerStateService: workerState));
     }
 

@@ -3,8 +3,69 @@
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Services
 @inject OperationsTelemetryUiService TelemetryUi
+@inject NightCodeForge.Core.Interfaces.IOperationsControlService OperationsControl
+@inject ToastService ToastService
+@inject Microsoft.Extensions.Logging.ILogger<ActiveOperationsHero> Logger
 
 <div id="active-operations-hero" class="forge-card" style="margin-bottom: 1.5rem; padding: 1.25rem 1.5rem;">
+    @if (OperationsControl.IsPaused)
+    {
+        <div id="gamer-mode-paused-card" style="margin-bottom: 1.25rem; padding: 1.15rem 1.35rem; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: var(--radius-md);">
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap;">
+                <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
+                    <span style="font-size: 1.6rem; line-height: 1;">⏸️</span>
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                            <strong style="color: var(--accent-amber); font-size: 1rem; font-weight: 700;">Global Operations Paused (Gamer / Dedicated Workload Mode)</strong>
+                            <span class="forge-badge @(OperationsControl.ReclaimStatus == NightCodeForge.Core.Domain.OperationsReclaimStatus.Evicted ? "badge-emerald" : (OperationsControl.ReclaimStatus == NightCodeForge.Core.Domain.OperationsReclaimStatus.Failed ? "badge-crimson" : "badge-amber"))" style="font-size: 0.75rem;">
+                                GPU VRAM: @OperationsControl.ReclaimStatus
+                            </span>
+                        </div>
+                        <p style="margin: 0; color: var(--text-secondary); font-size: 0.85rem; line-height: 1.4;">
+                            Background agent execution, inference pipelines, and Hangfire worker queues are paused. GPU VRAM has been reclaimed for games or external heavy workloads.
+                        </p>
+                        @if (!string.IsNullOrWhiteSpace(OperationsControl.LastReclaimError))
+                        {
+                            <div style="margin-top: 0.4rem; font-size: 0.8rem; color: var(--accent-crimson); font-weight: 500;">
+                                ⚠️ VRAM Reclaim Issue: @OperationsControl.LastReclaimError
+                            </div>
+                        }
+                    </div>
+                </div>
+                <button type="button" class="forge-btn forge-btn-warning btn-sm" id="btn-hero-resume-operations" @onclick="ResumeOperationsAsync" style="white-space: nowrap;">
+                    ▶️ Resume Operations
+                </button>
+            </div>
+        </div>
+    }
+
+    @if (!OperationsControl.IsPaused && _deferredTaskCount > 0)
+    {
+        <div id="deferred-tasks-retry-card" style="margin-bottom: 1.25rem; padding: 1.15rem 1.35rem; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: var(--radius-md);">
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap;">
+                <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
+                    <span style="font-size: 1.6rem; line-height: 1;">⚠️</span>
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                            <strong style="color: var(--accent-crimson); font-size: 1rem; font-weight: 700;">
+                                @_deferredTaskCount Deferred Task(s) Pending Dispatch
+                            </strong>
+                            <span class="forge-badge badge-crimson" style="font-size: 0.75rem;">
+                                Retry Needed
+                            </span>
+                        </div>
+                        <p style="margin: 0; color: var(--text-secondary); font-size: 0.85rem; line-height: 1.4;">
+                            These tasks were held during operations pause and could not be re-enqueued automatically on resume. You can retry dispatching them all, or manage individual tasks in the DevQueue.
+                        </p>
+                    </div>
+                </div>
+                <button type="button" class="forge-btn forge-btn-warning btn-sm" id="btn-hero-retry-deferred" @onclick="ResumeOperationsAsync" style="white-space: nowrap;">
+                    🔄 Retry Dispatch (@_deferredTaskCount)
+                </button>
+            </div>
+        </div>
+    }
+
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
         <div style="display: flex; align-items: center; gap: 0.5rem;">
             <span style="font-size: 1.25rem;">⚡</span>
@@ -189,11 +250,52 @@
 @code {
     private CancellationTokenSource? _timerCts;
     private bool _isDisposed;
+    private int _deferredTaskCount;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         TelemetryUi.OnChange += HandleChange;
+        OperationsControl.OnOperationsStateChanged += HandleOperationsChanged;
         StartLiveTimer();
+        await RefreshDeferredCountAsync();
+    }
+
+    private async void HandleOperationsChanged(bool isPaused)
+    {
+        if (_isDisposed) return;
+        await RefreshDeferredCountAsync();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RefreshDeferredCountAsync()
+    {
+        try
+        {
+            _deferredTaskCount = await OperationsControl.GetDeferredTaskCountAsync();
+        }
+        catch
+        {
+            // Best effort state hydration
+        }
+    }
+
+    private async Task ResumeOperationsAsync()
+    {
+        try
+        {
+            await OperationsControl.ResumeOperationsAsync();
+            await RefreshDeferredCountAsync();
+            ToastService.Show("Operations Resumed", "Deferred tasks have been re-enqueued for execution.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to resume operations from ActiveOperationsHero.");
+            ToastService.Show("Operations Control Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private void StartLiveTimer()
@@ -243,6 +345,7 @@
     {
         _isDisposed = true;
         TelemetryUi.OnChange -= HandleChange;
+        OperationsControl.OnOperationsStateChanged -= HandleOperationsChanged;
         if (_timerCts != null)
         {
             _timerCts.Cancel();

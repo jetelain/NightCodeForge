@@ -18,18 +18,44 @@ public class SignalRActivityBridgeService : BackgroundService
     private readonly IAgentActivityStreamer _streamer;
     private readonly IHubContext<OrchestratorHub, IOrchestratorHubClient> _hubContext;
     private readonly IOperationsTelemetryService _telemetryService;
+    private readonly IOperationsControlService _operationsControl;
     private readonly ILogger<SignalRActivityBridgeService> _logger;
 
     public SignalRActivityBridgeService(
         IAgentActivityStreamer streamer,
         IHubContext<OrchestratorHub, IOrchestratorHubClient> hubContext,
         IOperationsTelemetryService telemetryService,
+        IOperationsControlService operationsControl,
         ILogger<SignalRActivityBridgeService> logger)
     {
         _streamer = streamer ?? throw new ArgumentNullException(nameof(streamer));
         _hubContext = hubContext ?? throw new ArgumentNullException(nameof(hubContext));
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+        _operationsControl = operationsControl ?? throw new ArgumentNullException(nameof(operationsControl));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+        _operationsControl.OnOperationsStateChanged += HandleOperationsStateChanged;
+    }
+
+    private async void HandleOperationsStateChanged(bool isPaused)
+    {
+        try
+        {
+            await _hubContext.Clients.All.ReceiveOperationsStatusChanged(
+                isPaused,
+                _operationsControl.ReclaimStatus.ToString(),
+                _operationsControl.LastReclaimError);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to broadcast ReceiveOperationsStatusChanged to SignalR clients.");
+        }
+    }
+
+    public override void Dispose()
+    {
+        _operationsControl.OnOperationsStateChanged -= HandleOperationsStateChanged;
+        base.Dispose();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

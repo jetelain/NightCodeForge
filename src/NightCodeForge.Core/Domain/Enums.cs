@@ -98,7 +98,8 @@ public enum StageExecutionStatus
     Skipped = 4,
     WaitingForHuman = 5,
     Cancelled = 6,
-    Superseded = 7
+    Superseded = 7,
+    Interrupted = 8
 }
 
 /// <summary>

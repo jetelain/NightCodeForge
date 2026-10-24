@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Infrastructure.Inference;
@@ -94,14 +95,17 @@ public class OllamaModelCatalogService : IOllamaModelCatalogService
 public class OllamaModelPreloadService : IOllamaModelPreloadService
 {
     private readonly HttpClient _httpClient;
+    private readonly IOperationsControlService _operationsControlService;
     private readonly ILogger<OllamaModelPreloadService> _logger;
 
     public OllamaModelPreloadService(
         HttpClient httpClient,
+        IOperationsControlService operationsControlService,
         IOptions<OllamaRouterOptions> options,
         ILogger<OllamaModelPreloadService> logger)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _operationsControlService = operationsControlService ?? throw new ArgumentNullException(nameof(operationsControlService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         ArgumentNullException.ThrowIfNull(options);
 
@@ -120,6 +124,12 @@ public class OllamaModelPreloadService : IOllamaModelPreloadService
         if (string.IsNullOrWhiteSpace(modelName))
         {
             return false;
+        }
+
+        if (_operationsControlService.IsPaused)
+        {
+            _logger.LogWarning("Rejecting JIT model preload for '{ModelName}' because global operations are paused.", modelName);
+            throw new OperationsPausedException($"Cannot preload model '{modelName}' while global operations are paused.");
         }
 
         try

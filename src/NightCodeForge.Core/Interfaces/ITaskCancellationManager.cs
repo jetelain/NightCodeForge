@@ -34,4 +34,24 @@ public interface ITaskCancellationManager
     /// No-op if a newer registration has replaced it.
     /// </summary>
     void Unregister(int taskId, CancellationTokenSource source);
+
+    /// <summary>
+    /// Requests pause for the specified running task.
+    /// </summary>
+    void RequestPause(int taskId);
+
+    /// <summary>
+    /// Returns true when pause was requested for the task.
+    /// </summary>
+    bool IsPauseRequested(int taskId);
+
+    /// <summary>
+    /// Clears any pause state tracked for the specified task.
+    /// </summary>
+    void ClearPause(int taskId);
+
+    /// <summary>
+    /// Clears pause flags across all tasks upon global operations resumption.
+    /// </summary>
+    void ClearAllPauses();
 }

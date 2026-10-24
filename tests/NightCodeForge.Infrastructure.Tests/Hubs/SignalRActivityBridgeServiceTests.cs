@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Hubs;
@@ -11,15 +13,26 @@ namespace NightCodeForge.Infrastructure.Tests.Hubs;
 
 public class SignalRActivityBridgeServiceTests
 {
+    private static SignalRActivityBridgeService CreateBridge(
+        FakeHubContext fakeHubContext,
+        IAgentActivityStreamer? streamer = null,
+        IOperationsTelemetryService? telemetryService = null,
+        IOperationsControlService? operationsControl = null)
+    {
+        var mockOps = new Mock<IOperationsControlService>();
+        return new SignalRActivityBridgeService(
+            streamer ?? new InMemoryAgentActivityStreamer(),
+            fakeHubContext,
+            telemetryService ?? new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
+            operationsControl ?? mockOps.Object,
+            NullLogger<SignalRActivityBridgeService>.Instance);
+    }
+
     [Fact]
     public async Task DispatchActivityEventAsync_ThinkingDelta_RoutesToTaskGroupWithThinkingFlag()
     {
         var fakeHubContext = new FakeHubContext();
-        var bridge = new SignalRActivityBridgeService(
-            new InMemoryAgentActivityStreamer(),
-            fakeHubContext,
-            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
-            NullLogger<SignalRActivityBridgeService>.Instance);
+        var bridge = CreateBridge(fakeHubContext);
 
         var evt = new AgentActivityEvent(
             SessionId: "sess-1",
@@ -43,11 +56,7 @@ public class SignalRActivityBridgeServiceTests
     public async Task DispatchActivityEventAsync_MessageDelta_RoutesToTaskGroup()
     {
         var fakeHubContext = new FakeHubContext();
-        var bridge = new SignalRActivityBridgeService(
-            new InMemoryAgentActivityStreamer(),
-            fakeHubContext,
-            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
-            NullLogger<SignalRActivityBridgeService>.Instance);
+        var bridge = CreateBridge(fakeHubContext);
 
         var evt = new AgentActivityEvent(
             SessionId: "sess-1",
@@ -70,11 +79,7 @@ public class SignalRActivityBridgeServiceTests
     public async Task DispatchActivityEventAsync_ToolStartedAndCompleted_RoutesWithMetadata()
     {
         var fakeHubContext = new FakeHubContext();
-        var bridge = new SignalRActivityBridgeService(
-            new InMemoryAgentActivityStreamer(),
-            fakeHubContext,
-            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
-            NullLogger<SignalRActivityBridgeService>.Instance);
+        var bridge = CreateBridge(fakeHubContext);
 
         var startedEvt = new AgentActivityEvent(
             SessionId: "sess-1",
@@ -120,11 +125,7 @@ public class SignalRActivityBridgeServiceTests
     public async Task DispatchActivityEventAsync_StageTransitionsAndInterrupted_BroadcastsToAll()
     {
         var fakeHubContext = new FakeHubContext();
-        var bridge = new SignalRActivityBridgeService(
-            new InMemoryAgentActivityStreamer(),
-            fakeHubContext,
-            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
-            NullLogger<SignalRActivityBridgeService>.Instance);
+        var bridge = CreateBridge(fakeHubContext);
 
         var stageEvt = new AgentActivityEvent(
             SessionId: "sess-1",
@@ -163,11 +164,7 @@ public class SignalRActivityBridgeServiceTests
     public async Task DispatchActivityEventAsync_OptimizationAction_RoutesToTaskGroup()
     {
         var fakeHubContext = new FakeHubContext();
-        var bridge = new SignalRActivityBridgeService(
-            new InMemoryAgentActivityStreamer(),
-            fakeHubContext,
-            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
-            NullLogger<SignalRActivityBridgeService>.Instance);
+        var bridge = CreateBridge(fakeHubContext);
 
         var evt = new AgentActivityEvent(
             SessionId: "sess-1",
@@ -197,11 +194,7 @@ public class SignalRActivityBridgeServiceTests
     public async Task DispatchActivityEventAsync_ErrorEvent_RoutesExecutionLogToTaskGroup()
     {
         var fakeHubContext = new FakeHubContext();
-        var bridge = new SignalRActivityBridgeService(
-            new InMemoryAgentActivityStreamer(),
-            fakeHubContext,
-            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
-            NullLogger<SignalRActivityBridgeService>.Instance);
+        var bridge = CreateBridge(fakeHubContext);
 
         var now = DateTime.UtcNow;
         var errorEvt = new AgentActivityEvent(
@@ -226,11 +219,7 @@ public class SignalRActivityBridgeServiceTests
     {
         var streamer = new InMemoryAgentActivityStreamer();
         var fakeHubContext = new FakeHubContext();
-        var bridge = new SignalRActivityBridgeService(
-            streamer,
-            fakeHubContext,
-            new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance),
-            NullLogger<SignalRActivityBridgeService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, streamer: streamer);
 
         using var cts = new CancellationTokenSource();
         var bridgeTask = bridge.StartAsync(cts.Token);
@@ -278,11 +267,7 @@ public class SignalRActivityBridgeServiceTests
     {
         var fakeHubContext = new FakeHubContext();
         var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
-        var bridge = new SignalRActivityBridgeService(
-            new InMemoryAgentActivityStreamer(),
-            fakeHubContext,
-            telemetry,
-            NullLogger<SignalRActivityBridgeService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, telemetryService: telemetry);
 
         var startedEvt = new AgentActivityEvent(
             SessionId: "sess-telemetry",
@@ -342,11 +327,7 @@ public class SignalRActivityBridgeServiceTests
     {
         var fakeHubContext = new FakeHubContext();
         var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
-        var bridge = new SignalRActivityBridgeService(
-            new InMemoryAgentActivityStreamer(),
-            fakeHubContext,
-            telemetry,
-            NullLogger<SignalRActivityBridgeService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, telemetryService: telemetry);
 
         var firstStart = DateTime.UtcNow.AddMinutes(-10);
         await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 7, "stage-a", AgentActivityKind.StageStarted, "go", firstStart));
@@ -363,11 +344,7 @@ public class SignalRActivityBridgeServiceTests
     {
         var fakeHubContext = new FakeHubContext();
         var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
-        var bridge = new SignalRActivityBridgeService(
-            new InMemoryAgentActivityStreamer(),
-            fakeHubContext,
-            telemetry,
-            NullLogger<SignalRActivityBridgeService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, telemetryService: telemetry);
 
         await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 8, "stage-a", AgentActivityKind.StageStarted, "go", DateTime.UtcNow));
         await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 8, "stage-a", AgentActivityKind.Error, "boom", DateTime.UtcNow));
@@ -376,6 +353,27 @@ public class SignalRActivityBridgeServiceTests
         await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 9, "stage-a", AgentActivityKind.StageStarted, "go", DateTime.UtcNow));
         await bridge.DispatchActivityEventAsync(new AgentActivityEvent("s", 9, "stage-a", AgentActivityKind.Interrupted, "ask", DateTime.UtcNow));
         Assert.Null(telemetry.GetActiveTask());
+    }
+
+    [Fact]
+    public async Task HandleOperationsStateChanged_WhenTriggered_BroadcastsReceiveOperationsStatusChanged()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var opsMock = new Mock<IOperationsControlService>();
+        opsMock.SetupGet(o => o.ReclaimStatus).Returns(OperationsReclaimStatus.Evicted);
+        opsMock.SetupGet(o => o.LastReclaimError).Returns((string?)null);
+
+        var bridge = CreateBridge(fakeHubContext, operationsControl: opsMock.Object);
+
+        opsMock.Raise(o => o.OnOperationsStateChanged += null, true);
+
+        await Task.Yield();
+
+        var allClient = fakeHubContext.AllClient;
+        Assert.Single(allClient.OperationsStatusChanges);
+        Assert.True(allClient.OperationsStatusChanges[0].IsPaused);
+        Assert.Equal("Evicted", allClient.OperationsStatusChanges[0].ReclaimStatus);
+        Assert.Null(allClient.OperationsStatusChanges[0].LastReclaimError);
     }
 
     private class FakeHubContext : IHubContext<OrchestratorHub, IOrchestratorHubClient>
@@ -488,5 +486,12 @@ public class SignalRActivityBridgeServiceTests
         public Task ReceiveShellCommandStarted(NightCodeForge.Core.Workflow.ShellCommandRecord command) => Task.CompletedTask;
         public Task ReceiveShellCommandOutput(string commandId, string outputChunk, bool isError) => Task.CompletedTask;
         public Task ReceiveShellCommandCompleted(NightCodeForge.Core.Workflow.ShellCommandRecord command) => Task.CompletedTask;
+        public List<(bool IsPaused, string? ReclaimStatus, string? LastReclaimError)> OperationsStatusChanges { get; } = new();
+
+        public Task ReceiveOperationsStatusChanged(bool isPaused, string? reclaimStatus, string? lastReclaimError)
+        {
+            OperationsStatusChanges.Add((isPaused, reclaimStatus, lastReclaimError));
+            return Task.CompletedTask;
+        }
     }
 }

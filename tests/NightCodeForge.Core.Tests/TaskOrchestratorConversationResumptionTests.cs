@@ -175,6 +175,9 @@ public class TaskOrchestratorConversationResumptionTests
         await taskRepo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Initial prompt");
         await taskRepo.CompleteConversationAsync(conv.Id, StageExecutionStatus.WaitingForHuman, summary: "Waiting for human");
 
+        var mockOps = new Mock<IOperationsControlService>();
+        mockOps.Setup(m => m.IsPaused).Returns(false);
+
         var recoveryService = new StartupRecoveryService(
             wsRepo,
             taskRepo,
@@ -185,6 +188,7 @@ public class TaskOrchestratorConversationResumptionTests
             pathResolver.Object,
             procRunner.Object,
             new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
+            mockOps.Object,
             NullLogger<StartupRecoveryService>.Instance);
 
         await recoveryService.ReconcileWorkspacesAsync();

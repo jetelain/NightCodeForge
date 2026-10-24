@@ -26,12 +26,15 @@ public record WorkerStatusSnapshot(
 /// <summary>
 /// Singleton service providing real-time snapshot and event dispatch for worker execution state and questions.
 /// </summary>
-public class WorkerStateService
+public class WorkerStateService : IWorkerStateService
 {
     private readonly IOperationsTelemetryService _telemetryService;
     private readonly object _lock = new();
     private WorkerStatusSnapshot _current;
     private bool _hasAuthoritativeStatus;
+
+    public int? ActiveTaskId => Current.ActiveTaskId;
+    public bool IsRunning => Current.Status == WorkerExecutionStatus.Running;
 
     public WorkerStateService(IOperationsTelemetryService telemetryService)
     {

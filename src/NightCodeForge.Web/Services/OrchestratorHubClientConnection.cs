@@ -45,6 +45,7 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
     public event Action<NightCodeForge.Core.Workflow.ShellCommandRecord>? OnShellCommandStarted;
     public event Action<string, string, bool>? OnShellCommandOutput;
     public event Action<NightCodeForge.Core.Workflow.ShellCommandRecord>? OnShellCommandCompleted;
+    public event Action<bool, string?, string?>? OnOperationsStatusChanged;
     public event Action<HubConnectionState>? OnConnectionStateChanged;
 
     public OrchestratorHubClientConnection(
@@ -209,6 +210,7 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
         hub.On<NightCodeForge.Core.Workflow.ShellCommandRecord>("ReceiveShellCommandStarted", TriggerShellCommandStarted);
         hub.On<string, string, bool>("ReceiveShellCommandOutput", TriggerShellCommandOutput);
         hub.On<NightCodeForge.Core.Workflow.ShellCommandRecord>("ReceiveShellCommandCompleted", TriggerShellCommandCompleted);
+        hub.On<bool, string?, string?>("ReceiveOperationsStatusChanged", TriggerOperationsStatusChanged);
     }
 
     public void TriggerTokenDelta(int taskId, string token, bool isThinking) =>
@@ -261,6 +263,9 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
 
     public void TriggerConnectionStateChanged(HubConnectionState state) =>
         OnConnectionStateChanged?.Invoke(state);
+
+    public void TriggerOperationsStatusChanged(bool isPaused, string? reclaimStatus, string? lastReclaimError) =>
+        OnOperationsStatusChanged?.Invoke(isPaused, reclaimStatus, lastReclaimError);
 
     public async ValueTask DisposeAsync()
     {

@@ -40,11 +40,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly NightCodeForge.Core.Repositories.ITaskRepository _taskRepository;
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
+    private readonly ITaskCancellationManager _cancellationManager;
+    private readonly IOperationsControlService _operationsControlService;
     private readonly ILogger<CrucibleAgentHarness> _logger;
     private readonly ILogger<CanonicalTools> _canonicalToolsLogger;
     private readonly LlmProviderOptions _llmOptions;
     private readonly RetryPolicyOptions _retryOptions;
     private readonly TimeProvider _timeProvider;
+
+    private static readonly TimeSpan PauseAbortTimeout = TimeSpan.FromSeconds(5);
 
     public string HarnessId => StandardHarnessIds.Crucible;
 
@@ -63,6 +67,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         SessionTranscriptService transcriptService,
         IGlobalOptimizationSettingsService globalOptimizationSettings,
         NightCodeForge.Core.Repositories.ITaskRepository taskRepository,
+        ITaskCancellationManager cancellationManager,
+        IOperationsControlService operationsControlService,
         Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
         Microsoft.Extensions.Options.IOptions<RetryPolicyOptions> retryOptions,
         ILogger<CrucibleAgentHarness> logger,
@@ -83,6 +89,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
         _globalOptimizationSettings = globalOptimizationSettings ?? throw new ArgumentNullException(nameof(globalOptimizationSettings));
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
+        _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
+        _operationsControlService = operationsControlService ?? throw new ArgumentNullException(nameof(operationsControlService));
         ArgumentNullException.ThrowIfNull(llmOptions);
         _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
         ArgumentNullException.ThrowIfNull(retryOptions);
@@ -740,6 +748,36 @@ public partial class CrucibleAgentHarness : IAgentHarness
             await SaveAsync(AgentRunStatus.Cancelled, "Stage cancelled", timeoutCts.Token);
         }
 
+        async Task SuspendOnPauseAsync()
+        {
+            stopwatch.Stop();
+            try
+            {
+                interruptionCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Justification: CTS was already disposed upon stream completion
+            }
+            SanitizeInFlightTurns(chatHistory);
+            latestSerializedState = SerializeSession(chatHistory);
+            using var timeoutCts = new CancellationTokenSource(PauseAbortTimeout);
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, "Operations paused (GPU VRAM reclaimed)", timeoutCts.Token);
+            await SaveAsync(AgentRunStatus.Interrupted, "Operations paused (GPU VRAM reclaimed)", timeoutCts.Token);
+
+            if (context.Workspace != null)
+            {
+                try
+                {
+                    await _envProvider.CleanupTaskContainerAsync(context.Workspace, context.ForgeTask.Id, timeoutCts.Token);
+                }
+                catch (Exception pex)
+                {
+                    _logger.LogWarning(pex, "Failed to clean up container during pause suspension for task #{TaskId}", context.ForgeTask.Id);
+                }
+            }
+        }
+
         var toolNamesByCallId = new Dictionary<string, string>(StringComparer.Ordinal);
 
         void FlushTurnToHistory()
@@ -953,8 +991,20 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     {
                         return await CompleteWithRequestChangesAsync(capturedRequestChanges);
                     }
+                    var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
+                    if (isPause)
+                    {
+                        await SuspendOnPauseAsync();
+                        throw;
+                    }
                     await AbortOnCancellationAsync();
                     throw;
+                }
+                catch (NightCodeForge.Core.Exceptions.OperationsPausedException opex)
+                {
+                    _logger.LogInformation(opex, "Crucible streaming execution paused by OperationsPausedException for task #{TaskId}", context.ForgeTask.Id);
+                    await SuspendOnPauseAsync();
+                    throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", opex);
                 }
                 catch (Exception ex) when (TransientErrorDetector.IsTransient(ex) && streamRetryCount < maxTransientRetries)
                 {
@@ -1056,8 +1106,20 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     {
                         return await CompleteWithRequestChangesAsync(capturedRequestChanges);
                     }
+                    var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
+                    if (isPause)
+                    {
+                        await SuspendOnPauseAsync();
+                        throw;
+                    }
                     await AbortOnCancellationAsync();
                     throw;
+                }
+                catch (NightCodeForge.Core.Exceptions.OperationsPausedException opex)
+                {
+                    _logger.LogInformation(opex, "Crucible non-streaming execution paused by OperationsPausedException for task #{TaskId}", context.ForgeTask.Id);
+                    await SuspendOnPauseAsync();
+                    throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", opex);
                 }
                 catch (Exception ex) when (TransientErrorDetector.IsTransient(ex) && nonStreamingRetries < maxTransientRetries)
                 {
@@ -1267,6 +1329,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     AgentRunStatus.Completed => StageExecutionStatus.Completed,
                     AgentRunStatus.WaitingForHuman => StageExecutionStatus.WaitingForHuman,
                     AgentRunStatus.Cancelled => StageExecutionStatus.Cancelled,
+                    AgentRunStatus.Interrupted => StageExecutionStatus.Interrupted,
                     _ => StageExecutionStatus.Failed
                 };
 
@@ -1637,6 +1700,36 @@ public partial class CrucibleAgentHarness : IAgentHarness
         return (profile.MaxTurns.HasValue && profile.MaxTurns.Value > 0)
             ? profile.MaxTurns.Value
             : (harnessConfig.MaxTurns > 0 ? harnessConfig.MaxTurns : CrucibleHarnessConfig.DefaultMaxTurns);
+    }
+
+    /// <summary>
+    /// Rolls back any incomplete assistant tool call turns whose tool results were not recorded.
+    /// This prevents HTTP 400 Bad Request syntax errors on session resumption.
+    /// </summary>
+    public static void SanitizeInFlightTurns(List<ChatMessage> history)
+    {
+        if (history == null || history.Count == 0) return;
+
+        var callIdsWithResults = new HashSet<string>(
+            history.SelectMany(m => m.Contents)
+                .OfType<FunctionResultContent>()
+                .Where(frc => !string.IsNullOrEmpty(frc.CallId))
+                .Select(frc => frc.CallId!),
+            StringComparer.Ordinal);
+
+        var lastAssistantMsg = history.LastOrDefault(m => m.Role == ChatRole.Assistant);
+        if (lastAssistantMsg != null)
+        {
+            var toolCalls = lastAssistantMsg.Contents.OfType<FunctionCallContent>().ToList();
+            if (toolCalls.Count > 0 && toolCalls.Any(tc => string.IsNullOrEmpty(tc.CallId) || !callIdsWithResults.Contains(tc.CallId)))
+            {
+                var index = history.IndexOf(lastAssistantMsg);
+                if (index >= 0)
+                {
+                    history.RemoveRange(index, history.Count - index);
+                }
+            }
+        }
     }
 
     private record SerializedMessageItem(

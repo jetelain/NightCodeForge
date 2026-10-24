@@ -127,6 +127,7 @@ public class DefaultOllamaChatClientFactory : IOllamaChatClientFactory
     private readonly IOptions<LlmProviderOptions> _options;
     private readonly ILoggerFactory _loggerFactory;
     private readonly NightCodeForge.Core.Interfaces.IOperationsTelemetryService _telemetryService;
+    private readonly NightCodeForge.Core.Interfaces.IOperationsControlService _operationsControlService;
     private readonly TimeProvider _timeProvider;
     private readonly IOptions<RetryPolicyOptions> _retryOptions;
     private readonly ConcurrentDictionary<string, IChatClient> _clientCache = new(StringComparer.OrdinalIgnoreCase);
@@ -135,12 +136,14 @@ public class DefaultOllamaChatClientFactory : IOllamaChatClientFactory
         IOptions<LlmProviderOptions> options,
         ILoggerFactory loggerFactory,
         NightCodeForge.Core.Interfaces.IOperationsTelemetryService telemetryService,
+        NightCodeForge.Core.Interfaces.IOperationsControlService operationsControlService,
         TimeProvider timeProvider,
         IOptions<RetryPolicyOptions> retryOptions)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+        _operationsControlService = operationsControlService ?? throw new ArgumentNullException(nameof(operationsControlService));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _retryOptions = retryOptions ?? throw new ArgumentNullException(nameof(retryOptions));
     }
@@ -164,7 +167,8 @@ public class DefaultOllamaChatClientFactory : IOllamaChatClientFactory
                 _retryOptions.Value,
                 routingTarget);
 
-            return new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, routingTarget.ToString(), _loggerFactory.CreateLogger<TelemetryChatClient>());
+            var telemetryClient = new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, routingTarget.ToString(), _loggerFactory.CreateLogger<TelemetryChatClient>());
+            return new OperationsPauseGatingChatClient(telemetryClient, _operationsControlService);
         });
     }
 

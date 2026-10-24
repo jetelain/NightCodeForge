@@ -29,8 +29,12 @@ public class StartupRecoveryIntegrationTests : IDisposable
     private StartupRecoveryService CreateRecoveryService(
         IWorkspaceRepository workspaceRepo,
         ITaskRepository taskRepo,
-        ITaskJobQueue jobQueue) =>
-        new(
+        ITaskJobQueue jobQueue)
+    {
+        var mockOps = new Mock<IOperationsControlService>();
+        mockOps.Setup(m => m.IsPaused).Returns(false);
+
+        return new(
             workspaceRepo,
             taskRepo,
             _runner,
@@ -40,7 +44,9 @@ public class StartupRecoveryIntegrationTests : IDisposable
             _pathResolver,
             _processRunner,
             new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
+            mockOps.Object,
             NullLogger<StartupRecoveryService>.Instance);
+    }
 
     private readonly IWorkspacePathResolver _pathResolver = new WorkspacePathResolver(
         new Mock<IWslMetadataService>().Object,

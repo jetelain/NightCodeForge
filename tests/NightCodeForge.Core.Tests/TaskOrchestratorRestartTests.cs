@@ -82,6 +82,7 @@ public class TaskOrchestratorRestartTests
                 builder.Streamer,
                 _cancellationManagerMock.Object,
                 builder.ConflictResolutionVerifier,
+                builder.OperationsControlService,
                 NullLogger<TaskOrchestrator>.Instance);
         }
 

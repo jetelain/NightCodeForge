@@ -15,6 +15,7 @@ public class ForgeTask
     public int MaxExecutedStageOrder { get; set; } = 0;
     public MergeMode MergeMode { get; set; } = MergeMode.ManualReviewRequired;
     public bool IsWaitingForHuman { get; set; } = false;
+    public bool IsDeferredByPause { get; set; } = false;
     public string? InterruptedAgentProfileId { get; set; }
     public string? InterruptedStageId { get; set; }
     public string CurrentStageId { get; set; } = string.Empty;

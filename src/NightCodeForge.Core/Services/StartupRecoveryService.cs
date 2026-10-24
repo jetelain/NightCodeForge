@@ -24,6 +24,7 @@ public class StartupRecoveryService : IStartupRecoveryService
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IProcessRunner _processRunner;
     private readonly IExecutionEnvironmentProvider _environmentProvider;
+    private readonly IOperationsControlService _operationsControlService;
     private readonly ILogger<StartupRecoveryService> _logger;
 
     private const string RecoveryNoticeContent = "[System Notice: Host restarted unexpectedly; workspace restored; resuming from previous conversation turn]";
@@ -41,6 +42,7 @@ public class StartupRecoveryService : IStartupRecoveryService
         IWorkspacePathResolver pathResolver,
         IProcessRunner processRunner,
         IExecutionEnvironmentProvider environmentProvider,
+        IOperationsControlService operationsControlService,
         ILogger<StartupRecoveryService> logger)
     {
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
@@ -52,6 +54,7 @@ public class StartupRecoveryService : IStartupRecoveryService
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _environmentProvider = environmentProvider ?? throw new ArgumentNullException(nameof(environmentProvider));
+        _operationsControlService = operationsControlService ?? throw new ArgumentNullException(nameof(operationsControlService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -327,6 +330,23 @@ public class StartupRecoveryService : IStartupRecoveryService
 
             task.PipelineDataJson = bag.ToJson();
 
+            if (_operationsControlService.IsPaused)
+            {
+                task.InterruptedStageId = stage.StageId;
+                task.IsDeferredByPause = true;
+                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                {
+                    TaskId = task.Id,
+                    Level = LogLevel.Information,
+                    Message = $"Host reboot recovery: Operations are paused. Held task #{task.Id} at stage '{stage.StageId}' without enqueuing.",
+                    Timestamp = DateTime.UtcNow
+                }, cancellationToken);
+                reconciledCount++;
+                continue;
+            }
+
+            task.IsDeferredByPause = false;
             await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {

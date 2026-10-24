@@ -72,7 +72,7 @@ flowchart TD
         WorkerPoll["Worker dequeues job while paused"]
         DeferJob["Exit cleanly; task preserved in Open status"]
         UserResume["User clicks '▶️ Resume Operations'"]
-        ReconcileResume["ResumeOperationsAsync:<br/>1. Set IsPaused = false<br/>2. Clear pause flags via ClearPause()<br/>3. Query all Open tasks with InterruptedStageId / CurrentStageId<br/>4. Re-enqueue all tasks via TaskJobQueue.EnqueueStage<br/>5. Broadcast resume event via SignalR"]
+        ReconcileResume["ResumeOperationsAsync:<br/>1. Persist IsPaused = false<br/>2. Clear pause flags via ClearPause()<br/>3. Query Open tasks with IsDeferredByPause = true<br/>4. Re-enqueue DAG-ready tasks via TaskJobQueue.EnqueueStage<br/>5. Broadcast resume event via SignalR"]
     end
 
     UserAction --> SetState
@@ -202,12 +202,18 @@ flowchart TD
 
 4. **`OperationsControlService` Concrete Implementation:**
    Implement in `src/NightCodeForge.Core/Services/OperationsControlService.cs`, registered as a **Singleton**:
-   - Thread-safe state using lock or `volatile bool _isPaused`.
-   - Injects `IOperationsStateStore` to persist state across server restarts.
-   - **Constructor Rule Adherence:** All service dependencies (`IOperationsStateStore`, `IOllamaRouterGatewayService`, `IWorkerStateService`, `ITaskCancellationManager`, `ITaskRepository`, `IWorkflowPipelineProvider`, `ITaskJobQueue`, `IDependencyResolutionEngine`, `IExecutionEnvironmentProvider`, `ILogger`) are **required parameters** with null-checks; optional parameters or fallback default values are strictly forbidden.
+   - **Concurrency Serialization:** Uses a `SemaphoreSlim(1, 1)` (`_operationsLock`) to serialize `PauseOperationsAsync` and `ResumeOperationsAsync` executions, preventing overlapping state mutations or premature VRAM eviction.
+   - **Dependency Lifetime Management:** Because `OperationsControlService` is a singleton, resolving scoped dependencies (`ITaskRepository`, `IWorkflowPipelineProvider`, `ITaskJobQueue`, `IDependencyResolutionEngine`, `IExecutionEnvironmentProvider`) directly in the constructor would produce captive dependencies. Therefore, `IServiceScopeFactory` is injected alongside singletons (`IOperationsStateStore`, `IOllamaRouterGatewayService`, `IWorkerStateService`, `ITaskCancellationManager`, `ILogger<OperationsControlService>`). Required scoped dependencies are resolved via `_scopeFactory.CreateScope()` per pause/resume cycle.
+   - **Canonical Worker State:** `TelemetryWorkerStateService` in `NightCodeForge.Infrastructure` is the single canonical implementation of `IWorkerStateService` across both Web and background processing.
+   - **Constructor Rule Adherence:** All service dependencies are **required parameters** with null-checks; optional parameters or fallback default values are strictly forbidden. Startup database exceptions rethrow to fail fast.
    - **Startup Recovery Interplay:**
      In [StartupRecoveryService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/StartupRecoveryService.cs), inject `IOperationsControlService` as a required constructor dependency.
-     If `_operationsControlService.IsPaused` is true on boot, Git locks, Ext4 mirrors, and container cleanup are reconciled normally, but active/orphaned tasks are checkpointed with `InterruptedStageId` and held in `Open` status without enqueuing to Hangfire. They will be dispatched when `ResumeOperationsAsync` is called.
+      If `_operationsControlService.IsPaused` is true on boot, Git locks, Ext4 mirrors, and container cleanup are reconciled normally, but active/orphaned tasks are checkpointed with `InterruptedStageId`, marked with `IsDeferredByPause = true`, and held in `Open` status without enqueuing to Hangfire. They will be dispatched when `ResumeOperationsAsync` is called.
+    - **Persistence Failure & Rollback Semantics (No Half-Applied State):**
+      - In `PauseOperationsAsync`: active task pause is requested (`RequestPause`), then state persistence `SetIsPausedAsync(true)` is called. If persistence throws, the pause request is rolled back via `ClearPause`, in-memory states (`_isPaused`, `ReclaimStatus`) remain untouched, and `InvalidOperationException` is thrown.
+      - In `ResumeOperationsAsync`: state persistence `SetIsPausedAsync(false)` is called *before* changing in-memory state. If persistence throws, `_isPaused` remains `true`, no tasks are re-enqueued, and `InvalidOperationException` is thrown.
+   - **SignalR State Broadcasting:**
+     `SignalRActivityBridgeService` subscribes to `IOperationsControlService.OnOperationsStateChanged` and broadcasts `ReceiveOperationsStatusChanged(isPaused, reclaimStatus, lastReclaimError)` to all connected SignalR clients.
    - **Blazor UI Lifecycle & Disposal Rule:**
      Components subscribing to `OnOperationsStateChanged` must dispatch UI updates using `await InvokeAsync(StateHasChanged)` and must implement `IDisposable` to unsubscribe when torn down.
 
@@ -221,11 +227,16 @@ flowchart TD
    void RequestPause(int taskId);
    bool IsPauseRequested(int taskId);
    void ClearPause(int taskId);
+   void ClearAllPauses();
    ```
+   `ClearAllPauses()` clears all tracked pause states on resume, while `Unregister(taskId, cts)` cleans up task pause registrations upon task completion or cancellation.
 
 2. **Cancellation vs. Pause Precedence in `TaskOrchestrator.ProcessTaskAsync`:**
    Inject `IOperationsControlService` as a required constructor dependency of `TaskOrchestrator`.
-   When catching `OperationCanceledException`:
+   - **Pause Signal Before Flag Set:** `PauseOperationsAsync` signals active task pauses (`RequestPause`) before setting `_isPaused = true`, eliminating the race window where inference throws `OperationsPausedException` before pause is recorded.
+   - **Completed Stage Handling:** If a stage completes successfully before pause is acknowledged, `TaskOrchestrator` checkpoints the *next* stage in the pipeline (or `TargetRoutingStageId`), preventing completed stages from re-executing upon resume.
+   - **Preserving Interrupted Stage Id:** `ResumeOperationsAsync` leaves `task.InterruptedStageId` intact when re-enqueuing. `TaskOrchestrator` uses `InterruptedStageId` to detect `isResumedRun`, ensuring uncommitted disk edits are preserved via `SyncAllTasksFromDiskAsync` and the conflict-resolution budget is reset. `TaskOrchestrator` clears `InterruptedStageId` on entry.
+   - **Catch and Handlers:**
    ```csharp
    if (_cancellationManager.IsCancelRequested(taskId))
    {
@@ -248,6 +259,7 @@ flowchart TD
        task.InterruptedStageId = stage.StageId;
        task.InterruptedAgentProfileId = profile?.Id;
        task.IsWaitingForHuman = false;
+        task.IsDeferredByPause = true;
 
        await _taskRepository.UpdateWithHistoryAsync(
            task,
@@ -257,7 +269,7 @@ flowchart TD
        return;
    }
    ```
-   - The task is **never marked `Failed` or `Cancelled`** on pause. It remains in `Open` status with `InterruptedStageId` checkpointed.
+    - The task is **never marked `Failed` or `Cancelled`** on pause. It remains in `Open` status with `InterruptedStageId` checkpointed and `IsDeferredByPause = true`.
    - **Atomic Non-Cancellable Critical Sections:** Critical Git operations (committing merge resolutions, squash merges, pushing to `host-origin`) execute using `CancellationToken.None` (or non-cancellable wrapper) so that pause interruption never leaves a dirty, unfinalized Git index mid-commit.
 
 ---
@@ -343,36 +355,64 @@ To guarantee models are not accidentally re-loaded into GPU VRAM while the opera
            : base(message) { }
    }
    ```
-2. In `OllamaRouterGatewayService.cs`, `CrucibleClient.cs`, and any inference dispatchers:
-   - Before executing any prompt generation or `/api/generate` call, check `_operationsControlService.IsPaused`.
-   - If paused, fail fast with `OperationsPausedException`.
-   - Out-of-band operations (such as ideation triage, task suggestions, router health queries, or background prompt builders) are prevented from consuming VRAM.
+2. **Inference Gate Architecture:**
+   - All agentic, review, suggestion, and tool inference goes through `IChatClient` instances created by the client factory.
+   - `OperationsPauseGatingChatClient` wraps `IChatClient`, checking `_operationsControlService.IsPaused` prior to every streaming or non-streaming chat completion, throwing `OperationsPausedException` if paused.
+   - JIT model preloading in `OllamaModelPreloadService` similarly inspects `_operationsControlService.IsPaused` and aborts preloads when paused.
+   - `OllamaRouterGatewayService` provides status monitoring, resident model introspection, and VRAM eviction (`ReclaimVramAsync` posting `keep_alive: "0s"`), not inference generation.
+   - Both `CrucibleAgentHarness` and `TaskOrchestrator` catch `OperationsPausedException` and handle it as an operational pause/suspension (marking conversations `Interrupted` rather than failing the task).
 
 ---
 
 ### 3.6 Resumption Reconciler & Worker Queue Management
 
-1. **Worker Queue Gate:**
+1. **Worker Queue Gate Ordering:**
    At the entry of [TaskOrchestrator.ProcessTaskAsync](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs):
-   ```csharp
-   if (_operationsControlService.IsPaused)
-   {
-       _logger.LogInformation("Task #{TaskId} execution deferred: operations are globally paused.", taskId);
-       return;
-   }
-   ```
+   - The task is fetched and checked for existence (`task == null` logs error and exits).
+   - The task is checked for terminal status (`Cancelled`, `Closed`, `Rejected`). If in terminal status, it exits immediately without setting any pause flags. This prevents cancelled or closed tasks dequeued during a pause from being flagged as deferred and auto-starting if later reopened.
+   - Only after terminal status checks, if operations are paused (`_operationsControlService.IsPaused`), the gate intercepts execution:
+     ```csharp
+     if (_operationsControlService.IsPaused)
+     {
+         _logger.LogInformation("Task #{TaskId} execution deferred: operations are globally paused.", taskId);
+         if (task.Status == TaskOverallStatus.Open)
+         {
+             task.IsDeferredByPause = true;
+             await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+         }
+         return;
+     }
+     ```
+   - Only tasks in `TaskOverallStatus.Open` are flagged with `IsDeferredByPause = true`.
+
 2. **Resumption Reconciliation (`ResumeOperationsAsync`):**
    When the user clicks **"▶️ Resume Operations"**:
-   - Set `_isPaused = false` and `ReclaimStatus = OperationsReclaimStatus.Idle`.
-   - Clear all pause flags via `_cancellationManager.ClearPause(taskId)`.
-   - **Re-enqueue Orphaned / Interrupted Tasks with DAG Validation:**
-     Query `taskRepository` for all tasks where:
-     `t.Status == TaskOverallStatus.Open && !t.IsWaitingForHuman && (t.InterruptedStageId != null || t.CurrentStageId != null)`
+   - If `_isPaused` is true:
+     - Persist `_stateStore.SetIsPausedAsync(false)` to database first (fails fast and rolls back if database throws).
+     - Set in-memory `_isPaused = false` and `ReclaimStatus = OperationsReclaimStatus.Idle`.
+     - Clear all pause flags across all tasks via `_cancellationManager.ClearAllPauses()`.
+   - If `_isPaused` is already false:
+     - Check if any open tasks remain deferred (`!t.IsWaitingForHuman && t.IsDeferredByPause`).
+     - If none remain, exit early returning `true`.
+     - If deferred tasks remain (e.g. from a prior transient re-enqueue error or retry request), proceed with reconciliation retry rather than short-circuiting.
+   - **Re-enqueue In-Flight / Paused Tasks with DAG Validation:**
+     Query `taskRepository` specifically for tasks deferred by pause:
+     `t.Status == TaskOverallStatus.Open && !t.IsWaitingForHuman && t.IsDeferredByPause`
      For each candidate task:
-     - Verify DAG readiness via `await _dependencyEngine.IsReadyForExecutionAsync(task.Id, cancellationToken)`. If dependencies are still pending, do not dispatch to Hangfire.
-     - Resolve target stage definition from workflow (using `InterruptedStageId` or `CurrentStageId`, or initial stage if blank).
+     - Wrap dispatch in individual `try/catch` block to guarantee subsequent tasks are still processed if one encounters an error.
+     - Verify DAG readiness via `await _dependencyEngine.IsReadyForExecutionAsync(task.Id, cancellationToken)`.
+     - **Clearing Pause Flag on Unready Dependent Tasks:** If `IsReadyForExecutionAsync` returns `false`, `task.IsDeferredByPause` is explicitly cleared to `false` and persisted, skipping Hangfire dispatch. Because operations are now unpaused, the task is no longer deferred by pause—it is simply waiting on prerequisite completion according to standard DAG rules. When its prerequisites merge, `ResolveCascadeUnblockedTasksAsync` will naturally enqueue it; if prerequisites complete through alternate channels (e.g. manual closure, rejection, or cancellation), the task is not left with a stuck `IsDeferredByPause` flag.
+     - Resolve target stage definition from workflow: uses `task.InterruptedStageId ?? task.CurrentStageId`, falling back to `pipeline.InitialStage`.
+     - Preserves `task.InterruptedStageId` so `TaskOrchestrator` detects `isResumedRun` (reserving uncommitted disk edits and resetting the conflict budget).
+     - Sets `task.IsDeferredByPause = false` and updates database.
      - Enqueue via `_taskJobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority)`.
-   - Broadcast SignalR activity event to update all client views.
+   - Notify subscribers via `OnOperationsStateChanged?.Invoke(false)` and broadcast SignalR activity event via `ReceiveOperationsStatusChanged`.
+   - If any candidate task failed to re-enqueue, throw `AggregateException` to report the failures to caller/UI.
+
+3. **DAG Cascade Unblocking & Manual Retry Guarantees:**
+   - **Automatic Cascade Unblocking on Prerequisite Merge:** When a prerequisite task completes and squash-merges ([TaskOrchestrator.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs#L2224)), `_dependencyEngine.ResolveCascadeUnblockedTasksAsync(task.Id)` queries all dependent tasks whose prerequisites are now closed. For each unblocked task, `TaskOrchestrator` explicitly sets `unblockedTask.IsDeferredByPause = false`, enqueues its initial stage, and updates the repository. Thus, dependent tasks never remain stuck deferred once prerequisites merge.
+   - **UI "Retry N Deferred Tasks" Action:** When operations are active (`!IsPaused`) but deferred tasks remain (e.g. due to a transient re-enqueue exception), `TopNavBar.razor` renders `#nav-btn-retry-deferred` ("🔄 Retry Deferred (N)") and `ActiveOperationsHero.razor` renders `#deferred-tasks-retry-card` with an explicit dispatch retry button, calling `ResumeOperationsAsync()` to re-attempt reconciliation without requiring a full pause/resume cycle.
+   - **Intended Granular Recovery in DevQueue:** In [DevQueueService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Services/DevQueueService.cs), `RequeueJobAsync`, `RetryStageAsync`, and `RestartPipelineAsync` (via `TaskOrchestrator.RestartTaskPipelineAsync`) all explicitly clear `task.IsDeferredByPause = false`, giving operators direct UI controls to re-dispatch or retry any task individually.
 
 ---
 
@@ -383,6 +423,10 @@ To guarantee models are not accidentally re-loaded into GPU VRAM while the opera
      - Button: `⏸️ Pause Operations` (or `⏸️ Pause`)
      - Class: `forge-btn forge-btn-secondary btn-sm`
      - Tooltip: *"Pause background operations & unload GPU VRAM for gaming or dedicated workloads"*
+   - **When Running with Deferred Tasks Remaining (Pending Retry):**
+     - Button: `🔄 Retry Deferred (N)` (`#nav-btn-retry-deferred`)
+     - Class: `forge-btn forge-btn-warning btn-sm`
+     - Clicking executes `ResumeOperationsAsync()` to re-attempt reconciliation.
    - **When Paused:**
      - Button: `▶️ Resume Operations`
      - Class: `forge-btn forge-btn-warning btn-sm btn-pulse-amber`
@@ -391,8 +435,9 @@ To guarantee models are not accidentally re-loaded into GPU VRAM while the opera
      - Render warning badge adjacent to button: `⚠️ GPU Reclaim Incomplete` with tooltip showing `LastReclaimError`.
 
 2. **Operations Telemetry Console (`ActiveOperationsHero.razor` / `/monitoring`):**
-   - High-visibility amber status card explaining Gamer / Dedicated Workload Mode.
+   - High-visibility amber status card explaining Gamer / Dedicated Workload Mode when paused.
    - Shows VRAM eviction status (`Evicted` vs `Failed`).
+   - High-visibility alert card (`#deferred-tasks-retry-card`) when running with deferred tasks remaining, providing one-click "🔄 Retry Dispatch (N)".
 
 3. **Kanban & DevQueue Awareness:**
    - [DevQueueTable.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/DevQueue/DevQueueTable.razor) and [Backlog.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Backlog.razor) display a paused warning banner indicating that queue advancement is suspended.

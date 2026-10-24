@@ -28,8 +28,16 @@ public class StartupRecoveryTests : IDisposable
         _jobQueue = new FakeTaskJobQueue();
     }
 
-    private StartupRecoveryService CreateRecoveryService(IWorkflowPipelineProvider? pipelineProvider = null)
+    private StartupRecoveryService CreateRecoveryService(IWorkflowPipelineProvider? pipelineProvider = null, IOperationsControlService? operationsControlService = null)
     {
+        var ops = operationsControlService;
+        if (ops == null)
+        {
+            var mock = new Moq.Mock<IOperationsControlService>();
+            mock.Setup(m => m.IsPaused).Returns(false);
+            ops = mock.Object;
+        }
+
         return new StartupRecoveryService(
             _workspaceRepo,
             _taskRepo,
@@ -40,6 +48,7 @@ public class StartupRecoveryTests : IDisposable
             new Moq.Mock<IWorkspacePathResolver>().Object,
             new Moq.Mock<IProcessRunner>().Object,
             new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Moq.Mock<IExecutionEnvironment>().Object),
+            ops,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<StartupRecoveryService>.Instance);
     }
 

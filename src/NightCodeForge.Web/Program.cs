@@ -85,7 +85,6 @@ builder.Services.AddNightCodeForgeHangfireServers();
 
 // Register SignalR Telemetry Hub & Streaming Infrastructure
 builder.Services.AddSignalR();
-builder.Services.AddHostedService<NightCodeForge.Infrastructure.Hubs.SignalRActivityBridgeService>();
 builder.Services.AddScoped<OrchestratorHubClientConnection>();
 
 var app = builder.Build();

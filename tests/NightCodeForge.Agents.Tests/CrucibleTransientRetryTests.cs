@@ -202,4 +202,36 @@ public class CrucibleTransientRetryTests : IDisposable
         // Must fail immediately on invocation 1 without retrying since inner HTTP handler already exhausted retries
         Assert.Equal(1, invocationCount);
     }
+
+    [Fact]
+    public async Task CrucibleAgent_WhenOperationsPausedExceptionThrown_SuspendsAsInterrupted_WithoutRetry()
+    {
+        int invocationCount = 0;
+        var client = new ScriptedChatClient((messages, options, ct) =>
+        {
+            Interlocked.Increment(ref invocationCount);
+            throw new NightCodeForge.Core.Exceptions.OperationsPausedException("Global operations are paused (GPU VRAM reclaimed).");
+        });
+
+        var taskRepo = new InMemoryTaskRepository();
+        var harness = new TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = client,
+            TaskRepository = taskRepo
+        }.Build();
+
+        var context = NewContext();
+        await taskRepo.CreateAsync(context.ForgeTask);
+
+        // RunStageAsync should suspend on pause and rethrow OperationCanceledException instead of failing or retrying
+        await Assert.ThrowsAsync<OperationCanceledException>(() => harness.RunStageAsync(context, CancellationToken.None));
+
+        // It must NOT retry on OperationsPausedException
+        Assert.Equal(1, invocationCount);
+
+        // Active conversation must be marked Interrupted
+        var convs = await taskRepo.GetConversationsAsync(context.ForgeTask.Id);
+        var conv = Assert.Single(convs);
+        Assert.Equal(StageExecutionStatus.Interrupted, conv.Status);
+    }
 }

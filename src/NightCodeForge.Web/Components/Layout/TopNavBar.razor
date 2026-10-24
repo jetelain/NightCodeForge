@@ -2,6 +2,8 @@
 @inject WorkspaceStateService WorkspaceState
 @inject WorkerStateService WorkerState
 @inject NavigationManager Navigation
+@inject NightCodeForge.Core.Interfaces.IOperationsControlService OperationsControl
+@inject ToastService ToastService
 @inject ILogger<TopNavBar> Logger
 @implements IDisposable
 
@@ -45,6 +47,56 @@
     </div>
 
     <div class="top-navbar-right">
+        <!-- Global Operations Pause / Resume (Gamer Mode) -->
+        @if (!OperationsControl.IsPaused)
+        {
+            @if (_deferredTaskCount > 0)
+            {
+                <button type="button"
+                        class="forge-btn forge-btn-warning btn-sm"
+                        id="nav-btn-retry-deferred"
+                        disabled="@_isTogglingPause"
+                        title="Retry dispatching @_deferredTaskCount deferred task(s)"
+                        @onclick="RetryDeferredTasksAsync">
+                    <span>🔄</span>
+                    <span>Retry Deferred (@_deferredTaskCount)</span>
+                </button>
+            }
+
+            <button type="button"
+                    class="forge-btn forge-btn-secondary btn-sm"
+                    id="nav-btn-pause-operations"
+                    disabled="@_isTogglingPause"
+                    title="Pause background operations & unload GPU VRAM for gaming or dedicated workloads"
+                    @onclick="TogglePauseOperationsAsync">
+                <span>⏸️</span>
+                <span>@(_isTogglingPause ? "Pausing..." : "Pause Operations")</span>
+            </button>
+        }
+        else
+        {
+            <button type="button"
+                    class="forge-btn forge-btn-warning btn-sm btn-pulse-amber"
+                    id="nav-btn-resume-operations"
+                    disabled="@_isTogglingPause"
+                    title="Operations paused. Host GPU VRAM is free. Click to resume operations."
+                    @onclick="TogglePauseOperationsAsync">
+                <span>▶️</span>
+                <span>@(_isTogglingPause ? "Resuming..." : "Resume Operations")</span>
+            </button>
+        }
+
+        @if (OperationsControl.ReclaimStatus == NightCodeForge.Core.Domain.OperationsReclaimStatus.Failed)
+        {
+            <span class="badge bg-danger-subtle text-danger border border-danger-subtle ms-1"
+                  id="nav-badge-reclaim-failed"
+                  title="@(OperationsControl.LastReclaimError ?? "VRAM reclaim incomplete")"
+                  style="font-size: 0.75rem; padding: 0.25rem 0.5rem; display: inline-flex; align-items: center; gap: 0.25rem;">
+                <span>⚠️</span>
+                <span>GPU Reclaim Incomplete</span>
+            </span>
+        }
+
         <!-- Global + New Task Button -->
         <NavLink href="tasks/new" class="forge-btn forge-btn-primary btn-sm" id="nav-btn-new-task" style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.75rem; font-size: 0.82rem;" title="Create a new task">
             <span>➕</span>
@@ -66,15 +118,88 @@
     private IReadOnlyList<Workspace> _workspaces = Array.Empty<Workspace>();
     private string _currentSection = "Overview";
     private bool _disposed;
+    private bool _isTogglingPause;
+    private int _deferredTaskCount;
 
     protected override async Task OnInitializedAsync()
     {
         WorkspaceState.OnWorkspaceChanged += HandleStateChanged;
         WorkerState.OnWorkerStateChanged += HandleStateChanged;
         Navigation.LocationChanged += HandleLocationChanged;
+        OperationsControl.OnOperationsStateChanged += HandleOperationsStateChanged;
 
         await LoadWorkspacesAsync();
         UpdateCurrentSection(Navigation.Uri);
+        await RefreshDeferredCountAsync();
+    }
+
+    private async void HandleOperationsStateChanged(bool isPaused)
+    {
+        if (_disposed) return;
+        await RefreshDeferredCountAsync();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RefreshDeferredCountAsync()
+    {
+        try
+        {
+            _deferredTaskCount = await OperationsControl.GetDeferredTaskCountAsync();
+        }
+        catch
+        {
+            // Best-effort state hydration
+        }
+    }
+
+    private async Task RetryDeferredTasksAsync()
+    {
+        if (_isTogglingPause) return;
+        _isTogglingPause = true;
+        try
+        {
+            await OperationsControl.ResumeOperationsAsync();
+            await RefreshDeferredCountAsync();
+            ToastService.Show("Operations Resumed", "Deferred tasks have been re-enqueued for execution.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to retry deferred operations.");
+            ToastService.Show("Operations Control Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isTogglingPause = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task TogglePauseOperationsAsync()
+    {
+        if (_isTogglingPause) return;
+        _isTogglingPause = true;
+        try
+        {
+            if (OperationsControl.IsPaused)
+            {
+                await OperationsControl.ResumeOperationsAsync();
+            }
+            else
+            {
+                await OperationsControl.PauseOperationsAsync();
+            }
+            await RefreshDeferredCountAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to toggle operations pause state.");
+            ToastService.Show("Operations Control Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isTogglingPause = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private async Task LoadWorkspacesAsync()
@@ -154,5 +279,6 @@
         WorkspaceState.OnWorkspaceChanged -= HandleStateChanged;
         WorkerState.OnWorkerStateChanged -= HandleStateChanged;
         Navigation.LocationChanged -= HandleLocationChanged;
+        OperationsControl.OnOperationsStateChanged -= HandleOperationsStateChanged;
     }
 }

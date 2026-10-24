@@ -70,6 +70,7 @@ public class NavMenuShellTests : BunitContext
         Services.AddSingleton<NightCodeForge.Core.Repositories.IWorkspaceRepository>(new NightCodeForge.Core.Repositories.InMemoryWorkspaceRepository());
         Services.AddSingleton(new WorkspaceStateService());
         Services.AddSingleton(TestServices.CreateToastService());
+        Services.AddSingleton(TestServices.CreateOperationsControlService());
         Services.AddSingleton(new Moq.Mock<IWorkspaceProvisioningService>().Object);
         Services.AddSingleton(Microsoft.Extensions.Logging.Abstractions.NullLogger<TopNavBar>.Instance);
 
