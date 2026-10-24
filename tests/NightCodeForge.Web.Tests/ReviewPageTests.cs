@@ -79,6 +79,7 @@ public class ReviewPageTests : BunitContext
             Id = 55,
             Title = "Refactor JSON Parser",
             Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true,
             MergeMode = MergeMode.ManualReviewRequired,
             BaseBranch = "main",
             FeatureBranch = "feature/task-55",
@@ -132,6 +133,7 @@ public class ReviewPageTests : BunitContext
             Id = 60,
             Title = "Feature Gate Check",
             Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true,
             MergeMode = MergeMode.ManualReviewRequired,
             PipelineDataJson = new PipelineDataBag().ToJson()
         };
@@ -155,6 +157,78 @@ public class ReviewPageTests : BunitContext
         // Close approve modal
         cut.Find("#btn-approve-close").Click();
         Assert.Null(cut.FindAll("#approve-merge-modal").FirstOrDefault());
+    }
+
+    [Fact]
+    public async Task ReviewRoom_WhenTaskInFlight_RendersInFlightBannerAndHidesActionButtons()
+    {
+        var task = new ForgeTask
+        {
+            Id = 90,
+            Title = "In-Flight Gates Task",
+            Status = TaskOverallStatus.Implemented,
+            HasExecutionRun = true,
+            MergeMode = MergeMode.ManualReviewRequired,
+            PipelineDataJson = new PipelineDataBag().ToJson()
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<Review>(parameters => parameters
+            .Add(p => p.TaskId, 90));
+
+        // In-flight banner is rendered
+        Assert.NotNull(cut.Find("#alert-in-flight-review"));
+        Assert.Contains("undergoing automated quality gates and code review", cut.Markup);
+        Assert.Contains("/inspector/90", cut.Markup);
+
+        // Action buttons are NOT rendered
+        Assert.Null(cut.FindAll("#btn-request-changes").FirstOrDefault());
+        Assert.Null(cut.FindAll("#btn-approve-merge").FirstOrDefault());
+    }
+
+    [Fact]
+    public async Task ReviewRoom_WhenConflictResolved_RendersBannerOnlyWhenReady()
+    {
+        var bagWithConflict = new PipelineDataBag();
+        bagWithConflict.Set(PipelineDataBagKeys.HasResolvedConflict, true);
+
+        // Ready task with resolved conflict
+        var readyTask = new ForgeTask
+        {
+            Id = 91,
+            Title = "Ready Conflict Task",
+            Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true,
+            MergeMode = MergeMode.ManualReviewRequired,
+            PipelineDataJson = bagWithConflict.ToJson()
+        };
+        await _taskRepository.CreateAsync(readyTask);
+
+        var readyCut = Render<Review>(parameters => parameters
+            .Add(p => p.TaskId, 91));
+
+        Assert.NotNull(readyCut.Find("#alert-re-review-conflict"));
+        Assert.Contains("Autonomous Conflict Resolution Completed", readyCut.Markup);
+        Assert.NotNull(readyCut.Find("#btn-request-changes"));
+
+        // Implemented task with resolved conflict (still in flight downstream)
+        var inFlightTask = new ForgeTask
+        {
+            Id = 92,
+            Title = "In-Flight Conflict Task",
+            Status = TaskOverallStatus.Implemented,
+            HasExecutionRun = true,
+            MergeMode = MergeMode.ManualReviewRequired,
+            PipelineDataJson = bagWithConflict.ToJson()
+        };
+        await _taskRepository.CreateAsync(inFlightTask);
+
+        var inFlightCut = Render<Review>(parameters => parameters
+            .Add(p => p.TaskId, 92));
+
+        Assert.Null(inFlightCut.FindAll("#alert-re-review-conflict").FirstOrDefault());
+        Assert.NotNull(inFlightCut.Find("#alert-in-flight-review"));
+        Assert.Null(inFlightCut.FindAll("#btn-request-changes").FirstOrDefault());
     }
 
     [Fact]

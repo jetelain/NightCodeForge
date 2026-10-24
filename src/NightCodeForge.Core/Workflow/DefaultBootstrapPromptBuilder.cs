@@ -138,14 +138,22 @@ public static class DefaultBootstrapPromptBuilder
         {
             var conflictBaseBranch = context.DataBag.Get<string>(PipelineDataBagKeys.ConflictBaseBranch) ?? baseBranch;
             var fileListText = string.Join("\n", conflictFiles.Select(f => $"- {f}"));
+            var diagnosticsBlock = string.Empty;
+            if (compilerErrors is { Count: > 0 })
+            {
+                var errorsText = string.Join("\n", compilerErrors);
+                diagnosticsBlock = $"\nPREVIOUS COMPILER DIAGNOSTICS (Resolve these compilation errors):\n```\n{errorsText}\n```\n";
+            }
+
             var conflictDirective = string.Format(
                 ConflictResolutionConstants.ConflictDirectiveFormat,
                 conflictBaseBranch,
                 fileListText,
                 buildCommand,
-                testCommand).Trim();
+                testCommand,
+                diagnosticsBlock).Trim();
 
-            rendered = $"{rendered}\n\n{conflictDirective}".Trim();
+            rendered = $"{conflictDirective}\n\n{rendered}".Trim();
         }
 
         return rendered;

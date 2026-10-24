@@ -1,7 +1,11 @@
 using Hangfire;
 using Hangfire.MemoryStorage;
 using Hangfire.States;
+using Microsoft.Extensions.Logging.Abstractions;
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.BackgroundJobs;
+using Xunit;
 
 namespace NightCodeForge.Infrastructure.Tests;
 
@@ -14,7 +18,7 @@ public class HangfireQueuePriorityTests
 
         Assert.Equal("NCF-LLM-Inference-Worker", options.ServerName);
         Assert.Equal(1, options.WorkerCount);
-        Assert.Equal(new[] { HangfireQueues.LlmUrgent, HangfireQueues.LlmInference }, options.Queues);
+        Assert.Equal(HangfireQueues.InferenceQueues, options.Queues);
     }
 
     [Fact]
@@ -122,7 +126,7 @@ public class HangfireQueuePriorityTests
     {
         var storage = new MemoryStorage();
         var client = new BackgroundJobClient(storage);
-        var queue = new HangfireTaskJobQueue(client);
+        var queue = new HangfireTaskJobQueue(client, storage, NullLogger<HangfireTaskJobQueue>.Instance);
 
         var jobId = queue.EnqueueUrgent(101);
 
@@ -137,16 +141,25 @@ public class HangfireQueuePriorityTests
         var stateData = connection.GetStateData(jobId);
         Assert.NotNull(stateData);
         Assert.Equal(HangfireQueues.LlmUrgent, stateData.Data["Queue"]);
+
+        var param = connection.GetJobParameter(jobId, "OriginalEnqueuedAt");
+        Assert.NotNull(param);
     }
 
-    [Fact]
-    public void HangfireTaskJobQueue_EnqueueInference_EnqueuesToLlmInferenceQueue()
+    [Theory]
+    [InlineData(StageQueueTier.CodeReview, TaskPriority.Normal, HangfireQueues.LlmCodeReview)]
+    [InlineData(StageQueueTier.Implementation, TaskPriority.Normal, HangfireQueues.LlmImplementation)]
+    [InlineData(StageQueueTier.TaskReview, TaskPriority.Normal, HangfireQueues.LlmTaskReview)]
+    [InlineData(StageQueueTier.CodeReview, TaskPriority.Critical, HangfireQueues.LlmUrgent)]
+    [InlineData(StageQueueTier.Implementation, TaskPriority.Critical, HangfireQueues.LlmUrgent)]
+    [InlineData(StageQueueTier.TaskReview, TaskPriority.Critical, HangfireQueues.LlmUrgent)]
+    public void HangfireTaskJobQueue_EnqueueStage_RoutesToCorrectQueue(StageQueueTier tier, int priority, string expectedQueue)
     {
         var storage = new MemoryStorage();
         var client = new BackgroundJobClient(storage);
-        var queue = new HangfireTaskJobQueue(client);
+        var queue = new HangfireTaskJobQueue(client, storage, NullLogger<HangfireTaskJobQueue>.Instance);
 
-        var jobId = queue.EnqueueInference(202);
+        var jobId = queue.EnqueueStage(202, tier, priority);
 
         Assert.NotNull(jobId);
         using var connection = storage.GetConnection();
@@ -154,11 +167,42 @@ public class HangfireQueuePriorityTests
         Assert.NotNull(jobData);
         Assert.Equal("ProcessTaskAsync", jobData.Job.Method.Name);
         Assert.Equal(202, jobData.Job.Args[0]);
-        Assert.Equal(default(CancellationToken), jobData.Job.Args[1]);
 
         var stateData = connection.GetStateData(jobId);
         Assert.NotNull(stateData);
-        Assert.Equal(HangfireQueues.LlmInference, stateData.Data["Queue"]);
+        Assert.Equal(expectedQueue, stateData.Data["Queue"]);
+
+        var param = connection.GetJobParameter(jobId, "OriginalEnqueuedAt");
+        Assert.NotNull(param);
+    }
+
+    [Theory]
+    [InlineData(TaskPriority.Normal)]
+    [InlineData(TaskPriority.Critical)]
+    public void HangfireTaskJobQueue_EnqueueStage_ThrowsOnInvalidTier(int priority)
+    {
+        var storage = new MemoryStorage();
+        var client = new BackgroundJobClient(storage);
+        var queue = new HangfireTaskJobQueue(client, storage, NullLogger<HangfireTaskJobQueue>.Instance);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            queue.EnqueueStage(303, (StageQueueTier)999, priority));
+    }
+
+    [Fact]
+    public void HangfireTaskJobQueue_EnqueueStage_PreservesCustomOriginalEnqueuedAt()
+    {
+        var storage = new MemoryStorage();
+        var client = new BackgroundJobClient(storage);
+        var queue = new HangfireTaskJobQueue(client, storage, NullLogger<HangfireTaskJobQueue>.Instance);
+
+        var customTime = new DateTime(2026, 1, 15, 10, 30, 0, DateTimeKind.Utc);
+        var jobId = queue.EnqueueStage(304, StageQueueTier.Implementation, TaskPriority.Normal, customTime);
+
+        using var connection = storage.GetConnection();
+        var param = connection.GetJobParameter(jobId, "OriginalEnqueuedAt");
+        Assert.NotNull(param);
+        Assert.Equal(new DateTimeOffset(customTime, TimeSpan.Zero).ToString("O"), param);
     }
 
     [Fact]

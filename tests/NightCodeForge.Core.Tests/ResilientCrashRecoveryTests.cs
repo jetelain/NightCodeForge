@@ -151,8 +151,8 @@ public class ResilientCrashRecoveryTests
         // 7. Assert: interrupted conversation is closed (the harness resumes in a new one)
         Assert.Equal(StageExecutionStatus.Failed, fullConv.Status);
 
-        // 8. Assert: Enqueued to llm-urgent
-        Assert.Contains(task.Id, _jobQueue.UrgentQueue);
+        // 8. Assert: Enqueued to stage queue
+        Assert.Contains(task.Id, _jobQueue.TaskReviewQueue);
     }
 
     [Fact]
@@ -223,7 +223,7 @@ public class ResilientCrashRecoveryTests
         {
             Id = 402,
             WorkspaceId = workspace.Id,
-            Status = TaskOverallStatus.Implemented,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = DeterministicTestWithCoverageGate.DefaultStageId,
             PipelineDataJson = bag.ToJson()
         });
@@ -271,8 +271,8 @@ public class ResilientCrashRecoveryTests
         Assert.Equal(StageExecutionStatus.Failed, supersededConv.Status);
         Assert.Contains("reset for clean re-run", supersededConv.Summary);
 
-        // Re-enqueued to urgent for fresh execution
-        Assert.Contains(task.Id, _jobQueue.UrgentQueue);
+        // Re-enqueued to stage tier for fresh execution
+        Assert.Contains(task.Id, _jobQueue.ImplementationQueue);
     }
 
     [Fact]
@@ -378,7 +378,7 @@ public class ResilientCrashRecoveryTests
         Assert.NotNull(closedConv);
         Assert.Equal(StageExecutionStatus.Failed, closedConv.Status);
 
-        Assert.Contains(task.Id, _jobQueue.UrgentQueue);
+        Assert.Contains(task.Id, _jobQueue.TaskReviewQueue);
     }
 
     [Fact]

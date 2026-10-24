@@ -175,7 +175,7 @@ public class TaskOrchestratorTests
 
         var updated = await _taskRepo.GetByIdAsync(35);
         Assert.NotNull(updated);
-        Assert.Equal(TaskOverallStatus.Reviewed, updated.Status);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
         Assert.Equal("implementation", updated.CurrentStageId);
 
         var history = await _taskRepo.GetHistoryAsync(35);
@@ -185,7 +185,7 @@ public class TaskOrchestratorTests
         Assert.Equal(AuditActors.User, latest.ChangedBy);
         Assert.Contains("Reviewer requested changes", latest.ChangeReason);
         Assert.Contains("Need unit tests for edge cases", latest.ChangeReason);
-        Assert.Equal(TaskOverallStatus.Reviewed, latest.Status);
+        Assert.Equal(TaskOverallStatus.Open, latest.Status);
     }
 
     [Fact]

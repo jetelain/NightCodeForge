@@ -125,6 +125,7 @@ public class InMemoryWorkflowRepository : IWorkflowRepository
                     DisplayName = s.DisplayName,
                     Icon = s.Icon,
                     SequenceOrder = s.SequenceOrder,
+                    QueueTier = s.QueueTier,
                     Kind = s.Kind,
                     CsharpImplementationType = s.CsharpImplementationType,
                     ConfigurationJson = s.ConfigurationJson,

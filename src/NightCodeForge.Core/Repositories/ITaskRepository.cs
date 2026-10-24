@@ -1,4 +1,5 @@
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 
 namespace NightCodeForge.Core.Repositories;
 
@@ -22,6 +23,11 @@ public interface ITaskRepository
     Task<ForgeTask> CreateWithBaselineAsync(ForgeTask task, IEnumerable<int>? dependsOn, string createdBy, string? reason, CancellationToken cancellationToken = default);
     Task UpdateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default);
     Task UpdateWithHistoryAsync(ForgeTask task, IEnumerable<int>? dependsOn, string changedBy, string? reason, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Atomically updates only the LastHangfireJobId of a task without rewriting or overwriting other entity fields.
+    /// </summary>
+    Task UpdateLastHangfireJobIdAsync(int taskId, string? jobId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<int>> GetDependenciesAsync(int taskId, CancellationToken cancellationToken = default);
     Task<IReadOnlyDictionary<int, IReadOnlyList<int>>> GetWorkspaceDependenciesAsync(int workspaceId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ForgeTaskHistory>> GetHistoryAsync(int taskId, CancellationToken cancellationToken = default);
@@ -290,6 +296,20 @@ public class InMemoryTaskRepository : ITaskRepository
                 _questions[q.Id] = q;
             }
 
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task UpdateLastHangfireJobIdAsync(int taskId, string? jobId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            if (!_tasks.TryGetValue(taskId, out var task))
+            {
+                throw new TaskNotFoundException(taskId, $"ForgeTask #{taskId} was not found when updating Hangfire job ID.");
+            }
+
+            task.LastHangfireJobId = jobId;
             return Task.CompletedTask;
         }
     }

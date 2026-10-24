@@ -20,6 +20,12 @@ public class WorkflowStageFactory : IWorkflowStageFactory
     {
         ArgumentNullException.ThrowIfNull(definition);
 
+        if (!Enum.IsDefined(typeof(StageQueueTier), definition.QueueTier) || (int)definition.QueueTier == 0)
+        {
+            throw new Exceptions.WorkflowValidationException(
+                $"Stage '{definition.StageId}' does not have a designated QueueTier. Workflow stages must define a valid QueueTier.");
+        }
+
         if (!_registry.TryGetFactory(definition.CsharpImplementationType, out var factory) || factory == null)
         {
             var available = string.Join(", ", _registry.RegisteredTypes);
@@ -28,6 +34,8 @@ public class WorkflowStageFactory : IWorkflowStageFactory
                 $"Available registered types: [{available}]");
         }
 
-        return factory(_serviceProvider, definition);
+        var stage = factory(_serviceProvider, definition);
+        stage.QueueTier = definition.QueueTier;
+        return stage;
     }
 }

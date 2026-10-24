@@ -375,68 +375,68 @@ In [ConflictResolutionConstants.cs](file:///c:/Users/Julien/source/repos/jetelai
 ## 4. Definition of Done (DoD) Checklist
 
 ### 1. Stage-Priority Queue Scheduling
-- [ ] **Hangfire Queue Definitions:**
-  - [ ] Add `HangfireQueues.LlmCodeReview`, `HangfireQueues.LlmImplementation`, and `HangfireQueues.LlmTaskReview`.
-  - [ ] Configure `NCF-LLM-Inference-Worker` queues in priority sequence: `[LlmUrgent, LlmCodeReview, LlmImplementation, LlmTaskReview, LlmInference]`.
-- [ ] **Stage-Declared Queue Tier:**
-  - [ ] Add required `StageDefinition.QueueTier` (enum `StageQueueTier`), persisted, with workflow validation rejecting stages without a tier.
-  - [ ] Expose `IWorkflowStage.QueueTier` on runtime stage interface, populated by `WorkflowStageFactory`.
-  - [ ] Assign tiers to all standard stages in `StandardWorkflowDefinitions`.
-- [ ] **Job Queue Dispatching (Clean Break):**
-  - [ ] Remove `EnqueueInference` completely from `ITaskJobQueue`, `HangfireTaskJobQueue`, and `InMemoryTaskJobQueue`.
-  - [ ] Implement `EnqueueStage(int taskId, StageQueueTier tier, int priority)`; fail fast on unknown tier.
-  - [ ] Map P1 Critical to `LlmUrgent`; tiers to `LlmCodeReview` / `LlmImplementation` / `LlmTaskReview`. Only Infrastructure references `HangfireQueues`.
-  - [ ] `LlmUrgent` is reserved strictly for manual maintainer promotion (`PromoteToUrgentAsync`) and P1 Critical tasks.
-  - [ ] `SubmitAnswersAsync` re-enqueues in the queue of the task's current stage with the task's own priority (no urgent routing).
-  - [ ] `StartupRecoveryService` preserves the stage tier system upon crash recovery, dispatching recovered tasks via `EnqueueStage(task.Id, stage.QueueTier, task.Priority)` rather than bypassing tiers.
-  - [ ] Update all dispatch calls in `TaskOrchestrator` (`AdvanceToNextStageAsync`, `SubmitAnswersAsync`, `RequestChangesAsync`, `PromoteSuggestedTaskAsync`, `ResolveCascadeUnblockedTasksAsync`, `InitiateConflictResolutionAsync`, `HandleLoopBackAsync`), `CreateTask.razor`, and `DevQueueService`.
-  - [ ] Missing unblocked task entities in `ResolveCascadeUnblockedTasksAsync` fail fast with an exception rather than silently enqueuing.
-- [ ] **DevQueue Monitoring & Priority Re-Ordering:**
-  - [ ] Update `DevQueueService.GetSnapshotAsync` to monitor all tier queues.
-  - [ ] Update `ReorderInferenceQueueByPriorityAsync` to order each queue by `Priority ASC` (numerically lowest first) while preserving original `EnqueuedAt` timestamps.
-  - [ ] Worker race safeguard: Only reorder/delete jobs confirmed in `Enqueued` state, skipping jobs already transitioned to `Processing` or `Scheduled`.
-  - [ ] Display stage badges and queue tier sections in `DevQueueTable.razor`, including the age of the oldest waiting job per tier.
-  - [ ] Misplaced/legacy-queue jobs are migrated via delete + `EnqueueStage` at startup and on reorder; `LastHangfireJobId` and the original enqueue time are preserved/updated.
-  - [ ] Remove forbidden bare `catch` block in `DevQueueService.cs`.
+- [x] **Hangfire Queue Definitions:**
+  - [x] Add `HangfireQueues.LlmCodeReview`, `HangfireQueues.LlmImplementation`, and `HangfireQueues.LlmTaskReview`.
+  - [x] Configure `NCF-LLM-Inference-Worker` queues in priority sequence: `[LlmUrgent, LlmCodeReview, LlmImplementation, LlmTaskReview, LlmInference]`.
+- [x] **Stage-Declared Queue Tier:**
+  - [x] Add required `StageDefinition.QueueTier` (enum `StageQueueTier`), persisted, with workflow validation rejecting stages without a tier.
+  - [x] Expose `IWorkflowStage.QueueTier` on runtime stage interface, populated by `WorkflowStageFactory`.
+  - [x] Assign tiers to all standard stages in `StandardWorkflowDefinitions`.
+- [x] **Job Queue Dispatching (Clean Break):**
+  - [x] Remove `EnqueueInference` completely from `ITaskJobQueue`, `HangfireTaskJobQueue`, and `InMemoryTaskJobQueue`.
+  - [x] Implement `EnqueueStage(int taskId, StageQueueTier tier, int priority)`; fail fast on unknown tier.
+  - [x] Map P1 Critical to `LlmUrgent`; tiers to `LlmCodeReview` / `LlmImplementation` / `LlmTaskReview`. Only Infrastructure references `HangfireQueues`.
+  - [x] `LlmUrgent` is reserved strictly for manual maintainer promotion (`PromoteToUrgentAsync`) and P1 Critical tasks.
+  - [x] `SubmitAnswersAsync` re-enqueues in the queue of the task's current stage with the task's own priority (no urgent routing).
+  - [x] `StartupRecoveryService` preserves the stage tier system upon crash recovery, dispatching recovered tasks via `EnqueueStage(task.Id, stage.QueueTier, task.Priority)` rather than bypassing tiers.
+  - [x] Update all dispatch calls in `TaskOrchestrator` (`AdvanceToNextStageAsync`, `SubmitAnswersAsync`, `RequestChangesAsync`, `PromoteSuggestedTaskAsync`, `ResolveCascadeUnblockedTasksAsync`, `InitiateConflictResolutionAsync`, `HandleLoopBackAsync`), `CreateTask.razor`, and `DevQueueService`.
+  - [x] Missing unblocked task entities in `ResolveCascadeUnblockedTasksAsync` fail fast with an exception rather than silently enqueuing.
+- [x] **DevQueue Monitoring & Priority Re-Ordering:**
+  - [x] Update `DevQueueService.GetSnapshotAsync` to monitor all tier queues.
+  - [x] Update `ReorderInferenceQueueByPriorityAsync` to order each queue by `Priority ASC` (numerically lowest first) while preserving original `EnqueuedAt` timestamps.
+  - [x] Worker race safeguard: Only reorder/delete jobs confirmed in `Enqueued` state, skipping jobs already transitioned to `Processing` or `Scheduled`.
+  - [x] Display stage badges and queue tier sections in `DevQueueTable.razor`, including the age of the oldest waiting job per tier.
+  - [x] Misplaced/legacy-queue jobs are migrated via delete + `EnqueueStage` at startup and on reorder; `LastHangfireJobId` and the original enqueue time are preserved/updated.
+  - [x] Remove forbidden bare `catch` block in `DevQueueService.cs`.
 
 ### 2. Conflict Resolution Hardening
-- [ ] **Deterministic Compilation in Verifier:**
-  - [ ] Inject `IExecutionEnvironmentProvider` into `ConflictResolutionVerifier` constructor (fail fast if null).
-  - [ ] Update `ConflictResolutionVerificationResult` record contract to include `string? CompilerErrors = null`.
-  - [ ] Line-anchored conflict marker scan: check lines starting with markers; treat `=======` as conflict only when inside an open block or unclosed at EOF.
-  - [ ] Selective staging of conflicted and newly created source files (`git add`) occurs strictly BEFORE `workspace.BuildCommand` execution.
-  - [ ] Execute `workspace.BuildCommand` inside task sandbox worktree with workspace build timeout via `_environmentProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, taskId)`.
-  - [ ] Handle timeout as hard verification failure.
-  - [ ] Capture and truncate compiler errors to `MaxCompilerErrorsLength` (4000 chars) on exit code != 0.
-  - [ ] Verify no merge commit is created when build fails or markers exist.
-  - [ ] Create merge commit only after `BuildCommand` returns 0.
-  - [ ] Stage newly created files filtered by `.gitignore` without sweeping `bin/` or `obj/`.
-- [ ] **Optimized Prompt Mandate:**
-  - [ ] Update `ConflictResolutionConstants.ConflictDirectiveFormat` and prepend at the very top of prompt in `DefaultBootstrapPromptBuilder`.
-  - [ ] Add constants `MaxTotalConflictResolutionAttempts = 6` and `MaxLifetimeConflictDetections = 3`.
-  - [ ] Inject compiler diagnostics from `PipelineDataBagKeys.CompilerErrors` (formatted when non-empty).
+- [x] **Deterministic Compilation in Verifier:**
+  - [x] Inject `IExecutionEnvironmentProvider` into `ConflictResolutionVerifier` constructor (fail fast if null).
+  - [x] Update `ConflictResolutionVerificationResult` record contract to include `string? CompilerErrors = null`.
+  - [x] Line-anchored conflict marker scan: check lines starting with markers; treat `=======` as conflict only when inside an open block or unclosed at EOF.
+  - [x] Selective staging of conflicted and newly created source files (`git add`) occurs strictly BEFORE `workspace.BuildCommand` execution.
+  - [x] Execute `workspace.BuildCommand` inside task sandbox worktree with workspace build timeout via `_environmentProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, taskId)`.
+  - [x] Handle timeout as hard verification failure.
+  - [x] Capture and truncate compiler errors to `MaxCompilerErrorsLength` (4000 chars) on exit code != 0.
+  - [x] Verify no merge commit is created when build fails or markers exist.
+  - [x] Create merge commit only after `BuildCommand` returns 0.
+  - [x] Stage newly created files filtered by `.gitignore` without sweeping `bin/` or `obj/`.
+- [x] **Optimized Prompt Mandate:**
+  - [x] Update `ConflictResolutionConstants.ConflictDirectiveFormat` and prepend at the very top of prompt in `DefaultBootstrapPromptBuilder`.
+  - [x] Add constants `MaxTotalConflictResolutionAttempts = 6` and `MaxLifetimeConflictDetections = 3`.
+  - [x] Inject compiler diagnostics from `PipelineDataBagKeys.CompilerErrors` (formatted when non-empty).
 
 ### 3. Pipeline Gate Re-Traversal & Review Room Hygiene
-- [ ] **Full Downstream Gate Traversal:**
-  - [ ] On verifier success, task transitions through `PostImplementationGates` → `CodeReviewAndFix` → `PostReviewVerification` → Gate 2 → `Ready`.
-  - [ ] On a new conflict detected downstream (Gate 2 or later), restart the conflict flow with `ConflictResolutionAttempts` reset, `LifetimeConflictDetections` incremented, and `HasResolvedConflict` kept.
-  - [ ] Escalate to human maintainer if `TotalConflictResolutionAttempts >= 6` or `LifetimeConflictDetections >= 3`.
-  - [ ] On verifier failure (shared attempt budget; `CompilerErrors` stored as `List<string>` on build failures and cleared on non-build failures), loop back to `StandardStageIds.Implementation` (Tier 2 via the stage `QueueTier`), keeping `MERGE_HEAD` intact until attempts reach `MaxConflictResolutionAttempts`.
-- [ ] **Web UI Hygiene:**
-  - [ ] Extract review readiness helpers into `TaskReviewService` (comply with UI separation rule).
-  - [ ] Restrict `TaskReviewService.GetPendingReviewsAsync` strictly to `Status == TaskOverallStatus.Ready`.
-  - [ ] Restrict `Approve & Merge` and `Request Changes` in `Review.razor` strictly to `Ready` status.
-  - [ ] Display conflict banner strictly when `Ready && HasResolvedConflict`.
-  - [ ] Render in-flight progress banner when accessing `/review/{id}` while task is not in `Ready` status.
-  - [ ] One-time idempotent startup migration re-queues legacy `Implemented` tasks at `StandardStageIds.PostImplementationGates` and `Reviewed` tasks at `StandardStageIds.PostReviewVerification` with `Status = TaskOverallStatus.Open`.
+- [x] **Full Downstream Gate Traversal:**
+  - [x] On verifier success, task transitions through `PostImplementationGates` → `CodeReviewAndFix` → `PostReviewVerification` → Gate 2 → `Ready`.
+  - [x] On a new conflict detected downstream (Gate 2 or later), restart the conflict flow with `ConflictResolutionAttempts` reset, `LifetimeConflictDetections` incremented, and `HasResolvedConflict` kept.
+  - [x] Escalate to human maintainer if `TotalConflictResolutionAttempts >= 6` or `LifetimeConflictDetections >= 3`.
+  - [x] On verifier failure (shared attempt budget; `CompilerErrors` stored as `List<string>` on build failures and cleared on non-build failures), loop back to `StandardStageIds.Implementation` (Tier 2 via the stage `QueueTier`), keeping `MERGE_HEAD` intact until attempts reach `MaxConflictResolutionAttempts`.
+- [x] **Web UI Hygiene:**
+  - [x] Extract review readiness helpers into `TaskReviewService` (comply with UI separation rule).
+  - [x] Restrict `TaskReviewService.GetPendingReviewsAsync` strictly to `Status == TaskOverallStatus.Ready`.
+  - [x] Restrict `Approve & Merge` and `Request Changes` in `Review.razor` strictly to `Ready` status.
+  - [x] Display conflict banner strictly when `Ready && HasResolvedConflict`.
+  - [x] Render in-flight progress banner when accessing `/review/{id}` while task is not in `Ready` status.
+  - [x] One-time idempotent startup migration re-queues legacy `Implemented` tasks at `StandardStageIds.PostImplementationGates` and `Reviewed` tasks at `StandardStageIds.PostReviewVerification` with `Status = TaskOverallStatus.Open`.
 
 ### 4. Tests & Validation
-- [ ] **Unit Tests:**
-  - [ ] `HangfireQueuePriorityTests`: Verify `EnqueueStage` routes correctly by priority and stage tier, and throws on an unknown tier.
-  - [ ] `StageDefinition` / workflow validation tests: a stage without `QueueTier` is rejected; standard workflow stages carry the expected tiers.
-  - [ ] `StartupRecoveryServiceTests`: Verify crash recovery preserves the tier system, enqueuing tasks via `EnqueueStage` using target stage's `QueueTier` and `task.Priority` (routing to `LlmUrgent` only if `task.Priority == TaskPriority.Critical`).
-  - [ ] `TaskOrchestratorTests`: Verify `SubmitAnswersAsync`, `RequestChangesAsync`, and `HandleLoopBackAsync` enqueue with target stage tier and task priority; `Core` has no reference to `HangfireQueues`.
-  - [ ] `ConflictResolutionVerifierTests`:
+- [x] **Unit Tests:**
+  - [x] `HangfireQueuePriorityTests`: Verify `EnqueueStage` routes correctly by priority and stage tier, and throws on an unknown tier.
+  - [x] `StageDefinition` / workflow validation tests: a stage without `QueueTier` is rejected; standard workflow stages carry the expected tiers.
+  - [x] `StartupRecoveryServiceTests`: Verify crash recovery preserves the tier system, enqueuing tasks via `EnqueueStage` using target stage's `QueueTier` and `task.Priority` (routing to `LlmUrgent` only if `task.Priority == TaskPriority.Critical`).
+  - [x] `TaskOrchestratorTests`: Verify `SubmitAnswersAsync`, `RequestChangesAsync`, and `HandleLoopBackAsync` enqueue with target stage tier and task priority; `Core` has no reference to `HangfireQueues`.
+  - [x] `ConflictResolutionVerifierTests`:
     - Marker scan failure across all 4 markers (`<<<<<<< `, `||||||| `, `=======`, `>>>>>>> `).
     - Marker scan succeeds when `=======` appears on a line outside open conflict block (Markdown/RST headings).
     - Unmerged index failure (`git ls-files -u`).
@@ -445,12 +445,12 @@ In [ConflictResolutionConstants.cs](file:///c:/Users/Julien/source/repos/jetelai
     - Successful build execution (assert commit created, success result returned).
     - Staging executes before build and includes newly created source files while ignoring build artifacts.
     - Compiler errors keep the tail on truncation; null `BuildTimeoutSeconds` resolves to the workflow default.
-  - [ ] Update existing `ConflictResolutionLifecycleTests`: supply mocked `IExecutionEnvironmentProvider` across all `new ConflictResolutionVerifier(...)` test setups.
-  - [ ] `DefaultBootstrapPromptBuilderTests`: staged-files hint; compiler diagnostics omitted when empty; Verify conflict mandate prepends at the top of the prompt and formats compiler diagnostics.
-  - [ ] `TaskReviewServiceTests`: Verify `GetPendingReviewsAsync` excludes `Implemented` and `Reviewed`, returning only `Ready` tasks.
-  - [ ] `ReviewPageTests`: Verify approval actions are disabled and in-flight banner renders when task is in-flight.
-- [ ] **Integration / Scenario Tests:**
-  - [ ] Verify conflict resolution loopback turn, verifier passage, and downstream gate traversal (`deterministic-post-impl` → `code-review-fix` → `deterministic-post-review` → Gate 2 → Ready).
-  - [ ] Verify task escalation to human when lifetime conflict detection ceiling is reached.
-- [ ] **Regression Test Run:**
-  - [ ] Run `dotnet test --filter "Category!=Acceptance&Category!=E2E"` and ensure all tests pass cleanly.
+  - [x] Update existing `ConflictResolutionLifecycleTests`: supply mocked `IExecutionEnvironmentProvider` across all `new ConflictResolutionVerifier(...)` test setups.
+  - [x] `DefaultBootstrapPromptBuilderTests`: staged-files hint; compiler diagnostics omitted when empty; Verify conflict mandate prepends at the top of the prompt and formats compiler diagnostics.
+  - [x] `TaskReviewServiceTests`: Verify `GetPendingReviewsAsync` excludes `Implemented` and `Reviewed`, returning only `Ready` tasks.
+  - [x] `ReviewPageTests`: Verify approval actions are disabled and in-flight banner renders when task is in-flight.
+- [x] **Integration / Scenario Tests:**
+  - [x] Verify conflict resolution loopback turn, verifier passage, and downstream gate traversal (`deterministic-post-impl` → `code-review-fix` → `deterministic-post-review` → Gate 2 → Ready).
+  - [x] Verify task escalation to human when lifetime conflict detection ceiling is reached.
+- [x] **Regression Test Run:**
+  - [x] Run `dotnet test --filter "Category!=Acceptance&Category!=E2E"` and ensure all tests pass cleanly.

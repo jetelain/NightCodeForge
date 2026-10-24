@@ -179,7 +179,7 @@ public class TaskReviewDiskReadBackTests : IDisposable
         // Assert 2: The orchestrator read back the disk modifications into the task entity in database
         var updatedInDb = await taskRepo.GetByIdAsync(42);
         Assert.NotNull(updatedInDb);
-        Assert.Equal(TaskOverallStatus.Reviewed, updatedInDb.Status);
+        Assert.Equal(TaskOverallStatus.Open, updatedInDb.Status);
         Assert.Equal(StandardStageIds.Implementation, updatedInDb.CurrentStageId);
         Assert.Contains("RedisDistributedCache", updatedInDb.Description);
         Assert.Contains("## 🏛️ Architecture & Implementation Plan", updatedInDb.Description);

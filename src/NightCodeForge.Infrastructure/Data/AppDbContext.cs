@@ -336,6 +336,7 @@ public class AppDbContext : DbContext
             b.Property(s => s.Icon).HasMaxLength(32).HasDefaultValue("⚙️");
             b.Property(s => s.SequenceOrder).IsRequired();
             b.Property(s => s.Kind).HasConversion<int>();
+            b.Property(s => s.QueueTier).HasConversion<int>().IsRequired();
             b.Property(s => s.CsharpImplementationType).IsRequired().HasMaxLength(256);
             b.Property(s => s.ConfigurationJson).IsRequired();
 
@@ -403,6 +404,11 @@ public class AppDbContext : DbContext
     public const string AddAgentProfileContextWindowTokensMigrationId = "20261022031751_AddAgentProfileContextWindowTokens";
 
     /// <summary>
+    /// Migration identifier for stage queue tier.
+    /// </summary>
+    public const string AddStageQueueTierMigrationId = "20261024032000_AddStageQueueTier";
+
+    /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
     /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
@@ -421,7 +427,12 @@ public class AppDbContext : DbContext
             await Database.ExecuteSqlRawAsync("PRAGMA synchronous = NORMAL;", cancellationToken);
             await Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = ON;", cancellationToken);
 
+            await BackfillStageQueueTiersAsync(cancellationToken);
             await ApplyWorkspaceIdSeedIfConfiguredAsync(cancellationToken);
+        }
+        else
+        {
+            await BackfillStageQueueTiersAsync(cancellationToken);
         }
     }
 
@@ -491,6 +502,17 @@ VALUES ('" + AddPortalScopingAndExecutionFlagsMigrationId + @"', '10.0.12');";
                 {
                     cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + AddAgentProfileContextWindowTokensMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('StageDefinitions') WHERE name = 'QueueTier';";
+                var hasQueueTierColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasQueueTierColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddStageQueueTierMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }
@@ -593,7 +615,43 @@ VALUES ('" + AddAgentProfileContextWindowTokensMigrationId + @"', '10.0.12');";
             WorkflowDefinitions.Add(standardWorkflow);
             await SaveChangesAsync(cancellationToken);
         }
+        else
+        {
+            var canonical = StandardWorkflowDefinitions.CreateStandard3AgentWorkflow();
+            var modified = false;
+            foreach (var stage in standardWorkflow.Stages)
+            {
+                var canonicalStage = canonical.Stages.FirstOrDefault(s => s.StageId == stage.StageId);
+                if (canonicalStage != null && stage.QueueTier != canonicalStage.QueueTier)
+                {
+                    stage.QueueTier = canonicalStage.QueueTier;
+                    modified = true;
+                }
+            }
+
+            if (modified)
+            {
+                await SaveChangesAsync(cancellationToken);
+            }
+        }
 
         return standardWorkflow;
+    }
+
+    /// <summary>
+    /// Backfills QueueTier for any pre-existing stage definitions that have not been assigned canonical tiers.
+    /// Safe, idempotent, and non-destructive for all database providers.
+    /// </summary>
+    public async Task BackfillStageQueueTiersAsync(CancellationToken cancellationToken = default)
+    {
+        await Database.ExecuteSqlRawAsync(
+            $"UPDATE StageDefinitions SET QueueTier = {(int)StageQueueTier.TaskReview} WHERE StageId IN ('{StandardStageIds.TaskReview}', '{StandardStageIds.Triage}', '{StandardStageIds.Ideation}') AND QueueTier != {(int)StageQueueTier.TaskReview};",
+            cancellationToken);
+        await Database.ExecuteSqlRawAsync(
+            $"UPDATE StageDefinitions SET QueueTier = {(int)StageQueueTier.Implementation} WHERE StageId IN ('{StandardStageIds.PreImplementationBaseline}', '{StandardStageIds.Implementation}', '{StandardStageIds.PostImplementationGates}', '{StandardStageIds.Merge}') AND QueueTier != {(int)StageQueueTier.Implementation};",
+            cancellationToken);
+        await Database.ExecuteSqlRawAsync(
+            $"UPDATE StageDefinitions SET QueueTier = {(int)StageQueueTier.CodeReview} WHERE StageId IN ('{StandardStageIds.CodeReviewAndFix}', '{StandardStageIds.PostReviewVerification}') AND QueueTier != {(int)StageQueueTier.CodeReview};",
+            cancellationToken);
     }
 }

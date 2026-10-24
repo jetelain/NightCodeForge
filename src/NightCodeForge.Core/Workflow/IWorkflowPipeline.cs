@@ -6,6 +6,7 @@ namespace NightCodeForge.Core.Workflow;
 public interface IWorkflowPipeline
 {
     IReadOnlyList<IWorkflowStage> Stages { get; }
+    IWorkflowStage? InitialStage => Stages.FirstOrDefault();
     IWorkflowStage? GetNextStage(string currentStageId);
     IWorkflowStage? GetStage(string stageId);
 }
@@ -16,6 +17,7 @@ public interface IWorkflowPipeline
 public class WorkflowPipeline : IWorkflowPipeline
 {
     public IReadOnlyList<IWorkflowStage> Stages { get; }
+    public IWorkflowStage? InitialStage => Stages.FirstOrDefault();
 
     public WorkflowPipeline(IEnumerable<IWorkflowStage> stages)
     {

@@ -16,7 +16,7 @@ public class PipelineEngineTests
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2, stage3 });
         var engine = new WorkflowPipelineEngine();
 
-        var task = new ForgeTask { Id = 1, WorkspaceId = 1, Title = "Sequential Test" };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1, Title = "Sequential Test", Status = TaskOverallStatus.Open };
         var workspace = new Workspace { Id = 1, Name = "WS1" };
         var context = new PipelineContext(task, workspace);
 
@@ -24,13 +24,13 @@ public class PipelineEngineTests
         var res1 = await engine.ExecuteStepAsync(pipeline, context);
         Assert.True(res1.IsSuccess);
         Assert.Equal("implementation", task.CurrentStageId);
-        Assert.Equal(TaskOverallStatus.Reviewed, task.Status);
+        Assert.Equal(TaskOverallStatus.Open, task.Status);
 
         // Step 2: Implementation
         var res2 = await engine.ExecuteStepAsync(pipeline, context);
         Assert.True(res2.IsSuccess);
         Assert.Equal("code-review-fix", task.CurrentStageId);
-        Assert.Equal(TaskOverallStatus.Implemented, task.Status);
+        Assert.Equal(TaskOverallStatus.Open, task.Status);
 
         // Step 3: CodeReviewAndFix (End of pipeline)
         var res3 = await engine.ExecuteStepAsync(pipeline, context);

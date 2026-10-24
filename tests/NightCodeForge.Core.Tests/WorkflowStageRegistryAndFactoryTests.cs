@@ -80,6 +80,7 @@ public class WorkflowStageRegistryAndFactoryTests
         {
             StageId = "custom-review",
             DisplayName = "Custom Architecture Review",
+            QueueTier = StageQueueTier.TaskReview,
             Kind = WorkflowStageKind.Agentic,
             CsharpImplementationType = "agentic",
             ConfigurationJson = JsonSerializer.Serialize(agenticConfig)
@@ -115,6 +116,7 @@ public class WorkflowStageRegistryAndFactoryTests
         {
             StageId = implementationType,
             DisplayName = $"Test {implementationType}",
+            QueueTier = StageQueueTier.Implementation,
             Kind = WorkflowStageKind.Deterministic,
             CsharpImplementationType = implementationType,
             ConfigurationJson = "{}"
@@ -132,6 +134,7 @@ public class WorkflowStageRegistryAndFactoryTests
         {
             StageId = "unknown-gate",
             DisplayName = "Unknown Gate",
+            QueueTier = StageQueueTier.Implementation,
             CsharpImplementationType = "non-existent-type"
         };
 
@@ -152,6 +155,7 @@ public class WorkflowStageRegistryAndFactoryTests
         {
             StageId = "my-custom-stage",
             DisplayName = "My Custom Stage",
+            QueueTier = StageQueueTier.Implementation,
             CsharpImplementationType = "custom-mock-stage"
         };
 

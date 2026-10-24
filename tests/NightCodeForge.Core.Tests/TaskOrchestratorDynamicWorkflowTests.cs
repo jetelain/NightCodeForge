@@ -123,6 +123,7 @@ public class TaskOrchestratorDynamicWorkflowTests
                     StageId = "spec",
                     DisplayName = "Requirements Specification",
                     SequenceOrder = 1,
+                    QueueTier = StageQueueTier.TaskReview,
                     Kind = WorkflowStageKind.Agentic,
                     CsharpImplementationType = "agentic",
                     ConfigurationJson = """{"RequiredMode": 1}"""
@@ -132,6 +133,7 @@ public class TaskOrchestratorDynamicWorkflowTests
                     StageId = "dev",
                     DisplayName = "Development & Unit Test",
                     SequenceOrder = 2,
+                    QueueTier = StageQueueTier.Implementation,
                     Kind = WorkflowStageKind.Agentic,
                     CsharpImplementationType = "agentic",
                     ConfigurationJson = """{"RequiredMode": 1}"""
@@ -141,6 +143,7 @@ public class TaskOrchestratorDynamicWorkflowTests
                     StageId = "audit",
                     DisplayName = "Final Code Audit",
                     SequenceOrder = 3,
+                    QueueTier = StageQueueTier.CodeReview,
                     Kind = WorkflowStageKind.Agentic,
                     CsharpImplementationType = "agentic",
                     ConfigurationJson = """{"RequiredMode": 2, "LoopBackStageId": "dev"}"""
@@ -195,12 +198,12 @@ public class TaskOrchestratorDynamicWorkflowTests
             IsDefault = true,
             Stages = new List<StageDefinition>
             {
-                new() { StageId = "task-review", DisplayName = "ForgeTask Review", SequenceOrder = 1, CsharpImplementationType = "agentic" },
-                new() { StageId = "deterministic-pre-impl", DisplayName = "Pre-Impl Baseline", SequenceOrder = 2, CsharpImplementationType = "agentic" },
-                new() { StageId = "implementation", DisplayName = "Implementation", SequenceOrder = 3, CsharpImplementationType = "agentic" },
-                new() { StageId = "deterministic-post-impl", DisplayName = "Post-Impl Gates", SequenceOrder = 4, CsharpImplementationType = "agentic" },
-                new() { StageId = "code-review-fix", DisplayName = "Code Review & Fix", SequenceOrder = 5, CsharpImplementationType = "agentic" },
-                new() { StageId = "deterministic-post-review", DisplayName = "Post-Review Verification", SequenceOrder = 6, CsharpImplementationType = "agentic" }
+                new() { StageId = "task-review", DisplayName = "ForgeTask Review", SequenceOrder = 1, QueueTier = StageQueueTier.TaskReview, CsharpImplementationType = "agentic" },
+                new() { StageId = "deterministic-pre-impl", DisplayName = "Pre-Impl Baseline", SequenceOrder = 2, QueueTier = StageQueueTier.Implementation, CsharpImplementationType = "agentic" },
+                new() { StageId = "implementation", DisplayName = "Implementation", SequenceOrder = 3, QueueTier = StageQueueTier.Implementation, CsharpImplementationType = "agentic" },
+                new() { StageId = "deterministic-post-impl", DisplayName = "Post-Impl Gates", SequenceOrder = 4, QueueTier = StageQueueTier.Implementation, CsharpImplementationType = "agentic" },
+                new() { StageId = "code-review-fix", DisplayName = "Code Review & Fix", SequenceOrder = 5, QueueTier = StageQueueTier.CodeReview, CsharpImplementationType = "agentic" },
+                new() { StageId = "deterministic-post-review", DisplayName = "Post-Review Verification", SequenceOrder = 6, QueueTier = StageQueueTier.CodeReview, CsharpImplementationType = "agentic" }
             }
         };
         await _workflowRepo.CreateWorkflowAsync(standardWorkflow);
@@ -252,13 +255,14 @@ public class TaskOrchestratorDynamicWorkflowTests
             IsDefault = false,
             Stages = new List<StageDefinition>
             {
-                new() { StageId = "custom-planning", DisplayName = "Planning", SequenceOrder = 1, CsharpImplementationType = "agentic" },
-                new() { StageId = "custom-coding", DisplayName = "Coding", SequenceOrder = 2, CsharpImplementationType = "agentic" },
+                new() { StageId = "custom-planning", DisplayName = "Planning", SequenceOrder = 1, QueueTier = StageQueueTier.TaskReview, CsharpImplementationType = "agentic" },
+                new() { StageId = "custom-coding", DisplayName = "Coding", SequenceOrder = 2, QueueTier = StageQueueTier.Implementation, CsharpImplementationType = "agentic" },
                 new()
                 {
                     StageId = "custom-review",
                     DisplayName = "Custom Review",
                     SequenceOrder = 3,
+                    QueueTier = StageQueueTier.CodeReview,
                     CsharpImplementationType = "agentic",
                     ConfigurationJson = """{"RequiredMode": 2, "LoopBackStageId": "custom-coding"}"""
                 }
@@ -283,10 +287,10 @@ public class TaskOrchestratorDynamicWorkflowTests
 
         var reloaded = await _taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(reloaded);
-        Assert.Equal(TaskOverallStatus.Reviewed, reloaded.Status);
+        Assert.Equal(TaskOverallStatus.Open, reloaded.Status);
         // Verified: looped back to dynamically configured "custom-coding", not "implementation"!
         Assert.Equal("custom-coding", reloaded.CurrentStageId);
-        Assert.Contains(task.Id, _jobQueue.UrgentQueue);
+        Assert.Contains(task.Id, _jobQueue.ImplementationQueue);
 
         var bag = PipelineDataBag.FromJson(reloaded.PipelineDataJson);
         Assert.Equal("Unit tests are missing for edge cases.", bag.Get<string>(PipelineDataBagKeys.ReviewerFeedback));
@@ -309,12 +313,13 @@ public class TaskOrchestratorDynamicWorkflowTests
             Code = "gate-loopback",
             Stages = new List<StageDefinition>
             {
-                new() { StageId = "dev-step", DisplayName = "Dev", SequenceOrder = 1, CsharpImplementationType = "agentic" },
+                new() { StageId = "dev-step", DisplayName = "Dev", SequenceOrder = 1, QueueTier = StageQueueTier.Implementation, CsharpImplementationType = "agentic" },
                 new()
                 {
                     StageId = "strict-gate",
                     DisplayName = "Strict Gate",
                     SequenceOrder = 2,
+                    QueueTier = StageQueueTier.Implementation,
                     CsharpImplementationType = "failing-gate",
                     ConfigurationJson = """{"LoopBackStageId": "dev-step"}"""
                 }
@@ -338,9 +343,9 @@ public class TaskOrchestratorDynamicWorkflowTests
 
         var updated = await _taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(updated);
-        // Loops back to dev-step with urgent enqueue
+        // Loops back to dev-step with stage tier enqueue
         Assert.Equal("dev-step", updated.CurrentStageId);
-        Assert.Contains(task.Id, _jobQueue.UrgentQueue);
+        Assert.Contains(task.Id, _jobQueue.ImplementationQueue);
     }
 
     [Fact]
@@ -354,7 +359,7 @@ public class TaskOrchestratorDynamicWorkflowTests
             IsDefault = true,
             Stages = new List<StageDefinition>
             {
-                new() { StageId = "init-stage", DisplayName = "Init", SequenceOrder = 1, CsharpImplementationType = "agentic" }
+                new() { StageId = "init-stage", DisplayName = "Init", SequenceOrder = 1, QueueTier = StageQueueTier.TaskReview, CsharpImplementationType = "agentic" }
             }
         };
         await _workflowRepo.CreateWorkflowAsync(defaultWorkflow);
@@ -393,6 +398,7 @@ public class TaskOrchestratorDynamicWorkflowTests
                     StageId = "task-review",
                     DisplayName = "Task Review",
                     SequenceOrder = 1,
+                    QueueTier = StageQueueTier.TaskReview,
                     Kind = WorkflowStageKind.Agentic,
                     CsharpImplementationType = "agentic",
                     ConfigurationJson = """{"RequiredMode": 1}"""
@@ -402,6 +408,7 @@ public class TaskOrchestratorDynamicWorkflowTests
                     StageId = "deterministic-build",
                     DisplayName = "Deterministic Build",
                     SequenceOrder = 2,
+                    QueueTier = StageQueueTier.Implementation,
                     Kind = WorkflowStageKind.Deterministic,
                     CsharpImplementationType = "deterministic-build",
                     ConfigurationJson = """{"Action": "Build", "FailOnError": true}"""
@@ -411,6 +418,7 @@ public class TaskOrchestratorDynamicWorkflowTests
                     StageId = "implementation",
                     DisplayName = "Implementation",
                     SequenceOrder = 3,
+                    QueueTier = StageQueueTier.Implementation,
                     Kind = WorkflowStageKind.Agentic,
                     CsharpImplementationType = "agentic",
                     ConfigurationJson = """{"RequiredMode": 1}"""
@@ -465,14 +473,15 @@ public class TaskOrchestratorDynamicWorkflowTests
             Code = "4stage-loopback",
             Stages = new List<StageDefinition>
             {
-                new() { StageId = "stage-1", DisplayName = "Stage 1", SequenceOrder = 1, CsharpImplementationType = "agentic" },
-                new() { StageId = "stage-2", DisplayName = "Stage 2", SequenceOrder = 2, CsharpImplementationType = "agentic" },
-                new() { StageId = "stage-3", DisplayName = "Stage 3", SequenceOrder = 3, CsharpImplementationType = "agentic" },
+                new() { StageId = "stage-1", DisplayName = "Stage 1", SequenceOrder = 1, QueueTier = StageQueueTier.TaskReview, CsharpImplementationType = "agentic" },
+                new() { StageId = "stage-2", DisplayName = "Stage 2", SequenceOrder = 2, QueueTier = StageQueueTier.Implementation, CsharpImplementationType = "agentic" },
+                new() { StageId = "stage-3", DisplayName = "Stage 3", SequenceOrder = 3, QueueTier = StageQueueTier.Implementation, CsharpImplementationType = "agentic" },
                 new()
                 {
                     StageId = "stage-4",
                     DisplayName = "Stage 4 Failing Gate",
                     SequenceOrder = 4,
+                    QueueTier = StageQueueTier.Implementation,
                     CsharpImplementationType = "failing-stage-4",
                     ConfigurationJson = """{"LoopBackStageId": "stage-3"}"""
                 }
@@ -492,13 +501,13 @@ public class TaskOrchestratorDynamicWorkflowTests
 
         var orchestrator = CreateOrchestrator();
 
-        // Process stage 4 -> fails and routes back to stage-3 with urgent enqueue
+        // Process stage 4 -> fails and routes back to stage-3 with stage tier enqueue
         await orchestrator.ProcessTaskAsync(task.Id);
 
         var updated = await _taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(updated);
         Assert.Equal("stage-3", updated.CurrentStageId);
-        Assert.Contains(task.Id, _jobQueue.UrgentQueue);
+        Assert.Contains(task.Id, _jobQueue.ImplementationQueue);
     }
 
     private class FailingQualityGateStage : IWorkflowStage
@@ -506,6 +515,7 @@ public class TaskOrchestratorDynamicWorkflowTests
         public string StageId { get; }
         public string DisplayName { get; }
         public WorkflowStageKind Kind => WorkflowStageKind.Deterministic;
+        public StageQueueTier QueueTier { get; set; } = StageQueueTier.Implementation;
         public string? LoopBackStageId { get; }
 
         public FailingQualityGateStage(string stageId, string displayName, string loopBackStageId)

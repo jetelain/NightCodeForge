@@ -11,6 +11,21 @@ public static class ConflictResolutionConstants
     public const int MaxConflictResolutionAttempts = 3;
 
     /// <summary>
+    /// Maximum length in characters for compiler error diagnostics injected into prompts.
+    /// </summary>
+    public const int MaxCompilerErrorsLength = 4000;
+
+    /// <summary>
+    /// Cumulative maximum conflict resolution attempts across all conflicts on a single task.
+    /// </summary>
+    public const int MaxTotalConflictResolutionAttempts = 6;
+
+    /// <summary>
+    /// Maximum distinct merge conflicts against advancing base branch before escalating to human maintainer.
+    /// </summary>
+    public const int MaxLifetimeConflictDetections = 3;
+
+    /// <summary>
     /// Maximum retry attempts when host push of merged base branch is rejected due to non-fast-forward race.
     /// </summary>
     public const int MaxPushRetries = 1;
@@ -53,15 +68,17 @@ public static class ConflictResolutionConstants
 Your feature branch has conflicts with target branch '{0}'.
 A merge is in progress in your worktree. The following files are conflicted:
 {1}
-
+{4}
 INSTRUCTIONS:
 1. Inspect each conflicted file with 'read'. Conflict blocks look like:
    <<<<<<< HEAD                 (your feature changes)
    ||||||| <ancestor label>      (original code; label varies)
    =======
    >>>>>>> {0}   (incoming changes from base branch)
-2. Preserve the functionality of this task while integrating the incoming changes. Use 'edit' to replace each whole block with clean resolved code. NO conflict markers may remain.
-3. Non-textual conflicts (a file deleted on one side and modified on the other, or binary files) have no markers: decide explicitly and resolve with 'git rm <file>' or 'git add <file>'. For textual conflicts you do NOT need to stage anything; the orchestrator stages resolved files.
-4. Run '{2}' and '{3}' via 'bash' to verify.
-5. DO NOT run 'git commit', 'git merge --abort' or 'git reset'. Finish your turn once the files are resolved and verified; the orchestrator completes the merge.";
+2. Preserve the functionality of this task while integrating incoming changes. Use 'edit' to reconcile code and remove ALL four conflict markers (<<<<<<<, |||||||, =======, >>>>>>>). NO markers may remain.
+3. Signature Reconciliation: Thoroughly reconcile constructors, interfaces, and method signatures across all affected callers and callees (including tests).
+4. Inspect Staged & Untracked Files: The verifier automatically stages resolved conflicted files and newly created files via 'git add' during verification. Therefore, 'git diff' alone hides staged modifications. Use 'git diff --cached' and 'git status' to inspect staged changes and unstaged working tree state.
+5. Non-textual conflicts (a file deleted on one side and modified on the other, or binary files) have no markers: decide explicitly and resolve with 'git rm <file>' or 'git add <file>'.
+6. MANDATORY VERIFICATION: You MUST execute '{2}' and '{3}' via 'bash'. Any claims that compilation succeeded without running the actual commands will fail deterministic verification. Fix all compiler errors and broken tests.
+7. DO NOT run 'git commit', 'git merge --abort', or 'git reset'. Finish your turn once files are resolved and verified; the orchestrator deterministically verifies compilation and completes the merge.";
 }

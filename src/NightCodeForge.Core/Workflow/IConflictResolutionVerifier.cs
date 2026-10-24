@@ -8,10 +8,12 @@ namespace NightCodeForge.Core.Workflow;
 /// <param name="IsSuccess">Whether all conflict markers are eliminated, files are staged, no unmerged entries remain, and merge is committed.</param>
 /// <param name="ErrorMessage">Detailed verification failure message if any step failed.</param>
 /// <param name="RemainingConflictedFiles">List of file paths that still contain conflict markers or unmerged index entries.</param>
+/// <param name="CompilerErrors">Truncated compiler/diagnostic errors when deterministic compilation fails.</param>
 public record ConflictResolutionVerificationResult(
     bool IsSuccess,
     string? ErrorMessage = null,
-    IReadOnlyList<string>? RemainingConflictedFiles = null);
+    IReadOnlyList<string>? RemainingConflictedFiles = null,
+    string? CompilerErrors = null);
 
 /// <summary>
 /// Deterministically verifies that an agent's conflict resolution has removed all conflict markers,
@@ -27,5 +29,6 @@ public interface IConflictResolutionVerifier
         int taskId,
         string baseBranch,
         IReadOnlyList<string> conflictedFiles,
+        PipelineDataBag? dataBag = null,
         CancellationToken cancellationToken = default);
 }

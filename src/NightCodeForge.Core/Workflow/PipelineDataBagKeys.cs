@@ -57,6 +57,8 @@ public static class PipelineDataBagKeys
     public const string ConflictBaseBranch = "conflict.base_branch";
     public const string ConflictDetectedAt = "conflict.detected_at";
     public const string ConflictResolutionAttempts = "conflict.resolution_attempts";
+    public const string TotalConflictResolutionAttempts = "conflict.total_resolution_attempts";
+    public const string LifetimeConflictDetections = "conflict.lifetime_detections";
     public const string HasResolvedConflict = "conflict.has_resolved";
 
     public static string StageSummary(string stageId) => $"StageSummary_{stageId}";

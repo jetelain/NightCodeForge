@@ -64,7 +64,7 @@ public class DevQueueComponentTests : BunitContext
         var cut = Render<DevQueue>();
 
         Assert.Contains("llm-urgent (Priority 1)", cut.Markup);
-        Assert.Contains("llm-inference (Priority 2)", cut.Markup);
+        Assert.Contains("llm-inference (Legacy)", cut.Markup);
         Assert.Contains("default (Utility)", cut.Markup);
 
         Assert.Contains("Worker: 1", cut.Markup);

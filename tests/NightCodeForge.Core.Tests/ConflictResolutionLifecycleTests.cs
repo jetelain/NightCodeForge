@@ -6,6 +6,7 @@ using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Tests.Fixtures;
 using Xunit;
 
@@ -24,6 +25,17 @@ public class ConflictResolutionLifecycleTests
             RepositoryPath = "/test/repo",
             DefaultBaseBranch = "main"
         };
+    }
+
+    private static IExecutionEnvironmentProvider CreateMockEnvironmentProvider()
+    {
+        var env = new Mock<IExecutionEnvironment>();
+        env.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CommandResult(0, "Build succeeded", "", TimeSpan.Zero));
+        var envProvider = new Mock<IExecutionEnvironmentProvider>();
+        envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
+            .Returns(env.Object);
+        return envProvider.Object;
     }
 
     [Fact]
@@ -53,7 +65,7 @@ public class Test
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var customWorkspace = new Workspace
             {
@@ -107,7 +119,7 @@ Some resolved documentation.
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var customWorkspace = new Workspace
             {
@@ -209,6 +221,7 @@ Some resolved documentation.
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
         {
+            new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic),
             new TestWorkflowStage(StandardStageIds.PostReviewVerification, WorkflowStageKind.Deterministic)
             {
                 Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success())
@@ -323,7 +336,7 @@ Some resolved documentation.
             .ReturnsAsync(new MergeSyncResult(Success: false, HasConflict: true, ConflictedFiles: new[] { "Conflicted.cs" }, MergeCommitSha: null));
 
         var verifierMock = new Mock<IConflictResolutionVerifier>();
-        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<PipelineDataBag?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ConflictResolutionVerificationResult(false, "Conflict markers remain in Conflicted.cs", new[] { "Conflicted.cs" }));
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
@@ -418,7 +431,7 @@ Some resolved documentation.
 
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var result = await verifier.VerifyResolutionAsync(new Workspace { Id = 1, RepositoryPath = tempDir }, 10, "main", new[] { "kept.cs" });
 
@@ -506,8 +519,8 @@ Some resolved documentation.
 
         IReadOnlyList<string>? verifiedFiles = null;
         var verifierMock = new Mock<IConflictResolutionVerifier>();
-        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-            .Callback<Workspace, int, string, IReadOnlyList<string>, CancellationToken>((_, _, _, files, _) => verifiedFiles = files)
+        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<PipelineDataBag?>(), It.IsAny<CancellationToken>()))
+            .Callback<Workspace, int, string, IReadOnlyList<string>, PipelineDataBag?, CancellationToken>((_, _, _, files, _, _) => verifiedFiles = files)
             .ReturnsAsync(new ConflictResolutionVerificationResult(true));
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
@@ -564,7 +577,7 @@ Some resolved documentation.
             .ReturnsAsync(new MergeSyncResult(false, true, new[] { "Conflicted.cs" }, null));
 
         var verifierMock = new Mock<IConflictResolutionVerifier>();
-        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<PipelineDataBag?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ConflictResolutionVerificationResult(false, "markers remain", new[] { "Conflicted.cs" }));
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
@@ -740,7 +753,7 @@ Some resolved documentation.
         Assert.Contains("- Services/Foo.cs", prompt);
         Assert.Contains("- Services/Bar.cs", prompt);
         Assert.Contains("target branch 'main'", prompt);
-        Assert.Contains("Run 'dotnet build' and 'dotnet test --no-build' via 'bash' to verify.", prompt);
+        Assert.Contains("You MUST execute 'dotnet build' and 'dotnet test --no-build' via 'bash'", prompt);
     }
 
     [Fact]
@@ -768,7 +781,7 @@ Some resolved documentation.
 
         Assert.Contains(ConflictResolutionConstants.ConflictDirectiveHeader, prompt);
         Assert.Contains("target branch 'develop'", prompt);
-        Assert.Contains("Run 'npm run build' and 'npm test' via 'bash' to verify.", prompt);
+        Assert.Contains("You MUST execute 'npm run build' and 'npm test' via 'bash'", prompt);
         Assert.DoesNotContain("dotnet build", prompt);
     }
 
@@ -807,7 +820,7 @@ Some resolved documentation.
             var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, context);
 
             Assert.Contains(ConflictResolutionConstants.ConflictDirectiveHeader, prompt);
-            Assert.Contains("Run 'cargo build' and 'cargo test' via 'bash' to verify.", prompt);
+            Assert.Contains("You MUST execute 'cargo build' and 'cargo test' via 'bash'", prompt);
             Assert.DoesNotContain("dotnet build", prompt);
         }
         finally
@@ -840,7 +853,7 @@ Some resolved documentation.
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var result = await verifier.VerifyResolutionAsync(new Workspace { Id = 1, RepositoryPath = tempDir }, 10, "main", new[] { "resolved.cs" });
 
@@ -871,7 +884,7 @@ Some resolved documentation.
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var result = await verifier.VerifyResolutionAsync(new Workspace { Id = 1, RepositoryPath = tempDir }, 10, "main", new[] { "deleted.cs" });
 
@@ -904,7 +917,7 @@ Some resolved documentation.
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var result = await verifier.VerifyResolutionAsync(new Workspace { Id = 1, RepositoryPath = tempDir }, 10, "main", new[] { "image.png" });
 
@@ -941,7 +954,7 @@ Some resolved documentation.
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var result = await verifier.VerifyResolutionAsync(new Workspace { Id = 1, RepositoryPath = tempDir }, 10, "main", new[] { "file.cs" });
 
@@ -982,7 +995,7 @@ Some resolved documentation.
             .ReturnsAsync(new MergeSyncResult(false, true, new[] { "Conflicted.cs" }, null));
 
         var verifierMock = new Mock<IConflictResolutionVerifier>();
-        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<PipelineDataBag?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ConflictResolutionVerificationResult(false, "Unmerged index entries remain", new[] { "Conflicted.cs" }));
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
@@ -1044,7 +1057,7 @@ Some resolved documentation.
             .ReturnsAsync(new MergeSyncResult(false, true, new[] { "Resolved.cs" }, null));
 
         var verifierMock = new Mock<IConflictResolutionVerifier>();
-        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<PipelineDataBag?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ConflictResolutionVerificationResult(true));
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
@@ -1216,6 +1229,7 @@ Some resolved documentation.
         int executionCount = 0;
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
         {
+            new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic),
             new TestWorkflowStage(StandardStageIds.PostReviewVerification, WorkflowStageKind.Deterministic)
             {
                 Handler = (ctx, ct) =>
@@ -1455,6 +1469,711 @@ Some resolved documentation.
 
         await orchestrator.ProcessTaskAsync(task.Id);
         Assert.Equal(2, syncAttempts);
+    }
+
+    [Fact]
+    public async Task Verifier_DeterministicBuildFails_ReturnsFailureWithTruncatedTailErrorsAndNoCommit()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var resolvedFile = Path.Combine(tempDir, "file.cs");
+            await File.WriteAllTextAsync(resolvedFile, "public class Resolved { }");
+
+            var gitRunner = new Mock<IGitCliRunner>();
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("add")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("ls-files")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("status")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+
+            var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
+            gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
+
+            // Generate compiler output > 4000 characters
+            var longDiagnostics = new string('A', 3000) + "\nCS1002: ; expected at line 42\n" + new string('B', 2000);
+            var env = new Mock<IExecutionEnvironment>();
+            env.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new CommandResult(1, longDiagnostics, "", TimeSpan.FromSeconds(2)));
+
+            var envProvider = new Mock<IExecutionEnvironmentProvider>();
+            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
+                .Returns(env.Object);
+
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+
+            var workspace = new Workspace
+            {
+                Id = 1,
+                RepositoryPath = tempDir,
+                DefaultBaseBranch = "main"
+            };
+
+            var result = await verifier.VerifyResolutionAsync(workspace, 10, "main", new[] { "file.cs" });
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains("Deterministic build failed", result.ErrorMessage);
+            Assert.NotNull(result.CompilerErrors);
+            Assert.True(result.CompilerErrors.Length <= ConflictResolutionConstants.MaxCompilerErrorsLength);
+            Assert.Contains("truncated", result.CompilerErrors);
+            // Verify tail is preserved: ending with 'B' characters
+            Assert.EndsWith(new string('B', 100), result.CompilerErrors.TrimEnd());
+
+            // Verify no merge commit was created
+            gitRunner.Verify(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("commit")), It.IsAny<int?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Verifier_DeterministicBuildTimesOut_ReturnsHardFailureAndNoCommit()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var resolvedFile = Path.Combine(tempDir, "file.cs");
+            await File.WriteAllTextAsync(resolvedFile, "public class Resolved { }");
+
+            var gitRunner = new Mock<IGitCliRunner>();
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("add")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("ls-files")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("status")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+
+            var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
+            gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
+
+            var env = new Mock<IExecutionEnvironment>();
+            env.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new TimeoutException("Operation timed out after 30 seconds"));
+
+            var envProvider = new Mock<IExecutionEnvironmentProvider>();
+            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
+                .Returns(env.Object);
+
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+
+            var workspace = new Workspace
+            {
+                Id = 1,
+                RepositoryPath = tempDir,
+                DefaultBaseBranch = "main",
+                BuildTimeoutSeconds = 45
+            };
+
+            var result = await verifier.VerifyResolutionAsync(workspace, 10, "main", new[] { "file.cs" });
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains("timed out after 45 seconds", result.ErrorMessage);
+            Assert.Contains("Deterministic build timed out", result.CompilerErrors);
+
+            // Verify no merge commit was created
+            gitRunner.Verify(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("commit")), It.IsAny<int?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Verifier_DeterministicBuildPasses_CreatesMergeCommitAndReturnsSuccess()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var resolvedFile = Path.Combine(tempDir, "file.cs");
+            await File.WriteAllTextAsync(resolvedFile, "public class Resolved { }");
+
+            var gitRunner = new Mock<IGitCliRunner>();
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("add")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("ls-files")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("status")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("rev-parse")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "mock-sha", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("commit")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+
+            var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
+            gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
+
+            var env = new Mock<IExecutionEnvironment>();
+            env.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new CommandResult(0, "Build succeeded. 0 Warning(s) 0 Error(s)", "", TimeSpan.FromSeconds(3)));
+
+            var envProvider = new Mock<IExecutionEnvironmentProvider>();
+            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
+                .Returns(env.Object);
+
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+
+            var workspace = new Workspace
+            {
+                Id = 1,
+                RepositoryPath = tempDir,
+                DefaultBaseBranch = "main"
+            };
+
+            var result = await verifier.VerifyResolutionAsync(workspace, 10, "main", new[] { "file.cs" });
+
+            Assert.True(result.IsSuccess);
+            Assert.Null(result.ErrorMessage);
+            Assert.Null(result.CompilerErrors);
+
+            // Verify merge commit was created with proper message
+            gitRunner.Verify(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("commit") && args.Contains("Resolve merge conflicts with main")), It.IsAny<int?>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Verifier_StagingBeforeBuild_StagesUntrackedSourceFilesAndIgnoresBuildArtifacts()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var resolvedFile = Path.Combine(tempDir, "file.cs");
+            await File.WriteAllTextAsync(resolvedFile, "public class Resolved { }");
+
+            var stagedFiles = new List<string>();
+
+            var gitRunner = new Mock<IGitCliRunner>();
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("add")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .Callback<string, IEnumerable<string>, int?, CancellationToken>((_, args, _, _) =>
+                {
+                    var file = args.LastOrDefault();
+                    if (file != null) stagedFiles.Add(file);
+                })
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("ls-files")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+
+            // Status shows newly created source file and a build artifact in bin/
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("status")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "?? src/NewHelper.cs\n?? bin/Debug/app.dll\n?? obj/Debug/app.pdb", "", TimeSpan.Zero));
+
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("rev-parse")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "mock-sha", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("commit")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+
+            var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
+            gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
+
+            var env = new Mock<IExecutionEnvironment>();
+            env.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new CommandResult(0, "Build succeeded", "", TimeSpan.FromSeconds(1)));
+
+            var envProvider = new Mock<IExecutionEnvironmentProvider>();
+            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
+                .Returns(env.Object);
+
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+
+            var workspace = new Workspace
+            {
+                Id = 1,
+                RepositoryPath = tempDir,
+                DefaultBaseBranch = "main"
+            };
+
+            var result = await verifier.VerifyResolutionAsync(workspace, 10, "main", new[] { "file.cs" });
+
+            Assert.True(result.IsSuccess);
+            Assert.Contains("file.cs", stagedFiles);
+            Assert.Contains("src/NewHelper.cs", stagedFiles);
+            Assert.DoesNotContain("bin/Debug/app.dll", stagedFiles);
+            Assert.DoesNotContain("obj/Debug/app.pdb", stagedFiles);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Verifier_NullBuildTimeout_ResolvesToWorkflowDefault()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var resolvedFile = Path.Combine(tempDir, "file.cs");
+            await File.WriteAllTextAsync(resolvedFile, "public class Resolved { }");
+
+            var gitRunner = new Mock<IGitCliRunner>();
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("add")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("ls-files")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("status")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("rev-parse")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "mock-merge-head", "", TimeSpan.Zero));
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("commit")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+
+            var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
+            gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
+
+            int? capturedTimeout = null;
+            var env = new Mock<IExecutionEnvironment>();
+            env.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()))
+                .Callback<string, string, int?, IReadOnlyDictionary<string, string>, CancellationToken>((_, _, timeout, _, _) =>
+                {
+                    capturedTimeout = timeout;
+                })
+                .ReturnsAsync(new CommandResult(0, "Build succeeded", "", TimeSpan.FromSeconds(1)));
+
+            var envProvider = new Mock<IExecutionEnvironmentProvider>();
+            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
+                .Returns(env.Object);
+
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+
+            var workspace = new Workspace
+            {
+                Id = 1,
+                RepositoryPath = tempDir,
+                DefaultBaseBranch = "main",
+                BuildTimeoutSeconds = null // Null should resolve to WorkflowDefaults.DefaultBuildTimeoutSeconds
+            };
+
+            var result = await verifier.VerifyResolutionAsync(workspace, 10, "main", new[] { "file.cs" });
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal(WorkflowDefaults.DefaultBuildTimeoutSeconds, capturedTimeout);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public void PromptBuilder_ConflictMandate_PrependedAtTopAndIncludesInspectionHints()
+    {
+        var task = new ForgeTask
+        {
+            Id = 310,
+            WorkspaceId = _workspace.Id,
+            BaseBranch = "main",
+            Title = "Mandate Placement Task"
+        };
+        var stage = new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic)
+        {
+            PromptTemplate = "Persona: You are a senior engineer."
+        };
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.ConflictFiles, new List<string> { "Services/OrderService.cs" });
+        bag.Set(PipelineDataBagKeys.ConflictBaseBranch, "main");
+        var context = new PipelineContext(task, _workspace, bag);
+
+        var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, context);
+
+        Assert.StartsWith(ConflictResolutionConstants.ConflictDirectiveHeader, prompt);
+        Assert.Contains("git diff --cached", prompt);
+        Assert.Contains("git status", prompt);
+        Assert.Contains("Persona: You are a senior engineer.", prompt);
+    }
+
+    [Fact]
+    public void PromptBuilder_WithCompilerErrors_RendersDiagnosticsBlock()
+    {
+        var task = new ForgeTask
+        {
+            Id = 311,
+            WorkspaceId = _workspace.Id,
+            BaseBranch = "main",
+            Title = "Compiler Diagnostics Prompt Task"
+        };
+        var stage = new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic)
+        {
+            PromptTemplate = "Implement task {{ task.id }}"
+        };
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.ConflictFiles, new List<string> { "Services/OrderService.cs" });
+        bag.Set(PipelineDataBagKeys.CompilerErrors, new List<string> { "Error CS1002: ; expected in OrderService.cs", "Error CS0246: The type or namespace 'IOrder' could not be found" });
+        var context = new PipelineContext(task, _workspace, bag);
+
+        var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, context);
+
+        Assert.Contains("PREVIOUS COMPILER DIAGNOSTICS (Resolve these compilation errors):", prompt);
+        Assert.Contains("Error CS1002: ; expected", prompt);
+        Assert.Contains("Error CS0246: The type or namespace 'IOrder' could not be found", prompt);
+    }
+
+    [Fact]
+    public void PromptBuilder_WithoutCompilerErrors_OmitsDiagnosticsBlock()
+    {
+        var task = new ForgeTask
+        {
+            Id = 312,
+            WorkspaceId = _workspace.Id,
+            BaseBranch = "main",
+            Title = "Clean Diagnostics Prompt Task"
+        };
+        var stage = new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic)
+        {
+            PromptTemplate = "Implement task {{ task.id }}"
+        };
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.ConflictFiles, new List<string> { "Services/OrderService.cs" });
+        var context = new PipelineContext(task, _workspace, bag);
+
+        var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, context);
+
+        Assert.DoesNotContain("PREVIOUS COMPILER DIAGNOSTICS", prompt);
+    }
+
+    [Fact]
+    public async Task ConflictResolution_LifetimeDetectionsCeiling_EscalatesToHumanMaintainer()
+    {
+        var task = new ForgeTask
+        {
+            Id = 313,
+            WorkspaceId = _workspace.Id,
+            BaseBranch = "main",
+            Status = TaskOverallStatus.Reviewed,
+            CurrentStageId = StandardStageIds.PostReviewVerification
+        };
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.LifetimeConflictDetections, ConflictResolutionConstants.MaxLifetimeConflictDetections - 1); // 2 previous detections
+        task.PipelineDataJson = bag.ToJson();
+
+        var taskRepo = new InMemoryTaskRepository();
+        await taskRepo.CreateAsync(task);
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        await workspaceRepo.CreateAsync(_workspace);
+        var depStore = new InMemoryTaskDependencyStore();
+        depStore.AddTask(task.Id, task.WorkspaceId, task.Status);
+
+        var gitManagerMock = new Mock<IGitWorkspaceManager>();
+        gitManagerMock.Setup(m => m.CheckMergeableAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MergeabilityCheckResult(IsMergeable: false, ConflictedFiles: new[] { "src/Order.cs" }, BaseBranchSha: "b1", FeatureBranchSha: "f1"));
+
+        var jobQueue = new FakeTaskJobQueue();
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[]
+        {
+            new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic),
+            new TestWorkflowStage(StandardStageIds.PostReviewVerification, WorkflowStageKind.Deterministic)
+            {
+                Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success())
+            }
+        });
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyStore = depStore,
+            GitWorkspaceManager = gitManagerMock.Object,
+            JobQueue = jobQueue,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline)
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var updated = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updated);
+        Assert.True(updated.IsWaitingForHuman);
+        Assert.Equal(StandardStageIds.Implementation, updated.InterruptedStageId);
+
+        var updatedBag = PipelineDataBag.FromJson(updated.PipelineDataJson);
+        Assert.Equal(ConflictResolutionConstants.MaxLifetimeConflictDetections, updatedBag.Get<int?>(PipelineDataBagKeys.LifetimeConflictDetections));
+
+        var history = await taskRepo.GetHistoryAsync(task.Id);
+        Assert.Contains(history, h => h.ChangeReason != null && h.ChangeReason.Contains("distinct merge conflicts against advancing base branch. Escalated to maintainer"));
+        Assert.Empty(jobQueue.ImplementationQueue);
+    }
+
+    [Fact]
+    public async Task ConflictResolution_ExhaustsTotalAttemptsBudget_EscalatesToHumanMaintainer()
+    {
+        var task = new ForgeTask
+        {
+            Id = 314,
+            WorkspaceId = _workspace.Id,
+            BaseBranch = "main",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation
+        };
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.ConflictFiles, new List<string> { "src/Order.cs" });
+        bag.Set(PipelineDataBagKeys.ConflictResolutionAttempts, 0); // 0 in this conflict
+        bag.Set(PipelineDataBagKeys.TotalConflictResolutionAttempts, ConflictResolutionConstants.MaxTotalConflictResolutionAttempts - 1); // 5 total across task lifetime
+        task.PipelineDataJson = bag.ToJson();
+
+        var taskRepo = new InMemoryTaskRepository();
+        await taskRepo.CreateAsync(task);
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        await workspaceRepo.CreateAsync(_workspace);
+        var depStore = new InMemoryTaskDependencyStore();
+        depStore.AddTask(task.Id, task.WorkspaceId, task.Status);
+
+        var verifierMock = new Mock<IConflictResolutionVerifier>();
+        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<PipelineDataBag?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ConflictResolutionVerificationResult(false, "Build failed", CompilerErrors: "error CS0001"));
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[]
+        {
+            new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic)
+            {
+                Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success())
+            }
+        });
+
+        var gitManagerMock = new Mock<IGitWorkspaceManager>();
+        gitManagerMock.Setup(m => m.SyncFromBaseBranchAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MergeSyncResult(false, true, new[] { "src/Order.cs" }, null));
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyStore = depStore,
+            GitWorkspaceManager = gitManagerMock.Object,
+            ConflictResolutionVerifier = verifierMock.Object,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline)
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var updated = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updated);
+        Assert.True(updated.IsWaitingForHuman);
+        Assert.Equal(StandardStageIds.Implementation, updated.InterruptedStageId);
+
+        var history = await taskRepo.GetHistoryAsync(task.Id);
+        Assert.Contains(history, h => h.ChangeReason?.Contains(ConflictResolutionConstants.AuditConflictResolutionBudgetExhausted, StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
+    public async Task ConflictResolution_VerificationFailure_ClearsCompilerErrorsOnMarkerScanFailureAndLoopsBack()
+    {
+        var task = new ForgeTask
+        {
+            Id = 315,
+            WorkspaceId = _workspace.Id,
+            BaseBranch = "main",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation
+        };
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.ConflictFiles, new List<string> { "src/Order.cs" });
+        bag.Set(PipelineDataBagKeys.ConflictResolutionAttempts, 0);
+        bag.Set(PipelineDataBagKeys.CompilerErrors, new List<string> { "Old compiler error" });
+        task.PipelineDataJson = bag.ToJson();
+
+        var taskRepo = new InMemoryTaskRepository();
+        await taskRepo.CreateAsync(task);
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        await workspaceRepo.CreateAsync(_workspace);
+        var depStore = new InMemoryTaskDependencyStore();
+        depStore.AddTask(task.Id, task.WorkspaceId, task.Status);
+
+        var jobQueue = new FakeTaskJobQueue();
+
+        var gitManagerMock = new Mock<IGitWorkspaceManager>();
+        gitManagerMock.Setup(m => m.SyncFromBaseBranchAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MergeSyncResult(false, true, new[] { "src/Order.cs" }, null));
+
+        var verifierMock = new Mock<IConflictResolutionVerifier>();
+        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<PipelineDataBag?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ConflictResolutionVerificationResult(false, "Conflict markers remain in src/Order.cs", CompilerErrors: null));
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[]
+        {
+            new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic)
+            {
+                QueueTier = StageQueueTier.Implementation,
+                Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success())
+            }
+        });
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyStore = depStore,
+            GitWorkspaceManager = gitManagerMock.Object,
+            JobQueue = jobQueue,
+            ConflictResolutionVerifier = verifierMock.Object,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline)
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var updated = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updated);
+        Assert.False(updated.IsWaitingForHuman);
+        Assert.Equal(StandardStageIds.Implementation, updated.CurrentStageId);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
+
+        var updatedBag = PipelineDataBag.FromJson(updated.PipelineDataJson);
+        Assert.Equal(1, updatedBag.Get<int?>(PipelineDataBagKeys.ConflictResolutionAttempts));
+        Assert.Equal(1, updatedBag.Get<int?>(PipelineDataBagKeys.TotalConflictResolutionAttempts));
+        var errors = updatedBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
+        Assert.NotNull(errors);
+        Assert.Contains(errors, e => e.Contains("Conflict markers remain"));
+
+        Assert.Single(jobQueue.ImplementationQueue);
+        Assert.Equal(task.Id, jobQueue.ImplementationQueue[0]);
+    }
+
+    [Fact]
+    public async Task ConflictResolution_VerifiedPass_TraversesDownstreamGatesToReady()
+    {
+        var task = new ForgeTask
+        {
+            Id = 316,
+            WorkspaceId = _workspace.Id,
+            BaseBranch = "main",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation
+        };
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.ConflictFiles, new List<string> { "src/Resolved.cs" });
+        task.PipelineDataJson = bag.ToJson();
+
+        var taskRepo = new InMemoryTaskRepository();
+        await taskRepo.CreateAsync(task);
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        await workspaceRepo.CreateAsync(_workspace);
+        var depStore = new InMemoryTaskDependencyStore();
+        depStore.AddTask(task.Id, task.WorkspaceId, task.Status);
+
+        var gitManagerMock = new Mock<IGitWorkspaceManager>();
+        gitManagerMock.Setup(m => m.CheckMergeableAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MergeabilityCheckResult(true, Array.Empty<string>(), "base-sha", "feat-sha"));
+        var syncCount = 0;
+        gitManagerMock.Setup(m => m.SyncFromBaseBranchAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => syncCount++ == 0
+                ? new MergeSyncResult(false, true, new[] { "src/Resolved.cs" }, "feat-sha")
+                : new MergeSyncResult(true, false, Array.Empty<string>(), "feat-sha"));
+
+        var verifierMock = new Mock<IConflictResolutionVerifier>();
+        verifierMock.Setup(v => v.VerifyResolutionAsync(It.IsAny<Workspace>(), task.Id, "main", It.IsAny<IReadOnlyList<string>>(), It.IsAny<PipelineDataBag?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ConflictResolutionVerificationResult(true));
+
+        var jobQueue = new FakeTaskJobQueue();
+
+        var stagesVisited = new List<string>();
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[]
+        {
+            new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic)
+            {
+                QueueTier = StageQueueTier.Implementation,
+                Handler = (ctx, ct) => { stagesVisited.Add(StandardStageIds.Implementation); return Task.FromResult(StageExecutionResult.Success()); }
+            },
+            new TestWorkflowStage(StandardStageIds.PostImplementationGates, WorkflowStageKind.Deterministic)
+            {
+                QueueTier = StageQueueTier.Implementation,
+                Handler = (ctx, ct) => { stagesVisited.Add(StandardStageIds.PostImplementationGates); return Task.FromResult(StageExecutionResult.Success()); }
+            },
+            new TestWorkflowStage(StandardStageIds.CodeReviewAndFix, WorkflowStageKind.Agentic)
+            {
+                QueueTier = StageQueueTier.CodeReview,
+                Handler = (ctx, ct) => { stagesVisited.Add(StandardStageIds.CodeReviewAndFix); return Task.FromResult(StageExecutionResult.Success()); }
+            },
+            new TestWorkflowStage(StandardStageIds.PostReviewVerification, WorkflowStageKind.Deterministic)
+            {
+                QueueTier = StageQueueTier.CodeReview,
+                Handler = (ctx, ct) => { stagesVisited.Add(StandardStageIds.PostReviewVerification); return Task.FromResult(StageExecutionResult.Success()); }
+            }
+        });
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyStore = depStore,
+            GitWorkspaceManager = gitManagerMock.Object,
+            JobQueue = jobQueue,
+            ConflictResolutionVerifier = verifierMock.Object,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline)
+        }.Build();
+
+        // Step 1: Implementation agent turn verifies conflict resolution
+        await orchestrator.ProcessTaskAsync(task.Id);
+        var taskAfterImpl = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(taskAfterImpl);
+        Assert.Equal(StandardStageIds.PostImplementationGates, taskAfterImpl.CurrentStageId);
+        Assert.Equal(TaskOverallStatus.Open, taskAfterImpl.Status);
+
+        var bagAfterImpl = PipelineDataBag.FromJson(taskAfterImpl.PipelineDataJson);
+        Assert.True(bagAfterImpl.Get<bool?>(PipelineDataBagKeys.HasResolvedConflict));
+        Assert.Null(bagAfterImpl.Get<List<string>>(PipelineDataBagKeys.ConflictFiles));
+
+        // Step 2: PostImplementationGates
+        await orchestrator.ProcessTaskAsync(task.Id);
+        var taskAfterPostImpl = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(taskAfterPostImpl);
+        Assert.Equal(StandardStageIds.CodeReviewAndFix, taskAfterPostImpl.CurrentStageId);
+        Assert.Equal(TaskOverallStatus.Open, taskAfterPostImpl.Status);
+
+        // Step 3: CodeReviewAndFix
+        await orchestrator.ProcessTaskAsync(task.Id);
+        var taskAfterCR = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(taskAfterCR);
+        Assert.Equal(StandardStageIds.PostReviewVerification, taskAfterCR.CurrentStageId);
+        Assert.Equal(TaskOverallStatus.Open, taskAfterCR.Status);
+
+        // Step 4: PostReviewVerification and Gate 2
+        await orchestrator.ProcessTaskAsync(task.Id);
+        var taskAfterAll = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(taskAfterAll);
+        Assert.Equal(TaskOverallStatus.Ready, taskAfterAll.Status);
+
+        var finalBag = PipelineDataBag.FromJson(taskAfterAll.PipelineDataJson);
+        Assert.True(finalBag.Get<bool?>(PipelineDataBagKeys.HasResolvedConflict));
+
+        Assert.Equal(new[]
+        {
+            StandardStageIds.Implementation,
+            StandardStageIds.PostImplementationGates,
+            StandardStageIds.CodeReviewAndFix,
+            StandardStageIds.PostReviewVerification
+        }, stagesVisited);
     }
 }
 

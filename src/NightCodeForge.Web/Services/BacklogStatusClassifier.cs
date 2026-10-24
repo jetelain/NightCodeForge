@@ -42,8 +42,8 @@ public static class BacklogStatusClassifier
 
         if (task.Status == TaskOverallStatus.Open)
         {
-            // An Open task is only In-Flight if it has actually started execution or is actively running
-            if (task.HasExecutionRun && !string.IsNullOrWhiteSpace(task.CurrentStageId))
+            // An Open task is In-Flight if it has started execution or has an active job or stage
+            if ((task.HasExecutionRun || !string.IsNullOrWhiteSpace(task.LastHangfireJobId)) && !string.IsNullOrWhiteSpace(task.CurrentStageId))
             {
                 return BacklogKanbanColumn.InFlight;
             }

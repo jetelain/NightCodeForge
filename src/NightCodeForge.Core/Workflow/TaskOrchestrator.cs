@@ -1074,6 +1074,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     task.Id,
                     task.BaseBranch,
                     activeConflictFiles,
+                    pipelineContext.DataBag,
                     cancellationToken);
 
                 if (!verifierResult.IsSuccess)
@@ -1081,10 +1082,14 @@ public class TaskOrchestrator : ITaskOrchestrator
                     var attempts = (pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.ConflictResolutionAttempts) ?? 0) + 1;
                     pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictResolutionAttempts, attempts);
 
-                    if (attempts >= ConflictResolutionConstants.MaxConflictResolutionAttempts)
+                    var totalAttempts = (pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.TotalConflictResolutionAttempts) ?? 0) + 1;
+                    pipelineContext.DataBag.Set(PipelineDataBagKeys.TotalConflictResolutionAttempts, totalAttempts);
+
+                    if (attempts >= ConflictResolutionConstants.MaxConflictResolutionAttempts ||
+                        totalAttempts >= ConflictResolutionConstants.MaxTotalConflictResolutionAttempts)
                     {
-                        _logger.LogWarning("Conflict resolution budget exhausted for task #{TaskId} ({Attempts} attempts). Escalating to maintainer.",
-                            task.Id, attempts);
+                        _logger.LogWarning("Conflict resolution budget exhausted for task #{TaskId} ({Attempts} immediate attempts, {TotalAttempts} total attempts). Escalating to maintainer.",
+                            task.Id, attempts, totalAttempts);
 
                         task.IsWaitingForHuman = true;
                         task.InterruptedStageId = StandardStageIds.Implementation;
@@ -1109,12 +1114,50 @@ public class TaskOrchestrator : ITaskOrchestrator
                         return;
                     }
 
-                    // Loopback to Implementation with concrete feedback
-                    result = StageExecutionResult.Failure(verifierResult.ErrorMessage ?? "Conflict resolution verification failed.", loopBackStageId: StandardStageIds.Implementation);
+                    var errorToReport = !string.IsNullOrWhiteSpace(verifierResult.CompilerErrors)
+                        ? verifierResult.CompilerErrors
+                        : verifierResult.ErrorMessage;
 
-                    var compilerErrors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors) ?? new List<string>();
-                    compilerErrors.Add(verifierResult.ErrorMessage ?? "Conflict markers or unmerged index entries remain.");
-                    pipelineContext.DataBag.Set(PipelineDataBagKeys.CompilerErrors, compilerErrors);
+                    if (!string.IsNullOrWhiteSpace(errorToReport))
+                    {
+                        pipelineContext.DataBag.Set(PipelineDataBagKeys.CompilerErrors, new List<string> { errorToReport });
+                    }
+                    else
+                    {
+                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.CompilerErrors);
+                    }
+
+                    // Preserve worktree state and MERGE_HEAD; re-enqueue to Implementation directly without incrementing quality gate retries
+                    task.CurrentStageId = StandardStageIds.Implementation;
+                    task.Status = TaskOverallStatus.Open;
+                    pipelineContext.SyncDataBagToTask();
+
+                    var retryMsg = $"Conflict resolution verification failed ({verifierResult.ErrorMessage}). Looping back to '{StandardStageIds.Implementation}' (attempt {attempts}/{ConflictResolutionConstants.MaxConflictResolutionAttempts}, total: {totalAttempts}/{ConflictResolutionConstants.MaxTotalConflictResolutionAttempts}).";
+                    _logger.LogWarning("Task #{TaskId}: {Message}", task.Id, retryMsg);
+
+                    await _taskRepository.UpdateWithHistoryAsync(
+                        task,
+                        dependsOn: null,
+                        changedBy: AuditActors.TaskOrchestrator,
+                        reason: retryMsg,
+                        cancellationToken: cancellationToken);
+                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
+                    await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+
+                    await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                    {
+                        TaskId = task.Id,
+                        Level = LogLevel.Warning,
+                        Message = retryMsg,
+                        Timestamp = DateTime.UtcNow
+                    }, cancellationToken);
+
+                    var implementationStage = pipeline.GetStage(StandardStageIds.Implementation)
+                        ?? throw new WorkflowValidationException($"Task #{task.Id} workflow does not contain target implementation stage '{StandardStageIds.Implementation}' for conflict resolution loopback.");
+
+                    task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, implementationStage.QueueTier, task.Priority);
+                    await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                    return;
                 }
                 else
                 {
@@ -1123,6 +1166,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     pipelineContext.DataBag.Remove(PipelineDataBagKeys.ConflictFiles);
                     pipelineContext.DataBag.Remove(PipelineDataBagKeys.ConflictBaseBranch);
                     pipelineContext.DataBag.Remove(PipelineDataBagKeys.ConflictDetectedAt);
+                    pipelineContext.DataBag.Remove(PipelineDataBagKeys.CompilerErrors);
                     pipelineContext.DataBag.Set(PipelineDataBagKeys.HasResolvedConflict, true);
 
                     var resolvedMsg = string.Format(ConflictResolutionConstants.AuditConflictResolvedByAgentFormat, activeConflictFiles.Count, string.Join(", ", activeConflictFiles));
@@ -1194,14 +1238,8 @@ public class TaskOrchestrator : ITaskOrchestrator
             await _taskRepository.AddCheckpointAsync(checkpoint, cancellationToken);
             pipelineContext.DataBag.Remove(PipelineDataBagKeys.SerializedMemory);
 
-            // Status stamps per stage
-            if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(stage.StageId, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
             {
-                task.Status = TaskOverallStatus.Reviewed;
-            }
-            else if (string.Equals(stage.StageId, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
-            {
-                task.Status = TaskOverallStatus.Implemented;
                 try
                 {
                     var diffStat = await _gitWorkspaceManager.GenerateDiffStatAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
@@ -1211,10 +1249,6 @@ public class TaskOrchestrator : ITaskOrchestrator
                 {
                     _logger.LogWarning(ex, "Failed generating review diff stat after implementation for task #{TaskId}", task.Id);
                 }
-            }
-            else if (string.Equals(stage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
-            {
-                // Task status will transition to Ready after Gate 2 verification below
             }
 
             var nextStageId = result.TargetRoutingStageId;
@@ -1250,15 +1284,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
                 await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
 
-                // Enqueue next stage with priority routing (P1 to llm-urgent, others to llm-inference)
-                if (task.Priority == TaskPriority.Critical)
-                {
-                    task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
-                }
-                else
-                {
-                    task.LastHangfireJobId = _jobQueue.EnqueueInference(task.Id);
-                }
+                // Enqueue next stage with stage-priority routing
+                task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, nextStage.QueueTier, task.Priority);
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
             }
             else
@@ -1657,16 +1684,20 @@ public class TaskOrchestrator : ITaskOrchestrator
         await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
         await _dependencyStore.SetWaitingForHumanAsync(task.Id, false, cancellationToken);
 
+        var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
+        var blockedStage = (!string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null)
+            ?? pipeline.InitialStage
+            ?? throw new WorkflowValidationException($"No active or initial stage found for task #{task.Id}.");
+
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
         {
             TaskId = task.Id,
             Level = LogLevel.Information,
-            Message = $"Human answers submitted for task #{taskId} (batch {activeBatchId ?? "default"} completed); resumed and enqueued to llm-urgent",
+            Message = $"Human answers submitted for task #{taskId} (batch {activeBatchId ?? "default"} completed); resumed and enqueued to stage queue {blockedStage.QueueTier}",
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
 
-        // Preemptive top-priority resumption on llm-urgent
-        task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
+        task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, blockedStage.QueueTier, task.Priority);
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
     }
 
@@ -1685,8 +1716,11 @@ public class TaskOrchestrator : ITaskOrchestrator
             ?? pipeline.Stages.LastOrDefault(s => !string.IsNullOrWhiteSpace(s.LoopBackStageId))?.LoopBackStageId
             ?? StandardStageIds.Implementation;
 
+        var targetStage = pipeline.GetStage(targetStageId)
+            ?? throw new WorkflowValidationException($"Workflow does not contain stage '{targetStageId}'.");
+
         // Re-route task back to dynamic target stage
-        task.Status = TaskOverallStatus.Reviewed;
+        task.Status = TaskOverallStatus.Open;
         task.CurrentStageId = targetStageId;
 
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
@@ -1699,7 +1733,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             changedBy: AuditActors.User,
             reason: $"Reviewer requested changes (routing back to '{targetStageId}'): {revisionNotes}",
             cancellationToken: cancellationToken);
-        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Reviewed, cancellationToken);
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
 
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
         {
@@ -1709,8 +1743,8 @@ public class TaskOrchestrator : ITaskOrchestrator
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
 
-        // Enqueue to llm-urgent for rapid rework
-        task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
+        // Enqueue to target stage queue tier
+        task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority);
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
     }
 
@@ -1745,14 +1779,10 @@ public class TaskOrchestrator : ITaskOrchestrator
             var isReady = await _dependencyEngine.IsReadyForExecutionAsync(task.Id, cancellationToken);
             if (isReady)
             {
-                if (task.Priority == TaskPriority.Critical)
-                {
-                    task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
-                }
-                else
-                {
-                    task.LastHangfireJobId = _jobQueue.EnqueueInference(task.Id);
-                }
+                var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
+                var initialStage = pipeline.InitialStage
+                    ?? throw new WorkflowValidationException($"Workflow does not contain an initial stage for task #{task.Id}.");
+                task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, initialStage.QueueTier, task.Priority);
 
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
             }
@@ -1823,6 +1853,9 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
         bag.Remove(PipelineDataBagKeys.HasResolvedConflict);
+        bag.Remove(PipelineDataBagKeys.ConflictResolutionAttempts);
+        bag.Remove(PipelineDataBagKeys.TotalConflictResolutionAttempts);
+        bag.Remove(PipelineDataBagKeys.LifetimeConflictDetections);
         task.PipelineDataJson = bag.ToJson();
 
         var rejectionReason = string.IsNullOrWhiteSpace(reason)
@@ -1985,6 +2018,8 @@ public class TaskOrchestrator : ITaskOrchestrator
         var closedBag = PipelineDataBag.FromJson(task.PipelineDataJson);
         closedBag.Remove(PipelineDataBagKeys.HasResolvedConflict);
         closedBag.Remove(PipelineDataBagKeys.ConflictResolutionAttempts);
+        closedBag.Remove(PipelineDataBagKeys.TotalConflictResolutionAttempts);
+        closedBag.Remove(PipelineDataBagKeys.LifetimeConflictDetections);
         task.PipelineDataJson = closedBag.ToJson();
         await _taskRepository.UpdateWithHistoryAsync(
             task,
@@ -2032,6 +2067,15 @@ public class TaskOrchestrator : ITaskOrchestrator
         if (unblocked.Count > 0)
         {
             var unblockedTasks = await _taskRepository.GetByIdsAsync(unblocked, cancellationToken);
+            var foundIds = unblockedTasks.Select(t => t.Id).ToHashSet();
+            var missingIds = unblocked.Where(id => !foundIds.Contains(id)).ToList();
+            if (missingIds.Count > 0)
+            {
+                var missingList = string.Join(", ", missingIds);
+                _logger.LogCritical("ForgeTask #{PrereqId} cascade unblocking failed: dependent task(s) [{MissingIds}] not found in task repository.", task.Id, missingList);
+                throw new TaskNotFoundException(missingIds[0], $"Dependent task #{missingIds[0]} unblocked by task #{task.Id} was not found in task repository.");
+            }
+
             var orderedUnblocked = unblockedTasks
                 .OrderBy(t => t.Priority)     // 1 (Highest) first
                 .ThenBy(t => t.CreatedAt)    // Older tasks first on priority tie
@@ -2043,22 +2087,11 @@ public class TaskOrchestrator : ITaskOrchestrator
                     "ForgeTask #{PrereqId} completed; unblocked dependent task #{UnblockedId} (Priority: {Priority}).",
                     task.Id, unblockedTask.Id, unblockedTask.Priority);
 
-                if (unblockedTask.Priority == TaskPriority.Critical)
-                {
-                    unblockedTask.LastHangfireJobId = _jobQueue.EnqueueUrgent(unblockedTask.Id);
-                }
-                else
-                {
-                    unblockedTask.LastHangfireJobId = _jobQueue.EnqueueInference(unblockedTask.Id);
-                }
+                var unblockedPipeline = await _pipelineProvider.GetPipelineAsync(unblockedTask, cancellationToken);
+                var initialStage = unblockedPipeline.InitialStage
+                    ?? throw new WorkflowValidationException($"Workflow does not contain an initial stage for unblocked task #{unblockedTask.Id}.");
+                unblockedTask.LastHangfireJobId = _jobQueue.EnqueueStage(unblockedTask.Id, initialStage.QueueTier, unblockedTask.Priority);
                 await _taskRepository.UpdateAsync(unblockedTask, cancellationToken: cancellationToken);
-            }
-
-            var foundIds = unblockedTasks.Select(t => t.Id).ToHashSet();
-            foreach (var missingId in unblocked.Where(id => !foundIds.Contains(id)))
-            {
-                _logger.LogWarning("ForgeTask #{PrereqId} completed; unblocked dependent task #{UnblockedId} was not found in task repository.", task.Id, missingId);
-                _jobQueue.EnqueueInference(missingId);
             }
         }
 
@@ -2087,6 +2120,38 @@ public class TaskOrchestrator : ITaskOrchestrator
         CancellationToken cancellationToken,
         bool discardApproval = false)
     {
+        var lifetimeDetections = (pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.LifetimeConflictDetections) ?? 0) + 1;
+        pipelineContext.DataBag.Set(PipelineDataBagKeys.LifetimeConflictDetections, lifetimeDetections);
+        pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictResolutionAttempts, 0);
+
+        if (lifetimeDetections >= ConflictResolutionConstants.MaxLifetimeConflictDetections)
+        {
+            var escalationMsg = $"Task has experienced {ConflictResolutionConstants.MaxLifetimeConflictDetections} distinct merge conflicts against advancing base branch. Escalated to maintainer to rebase manually.";
+            _logger.LogWarning("Task #{TaskId}: {Message}", task.Id, escalationMsg);
+
+            task.IsWaitingForHuman = true;
+            task.InterruptedStageId = StandardStageIds.Implementation;
+            pipelineContext.SyncDataBagToTask();
+
+            await _taskRepository.UpdateWithHistoryAsync(
+                task,
+                dependsOn: null,
+                changedBy: AuditActors.System,
+                reason: escalationMsg,
+                cancellationToken: cancellationToken);
+            await _dependencyStore.SetWaitingForHumanAsync(task.Id, true, cancellationToken);
+
+            await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+            {
+                TaskId = task.Id,
+                Level = LogLevel.Warning,
+                Message = escalationMsg,
+                Timestamp = DateTime.UtcNow
+            }, cancellationToken);
+
+            return;
+        }
+
         pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictFiles, conflictedFiles.ToList());
         pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictBaseBranch, task.BaseBranch);
         pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictDetectedAt, DateTime.UtcNow);
@@ -2100,14 +2165,11 @@ public class TaskOrchestrator : ITaskOrchestrator
             ? string.Format(ConflictResolutionConstants.AuditApprovalDiscardedFormat, task.BaseBranch)
             : string.Format(ConflictResolutionConstants.AuditConflictResolutionRoutedFormat, task.BaseBranch);
 
-        if (task.Priority == TaskPriority.Critical)
-        {
-            task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
-        }
-        else
-        {
-            task.LastHangfireJobId = _jobQueue.EnqueueInference(task.Id);
-        }
+        var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
+        var implementationStage = pipeline.GetStage(StandardStageIds.Implementation)
+            ?? throw new WorkflowValidationException($"Task #{task.Id} workflow does not contain target implementation stage '{StandardStageIds.Implementation}' for conflict resolution.");
+
+        task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, implementationStage.QueueTier, task.Priority);
 
         await _taskRepository.UpdateWithHistoryAsync(
             task,
@@ -2180,7 +2242,11 @@ public class TaskOrchestrator : ITaskOrchestrator
                 Timestamp = DateTime.UtcNow
             }, cancellationToken);
 
-            task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
+            var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
+            var targetStage = pipeline.GetStage(targetLoopBackId)
+                ?? throw new WorkflowValidationException($"Task #{task.Id} workflow does not contain loopback target stage '{targetLoopBackId}'.");
+
+            task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority);
             await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
             return;
         }

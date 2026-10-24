@@ -7,18 +7,42 @@ namespace NightCodeForge.Core.Tests;
 public class FakeTaskJobQueue : ITaskJobQueue
 {
     public List<int> UrgentQueue { get; } = new();
+    public List<int> CodeReviewQueue { get; } = new();
+    public List<int> ImplementationQueue { get; } = new();
+    public List<int> TaskReviewQueue { get; } = new();
     public List<int> InferenceQueue { get; } = new();
+    public List<(int TaskId, StageQueueTier Tier, int Priority)> EnqueuedStages { get; } = new();
 
-    public string EnqueueUrgent(int taskId)
+    public string EnqueueUrgent(int taskId, DateTime? originalEnqueuedAt = null)
     {
         UrgentQueue.Add(taskId);
         return $"job-urgent-{taskId}-{Guid.NewGuid():N}";
     }
 
-    public string EnqueueInference(int taskId)
+    public string EnqueueStage(int taskId, StageQueueTier tier, int priority, DateTime? originalEnqueuedAt = null)
     {
+        EnqueuedStages.Add((taskId, tier, priority));
+        if (priority <= TaskPriority.Critical)
+        {
+            UrgentQueue.Add(taskId);
+            return $"job-urgent-{taskId}-{Guid.NewGuid():N}";
+        }
+
         InferenceQueue.Add(taskId);
-        return $"job-inference-{taskId}-{Guid.NewGuid():N}";
+        switch (tier)
+        {
+            case StageQueueTier.CodeReview:
+                CodeReviewQueue.Add(taskId);
+                return $"job-cr-{taskId}-{Guid.NewGuid():N}";
+            case StageQueueTier.Implementation:
+                ImplementationQueue.Add(taskId);
+                return $"job-impl-{taskId}-{Guid.NewGuid():N}";
+            case StageQueueTier.TaskReview:
+                TaskReviewQueue.Add(taskId);
+                return $"job-tr-{taskId}-{Guid.NewGuid():N}";
+            default:
+                throw new ArgumentOutOfRangeException(nameof(tier), tier, "Unknown queue tier");
+        }
     }
 
     public List<string> DeletedJobs { get; } = new();
@@ -207,6 +231,7 @@ public class TestWorkflowStage : IWorkflowStage
     public string StageId { get; set; }
     public string DisplayName => StageId;
     public WorkflowStageKind Kind { get; set; } = WorkflowStageKind.Agentic;
+    public StageQueueTier QueueTier { get; set; } = StageQueueTier.Implementation;
     public AgentMode RequiredMode { get; set; } = AgentMode.Full;
     public string? PromptTemplate { get; set; }
     public string? LoopBackStageId { get; set; }

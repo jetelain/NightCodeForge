@@ -1,6 +1,7 @@
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Tests.Fixtures;
 using NightCodeForge.Core.Workflow;
@@ -178,7 +179,7 @@ public class CascadeUnblockingTests
     }
 
     [Fact]
-    public async Task CompleteTaskAndCascadeAsync_WhenUnblockedTaskNotFoundInRepository_LogsWarningAndSkipsWithoutCrashing()
+    public async Task CompleteTaskAndCascadeAsync_WhenUnblockedTaskNotFoundInRepository_ThrowsTaskNotFoundExceptionAndDoesNotEnqueueMissingTask()
     {
         var task300 = await _taskRepo.CreateAsync(new ForgeTask
         {
@@ -215,16 +216,14 @@ public class CascadeUnblockingTests
             DependencyStore = _depStore
         }.Build();
 
-        // Must complete cleanly without throwing an unhandled exception
-        await orchestrator.CompleteTaskAndCascadeAsync(300, "Merge task 300");
+        // Must throw TaskNotFoundException when an unblocked task is missing
+        var ex = await Assert.ThrowsAsync<TaskNotFoundException>(() => orchestrator.CompleteTaskAndCascadeAsync(300, "Merge task 300"));
+        Assert.Equal(302, ex.TaskId);
 
-        // Existing task 301 and fallback unblocked task 302 are both enqueued to inference queue
-        Assert.Equal(2, _jobQueue.InferenceQueue.Count);
-        Assert.Contains(301, _jobQueue.InferenceQueue);
-        Assert.Contains(302, _jobQueue.InferenceQueue);
-
-        // Neither is enqueued to urgent queue
+        // Neither missing task 302 nor valid task 301 is enqueued (fail-fast before any jobs are queued)
+        Assert.Empty(_jobQueue.InferenceQueue);
         Assert.Empty(_jobQueue.UrgentQueue);
+        Assert.Empty(_jobQueue.EnqueuedStages);
     }
 
     [Fact]

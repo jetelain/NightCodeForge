@@ -1,4 +1,5 @@
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
@@ -156,7 +157,7 @@ public class StartupRecoveryTests : IDisposable
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);
         Assert.False(bag.ContainsKey(PipelineDataBagKeys.RecoveredSerializedMemory));
 
-        Assert.Contains(301, _jobQueue.UrgentQueue);
+        Assert.Contains(301, _jobQueue.TaskReviewQueue);
     }
 
     [Fact]
@@ -176,7 +177,7 @@ public class StartupRecoveryTests : IDisposable
         {
             Id = 302,
             WorkspaceId = 1,
-            Status = TaskOverallStatus.Implemented,
+            Status = TaskOverallStatus.Open,
             CurrentStageId = DeterministicTestWithCoverageGate.DefaultStageId,
             PipelineDataJson = bag.ToJson()
         });
@@ -190,7 +191,7 @@ public class StartupRecoveryTests : IDisposable
 
         var updated = await _taskRepo.GetByIdAsync(302);
         Assert.NotNull(updated);
-        Assert.Equal(TaskOverallStatus.Implemented, updated.Status);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
 
         var updatedBag = PipelineDataBag.FromJson(updated.PipelineDataJson);
         Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.TestsCurrentTotal));
@@ -202,7 +203,7 @@ public class StartupRecoveryTests : IDisposable
         Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.FailedTests));
         Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.TestFailureReason));
 
-        Assert.Contains(302, _jobQueue.UrgentQueue);
+        Assert.Contains(302, _jobQueue.ImplementationQueue);
     }
 
     [Fact]
@@ -239,5 +240,100 @@ public class StartupRecoveryTests : IDisposable
         var exception = await Record.ExceptionAsync(() => CreateRecoveryService().ReconcileWorkspacesAsync());
 
         Assert.Null(exception);
+    }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_MigratesLegacyImplementedTask_ToPostImplementationGatesAndEnqueuesImplementationTier()
+    {
+        await _workspaceRepo.CreateAsync(new Workspace { Id = 10, Name = "Legacy Workspace Impl", RepositoryPath = _tempDir });
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 1001,
+            WorkspaceId = 10,
+            Status = TaskOverallStatus.Implemented,
+            CurrentStageId = StandardStageIds.Implementation,
+            Priority = TaskPriority.Normal
+        });
+
+        var postImplMock = new Moq.Mock<IWorkflowStage>();
+        postImplMock.SetupGet(s => s.StageId).Returns(StandardStageIds.PostImplementationGates);
+        postImplMock.SetupGet(s => s.DisplayName).Returns("Post-Implementation Gates");
+        postImplMock.SetupGet(s => s.Kind).Returns(WorkflowStageKind.Deterministic);
+        postImplMock.SetupProperty(s => s.QueueTier, StageQueueTier.Implementation);
+
+        var pipeline = new WorkflowPipeline(new[] { postImplMock.Object });
+        var recovery = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline));
+
+        await recovery.ReconcileWorkspacesAsync();
+
+        var updated = await _taskRepo.GetByIdAsync(1001);
+        Assert.NotNull(updated);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
+        Assert.Equal(StandardStageIds.PostImplementationGates, updated.CurrentStageId);
+        Assert.True(updated.HasExecutionRun);
+        Assert.NotNull(updated.LastHangfireJobId);
+
+        Assert.Contains(1001, _jobQueue.ImplementationQueue);
+        Assert.DoesNotContain(1001, _jobQueue.UrgentQueue);
+
+        var history = await _taskRepo.GetHistoryAsync(1001);
+        Assert.Contains(history, h => h.ChangedBy == AuditActors.System && h.ChangeReason != null && h.ChangeReason.Contains("Legacy status migration"));
+    }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_MigratesLegacyReviewedTask_ToPostReviewVerificationAndEnqueuesCodeReviewTier()
+    {
+        await _workspaceRepo.CreateAsync(new Workspace { Id = 11, Name = "Legacy Workspace Rev", RepositoryPath = _tempDir });
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 1002,
+            WorkspaceId = 11,
+            Status = TaskOverallStatus.Reviewed,
+            CurrentStageId = StandardStageIds.TaskReview,
+            Priority = TaskPriority.Normal
+        });
+
+        var postReviewMock = new Moq.Mock<IWorkflowStage>();
+        postReviewMock.SetupGet(s => s.StageId).Returns(StandardStageIds.PostReviewVerification);
+        postReviewMock.SetupGet(s => s.DisplayName).Returns("Post-Review Verification");
+        postReviewMock.SetupGet(s => s.Kind).Returns(WorkflowStageKind.Deterministic);
+        postReviewMock.SetupProperty(s => s.QueueTier, StageQueueTier.CodeReview);
+
+        var pipeline = new WorkflowPipeline(new[] { postReviewMock.Object });
+        var recovery = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline));
+
+        await recovery.ReconcileWorkspacesAsync();
+
+        var updated = await _taskRepo.GetByIdAsync(1002);
+        Assert.NotNull(updated);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
+        Assert.Equal(StandardStageIds.PostReviewVerification, updated.CurrentStageId);
+        Assert.True(updated.HasExecutionRun);
+        Assert.NotNull(updated.LastHangfireJobId);
+
+        Assert.Contains(1002, _jobQueue.CodeReviewQueue);
+        Assert.DoesNotContain(1002, _jobQueue.UrgentQueue);
+
+        var history = await _taskRepo.GetHistoryAsync(1002);
+        Assert.Contains(history, h => h.ChangedBy == AuditActors.System && h.ChangeReason != null && h.ChangeReason.Contains("Legacy status migration"));
+    }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_WhenLegacyTaskTargetStageNotDefined_ThrowsWorkflowValidationException()
+    {
+        await _workspaceRepo.CreateAsync(new Workspace { Id = 12, Name = "Legacy Missing Stage", RepositoryPath = _tempDir });
+        await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 1003,
+            WorkspaceId = 12,
+            Status = TaskOverallStatus.Implemented,
+            CurrentStageId = StandardStageIds.Implementation,
+            Priority = TaskPriority.Normal
+        });
+
+        var emptyPipeline = new WorkflowPipeline(Array.Empty<IWorkflowStage>());
+        var recovery = CreateRecoveryService(new DefaultWorkflowPipelineProvider(emptyPipeline));
+
+        await Assert.ThrowsAsync<WorkflowValidationException>(() => recovery.ReconcileWorkspacesAsync());
     }
 }

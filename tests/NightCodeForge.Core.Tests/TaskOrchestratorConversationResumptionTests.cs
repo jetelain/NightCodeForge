@@ -81,8 +81,8 @@ public class TaskOrchestratorConversationResumptionTests
         reloadedTask = await repo.GetByIdAsync(task.Id);
         Assert.NotNull(reloadedTask);
         Assert.False(reloadedTask.IsWaitingForHuman, "Task must not be waiting for human after entire batch is answered");
-        Assert.Single(jobQueue.UrgentQueue);
-        Assert.Equal(task.Id, jobQueue.UrgentQueue[0]);
+        Assert.Single(jobQueue.TaskReviewQueue);
+        Assert.Equal(task.Id, jobQueue.TaskReviewQueue[0]);
     }
 
     [Fact]

@@ -29,6 +29,12 @@ public class StageDefinition
     public int SequenceOrder { get; set; }
 
     /// <summary>
+    /// Execution priority queue tier designated by this stage (Tier 1 CodeReview, Tier 2 Implementation, Tier 3 TaskReview).
+    /// Required; stages without a valid designated tier fail workflow validation.
+    /// </summary>
+    public StageQueueTier QueueTier { get; set; }
+
+    /// <summary>
     /// Operational kind: Agentic (LLM-driven) or Deterministic (CPU tool execution).
     /// </summary>
     public WorkflowStageKind Kind { get; set; } = WorkflowStageKind.Agentic;

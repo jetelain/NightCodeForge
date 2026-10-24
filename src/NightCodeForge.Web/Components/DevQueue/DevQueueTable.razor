@@ -4,11 +4,31 @@
 @using NightCodeForge.Web.Services
 
 <div class="card-surface p-4" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);" id="dev-queue-table-card">
-    <div class="d-flex justify-content-between align-items-center mb-3">
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
         <h4 class="m-0" style="font-weight: 700; color: var(--text-primary); font-size: 1.15rem;">Sequential GPU Queue Schedule</h4>
-        <span class="badge" style="background: var(--bg-card); color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.85rem;">
-            @(Jobs?.Count ?? 0) Total Scheduled
-        </span>
+        <div class="d-flex align-items-center flex-wrap gap-2">
+            @if (OldestTaskReviewAge.HasValue)
+            {
+                <span class="badge" style="background: rgba(20, 184, 166, 0.15); color: #2dd4bf; border: 1px solid rgba(20, 184, 166, 0.3); font-size: 0.78rem;" title="Oldest waiting job in Task Review tier">
+                    Task Review Wait: @FormatAge(OldestTaskReviewAge.Value)
+                </span>
+            }
+            @if (OldestImplementationAge.HasValue)
+            {
+                <span class="badge" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 0.78rem;" title="Oldest waiting job in Implementation tier">
+                    Impl Wait: @FormatAge(OldestImplementationAge.Value)
+                </span>
+            }
+            @if (OldestCodeReviewAge.HasValue)
+            {
+                <span class="badge" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); font-size: 0.78rem;" title="Oldest waiting job in Code Review tier">
+                    Review Wait: @FormatAge(OldestCodeReviewAge.Value)
+                </span>
+            }
+            <span class="badge" style="background: var(--bg-card); color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.85rem;">
+                @(Jobs?.Count ?? 0) Total Scheduled
+            </span>
+        </div>
     </div>
 
     @if (Jobs == null || Jobs.Count == 0)
@@ -62,7 +82,34 @@
                                     }
                                 </td>
                                 <td>
-                                    <code style="color: var(--accent-indigo);">@job.QueueName</code>
+                                    @if (job.QueueName == HangfireQueues.LlmUrgent)
+                                    {
+                                        <span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; font-size: 0.78rem;" title="Critical / Urgent Queue">
+                                            🚨 llm-urgent
+                                        </span>
+                                    }
+                                    else if (job.QueueName == HangfireQueues.LlmCodeReview)
+                                    {
+                                        <span class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid #a855f7; font-size: 0.78rem;" title="Tier 1: Code Review &amp; Post-Review">
+                                            🔍 llm-code-review
+                                        </span>
+                                    }
+                                    else if (job.QueueName == HangfireQueues.LlmImplementation)
+                                    {
+                                        <span class="badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid #3b82f6; font-size: 0.78rem;" title="Tier 2: Implementation &amp; Pre/Post Gates">
+                                            💻 llm-implementation
+                                        </span>
+                                    }
+                                    else if (job.QueueName == HangfireQueues.LlmTaskReview)
+                                    {
+                                        <span class="badge" style="background: rgba(20, 184, 166, 0.2); color: #2dd4bf; border: 1px solid #14b8a6; font-size: 0.78rem;" title="Tier 3: Task Review &amp; Triage">
+                                            📝 llm-task-review
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <code style="color: var(--accent-indigo);">@job.QueueName</code>
+                                    }
                                 </td>
                                 <td>
                                     @if (job.TaskId > 0)
@@ -80,7 +127,16 @@
                                     <span class="text-muted">@job.StageId</span>
                                 </td>
                                 <td class="text-secondary">
-                                    @job.EnqueuedAt.ToString("HH:mm:ss")
+                                    <div>@job.EnqueuedAt.ToString("HH:mm:ss")</div>
+                                    @{
+                                        var wait = DateTime.UtcNow - job.EnqueuedAt;
+                                        if (wait.TotalSeconds >= 1)
+                                        {
+                                            <div style="font-size: 0.75rem; color: var(--text-muted);">
+                                                @FormatAge(wait) wait
+                                            </div>
+                                        }
+                                    }
                                 </td>
                                 <td class="text-end">
                                     @if (job.QueueName != HangfireQueues.LlmUrgent)
@@ -120,6 +176,18 @@
 
 @code {
     [Parameter] public IReadOnlyList<QueuedJobItem> Jobs { get; set; } = Array.Empty<QueuedJobItem>();
+    [Parameter] public TimeSpan? OldestUrgentAge { get; set; }
+    [Parameter] public TimeSpan? OldestCodeReviewAge { get; set; }
+    [Parameter] public TimeSpan? OldestImplementationAge { get; set; }
+    [Parameter] public TimeSpan? OldestTaskReviewAge { get; set; }
     [Parameter] public EventCallback<QueuedJobItem> OnPrioritize { get; set; }
     [Parameter] public EventCallback<QueuedJobItem> OnCancel { get; set; }
+
+    private static string FormatAge(TimeSpan age)
+    {
+        if (age.TotalDays >= 1) return $"{(int)age.TotalDays}d {age.Hours}h";
+        if (age.TotalHours >= 1) return $"{(int)age.TotalHours}h {age.Minutes}m";
+        if (age.TotalMinutes >= 1) return $"{(int)age.TotalMinutes}m {age.Seconds:D2}s";
+        return $"{(int)age.TotalSeconds}s";
+    }
 }

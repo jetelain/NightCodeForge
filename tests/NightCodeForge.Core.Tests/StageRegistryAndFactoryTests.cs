@@ -90,6 +90,7 @@ public class StageRegistryAndFactoryTests
         {
             StageId = $"test-{implementationType}",
             DisplayName = $"Test {implementationType}",
+            QueueTier = StageQueueTier.Implementation,
             Kind = implementationType.StartsWith("agentic", StringComparison.OrdinalIgnoreCase)
                 ? WorkflowStageKind.Agentic
                 : WorkflowStageKind.Deterministic,
@@ -112,6 +113,7 @@ public class StageRegistryAndFactoryTests
         {
             StageId = "test-case-insensitive",
             DisplayName = "Case Insensitive Test",
+            QueueTier = StageQueueTier.Implementation,
             Kind = WorkflowStageKind.Agentic,
             CsharpImplementationType = "AGENTIC", // UPPERCASE
             ConfigurationJson = "{}"
@@ -145,6 +147,7 @@ public class StageRegistryAndFactoryTests
         {
             StageId = "custom-agentic",
             DisplayName = "Original",
+            QueueTier = StageQueueTier.Implementation,
             CsharpImplementationType = "agentic"
         });
 
@@ -172,6 +175,7 @@ public class StageRegistryAndFactoryTests
         {
             StageId = "bad-stage",
             DisplayName = "Bad Stage",
+            QueueTier = StageQueueTier.Implementation,
             CsharpImplementationType = "custom-quantum-solver"
         };
 
@@ -207,6 +211,7 @@ public class StageRegistryAndFactoryTests
         {
             StageId = "security-review",
             DisplayName = "Security Review",
+            QueueTier = StageQueueTier.CodeReview,
             Kind = WorkflowStageKind.Agentic,
             CsharpImplementationType = "agentic",
             ConfigurationJson = JsonSerializer.Serialize(config)
@@ -217,6 +222,7 @@ public class StageRegistryAndFactoryTests
 
         Assert.Equal("security-review", agentic.StageId);
         Assert.Equal("Security Review", agentic.DisplayName);
+        Assert.Equal(StageQueueTier.CodeReview, agentic.QueueTier);
         Assert.Equal(AgentMode.Review, agentic.RequiredMode);
         Assert.Equal("specialized-reviewer", agentic.AgentProfileId);
         Assert.Equal("Inspect all security annotations.", agentic.StageDirective);

@@ -36,7 +36,21 @@ public class TestOrchestratorBuilder
     public IWorkspaceLockProvider LockProvider { get; set; } = new WorkspaceLockProvider();
     public IGitWorkspaceManager GitWorkspaceManager { get; set; } = CreateDefaultGitWorkspaceManager();
     public Mock<IExecutionEnvironmentProvider> EnvironmentProviderMock { get; } = new();
-    public IWorkflowPipelineProvider PipelineProvider { get; set; } = new DefaultWorkflowPipelineProvider();
+    public IWorkflowPipelineProvider PipelineProvider { get; set; } = CreateDefaultPipelineProvider();
+
+    private static IWorkflowPipelineProvider CreateDefaultPipelineProvider()
+    {
+        var stages = new IWorkflowStage[]
+        {
+            new TestWorkflowStage(StandardStageIds.TaskReview, WorkflowStageKind.Agentic) { QueueTier = StageQueueTier.TaskReview },
+            new TestWorkflowStage(StandardStageIds.PreImplementationBaseline, WorkflowStageKind.Deterministic) { QueueTier = StageQueueTier.Implementation },
+            new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic) { QueueTier = StageQueueTier.Implementation },
+            new TestWorkflowStage(StandardStageIds.PostImplementationGates, WorkflowStageKind.Deterministic) { QueueTier = StageQueueTier.Implementation },
+            new TestWorkflowStage(StandardStageIds.CodeReviewAndFix, WorkflowStageKind.Agentic) { QueueTier = StageQueueTier.CodeReview },
+            new TestWorkflowStage(StandardStageIds.PostReviewVerification, WorkflowStageKind.Deterministic) { QueueTier = StageQueueTier.CodeReview }
+        };
+        return new DefaultWorkflowPipelineProvider(new WorkflowPipeline(stages));
+    }
 
     private static IGitWorkspaceManager CreateDefaultGitWorkspaceManager()
     {

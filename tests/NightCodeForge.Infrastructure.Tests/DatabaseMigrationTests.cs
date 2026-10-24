@@ -83,10 +83,11 @@ public class DatabaseMigrationTests : IDisposable
             historyRows.Add((reader.GetString(0), reader.GetString(1)));
         }
 
-        Assert.Equal(3, historyRows.Count);
+        Assert.Equal(4, historyRows.Count);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.InitialCreateMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddAgentProfileContextWindowTokensMigrationId);
+        Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddStageQueueTierMigrationId);
     }
 
     [Fact]
@@ -248,10 +249,11 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Null(ex);
 
         var appliedMigrations = (await context.Database.GetAppliedMigrationsAsync()).ToList();
-        Assert.Equal(3, appliedMigrations.Count);
+        Assert.Equal(4, appliedMigrations.Count);
         Assert.Contains(AppDbContext.InitialCreateMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddAgentProfileContextWindowTokensMigrationId, appliedMigrations);
+        Assert.Contains(AppDbContext.AddStageQueueTierMigrationId, appliedMigrations);
     }
 
     [Fact]
@@ -299,6 +301,70 @@ public class DatabaseMigrationTests : IDisposable
 
             var loadedWs = await migratedContext.Workspaces.FirstOrDefaultAsync(w => w.Name == "PreMigrationWorkspace");
             Assert.NotNull(loadedWs);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureDatabaseCreatedAndWalAsync_PreExistingStages_BackfillsCorrectQueueTiers()
+    {
+        // Arrange - Database with tables created and pre-existing stages with default/unassigned QueueTier
+        using var testConn = new SqliteConnection("DataSource=:memory:");
+        await testConn.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(testConn)
+            .Options;
+
+        // Initialize schema using migrations
+        using (var initialContext = new AppDbContext(options))
+        {
+            await initialContext.EnsureDatabaseCreatedAndWalAsync();
+
+            var workflow = new WorkflowDefinition
+            {
+                Name = "Test Workflow",
+                Code = "test-custom-workflow",
+                Stages = new List<StageDefinition>
+                {
+                    new() { StageId = StandardStageIds.TaskReview, DisplayName = "Task Review", QueueTier = StageQueueTier.Implementation },
+                    new() { StageId = StandardStageIds.CodeReviewAndFix, DisplayName = "Code Review", QueueTier = StageQueueTier.Implementation },
+                    new() { StageId = StandardStageIds.PostReviewVerification, DisplayName = "Post Review", QueueTier = StageQueueTier.Implementation },
+                    new() { StageId = StandardStageIds.Triage, DisplayName = "Triage", QueueTier = StageQueueTier.Implementation },
+                    new() { StageId = StandardStageIds.Implementation, DisplayName = "Implementation", QueueTier = StageQueueTier.Implementation }
+                }
+            };
+            initialContext.WorkflowDefinitions.Add(workflow);
+            await initialContext.SaveChangesAsync();
+        }
+
+        // Force QueueTier = 2 across all stages in DB to simulate pre-existing stages prior to data migration
+        using (var updateCmd = testConn.CreateCommand())
+        {
+            updateCmd.CommandText = "UPDATE StageDefinitions SET QueueTier = 2;";
+            await updateCmd.ExecuteNonQueryAsync();
+        }
+
+        // Act - Call EnsureDatabaseCreatedAndWalAsync() which triggers BackfillStageQueueTiersAsync
+        using (var migratedContext = new AppDbContext(options))
+        {
+            await migratedContext.EnsureDatabaseCreatedAndWalAsync();
+
+            // Assert - Pre-existing stages have been backfilled with their canonical tiers
+            var stages = await migratedContext.StageDefinitions
+                .Where(s => s.Workflow != null && s.Workflow.Code == "test-custom-workflow")
+                .ToListAsync();
+
+            var taskReview = stages.First(s => s.StageId == StandardStageIds.TaskReview);
+            var codeReview = stages.First(s => s.StageId == StandardStageIds.CodeReviewAndFix);
+            var postReview = stages.First(s => s.StageId == StandardStageIds.PostReviewVerification);
+            var triage = stages.First(s => s.StageId == StandardStageIds.Triage);
+            var impl = stages.First(s => s.StageId == StandardStageIds.Implementation);
+
+            Assert.Equal(StageQueueTier.TaskReview, taskReview.QueueTier);
+            Assert.Equal(StageQueueTier.CodeReview, codeReview.QueueTier);
+            Assert.Equal(StageQueueTier.CodeReview, postReview.QueueTier);
+            Assert.Equal(StageQueueTier.TaskReview, triage.QueueTier);
+            Assert.Equal(StageQueueTier.Implementation, impl.QueueTier);
         }
     }
 }

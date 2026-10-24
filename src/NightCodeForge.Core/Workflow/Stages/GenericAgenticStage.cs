@@ -11,6 +11,7 @@ public class GenericAgenticStage : IWorkflowStage
     public string StageId { get; }
     public string DisplayName { get; }
     public WorkflowStageKind Kind => WorkflowStageKind.Agentic;
+    public StageQueueTier QueueTier { get; set; } = StageQueueTier.Implementation;
     public AgentMode RequiredMode { get; }
     public string StageDirective { get; set; }
     public string? PromptTemplate { get; set; }

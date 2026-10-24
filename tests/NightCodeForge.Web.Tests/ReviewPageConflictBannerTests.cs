@@ -137,6 +137,7 @@ public class ReviewPageConflictBannerTests : BunitContext
             WorkspaceId = 1,
             Title = "Real Evaluated Title",
             Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true,
             BaseBranch = "main",
             FeatureBranch = "feature/task-57"
         };

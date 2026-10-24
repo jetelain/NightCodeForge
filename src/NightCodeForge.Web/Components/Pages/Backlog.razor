@@ -180,8 +180,8 @@
                     <option value="ALL">All Statuses</option>
                     <option value="@TaskOverallStatus.Suggested">Suggested (Triage)</option>
                     <option value="@TaskOverallStatus.Open">Open (Backlog)</option>
-                    <option value="@TaskOverallStatus.Reviewed">Reviewed</option>
-                    <option value="@TaskOverallStatus.Implemented">Implemented</option>
+                    <option value="@TaskOverallStatus.Reviewed">In-Flight (Reviewed)</option>
+                    <option value="@TaskOverallStatus.Implemented">In-Flight (Implemented)</option>
                     <option value="@TaskOverallStatus.Ready">Ready for Review</option>
                     <option value="@TaskOverallStatus.Closed">Closed &amp; Merged</option>
                     <option value="@TaskOverallStatus.Rejected">Rejected / Archived</option>
@@ -511,7 +511,7 @@
 
         if (_statusFilter.HasValue)
         {
-            if (_statusFilter == TaskOverallStatus.Reviewed)
+            if (_statusFilter == TaskOverallStatus.Reviewed || _statusFilter == TaskOverallStatus.Implemented)
             {
                 // Group In-Flight stages
                 query = query.Where(t => BacklogStatusClassifier.IsInFlight(t));

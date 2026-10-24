@@ -42,8 +42,8 @@ public class WorkflowRepositoryAndPipelineProviderTests
             WorkspaceId = null,
             Stages = new List<StageDefinition>
             {
-                new() { StageId = "stage-1", DisplayName = "Stage 1", SequenceOrder = 1, CsharpImplementationType = "agentic" },
-                new() { StageId = "stage-2", DisplayName = "Stage 2", SequenceOrder = 2, CsharpImplementationType = "agentic" }
+                new() { StageId = "stage-1", DisplayName = "Stage 1", SequenceOrder = 1, QueueTier = StageQueueTier.TaskReview, CsharpImplementationType = "agentic" },
+                new() { StageId = "stage-2", DisplayName = "Stage 2", SequenceOrder = 2, QueueTier = StageQueueTier.Implementation, CsharpImplementationType = "agentic" }
             }
         };
 
@@ -56,7 +56,7 @@ public class WorkflowRepositoryAndPipelineProviderTests
             WorkspaceId = 42,
             Stages = new List<StageDefinition>
             {
-                new() { StageId = "custom-1", DisplayName = "Custom 1", SequenceOrder = 1, CsharpImplementationType = "agentic" }
+                new() { StageId = "custom-1", DisplayName = "Custom 1", SequenceOrder = 1, QueueTier = StageQueueTier.TaskReview, CsharpImplementationType = "agentic" }
             }
         };
 
@@ -106,9 +106,9 @@ public class WorkflowRepositoryAndPipelineProviderTests
             IsDefault = false,
             Stages = new List<StageDefinition>
             {
-                new() { StageId = "stage-c", DisplayName = "Stage C", SequenceOrder = 3, CsharpImplementationType = "agentic" },
-                new() { StageId = "stage-a", DisplayName = "Stage A", SequenceOrder = 1, CsharpImplementationType = "agentic" },
-                new() { StageId = "stage-b", DisplayName = "Stage B", SequenceOrder = 2, CsharpImplementationType = "agentic" }
+                new() { StageId = "stage-c", DisplayName = "Stage C", SequenceOrder = 3, QueueTier = StageQueueTier.CodeReview, CsharpImplementationType = "agentic" },
+                new() { StageId = "stage-a", DisplayName = "Stage A", SequenceOrder = 1, QueueTier = StageQueueTier.TaskReview, CsharpImplementationType = "agentic" },
+                new() { StageId = "stage-b", DisplayName = "Stage B", SequenceOrder = 2, QueueTier = StageQueueTier.Implementation, CsharpImplementationType = "agentic" }
             }
         };
 
@@ -140,7 +140,7 @@ public class WorkflowRepositoryAndPipelineProviderTests
             IsDefault = true,
             Stages = new List<StageDefinition>
             {
-                new() { StageId = "default-stage-1", DisplayName = "Stage 1", SequenceOrder = 1, CsharpImplementationType = "agentic" }
+                new() { StageId = "default-stage-1", DisplayName = "Stage 1", SequenceOrder = 1, QueueTier = StageQueueTier.TaskReview, CsharpImplementationType = "agentic" }
             }
         };
 

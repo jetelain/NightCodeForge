@@ -21,7 +21,8 @@ public record TaskReviewSnapshot(
     TaskOverallStatus Status,
     IReadOnlyList<FileDiffSummary> Files,
     QualityGateMetrics GateMetrics,
-    bool HasResolvedConflict = false);
+    bool HasResolvedConflict = false,
+    bool HasExecutionRun = false);
 
 public record QualityGateMetrics(
     double BaselineCoverage,

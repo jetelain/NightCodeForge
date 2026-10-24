@@ -27,7 +27,7 @@
         <div class="card-surface p-5 text-center" id="review-empty-state">
             <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">🔍</div>
             <h3>No Tasks Awaiting Review</h3>
-            <p class="text-secondary mb-3">Tasks in <code>Ready</code> or <code>Implemented</code> status will appear here for maintainer code review and merge gate resolution.</p>
+            <p class="text-secondary mb-3">Tasks in <code>Ready</code> status will appear here for maintainer code review and merge gate resolution.</p>
             <a href="/backlog" class="btn btn-secondary">Go to Backlog</a>
         </div>
     }
@@ -50,7 +50,25 @@
             </div>
         }
 
-        @if (_snapshot.HasResolvedConflict)
+        @if (!TaskReviewService.IsPendingReview(_snapshot) && _snapshot.Status != TaskOverallStatus.Closed)
+        {
+            <div class="alert alert-info mb-3 p-3 d-flex align-items-center justify-content-between gap-3" id="alert-in-flight-review" style="border-left: 4px solid var(--accent-indigo, #6366f1); background-color: rgba(99, 102, 241, 0.1); border-radius: var(--radius-sm, 4px);">
+                <div class="d-flex align-items-center gap-3">
+                    <span style="font-size: 1.5rem;">⚙️</span>
+                    <div>
+                        <strong>Automated Quality Gates In-Flight</strong>
+                        <div style="font-size: 0.9rem; margin-top: 0.25rem;">
+                            Task #@_snapshot.TaskId is currently undergoing automated quality gates and code review before entering the Review Room.
+                        </div>
+                    </div>
+                </div>
+                <a href="/inspector/@_snapshot.TaskId" class="btn btn-sm btn-primary" style="white-space: nowrap;">
+                    🔍 View in Inspector
+                </a>
+            </div>
+        }
+
+        @if (TaskReviewService.ShouldDisplayConflictResolvedBanner(_snapshot))
         {
             <div class="alert alert-warning mb-3 p-3 d-flex align-items-center gap-3" id="alert-re-review-conflict" style="border-left: 4px solid var(--accent-amber, #f59e0b); background-color: rgba(245, 158, 11, 0.1); border-radius: var(--radius-sm, 4px);">
                 <span style="font-size: 1.5rem;">⚠️</span>
@@ -95,7 +113,7 @@
                     {
                         <span class="badge-success-large" id="badge-merged">✅ Merged to @_snapshot.BaseBranch</span>
                     }
-                    else if (_snapshot.Status == TaskOverallStatus.Ready || _snapshot.Status == TaskOverallStatus.Implemented)
+                    else if (TaskReviewService.IsPendingReview(_snapshot))
                     {
                         <button class="btn btn-warning-outline" id="btn-request-changes" @onclick="OpenChangeRequestModal">
                             📝 Request Changes @(CommentState.CommentCount > 0 ? $"({CommentState.CommentCount})" : "")

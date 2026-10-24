@@ -30,6 +30,7 @@ public static class TestWorkflowPipelines
             SharedRenderer,
             SharedTimeProvider)
         {
+            QueueTier = StageQueueTier.TaskReview,
             Handler = handler
         };
     }
@@ -50,6 +51,7 @@ public static class TestWorkflowPipelines
             SharedRenderer,
             SharedTimeProvider)
         {
+            QueueTier = StageQueueTier.Implementation,
             Handler = handler
         };
     }
@@ -71,6 +73,7 @@ public static class TestWorkflowPipelines
             SharedRenderer,
             SharedTimeProvider)
         {
+            QueueTier = StageQueueTier.CodeReview,
             Handler = handler
         };
     }
@@ -85,14 +88,21 @@ public static class TestWorkflowPipelines
         IExecutionEnvironmentProvider? envProvider = null)
     {
         var env = envProvider ?? new SingleExecutionEnvironmentProvider(new FakeExecutionEnv());
+        var preImpl = preImplStage ?? new DeterministicBuildStage(env, null, new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance), Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance, "dotnet build", StandardStageIds.PreImplementationBaseline, "Pre-Implementation Baseline");
+        preImpl.QueueTier = StageQueueTier.Implementation;
+        var postImpl = postImplStage ?? new DeterministicWarningRatchetStage();
+        postImpl.QueueTier = StageQueueTier.Implementation;
+        var postReview = postReviewStage ?? new DeterministicTestStage(env, "dotnet test", StandardStageIds.PostReviewVerification, "Post-Review Verification");
+        postReview.QueueTier = StageQueueTier.CodeReview;
+
         return new WorkflowPipeline(new IWorkflowStage[]
         {
             reviewStage ?? CreateReviewStage(),
-            preImplStage ?? new DeterministicBuildStage(env, null, new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance), Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance, "dotnet build", StandardStageIds.PreImplementationBaseline, "Pre-Implementation Baseline"),
+            preImpl,
             implStage ?? CreateImplementationStage(),
-            postImplStage ?? new DeterministicWarningRatchetStage(),
+            postImpl,
             fixStage ?? CreateCodeReviewStage(),
-            postReviewStage ?? new DeterministicTestStage(env, "dotnet test", StandardStageIds.PostReviewVerification, "Post-Review Verification")
+            postReview
         });
     }
 

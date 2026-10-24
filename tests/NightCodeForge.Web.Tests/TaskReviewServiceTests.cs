@@ -315,6 +315,121 @@ new file mode 100644
         Assert.Equal(1, diffs[0].Additions);
     }
 
+    [Fact]
+    public async Task GetPendingReviewsAsync_ExcludesImplementedAndReviewed_ReturnsOnlyReadyTasksWithExecutionRun()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var gitManager = new TestGitWorkspaceManager();
+        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+
+        var readyWithRun = new ForgeTask
+        {
+            Id = 401,
+            WorkspaceId = 1,
+            Title = "Ready with Run",
+            Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true
+        };
+        var readyWithoutRun = new ForgeTask
+        {
+            Id = 402,
+            WorkspaceId = 1,
+            Title = "Ready without Run",
+            Status = TaskOverallStatus.Ready,
+            HasExecutionRun = false
+        };
+        var implementedWithRun = new ForgeTask
+        {
+            Id = 403,
+            WorkspaceId = 1,
+            Title = "Implemented Task",
+            Status = TaskOverallStatus.Implemented,
+            HasExecutionRun = true
+        };
+        var reviewedWithRun = new ForgeTask
+        {
+            Id = 404,
+            WorkspaceId = 1,
+            Title = "Reviewed Task",
+            Status = TaskOverallStatus.Reviewed,
+            HasExecutionRun = true
+        };
+        var openTask = new ForgeTask
+        {
+            Id = 405,
+            WorkspaceId = 1,
+            Title = "Open Task",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true
+        };
+
+        await taskRepo.CreateAsync(readyWithRun);
+        await taskRepo.CreateAsync(readyWithoutRun);
+        await taskRepo.CreateAsync(implementedWithRun);
+        await taskRepo.CreateAsync(reviewedWithRun);
+        await taskRepo.CreateAsync(openTask);
+
+        var pending = await service.GetPendingReviewsAsync();
+
+        Assert.Single(pending);
+        Assert.Equal(401, pending[0].TaskId);
+    }
+
+    [Fact]
+    public async Task GetPendingReviewsAsync_WithWorkspaceId_ReturnsOnlyReadyTasksForSpecifiedWorkspace()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var gitManager = new TestGitWorkspaceManager();
+        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+
+        var taskWs1 = new ForgeTask
+        {
+            Id = 501,
+            WorkspaceId = 1,
+            Title = "Workspace 1 Task",
+            Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true
+        };
+        var taskWs2 = new ForgeTask
+        {
+            Id = 502,
+            WorkspaceId = 2,
+            Title = "Workspace 2 Task",
+            Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true
+        };
+
+        await taskRepo.CreateAsync(taskWs1);
+        await taskRepo.CreateAsync(taskWs2);
+
+        var pendingWs1 = await service.GetPendingReviewsAsync(workspaceId: 1);
+
+        Assert.Single(pendingWs1);
+        Assert.Equal(501, pendingWs1[0].TaskId);
+    }
+
+    [Fact]
+    public void TaskReviewService_ReviewReadinessPredicates_BehaveCorrectly()
+    {
+        var emptyFiles = Array.Empty<FileDiffSummary>();
+        var metrics = new QualityGateMetrics(80, 85, 5, 2, 1, -1, 10, 10, 0, 100);
+
+        var readyWithRun = new TaskReviewSnapshot(1, "Ready Task", "feat", "main", MergeMode.ManualReviewRequired, TaskOverallStatus.Ready, emptyFiles, metrics, HasResolvedConflict: true, HasExecutionRun: true);
+        var readyWithoutRun = new TaskReviewSnapshot(2, "Ready No Run", "feat", "main", MergeMode.ManualReviewRequired, TaskOverallStatus.Ready, emptyFiles, metrics, HasResolvedConflict: true, HasExecutionRun: false);
+        var implemented = new TaskReviewSnapshot(3, "Implemented Task", "feat", "main", MergeMode.ManualReviewRequired, TaskOverallStatus.Implemented, emptyFiles, metrics, HasResolvedConflict: true, HasExecutionRun: true);
+        var readyNoConflict = new TaskReviewSnapshot(4, "Ready Clean", "feat", "main", MergeMode.ManualReviewRequired, TaskOverallStatus.Ready, emptyFiles, metrics, HasResolvedConflict: false, HasExecutionRun: true);
+
+        Assert.True(TaskReviewService.IsPendingReview(readyWithRun));
+        Assert.False(TaskReviewService.IsPendingReview(readyWithoutRun));
+        Assert.False(TaskReviewService.IsPendingReview(implemented));
+
+        Assert.True(TaskReviewService.ShouldDisplayConflictResolvedBanner(readyWithRun));
+        Assert.False(TaskReviewService.ShouldDisplayConflictResolvedBanner(implemented));
+        Assert.False(TaskReviewService.ShouldDisplayConflictResolvedBanner(readyNoConflict));
+    }
+
     private class TestGitWorkspaceManager : NightCodeForge.Core.Interfaces.IGitWorkspaceManager
     {
         public bool GetCommitDiffCalled { get; private set; }

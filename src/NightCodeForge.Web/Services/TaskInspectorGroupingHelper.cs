@@ -52,7 +52,10 @@ public static class TaskInspectorGroupingHelper
             {
                 running.Add(task);
             }
-            else if (queued.Contains(task.Id) || (task.HasExecutionRun && task.Status != TaskOverallStatus.Open))
+            else if (queued.Contains(task.Id)
+                || (task.HasExecutionRun && (task.Status != TaskOverallStatus.Open || !string.IsNullOrWhiteSpace(task.CurrentStageId)))
+                || (!string.IsNullOrWhiteSpace(task.LastHangfireJobId) && !string.IsNullOrWhiteSpace(task.CurrentStageId))
+                || task.Status is TaskOverallStatus.Reviewed or TaskOverallStatus.Implemented)
             {
                 waitingForSlot.Add(task);
             }

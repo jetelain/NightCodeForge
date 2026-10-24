@@ -13,15 +13,18 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
 {
     private readonly IGitCliRunner _gitCliRunner;
     private readonly IGitWorkspaceManager _gitWorkspaceManager;
+    private readonly IExecutionEnvironmentProvider _environmentProvider;
     private readonly ILogger<ConflictResolutionVerifier> _logger;
 
     public ConflictResolutionVerifier(
         IGitCliRunner gitCliRunner,
         IGitWorkspaceManager gitWorkspaceManager,
+        IExecutionEnvironmentProvider environmentProvider,
         ILogger<ConflictResolutionVerifier> logger)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
+        _environmentProvider = environmentProvider ?? throw new ArgumentNullException(nameof(environmentProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -31,6 +34,7 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
         int taskId,
         string baseBranch,
         IReadOnlyList<string> conflictedFiles,
+        PipelineDataBag? dataBag = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workspace);
@@ -133,6 +137,10 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
             }
         }
 
+        // Stage newly created source files BEFORE executing build command,
+        // so build outputs (bin/, obj/) generated during the build are not accidentally staged.
+        await StageNewSourceFilesAsync(worktreePath, cancellationToken);
+
         // Step 3: Verify git ls-files -u is empty
         var lsResult = await _gitCliRunner.ExecuteAsync(worktreePath, ["ls-files", "-u"], cancellationToken: cancellationToken);
         var unmergedOutput = lsResult.StandardOutput.Trim();
@@ -156,7 +164,80 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
                 RemainingConflictedFiles: unmergedFiles);
         }
 
-        // Step 4: If MERGE_HEAD is present, create merge commit
+        // Step 4: Deterministic build verification before merge commit
+        var config = CodeStackPresets.ResolveConfig(workspace.RepositoryPath, dataBag, _logger);
+        var buildCommand = config.BuildCommand;
+
+        if (string.IsNullOrWhiteSpace(buildCommand))
+        {
+            var noBuildMsg = "Deterministic build verification failed: no build command configured or detected for workspace.";
+            _logger.LogWarning("Conflict resolution verification failed for task #{TaskId}: {Message}", taskId, noBuildMsg);
+            return new ConflictResolutionVerificationResult(
+                IsSuccess: false,
+                ErrorMessage: noBuildMsg);
+        }
+
+        var env = _environmentProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, taskId)
+            ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
+
+        var timeoutSeconds = workspace.BuildTimeoutSeconds ?? config.BuildTimeoutSeconds ?? WorkflowDefaults.DefaultBuildTimeoutSeconds;
+
+        _logger.LogInformation("Executing deterministic build command '{BuildCommand}' for task #{TaskId} (timeout: {Timeout}s)",
+            buildCommand, taskId, timeoutSeconds);
+
+        CommandResult buildResult;
+        try
+        {
+            buildResult = await env.ExecuteAsync(buildCommand, worktreePath, timeoutSeconds: timeoutSeconds, cancellationToken: cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            var timeoutMsg = $"Deterministic build timed out after {timeoutSeconds} seconds";
+            _logger.LogWarning("Conflict resolution verification build timed out for task #{TaskId}: {Message}", taskId, timeoutMsg);
+            return new ConflictResolutionVerificationResult(
+                IsSuccess: false,
+                ErrorMessage: timeoutMsg,
+                CompilerErrors: timeoutMsg);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            var timeoutMsg = $"Deterministic build timed out after {timeoutSeconds} seconds";
+            _logger.LogWarning("Conflict resolution verification build timed out for task #{TaskId}: {Message}", taskId, timeoutMsg);
+            return new ConflictResolutionVerificationResult(
+                IsSuccess: false,
+                ErrorMessage: timeoutMsg,
+                CompilerErrors: timeoutMsg);
+        }
+
+        bool isTimeout = buildResult.ExitCode == WorkflowDefaults.ProcessTimeoutExitCode;
+
+        if (isTimeout)
+        {
+            var timeoutMsg = $"Deterministic build timed out after {timeoutSeconds} seconds";
+            _logger.LogWarning("Conflict resolution verification build timed out for task #{TaskId}: {Message}", taskId, timeoutMsg);
+            return new ConflictResolutionVerificationResult(
+                IsSuccess: false,
+                ErrorMessage: timeoutMsg,
+                CompilerErrors: timeoutMsg);
+        }
+
+        if (!buildResult.Success)
+        {
+            var fullOutput = string.IsNullOrWhiteSpace(buildResult.StandardError)
+                ? buildResult.StandardOutput
+                : $"{buildResult.StandardOutput}\n{buildResult.StandardError}";
+
+            var truncatedErrors = TruncatePreservingTail(fullOutput, ConflictResolutionConstants.MaxCompilerErrorsLength);
+            var errorMsg = $"Deterministic build failed after conflict resolution (exit code {buildResult.ExitCode})";
+            _logger.LogWarning("Conflict resolution build verification failed for task #{TaskId}: {Message}", taskId, errorMsg);
+
+            return new ConflictResolutionVerificationResult(
+                IsSuccess: false,
+                ErrorMessage: errorMsg,
+                CompilerErrors: truncatedErrors);
+        }
+
+        // Step 5: If MERGE_HEAD is present, create merge commit
         var isMergeInProgress = await CheckMergeHeadExistsAsync(worktreePath, cancellationToken);
         if (isMergeInProgress)
         {
@@ -170,6 +251,58 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
 
         _logger.LogInformation("Conflict resolution verification passed for task #{TaskId}", taskId);
         return new ConflictResolutionVerificationResult(IsSuccess: true);
+    }
+
+    private async Task StageNewSourceFilesAsync(string worktreePath, CancellationToken cancellationToken)
+    {
+        var statusResult = await _gitCliRunner.ExecuteAsync(worktreePath, ["status", "--porcelain", "-z"], cancellationToken: cancellationToken);
+        var output = statusResult?.StandardOutput ?? string.Empty;
+        var lines = output.Split(new[] { '\0', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("?? ", StringComparison.Ordinal))
+            {
+                var filePath = line[3..].Trim().Trim('"');
+                if (IsExcludedPath(filePath))
+                {
+                    continue;
+                }
+
+                await _gitCliRunner.ExecuteAsync(worktreePath, ["add", "--", filePath], cancellationToken: cancellationToken);
+            }
+        }
+    }
+
+    private static bool IsExcludedPath(string path)
+    {
+        var normalized = path.Replace('\\', '/').TrimStart('/');
+        return normalized.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("obj/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("node_modules/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("/node_modules/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.EndsWith("/node_modules", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith(".git/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("/.git/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string TruncatePreservingTail(string text, int maxLength)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
+        {
+            return text;
+        }
+
+        const string truncationPrefix = "... [truncated, showing tail of compiler diagnostics] ...\n";
+        var availableLength = maxLength - truncationPrefix.Length;
+        if (availableLength <= 0)
+        {
+            return text[^maxLength..];
+        }
+
+        return truncationPrefix + text[^availableLength..];
     }
 
     private async Task<HashSet<string>> GetUndecidedNonTextualConflictsAsync(string worktreePath, CancellationToken cancellationToken)

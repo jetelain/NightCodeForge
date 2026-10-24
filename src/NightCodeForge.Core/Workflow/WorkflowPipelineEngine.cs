@@ -76,16 +76,7 @@ public class WorkflowPipelineEngine : IWorkflowPipelineEngine
             // Reset retry count on forward progression
             context.ResetRetries();
 
-            // Status stamps per stage
-            if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase))
-            {
-                context.ForgeTask.Status = TaskOverallStatus.Reviewed;
-            }
-            else if (string.Equals(stage.StageId, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
-            {
-                context.ForgeTask.Status = TaskOverallStatus.Implemented;
-            }
-            else if (string.Equals(stage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(stage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
             {
                 context.ForgeTask.Status = TaskOverallStatus.Ready;
             }

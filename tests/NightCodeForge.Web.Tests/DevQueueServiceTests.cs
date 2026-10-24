@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
@@ -26,6 +27,7 @@ public class DevQueueServiceTests : IDisposable
     private readonly TestDevQueueMarkdownSyncService _markdownSync;
     private readonly Mock<ITaskCancellationManager> _cancellationManager;
     private readonly Mock<IWorkspacePathResolver> _pathResolver;
+    private readonly IDevQueueSkippedJobRegistry _skippedJobRegistry = new DevQueueSkippedJobRegistry();
     private readonly ServiceProvider _serviceProvider;
     private readonly JobStorage _jobStorage = new MemoryStorage();
     private readonly string _tempDir;
@@ -45,6 +47,18 @@ public class DevQueueServiceTests : IDisposable
         services.AddSingleton<ITaskRepository>(_taskRepo);
         services.AddSingleton<IWorkspaceRepository>(_workspaceRepo);
         services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
+
+        var mockStage = new Mock<IWorkflowStage>();
+        mockStage.Setup(s => s.StageId).Returns("task-review");
+        mockStage.Setup(s => s.QueueTier).Returns(StageQueueTier.TaskReview);
+
+        var mockImplStage = new Mock<IWorkflowStage>();
+        mockImplStage.Setup(s => s.StageId).Returns("deterministic-post-impl");
+        mockImplStage.Setup(s => s.QueueTier).Returns(StageQueueTier.Implementation);
+
+        var pipeline = new WorkflowPipeline(new[] { mockStage.Object, mockImplStage.Object });
+        services.AddSingleton<IWorkflowPipelineProvider>(new DefaultWorkflowPipelineProvider(pipeline));
+
         _serviceProvider = services.BuildServiceProvider();
 
         _tempDir = Path.Combine(Path.GetTempPath(), "ncf-test-" + Guid.NewGuid().ToString("N"));
@@ -57,7 +71,7 @@ public class DevQueueServiceTests : IDisposable
     {
         var monitoring = _jobStorage.GetMonitoringApi();
         var client = new BackgroundJobClient(_jobStorage);
-        foreach (var q in new[] { HangfireQueues.LlmInference, HangfireQueues.LlmUrgent, HangfireQueues.Default })
+        foreach (var q in HangfireQueues.All)
         {
             var jobs = monitoring.EnqueuedJobs(q, 0, 1000);
             foreach (var (jobId, _) in jobs)
@@ -75,7 +89,7 @@ public class DevQueueServiceTests : IDisposable
         }
     }
 
-    private DevQueueService CreateService() => new(
+    private DevQueueService CreateService(IDevQueueSkippedJobRegistry? registry = null) => new(
         _lockProvider,
         _jobClient,
         _jobQueue,
@@ -83,6 +97,7 @@ public class DevQueueServiceTests : IDisposable
         _jobStorage,
         _cancellationManager.Object,
         _pathResolver.Object,
+        registry ?? _skippedJobRegistry,
         NullLogger<DevQueueService>.Instance);
 
     [Fact]
@@ -311,7 +326,7 @@ public class DevQueueServiceTests : IDisposable
             Status = TaskOverallStatus.Failed,
             CurrentStageId = "deterministic-post-impl",
             SquashCommitSha = "deadbeef1234567890abcdef1234567890abcdef",
-            Priority = 1
+            Priority = TaskPriority.Normal
         };
         await _taskRepo.CreateAsync(task);
 
@@ -345,7 +360,7 @@ public class DevQueueServiceTests : IDisposable
             Status = TaskOverallStatus.Failed,
             CurrentStageId = "deterministic-post-impl",
             SquashCommitSha = "c0ffee1234567890abcdef1234567890abcdef",
-            Priority = 1
+            Priority = TaskPriority.Normal
         };
         await _taskRepo.CreateAsync(task);
 
@@ -555,11 +570,13 @@ public class DevQueueServiceTests : IDisposable
     public async Task ReorderInferenceQueueByPriorityAsync_WhenQueueContainsDeletedJobs_IgnoresDeletedJobs()
     {
 
+        await _taskRepo.CreateAsync(new ForgeTask { Id = 850, WorkspaceId = 1, Title = "Task 850", Priority = TaskPriority.Normal });
+
         var client = new BackgroundJobClient(_jobStorage);
-        var deletedJob = client.Create(() => TestUtilityJobTarget.Run(), new EnqueuedState(HangfireQueues.LlmInference));
+        var deletedJob = client.Create(() => TestUtilityJobTarget.Run(), new EnqueuedState(HangfireQueues.LlmTaskReview));
         client.Delete(deletedJob);
 
-        var activeJob = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(850, default), new EnqueuedState(HangfireQueues.LlmInference));
+        var activeJob = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(850, default), new EnqueuedState(HangfireQueues.LlmTaskReview));
 
         var service = CreateService();
 
@@ -576,8 +593,20 @@ public class DevQueueServiceTests : IDisposable
         var task702 = await _taskRepo.CreateAsync(new ForgeTask { Id = 702, WorkspaceId = 1, Title = "P3 Task", Priority = TaskPriority.Normal });
 
         var client = new BackgroundJobClient(_jobStorage);
-        var job1 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(701, default), new EnqueuedState(HangfireQueues.LlmInference));
-        var job2 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(702, default), new EnqueuedState(HangfireQueues.LlmInference));
+        var job1 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(701, default), new EnqueuedState(HangfireQueues.LlmTaskReview));
+        var job2 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(702, default), new EnqueuedState(HangfireQueues.LlmTaskReview));
+
+        // MemoryStorage uses ConcurrentDictionary internally with hash-based iteration.
+        // Ensure that whichever job is first in the enqueued list is mapped to High priority
+        // so the queue is genuinely already sorted.
+        var enqueued = _jobStorage.GetMonitoringApi().EnqueuedJobs(HangfireQueues.LlmTaskReview, 0, 10);
+        if (enqueued.Count >= 2 && enqueued[0].Key == job2)
+        {
+            task701.Priority = TaskPriority.Normal;
+            task702.Priority = TaskPriority.High;
+            await _taskRepo.UpdateAsync(task701);
+            await _taskRepo.UpdateAsync(task702);
+        }
 
         var service = CreateService();
 
@@ -585,6 +614,27 @@ public class DevQueueServiceTests : IDisposable
 
         Assert.Equal(0, reorderedCount);
         Assert.Empty(_jobClient.DeletedJobIds);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenJobsInLegacyQueue_MigratesJobsToTargetTierQueues()
+    {
+        var task701 = await _taskRepo.CreateAsync(new ForgeTask { Id = 701, WorkspaceId = 1, Title = "P2 Task", Priority = TaskPriority.High });
+        var task702 = await _taskRepo.CreateAsync(new ForgeTask { Id = 702, WorkspaceId = 1, Title = "P3 Task", Priority = TaskPriority.Normal });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var job1 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(701, default), new EnqueuedState(HangfireQueues.LlmInference));
+        var job2 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(702, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var service = CreateService();
+
+        var reorderedCount = await service.ReorderInferenceQueueByPriorityAsync();
+
+        Assert.Equal(2, reorderedCount);
+        Assert.Contains(job1, _jobClient.DeletedJobIds);
+        Assert.Contains(job2, _jobClient.DeletedJobIds);
+        Assert.Contains(_jobQueue.EnqueuedStages, s => s.TaskId == 701 && s.Tier == StageQueueTier.TaskReview);
+        Assert.Contains(_jobQueue.EnqueuedStages, s => s.TaskId == 702 && s.Tier == StageQueueTier.TaskReview);
     }
 
     [Fact]
@@ -609,6 +659,299 @@ public class DevQueueServiceTests : IDisposable
         Assert.DoesNotContain(jobNonTask, _jobClient.DeletedJobIds);
         Assert.Contains(job1, _jobClient.DeletedJobIds);
         Assert.Contains(job2, _jobClient.DeletedJobIds);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenOrphanedJobFound_DeletesOrphanedJobAndContinues()
+    {
+        var task801 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 801,
+            WorkspaceId = 1,
+            Title = "Valid Task",
+            Priority = TaskPriority.Normal
+        });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var orphanedJob = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(899, default), new EnqueuedState(HangfireQueues.LlmInference));
+        var validJob = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(801, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var service = CreateService();
+
+        var reorderedCount = await service.ReorderInferenceQueueByPriorityAsync();
+
+        Assert.Contains(orphanedJob, _jobClient.DeletedJobIds);
+        Assert.Equal(1, reorderedCount);
+        Assert.Contains(801, _jobQueue.EnqueuedInferenceTaskIds);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenEnqueueThrows_PreservesOldJobAndThrowsAggregateException()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 888,
+            WorkspaceId = 1,
+            Title = "Task with Enqueue Failure",
+            Priority = TaskPriority.Normal
+        });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var job = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(888, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        _jobQueue.ShouldThrowOnEnqueue = true;
+
+        var service = CreateService();
+
+        var ex = await Assert.ThrowsAsync<AggregateException>(() => service.ReorderInferenceQueueByPriorityAsync());
+        Assert.Single(ex.InnerExceptions);
+
+        // Old job MUST NOT have been deleted
+        Assert.DoesNotContain(job, _jobClient.DeletedJobIds);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenEnqueueFailsForOneTask_PreservesFailedTaskJobAndReordersOthersAndThrowsAggregateException()
+    {
+        var taskFailing = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 888,
+            WorkspaceId = 1,
+            Title = "Failing Enqueue Task",
+            Priority = TaskPriority.Normal
+        });
+        var taskPassing = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 889,
+            WorkspaceId = 1,
+            Title = "Passing Task",
+            Priority = TaskPriority.Normal
+        });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var job1 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(888, default), new EnqueuedState(HangfireQueues.LlmInference));
+        var job2 = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(889, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        // Throw only for task 888
+        _jobQueue.ShouldThrowForTaskId = id => id == 888;
+
+        var service = CreateService();
+
+        var ex = await Assert.ThrowsAsync<AggregateException>(() => service.ReorderInferenceQueueByPriorityAsync());
+        Assert.Single(ex.InnerExceptions);
+
+        // Failing task's old job is preserved
+        Assert.DoesNotContain(job1, _jobClient.DeletedJobIds);
+
+        // Passing task was reordered and its old job deleted
+        Assert.Contains(job2, _jobClient.DeletedJobIds);
+        Assert.Contains(889, _jobQueue.EnqueuedInferenceTaskIds);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenOldJobAlreadyPickedUpByWorker_DeletesNewJobToPreventDuplicateExecution()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 890,
+            WorkspaceId = 1,
+            Title = "Race Condition Task",
+            Priority = TaskPriority.Normal
+        });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var oldJob = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(890, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        // Simulate worker picked up old job: ChangeState for oldJob with expectedState="Enqueued" returns false
+        _jobClient.ChangeStateHandler = (jobId, state, expectedState) =>
+        {
+            if (jobId == oldJob && expectedState == "Enqueued")
+            {
+                return false;
+            }
+            return true;
+        };
+
+        var service = CreateService();
+
+        var reorderedCount = await service.ReorderInferenceQueueByPriorityAsync();
+
+        // 0 jobs reordered because old job was taken by worker
+        Assert.Equal(0, reorderedCount);
+
+        // Newly enqueued job must be deleted immediately to prevent duplicate execution
+        var expectedNewJobId = "job-taskreview-890";
+        Assert.Contains(expectedNewJobId, _jobClient.DeletedJobIds);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenUnknownTier_ThrowsArgumentOutOfRangeException()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<ITaskRepository>(_taskRepo);
+        services.AddSingleton<IWorkspaceRepository>(new InMemoryWorkspaceRepository());
+
+        var mockStage = new Mock<IWorkflowStage>();
+        mockStage.Setup(s => s.StageId).Returns("invalid-tier-stage");
+        mockStage.Setup(s => s.QueueTier).Returns((StageQueueTier)999);
+
+        var pipeline = new WorkflowPipeline(new[] { mockStage.Object });
+        services.AddSingleton<IWorkflowPipelineProvider>(new DefaultWorkflowPipelineProvider(pipeline));
+
+        var sp = services.BuildServiceProvider();
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 891,
+            WorkspaceId = 1,
+            Title = "Task with Invalid Tier",
+            Priority = TaskPriority.Normal,
+            CurrentStageId = "invalid-tier-stage"
+        });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(891, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            _jobStorage,
+            _cancellationManager.Object,
+            _pathResolver.Object,
+            _skippedJobRegistry,
+            NullLogger<DevQueueService>.Instance);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.ReorderInferenceQueueByPriorityAsync());
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenWorkflowStageUnresolvable_SurfacesInSkippedJobs()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 892,
+            WorkspaceId = 1,
+            Title = "Task with Missing Stage",
+            Priority = TaskPriority.Normal,
+            CurrentStageId = "non-existent-stage"
+        });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var job = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(892, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var service = CreateService();
+
+        var reorderedCount = await service.ReorderInferenceQueueByPriorityAsync();
+        Assert.Equal(0, reorderedCount);
+
+        var snapshot = await service.GetSnapshotAsync();
+        Assert.NotNull(snapshot.SkippedJobs);
+        var skipped = Assert.Single(snapshot.SkippedJobs);
+        Assert.Equal(job, skipped.JobId);
+        Assert.Equal(892, skipped.TaskId);
+        Assert.Contains("non-existent-stage", skipped.Reason);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenUpdateLastHangfireJobIdFails_PropagatesException()
+    {
+        var failingRepoMock = new Mock<ITaskRepository>();
+        failingRepoMock.Setup(r => r.GetByIdsAsync(It.IsAny<IEnumerable<int>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ForgeTask>
+            {
+                new() { Id = 893, WorkspaceId = 1, Title = "Update Failing Task", Priority = TaskPriority.Normal }
+            });
+        failingRepoMock.Setup(r => r.UpdateLastHangfireJobIdAsync(It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Database connection dead"));
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<ITaskRepository>(failingRepoMock.Object);
+        services.AddSingleton<IWorkspaceRepository>(new InMemoryWorkspaceRepository());
+
+        var mockStage = new Mock<IWorkflowStage>();
+        mockStage.Setup(s => s.StageId).Returns("task-review");
+        mockStage.Setup(s => s.QueueTier).Returns(StageQueueTier.TaskReview);
+        var pipeline = new WorkflowPipeline(new[] { mockStage.Object });
+        services.AddSingleton<IWorkflowPipelineProvider>(new DefaultWorkflowPipelineProvider(pipeline));
+
+        var sp = services.BuildServiceProvider();
+
+        var client = new BackgroundJobClient(_jobStorage);
+        client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(893, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            _jobStorage,
+            _cancellationManager.Object,
+            _pathResolver.Object,
+            _skippedJobRegistry,
+            NullLogger<DevQueueService>.Instance);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.ReorderInferenceQueueByPriorityAsync());
+        Assert.Equal("Database connection dead", ex.Message);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenSkipRecordedOnOneInstance_ReadsFromSecondInstanceViaRegistry()
+    {
+        var sharedRegistry = new DevQueueSkippedJobRegistry();
+
+        var instance1 = CreateService(sharedRegistry);
+        var instance2 = CreateService(sharedRegistry);
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 894,
+            WorkspaceId = 1,
+            Title = "Task with Missing Stage across instances",
+            Priority = TaskPriority.Normal,
+            CurrentStageId = "missing-stage-cross-instance"
+        });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var job = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(894, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        // Instance 1 runs reorder, encountering the unresolvable stage
+        var reorderedCount = await instance1.ReorderInferenceQueueByPriorityAsync();
+        Assert.Equal(0, reorderedCount);
+
+        // Instance 2 takes a snapshot: it must see the skipped job recorded by instance 1
+        var snapshot = await instance2.GetSnapshotAsync();
+        Assert.NotNull(snapshot.SkippedJobs);
+        var skipped = Assert.Single(snapshot.SkippedJobs);
+        Assert.Equal(job, skipped.JobId);
+        Assert.Equal(894, skipped.TaskId);
+        Assert.Contains("missing-stage-cross-instance", skipped.Reason);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenOldJobAndNewJobBothTakenByWorker_LogsErrorAndDoesNotThrow()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 895,
+            WorkspaceId = 1,
+            Title = "Double Race Task",
+            Priority = TaskPriority.Normal
+        });
+
+        var client = new BackgroundJobClient(_jobStorage);
+        var oldJob = client.Create<ITaskOrchestrator>(o => o.ProcessTaskAsync(895, default), new EnqueuedState(HangfireQueues.LlmInference));
+
+        // Simulate worker picked up old job AND new job (both ChangeState return false)
+        _jobClient.ChangeStateHandler = (jobId, state, expectedState) => false;
+
+        var service = CreateService();
+
+        var reorderedCount = await service.ReorderInferenceQueueByPriorityAsync();
+        Assert.Equal(0, reorderedCount);
     }
 
     [Fact]
@@ -713,6 +1056,7 @@ public class DevQueueServiceTests : IDisposable
         public string? LastDeletedJobId { get; private set; }
         public string? LastRequeuedJobId { get; private set; }
         public List<string> DeletedJobIds { get; } = new();
+        public Func<string, IState, string?, bool>? ChangeStateHandler { get; set; }
 
         public bool ChangeState(string jobId, IState state, string? expectedState = null)
         {
@@ -729,16 +1073,22 @@ public class DevQueueServiceTests : IDisposable
                 DeletedJobIds.Add(jobId);
             }
 
+            if (ChangeStateHandler != null)
+            {
+                return ChangeStateHandler(jobId, state, expectedState);
+            }
+
             if (_storage != null)
             {
                 try
                 {
-                    new BackgroundJobClient(_storage).ChangeState(jobId, state, expectedState);
+                    return new BackgroundJobClient(_storage).ChangeState(jobId, state, expectedState);
                 }
                 catch (Exception ex)
                 {
                     // Justification: Mock job IDs may not exist in backing storage
                     _ = ex.Message;
+                    return false;
                 }
             }
             return true;
@@ -753,19 +1103,40 @@ public class DevQueueServiceTests : IDisposable
         public int? LastEnqueuedInferenceTaskId { get; private set; }
         public List<int> EnqueuedUrgentTaskIds { get; } = new();
         public List<int> EnqueuedInferenceTaskIds { get; } = new();
+        public List<(int TaskId, StageQueueTier Tier, int Priority)> EnqueuedStages { get; } = new();
+        public bool ShouldThrowOnEnqueue { get; set; }
+        public Func<int, bool>? ShouldThrowForTaskId { get; set; }
+        public int EnqueueStageCallCount { get; private set; }
 
-        public string EnqueueUrgent(int taskId)
+        public string EnqueueUrgent(int taskId, DateTime? originalEnqueuedAt = null)
         {
+            if (ShouldThrowOnEnqueue || (ShouldThrowForTaskId != null && ShouldThrowForTaskId(taskId)))
+            {
+                throw new InvalidOperationException($"Simulated enqueue urgent failure for {taskId}");
+            }
             LastEnqueuedUrgentTaskId = taskId;
             EnqueuedUrgentTaskIds.Add(taskId);
-            return "urgent-job-id";
+            return $"urgent-job-{taskId}";
         }
 
-        public string EnqueueInference(int taskId)
+        public string EnqueueStage(int taskId, StageQueueTier tier, int priority, DateTime? originalEnqueuedAt = null)
         {
+            EnqueueStageCallCount++;
+            if (ShouldThrowOnEnqueue || (ShouldThrowForTaskId != null && ShouldThrowForTaskId(taskId)))
+            {
+                throw new InvalidOperationException($"Simulated enqueue failure for {taskId}");
+            }
+            EnqueuedStages.Add((taskId, tier, priority));
+            if (priority <= TaskPriority.Critical)
+            {
+                LastEnqueuedUrgentTaskId = taskId;
+                EnqueuedUrgentTaskIds.Add(taskId);
+                return $"urgent-job-{taskId}";
+            }
+
             LastEnqueuedInferenceTaskId = taskId;
             EnqueuedInferenceTaskIds.Add(taskId);
-            return "inference-job-id";
+            return $"job-{tier.ToString().ToLowerInvariant()}-{taskId}";
         }
 
         public bool Delete(string jobId) => true;

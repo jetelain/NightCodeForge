@@ -568,17 +568,12 @@
 
             if (launchImmediately)
             {
-                string jobId;
-                if (created.Priority == TaskPriority.Critical)
-                {
-                    jobId = TaskJobQueue.EnqueueUrgent(created.Id);
-                    Logger.LogInformation("Dispatched critical Task #{TaskId} to llm-urgent (JobId: {JobId})", created.Id, jobId);
-                }
-                else
-                {
-                    jobId = TaskJobQueue.EnqueueInference(created.Id);
-                    Logger.LogInformation("Dispatched Task #{TaskId} (P{Priority}) to llm-inference (JobId: {JobId})", created.Id, created.Priority, jobId);
-                }
+                var workflow = _workflows.FirstOrDefault(w => w.Id == created.WorkflowId) ?? _workflows.FirstOrDefault();
+                var initialStage = workflow?.Stages.OrderBy(s => s.SequenceOrder).FirstOrDefault();
+                var tier = initialStage?.QueueTier ?? StageQueueTier.TaskReview;
+
+                var jobId = TaskJobQueue.EnqueueStage(created.Id, tier, created.Priority);
+                Logger.LogInformation("Dispatched Task #{TaskId} (P{Priority}) to tier {Tier} (JobId: {JobId})", created.Id, created.Priority, tier, jobId);
 
                 created.LastHangfireJobId = jobId;
                 await TaskRepository.UpdateAsync(created, dependsOn: _selectedPrereqIds);

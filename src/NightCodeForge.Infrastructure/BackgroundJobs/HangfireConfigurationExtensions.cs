@@ -53,23 +53,25 @@ public static class HangfireConfigurationExtensions
 
     /// <summary>
     /// Configures the two isolated Hangfire processing servers via IServiceCollection:
-    /// 1. NCF-LLM-Inference-Worker (WorkerCount = 1) on queues [llm-urgent, llm-inference]
+    /// 1. NCF-LLM-Inference-Worker (WorkerCount = 1) on queues [llm-urgent, llm-code-review, llm-implementation, llm-task-review, llm-inference]
     /// 2. NCF-Utility-Worker (WorkerCount = 4) on queue [default]
     /// </summary>
     public static IServiceCollection AddNightCodeForgeHangfireServers(this IServiceCollection services)
     {
         services.AddHangfireServer(options =>
         {
-            options.ServerName = "NCF-LLM-Inference-Worker";
-            options.WorkerCount = 1;
-            options.Queues = new[] { HangfireQueues.LlmUrgent, HangfireQueues.LlmInference };
+            var llmOptions = CreateLlmInferenceServerOptions();
+            options.ServerName = llmOptions.ServerName;
+            options.WorkerCount = llmOptions.WorkerCount;
+            options.Queues = llmOptions.Queues;
         });
 
         services.AddHangfireServer(options =>
         {
-            options.ServerName = "NCF-Utility-Worker";
-            options.WorkerCount = 4;
-            options.Queues = new[] { HangfireQueues.Default };
+            var utilityOptions = CreateUtilityServerOptions();
+            options.ServerName = utilityOptions.ServerName;
+            options.WorkerCount = utilityOptions.WorkerCount;
+            options.Queues = utilityOptions.Queues;
         });
 
         return services;
@@ -83,7 +85,7 @@ public static class HangfireConfigurationExtensions
         {
             ServerName = "NCF-LLM-Inference-Worker",
             WorkerCount = 1,
-            Queues = new[] { HangfireQueues.LlmUrgent, HangfireQueues.LlmInference }
+            Queues = HangfireQueues.InferenceQueues
         };
 
     /// <summary>

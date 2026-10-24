@@ -10,6 +10,7 @@ public interface IWorkflowStage
     string StageId { get; }
     string DisplayName { get; }
     WorkflowStageKind Kind { get; }
+    StageQueueTier QueueTier { get; set; }
     string StageDirective => string.Empty;
     AgentMode RequiredMode => AgentMode.Full;
     string? PromptTemplate => null;

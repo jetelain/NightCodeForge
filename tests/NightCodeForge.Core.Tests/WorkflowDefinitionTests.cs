@@ -1,5 +1,8 @@
 using System.Text.Json;
+using Moq;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Configuration;
 using Xunit;
 
@@ -264,5 +267,56 @@ public class WorkflowDefinitionTests
         Assert.True(deserializedCamel.FailOnError);
         Assert.Equal(120, deserializedCamel.TimeoutSeconds);
         Assert.Equal("Val1", deserializedCamel.ExtraParameters["Key1"]);
+    }
+
+    [Fact]
+    public void WorkflowStageFactory_StageDefinitionWithoutQueueTier_ThrowsWorkflowValidationException()
+    {
+        var registry = new WorkflowStageRegistry();
+        var spMock = new Mock<IServiceProvider>();
+        var factory = new WorkflowStageFactory(registry, spMock.Object);
+
+        var def = new StageDefinition
+        {
+            StageId = "untyped-stage",
+            DisplayName = "Untyped Stage",
+            CsharpImplementationType = "deterministic",
+            QueueTier = 0 // Invalid / unassigned
+        };
+
+        var ex = Assert.Throws<WorkflowValidationException>(() => factory.CreateStage(def));
+        Assert.Contains("does not have a designated QueueTier", ex.Message);
+    }
+
+    [Fact]
+    public void StandardWorkflowDefinitions_AllStagesHaveAssignedQueueTiers()
+    {
+        var stages = StandardWorkflowDefinitions.CreateStandard3AgentWorkflow().Stages;
+        Assert.NotEmpty(stages);
+
+        foreach (var stage in stages)
+        {
+            Assert.True(Enum.IsDefined(typeof(StageQueueTier), stage.QueueTier), $"Stage {stage.StageId} has undefined QueueTier: {stage.QueueTier}");
+            Assert.NotEqual((StageQueueTier)0, stage.QueueTier);
+        }
+
+        // Verify specific tiers for standard stages
+        var taskReview = stages.First(s => s.StageId == StandardStageIds.TaskReview);
+        Assert.Equal(StageQueueTier.TaskReview, taskReview.QueueTier);
+
+        var impl = stages.First(s => s.StageId == StandardStageIds.Implementation);
+        Assert.Equal(StageQueueTier.Implementation, impl.QueueTier);
+
+        var preImpl = stages.First(s => s.StageId == StandardStageIds.PreImplementationBaseline);
+        Assert.Equal(StageQueueTier.Implementation, preImpl.QueueTier);
+
+        var postImpl = stages.First(s => s.StageId == StandardStageIds.PostImplementationGates);
+        Assert.Equal(StageQueueTier.Implementation, postImpl.QueueTier);
+
+        var codeReview = stages.First(s => s.StageId == StandardStageIds.CodeReviewAndFix);
+        Assert.Equal(StageQueueTier.CodeReview, codeReview.QueueTier);
+
+        var postReview = stages.First(s => s.StageId == StandardStageIds.PostReviewVerification);
+        Assert.Equal(StageQueueTier.CodeReview, postReview.QueueTier);
     }
 }

@@ -363,6 +363,12 @@ public class TaskInspectorPageTests : BunitContext
 
         public Task<IReadOnlyList<FileDiffSummary>> GetTaskDiffFilesAsync(int taskId, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<FileDiffSummary>>(Array.Empty<FileDiffSummary>());
+
+        public bool IsPendingReview(TaskReviewSnapshot snapshot)
+            => snapshot.HasExecutionRun && snapshot.Status == TaskOverallStatus.Ready;
+
+        public bool ShouldDisplayConflictResolvedBanner(TaskReviewSnapshot snapshot)
+            => snapshot.HasResolvedConflict && snapshot.Status == TaskOverallStatus.Ready;
     }
 
     #endregion

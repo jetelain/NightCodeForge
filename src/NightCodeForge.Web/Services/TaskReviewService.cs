@@ -12,6 +12,8 @@ public interface ITaskReviewService
     Task<TaskReviewSnapshot?> GetSnapshotAsync(int taskId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TaskReviewSnapshot>> GetPendingReviewsAsync(int? workspaceId = null, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<FileDiffSummary>> GetTaskDiffFilesAsync(int taskId, CancellationToken cancellationToken = default);
+    bool IsPendingReview(TaskReviewSnapshot snapshot);
+    bool ShouldDisplayConflictResolvedBanner(TaskReviewSnapshot snapshot);
 }
 
 public partial class TaskReviewService : ITaskReviewService
@@ -36,6 +38,16 @@ public partial class TaskReviewService : ITaskReviewService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
+    public static bool IsPendingReview(TaskReviewSnapshot snapshot) =>
+        snapshot.HasExecutionRun && snapshot.Status == TaskOverallStatus.Ready;
+
+    public static bool ShouldDisplayConflictResolvedBanner(TaskReviewSnapshot snapshot) =>
+        snapshot.HasResolvedConflict && snapshot.Status == TaskOverallStatus.Ready;
+
+    bool ITaskReviewService.IsPendingReview(TaskReviewSnapshot snapshot) => IsPendingReview(snapshot);
+
+    bool ITaskReviewService.ShouldDisplayConflictResolvedBanner(TaskReviewSnapshot snapshot) => ShouldDisplayConflictResolvedBanner(snapshot);
+
     public async Task<TaskReviewSnapshot?> GetSnapshotAsync(int taskId, CancellationToken cancellationToken = default)
     {
         var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
@@ -58,7 +70,8 @@ public partial class TaskReviewService : ITaskReviewService
             Status: task.Status,
             Files: files,
             GateMetrics: metrics,
-            HasResolvedConflict: hasResolvedConflict);
+            HasResolvedConflict: hasResolvedConflict,
+            HasExecutionRun: task.HasExecutionRun);
     }
 
     public async Task<IReadOnlyList<TaskReviewSnapshot>> GetPendingReviewsAsync(int? workspaceId = null, CancellationToken cancellationToken = default)
@@ -68,18 +81,14 @@ public partial class TaskReviewService : ITaskReviewService
         {
             var wsTasks = await _taskRepository.GetByWorkspaceIdAsync(workspaceId.Value, cancellationToken);
             candidateTasks = wsTasks
-                .Where(t => t.HasExecutionRun && t.Status is TaskOverallStatus.Ready 
-                                                         or TaskOverallStatus.Implemented 
-                                                         or TaskOverallStatus.Reviewed)
+                .Where(t => t.HasExecutionRun && t.Status == TaskOverallStatus.Ready)
                 .OrderByDescending(t => t.UpdatedAt)
                 .ToList();
         }
         else
         {
             var readyTasks = await _taskRepository.GetByStatusAsync(TaskOverallStatus.Ready, cancellationToken);
-            var implementedTasks = await _taskRepository.GetByStatusAsync(TaskOverallStatus.Implemented, cancellationToken);
-            var reviewedTasks = await _taskRepository.GetByStatusAsync(TaskOverallStatus.Reviewed, cancellationToken);
-            candidateTasks = readyTasks.Concat(implementedTasks).Concat(reviewedTasks)
+            candidateTasks = readyTasks
                 .Where(t => t.HasExecutionRun)
                 .OrderByDescending(t => t.UpdatedAt)
                 .ToList();

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Hangfire;
 using Hangfire.Common;
 using Hangfire.States;
@@ -6,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
@@ -27,6 +29,7 @@ public class DevQueueService : IDevQueueService
     private readonly JobStorage _jobStorage;
     private readonly ITaskCancellationManager _cancellationManager;
     private readonly IWorkspacePathResolver _pathResolver;
+    private readonly IDevQueueSkippedJobRegistry _skippedJobRegistry;
     private readonly ILogger<DevQueueService> _logger;
 
     public DevQueueService(
@@ -37,6 +40,7 @@ public class DevQueueService : IDevQueueService
         JobStorage jobStorage,
         ITaskCancellationManager cancellationManager,
         IWorkspacePathResolver pathResolver,
+        IDevQueueSkippedJobRegistry skippedJobRegistry,
         ILogger<DevQueueService> logger)
     {
         _lockProvider = lockProvider ?? throw new ArgumentNullException(nameof(lockProvider));
@@ -46,6 +50,7 @@ public class DevQueueService : IDevQueueService
         _jobStorage = jobStorage ?? throw new ArgumentNullException(nameof(jobStorage));
         _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _skippedJobRegistry = skippedJobRegistry ?? throw new ArgumentNullException(nameof(skippedJobRegistry));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -54,6 +59,9 @@ public class DevQueueService : IDevQueueService
         var activeLocks = _lockProvider.GetActiveLocks();
 
         var urgentJobs = new List<QueuedJobItem>();
+        var codeReviewJobs = new List<QueuedJobItem>();
+        var implementationJobs = new List<QueuedJobItem>();
+        var taskReviewJobs = new List<QueuedJobItem>();
         var inferenceJobs = new List<QueuedJobItem>();
         var utilityJobs = new List<QueuedJobItem>();
         var processingJobs = new List<QueuedJobItem>();
@@ -63,26 +71,46 @@ public class DevQueueService : IDevQueueService
         {
             var monitoring = _jobStorage.GetMonitoringApi();
 
-                var rawUrgent = monitoring.EnqueuedJobs(HangfireQueues.LlmUrgent, 0, 100);
-                var rawInference = monitoring.EnqueuedJobs(HangfireQueues.LlmInference, 0, 100);
-                var rawDefault = monitoring.EnqueuedJobs(HangfireQueues.Default, 0, 100);
-                var rawProcessing = monitoring.ProcessingJobs(0, 50);
-                var rawFailed = monitoring.FailedJobs(0, 50);
+            var rawUrgent = monitoring.EnqueuedJobs(HangfireQueues.LlmUrgent, 0, 100);
+            var rawCodeReview = monitoring.EnqueuedJobs(HangfireQueues.LlmCodeReview, 0, 100);
+            var rawImplementation = monitoring.EnqueuedJobs(HangfireQueues.LlmImplementation, 0, 100);
+            var rawTaskReview = monitoring.EnqueuedJobs(HangfireQueues.LlmTaskReview, 0, 100);
+            var rawInference = monitoring.EnqueuedJobs(HangfireQueues.LlmInference, 0, 100);
+            var rawDefault = monitoring.EnqueuedJobs(HangfireQueues.Default, 0, 100);
+            var rawProcessing = monitoring.ProcessingJobs(0, 50);
+            var rawFailed = monitoring.FailedJobs(0, 50);
 
-                var taskIds = new HashSet<int>();
-                ExtractTaskIds(rawUrgent, taskIds);
-                ExtractTaskIds(rawInference, taskIds);
-                ExtractTaskIds(rawDefault, taskIds);
-                ExtractTaskIdsFromProcessing(rawProcessing, taskIds);
-                ExtractTaskIdsFromFailed(rawFailed, taskIds);
+            var taskIds = new HashSet<int>();
+            ExtractTaskIds(rawUrgent, taskIds);
+            ExtractTaskIds(rawCodeReview, taskIds);
+            ExtractTaskIds(rawImplementation, taskIds);
+            ExtractTaskIds(rawTaskReview, taskIds);
+            ExtractTaskIds(rawInference, taskIds);
+            ExtractTaskIds(rawDefault, taskIds);
+            ExtractTaskIdsFromProcessing(rawProcessing, taskIds);
+            ExtractTaskIdsFromFailed(rawFailed, taskIds);
 
-                var taskLookup = await LoadTasksAsync(taskIds, cancellationToken);
+            var taskLookup = await LoadTasksAsync(taskIds, cancellationToken);
 
-                urgentJobs.AddRange(MapEnqueued(rawUrgent, HangfireQueues.LlmUrgent, "Urgent", taskLookup));
-                inferenceJobs.AddRange(MapEnqueued(rawInference, HangfireQueues.LlmInference, "Queued", taskLookup));
-                utilityJobs.AddRange(MapEnqueued(rawDefault, HangfireQueues.Default, "Queued", taskLookup));
-                processingJobs.AddRange(MapProcessing(rawProcessing, taskLookup));
-                failedJobs.AddRange(MapFailed(rawFailed, taskLookup));
+            urgentJobs.AddRange(MapEnqueued(rawUrgent, HangfireQueues.LlmUrgent, "Urgent", taskLookup));
+            codeReviewJobs.AddRange(MapEnqueued(rawCodeReview, HangfireQueues.LlmCodeReview, "Code Review", taskLookup));
+            implementationJobs.AddRange(MapEnqueued(rawImplementation, HangfireQueues.LlmImplementation, "Implementation", taskLookup));
+            taskReviewJobs.AddRange(MapEnqueued(rawTaskReview, HangfireQueues.LlmTaskReview, "Task Review", taskLookup));
+            inferenceJobs.AddRange(MapEnqueued(rawInference, HangfireQueues.LlmInference, "Queued", taskLookup));
+            utilityJobs.AddRange(MapEnqueued(rawDefault, HangfireQueues.Default, "Queued", taskLookup));
+            processingJobs.AddRange(MapProcessing(rawProcessing, taskLookup));
+            failedJobs.AddRange(MapFailed(rawFailed, taskLookup));
+
+            // Clean up any skipped jobs that are no longer present in Hangfire queues
+            var currentEnqueuedJobIds = new HashSet<string>(
+                rawUrgent.Select(j => j.Key)
+                .Concat(rawCodeReview.Select(j => j.Key))
+                .Concat(rawImplementation.Select(j => j.Key))
+                .Concat(rawTaskReview.Select(j => j.Key))
+                .Concat(rawInference.Select(j => j.Key))
+                .Concat(rawDefault.Select(j => j.Key)));
+
+            _skippedJobRegistry.PruneActiveJobIds(currentEnqueuedJobIds);
         }
         catch (Exception ex)
         {
@@ -91,11 +119,15 @@ public class DevQueueService : IDevQueueService
 
         return new DevQueueSnapshot(
             urgentJobs,
+            codeReviewJobs,
+            implementationJobs,
+            taskReviewJobs,
             inferenceJobs,
             utilityJobs,
             processingJobs,
             failedJobs,
-            activeLocks);
+            activeLocks,
+            _skippedJobRegistry.GetSkippedJobs());
     }
 
     public async Task<bool> PromoteToUrgentAsync(string jobId, int taskId, CancellationToken cancellationToken = default)
@@ -126,18 +158,6 @@ public class DevQueueService : IDevQueueService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to promote job {JobId} for Task #{TaskId} to llm-urgent", jobId, taskId);
-            if (taskId > 0)
-            {
-                try
-                {
-                    _taskJobQueue.EnqueueUrgent(taskId);
-                    return true;
-                }
-                catch (Exception fallbackEx)
-                {
-                    _logger.LogError(fallbackEx, "Fallback urgent enqueue failed for Task #{TaskId}", taskId);
-                }
-            }
             return false;
         }
     }
@@ -149,7 +169,10 @@ public class DevQueueService : IDevQueueService
         try
         {
             var snapshot = await GetSnapshotAsync(cancellationToken);
-            var queuedJob = snapshot.InferenceJobs.FirstOrDefault(j => j.TaskId == taskId)
+            var queuedJob = snapshot.CodeReviewJobs.FirstOrDefault(j => j.TaskId == taskId)
+                         ?? snapshot.ImplementationJobs.FirstOrDefault(j => j.TaskId == taskId)
+                         ?? snapshot.TaskReviewJobs.FirstOrDefault(j => j.TaskId == taskId)
+                         ?? snapshot.InferenceJobs.FirstOrDefault(j => j.TaskId == taskId)
                          ?? snapshot.UtilityJobs.FirstOrDefault(j => j.TaskId == taskId);
 
             if (queuedJob != null && !string.IsNullOrWhiteSpace(queuedJob.JobId))
@@ -222,6 +245,7 @@ public class DevQueueService : IDevQueueService
             if (!string.IsNullOrWhiteSpace(jobId))
             {
                 _backgroundJobClient.Delete(jobId);
+                _skippedJobRegistry.RemoveSkippedJob(jobId);
                 _logger.LogInformation("Cancelled Hangfire job {JobId}", jobId);
             }
 
@@ -286,48 +310,28 @@ public class DevQueueService : IDevQueueService
             {
                 using var scope = _scopeFactory.CreateScope();
                 var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+                var pipelineProvider = scope.ServiceProvider.GetRequiredService<IWorkflowPipelineProvider>();
                 var task = await taskRepo.GetByIdAsync(taskId.Value, cancellationToken);
-                if (task?.Priority == TaskPriority.Critical)
+                if (task != null)
                 {
-                    _taskJobQueue.EnqueueUrgent(taskId.Value);
-                    _logger.LogInformation("Re-enqueued critical Task #{TaskId} to llm-urgent", taskId.Value);
+                    var pipeline = await pipelineProvider.GetPipelineAsync(task, cancellationToken);
+                    var stage = (!string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null)
+                        ?? pipeline.InitialStage
+                        ?? throw new InvalidOperationException($"Task #{task.Id} has no initial or active stage.");
+
+                    var newJobId = _taskJobQueue.EnqueueStage(task.Id, stage.QueueTier, task.Priority);
+                    task.LastHangfireJobId = newJobId;
+                    await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);
+                    _logger.LogInformation("Re-enqueued Task #{TaskId} to stage tier {Tier} (JobId: {JobId})", taskId.Value, stage.QueueTier, newJobId);
+                    return true;
                 }
-                else
-                {
-                    _taskJobQueue.EnqueueInference(taskId.Value);
-                    _logger.LogInformation("Re-enqueued Task #{TaskId} to llm-inference", taskId.Value);
-                }
-                return true;
             }
 
             return false;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to requeue job {JobId}", jobId);
-            if (taskId.HasValue && taskId.Value > 0)
-            {
-                try
-                {
-                    using var scope = _scopeFactory.CreateScope();
-                    var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
-                    var task = await taskRepo.GetByIdAsync(taskId.Value, cancellationToken);
-                    if (task?.Priority == TaskPriority.Critical)
-                    {
-                        _taskJobQueue.EnqueueUrgent(taskId.Value);
-                    }
-                    else
-                    {
-                        _taskJobQueue.EnqueueInference(taskId.Value);
-                    }
-                    return true;
-                }
-                catch
-                {
-                    _taskJobQueue.EnqueueInference(taskId.Value);
-                    return true;
-                }
-            }
+            _logger.LogError(ex, "Failed to requeue job {JobId} for Task #{TaskId}", jobId, taskId);
             return false;
         }
     }
@@ -406,8 +410,16 @@ public class DevQueueService : IDevQueueService
                 reason: rescheduleReason,
                 cancellationToken: cancellationToken);
 
-            var jobId = _taskJobQueue.EnqueueInference(taskId);
-            _logger.LogInformation("Rescheduled Task #{TaskId} (RestartPipeline={RestartPipeline}, JobId={JobId})", taskId, restartPipeline, jobId);
+            var pipelineProvider = scope.ServiceProvider.GetRequiredService<IWorkflowPipelineProvider>();
+            var pipeline = await pipelineProvider.GetPipelineAsync(task, cancellationToken);
+            var stage = (!string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null)
+                ?? pipeline.InitialStage
+                ?? throw new InvalidOperationException($"Task #{task.Id} has no initial or active stage.");
+
+            var jobId = _taskJobQueue.EnqueueStage(taskId, stage.QueueTier, task.Priority);
+            task.LastHangfireJobId = jobId;
+            await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);
+            _logger.LogInformation("Rescheduled Task #{TaskId} (RestartPipeline={RestartPipeline}, JobId={JobId}, Tier={Tier})", taskId, restartPipeline, jobId, stage.QueueTier);
             return true;
         }
         catch (Exception ex)
@@ -422,88 +434,207 @@ public class DevQueueService : IDevQueueService
         try
         {
             var monitoring = _jobStorage.GetMonitoringApi();
-            var rawInference = monitoring.EnqueuedJobs(HangfireQueues.LlmInference, 0, 1000);
-            if (rawInference.Count == 0)
+            var targetQueues = new[]
             {
-                return 0;
-            }
+                HangfireQueues.LlmCodeReview,
+                HangfireQueues.LlmImplementation,
+                HangfireQueues.LlmTaskReview,
+                HangfireQueues.LlmInference
+            };
 
+            var allRawJobs = new List<(string CurrentQueue, string JobId, EnqueuedJobDto Dto)>();
             var taskIds = new HashSet<int>();
-            ExtractTaskIds(rawInference, taskIds);
-            var tasks = await LoadTasksAsync(taskIds, cancellationToken);
 
-            var currentQueueOrder = new List<(string JobId, int TaskId, ForgeTask? Task, DateTime EnqueuedAt)>();
-            // Hangfire queue storage can return jobs in non-deterministic or hash-bucket order.
-            // We order by EnqueuedAt ascending to reconstruct the true FIFO execution sequence (head to tail).
-            foreach (var (key, dto) in rawInference.OrderBy(x => x.Value.EnqueuedAt ?? DateTime.MinValue))
+            foreach (var q in targetQueues)
             {
-                if (string.Equals(dto.State, "Deleted", StringComparison.OrdinalIgnoreCase)) continue;
-                var (taskId, _, _) = ParseJobInfo(dto.Job);
-                if (taskId <= 0) continue; // Preserve non-task background jobs
-
-                tasks.TryGetValue(taskId, out var task);
-                currentQueueOrder.Add((key, taskId, task, dto.EnqueuedAt ?? DateTime.UtcNow));
-            }
-
-            // Priority ascending; preserve FIFO arrival sequence for equal priority
-            var ordered = currentQueueOrder
-                .OrderBy(j => j.Task?.Priority ?? TaskPriority.Normal)
-                .ThenBy(j => j.EnqueuedAt)
-                .ToList();
-
-
-            bool isAlreadySorted = true;
-            for (int i = 0; i < currentQueueOrder.Count; i++)
-            {
-                if (currentQueueOrder[i].JobId != ordered[i].JobId)
+                var enqueued = monitoring.EnqueuedJobs(q, 0, 1000);
+                foreach (var (key, dto) in enqueued)
                 {
-                    isAlreadySorted = false;
-                    break;
+                    if (string.Equals(dto.State, "Deleted", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var (taskId, _, _) = ParseJobInfo(dto.Job);
+                    if (taskId <= 0) continue;
+
+                    allRawJobs.Add((q, key, dto));
+                    taskIds.Add(taskId);
                 }
             }
 
-            bool hasCritical = currentQueueOrder.Any(j => j.Task?.Priority == TaskPriority.Critical);
-
-            if (isAlreadySorted && !hasCritical)
+            if (allRawJobs.Count == 0)
             {
                 return 0;
             }
 
+            var tasks = await LoadTasksAsync(taskIds, cancellationToken);
             using var scope = _scopeFactory.CreateScope();
             var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+            var pipelineProvider = scope.ServiceProvider.GetRequiredService<IWorkflowPipelineProvider>();
 
-            foreach (var item in currentQueueOrder)
-            {
-                _backgroundJobClient.Delete(item.JobId);
-            }
+            var candidateJobs = new List<(string JobId, string CurrentQueue, int TaskId, ForgeTask Task, StageQueueTier Tier, DateTime OriginalEnqueuedAt)>();
 
-            int reorderedCount = 0;
-            foreach (var item in ordered)
+            using (var conn = _jobStorage.GetConnection())
             {
-                if (item.TaskId > 0)
+                foreach (var (currentQueue, jobId, dto) in allRawJobs)
                 {
-                    string newJobId;
-                    if (item.Task?.Priority == TaskPriority.Critical)
+                    var (taskId, _, _) = ParseJobInfo(dto.Job);
+                    if (!tasks.TryGetValue(taskId, out var task) || task == null)
                     {
-                        newJobId = _taskJobQueue.EnqueueUrgent(item.TaskId);
-                        _logger.LogInformation("Promoted critical Task #{TaskId} from inference queue to llm-urgent (JobId: {JobId})", item.TaskId, newJobId);
+                        _logger.LogCritical("Orphaned Hangfire job {JobId} in queue {Queue} references Task #{TaskId} which does not exist in the task repository; deleting orphaned job.", jobId, currentQueue, taskId);
+                        _backgroundJobClient.ChangeState(jobId, new DeletedState(), "Enqueued");
+                        _skippedJobRegistry.RemoveSkippedJob(jobId);
+                        continue;
+                    }
+
+                    var originalEnqueuedStr = conn.GetJobParameter(jobId, "OriginalEnqueuedAt");
+                    DateTime originalEnqueuedAt;
+                    if (!string.IsNullOrWhiteSpace(originalEnqueuedStr) && DateTimeOffset.TryParse(originalEnqueuedStr, out var parsedOffset))
+                    {
+                        originalEnqueuedAt = parsedOffset.UtcDateTime;
                     }
                     else
                     {
-                        newJobId = _taskJobQueue.EnqueueInference(item.TaskId);
-                        _logger.LogInformation("Re-enqueued Task #{TaskId} (Priority {Priority}) to llm-inference (JobId: {JobId})", item.TaskId, item.Task?.Priority ?? TaskPriority.Normal, newJobId);
+                        originalEnqueuedAt = dto.EnqueuedAt ?? DateTime.UtcNow;
                     }
 
-                    if (item.Task != null)
+                    IWorkflowPipeline pipeline;
+                    try
                     {
-                        item.Task.LastHangfireJobId = newJobId;
-                        await taskRepo.UpdateAsync(item.Task, cancellationToken: cancellationToken);
+                        pipeline = await pipelineProvider.GetPipelineAsync(task, cancellationToken);
                     }
-                    reorderedCount++;
+                    catch (Exception ex)
+                    {
+                        _logger.LogCritical(ex, "Failed to resolve workflow pipeline for Task #{TaskId} during dev queue reordering; skipping job {JobId}.", task.Id, jobId);
+                        _skippedJobRegistry.RecordSkippedJob(new SkippedJobItem(jobId, currentQueue, task.Id, $"Pipeline resolution failed: {ex.Message}", originalEnqueuedAt));
+                        continue;
+                    }
+
+                    var stage = string.IsNullOrWhiteSpace(task.CurrentStageId)
+                        ? pipeline.InitialStage
+                        : pipeline.GetStage(task.CurrentStageId);
+
+                    if (stage == null)
+                    {
+                        _logger.LogCritical("No workflow stage resolved for Task #{TaskId} (CurrentStageId: '{StageId}') during dev queue reordering; skipping job {JobId}.", task.Id, task.CurrentStageId, jobId);
+                        _skippedJobRegistry.RecordSkippedJob(new SkippedJobItem(jobId, currentQueue, task.Id, $"Stage '{task.CurrentStageId}' could not be resolved in workflow pipeline", originalEnqueuedAt));
+                        continue;
+                    }
+
+                    _skippedJobRegistry.RemoveSkippedJob(jobId);
+                    candidateJobs.Add((jobId, currentQueue, task.Id, task, stage.QueueTier, originalEnqueuedAt));
                 }
             }
 
-            _logger.LogInformation("Reordered {Count} inference queue jobs by priority.", reorderedCount);
+            int reorderedCount = 0;
+            var reorderExceptions = new List<Exception>();
+
+            // Group by expected target queue
+            var jobsByTargetQueue = candidateJobs
+                .GroupBy(j => j.Task.Priority <= TaskPriority.Critical
+                    ? HangfireQueues.LlmUrgent
+                    : j.Tier switch
+                    {
+                        StageQueueTier.CodeReview => HangfireQueues.LlmCodeReview,
+                        StageQueueTier.Implementation => HangfireQueues.LlmImplementation,
+                        StageQueueTier.TaskReview => HangfireQueues.LlmTaskReview,
+                        _ => throw new ArgumentOutOfRangeException(nameof(j.Tier), j.Tier, $"Unsupported stage queue tier: {j.Tier}")
+                    })
+                .ToDictionary(g => g.Key, g => g.OrderBy(j => j.Task.Priority).ThenBy(j => j.OriginalEnqueuedAt).ToList());
+
+            foreach (var (targetQueue, targetJobs) in jobsByTargetQueue)
+            {
+                var currentJobsInQueue = candidateJobs.Where(j => j.CurrentQueue == targetQueue).ToList();
+                bool needsReorder = targetJobs.Any(j => j.CurrentQueue != targetQueue);
+
+                if (!needsReorder && currentJobsInQueue.Count == targetJobs.Count)
+                {
+                    for (int i = 0; i < targetJobs.Count; i++)
+                    {
+                        if (currentJobsInQueue[i].JobId != targetJobs[i].JobId)
+                        {
+                            needsReorder = true;
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    needsReorder = true;
+                }
+
+                if (!needsReorder)
+                {
+                    continue;
+                }
+
+                // Enqueue-First Pattern:
+                // Enqueue the new job first so that if enqueuing fails (e.g. invalid tier, storage outage),
+                // the old job remains untouched in the queue and no work is ever lost.
+                foreach (var item in targetJobs)
+                {
+                    string newJobId;
+                    try
+                    {
+                        if (item.Task.Priority <= TaskPriority.Critical)
+                        {
+                            newJobId = _taskJobQueue.EnqueueUrgent(item.TaskId, item.OriginalEnqueuedAt);
+                        }
+                        else
+                        {
+                            newJobId = _taskJobQueue.EnqueueStage(item.TaskId, item.Tier, item.Task.Priority, item.OriginalEnqueuedAt);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to re-enqueue Task #{TaskId} (Tier {Tier}, Priority {Priority}) to queue {TargetQueue}. Old job {JobId} remains untouched in queue.",
+                            item.TaskId, item.Tier, item.Task.Priority, targetQueue, item.JobId);
+                        reorderExceptions.Add(ex);
+                        continue;
+                    }
+
+                    // Delete the old job atomically only if it is still in Enqueued state
+                    var oldJobDeleted = _backgroundJobClient.ChangeState(item.JobId, new DeletedState(), "Enqueued");
+                    if (!oldJobDeleted)
+                    {
+                        // Old job was already fetched by a worker concurrently. Delete the new job to prevent duplicate execution.
+                        var newJobDeleted = _backgroundJobClient.ChangeState(newJobId, new DeletedState(), "Enqueued");
+                        if (!newJobDeleted)
+                        {
+                            _logger.LogError("CRITICAL: Old job {OldJobId} for Task #{TaskId} was already fetched by a worker, and rollback cancellation of newly enqueued job {NewJobId} failed! Task may run twice.",
+                                item.JobId, item.TaskId, newJobId);
+                        }
+                        else
+                        {
+                            _logger.LogInformation("Old job {OldJobId} for Task #{TaskId} was already fetched by a worker; cancelled newly enqueued job {NewJobId}.", item.JobId, item.TaskId, newJobId);
+                        }
+                        continue;
+                    }
+
+                    try
+                    {
+                        await taskRepo.UpdateLastHangfireJobIdAsync(item.TaskId, newJobId, cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to update LastHangfireJobId for Task #{TaskId} to {NewJobId} after reorder.", item.TaskId, newJobId);
+                        throw;
+                    }
+
+                    reorderedCount++;
+
+                    _logger.LogInformation("Reordered/migrated Task #{TaskId} (Priority {Priority}, Tier {Tier}) to {Queue} (JobId: {JobId})",
+                        item.TaskId, item.Task.Priority, item.Tier, targetQueue, newJobId);
+                }
+            }
+
+            if (reorderExceptions.Count > 0)
+            {
+                throw new AggregateException("One or more jobs failed to re-enqueue during queue reordering.", reorderExceptions);
+            }
+
+            _logger.LogInformation("Reordered/migrated {Count} queue jobs by priority.", reorderedCount);
             return reorderedCount;
         }
         catch (Exception ex)

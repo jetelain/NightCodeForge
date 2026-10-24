@@ -228,7 +228,7 @@ public class Step917DiffStatAndBatchedClarificationTests
         var midway = await taskRepo.GetByIdAsync(301);
         Assert.NotNull(midway);
         Assert.True(midway.IsWaitingForHuman); // Still waiting!
-        Assert.Empty(jobQueue.UrgentQueue);   // Not yet enqueued!
+        Assert.Empty(jobQueue.TaskReviewQueue);   // Not yet enqueued!
 
         var q10 = await taskRepo.GetQuestionByIdAsync(10);
         Assert.Equal(QuestionStatus.Answered, q10?.Status);
@@ -239,8 +239,8 @@ public class Step917DiffStatAndBatchedClarificationTests
         var completed = await taskRepo.GetByIdAsync(301);
         Assert.NotNull(completed);
         Assert.False(completed.IsWaitingForHuman); // Resumed!
-        Assert.Single(jobQueue.UrgentQueue);      // Enqueued exactly once!
-        Assert.Contains(301, jobQueue.UrgentQueue);
+        Assert.Single(jobQueue.TaskReviewQueue);      // Enqueued exactly once!
+        Assert.Contains(301, jobQueue.TaskReviewQueue);
     }
 
     [Fact]
@@ -361,7 +361,7 @@ public class Step917DiffStatAndBatchedClarificationTests
         var finalTask = await taskRepo.GetByIdAsync(400);
         Assert.NotNull(finalTask);
         Assert.False(finalTask.IsWaitingForHuman);
-        Assert.Single(jobQueue.UrgentQueue); // Enqueued exactly once!
+        Assert.Single(jobQueue.TaskReviewQueue); // Enqueued exactly once!
     }
 
     [Fact]

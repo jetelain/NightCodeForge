@@ -129,11 +129,11 @@ public class StartupRecoveryIntegrationTests : IDisposable
         var log = await _runner.ExecuteAsync(_repo.RepositoryPath, ["log", "-n", "1", "--oneline"]);
         Assert.Contains("WIP-RECOVERY", log.StandardOutput);
 
-        // Verify task status remains Open and re-enqueued to urgent
+        // Verify task status remains Open and re-enqueued to its stage tier (task-review)
         var updated = await taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(updated);
         Assert.Equal(TaskOverallStatus.Open, updated.Status);
-        Assert.Contains(task.Id, jobQueue.UrgentQueue);
+        Assert.Contains(task.Id, jobQueue.TaskReviewQueue);
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
         var updatedTask = await taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(updatedTask);
         Assert.DoesNotContain("Host restarted unexpectedly", updatedTask.PipelineDataJson ?? string.Empty);
-        Assert.Contains(task.Id, jobQueue.UrgentQueue);
+        Assert.Contains(task.Id, jobQueue.TaskReviewQueue);
     }
 
     [Fact]
@@ -254,7 +254,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
         Assert.NotNull(recoveredConv);
         Assert.Equal(StageExecutionStatus.Failed, recoveredConv.Status);
 
-        Assert.Contains(task.Id, jobQueue.UrgentQueue);
+        Assert.Contains(task.Id, jobQueue.TaskReviewQueue);
         var recoveredTask = await taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(recoveredTask);
         Assert.False(string.IsNullOrWhiteSpace(recoveredTask.LastHangfireJobId));
@@ -389,8 +389,8 @@ public class StartupRecoveryIntegrationTests : IDisposable
             Assert.Equal(0, logResult.ExitCode);
             Assert.Contains("Initial root commit", logResult.StandardOutput);
 
-            // 10. Verify task re-enqueued to urgent queue
-            Assert.Contains(task.Id, jobQueue.UrgentQueue);
+            // 10. Verify task re-enqueued to task-review queue
+            Assert.Contains(task.Id, jobQueue.TaskReviewQueue);
 
             // 11. Verify ExecutionEnvironmentProvider also normalizes paths
             var envProvider = new ExecutionEnvironmentProvider(
@@ -413,29 +413,99 @@ public class StartupRecoveryIntegrationTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_WithInFlightTaskAtCodeReviewStage_PreservesStageAndDoesNotTriggerLegacyNormalization()
+    {
+        var workspace = new Workspace
+        {
+            Name = "InFlight Workspace",
+            RepositoryPath = _repo.RepositoryPath,
+            DefaultBaseBranch = "main"
+        };
+        _context.Workspaces.Add(workspace);
+        await _context.SaveChangesAsync();
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "In-flight Code Review Task",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "code-review-fix",
+            HasExecutionRun = true
+        };
+        _context.Tasks.Add(task);
+        await _context.SaveChangesAsync();
+
+        // Clear EF Core local tracking to simulate host restart
+        _context.ChangeTracker.Clear();
+
+        var workspaceRepo = new EfCoreWorkspaceRepository(_context);
+        var taskRepo = new EfCoreTaskRepository(_context);
+        var jobQueue = new FakeTestJobQueue();
+        var recoveryService = CreateRecoveryService(workspaceRepo, taskRepo, jobQueue);
+
+        await recoveryService.ReconcileWorkspacesAsync();
+
+        // Verify task state in SQLite: must remain Open and CurrentStageId must NOT be changed
+        var updatedTask = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Open, updatedTask.Status);
+        Assert.Equal("code-review-fix", updatedTask.CurrentStageId);
+
+        // Verify re-enqueued to CodeReview queue tier
+        Assert.Contains(task.Id, jobQueue.CodeReviewQueue);
+
+        // Verify no legacy status migration history was recorded
+        var history = await taskRepo.GetHistoryAsync(task.Id);
+        Assert.DoesNotContain(history, h => h.ChangeReason != null && h.ChangeReason.Contains("Legacy status migration"));
+    }
+
     private static IWorkflowPipelineProvider CreatePipelineProvider() =>
         new DefaultWorkflowPipelineProvider(new WorkflowPipeline(new IWorkflowStage[]
         {
-            new GenericAgenticStage("task-review", "Task Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer(), TimeProvider.System),
-            new GenericAgenticStage("implementation", "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer(), TimeProvider.System)
+            new GenericAgenticStage("task-review", "Task Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer(), TimeProvider.System) { QueueTier = StageQueueTier.TaskReview },
+            new GenericAgenticStage("implementation", "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer(), TimeProvider.System) { QueueTier = StageQueueTier.Implementation },
+            new GenericAgenticStage("code-review-fix", "Code Review and Fix", new AgenticStageConfig { RequiredMode = AgentMode.Full }, new ScribanPromptTemplateRenderer(), TimeProvider.System) { QueueTier = StageQueueTier.CodeReview }
         }));
 }
 
 public class FakeTestJobQueue : ITaskJobQueue
 {
     public List<int> UrgentQueue { get; } = new();
-    public List<int> InferenceQueue { get; } = new();
+    public List<int> CodeReviewQueue { get; } = new();
+    public List<int> ImplementationQueue { get; } = new();
+    public List<int> TaskReviewQueue { get; } = new();
+    public List<(int TaskId, StageQueueTier Tier, int Priority)> EnqueuedStages { get; } = new();
 
-    public string EnqueueUrgent(int taskId)
+    public string EnqueueUrgent(int taskId, DateTime? originalEnqueuedAt = null)
     {
         UrgentQueue.Add(taskId);
         return $"urgent-{taskId}";
     }
 
-    public string EnqueueInference(int taskId)
+    public string EnqueueStage(int taskId, StageQueueTier tier, int priority, DateTime? originalEnqueuedAt = null)
     {
-        InferenceQueue.Add(taskId);
-        return $"inference-{taskId}";
+        EnqueuedStages.Add((taskId, tier, priority));
+        if (priority <= TaskPriority.Critical)
+        {
+            UrgentQueue.Add(taskId);
+            return $"urgent-{taskId}";
+        }
+
+        switch (tier)
+        {
+            case StageQueueTier.CodeReview:
+                CodeReviewQueue.Add(taskId);
+                return $"cr-{taskId}";
+            case StageQueueTier.Implementation:
+                ImplementationQueue.Add(taskId);
+                return $"impl-{taskId}";
+            case StageQueueTier.TaskReview:
+                TaskReviewQueue.Add(taskId);
+                return $"tr-{taskId}";
+            default:
+                throw new ArgumentOutOfRangeException(nameof(tier), tier, "Unknown queue tier");
+        }
     }
 
     public bool Delete(string jobId) => true;

@@ -252,7 +252,8 @@ public class Step920PromptStabilizerAndTemporalContextTests
         {
             StageId = "test-agentic",
             DisplayName = "Test Agentic",
-            CsharpImplementationType = "agentic"
+            CsharpImplementationType = "agentic",
+            QueueTier = NightCodeForge.Core.Domain.StageQueueTier.Implementation
         };
 
         Assert.Throws<InvalidOperationException>(() => stageFactory.CreateStage(def));

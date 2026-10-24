@@ -47,6 +47,7 @@ builder.Services.AddScoped<ReviewCommentStateService>();
 builder.Services.AddScoped<ITaskReviewService, TaskReviewService>();
 builder.Services.AddScoped<ITranscriptBrowserService, TranscriptBrowserService>();
 builder.Services.AddScoped<IGitSyncService, GitSyncService>();
+builder.Services.AddSingleton<IDevQueueSkippedJobRegistry, DevQueueSkippedJobRegistry>();
 builder.Services.AddScoped<IDevQueueService, DevQueueService>();
 builder.Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
 builder.Services.AddScoped<ITaskMutationService, TaskMutationService>();
@@ -117,6 +118,17 @@ using (var scope = app.Services.CreateScope())
 
     var recoveryService = scope.ServiceProvider.GetRequiredService<IStartupRecoveryService>();
     await recoveryService.ReconcileWorkspacesAsync();
+
+    var devQueueService = scope.ServiceProvider.GetRequiredService<IDevQueueService>();
+    try
+    {
+        await devQueueService.ReorderInferenceQueueByPriorityAsync();
+    }
+    catch (AggregateException ex)
+    {
+        Log.Error(ex, "Failed to reorder and migrate inference queues during startup: {Message}", ex.Message);
+        throw;
+    }
 
     var workspaceRepo = scope.ServiceProvider.GetRequiredService<NightCodeForge.Core.Repositories.IWorkspaceRepository>();
     var markdownSync = scope.ServiceProvider.GetRequiredService<ITaskMarkdownSyncService>();

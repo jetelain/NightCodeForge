@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Repositories;
 
 namespace NightCodeForge.Infrastructure.Data.Repositories;
@@ -211,6 +212,21 @@ public class EfCoreTaskRepository : ITaskRepository
 
         await SyncQuestionsAsync(task, existing ?? task, cancellationToken);
 
+        await _context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task UpdateLastHangfireJobIdAsync(int taskId, string? jobId, CancellationToken cancellationToken = default)
+    {
+        var existing = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == taskId)
+                       ?? await _context.Tasks.FindAsync(new object[] { taskId }, cancellationToken);
+
+        if (existing == null)
+        {
+            throw new TaskNotFoundException(taskId, $"ForgeTask #{taskId} was not found when updating Hangfire job ID.");
+        }
+
+        existing.LastHangfireJobId = jobId;
+        _context.Entry(existing).Property(t => t.LastHangfireJobId).IsModified = true;
         await _context.SaveChangesAsync(cancellationToken);
     }
 

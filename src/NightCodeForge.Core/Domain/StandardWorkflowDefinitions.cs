@@ -32,6 +32,7 @@ public static class StandardWorkflowDefinitions
                     DisplayName = "ForgeTask Review",
                     Icon = "🔍",
                     SequenceOrder = 1,
+                    QueueTier = StageQueueTier.TaskReview,
                     Kind = WorkflowStageKind.Agentic,
                     CsharpImplementationType = StageImplementationTypes.Agentic,
                     ConfigurationJson = """
@@ -51,6 +52,7 @@ public static class StandardWorkflowDefinitions
                     DisplayName = "Pre-Implementation Baseline",
                     Icon = "⚙️",
                     SequenceOrder = 2,
+                    QueueTier = StageQueueTier.Implementation,
                     Kind = WorkflowStageKind.Deterministic,
                     CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
                     ConfigurationJson = """{"Action": "CompositeBaseline", "FailOnError": false, "TimeoutSeconds": 600, "ExtraParameters": {"Stages": "build,test-with-coverage"}}"""
@@ -61,6 +63,7 @@ public static class StandardWorkflowDefinitions
                     DisplayName = "Implementation",
                     Icon = "💻",
                     SequenceOrder = 3,
+                    QueueTier = StageQueueTier.Implementation,
                     Kind = WorkflowStageKind.Agentic,
                     CsharpImplementationType = StageImplementationTypes.Agentic,
                     ConfigurationJson = """
@@ -80,6 +83,7 @@ public static class StandardWorkflowDefinitions
                     DisplayName = "Post-Implementation Gates",
                     Icon = "🧪",
                     SequenceOrder = 4,
+                    QueueTier = StageQueueTier.Implementation,
                     Kind = WorkflowStageKind.Deterministic,
                     CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
                     ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "{LOOPBACK}", "FailOnError": true, "TimeoutSeconds": 900, "ExtraParameters": {"Stages": "format,build,test-with-coverage,sast"}}"""
@@ -91,6 +95,7 @@ public static class StandardWorkflowDefinitions
                     DisplayName = "Code Review & Fix",
                     Icon = "🧐",
                     SequenceOrder = 5,
+                    QueueTier = StageQueueTier.CodeReview,
                     Kind = WorkflowStageKind.Agentic,
                     CsharpImplementationType = StageImplementationTypes.Agentic,
                     ConfigurationJson = """
@@ -111,6 +116,7 @@ public static class StandardWorkflowDefinitions
                     DisplayName = "Post-Review Verification",
                     Icon = "🛡️",
                     SequenceOrder = 6,
+                    QueueTier = StageQueueTier.CodeReview,
                     Kind = WorkflowStageKind.Deterministic,
                     CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
                     ConfigurationJson = """{"Action": "CompositeVerification", "LoopBackStageId": "{LOOPBACK}", "FailOnError": true, "TimeoutSeconds": 600, "ExtraParameters": {"Stages": "build,test-with-coverage"}}"""

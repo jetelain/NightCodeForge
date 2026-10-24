@@ -106,8 +106,8 @@ public class QualityGateLoopbackTests
         // Assert
         Assert.Equal("implementation", task.CurrentStageId);
         Assert.Equal(TaskOverallStatus.Open, task.Status);
-        Assert.Single(jobQueue.UrgentQueue);
-        Assert.Equal(10, jobQueue.UrgentQueue[0]);
+        Assert.Single(jobQueue.ImplementationQueue);
+        Assert.Equal(10, jobQueue.ImplementationQueue[0]);
 
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
         var stageRetries = bag.Get<Dictionary<string, int>>(PipelineDataBagKeys.StageRetries);
@@ -400,8 +400,8 @@ public class QualityGateLoopbackTests
 
         // Assert
         Assert.Equal(StandardStageIds.Implementation, task.CurrentStageId);
-        Assert.Single(jobQueue.UrgentQueue);
-        Assert.Equal(99, jobQueue.UrgentQueue[0]);
+        Assert.Single(jobQueue.ImplementationQueue);
+        Assert.Equal(99, jobQueue.ImplementationQueue[0]);
 
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
         var stageRetries = bag.Get<Dictionary<string, int>>(PipelineDataBagKeys.StageRetries);

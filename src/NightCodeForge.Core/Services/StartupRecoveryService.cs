@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
@@ -10,7 +11,7 @@ namespace NightCodeForge.Core.Services;
 
 /// <summary>
 /// Implements startup crash recovery: purges dangling Git locks, commits uncommitted dirty working trees,
-/// and re-enqueues orphaned Running tasks to llm-urgent.
+/// reaps orphaned task containers, and re-enqueues interrupted active tasks to their respective stage queue tiers.
 /// </summary>
 public class StartupRecoveryService : IStartupRecoveryService
 {
@@ -143,160 +144,202 @@ public class StartupRecoveryService : IStartupRecoveryService
             }
         }
 
-        // 3. Reconcile active tasks left interrupted by restart (Open, Reviewed, Implemented without WaitingForHuman)
-        var activeMilestones = new[] { TaskOverallStatus.Open, TaskOverallStatus.Reviewed, TaskOverallStatus.Implemented };
-        var reconciledCount = 0;
+        // 4. Status normalization & crash recovery for active tasks left interrupted by restart
+        var activeStatuses = new[] { TaskOverallStatus.Open, TaskOverallStatus.Implemented, TaskOverallStatus.Reviewed };
+        var candidateTasks = new List<ForgeTask>();
+        var seenTaskIds = new HashSet<int>();
 
-        foreach (var status in activeMilestones)
+        foreach (var status in activeStatuses)
         {
-            var activeTasks = await _taskRepository.GetByStatusAsync(status, cancellationToken);
-            foreach (var task in activeTasks.Where(i => !i.IsWaitingForHuman))
+            var tasks = await _taskRepository.GetByStatusAsync(status, cancellationToken);
+            foreach (var t in tasks.Where(task => !task.IsWaitingForHuman && seenTaskIds.Add(task.Id)))
             {
-                var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
-                var stage = (!string.IsNullOrWhiteSpace(task.CurrentStageId)
-                    ? pipeline.GetStage(task.CurrentStageId)
-                    : null) ?? pipeline.Stages.FirstOrDefault();
+                candidateTasks.Add(t);
+            }
+        }
 
-                var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
+        var reconciledCount = 0;
+        foreach (var task in candidateTasks)
+        {
+            var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
 
-                if (stage != null && stage.Kind == WorkflowStageKind.Agentic)
+            // Normalize legacy status Implemented / Reviewed
+            if (task.Status is TaskOverallStatus.Implemented or TaskOverallStatus.Reviewed)
+            {
+                var targetStageId = task.Status == TaskOverallStatus.Implemented
+                    ? StandardStageIds.PostImplementationGates
+                    : StandardStageIds.PostReviewVerification;
+
+                var targetStage = pipeline.GetStage(targetStageId)
+                    ?? throw new WorkflowValidationException($"Cannot migrate legacy task #{task.Id} with status '{task.Status}': stage '{targetStageId}' is not defined in workflow.");
+
+                task.CurrentStageId = targetStage.StageId;
+                task.Status = TaskOverallStatus.Open;
+                task.HasExecutionRun = true;
+
+                var logMsg = $"Legacy status migration: Normalized task #{task.Id} to Open at stage '{task.CurrentStageId}'.";
+                _logger.LogInformation(logMsg);
+
+                await _taskRepository.UpdateWithHistoryAsync(
+                    task,
+                    dependsOn: null,
+                    changedBy: AuditActors.System,
+                    reason: logMsg,
+                    cancellationToken: cancellationToken);
+            }
+
+            IWorkflowStage stage;
+            if (!string.IsNullOrWhiteSpace(task.CurrentStageId))
+            {
+                stage = pipeline.GetStage(task.CurrentStageId)
+                    ?? throw new WorkflowValidationException($"No workflow stage '{task.CurrentStageId}' found in workflow for task #{task.Id}.");
+            }
+            else
+            {
+                stage = pipeline.InitialStage
+                    ?? throw new WorkflowValidationException($"No initial workflow stage resolved for task #{task.Id}.");
+                task.CurrentStageId = stage.StageId;
+            }
+
+            var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
+
+            if (stage.Kind == WorkflowStageKind.Agentic)
+            {
+                // Agentic Stage: Rehydrate memory from active database conversation turns
+                var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+                var activeConv = convs
+                    .Where(c => c.StageId == stage.StageId && (c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman))
+                    .OrderByDescending(c => c.AttemptIndex)
+                    .ThenByDescending(c => c.StartedAt)
+                    .FirstOrDefault();
+
+                // Supersede any older running/waiting conversations left dangling by previous crashes
+                foreach (var other in convs.Where(c => (c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman) && (activeConv == null || c.Id != activeConv.Id)))
                 {
-                    // Agentic Stage: Rehydrate memory from active database conversation turns
-                    var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
-                    var activeConv = convs
-                        .Where(c => c.StageId == stage.StageId && (c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman))
-                        .OrderByDescending(c => c.AttemptIndex)
-                        .ThenByDescending(c => c.StartedAt)
-                        .FirstOrDefault();
+                    await _taskRepository.CompleteConversationAsync(
+                        other.Id,
+                        StageExecutionStatus.Failed,
+                        summary: SupersededRunningConversationSummary,
+                        cancellationToken: cancellationToken);
+                }
 
-                    // Supersede any older running/waiting conversations left dangling by previous crashes
-                    foreach (var other in convs.Where(c => (c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman) && (activeConv == null || c.Id != activeConv.Id)))
+                if (activeConv != null)
+                {
+                    var convWithTurns = await _taskRepository.GetConversationWithTurnsAsync(activeConv.Id, cancellationToken)
+                        ?? throw new InvalidOperationException($"Conversation #{activeConv.Id} of task #{task.Id} disappeared during startup recovery.");
+
+                    if (convWithTurns.Turns.Count > 0)
                     {
-                        await _taskRepository.CompleteConversationAsync(
-                            other.Id,
-                            StageExecutionStatus.Failed,
-                            summary: SupersededRunningConversationSummary,
+                        var noticeTurn = await _taskRepository.AddConversationTurnAsync(
+                            activeConv.Id,
+                            StageTurnRole.System,
+                            content: RecoveryNoticeContent,
                             cancellationToken: cancellationToken);
-                    }
 
-                    if (activeConv != null)
-                    {
-                        var convWithTurns = await _taskRepository.GetConversationWithTurnsAsync(activeConv.Id, cancellationToken)
-                            ?? throw new InvalidOperationException($"Conversation #{activeConv.Id} of task #{task.Id} disappeared during startup recovery.");
+                        var allTurns = convWithTurns.Turns
+                            .Where(t => t.Id != noticeTurn.Id)
+                            .Append(noticeTurn)
+                            .OrderBy(t => t.TurnIndex)
+                            .ToList();
 
-                        if (convWithTurns.Turns.Count > 0)
-                        {
-                            var noticeTurn = await _taskRepository.AddConversationTurnAsync(
-                                activeConv.Id,
-                                StageTurnRole.System,
-                                content: RecoveryNoticeContent,
-                                cancellationToken: cancellationToken);
+                        var reconstructedHistory = ConversationHistorySerializer.Serialize(allTurns);
+                        bag.Set(PipelineDataBagKeys.RecoveredSerializedMemory, reconstructedHistory);
 
-                            var allTurns = convWithTurns.Turns
-                                .Where(t => t.Id != noticeTurn.Id)
-                                .Append(noticeTurn)
-                                .OrderBy(t => t.TurnIndex)
-                                .ToList();
+                        // The harness resumes in a brand new conversation: close the interrupted one so it is
+                        // not left "Running" forever nor picked up again by the next recovery.
+                        await _taskRepository.CompleteConversationAsync(
+                            activeConv.Id,
+                            StageExecutionStatus.Failed,
+                            summary: InterruptedAgenticConversationSummary,
+                            cancellationToken: cancellationToken);
 
-                            var reconstructedHistory = ConversationHistorySerializer.Serialize(allTurns);
-                            bag.Set(PipelineDataBagKeys.RecoveredSerializedMemory, reconstructedHistory);
-
-                            // The harness resumes in a brand new conversation: close the interrupted one so it is
-                            // not left "Running" forever nor picked up again by the next recovery.
-                            await _taskRepository.CompleteConversationAsync(
-                                activeConv.Id,
-                                StageExecutionStatus.Failed,
-                                summary: InterruptedAgenticConversationSummary,
-                                cancellationToken: cancellationToken);
-
-                            _logger.LogWarning("Rehydrated agentic session memory from {Count} turns for orphaned task #{TaskId}.", allTurns.Count, task.Id);
-                        }
-                        else
-                        {
-                            // Interrupted before first turn was recorded; close conversation and resume cleanly from scratch/checkpoint
-                            await _taskRepository.CompleteConversationAsync(
-                                activeConv.Id,
-                                StageExecutionStatus.Failed,
-                                summary: InterruptedAgenticConversationSummary,
-                                cancellationToken: cancellationToken);
-
-                            bag.Remove(PipelineDataBagKeys.RecoveredSerializedMemory);
-                            _logger.LogWarning("Running conversation #{ConvId} for task #{TaskId} had 0 turns; resuming cleanly from last checkpoint or bootstrap prompt.", activeConv.Id, task.Id);
-                        }
+                        _logger.LogWarning("Rehydrated agentic session memory from {Count} turns for orphaned task #{TaskId}.", allTurns.Count, task.Id);
                     }
                     else
                     {
-                        // No interrupted conversation was persisted: nothing to rehydrate. Any stale in-flight memory is
-                        // dropped so the orchestrator resumes from the last stage checkpoint (or from scratch).
+                        // Interrupted before first turn was recorded; close conversation and resume cleanly from scratch/checkpoint
+                        await _taskRepository.CompleteConversationAsync(
+                            activeConv.Id,
+                            StageExecutionStatus.Failed,
+                            summary: InterruptedAgenticConversationSummary,
+                            cancellationToken: cancellationToken);
+
                         bag.Remove(PipelineDataBagKeys.RecoveredSerializedMemory);
-                        _logger.LogWarning("No running conversation found for orphaned agentic task #{TaskId} at stage '{StageId}'; resuming from last checkpoint.", task.Id, stage.StageId);
+                        _logger.LogWarning("Running conversation #{ConvId} for task #{TaskId} had 0 turns; resuming cleanly from last checkpoint or bootstrap prompt.", activeConv.Id, task.Id);
                     }
                 }
                 else
                 {
-                    // Deterministic Stage: Reset all partial metrics and stage command/output keys
-                    var deterministicKeys = new[]
-                    {
-                        PipelineDataBagKeys.TestsCurrentTotal,
-                        PipelineDataBagKeys.TestsCurrentPassed,
-                        PipelineDataBagKeys.TestsCurrentFailed,
-                        PipelineDataBagKeys.TestsCurrentDurationMs,
-                        PipelineDataBagKeys.CoverageCurrentLineRate,
-                        PipelineDataBagKeys.WarningsCurrentTotal,
-                        PipelineDataBagKeys.WarningsNew,
-                        PipelineDataBagKeys.FailedTests,
-                        PipelineDataBagKeys.BuildFailureReason,
-                        PipelineDataBagKeys.TestFailureReason,
-                        PipelineDataBagKeys.CoverageFailureReason,
-                        PipelineDataBagKeys.SastFailureReason,
-                        PipelineDataBagKeys.RatchetFailureReason,
-                        stage != null ? PipelineDataBagKeys.StageCommand(stage.StageId) : null,
-                        stage != null ? PipelineDataBagKeys.StageOutput(stage.StageId) : null
-                    };
-
-                    foreach (var key in deterministicKeys)
-                    {
-                        if (!string.IsNullOrEmpty(key))
-                        {
-                            bag.Remove(key);
-                        }
-                    }
-
-                    // Supersede incomplete conversation runs if any exist
-                    var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
-                    foreach (var runningConv in convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman))
-                    {
-                        await _taskRepository.CompleteConversationAsync(
-                            runningConv.Id,
-                            StageExecutionStatus.Failed,
-                            summary: InterruptedDeterministicConversationSummary,
-                            cancellationToken: cancellationToken);
-                    }
-
-                    _logger.LogWarning("Reset metrics for deterministic stage on orphaned task #{TaskId}.", task.Id);
+                    // No interrupted conversation was persisted: nothing to rehydrate. Any stale in-flight memory is
+                    // dropped so the orchestrator resumes from the last stage checkpoint (or from scratch).
+                    bag.Remove(PipelineDataBagKeys.RecoveredSerializedMemory);
+                    _logger.LogWarning("No running conversation found for orphaned agentic task #{TaskId} at stage '{StageId}'; resuming from last checkpoint.", task.Id, stage.StageId);
                 }
-
-                if (stage != null && string.IsNullOrWhiteSpace(task.CurrentStageId))
-                {
-                    task.CurrentStageId = stage.StageId;
-                }
-
-                task.PipelineDataJson = bag.ToJson();
-
-                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
-                {
-                    TaskId = task.Id,
-                    Level = LogLevel.Warning,
-                    Message = $"Host reboot recovery: Re-enqueued task #{task.Id} to llm-urgent.",
-                    Timestamp = DateTime.UtcNow
-                }, cancellationToken);
-
-                // Head-of-line priority re-enqueue
-                task.LastHangfireJobId = _jobQueue.EnqueueUrgent(task.Id);
-                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-                reconciledCount++;
             }
+            else
+            {
+                // Deterministic Stage: Reset all partial metrics and stage command/output keys
+                var deterministicKeys = new[]
+                {
+                    PipelineDataBagKeys.TestsCurrentTotal,
+                    PipelineDataBagKeys.TestsCurrentPassed,
+                    PipelineDataBagKeys.TestsCurrentFailed,
+                    PipelineDataBagKeys.TestsCurrentDurationMs,
+                    PipelineDataBagKeys.CoverageCurrentLineRate,
+                    PipelineDataBagKeys.WarningsCurrentTotal,
+                    PipelineDataBagKeys.WarningsNew,
+                    PipelineDataBagKeys.FailedTests,
+                    PipelineDataBagKeys.BuildFailureReason,
+                    PipelineDataBagKeys.TestFailureReason,
+                    PipelineDataBagKeys.CoverageFailureReason,
+                    PipelineDataBagKeys.SastFailureReason,
+                    PipelineDataBagKeys.RatchetFailureReason,
+                    PipelineDataBagKeys.StageCommand(stage.StageId),
+                    PipelineDataBagKeys.StageOutput(stage.StageId)
+                };
+
+                foreach (var key in deterministicKeys)
+                {
+                    if (!string.IsNullOrEmpty(key))
+                    {
+                        bag.Remove(key);
+                    }
+                }
+
+                // Supersede incomplete conversation runs if any exist
+                var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+                foreach (var runningConv in convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman))
+                {
+                    await _taskRepository.CompleteConversationAsync(
+                        runningConv.Id,
+                        StageExecutionStatus.Failed,
+                        summary: InterruptedDeterministicConversationSummary,
+                        cancellationToken: cancellationToken);
+                }
+
+                _logger.LogWarning("Reset metrics for deterministic stage on orphaned task #{TaskId}.", task.Id);
+            }
+
+            if (string.IsNullOrWhiteSpace(task.CurrentStageId))
+            {
+                task.CurrentStageId = stage.StageId;
+            }
+
+            task.PipelineDataJson = bag.ToJson();
+
+            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+            {
+                TaskId = task.Id,
+                Level = LogLevel.Warning,
+                Message = $"Host reboot recovery: Re-enqueued task #{task.Id} to stage queue {stage.QueueTier} (Priority: {task.Priority}).",
+                Timestamp = DateTime.UtcNow
+            }, cancellationToken);
+
+            // Stage-tier priority re-enqueue (P1 routes to urgent, others to their stage tier)
+            task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, stage.QueueTier, task.Priority);
+            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            reconciledCount++;
         }
 
         _logger.LogInformation("Startup workspace reconciliation completed. Reconciled {Count} active tasks.", reconciledCount);

@@ -314,7 +314,7 @@ public class DagLayoutEngine : IDagLayoutEngine
         if (task.IsWaitingForHuman) return "⚠️ Waiting Human";
         if (isBlocked) return $"🔒 Blocked ({blockerCount})";
         if (isReadyToExecute) return "🟢 Ready";
-        if (task.Status == TaskOverallStatus.Open && task.HasExecutionRun && !string.IsNullOrWhiteSpace(task.CurrentStageId))
+        if (task.Status == TaskOverallStatus.Open && (task.HasExecutionRun || !string.IsNullOrWhiteSpace(task.LastHangfireJobId)) && !string.IsNullOrWhiteSpace(task.CurrentStageId))
         {
             return $"In-Flight: {task.CurrentStageId}";
         }

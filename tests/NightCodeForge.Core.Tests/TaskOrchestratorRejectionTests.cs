@@ -290,7 +290,7 @@ public class TaskOrchestratorRejectionTests
         var updated = await _taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(updated);
         Assert.False(string.IsNullOrWhiteSpace(updated.LastHangfireJobId));
-        Assert.Equal(TaskOverallStatus.Reviewed, updated.Status);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
     }
 
     [Fact]

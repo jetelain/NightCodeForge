@@ -96,9 +96,10 @@ public class ResumptionTests
         Assert.Contains("What port should the server listen on?", lastAnswer);
         Assert.Contains("Port 8080", lastAnswer);
 
-        // Enqueued to llm-urgent
-        Assert.Contains(100, _jobQueue.UrgentQueue);
-        Assert.DoesNotContain(100, _jobQueue.InferenceQueue);
+        // Enqueued to stage tier
+        Assert.Contains(100, _jobQueue.InferenceQueue);
+        Assert.Contains(100, _jobQueue.TaskReviewQueue);
+        Assert.DoesNotContain(100, _jobQueue.UrgentQueue);
     }
 
     [Fact]
@@ -138,7 +139,8 @@ public class ResumptionTests
         Assert.False(updatedTask.IsWaitingForHuman);
         Assert.Equal(TaskOverallStatus.Implemented, updatedTask.Status); // Preserved!
 
-        Assert.Contains(105, _jobQueue.UrgentQueue);
+        Assert.Contains(105, _jobQueue.InferenceQueue);
+        Assert.DoesNotContain(105, _jobQueue.UrgentQueue);
     }
 
     [Fact]
@@ -207,13 +209,15 @@ public class ResumptionTests
 
         var updated = await _taskRepo.GetByIdAsync(102);
         Assert.NotNull(updated);
-        Assert.Equal(TaskOverallStatus.Reviewed, updated.Status);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
         Assert.Equal(StandardStageIds.Implementation, updated.CurrentStageId);
 
         var bag = PipelineDataBag.FromJson(updated.PipelineDataJson);
         Assert.Equal("Please add XML documentation to all public interfaces and fix indentation.", bag.Get<string>(PipelineDataBagKeys.ReviewerFeedback));
 
-        // Enqueued to llm-urgent
-        Assert.Contains(102, _jobQueue.UrgentQueue);
+        // Enqueued to stage tier
+        Assert.Contains(102, _jobQueue.ImplementationQueue);
+        Assert.Contains(102, _jobQueue.InferenceQueue);
+        Assert.DoesNotContain(102, _jobQueue.UrgentQueue);
     }
 }
