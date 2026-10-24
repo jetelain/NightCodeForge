@@ -191,6 +191,12 @@ Some resolved documentation.
 
         // Verify AbortMergeAsync was invoked to leave clean tree
         gitManagerMock.Verify(m => m.AbortMergeAsync(It.IsAny<Workspace>(), task.Id, It.IsAny<CancellationToken>()), Times.Once);
+
+        // Verify conversation was completed as Failed (not left stuck in Running)
+        var convs = await taskRepo.GetConversationsAsync(task.Id);
+        var conv = Assert.Single(convs);
+        Assert.Equal(StageExecutionStatus.Failed, conv.Status);
+        Assert.Contains("Merge conflict", conv.Summary);
     }
 
     [Fact]

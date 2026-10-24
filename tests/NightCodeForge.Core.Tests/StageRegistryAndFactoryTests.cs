@@ -1,7 +1,10 @@
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
@@ -21,6 +24,8 @@ public class StageRegistryAndFactoryTests
             if (serviceType.IsGenericType && serviceType.GetGenericTypeDefinition() == typeof(Microsoft.Extensions.Logging.ILogger<>))
             {
                 var loggerType = typeof(Microsoft.Extensions.Logging.Abstractions.NullLogger<>).MakeGenericType(serviceType.GetGenericArguments()[0]);
+                var instanceField = loggerType.GetField("Instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (instanceField != null) return instanceField.GetValue(null);
                 var instanceProp = loggerType.GetProperty("Instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
                 return instanceProp?.GetValue(null);
             }
@@ -56,6 +61,8 @@ public class StageRegistryAndFactoryTests
         _serviceProvider.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
         _serviceProvider.AddService<TimeProvider>(TimeProvider.System);
         _serviceProvider.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
+        _serviceProvider.AddService<IAgentActivityStreamer>(new Mock<IAgentActivityStreamer>().Object);
+        _serviceProvider.AddService<ITaskRepository>(new Mock<ITaskRepository>().Object);
         _registry = new WorkflowStageRegistry();
         _factory = new WorkflowStageFactory(_registry, _serviceProvider);
     }

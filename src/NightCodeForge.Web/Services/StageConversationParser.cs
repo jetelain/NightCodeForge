@@ -77,6 +77,49 @@ public static class StageConversationParser
     }
 
     /// <summary>
+    /// Determines whether a live running tool execution has completed based on persisted conversation turns.
+    /// Avoids falsely matching older ToolResult turns from prior calls of the same tool (e.g. repeated bash calls or retries).
+    /// </summary>
+    public static bool IsRunningToolCompleted(
+        IEnumerable<ConversationTurn>? turns,
+        string? runningToolName,
+        DateTime? runningToolStartedAt = null)
+    {
+        if (turns == null || string.IsNullOrWhiteSpace(runningToolName))
+            return false;
+
+        // Find turns matching this tool name, ordered by TurnIndex then Timestamp
+        var matchingTurns = turns
+            .Where(t => string.Equals(t.ToolName, runningToolName, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(t => t.TurnIndex)
+            .ThenBy(t => t.Timestamp)
+            .ToList();
+
+        if (matchingTurns.Count == 0)
+            return false;
+
+        // If the latest matching turn in the conversation is a Tool turn (call), check if it carries an embedded result or is awaiting one.
+        var latestTurn = matchingTurns[^1];
+        if (latestTurn.Role == StageTurnRole.Tool)
+        {
+            if (!string.IsNullOrWhiteSpace(latestTurn.ToolResult))
+            {
+                if (runningToolStartedAt.HasValue && latestTurn.Timestamp < runningToolStartedAt.Value)
+                    return false;
+                return true;
+            }
+            return false;
+        }
+
+        // If the latest matching turn is a ToolResult:
+        // If we have a start timestamp for the current invocation, ensure this result was persisted at or after that time.
+        if (runningToolStartedAt.HasValue && latestTurn.Timestamp < runningToolStartedAt.Value)
+            return false;
+
+        return latestTurn.Role == StageTurnRole.ToolResult;
+    }
+
+    /// <summary>
     /// Formats a workflow stage ID into a human-readable name, respecting custom definitions if provided.
     /// </summary>
     public static string FormatStageName(string stageId, IReadOnlyList<StageDefinition>? workflowStages = null)

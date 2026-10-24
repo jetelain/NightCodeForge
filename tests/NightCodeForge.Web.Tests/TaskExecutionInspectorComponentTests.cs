@@ -922,6 +922,74 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         Assert.DoesNotContain("LIVE STREAMING", cut.Markup);
     }
 
+    [Fact]
+    public void StageConversationViewer_WhenDeterministicStageRunning_RendersTealLiveStreamingBadgeAndRunningTool()
+    {
+        var conv = new Conversation
+        {
+            Id = 1,
+            TaskId = 10,
+            StageId = "deterministic-pre-impl",
+            StageKind = WorkflowStageKind.Deterministic,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Running,
+            StartedAt = DateTime.UtcNow.AddSeconds(-10)
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.IsActiveStage, true)
+            .Add(x => x.LiveRunningToolName, "deterministic-pre-impl-build")
+            .Add(x => x.LiveRunningToolArguments, "dotnet build")
+            .Add(x => x.LiveRunningToolOutput, "Compiling project..."));
+
+        Assert.Contains("Deterministic CPU", cut.Markup);
+        Assert.Contains("LIVE STREAMING", cut.Markup);
+        Assert.Contains("badge-teal", cut.Markup);
+        Assert.Contains("Running", cut.Markup);
+        Assert.Contains("deterministic-pre-impl-build", cut.Markup);
+        Assert.Contains("dotnet build", cut.Markup);
+        Assert.Contains("Compiling project...", cut.Markup);
+    }
+
+    [Fact]
+    public void StageConversationViewer_WhenToolTurnInProgress_RendersRunningBadgeOnToolCallCard_AndLiveOutput()
+    {
+        var conv = new Conversation
+        {
+            Id = 2,
+            TaskId = 10,
+            StageId = "deterministic-pre-impl",
+            StageKind = WorkflowStageKind.Deterministic,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Running,
+            StartedAt = DateTime.UtcNow.AddSeconds(-20),
+            Turns = new List<ConversationTurn>
+            {
+                new ConversationTurn
+                {
+                    Id = 101,
+                    ConversationId = 2,
+                    Role = StageTurnRole.Tool,
+                    ToolName = "deterministic-pre-impl-test",
+                    ToolArguments = "dotnet test",
+                    Timestamp = DateTime.UtcNow.AddSeconds(-5)
+                }
+            }
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.IsActiveStage, true)
+            .Add(x => x.LiveRunningToolName, "deterministic-pre-impl-test")
+            .Add(x => x.LiveRunningToolArguments, "dotnet test")
+            .Add(x => x.LiveRunningToolOutput, "Test run started: 4 tests executed so far..."));
+
+        Assert.Contains("Running", cut.Markup);
+        Assert.Contains("deterministic-pre-impl-test", cut.Markup);
+        Assert.Contains("Test run started: 4 tests executed so far...", cut.Markup);
+    }
+
     #region Fakes
 
     private class FakeDevQueueService : IDevQueueService

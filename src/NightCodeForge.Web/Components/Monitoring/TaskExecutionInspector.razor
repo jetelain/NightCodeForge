@@ -1,6 +1,8 @@
 @namespace NightCodeForge.Web.Components.Monitoring
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Services
 @using NightCodeForge.Web.Components.Review
 @implements IAsyncDisposable
@@ -171,6 +173,9 @@
                                              IsActiveStage="@IsStageActive(_selectedConversation?.StageId)"
                                              LiveStreamingThinking="@_liveStreamingThinking"
                                              LiveStreamingMessage="@_liveStreamingMessage"
+                                             LiveRunningToolName="@_liveRunningToolName"
+                                             LiveRunningToolArguments="@_liveRunningToolArguments"
+                                             LiveRunningToolOutput="@_liveRunningToolOutput"
                                              OnConversationUpdated="LoadTaskDataAsync" />
                 </div>
             </div>
@@ -368,6 +373,11 @@
     private string? _actionMessage;
     private string? _liveStreamingThinking;
     private string? _liveStreamingMessage;
+    private string? _liveRunningToolName;
+    private string? _liveRunningToolArguments;
+    private string? _liveRunningToolOutput;
+    private DateTime? _liveRunningToolStartedAt;
+    private readonly HashSet<string> _activeTaskCommandIds = new(StringComparer.OrdinalIgnoreCase);
     private int _selectedTurnCount;
     private int? _joinedTaskId;
     private bool _disposed;
@@ -413,6 +423,9 @@
             HubClient.OnExecutionLogReceived += HandleExecutionLog;
             HubClient.OnStageTransitionReceived += HandleStageTransition;
             HubClient.OnDeterministicGateResultReceived += HandleDeterministicGateResult;
+            HubClient.OnShellCommandStarted += HandleShellCommandStarted;
+            HubClient.OnShellCommandOutput += HandleShellCommandOutput;
+            HubClient.OnShellCommandCompleted += HandleShellCommandCompleted;
 
             try
             {
@@ -570,6 +583,14 @@
         _selectedTurnCount = 0;
         _liveStreamingThinking = null;
         _liveStreamingMessage = null;
+        _liveRunningToolName = null;
+        _liveRunningToolArguments = null;
+        _liveRunningToolOutput = null;
+        _liveRunningToolStartedAt = null;
+        lock (_activeTaskCommandIds)
+        {
+            _activeTaskCommandIds.Clear();
+        }
         await ReloadSelectedTurnsAsync();
     }
 
@@ -607,6 +628,14 @@
             {
                 _liveStreamingThinking = null;
                 _liveStreamingMessage = null;
+            }
+            if (!string.IsNullOrEmpty(_liveRunningToolName) &&
+                StageConversationParser.IsRunningToolCompleted(loaded.Turns, _liveRunningToolName, _liveRunningToolStartedAt))
+            {
+                _liveRunningToolName = null;
+                _liveRunningToolArguments = null;
+                _liveRunningToolOutput = null;
+                _liveRunningToolStartedAt = null;
             }
             _selectedTurnCount = count;
         }
@@ -749,14 +778,84 @@
             _terminalRef?.AddLog(taskId, "Tool", status.Equals("Running", StringComparison.OrdinalIgnoreCase) ? "Info" : "Debug",
                 $"[{toolName}] {status} {(durationMs.HasValue ? $"({durationMs}ms)" : "")}: {arguments}", DateTime.UtcNow);
 
-            // A model response just ended: surface what was persisted (thinking, tool call, tool result).
-            await ReloadSelectedTurnsAsync();
+            if (status.Equals("Running", StringComparison.OrdinalIgnoreCase))
+            {
+                _liveRunningToolName = toolName;
+                _liveRunningToolArguments = arguments;
+                _liveRunningToolOutput = null;
+                _liveRunningToolStartedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                if (string.Equals(_liveRunningToolName, toolName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _liveRunningToolName = null;
+                    _liveRunningToolArguments = null;
+                    _liveRunningToolOutput = null;
+                    _liveRunningToolStartedAt = null;
+                }
+            }
+
+            if (_selectedConversation == null)
+            {
+                await LoadTaskDataAsync();
+            }
+            else
+            {
+                await ReloadSelectedTurnsAsync();
+            }
+
             if (string.Equals(toolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
             {
                 await LoadTaskDataAsync();
             }
             else if (!_disposed)
             {
+                StateHasChanged();
+            }
+        });
+    }
+
+    private void HandleShellCommandStarted(ShellCommandRecord command)
+    {
+        if (_disposed || command == null) return;
+
+        if (ShellCommandTaskMatcher.IsCommandForTask(command.WorkingDirectory, TaskId))
+        {
+            lock (_activeTaskCommandIds)
+            {
+                _activeTaskCommandIds.Add(command.CommandId);
+            }
+        }
+    }
+
+    private void HandleShellCommandCompleted(ShellCommandRecord command)
+    {
+        if (_disposed || command == null) return;
+        lock (_activeTaskCommandIds)
+        {
+            _activeTaskCommandIds.Remove(command.CommandId);
+        }
+    }
+
+    private void HandleShellCommandOutput(string commandId, string chunk, bool isError)
+    {
+        if (_disposed || string.IsNullOrEmpty(chunk)) return;
+
+        bool isForThisTask;
+        lock (_activeTaskCommandIds)
+        {
+            isForThisTask = _activeTaskCommandIds.Contains(commandId);
+        }
+
+        if (!isForThisTask) return;
+
+        InvokeAsync(() =>
+        {
+            if (_disposed) return;
+            if (!string.IsNullOrEmpty(_liveRunningToolName))
+            {
+                _liveRunningToolOutput = (_liveRunningToolOutput ?? "") + chunk;
                 StateHasChanged();
             }
         });
@@ -795,6 +894,14 @@
             if (_disposed) return;
             _liveStreamingThinking = null;
             _liveStreamingMessage = null;
+            _liveRunningToolName = null;
+            _liveRunningToolArguments = null;
+            _liveRunningToolOutput = null;
+            _liveRunningToolStartedAt = null;
+            lock (_activeTaskCommandIds)
+            {
+                _activeTaskCommandIds.Clear();
+            }
             _selectedTurnCount = 0;
             _stepperRef?.ApplyStageTransition(stageId, status);
             if (status.Equals("Running", StringComparison.OrdinalIgnoreCase))
@@ -884,6 +991,9 @@
             HubClient.OnExecutionLogReceived -= HandleExecutionLog;
             HubClient.OnStageTransitionReceived -= HandleStageTransition;
             HubClient.OnDeterministicGateResultReceived -= HandleDeterministicGateResult;
+            HubClient.OnShellCommandStarted -= HandleShellCommandStarted;
+            HubClient.OnShellCommandOutput -= HandleShellCommandOutput;
+            HubClient.OnShellCommandCompleted -= HandleShellCommandCompleted;
         }
 
         _loadGate.Dispose();

@@ -749,5 +749,88 @@ public class StageConversationParserTests
         Assert.True(StageConversationParser.IsStageWaitingForAnswer(conv, task));
     }
 
+    [Fact]
+    public void IsRunningToolCompleted_WhenTurnsNullOrEmpty_ReturnsFalse()
+    {
+        Assert.False(StageConversationParser.IsRunningToolCompleted(null, "bash"));
+        Assert.False(StageConversationParser.IsRunningToolCompleted(new List<ConversationTurn>(), "bash"));
+        Assert.False(StageConversationParser.IsRunningToolCompleted(new List<ConversationTurn> { new() { ToolName = "bash" } }, null));
+        Assert.False(StageConversationParser.IsRunningToolCompleted(new List<ConversationTurn> { new() { ToolName = "bash" } }, "  "));
+    }
+
+    [Fact]
+    public void IsRunningToolCompleted_WhenRepeatedToolCallStarts_DoesNotMatchPriorResult()
+    {
+        var t0 = new DateTime(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
+        var t1 = t0.AddSeconds(5);
+        var t2 = t0.AddMinutes(5); // 2nd call started
+        var t3 = t2.AddSeconds(8); // 2nd call finished
+
+        var turns = new List<ConversationTurn>
+        {
+            new() { Id = 1, TurnIndex = 1, Role = StageTurnRole.Tool, ToolName = "bash", Timestamp = t0 },
+            new() { Id = 2, TurnIndex = 2, Role = StageTurnRole.ToolResult, ToolName = "bash", ToolResult = "ok 1", Timestamp = t1 }
+        };
+
+        // 2nd call running, but turns in DB only have the first call's result
+        Assert.False(StageConversationParser.IsRunningToolCompleted(turns, "bash", runningToolStartedAt: t2));
+
+        // 2nd call's Tool turn added to DB
+        turns.Add(new ConversationTurn { Id = 3, TurnIndex = 3, Role = StageTurnRole.Tool, ToolName = "bash", Timestamp = t2 });
+        Assert.False(StageConversationParser.IsRunningToolCompleted(turns, "bash", runningToolStartedAt: t2));
+
+        // 2nd call's ToolResult turn added to DB
+        turns.Add(new ConversationTurn { Id = 4, TurnIndex = 4, Role = StageTurnRole.ToolResult, ToolName = "bash", ToolResult = "ok 2", Timestamp = t3 });
+        Assert.True(StageConversationParser.IsRunningToolCompleted(turns, "bash", runningToolStartedAt: t2));
+    }
+
+    [Fact]
+    public void IsRunningToolCompleted_WhenLatestTurnIsToolCall_ReturnsFalse()
+    {
+        var turns = new List<ConversationTurn>
+        {
+            new() { Id = 1, TurnIndex = 1, Role = StageTurnRole.Tool, ToolName = "dotnet-test", Timestamp = DateTime.UtcNow }
+        };
+
+        Assert.False(StageConversationParser.IsRunningToolCompleted(turns, "dotnet-test"));
+    }
+
+    [Fact]
+    public void IsRunningToolCompleted_WhenFastConsecutiveCallsWithinOneSecond_DoesNotMatchPriorResult()
+    {
+        var t0 = new DateTime(2026, 10, 24, 12, 0, 0, 0, DateTimeKind.Utc);
+        var t1 = t0.AddMilliseconds(500); // 1st call finished
+        var t2 = t1.AddMilliseconds(200); // 2nd call started 200ms later (less than 1s)
+
+        var turns = new List<ConversationTurn>
+        {
+            new() { Id = 1, TurnIndex = 1, Role = StageTurnRole.Tool, ToolName = "bash", Timestamp = t0 },
+            new() { Id = 2, TurnIndex = 2, Role = StageTurnRole.ToolResult, ToolName = "bash", ToolResult = "ok 1", Timestamp = t1 }
+        };
+
+        // 2nd call is running. DB still only has the 1st call's result.
+        // It should NOT match the 1st result as completed for the 2nd call despite being within 1 second.
+        Assert.False(StageConversationParser.IsRunningToolCompleted(turns, "bash", runningToolStartedAt: t2));
+
+        // When 2nd call completes at t3 (>= t2):
+        var t3 = t2.AddMilliseconds(300);
+        turns.Add(new ConversationTurn { Id = 3, TurnIndex = 3, Role = StageTurnRole.ToolResult, ToolName = "bash", ToolResult = "ok 2", Timestamp = t3 });
+        Assert.True(StageConversationParser.IsRunningToolCompleted(turns, "bash", runningToolStartedAt: t2));
+    }
+
+    [Fact]
+    public void IsRunningToolCompleted_WhenToolTurnContainsEmbeddedResult_ReturnsTrue()
+    {
+        var t0 = new DateTime(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
+        var t1 = t0.AddSeconds(2);
+
+        var turns = new List<ConversationTurn>
+        {
+            new() { Id = 1, TurnIndex = 1, Role = StageTurnRole.Tool, ToolName = "read_file", ToolResult = "file contents", Timestamp = t1 }
+        };
+
+        Assert.True(StageConversationParser.IsRunningToolCompleted(turns, "read_file", runningToolStartedAt: t0));
+    }
+
     #endregion
 }

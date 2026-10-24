@@ -324,28 +324,6 @@ public class TaskOrchestrator : ITaskOrchestrator
         task.MaxExecutedStageOrder = Math.Max(task.MaxExecutedStageOrder, stageOrder);
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
 
-        try
-        {
-            await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
-                Guid.NewGuid().ToString("N"),
-                task.Id,
-                stage.StageId,
-                Streaming.AgentActivityKind.StageStarted,
-                $"Starting stage '{stage.StageId}'",
-                DateTime.UtcNow,
-                new Dictionary<string, object?>
-                {
-                    [Streaming.AgentActivityMetadataKeys.StageKind] = stage.Kind.ToString(),
-                    [Streaming.AgentActivityMetadataKeys.TaskTitle] = task.Title,
-                    [Streaming.AgentActivityMetadataKeys.Priority] = task.Priority,
-                    [Streaming.AgentActivityMetadataKeys.QueueType] = stage.Kind == WorkflowStageKind.Deterministic ? "cpu-deterministic" : "llm-inference"
-                }), cancellationToken);
-        }
-        catch (Exception sex)
-        {
-            _logger.LogDebug(sex, "Failed broadcasting stage started event for task #{TaskId}", task.Id);
-        }
-
         // Resolve Agent Profile matching interrupted profile or current stage, or fallback to first
         AgentProfile? profile = null;
         if (!string.IsNullOrWhiteSpace(task.InterruptedAgentProfileId))
@@ -419,13 +397,6 @@ public class TaskOrchestrator : ITaskOrchestrator
             CurrentProfile = profile
         };
 
-        // Explicit maintainer resume after an escalation: grant a fresh conflict-resolution budget.
-        if (isResumedRun &&
-            (pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.ConflictResolutionAttempts) ?? 0) >= ConflictResolutionConstants.MaxConflictResolutionAttempts)
-        {
-            pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictResolutionAttempts, 0);
-        }
-
         var hostWorkingPath = !string.IsNullOrWhiteSpace(taskWorkingPath) ? _pathResolver.ToHostPath(taskWorkingPath) : null;
         if (string.IsNullOrWhiteSpace(hostWorkingPath))
         {
@@ -442,7 +413,75 @@ public class TaskOrchestrator : ITaskOrchestrator
             ? hostWorkingPath
             : hostRepoPath;
 
+        // Explicit maintainer resume after an escalation: grant a fresh conflict-resolution budget.
+        if (isResumedRun &&
+            (pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.ConflictResolutionAttempts) ?? 0) >= ConflictResolutionConstants.MaxConflictResolutionAttempts)
+        {
+            pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictResolutionAttempts, 0);
+        }
+
+        // Start Conversation immediately for deterministic stages so Task Inspector tracks active run and progression in real-time
+        Conversation? deterministicConv = null;
+        bool deterministicConvFinalized = false;
         IReadOnlyDictionary<int, Services.TaskBaselineEntry>? baselineSnapshot = null;
+        StageExecutionResult? result = null;
+        if (stage.Kind == WorkflowStageKind.Deterministic)
+        {
+            try
+            {
+                int attemptIndex = (pipelineContext.StageRetries.GetValueOrDefault(stage.StageId, 0)) + 1;
+                deterministicConv = await _taskRepository.StartConversationAsync(
+                    task.Id,
+                    stage.StageId,
+                    WorkflowStageKind.Deterministic,
+                    attemptIndex,
+                    agentProfileId: null,
+                    harnessId: StandardHarnessIds.NativeCli,
+                    modelName: DeterministicStageConstants.CpuModelName,
+                    cancellationToken: cancellationToken);
+
+                pipelineContext.CurrentConversation = deterministicConv;
+
+                // Turn 1: User prompt
+                await _taskRepository.AddConversationTurnAsync(
+                    deterministicConv.Id,
+                    StageTurnRole.User,
+                    content: $"Execute deterministic gate '{stage.DisplayName}' ({stage.StageId})",
+                    cancellationToken: cancellationToken);
+            }
+            catch (Exception dex)
+            {
+                _logger.LogWarning(dex, "Failed starting deterministic conversation for task #{TaskId}, stage '{StageId}'", task.Id, stage.StageId);
+            }
+        }
+
+        try
+        {
+            try
+            {
+                await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                Guid.NewGuid().ToString("N"),
+                task.Id,
+                stage.StageId,
+                Streaming.AgentActivityKind.StageStarted,
+                $"Starting stage '{stage.StageId}'",
+                DateTime.UtcNow,
+                new Dictionary<string, object?>
+                {
+                    [Streaming.AgentActivityMetadataKeys.StageKind] = stage.Kind.ToString(),
+                    [Streaming.AgentActivityMetadataKeys.TaskTitle] = task.Title,
+                    [Streaming.AgentActivityMetadataKeys.Priority] = task.Priority,
+                    [Streaming.AgentActivityMetadataKeys.QueueType] = stage.Kind == WorkflowStageKind.Deterministic
+                        ? DeterministicStageConstants.CpuDeterministicQueue
+                        : DeterministicStageConstants.LlmInferenceQueue
+                }), cancellationToken);
+        }
+        catch (Exception sex)
+        {
+            _logger.LogDebug(sex, "Failed broadcasting stage started event for task #{TaskId}", task.Id);
+        }
+
+        baselineSnapshot = null;
         if (!string.IsNullOrWhiteSpace(targetSyncPath) && Directory.Exists(targetSyncPath))
         {
             try
@@ -495,6 +534,40 @@ public class TaskOrchestrator : ITaskOrchestrator
         // Gate 1: Pre-Implementation Baseline Synchronization
         if (string.Equals(stage.StageId, StandardStageIds.PreImplementationBaseline, StringComparison.OrdinalIgnoreCase))
         {
+            var syncToolName = $"{stage.StageId}{DeterministicStageConstants.GitSyncToolSuffix}";
+            var syncCmd = $"git merge {task.BaseBranch}";
+            var syncSw = System.Diagnostics.Stopwatch.StartNew();
+
+            if (deterministicConv != null)
+            {
+                try
+                {
+                    await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                        Guid.NewGuid().ToString("N"),
+                        task.Id,
+                        stage.StageId,
+                        Streaming.AgentActivityKind.ToolStarted,
+                        $"{syncToolName}: Syncing from '{task.BaseBranch}'...",
+                        DateTime.UtcNow,
+                        new Dictionary<string, object?>
+                        {
+                            [Streaming.AgentActivityMetadataKeys.ToolName] = syncToolName
+                        }), cancellationToken);
+
+                    await _taskRepository.AddConversationTurnAsync(
+                        deterministicConv.Id,
+                        StageTurnRole.Tool,
+                        content: $"Sync from base branch '{task.BaseBranch}'",
+                        toolName: syncToolName,
+                        toolArguments: syncCmd,
+                        cancellationToken: cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed broadcasting or recording Gate 1 sync tool started turn for task #{TaskId}", task.Id);
+                }
+            }
+
             await _gitWorkspaceManager.CreateWipCheckpointAsync(
                 workspace,
                 task.Id,
@@ -503,6 +576,46 @@ public class TaskOrchestrator : ITaskOrchestrator
                 cancellationToken);
 
             var baselineSyncResult = await _gitWorkspaceManager.SyncFromBaseBranchAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+            syncSw.Stop();
+            var syncDuration = (int)syncSw.ElapsedMilliseconds;
+
+            if (deterministicConv != null)
+            {
+                try
+                {
+                    var syncResultMsg = baselineSyncResult.HasConflict
+                        ? $"Merge conflict with '{task.BaseBranch}' in {baselineSyncResult.ConflictedFiles.Count} files."
+                        : $"Successfully synchronized from base branch '{task.BaseBranch}'.";
+
+                    await _taskRepository.AddConversationTurnAsync(
+                        deterministicConv.Id,
+                        StageTurnRole.ToolResult,
+                        content: syncResultMsg,
+                        toolName: syncToolName,
+                        toolResult: syncResultMsg,
+                        durationMs: syncDuration,
+                        isError: baselineSyncResult.HasConflict,
+                        cancellationToken: cancellationToken);
+
+                    await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                        Guid.NewGuid().ToString("N"),
+                        task.Id,
+                        stage.StageId,
+                        Streaming.AgentActivityKind.ToolCompleted,
+                        $"{syncToolName}: {syncResultMsg}",
+                        DateTime.UtcNow,
+                        new Dictionary<string, object?>
+                        {
+                            [Streaming.AgentActivityMetadataKeys.ToolName] = syncToolName,
+                            [Streaming.AgentActivityMetadataKeys.DurationMs] = syncDuration
+                        }), cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed broadcasting or recording Gate 1 sync tool completed turn for task #{TaskId}", task.Id);
+                }
+            }
+
             if (baselineSyncResult.HasConflict)
             {
                 await _gitWorkspaceManager.AbortMergeAsync(workspace, task.Id, cancellationToken);
@@ -525,6 +638,30 @@ public class TaskOrchestrator : ITaskOrchestrator
                     Message = conflictMsg,
                     Timestamp = DateTime.UtcNow
                 }, cancellationToken);
+
+                if (deterministicConv != null)
+                {
+                    try
+                    {
+                        var summary = $"Deterministic gate '{stage.DisplayName}' failed: {conflictMsg}";
+                        await _taskRepository.AddConversationTurnAsync(
+                            deterministicConv.Id,
+                            StageTurnRole.Assistant,
+                            content: summary,
+                            cancellationToken: CancellationToken.None);
+
+                        await _taskRepository.CompleteConversationAsync(
+                            deterministicConv.Id,
+                            StageExecutionStatus.Failed,
+                            summary: summary,
+                            cancellationToken: CancellationToken.None);
+                        deterministicConvFinalized = true;
+                    }
+                    catch (Exception cex)
+                    {
+                        _logger.LogWarning(cex, "Failed completing deterministic conversation on Gate 1 merge conflict for task #{TaskId}", task.Id);
+                    }
+                }
 
                 throw new MergeConflictException(task.Id, task.BaseBranch, baselineSyncResult.ConflictedFiles, conflictMsg);
             }
@@ -566,7 +703,6 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         var startedAt = DateTime.UtcNow;
-        StageExecutionResult result;
 
         try
         {
@@ -687,7 +823,92 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
             else
             {
+                bool isStandaloneDeterministic = stage.Kind == WorkflowStageKind.Deterministic && stage is not Stages.CompositeDeterministicStage;
+                if (isStandaloneDeterministic)
+                {
+                    try
+                    {
+                        await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                            Guid.NewGuid().ToString("N"),
+                            task.Id,
+                            stage.StageId,
+                            Streaming.AgentActivityKind.ToolStarted,
+                            $"{stage.StageId}: Running {stage.DisplayName}...",
+                            DateTime.UtcNow,
+                            new Dictionary<string, object?>
+                            {
+                                [Streaming.AgentActivityMetadataKeys.ToolName] = stage.StageId
+                            }), cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Failed broadcasting standalone deterministic tool started for task #{TaskId}", task.Id);
+                    }
+
+                    if (deterministicConv != null)
+                    {
+                        try
+                        {
+                            await _taskRepository.AddConversationTurnAsync(
+                                deterministicConv.Id,
+                                StageTurnRole.Tool,
+                                content: $"Execute {stage.DisplayName}",
+                                toolName: stage.StageId,
+                                toolArguments: stage.DisplayName,
+                                cancellationToken: cancellationToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed adding standalone deterministic tool turn for task #{TaskId}", task.Id);
+                        }
+                    }
+                }
+
                 result = await stage.ExecuteAsync(pipelineContext, cancellationToken);
+
+                if (isStandaloneDeterministic && deterministicConv != null)
+                {
+                    var standaloneOut = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId))
+                        ?? (result.IsSuccess ? "Completed successfully." : result.ErrorMessage ?? "Deterministic step failed.");
+                    var standaloneDuration = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds;
+
+                    try
+                    {
+                        await _taskRepository.AddConversationTurnAsync(
+                            deterministicConv.Id,
+                            StageTurnRole.ToolResult,
+                            content: standaloneOut,
+                            toolName: stage.StageId,
+                            toolResult: standaloneOut,
+                            durationMs: standaloneDuration,
+                            isError: !result.IsSuccess,
+                            cancellationToken: cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed adding standalone deterministic tool result turn for task #{TaskId}", task.Id);
+                    }
+
+                    try
+                    {
+                        await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                            Guid.NewGuid().ToString("N"),
+                            task.Id,
+                            stage.StageId,
+                            Streaming.AgentActivityKind.ToolCompleted,
+                            $"{stage.StageId}: {standaloneOut}",
+                            DateTime.UtcNow,
+                            new Dictionary<string, object?>
+                            {
+                                [Streaming.AgentActivityMetadataKeys.ToolName] = stage.StageId,
+                                [Streaming.AgentActivityMetadataKeys.DurationMs] = standaloneDuration
+                            }), cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Failed broadcasting standalone deterministic tool completed for task #{TaskId}", task.Id);
+                    }
+                }
             }
         }
         catch (HumanInterruptionException hex)
@@ -724,6 +945,11 @@ public class TaskOrchestrator : ITaskOrchestrator
             result = StageExecutionResult.Failure(ex.Message);
         }
 
+        if (result == null)
+        {
+            throw new InvalidOperationException($"Stage execution for '{stage.StageId}' did not produce a result.");
+        }
+
         var completedAt = DateTime.UtcNow;
         var durationMs = (int)(completedAt - startedAt).TotalMilliseconds;
 
@@ -742,7 +968,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             ? StageExecutionStatus.Completed
             : (result.IsCancelled ? StageExecutionStatus.Cancelled : (result.IsSuccess ? StageExecutionStatus.Completed : StageExecutionStatus.Failed));
 
-        using (var saveTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        using (var saveTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(DeterministicStageConstants.DefaultPersistTimeoutSeconds)))
         {
             var saveToken = result.IsCancelled ? saveTimeoutCts.Token : cancellationToken;
             try
@@ -755,108 +981,169 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
         }
 
-        // Record Conversation for deterministic stages
-        if (stage.Kind == WorkflowStageKind.Deterministic && !result.IsCancelled)
+        // Finalize Conversation for deterministic stages
+        if (stage.Kind == WorkflowStageKind.Deterministic && !deterministicConvFinalized)
         {
             try
             {
-                int attemptIndex = (pipelineContext.StageRetries.GetValueOrDefault(stage.StageId, 0)) + 1;
-                var deterministicConv = await _taskRepository.StartConversationAsync(
-                    task.Id,
-                    stage.StageId,
-                    WorkflowStageKind.Deterministic,
-                    attemptIndex,
-                    agentProfileId: null,
-                    harnessId: "native-cli",
-                    modelName: "deterministic-cpu",
-                    cancellationToken: cancellationToken);
+                using var finishCts = new CancellationTokenSource(TimeSpan.FromSeconds(DeterministicStageConstants.DefaultPersistTimeoutSeconds));
+                var finishToken = finishCts.Token;
 
-                // Turn 1: User prompt
-                await _taskRepository.AddConversationTurnAsync(
-                    deterministicConv.Id,
-                    StageTurnRole.User,
-                    content: $"Execute deterministic gate '{stage.DisplayName}' ({stage.StageId})",
-                    cancellationToken: cancellationToken);
-
-                // Turn 2: Tool execution(s)
-                var commandExecutions = pipelineContext.DataBag.Get<List<StageCommandExecution>>(PipelineDataBagKeys.StageCommands(stage.StageId));
-                if (commandExecutions != null && commandExecutions.Count > 0)
+                if (deterministicConv == null)
                 {
-                    foreach (var exec in commandExecutions)
-                    {
-                        var toolStageName = !string.IsNullOrWhiteSpace(exec.StageName)
-                            ? $"{stage.StageId}-{exec.StageName}"
-                            : stage.StageId;
+                    int attemptIndex = (pipelineContext.StageRetries.GetValueOrDefault(stage.StageId, 0)) + 1;
+                    deterministicConv = await _taskRepository.StartConversationAsync(
+                        task.Id,
+                        stage.StageId,
+                        WorkflowStageKind.Deterministic,
+                        attemptIndex,
+                        agentProfileId: null,
+                        harnessId: StandardHarnessIds.NativeCli,
+                        modelName: DeterministicStageConstants.CpuModelName,
+                        cancellationToken: finishToken);
 
+                    // Turn 1: User prompt
+                    await _taskRepository.AddConversationTurnAsync(
+                        deterministicConv.Id,
+                        StageTurnRole.User,
+                        content: $"Execute deterministic gate '{stage.DisplayName}' ({stage.StageId})",
+                        cancellationToken: finishToken);
+                }
+
+                if (!result.IsCancelled)
+                {
+                    var existingTurns = (await _taskRepository.GetConversationWithTurnsAsync(deterministicConv.Id, finishToken))?.Turns;
+                    var existingToolNames = existingTurns?
+                        .Where(t => t.Role == StageTurnRole.Tool && !string.IsNullOrWhiteSpace(t.ToolName))
+                        .Select(t => t.ToolName!)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                    // Turn 2: Tool execution(s)
+                    var commandExecutions = pipelineContext.DataBag.Get<List<StageCommandExecution>>(PipelineDataBagKeys.StageCommands(stage.StageId));
+                    if (commandExecutions != null && commandExecutions.Count > 0)
+                    {
+                        foreach (var exec in commandExecutions)
+                        {
+                            var toolStageName = !string.IsNullOrWhiteSpace(exec.StageName)
+                                ? $"{stage.StageId}-{exec.StageName}"
+                                : stage.StageId;
+
+                            // Prevent duplicate turn if this sub-stage was already persisted live
+                            if (existingToolNames.Contains(toolStageName))
+                            {
+                                continue;
+                            }
+
+                            await _taskRepository.AddConversationTurnAsync(
+                                deterministicConv.Id,
+                                StageTurnRole.Tool,
+                                content: $"Execute {exec.Command}",
+                                toolName: toolStageName,
+                                toolArguments: exec.Command,
+                                toolResult: exec.Output,
+                                durationMs: exec.DurationMs > 0 ? exec.DurationMs : durationMs,
+                                isError: !exec.IsSuccess,
+                                cancellationToken: finishToken);
+
+                            existingToolNames.Add(toolStageName);
+                        }
+                    }
+                    else if (!existingToolNames.Contains(stage.StageId))
+                    {
+                        var cmd = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId)) 
+                            ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.BuildCommand) 
+                            ?? DeterministicStageConstants.DefaultBuildCommand;
+                        var output = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId)) 
+                            ?? (result.IsSuccess ? "Verification completed successfully with exit code 0." : result.ErrorMessage ?? "Deterministic step failed");
                         await _taskRepository.AddConversationTurnAsync(
                             deterministicConv.Id,
                             StageTurnRole.Tool,
-                            content: $"Execute {exec.Command}",
-                            toolName: toolStageName,
-                            toolArguments: exec.Command,
-                            toolResult: exec.Output,
-                            durationMs: exec.DurationMs > 0 ? exec.DurationMs : durationMs,
-                            isError: !exec.IsSuccess,
-                            cancellationToken: cancellationToken);
+                            content: $"Execute {cmd}",
+                            toolName: stage.StageId,
+                            toolArguments: cmd,
+                            toolResult: output,
+                            durationMs: durationMs,
+                            isError: !result.IsSuccess,
+                            cancellationToken: finishToken);
+
+                        existingToolNames.Add(stage.StageId);
+                    }
+
+                    // Turn 3: Assistant result summary
+                    var summary = result.IsSuccess 
+                        ? $"Deterministic gate '{stage.DisplayName}' passed successfully."
+                        : $"Deterministic gate '{stage.DisplayName}' failed: {result.ErrorMessage}";
+                    await _taskRepository.AddConversationTurnAsync(
+                        deterministicConv.Id,
+                        StageTurnRole.Assistant,
+                        content: summary,
+                        cancellationToken: finishToken);
+
+                    await _taskRepository.CompleteConversationAsync(
+                        deterministicConv.Id,
+                        result.IsSuccess ? StageExecutionStatus.Completed : StageExecutionStatus.Failed,
+                        summary: summary,
+                        cancellationToken: finishToken);
+                    deterministicConvFinalized = true;
+
+                    if (result.IsSuccess)
+                    {
+                        try
+                        {
+                            await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                                Guid.NewGuid().ToString("N"),
+                                task.Id,
+                                stage.StageId,
+                                Streaming.AgentActivityKind.StageCompleted,
+                                summary,
+                                DateTime.UtcNow,
+                                new Dictionary<string, object?> { [Streaming.AgentActivityMetadataKeys.StageKind] = nameof(WorkflowStageKind.Deterministic) }), finishToken);
+                        }
+                        catch (Exception sex)
+                        {
+                            _logger.LogDebug(sex, "Failed broadcasting deterministic stage completion event for task #{TaskId}", task.Id);
+                        }
                     }
                 }
                 else
                 {
-                    var cmd = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId)) 
-                        ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.BuildCommand) 
-                        ?? "dotnet build";
-                    var output = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId)) 
-                        ?? (result.IsSuccess ? "Verification completed successfully with exit code 0." : result.ErrorMessage ?? "Deterministic step failed");
-                    await _taskRepository.AddConversationTurnAsync(
+                    await _taskRepository.CompleteConversationAsync(
                         deterministicConv.Id,
-                        StageTurnRole.Tool,
-                        content: $"Execute {cmd}",
-                        toolName: stage.StageId,
-                        toolArguments: cmd,
-                        toolResult: output,
-                        durationMs: durationMs,
-                        isError: !result.IsSuccess,
-                        cancellationToken: cancellationToken);
-                }
-
-                // Turn 3: Assistant result summary
-                var summary = result.IsSuccess 
-                    ? $"Deterministic gate '{stage.DisplayName}' passed successfully."
-                    : $"Deterministic gate '{stage.DisplayName}' failed: {result.ErrorMessage}";
-                await _taskRepository.AddConversationTurnAsync(
-                    deterministicConv.Id,
-                    StageTurnRole.Assistant,
-                    content: summary,
-                    cancellationToken: cancellationToken);
-
-                await _taskRepository.CompleteConversationAsync(
-                    deterministicConv.Id,
-                    result.IsSuccess ? StageExecutionStatus.Completed : StageExecutionStatus.Failed,
-                    summary: summary,
-                    cancellationToken: cancellationToken);
-
-                if (result.IsSuccess)
-                {
-                    try
-                    {
-                        await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
-                            Guid.NewGuid().ToString("N"),
-                            task.Id,
-                            stage.StageId,
-                            Streaming.AgentActivityKind.StageCompleted,
-                            summary,
-                            DateTime.UtcNow,
-                            new Dictionary<string, object?> { ["StageKind"] = "Deterministic" }), cancellationToken);
-                    }
-                    catch (Exception sex)
-                    {
-                        _logger.LogDebug(sex, "Failed broadcasting deterministic stage completion event for task #{TaskId}", task.Id);
-                    }
+                        StageExecutionStatus.Cancelled,
+                        summary: "Deterministic execution was cancelled.",
+                        cancellationToken: finishToken);
+                    deterministicConvFinalized = true;
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to persist deterministic Conversation for task #{TaskId}, stage '{StageId}'", task.Id, stage.StageId);
+            }
+        }
+        }
+        finally
+        {
+            if (stage.Kind == WorkflowStageKind.Deterministic && deterministicConv != null && !deterministicConvFinalized)
+            {
+                try
+                {
+                    bool isCancelled = cancellationToken.IsCancellationRequested || (result?.IsCancelled == true);
+                    var status = isCancelled ? StageExecutionStatus.Cancelled : StageExecutionStatus.Failed;
+                    var summary = isCancelled
+                        ? "Deterministic execution was cancelled."
+                        : "Deterministic execution terminated unexpectedly.";
+
+                    await _taskRepository.CompleteConversationAsync(
+                        deterministicConv.Id,
+                        status,
+                        summary: summary,
+                        cancellationToken: CancellationToken.None);
+                    deterministicConvFinalized = true;
+                }
+                catch (Exception fex)
+                {
+                    _logger.LogWarning(fex, "Failed completing dangling deterministic conversation #{ConversationId} for task #{TaskId}", deterministicConv.Id, task.Id);
+                }
             }
         }
 

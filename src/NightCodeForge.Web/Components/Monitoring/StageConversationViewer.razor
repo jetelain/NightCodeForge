@@ -54,9 +54,9 @@
                                 </span>
                             }
                         }
-                        @if (IsActiveStage && (Conversation == null || Conversation.Status == StageExecutionStatus.Running || !string.IsNullOrEmpty(LiveStreamingThinking) || !string.IsNullOrEmpty(LiveStreamingMessage)))
+                        @if (IsActiveStage && (Conversation == null || Conversation.Status == StageExecutionStatus.Running || !string.IsNullOrEmpty(LiveStreamingThinking) || !string.IsNullOrEmpty(LiveStreamingMessage) || !string.IsNullOrEmpty(LiveRunningToolName)))
                         {
-                            <span class="step-badge badge-gpu" style="font-size: 0.68rem;">
+                            <span class="step-badge @(Conversation?.StageKind == WorkflowStageKind.Deterministic ? "badge-teal" : "badge-gpu")" style="font-size: 0.68rem;">
                                 LIVE STREAMING
                                 <span class="cursor-blink">▊</span>
                             </span>
@@ -199,12 +199,25 @@
                             }
                             else
                             {
+                                var isRunning = IsActiveStage &&
+                                                Conversation?.Status == StageExecutionStatus.Running &&
+                                                pairedResult == null &&
+                                                string.IsNullOrEmpty(turn.ToolResult);
+
+                                var liveResult = isRunning &&
+                                                 !string.IsNullOrEmpty(LiveRunningToolOutput) &&
+                                                 (string.Equals(turn.ToolName, LiveRunningToolName, StringComparison.OrdinalIgnoreCase) ||
+                                                  string.Equals(turn.Content, LiveRunningToolArguments, StringComparison.OrdinalIgnoreCase))
+                                    ? LiveRunningToolOutput
+                                    : (pairedResult?.ToolResult ?? turn.ToolResult);
+
                                 <div class="chat-bubble assistant turn-tool">
                                     <div class="chat-avatar">⚙️</div>
                                     <div class="chat-bubble-body" style="width: 100%;">
                                         <ToolCallCard ToolName="@turn.ToolName"
                                                       Arguments="@turn.ToolArguments"
-                                                      Result="@(pairedResult?.ToolResult ?? turn.ToolResult)"
+                                                      Result="@liveResult"
+                                                      IsRunning="@isRunning"
                                                       IsError="@(turn.IsError || (pairedResult?.IsError ?? false))"
                                                       Offset="@(effectiveDuration.HasValue ? $"{effectiveDuration.Value}ms" : null)" />
                                     </div>
@@ -259,6 +272,22 @@
                 </div>
             }
 
+            @if (IsActiveStage &&
+                 (Conversation == null || Conversation.Status == StageExecutionStatus.Running) &&
+                 !string.IsNullOrWhiteSpace(LiveRunningToolName) &&
+                 !turns.Any(t => t.Role == StageTurnRole.Tool && string.Equals(t.ToolName, LiveRunningToolName, StringComparison.OrdinalIgnoreCase) && string.IsNullOrEmpty(t.ToolResult)))
+            {
+                <div class="chat-bubble assistant turn-tool">
+                    <div class="chat-avatar">⚙️</div>
+                    <div class="chat-bubble-body" style="width: 100%;">
+                        <ToolCallCard ToolName="@LiveRunningToolName"
+                                      Arguments="@LiveRunningToolArguments"
+                                      Result="@LiveRunningToolOutput"
+                                      IsRunning="true" />
+                    </div>
+                </div>
+            }
+
             @if (IsActiveStage && (Conversation == null || Conversation.Status == StageExecutionStatus.Running) && !string.IsNullOrEmpty(LiveStreamingThinking))
             {
                 <div class="chat-bubble assistant turn-live-thinking">
@@ -308,6 +337,9 @@
     [Parameter] public bool IsActiveStage { get; set; }
     [Parameter] public string? LiveStreamingThinking { get; set; }
     [Parameter] public string? LiveStreamingMessage { get; set; }
+    [Parameter] public string? LiveRunningToolName { get; set; }
+    [Parameter] public string? LiveRunningToolArguments { get; set; }
+    [Parameter] public string? LiveRunningToolOutput { get; set; }
     [Parameter] public IReadOnlyList<StageDefinition>? WorkflowStages { get; set; }
     [Parameter] public EventCallback OnConversationUpdated { get; set; }
 

@@ -2,6 +2,8 @@ using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
@@ -58,6 +60,8 @@ public class QualityGateCorrectnessTests
             if (serviceType.IsGenericType && serviceType.GetGenericTypeDefinition() == typeof(Microsoft.Extensions.Logging.ILogger<>))
             {
                 var loggerType = typeof(Microsoft.Extensions.Logging.Abstractions.NullLogger<>).MakeGenericType(serviceType.GetGenericArguments()[0]);
+                var instanceField = loggerType.GetField("Instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (instanceField != null) return instanceField.GetValue(null);
                 var instanceProp = loggerType.GetProperty("Instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
                 return instanceProp?.GetValue(null);
             }
@@ -519,6 +523,8 @@ Passed! - Failed: 0, Passed: 10, Total: 10";
         sp.AddService<IOllamaModelPreloadService>(new FakePreload());
         sp.AddService<IBackgroundTaskRunner>(new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance));
         sp.AddService<IWorkflowStageRegistry>(new WorkflowStageRegistry());
+        sp.AddService<IAgentActivityStreamer>(new Moq.Mock<IAgentActivityStreamer>().Object);
+        sp.AddService<ITaskRepository>(new Moq.Mock<ITaskRepository>().Object);
 
         var config = new DeterministicStageConfig
         {
@@ -547,6 +553,91 @@ Passed! - Failed: 0, Passed: 10, Total: 10";
         Assert.Contains("dotnet test", list[2].Command);
         Assert.Equal("sast", list[3].StageName);
         Assert.Equal("sast (skipped)", list[3].Command);
+    }
+
+    [Fact]
+    public async Task CompositeDeterministicStage_StreamsToolActivityAndRecordsTurnsLive()
+    {
+        var sp = new TestServiceProvider();
+        var fakeEnv = new FakeEnv
+        {
+            NextResult = new CommandResult(0, "Build succeeded.\nPassed: 5, Failed: 0, Total: 5", string.Empty, TimeSpan.FromMilliseconds(50))
+        };
+        sp.AddService<IExecutionEnvironmentProvider>(fakeEnv);
+        sp.AddService<IOllamaModelPreloadService>(new FakePreload());
+        sp.AddService<IBackgroundTaskRunner>(new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance));
+        sp.AddService<IWorkflowStageRegistry>(new WorkflowStageRegistry());
+
+        var recordedEvents = new List<AgentActivityEvent>();
+        var mockStreamer = new Moq.Mock<IAgentActivityStreamer>();
+        mockStreamer
+            .Setup(s => s.BroadcastAsync(Moq.It.IsAny<AgentActivityEvent>(), Moq.It.IsAny<CancellationToken>()))
+            .Callback<AgentActivityEvent, CancellationToken>((evt, _) => recordedEvents.Add(evt))
+            .Returns(Task.CompletedTask);
+        sp.AddService<IAgentActivityStreamer>(mockStreamer.Object);
+
+        var recordedTurns = new List<(int convId, StageTurnRole role, string? toolName, string? toolResult)>();
+        var mockRepo = new Moq.Mock<ITaskRepository>();
+        mockRepo
+            .Setup(r => r.AddConversationTurnAsync(
+                Moq.It.IsAny<int>(),
+                Moq.It.IsAny<StageTurnRole>(),
+                Moq.It.IsAny<string?>(),
+                Moq.It.IsAny<string?>(),
+                Moq.It.IsAny<string?>(),
+                Moq.It.IsAny<string?>(),
+                Moq.It.IsAny<string?>(),
+                Moq.It.IsAny<long?>(),
+                Moq.It.IsAny<bool>(),
+                Moq.It.IsAny<string?>(),
+                Moq.It.IsAny<CancellationToken>()))
+            .Callback<int, StageTurnRole, string?, string?, string?, string?, string?, long?, bool, string?, CancellationToken>(
+                (cid, role, content, think, tName, tArgs, tResult, dur, isErr, meta, ct) =>
+                    recordedTurns.Add((cid, role, tName, tResult)))
+            .Returns(Task.FromResult(new ConversationTurn()));
+        sp.AddService<ITaskRepository>(mockRepo.Object);
+
+        var config = new DeterministicStageConfig
+        {
+            ExtraParameters = new Dictionary<string, string>
+            {
+                ["Stages"] = "build,test"
+            }
+        };
+
+        var composite = new CompositeDeterministicStage("deterministic-post-impl", "Post-Impl Gates", config, sp, sp.GetRequiredService<IWorkflowStageRegistry>());
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var context = new PipelineContext(task, workspace)
+        {
+            CurrentConversation = new Conversation { Id = 99, TaskId = 1 }
+        };
+
+        var result = await composite.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+
+        // Verify ToolStarted and ToolCompleted events were streamed live
+        var toolStartedEvents = recordedEvents.Where(e => e.Kind == AgentActivityKind.ToolStarted).ToList();
+        var toolCompletedEvents = recordedEvents.Where(e => e.Kind == AgentActivityKind.ToolCompleted).ToList();
+        Assert.Equal(2, toolStartedEvents.Count);
+        Assert.Equal(2, toolCompletedEvents.Count);
+        Assert.NotNull(toolStartedEvents[0].Metadata);
+        Assert.NotNull(toolStartedEvents[1].Metadata);
+        Assert.Equal("deterministic-post-impl-build", toolStartedEvents[0].Metadata![AgentActivityMetadataKeys.ToolName]?.ToString());
+        Assert.Equal("deterministic-post-impl-test", toolStartedEvents[1].Metadata![AgentActivityMetadataKeys.ToolName]?.ToString());
+
+        // Verify turns were added incrementally to the active conversation
+        Assert.Equal(4, recordedTurns.Count);
+        Assert.Equal(StageTurnRole.Tool, recordedTurns[0].role);
+        Assert.Equal("deterministic-post-impl-build", recordedTurns[0].toolName);
+        Assert.Equal(StageTurnRole.ToolResult, recordedTurns[1].role);
+        Assert.Equal("deterministic-post-impl-build", recordedTurns[1].toolName);
+
+        Assert.Equal(StageTurnRole.Tool, recordedTurns[2].role);
+        Assert.Equal("deterministic-post-impl-test", recordedTurns[2].toolName);
+        Assert.Equal(StageTurnRole.ToolResult, recordedTurns[3].role);
+        Assert.Equal("deterministic-post-impl-test", recordedTurns[3].toolName);
     }
 
     [Fact]
@@ -875,15 +966,22 @@ Failed!  - Failed: 3, Passed: 12, Total: 15 - Assembly2.dll
     [Fact]
     public void CompositeDeterministicStage_Constructors_FailFastWithoutOptionalParameters()
     {
-        var sp = new TestServiceProvider();
+        var spEmpty = new TestServiceProvider();
         var def = new StageDefinition { StageId = "test-stage", DisplayName = "Test" };
         var registry = new WorkflowStageRegistry();
 
         // Constructor throws if registry is null
-        Assert.Throws<ArgumentNullException>(() => new CompositeDeterministicStage(def, sp, null!));
+        Assert.Throws<ArgumentNullException>(() => new CompositeDeterministicStage(def, spEmpty, null!));
 
-        // Constructor with explicit registry
-        var stage = new CompositeDeterministicStage(def, sp, registry);
+        // Constructor fails fast if required services are missing from serviceProvider
+        Assert.Throws<InvalidOperationException>(() => new CompositeDeterministicStage(def, spEmpty, registry));
+
+        // Constructor succeeds when all required services are registered
+        var spFull = new TestServiceProvider();
+        spFull.AddService<IAgentActivityStreamer>(new Moq.Mock<IAgentActivityStreamer>().Object);
+        spFull.AddService<ITaskRepository>(new Moq.Mock<ITaskRepository>().Object);
+
+        var stage = new CompositeDeterministicStage(def, spFull, registry);
         Assert.NotNull(stage);
         Assert.Equal("test-stage", stage.StageId);
     }

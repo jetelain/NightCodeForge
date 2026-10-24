@@ -15,6 +15,7 @@ public class PipelineContext
     public string? WorkingDirectory { get; set; }
     public int RetryCount { get; set; }
     public Dictionary<string, int> StageRetries { get; } = new();
+    public Conversation? CurrentConversation { get; set; }
 
     public PipelineContext(ForgeTask task, Workspace workspace)
         : this(task, workspace, PipelineDataBag.FromJson(task?.PipelineDataJson))

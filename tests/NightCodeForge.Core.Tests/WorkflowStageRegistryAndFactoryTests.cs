@@ -1,7 +1,10 @@
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
@@ -21,11 +24,21 @@ public class WorkflowStageRegistryAndFactoryTests
             if (serviceType.IsGenericType && serviceType.GetGenericTypeDefinition() == typeof(Microsoft.Extensions.Logging.ILogger<>))
             {
                 var loggerType = typeof(Microsoft.Extensions.Logging.Abstractions.NullLogger<>).MakeGenericType(serviceType.GetGenericArguments()[0]);
+                var instanceField = loggerType.GetField("Instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (instanceField != null) return instanceField.GetValue(null);
                 var instanceProp = loggerType.GetProperty("Instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
                 return instanceProp?.GetValue(null);
             }
             return null;
         }
+    }
+
+    private static void RegisterDefaultStageServices(TestServiceProvider sp)
+    {
+        var mockStreamer = new Mock<IAgentActivityStreamer>();
+        sp.AddService<IAgentActivityStreamer>(mockStreamer.Object);
+        var mockRepo = new Mock<ITaskRepository>();
+        sp.AddService<ITaskRepository>(mockRepo.Object);
     }
 
     private class FakeExecutionEnvironment : IExecutionEnvironment
@@ -58,6 +71,7 @@ public class WorkflowStageRegistryAndFactoryTests
         _serviceProvider.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
         _serviceProvider.AddService<TimeProvider>(TimeProvider.System);
         _serviceProvider.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
+        RegisterDefaultStageServices(_serviceProvider);
         _registry = new WorkflowStageRegistry();
         _factory = new WorkflowStageFactory(_registry, _serviceProvider);
     }
@@ -233,6 +247,7 @@ public class WorkflowStageRegistryAndFactoryTests
         sp.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv1));
         sp.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         sp.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
+        RegisterDefaultStageServices(sp);
 
         var config = new DeterministicStageConfig
         {
@@ -273,6 +288,7 @@ public class WorkflowStageRegistryAndFactoryTests
         sp.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv2));
         sp.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         sp.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
+        RegisterDefaultStageServices(sp);
 
         var config = new DeterministicStageConfig
         {

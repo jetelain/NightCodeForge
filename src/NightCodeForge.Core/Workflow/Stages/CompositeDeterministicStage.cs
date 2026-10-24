@@ -2,7 +2,10 @@ namespace NightCodeForge.Core.Workflow.Stages;
 
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow.Configuration;
 
 /// <summary>
@@ -22,16 +25,23 @@ public class CompositeDeterministicStage : IWorkflowStage
 
     private readonly IServiceProvider _serviceProvider;
     private readonly IWorkflowStageRegistry _registry;
+    private readonly IAgentActivityStreamer _streamer;
+    private readonly ITaskRepository _taskRepository;
+    private readonly ILogger<CompositeDeterministicStage> _logger;
 
     public CompositeDeterministicStage(
         StageDefinition definition,
         IServiceProvider serviceProvider,
         IWorkflowStageRegistry registry)
     {
+        ArgumentNullException.ThrowIfNull(definition);
         StageId = definition.StageId;
         DisplayName = definition.DisplayName;
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _streamer = serviceProvider.GetRequiredService<IAgentActivityStreamer>();
+        _taskRepository = serviceProvider.GetRequiredService<ITaskRepository>();
+        _logger = serviceProvider.GetRequiredService<ILogger<CompositeDeterministicStage>>();
 
         Config = !string.IsNullOrWhiteSpace(definition.ConfigurationJson)
             ? JsonSerializer.Deserialize<DeterministicStageConfig>(definition.ConfigurationJson, JsonOptions) ?? new DeterministicStageConfig()
@@ -50,6 +60,9 @@ public class CompositeDeterministicStage : IWorkflowStage
         Config = config ?? throw new ArgumentNullException(nameof(config));
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _streamer = serviceProvider.GetRequiredService<IAgentActivityStreamer>();
+        _taskRepository = serviceProvider.GetRequiredService<ITaskRepository>();
+        _logger = serviceProvider.GetRequiredService<ILogger<CompositeDeterministicStage>>();
     }
 
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)
@@ -60,20 +73,116 @@ public class CompositeDeterministicStage : IWorkflowStage
 
         context.DataBag.Remove(PipelineDataBagKeys.StageCommands(StageId));
 
+        var convId = context.CurrentConversation?.Id;
+
         foreach (var key in stageKeys)
         {
             var subStage = ResolveSubStage(key);
+            var toolStageName = !string.IsNullOrWhiteSpace(key) ? $"{StageId}-{key}" : StageId;
+            var initialCmd = ResolveInitialCommand(subStage, key, context);
+
+            try
+            {
+                await _streamer.BroadcastAsync(new AgentActivityEvent(
+                    Guid.NewGuid().ToString("N"),
+                    context.ForgeTask.Id,
+                    StageId,
+                    AgentActivityKind.ToolStarted,
+                    $"{toolStageName}: {initialCmd}",
+                    DateTime.UtcNow,
+                    new Dictionary<string, object?>
+                    {
+                        [AgentActivityMetadataKeys.ToolName] = toolStageName
+                    }), cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed broadcasting ToolStarted for {ToolName} in task #{TaskId}", toolStageName, context.ForgeTask.Id);
+            }
+
+            if (convId.HasValue)
+            {
+                try
+                {
+                    await _taskRepository.AddConversationTurnAsync(
+                        convId.Value,
+                        StageTurnRole.Tool,
+                        content: $"Execute {initialCmd}",
+                        toolName: toolStageName,
+                        toolArguments: initialCmd,
+                        cancellationToken: cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed recording Tool turn for {ToolName} in conversation #{ConvId}", toolStageName, convId.Value);
+                }
+            }
+
+            try
+            {
+                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                {
+                    TaskId = context.ForgeTask.Id,
+                    Level = LogLevel.Information,
+                    Message = $"[Deterministic] Running sub-stage '{key}' ({initialCmd})",
+                    Timestamp = DateTime.UtcNow
+                }, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed recording execution log for {SubStage} in task #{TaskId}", key, context.ForgeTask.Id);
+            }
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var result = await subStage.ExecuteAsync(context, cancellationToken);
             sw.Stop();
 
-            var subCmd = context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(subStage.StageId))
-                         ?? key;
+            var actualCmd = context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(subStage.StageId)) ?? initialCmd;
             var subOut = context.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(subStage.StageId))
                          ?? (result.IsSuccess ? "Verification completed successfully." : result.ErrorMessage ?? "Deterministic step failed.");
 
-            commandList.Add(new StageCommandExecution(subCmd, subOut, key, result.IsSuccess, sw.ElapsedMilliseconds));
+            commandList.Add(new StageCommandExecution(actualCmd, subOut, key, result.IsSuccess, sw.ElapsedMilliseconds));
+
+            if (convId.HasValue)
+            {
+                try
+                {
+                    await _taskRepository.AddConversationTurnAsync(
+                        convId.Value,
+                        StageTurnRole.ToolResult,
+                        content: subOut,
+                        toolName: toolStageName,
+                        toolArguments: actualCmd,
+                        toolResult: subOut,
+                        durationMs: (int)sw.ElapsedMilliseconds,
+                        isError: !result.IsSuccess,
+                        cancellationToken: cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed recording ToolResult turn for {ToolName} in conversation #{ConvId}", toolStageName, convId.Value);
+                }
+            }
+
+            try
+            {
+                await _streamer.BroadcastAsync(new AgentActivityEvent(
+                    Guid.NewGuid().ToString("N"),
+                    context.ForgeTask.Id,
+                    StageId,
+                    AgentActivityKind.ToolCompleted,
+                    $"{toolStageName}: {subOut}",
+                    DateTime.UtcNow,
+                    new Dictionary<string, object?>
+                    {
+                        [AgentActivityMetadataKeys.ToolName] = toolStageName,
+                        [AgentActivityMetadataKeys.DurationMs] = (int)sw.ElapsedMilliseconds
+                    }), cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed broadcasting ToolCompleted for {ToolName} in task #{TaskId}", toolStageName, context.ForgeTask.Id);
+            }
 
             if (!result.IsSuccess && Config.FailOnError)
             {
@@ -97,6 +206,23 @@ public class CompositeDeterministicStage : IWorkflowStage
         context.DataBag.Set(PipelineDataBagKeys.StageOutput(StageId), WorkflowDefaults.TruncateStageOutput(combinedOutputs));
 
         return StageExecutionResult.Success();
+    }
+
+    private static string ResolveInitialCommand(IWorkflowStage subStage, string key, PipelineContext context)
+    {
+        var repoPath = context.Workspace?.RepositoryPath;
+        var bag = context.DataBag;
+        var config = !string.IsNullOrWhiteSpace(repoPath) ? CodeStackPresets.ResolveConfig(repoPath, bag) : null;
+
+        return key.Trim().ToLowerInvariant() switch
+        {
+            DeterministicStageConstants.BuildSubStage => config?.BuildCommand ?? DeterministicStageConstants.DefaultBuildCommand,
+            DeterministicStageConstants.TestSubStage => config?.TestCommand ?? DeterministicStageConstants.DefaultTestCommand,
+            DeterministicStageConstants.TestWithCoverageSubStage => bag.Get<string>(PipelineDataBagKeys.CoverageCommand) ?? config?.CoverageCommand ?? WorkflowDefaults.DefaultCoverageTestCommand,
+            DeterministicStageConstants.FormatSubStage => config?.FormatCommand ?? DeterministicStageConstants.DefaultFormatCommand,
+            DeterministicStageConstants.SastSubStage => config?.SastCommand ?? DeterministicStageConstants.DefaultSastCommand,
+            _ => bag.Get<string>(PipelineDataBagKeys.StageCommand(subStage.StageId)) ?? subStage.DisplayName
+        };
     }
 
     private IWorkflowStage ResolveSubStage(string stageName)
