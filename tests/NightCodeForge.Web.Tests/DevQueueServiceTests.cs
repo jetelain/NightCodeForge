@@ -1045,6 +1045,54 @@ public class DevQueueServiceTests : IDisposable
         _taskOrchestrator.Verify(o => o.RestartTaskPipelineAsync(It.IsAny<int>(), It.IsAny<TaskRestartGitMode>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task GetSnapshotAsync_WhenJobStorageDisposed_ReturnsEmptySnapshotWithoutThrowing()
+    {
+        var mockStorage = new Mock<JobStorage>();
+        mockStorage.Setup(s => s.GetMonitoringApi()).Throws(new ObjectDisposedException("SQLiteStorage"));
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            mockStorage.Object,
+            _cancellationManager.Object,
+            _pathResolver.Object,
+            _skippedJobRegistry,
+            _taskOrchestrator.Object,
+            NullLogger<DevQueueService>.Instance);
+
+        var snapshot = await service.GetSnapshotAsync();
+
+        Assert.NotNull(snapshot);
+        Assert.Empty(snapshot.UrgentJobs);
+        Assert.Empty(snapshot.InferenceJobs);
+    }
+
+    [Fact]
+    public async Task ReorderInferenceQueueByPriorityAsync_WhenJobStorageDisposed_ReturnsZeroWithoutThrowing()
+    {
+        var mockStorage = new Mock<JobStorage>();
+        mockStorage.Setup(s => s.GetMonitoringApi()).Throws(new ObjectDisposedException("SQLiteStorage"));
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            mockStorage.Object,
+            _cancellationManager.Object,
+            _pathResolver.Object,
+            _skippedJobRegistry,
+            _taskOrchestrator.Object,
+            NullLogger<DevQueueService>.Instance);
+
+        var reordered = await service.ReorderInferenceQueueByPriorityAsync();
+
+        Assert.Equal(0, reordered);
+    }
+
     #region Mock Implementations
 
     private class MockLockProvider : IWorkspaceLockProvider

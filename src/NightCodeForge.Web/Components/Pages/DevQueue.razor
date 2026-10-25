@@ -193,6 +193,10 @@
                 {
                     break;
                 }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
                 catch (Exception ex)
                 {
                     Logger.LogWarning(ex, "DevQueue auto-refresh tick failed.");

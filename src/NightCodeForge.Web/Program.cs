@@ -83,6 +83,12 @@ builder.Services.AddNightCodeForgeAgents();
 builder.Services.AddNightCodeForgeHangfire(hangfireConnection);
 builder.Services.AddNightCodeForgeHangfireServers();
 
+// Configure host shutdown timeout to give background services adequate time for graceful shutdown
+builder.Services.Configure<HostOptions>(options =>
+{
+    options.ShutdownTimeout = HangfireConfigurationExtensions.DefaultHostShutdownTimeout;
+});
+
 // Register SignalR Telemetry Hub & Streaming Infrastructure
 builder.Services.AddSignalR();
 builder.Services.AddNightCodeForgeSignalRBridge();

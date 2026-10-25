@@ -19,6 +19,9 @@ public class HangfireQueuePriorityTests
         Assert.Equal("NCF-LLM-Inference-Worker", options.ServerName);
         Assert.Equal(1, options.WorkerCount);
         Assert.Equal(HangfireQueues.InferenceQueues, options.Queues);
+        Assert.True(options.IsLightweightServer);
+        Assert.Equal(HangfireConfigurationExtensions.DefaultHangfireShutdownTimeout, options.ShutdownTimeout);
+        Assert.Equal(HangfireConfigurationExtensions.DefaultHangfireStopTimeout, options.StopTimeout);
     }
 
     [Fact]
@@ -29,6 +32,15 @@ public class HangfireQueuePriorityTests
         Assert.Equal("NCF-Utility-Worker", options.ServerName);
         Assert.Equal(4, options.WorkerCount);
         Assert.Equal(new[] { HangfireQueues.Default }, options.Queues);
+        Assert.False(options.IsLightweightServer);
+        Assert.Equal(HangfireConfigurationExtensions.DefaultHangfireShutdownTimeout, options.ShutdownTimeout);
+        Assert.Equal(HangfireConfigurationExtensions.DefaultHangfireStopTimeout, options.StopTimeout);
+    }
+
+    [Fact]
+    public void ShutdownTimeouts_HostTimeoutIsLongerThanServerTimeout()
+    {
+        Assert.True(HangfireConfigurationExtensions.DefaultHostShutdownTimeout > HangfireConfigurationExtensions.DefaultHangfireShutdownTimeout);
     }
 
     [Fact]

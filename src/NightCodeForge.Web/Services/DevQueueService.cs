@@ -115,6 +115,10 @@ public class DevQueueService : IDevQueueService
 
             _skippedJobRegistry.PruneActiveJobIds(currentEnqueuedJobIds);
         }
+        catch (ObjectDisposedException ex)
+        {
+            _logger.LogDebug(ex, "JobStorage was disposed while querying Hangfire monitoring API.");
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to query Hangfire monitoring API");
@@ -634,6 +638,11 @@ public class DevQueueService : IDevQueueService
 
             _logger.LogInformation("Reordered/migrated {Count} queue jobs by priority.", reorderedCount);
             return reorderedCount;
+        }
+        catch (ObjectDisposedException ex)
+        {
+            _logger.LogDebug(ex, "JobStorage was disposed while reordering inference queue.");
+            return 0;
         }
         catch (Exception ex)
         {

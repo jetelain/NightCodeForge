@@ -252,42 +252,79 @@ A task remains dormant in `Suggested` until a maintainer performs a **single man
   - The Task Execution Inspector (`/inspector`) and Review Room (`/review`) strictly scope their selection lists to tasks meeting `HasExecutionRun == true`, ensuring maintainers only inspect or review tasks that have executed work.
 
 ### 3.3 Main Workflow Execution Engine
-Once a task has `Status == TaskOverallStatus.Open` and **all its dependencies have `Status == TaskOverallStatus.Closed`**, it is enqueued to its initial stage queue (`llm-task-review` via `ITaskJobQueue.EnqueueStage`) and executes sequentially through the single-worker inference pipeline:
+Once a task has `Status == TaskOverallStatus.Open` and **all its dependencies have `Status == TaskOverallStatus.Closed`**, it is enqueued to its initial stage queue (`llm-task-review` via `ITaskJobQueue.EnqueueStage`).
+
+Rather than dispatching every individual stage as an isolated background job—which would cause the single worker slot to be relinquished between CPU and GPU steps, causing inter-stage interleaving, GPU starvation, and base branch drift—NightCodeForge executes tasks via **In-Process Stage Chaining** organized into **Atomic Execution Cohorts** (see Section 7.1.6):
+
+* **Intake Phase (`StageQueueTier.TaskReview`, Tier 3):** Dispatched independently in `llm-task-review`. The architect agent analyzes specifications and clarifies ambiguities. If human input is required, the task invokes `ask` and pauses safely in `IsWaitingForHuman = true` without occupying downstream compute.
+* **Cohort 1: Implementation Cohort (`StageQueueTier.Implementation`, Tier 2):** Chains **Stages 2 -> 3 -> 4 within a single Hangfire job turn**. If Stage 4 detects compiler or test regressions, an **in-job loopback** re-executes Stage 3 directly in-process without releasing the worker slot.
+* **Cohort 2: Review & Delivery Cohort (`StageQueueTier.CodeReview`, Tier 1):** Chains **Stages 5 -> 6 and Gate 2 Delivery within a single Hangfire job turn**. Review edits are verified deterministically; if clean, Gate 2 performs immediate mergeability verification and automated delivery (squash-and-merge in `Automatic` mode, or transition to `Ready` in `ManualReviewRequired` mode).
 
 ```mermaid
 flowchart TD
     Suggested(["Suggested (Intake)"]) -->|Maintainer Action: Promote| Open(["Open (Dependencies Pending)"])
-    Open -->|All Dependencies Closed| S1["1. ForgeTask Review Stage\n(Agentic - Scope & Q&A)\n[Queue: llm-task-review (Tier 3)]"]
-    S1 --> Reviewed["Status: Reviewed"]
-    Reviewed --> S2["2. Deterministic Pre-Implementation\n(Baseline Build / Test / Coverage)\n[Queue: llm-implementation (Tier 2)]"]
-    S2 --> S3["3. Implementation Stage\n(Agentic - Code & Test Generation)\n[Queue: llm-implementation (Tier 2)]"]
-    S3 --> Implemented["Status: Implemented"]
-    Implemented --> S4["4. Deterministic Post-Implementation\n(Coverage Gate / Warning Ratchet)\n[Queue: llm-implementation (Tier 2)]"]
-    S4 -->|Pass| S5["5. Code Review Stage\n(Agentic - Audit & Direct Polish)\n[Queue: llm-code-review (Tier 1)]"]
-    S4 -.->|Regression| S3
-    S5 --> S6["6. Deterministic Post-Review\n(Build & Test Verification of Review Edits)\n[Queue: llm-code-review (Tier 1)]"]
-    S6 -->|Pass| Gate2{"Gate 2: Pre-Review\nMergeability Check\nagainst baseBranch"}
-    S6 -.->|Review Introduced Failure| S5
 
-    Gate2 -->|Clean Merge| Ready["Status: Ready\n(Review Room Pending Review)"]
+    subgraph IntakePhase ["Intake Phase (Tier 3: 'llm-task-review') - Independent Turn"]
+        S1["1. ForgeTask Review Stage\n(Agentic - Scope & Q&A)\n[Queue: llm-task-review]"]
+        S1Ask{"Needs Clarification\n('ask' tool)?"}
+        S1Wait["IsWaitingForHuman = true\n(Status preserved; GPU Freed Cleanly)"]
+        S1Done["Status: Reviewed\n(Enrich task spec on disk)"]
+    end
+
+    subgraph Cohort1 ["Cohort 1: Implementation Cohort (Tier 2: 'llm-implementation') - SINGLE HANGFIRE JOB"]
+        direction TB
+        S2["2. Deterministic Pre-Implementation\n(Baseline Build / Test / Coverage)"]
+        S3["3. Implementation Stage\n(Agentic - Code & Test Generation)"]
+        S4["4. Deterministic Post-Implementation\n(Coverage Gate / Warning Ratchet)"]
+        Gate4Check{"Stage 4 Passed\n(Exit Code 0)?"}
+        Loopback3["In-Job Loopback to Stage 3\n(Inject Compiler Errors / Test Failures;\nRetry Budget in PipelineDataBag)"]
+    end
+
+    subgraph Cohort2 ["Cohort 2: Review & Delivery Cohort (Tier 1: 'llm-code-review') - SINGLE HANGFIRE JOB"]
+        direction TB
+        S5["5. Code Review Stage\n(Agentic - Audit & Direct Polish)"]
+        S6["6. Deterministic Post-Review\n(Build & Test Verification of Review Edits)"]
+        Gate2{"Gate 2: Pre-Review\nMergeability Check\nagainst baseBranch"}
+        MergeGate{"task.MergeMode"}
+        AutoMerge["Automated Delivery:\nImmediate Squash & Merge to baseBranch\nStatus = Closed | SquashCommitSha Persisted"]
+        ManualWait["Status: Ready\n(Review Room Pending Maintainer Approval)"]
+    end
+
+    Open -->|All Dependencies Closed| S1
+    S1 --> S1Ask
+    S1Ask -- Yes --> S1Wait
+    S1Ask -- No --> S1Done
+    S1Wait -.->|Developer Answers in UI| ResumeIntake["Resume Intake Turn"]
+    ResumeIntake -.-> S1
+
+    S1Done -->|Enqueue Cohort 1 to llm-implementation| S2
+    S2 -->|Chained In-Process| S3
+    S3 -->|Chained In-Process| S4
+    S4 --> Gate4Check
+    Gate4Check -- Failed (Attempts < Max) --> Loopback3 --> S3
+    Gate4Check -- Failed (Attempts >= Max) --> FailStage4["Status = Failed\n(Max Quality Gate Retries Exceeded)"]
+
+    Gate4Check -- Success -->|Enqueue Cohort 2 to llm-code-review| S5
+    S5 -->|Chained In-Process| S6
+    S6 -->|Chained In-Process| Gate2
     Gate2 -.->|Merge Conflict Detected| ConflictResolution["Autonomous Conflict Resolution Turn\n[Queue: llm-implementation (Tier 2)]\n- Top-of-Prompt Header Mandate\n- Selective Staging Before Build\n- Deterministic Build Verification in Sandbox\n- Mandatory Downstream Gate Re-Traversal"]
     ConflictResolution --> S4
 
-    Ready --> MergeGate{"MergeMode?"}
-    MergeGate -->|Automatic| AutoMerge["Auto-Squash & Merge to Base Branch"]
-    MergeGate -->|ManualReviewRequired| ManualWait["Maintainer Review & Local Testing in UI"]
-    ManualWait -->|Approved| ManualMerge["Maintainer Triggers Merge"]
+    Gate2 -->|Clean Merge| MergeGate
+    MergeGate -->|Automatic| AutoMerge
+    MergeGate -->|ManualReviewRequired| ManualWait
+    ManualWait -->|Approved in UI| ManualMerge["Maintainer Triggers Merge"]
+
     AutoMerge --> Closed(["Status: Closed"])
     ManualMerge --> Closed
     Closed --> Cascade["Cascade Unblock Dependent Tasks\n(Ordered by Priority ASC, CreatedAt ASC)"]
 
-    S1 -.->|ask| Blocked["IsWaitingForHuman = true\n(Status preserved; GPU Freed Cleanly)"]
-    S3 -.->|ask| Blocked
-    S5 -.->|ask| Blocked
-    Blocked -.->|Developer Answers in UI| ResumeTier["EnqueueStage(taskId, stage.QueueTier, priority)\n(Preserves Stage Tier System; P1 routes to llm-urgent)"]
-    ResumeTier -.-> S1
-    ResumeTier -.-> S3
-    ResumeTier -.-> S5
+    S3 -.->|ask| Blocked3["IsWaitingForHuman = true\n(GPU Freed Cleanly)"]
+    S5 -.->|ask| Blocked5["IsWaitingForHuman = true\n(GPU Freed Cleanly)"]
+    Blocked3 -.->|Developer Answers| ResumeC1["EnqueueStage(taskId, Implementation, priority)"]
+    Blocked5 -.->|Developer Answers| ResumeC2["EnqueueStage(taskId, CodeReview, priority)"]
+    ResumeC1 -.-> S3
+    ResumeC2 -.-> S5
 ```
 
 #### Main Workflow Stages:
@@ -295,29 +332,29 @@ flowchart TD
    - **Queue Tier:** Tier 3 (`llm-task-review`).
    - **Mission:** Deeply inspect the codebase against the task request *before* coding begins. Detect ambiguities, uncover hidden constraints, identify impacted files, verify prerequisites, and formulate an approved technical plan.
    - **Transition:** On completion, updates `task.Status = TaskOverallStatus.Reviewed`.
-2. **Stage 2: Deterministic Pre-Implementation:**
+2. **Stage 2: Deterministic Pre-Implementation (Cohort 1):**
    - **Queue Tier:** Tier 2 (`llm-implementation`).
-   - **Mission:** Execute baseline compilation (`dotnet build`), run baseline test suite, and capture baseline coverage and warning metrics without consuming LLM tokens. Metrics are recorded in `PipelineDataBag`.
-3. **Stage 3: Implementation Agent (`ImplementationStage`):**
+   - **Mission:** Execute baseline compilation (`dotnet build`), run baseline test suite, and capture baseline coverage and warning metrics without consuming LLM tokens. Metrics are recorded in `PipelineDataBag`. Runs in-process on CPU and chains directly into Stage 3.
+3. **Stage 3: Implementation Agent (Cohort 1):**
    - **Queue Tier:** Tier 2 (`llm-implementation`).
    - **Mission:** Implement the code changes outlined in the approved plan. Modify files, generate unit tests, iterate on compiler/test feedback inside the sandbox.
-   - **Transition:** On completion, updates `task.Status = TaskOverallStatus.Implemented`.
-4. **Stage 4: Deterministic Post-Implementation Quality Gates:**
+   - **Transition:** On completion, updates `task.Status = TaskOverallStatus.Implemented` and chains directly into Stage 4 in-process.
+4. **Stage 4: Deterministic Post-Implementation Quality Gates (Cohort 1):**
    - **Queue Tier:** Tier 2 (`llm-implementation`).
-   - **Mission:** Run `format,build,test-with-coverage,sast` via `CompositeDeterministicStage` (incorporating `DeterministicFormatStage`, `DeterministicBuildStage`, `DeterministicTestWithCoverageGate` [$\Delta \ge 0$], and `DeterministicSastStage`). If tests fail, coverage regresses, or build breaks, loops back to Stage 3 with structured compiler and assertion diagnostics.
-5. **Stage 5: Code Review Agent (`CodeReviewAndFixStage`):**
+   - **Mission:** Run `format,build,test-with-coverage,sast` via `CompositeDeterministicStage` (incorporating `DeterministicFormatStage`, `DeterministicBuildStage`, `DeterministicTestWithCoverageGate` [$\Delta \ge 0$], and `DeterministicSastStage`).
+   - **In-Job Loopback:** If tests fail, coverage regresses, or build breaks, loops back directly to Stage 3 *in-process within the same job turn* with structured compiler and assertion diagnostics until the retry budget is exhausted. On success, enqueues Cohort 2 to `llm-code-review`.
+5. **Stage 5: Code Review Agent (Cohort 2):**
    - **Queue Tier:** Tier 1 (`llm-code-review`).
-   - **Mission:** Act as a critical reviewer and automated fixer. Inspect the noise-filtered `git diff -U2`, check coding conventions, detect subtle regressions, and apply direct minor polish patches. Prioritized ahead of implementation turns to close nearly completed work and prevent branch drift.
-6. **Stage 6: Deterministic Post-Review Verification & Gate 2:**
+   - **Mission:** Act as a critical reviewer and automated fixer. Inspect the noise-filtered `git diff -U2`, check coding conventions, detect subtle regressions, and apply direct minor polish patches. Chains directly into Stage 6 in-process.
+6. **Stage 6: Deterministic Post-Review Verification (Cohort 2):**
    - **Queue Tier:** Tier 1 (`llm-code-review`).
-   - **Mission:** Because the Code Review agent can modify code and introduce syntax or regression bugs, this deterministic step re-compiles and re-executes unit tests on the final changeset.
-   - **Gate 2 (Pre-Review Mergeability Check):** Checks whether `feature/task-{id}` cleanly merges against latest `baseBranch`. If conflicts exist, initiates hardened conflict resolution (see Section 3.11).
-   - **Transition:** On pass, updates `task.Status = TaskOverallStatus.Ready`. On test/build failure, loops back to Stage 5 with diagnostic output.
-7. **Stage 7: Merge Resolution Gate:**
+   - **Mission:** Re-compiles and re-executes unit tests on the final changeset. If review patches introduced failures, loops back to Stage 5 (or Stage 3 if broader fixes are needed). On pass, immediately executes terminal Gate 2 delivery in the same job turn.
+7. **Gate 2 Pre-Review Verification & Automated Delivery:**
+   - **Terminal Gate 2 Logic:** Checks whether `feature/task-{id}` cleanly merges against latest `baseBranch`. If conflicts exist, initiates hardened conflict resolution (see Section 3.11). If `baseBranch` advanced during execution, re-verifies deterministic gates.
    - **Guarded Pending Review Contract:** Only tasks with `HasExecutionRun == true && Status == TaskOverallStatus.Ready` are treated as pending review (`TaskReviewService.IsPendingReview`). In-flight tasks in `Implemented` or `Reviewed` status are actively traversing downstream quality gates and cannot be merged prematurely.
    - Evaluates `task.MergeMode`:
-     - **Automatic Mode:** NightCodeForge automatically squashes WIP commits into a conventional commit, merges into `baseBranch`, sets `task.Status = TaskOverallStatus.Closed`, and triggers cascade unblocking.
-     - **Manual Review Required Mode:** ForgeTask remains in `Ready`. The maintainer inspects the diff in the Review Room, runs manual tests, and clicks "Approve & Merge" $\rightarrow$ sets `task.Status = TaskOverallStatus.Closed`.
+     - **Automatic Mode:** NightCodeForge automatically squashes WIP commits into a conventional commit, merges into `baseBranch`, immediately persists `task.Status = TaskOverallStatus.Closed` and `task.SquashCommitSha`, and triggers cascade unblocking.
+     - **Manual Review Required Mode:** ForgeTask transitions to `Ready`. The maintainer inspects the diff in the Review Room, runs manual tests, and clicks "Approve & Merge" $\rightarrow$ sets `task.Status = TaskOverallStatus.Closed`.
 8. **Universal Human Interruption (`ask`):**
    - At any time during agentic stages (1, 3, or 5), an agent can invoke `ask` to request clarification.
    - **Strict Architectural Invariant:** Human interruption **never mutates `task.Status`**. The task's overall lifecycle milestone (`Open`, `Reviewed`, or `Implemented`) is preserved completely intact.
@@ -520,7 +557,7 @@ flowchart TD
 Workflows in NightCodeForge are not limited to purely agentic reasoning loops. A robust software engineering pipeline often requires **deterministic steps** (e.g., compilation, unit test suites, Static Application Security Testing [SAST], formatters, or linters) that execute predictable shell commands without AI intervention.
 
 #### Architectural Advantages:
-1. **Zero GPU & Token Overhead:** Deterministic stages execute directly in the workspace sandbox (`IExecutionEnvironment`), running on the host CPU or inside the sandbox container. They consume **0 LLM tokens** and **do not occupy the exclusive GPU inference worker** (`WorkerCount = 1`).
+1. **Zero GPU & Token Overhead:** Deterministic stages execute directly in the workspace sandbox (`IExecutionEnvironment`), running on the host CPU or inside the sandbox container. They consume **0 LLM tokens**. When executed within an in-process pipeline cohort (see Section 7.1.6), they run on CPU in-process within the cohort's worker turn, guaranteeing instant continuation to subsequent stages with zero queue delay or branch drift.
 2. **Deterministic Quality Gates & Outcome-Based Routing:**
    * **Forward Routing (Pass):** If builds, unit tests, and SAST scans pass cleanly, the deterministic stage packages a verified status (`ValidationStatus = Success`) and advances to the next stage (e.g. `CodeReviewAndFixStage`).
    * **Backward Feedback Loop (Fail):** If compilation fails or tests break, the deterministic step routes backward to the implementation agent (with a configurable loop counter, e.g. max 3 iterations, to prevent infinite loops) to request an immediate fix. If the loop counter expires, it pauses and alerts the human (`WaitingForHuman`).
@@ -1109,6 +1146,228 @@ In [DevQueueService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeF
     2. Original enqueue time ascending (FIFO aging within equal priority, preserved across re-enqueues via job parameters).
   - Misplaced jobs (where stage tier or priority changed, or legacy jobs) are verified deleted (`Delete` returns `true`) before calling `EnqueueStage`, atomically updating `ForgeTask.LastHangfireJobId` to guarantee no job executes twice.
 * **Starvation Observability:** `DevQueueTable.razor` displays the age of the oldest waiting job per tier so operators can observe intake delays under heavy review/implementation bursts.
+
+### 7.1.6 Pipeline Stage Chaining & Atomic Cohort Job Execution
+
+NightCodeForge orchestrates autonomous software engineering tasks on a dedicated single-worker GPU inference queue (`WorkerCount = 1`) to eliminate model thrashing and GPU out-of-memory contention on local Ollama / OllamaRouter backends. In Section 7.1.1–7.1.5, tasks are scheduled using the stage-priority queue hierarchy (`llm-code-review` -> `llm-implementation` -> `llm-task-review`) under the **"Task as a Whole"** principle.
+
+To ensure execution continuity, eliminate inter-stage interleaving, and minimize branch drift against an advancing `baseBranch`, NightCodeForge implements **In-Process Stage Chaining** organized into **Atomic Execution Cohorts**.
+
+#### 7.1.6.1 The Inter-Stage Vulnerability & GPU Resource Starvation
+In the standard software engineering pipeline, workflow stages alternate between GPU (Agentic LLM) and CPU (Deterministic) workloads:
+* **Stage 1 (ForgeTask Review):** GPU / Agentic (`StageQueueTier.TaskReview`, Tier 3)
+* **Stage 2 (Pre-Implementation Baseline):** CPU / Deterministic (`StageQueueTier.Implementation`, Tier 2)
+* **Stage 3 (Implementation):** GPU / Agentic (`StageQueueTier.Implementation`, Tier 2)
+* **Stage 4 (Post-Implementation Gates):** CPU / Deterministic (`StageQueueTier.Implementation`, Tier 2)
+* **Stage 5 (Code Review & Fix):** GPU / Agentic (`StageQueueTier.CodeReview`, Tier 1)
+* **Stage 6 (Post-Review Verification):** CPU / Deterministic (`StageQueueTier.CodeReview`, Tier 1)
+* **Gate 2 & Delivery (Pre-Review Mergeability & Auto-Delivery):** CPU / Deterministic (terminal orchestrator logic)
+
+If every stage were dispatched as an isolated Hangfire background job, completing Stage 3 (Implementation) would cause the worker to update the database, enqueue Stage 4 (`deterministic-post-impl`) into Hangfire, and exit the worker turn. Relinquishing the single worker slot introduces severe architectural vulnerabilities:
+1. **Queue Interleaving & Long Stalls:** Any other queued job of equal or higher tier can seize the single worker slot and start a 15–30 minute LLM reasoning turn. The initial task, having merely finished writing code, is stranded waiting for its 45-second deterministic test suite to run.
+2. **Accelerated Branch Drift & Merge Conflicts:** While the task is stranded between stages, the target base branch (`main`) continues to advance as maintainers commit code or other tasks complete. By the time the stranded task finally runs its tests, its branch has drifted, creating avoidable merge conflicts.
+3. **Deadlock & Synchronization Fragility:** Conversely, having the worker sleep or poll waiting for a separately dispatched deterministic background job introduces fragile cross-process synchronization and deadlocks since CPU and GPU steps share the same queue infrastructure.
+
+#### 7.1.6.2 Atomic Cohort Groupings & Boundary Contracts
+Rather than introducing redundant domain concepts, cohort membership is unified directly through the existing [StageQueueTier](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/StageDefinition.cs) enum (`TaskReview`, `Implementation`, `CodeReview`).
+
+A **cohort** consists of contiguous workflow stages sharing the same `QueueTier`. Cohort execution obeys the following contracts:
+1. **Intake Phase (`StageQueueTier.TaskReview`, Tier 3):**
+   * Encompasses `task-review` (and external `triage`).
+   * **Isolation Rule:** Runs as an independent execution turn. Intake stages frequently interact with humans or external issue trackers and may pause for clarification (`ask` tool) without consuming downstream compute.
+   * `IsSameCohort` explicitly excludes `TaskReview` from chaining into subsequent stages (`current.QueueTier == next.QueueTier && current.QueueTier != StageQueueTier.TaskReview`).
+2. **Implementation Cohort (`StageQueueTier.Implementation`, Tier 2):**
+   * Encompasses `deterministic-pre-impl` (Stage 2), `implementation` (Stage 3), and `deterministic-post-impl` (Stage 4).
+   * **Atomic Invariant:** Executes sequentially within a **single Hangfire job turn**. Stage 4 immediately follows Stage 3 without relinquishing the worker slot. If Stage 4 detects compiler errors or failing tests, an **in-job loopback** re-executes Stage 3 directly in-process.
+3. **Review & Delivery Cohort (`StageQueueTier.CodeReview`, Tier 1):**
+   * Encompasses `code-review-fix` (Stage 5), `deterministic-post-review` (Stage 6), and terminal Gate 2 Pre-Review Verification & Delivery.
+   * **Atomic Invariant:** Executes within a **single Hangfire job turn**. Code review edits, deterministic verification, and automated squash-and-merge occur in rapid succession, preventing branch drift at the finish line.
+4. **Contiguous Cohort Validation:**
+   [WorkflowDefinitionValidator.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/WorkflowDefinitionValidator.cs) and [DatabaseWorkflowPipelineProvider.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Workflow/DatabaseWorkflowPipelineProvider.cs) enforce that stages sharing the same `QueueTier` must appear in strictly contiguous sequence. Any workflow definition with split, alternating, or invalid queue tiers is rejected fail-fast with a [WorkflowValidationException](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Exceptions/WorkflowValidationException.cs).
+
+#### 7.1.6.3 In-Process Progression Loop & In-Job Loopbacks
+In [TaskOrchestrator.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs), the execution loop in `ProcessTaskAsync` progresses through chained stages in-process:
+
+```csharp
+var isFirstIteration = true;
+while (!cancellationToken.IsCancellationRequested)
+{
+    // 1. Cooperative Global Pause Check
+    if (_operationsControlService.IsPaused)
+    {
+        task.IsDeferredByPause = true;
+        await _taskRepository.UpdateWithHistoryAsync(task, AuditActors.System, "Execution deferred: Operations paused.", cancellationToken);
+        exitReason = CohortExitReason.Paused;
+        return;
+    }
+
+    // 2. Cooperative Urgent Preemption Check (skipped on first iteration)
+    if (!isFirstIteration && await _jobQueue.HasUrgentJobsWaitingAsync(cancellationToken))
+    {
+        task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, stage.QueueTier, task.Priority);
+        await _taskRepository.UpdateWithHistoryAsync(task, AuditActors.System, $"Yielded worker before stage '{stage.StageId}' for P1 Urgent job.", cancellationToken);
+        exitReason = CohortExitReason.Yielded;
+        return;
+    }
+
+    isFirstIteration = false;
+
+    // 3. Stage Execution Core
+    var result = await ExecuteStageCoreAsync(task, workspace, stage, pipelineContext, cancellationToken);
+
+    // 4. Human Clarification Request ('ask' tool invoked)
+    if (result.RequiresHumanClarification || task.IsWaitingForHuman)
+    {
+        exitReason = CohortExitReason.WaitingForHuman;
+        return;
+    }
+
+    // 5. Gate / Stage Failure Handling
+    if (!result.IsSuccess)
+    {
+        var loopBackStageId = result.TargetRoutingStageId ?? stage.LoopBackStageId;
+        var retries = pipelineContext.IncrementRetry(stage.StageId);
+        var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
+
+        if (!string.IsNullOrWhiteSpace(loopBackStageId) && retries <= effectiveMaxRetries)
+        {
+            var targetStage = pipeline.GetStage(loopBackStageId)
+                ?? throw new WorkflowValidationException($"Stage '{stage.StageId}' failed and attempted to loop back to target stage '{loopBackStageId}', but that stage does not exist in the workflow pipeline.");
+
+            if (targetStage.QueueTier == stage.QueueTier && stage.QueueTier != StageQueueTier.TaskReview)
+            {
+                // IN-PROCESS LOOPBACK (e.g. Stage 4 PostImplementationGates -> Stage 3 Implementation)
+                await PrepareInProcessLoopBackAsync(task, workspace, stage, targetStage, result, pipelineContext, cancellationToken);
+                stage = targetStage;
+                continue;
+            }
+            else
+            {
+                // CROSS-COHORT LOOPBACK (e.g. Stage 5/6 routing back to Stage 3 in Cohort 1)
+                await HandleCrossCohortLoopBackAsync(task, workspace, stage, targetStage, result, pipelineContext, cancellationToken);
+                exitReason = CohortExitReason.CohortCompleted;
+                return;
+            }
+        }
+
+        // Fatal failure or retry budget exhausted
+        await HandleStageFatalFailureAsync(task, workspace, stage, result, pipelineContext, cancellationToken);
+        exitReason = CohortExitReason.Failed;
+        return;
+    }
+
+    // 6. Data Bag Diagnostics Cleanup on Pass
+    if (stage.StageId == StandardStageIds.PostImplementationGates)
+    {
+        pipelineContext.DataBag.Remove(PipelineDataBagKeys.CompilerErrors);
+        pipelineContext.DataBag.Remove(PipelineDataBagKeys.FailedTests);
+    }
+
+    // 7. Resolve Next Stage & Advance
+    var nextStageId = result.TargetRoutingStageId;
+    var nextStage = (!string.IsNullOrWhiteSpace(nextStageId) 
+        ? (pipeline.GetStage(nextStageId) ?? throw new WorkflowValidationException($"Stage '{stage.StageId}' completed with dynamic routing target '{nextStageId}', but that stage does not exist in the workflow pipeline."))
+        : null) ?? pipeline.GetNextStage(stage.StageId);
+
+    if (nextStage == null)
+    {
+        // Terminal Gate 2 & Automated Delivery (no downstream stages)
+        await HandleGate2AndDeliveryAsync(task, workspace, pipelineContext, cancellationToken);
+        exitReason = task.IsWaitingForHuman ? CohortExitReason.WaitingForHuman 
+            : task.Status == TaskOverallStatus.Failed ? CohortExitReason.Failed 
+            : CohortExitReason.CohortCompleted;
+        return;
+    }
+
+    // 8. Cohort Boundary Evaluation
+    bool isSameCohort = stage.QueueTier == nextStage.QueueTier && stage.QueueTier != StageQueueTier.TaskReview;
+    if (isSameCohort)
+    {
+        await TransitionToNextStageInProcessAsync(task, workspace, stage, nextStage, pipelineContext, cancellationToken);
+        stage = nextStage;
+        continue;
+    }
+    else
+    {
+        await TransitionAndEnqueueNextCohortAsync(task, workspace, stage, nextStage, pipelineContext, cancellationToken);
+        exitReason = CohortExitReason.CohortCompleted;
+        return;
+    }
+}
+```
+
+#### Key Chaining & Loopback Guarantees:
+1. **In-Job Loopback (Stage 4 $\rightarrow$ Stage 3):**
+   When `PostImplementationGates` detects compile or test failures, compiler diagnostics and assertion errors are written into `PipelineDataBagKeys.CompilerErrors` and `FailedTests`. The loop updates `task.CurrentStageId = StandardStageIds.Implementation` and immediately re-enters Stage 3 **without Hangfire dispatch**. Crucible synthetic conversation priming seeds the agent with the exact failure, allowing the coder agent to fix issues instantly while holding the worker slot. When Stage 4 subsequently passes, stale diagnostics are cleared.
+2. **Persistent Retry Counter:**
+   The loopback counter is stored in `PipelineDataBagKeys.StageRetries` and persisted to the database. It survives worker pauses, urgent yields, host crashes, and task restarts. If the retry budget is exhausted, the task fails fast (`TaskOverallStatus.Failed`).
+3. **Cross-Cohort Loopbacks (Stage 5/6 $\rightarrow$ Stage 3):**
+   If the Code Review agent requests changes or `PostReviewVerification` detects a regression, routing back to Stage 3 crosses the cohort boundary (Cohort 2 $\rightarrow$ Cohort 1). The orchestrator updates the task, enqueues Cohort 1 to `llm-implementation` (Tier 2), and cleanly terminates the Tier 1 job turn.
+
+#### 7.1.6.4 Cooperative Preemption & Inter-Stage Safety Guards
+Between chained stages, the orchestrator evaluates three non-negotiable safety guards:
+1. **Cancellation:** Evaluates `cancellationToken.IsCancellationRequested`. If cancelled, halts immediately, leaving `CurrentStageId` on the active stage.
+2. **Global Operations Pause:** If maintainers trigger a global pause (`_operationsControlService.IsPaused`), the orchestrator checkpoints WIP, sets `task.IsDeferredByPause = true`, sets `task.CurrentStageId = nextStage.StageId`, updates the database with history, and exits cleanly with `CohortExitReason.Paused`. When operations resume, the task re-enqueues at `CurrentStageId`.
+3. **Cooperative Urgent Preemption:**
+   Under strict Hangfire polling, high-priority jobs (`llm-urgent`) cannot interrupt a currently executing thread. To avoid starving emergency hotfixes during multi-stage cohorts, the orchestrator calls `_jobQueue.HasUrgentJobsWaitingAsync(cancellationToken)` before every chained stage (skipped on iteration 1, as the worker just dequeued this job). If a P1 Critical job is waiting in `llm-urgent`:
+   * The orchestrator checkpoints WIP.
+   * Advances `task.CurrentStageId` to the next (unexecuted) stage.
+   * Re-enqueues the remainder of the cohort to its tier (`_jobQueue.EnqueueStage`).
+   * Exits with `CohortExitReason.Yielded`, instantly freeing the inference worker for the P1 hotfix.
+4. **Resume Semantics:**
+   A resumed job (from pause, urgent yield, human reply, reboot recovery, or pipeline restart) always begins execution at `task.CurrentStageId`. Chaining continues in-process for the remaining stages of the cohort.
+
+#### 7.1.6.5 Terminal Automated Delivery (Gate 2 & Squash-and-Merge)
+When Stage 6 (`PostReviewVerification`) succeeds, there are no further stages in the pipeline. Rather than creating a synthetic dummy stage in the UI, `HandleGate2AndDeliveryAsync` executes terminal delivery logic directly within the Review & Delivery Cohort:
+1. **Gate 2 Mergeability Verification:**
+   * Creates a Git WIP checkpoint.
+   * Runs `_gitWorkspaceManager.CheckMergeableAsync(workspace, task.Id, task.BaseBranch)`.
+   * If a merge conflict is detected, dispatches autonomous conflict resolution: sets status to `Open`, stage to `Implementation`, enqueues to Tier 2 (`llm-implementation`), and exits.
+2. **Base Branch Advance Re-Verification:**
+   * If the base branch advanced while the task executed, the orchestrator synchronizes changes into the worktree and re-executes deterministic verification gates (`stage.ExecuteAsync`).
+   * If re-verification fails due to upstream API changes, routes backward to `Implementation` (Stage 3), enqueues Cohort 1 to Tier 2, and exits.
+3. **Delivery Dispatch:**
+   * **`MergeMode.Automatic`:**
+     - Executes `_gitWorkspaceManager.SquashAndMergeAsync(workspace, task.Id, task.BaseBranch, commitMessage)`.
+     - **Strict Ordering Guarantee:** Immediately persists `Status = TaskOverallStatus.Closed` and `SquashCommitSha = resultSha` via `_taskRepository.UpdateWithHistoryAsync` **before** performing cascade dependency unblocking or sandbox cleanup. This guarantees that any subsequent network or cleanup failure cannot leave the Git repository merged while the database marks the task unclosed.
+     - Invokes `_dependencyEngine.ResolveCascadeUnblockedTasksAsync` to enqueue dependent tasks unblocked by the `Closed` state.
+     - Cleans up the task sandbox container via `_environmentProvider.CleanupTaskContainerAsync`.
+   * **`MergeMode.ManualReviewRequired`:**
+     - Transitions `task.Status = TaskOverallStatus.Ready`.
+     - Displays the task in the Review Room with verified diff and maintainer approval actions.
+
+#### 7.1.6.6 Long-Running Watchdog Hardening (`InvisibilityTimeout`)
+In SQLite-backed Hangfire (`Hangfire.Storage.SQLite`), a background watchdog monitors active jobs. By default, `SQLiteStorageOptions.InvisibilityTimeout` is set to **30 minutes**. If a single job execution turn exceeds 30 minutes, Hangfire assumes the worker has crashed, returns the job to the `Enqueued` state, and allows another worker to pick it up concurrently.
+
+Because multi-stage cohorts (and potential in-job loopbacks) can legitimately run for 1 to 2 hours or more, an unconfigured watchdog would cause duplicate worker executions and severe Git worktree corruption.
+
+In [HangfireConfigurationExtensions.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/BackgroundJobs/HangfireConfigurationExtensions.cs), NightCodeForge explicitly configures:
+```csharp
+new SQLiteStorageOptions
+{
+    QueuePollInterval = TimeSpan.FromSeconds(1),
+    InvisibilityTimeout = TimeSpan.FromHours(4) // Exceeds maximum possible cohort duration
+}
+```
+This guarantees that multi-stage cohorts execute to completion without watchdog interference.
+
+#### 7.1.6.7 Telemetry & Continuous Observability
+Executing multiple stages within a single Hangfire job does not compromise UI observability:
+1. **Real-Time Stage Telemetry:**
+   * On every chained stage transition, `_taskRepository.UpdateWithHistoryAsync` persists `task.CurrentStageId` and records an immutable audit history record.
+   * `_streamer.BroadcastAsync` emits `StageStarted` and `StageCompleted` SignalR events.
+   * `_telemetryService.RecordActiveTask` updates the active stage and hardware target in real-time.
+   * The Kanban board, `/inspector` pipeline stepper, and `/monitoring` live operations console update instantly as stages advance.
+2. **Discrete Conversation Records:**
+   Each executed stage (Stages 2, 3, 4, 5, and 6) instantiates its own `Conversation` entity and records its turns in the database. In the Web UI, discrete tabs exist for each stage. (Terminal Gate 2 delivery generates no conversation tab or stepper step, keeping the presentation clean and aligned with the specification).
+3. **Cohort Turn Duration & Exit Reason Tracking:**
+   Cohort job turns track start time and duration, logging completion along with an explicit `CohortExitReason` enum:
+   * `CohortCompleted`: All stages in the cohort finished, and the next cohort or delivery was dispatched.
+   * `WaitingForHuman`: Interrupted by `ask` tool or conflict budget escalation.
+   * `Paused`: Deferred by global operations pause.
+   * `Yielded`: Cooperatively yielded to a pending P1 Urgent job.
+   * `Failed`: Fatal stage failure or retry budget exhausted.
+   * `Cancelled`: Aborted via cancellation token.
 
 ### 7.2 Workspace & ForgeTask-Level Concurrency: Dual-Tiered Git Locking (`IWorkspaceLockProvider`)
 
