@@ -475,6 +475,11 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         Assert.Contains("src/ImportantLogic.cs", cut.Markup);
         Assert.Contains("+15", cut.Markup);
         Assert.Contains("-3", cut.Markup);
+        Assert.NotNull(cut.Find("#diff-workspace-grid"));
+        Assert.NotNull(cut.Find("#file-list"));
+        Assert.NotNull(cut.Find("#diff-viewer-panel"));
+        Assert.NotNull(cut.Find(".review-dir-node"));
+        Assert.NotNull(cut.Find(".review-file-node"));
     }
 
     [Fact]

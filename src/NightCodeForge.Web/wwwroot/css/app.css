@@ -1141,6 +1141,7 @@ code, kbd, samp, pre {
     display: flex;
     gap: 0.75rem;
     max-width: 100%;
+    min-width: 0;
 }
 
 .chat-bubble.user {
@@ -1170,6 +1171,7 @@ code, kbd, samp, pre {
 
 .chat-bubble-body {
     max-width: 82%;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
@@ -1206,12 +1208,60 @@ code, kbd, samp, pre {
     border-radius: var(--radius-md);
     padding: 0.75rem 1rem;
     word-break: break-word;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
 }
 
 .chat-bubble.user .chat-content-wrap {
     background: rgba(99, 102, 241, 0.16);
     border-color: rgba(99, 102, 241, 0.35);
     color: var(--text-primary);
+}
+
+/* Stage Conversation Viewer: Full-width prompts & horizontal scroll overflow for nested code blocks */
+.stage-conversation-viewer .chat-bubble {
+    max-width: 100%;
+    min-width: 0;
+}
+
+.stage-conversation-viewer .chat-bubble-body {
+    max-width: 100%;
+    min-width: 0;
+    width: 100%;
+}
+
+.stage-conversation-viewer .chat-bubble.user .chat-bubble-body {
+    align-items: stretch;
+}
+
+.stage-conversation-viewer .chat-content-wrap,
+.turn-content-markdown {
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-wrap: break-word;
+}
+
+.stage-conversation-viewer pre,
+.task-execution-inspector pre,
+.turn-content-markdown pre,
+.chat-content-wrap pre {
+    max-width: 100%;
+    overflow-x: auto;
+    white-space: pre;
+    word-break: normal;
+    word-wrap: normal;
+    box-sizing: border-box;
+}
+
+.stage-conversation-viewer pre code,
+.task-execution-inspector pre code,
+.turn-content-markdown pre code,
+.chat-content-wrap pre code {
+    white-space: pre;
+    word-break: normal;
+    word-wrap: normal;
 }
 
 /* Collapsible Reasoning Trace Accordion */
@@ -6178,12 +6228,20 @@ div.spinner-pulse {
     padding-bottom: 3rem;
 }
 
+.task-detail-page.full-width {
+    max-width: 100%;
+}
+
 .task-detail-grid,
 .create-task-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 360px;
     gap: 1.5rem;
     align-items: start;
+}
+
+.task-detail-grid.full-width {
+    grid-template-columns: 1fr;
 }
 
 @media (max-width: 1100px) {

@@ -319,5 +319,16 @@ public class TaskDetailPageTests : BunitContext
         Assert.NotNull(cut.Find(".review-dir-node"));
         Assert.NotNull(cut.Find(".review-file-node"));
         Assert.Contains("Engine.cs", cut.Find("#task-changes-panel").TextContent);
+
+        // Verify full width and hidden sidebar when on changes tab
+        Assert.Contains("full-width", cut.Find(".task-detail-page").ClassName);
+        Assert.Contains("full-width", cut.Find(".task-detail-grid").ClassName);
+        Assert.Empty(cut.FindAll(".grid-column-sidebar"));
+
+        // Switch back to spec tab and verify sidebar returns and full-width is removed
+        await cut.Find("#tab-btn-spec").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        Assert.DoesNotContain("full-width", cut.Find(".task-detail-page").ClassName);
+        Assert.DoesNotContain("full-width", cut.Find(".task-detail-grid").ClassName);
+        Assert.NotEmpty(cut.FindAll(".grid-column-sidebar"));
     }
 }

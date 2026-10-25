@@ -176,10 +176,20 @@
 
         if (Conversations != null && Conversations.Any())
         {
-            foreach (var conv in Conversations.OrderByDescending(c => c.StartedAt))
+            var latestByOrder = Conversations
+                .Where(c => !string.IsNullOrEmpty(c.StageId))
+                .Select(c => new { Conversation = c, Order = ResolveStageOrder(c.StageId) })
+                .Where(x => x.Order > 0)
+                .GroupBy(x => x.Order)
+                .Select(g => g.OrderByDescending(x => x.Conversation.AttemptIndex)
+                              .ThenByDescending(x => x.Conversation.StartedAt)
+                              .ThenByDescending(x => x.Conversation.Id)
+                              .First());
+
+            foreach (var item in latestByOrder)
             {
-                var order = ResolveStageOrder(conv.StageId);
-                var st = Stages.FirstOrDefault(s => s.SequenceOrder == order);
+                var conv = item.Conversation;
+                var st = Stages.FirstOrDefault(s => s.SequenceOrder == item.Order);
                 if (st != null)
                 {
                     if (conv.Status is StageExecutionStatus.Completed or StageExecutionStatus.Failed
@@ -203,6 +213,21 @@
                 {
                     target.Status = StageExecutionStatus.Failed;
                     target.StatusText = "Failed";
+                    failedStage = target;
+                }
+            }
+
+            var cutoffOrder = failedStage?.SequenceOrder ?? (!string.IsNullOrEmpty(CurrentStageId) ? ResolveStageOrder(CurrentStageId) : 0);
+            if (cutoffOrder > 0)
+            {
+                for (int i = 0; i < Stages.Count; i++)
+                {
+                    var st = Stages[i];
+                    if (st.SequenceOrder < cutoffOrder && st.Status == StageExecutionStatus.Pending)
+                    {
+                        st.Status = StageExecutionStatus.Completed;
+                        st.StatusText = "Completed";
+                    }
                 }
             }
         }
@@ -294,11 +319,8 @@
             var st = Stages[i];
             if (st.SequenceOrder < order)
             {
-                if (st.Status != StageExecutionStatus.Failed)
-                {
-                    st.Status = StageExecutionStatus.Completed;
-                    st.StatusText = "Completed";
-                }
+                st.Status = StageExecutionStatus.Completed;
+                st.StatusText = "Completed";
             }
             else if (st.SequenceOrder == order)
             {

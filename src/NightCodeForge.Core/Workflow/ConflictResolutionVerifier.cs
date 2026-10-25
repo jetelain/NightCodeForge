@@ -14,17 +14,20 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
     private readonly IGitCliRunner _gitCliRunner;
     private readonly IGitWorkspaceManager _gitWorkspaceManager;
     private readonly IExecutionEnvironmentProvider _environmentProvider;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly ILogger<ConflictResolutionVerifier> _logger;
 
     public ConflictResolutionVerifier(
         IGitCliRunner gitCliRunner,
         IGitWorkspaceManager gitWorkspaceManager,
         IExecutionEnvironmentProvider environmentProvider,
+        IWorkspacePathResolver pathResolver,
         ILogger<ConflictResolutionVerifier> logger)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
         _environmentProvider = environmentProvider ?? throw new ArgumentNullException(nameof(environmentProvider));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -42,9 +45,14 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
         ArgumentNullException.ThrowIfNull(conflictedFiles);
 
         var worktreePath = _gitWorkspaceManager.GetWorktreePath(workspace, taskId);
+        var hostWorktreePath = _pathResolver.ToHostPath(worktreePath);
+        if (string.IsNullOrWhiteSpace(hostWorktreePath))
+        {
+            hostWorktreePath = worktreePath;
+        }
 
-        _logger.LogInformation("Verifying conflict resolution for ForgeTask #{TaskId} in '{WorktreePath}' ({Count} files)",
-            taskId, worktreePath, conflictedFiles.Count);
+        _logger.LogInformation("Verifying conflict resolution for ForgeTask #{TaskId} in '{WorktreePath}' (host: '{HostWorktreePath}', {Count} files)",
+            taskId, worktreePath, hostWorktreePath, conflictedFiles.Count);
 
         // Step 1: Marker scan on every conflicted file
         var markerErrors = new List<string>();
@@ -52,7 +60,7 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
 
         foreach (var relPath in conflictedFiles)
         {
-            var fullPath = Path.Combine(worktreePath, relPath);
+            var fullPath = Path.Combine(hostWorktreePath, relPath);
             if (!File.Exists(fullPath))
             {
                 // File deleted in conflict resolution (e.g. delete/modify conflict resolved by deletion)
@@ -117,7 +125,7 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
         // Step 2: Selective staging of resolved files (no blind git add -A)
         // Non-textual conflicts (delete/modify conflicts and binary conflicts) must be decided
         // explicitly by the agent (via git rm or git add); the verifier must not auto-stage them.
-        var undecidedNonTextual = await GetUndecidedNonTextualConflictsAsync(worktreePath, cancellationToken);
+        var undecidedNonTextual = await GetUndecidedNonTextualConflictsAsync(worktreePath, hostWorktreePath, cancellationToken);
 
         foreach (var relPath in conflictedFiles)
         {
@@ -126,7 +134,7 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
                 continue;
             }
 
-            var fullPath = Path.Combine(worktreePath, relPath);
+            var fullPath = Path.Combine(hostWorktreePath, relPath);
             if (File.Exists(fullPath))
             {
                 await _gitCliRunner.ExecuteAsync(worktreePath, ["add", "--", relPath], cancellationToken: cancellationToken);
@@ -305,7 +313,7 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
         return truncationPrefix + text[^availableLength..];
     }
 
-    private async Task<HashSet<string>> GetUndecidedNonTextualConflictsAsync(string worktreePath, CancellationToken cancellationToken)
+    private async Task<HashSet<string>> GetUndecidedNonTextualConflictsAsync(string worktreePath, string hostWorktreePath, CancellationToken cancellationToken)
     {
         var ls = await _gitCliRunner.ExecuteAsync(worktreePath, ["ls-files", "-u"], cancellationToken: cancellationToken);
         var stagesByPath = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
@@ -348,7 +356,7 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
             }
 
             // Binary file conflict: binary files have no text conflict markers; if still in ls-files -u, agent hasn't decided
-            var fullPath = Path.Combine(worktreePath, path);
+            var fullPath = Path.Combine(hostWorktreePath, path);
             if (await IsBinaryFileAsync(fullPath, cancellationToken))
             {
                 undecided.Add(path);

@@ -172,4 +172,137 @@ public class PipelineStepperTests : BunitContext
         Assert.Contains("✋", stage1.TextContent);
         Assert.Empty(cut.FindAll(".spinner-pulse"));
     }
+
+    [Fact]
+    public void PipelineStepper_WhenStageHasFailedRunThenSuccessfulRun_ReflectsLastRunStatusCompleted()
+    {
+        var conv1 = new Conversation
+        {
+            Id = 1,
+            TaskId = 42,
+            StageId = StandardStageIds.TaskReview,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Failed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-10)
+        };
+        var conv2 = new Conversation
+        {
+            Id = 2,
+            TaskId = 42,
+            StageId = StandardStageIds.TaskReview,
+            AttemptIndex = 2,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-5)
+        };
+
+        var cut = Render<PipelineStepper>(p => p
+            .Add(c => c.WorkflowStages, CreateTestStages())
+            .Add(c => c.Conversations, new List<Conversation> { conv1, conv2 }));
+
+        var steps = cut.FindAll(".step-item");
+        var stage1 = steps[0];
+
+        // Should reflect the latest run (Attempt 2: Completed), NOT the older failed run
+        Assert.Contains("step-completed", stage1.ClassName);
+        Assert.DoesNotContain("step-failed", stage1.ClassName);
+        Assert.Contains("✓", stage1.TextContent);
+    }
+
+    [Fact]
+    public void PipelineStepper_WhenStageHasSuccessfulRunThenFailedRun_ReflectsLastRunStatusFailed()
+    {
+        var conv1 = new Conversation
+        {
+            Id = 1,
+            TaskId = 42,
+            StageId = StandardStageIds.TaskReview,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-10)
+        };
+        var conv2 = new Conversation
+        {
+            Id = 2,
+            TaskId = 42,
+            StageId = StandardStageIds.TaskReview,
+            AttemptIndex = 2,
+            Status = StageExecutionStatus.Failed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-5)
+        };
+
+        var cut = Render<PipelineStepper>(p => p
+            .Add(c => c.WorkflowStages, CreateTestStages())
+            .Add(c => c.Conversations, new List<Conversation> { conv1, conv2 }));
+
+        var steps = cut.FindAll(".step-item");
+        var stage1 = steps[0];
+
+        // Should reflect the latest run (Attempt 2: Failed)
+        Assert.Contains("step-failed", stage1.ClassName);
+        Assert.DoesNotContain("step-completed", stage1.ClassName);
+        Assert.Contains("✕", stage1.TextContent);
+        Assert.NotEmpty(stage1.QuerySelectorAll(".status-overlay-failed"));
+    }
+
+    [Fact]
+    public void PipelineStepper_WhenPipelineAdvancesToLaterStage_PreviousStageTransitionsToCompleted()
+    {
+        var cut = Render<PipelineStepper>(p => p
+            .Add(c => c.WorkflowStages, CreateTestStages())
+            .Add(c => c.CurrentStageId, StandardStageIds.TaskReview)
+            .Add(c => c.CurrentStageStatus, StageExecutionStatus.Failed));
+
+        var steps = cut.FindAll(".step-item");
+        Assert.Contains("step-failed", steps[0].ClassName);
+
+        // Advance pipeline to stage 2
+        cut.InvokeAsync(() =>
+        {
+            cut.Instance.ApplyStageTransition(StandardStageIds.PreImplementationBaseline, StageExecutionStatus.Running);
+        });
+
+        steps = cut.FindAll(".step-item");
+        // Stage 1 must now be completed since pipeline progressed to stage 2
+        Assert.Contains("step-completed", steps[0].ClassName);
+        Assert.DoesNotContain("step-failed", steps[0].ClassName);
+        Assert.Contains("step-active", steps[1].ClassName);
+    }
+
+    [Fact]
+    public void PipelineStepper_WhenTaskFailsAtLaterStage_PrecedingPendingStagesTransitionToCompleted()
+    {
+        // Stage 1 (Agentic) succeeded and has conversation.
+        // Stage 2 (Deterministic) succeeded (no conversation in Conversations).
+        // Stage 3 (Agentic) failed and task OverallStatus is Failed.
+        var conv1 = new Conversation
+        {
+            Id = 1,
+            TaskId = 42,
+            StageId = StandardStageIds.TaskReview,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-10)
+        };
+
+        var cut = Render<PipelineStepper>(p => p
+            .Add(c => c.WorkflowStages, CreateTestStages())
+            .Add(c => c.Conversations, new List<Conversation> { conv1 })
+            .Add(c => c.CurrentStageId, StandardStageIds.Implementation)
+            .Add(c => c.OverallStatus, TaskOverallStatus.Failed));
+
+        var steps = cut.FindAll(".step-item");
+
+        // Stage 1 should be completed (from conversation)
+        Assert.Contains("step-completed", steps[0].ClassName);
+
+        // Stage 2 (preceding deterministic stage with no conversation) must be marked completed
+        Assert.Contains("step-completed", steps[1].ClassName);
+        Assert.DoesNotContain("step-pending", steps[1].ClassName);
+
+        // Stage 3 (current failing stage) should be failed
+        Assert.Contains("step-failed", steps[2].ClassName);
+
+        // Stage 4 (subsequent stage) should remain pending
+        Assert.Contains("step-pending", steps[3].ClassName);
+    }
 }

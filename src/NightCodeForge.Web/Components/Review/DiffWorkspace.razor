@@ -1,0 +1,200 @@
+@namespace NightCodeForge.Web.Components.Review
+@using NightCodeForge.Web.Services
+
+<div class="diff-workspace-grid" id="diff-workspace-grid">
+    <div class="file-tree card-surface">
+        <h4>Changed Files (@(_filesList.Count))</h4>
+        @if (_filesList.Count == 0)
+        {
+            <p class="text-muted small">@EmptyMessage</p>
+        }
+        else
+        {
+            <div class="file-list" id="file-list">
+                @foreach (var node in _treeNodes)
+                {
+                    @RenderTreeNode(node)
+                }
+            </div>
+        }
+    </div>
+
+    <div class="diff-viewer-panel card-surface" id="diff-viewer-panel">
+        @if (_activeFile != null)
+        {
+            <DiffViewer File="_activeFile" />
+        }
+        else
+        {
+            <div class="p-4 text-center text-muted">
+                @NoFileSelectedMessage
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public IEnumerable<FileDiffSummary>? Files { get; set; }
+    [Parameter] public FileDiffSummary? SelectedFile { get; set; }
+    [Parameter] public EventCallback<FileDiffSummary?> SelectedFileChanged { get; set; }
+    [Parameter] public string EmptyMessage { get; set; } = "No file modifications recorded in diff.";
+    [Parameter] public string NoFileSelectedMessage { get; set; } = "Select a file on the left to inspect diff and add inline comments.";
+
+    private List<ReviewFileTreeNode> _treeNodes = new();
+    private FileDiffSummary? _activeFile;
+    private FileDiffSummary? _lastPassedSelectedFile;
+    private IEnumerable<FileDiffSummary>? _lastFiles;
+    private IReadOnlyList<FileDiffSummary> _filesList = Array.Empty<FileDiffSummary>();
+    private readonly HashSet<string> _collapsedDirectories = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override void OnParametersSet()
+    {
+        _filesList = Files != null
+            ? (Files as IReadOnlyList<FileDiffSummary> ?? Files.ToList())
+            : Array.Empty<FileDiffSummary>();
+
+        if (!ReferenceEquals(_lastFiles, Files) || (_treeNodes.Count == 0 && _filesList.Count > 0))
+        {
+            _treeNodes = ReviewFileTreeBuilder.BuildTree(_filesList);
+            ApplyCollapsedState(_treeNodes);
+            _lastFiles = Files;
+        }
+
+        // Handle SelectedFile synchronization
+        if (SelectedFile != null && _filesList.Any(f => f.Path == SelectedFile.Path))
+        {
+            _activeFile = _filesList.First(f => f.Path == SelectedFile.Path);
+        }
+        else if (SelectedFile == null && _lastPassedSelectedFile != null)
+        {
+            // Parent explicitly cleared selection
+            _activeFile = null;
+        }
+        else if (_activeFile != null && _filesList.Any(f => f.Path == _activeFile.Path))
+        {
+            // Retain currently active file if it still exists in the file list
+            _activeFile = _filesList.First(f => f.Path == _activeFile.Path);
+        }
+        else
+        {
+            // Default to first file on initial load when files are available
+            _activeFile = _filesList.FirstOrDefault();
+        }
+
+        _lastPassedSelectedFile = SelectedFile;
+    }
+
+    private void ToggleDirectory(ReviewFileTreeNode node)
+    {
+        node.IsExpanded = !node.IsExpanded;
+        if (node.IsExpanded)
+        {
+            _collapsedDirectories.Remove(node.FullPath);
+        }
+        else
+        {
+            _collapsedDirectories.Add(node.FullPath);
+        }
+    }
+
+    private void ApplyCollapsedState(IEnumerable<ReviewFileTreeNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.IsDirectory)
+            {
+                if (_collapsedDirectories.Contains(node.FullPath))
+                {
+                    node.IsExpanded = false;
+                }
+                ApplyCollapsedState(node.Children);
+            }
+        }
+    }
+
+    private async Task SelectFileAsync(FileDiffSummary file)
+    {
+        _activeFile = file;
+        _lastPassedSelectedFile = file;
+        if (SelectedFileChanged.HasDelegate)
+        {
+            await SelectedFileChanged.InvokeAsync(file);
+        }
+    }
+
+    private RenderFragment RenderTreeNode(ReviewFileTreeNode node) => builder =>
+    {
+        if (node.IsDirectory)
+        {
+            builder.OpenElement(0, "div");
+            builder.AddAttribute(1, "class", "review-dir-node");
+
+            builder.OpenElement(2, "div");
+            builder.AddAttribute(3, "class", "review-dir-header");
+            builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => ToggleDirectory(node)));
+
+            builder.OpenElement(5, "span");
+            builder.AddAttribute(6, "class", "review-dir-chevron");
+            builder.AddContent(7, node.IsExpanded ? "▼" : "▶");
+            builder.CloseElement();
+
+            builder.OpenElement(8, "span");
+            builder.AddAttribute(9, "class", "review-dir-icon");
+            builder.AddContent(10, "📁 ");
+            builder.CloseElement();
+
+            builder.OpenElement(11, "span");
+            builder.AddAttribute(12, "class", "review-dir-name");
+            builder.AddContent(13, node.Name);
+            builder.CloseElement();
+
+            if (node.TotalAdditions > 0 || node.TotalDeletions > 0)
+            {
+                builder.OpenElement(14, "span");
+                builder.AddAttribute(15, "class", "file-counts ms-auto text-muted small");
+                builder.AddContent(16, $"+{node.TotalAdditions} -{node.TotalDeletions}");
+                builder.CloseElement();
+            }
+
+            builder.CloseElement(); // review-dir-header
+
+            if (node.IsExpanded)
+            {
+                builder.OpenElement(17, "div");
+                builder.AddAttribute(18, "class", "review-dir-children");
+                foreach (var child in node.Children)
+                {
+                    builder.AddContent(19, RenderTreeNode(child));
+                }
+                builder.CloseElement();
+            }
+
+            builder.CloseElement(); // review-dir-node
+        }
+        else
+        {
+            var isSelected = _activeFile?.Path == node.File?.Path;
+            builder.OpenElement(0, "div");
+            builder.AddAttribute(1, "class", $"review-file-node file-item {(isSelected ? "active" : "")}");
+            builder.AddAttribute(2, "onclick", EventCallback.Factory.Create(this, () => SelectFileAsync(node.File!)));
+
+            builder.OpenElement(3, "span");
+            builder.AddAttribute(4, "class", $"file-type badge-{node.File?.ChangeType.ToString().ToLowerInvariant()}");
+            builder.AddContent(5, node.File?.ChangeType.ToString()[0].ToString());
+            builder.CloseElement();
+
+            builder.OpenElement(6, "span");
+            builder.AddAttribute(7, "class", "review-file-name file-path");
+            builder.AddAttribute(8, "title", node.File?.Path);
+            builder.AddContent(9, node.Name);
+            builder.CloseElement();
+
+            builder.OpenElement(10, "span");
+            builder.AddAttribute(11, "class", "file-counts text-muted small");
+            builder.AddContent(12, $"+{node.File?.Additions} -{node.File?.Deletions}");
+            builder.CloseElement();
+
+            builder.CloseElement(); // review-file-node
+        }
+    };
+}

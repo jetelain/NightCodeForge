@@ -23,7 +23,7 @@
 
 <PageTitle>@(_task != null ? $"#{_task.Id} - {_task.Title} - NightCodeForge" : "Task Details - NightCodeForge")</PageTitle>
 
-<div class="task-detail-page">
+<div class="task-detail-page @(_activeTab == "changes" ? "full-width" : "")">
     @if (_isLoading)
     {
         <div class="card-surface card-glass" style="padding: 3rem 1.5rem; text-align: center; color: var(--text-muted); border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); margin-top: 1rem;">
@@ -156,7 +156,7 @@
         </div>
 
         <!-- Main Responsive Two-Column Grid -->
-        <div class="task-detail-grid" style="margin-top: 1.25rem;">
+        <div class="task-detail-grid @(_activeTab == "changes" ? "full-width" : "")" style="margin-top: 1.25rem;">
             <!-- Left Primary Column (Specification, History, Execution) -->
             <div class="grid-column-main">
                 <!-- Navigation Tabs -->
@@ -390,30 +390,16 @@
                         }
                         else
                         {
-                            <div class="diff-workspace-grid" style="display: grid; grid-template-columns: 240px 1fr; gap: 1rem; align-items: start;">
-                                <div class="file-tree card-surface" style="padding: 0.75rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-md);">
-                                    <h4 style="font-size: 0.85rem; margin: 0 0 0.5rem 0; color: var(--text-secondary);">Changed Files (@_diffFiles.Count)</h4>
-                                    <div class="file-list" id="file-list">
-                                        @foreach (var node in _diffTreeNodes)
-                                        {
-                                            @RenderDiffTreeNode(node)
-                                        }
-                                    </div>
-                                </div>
-                                <div class="diff-viewer-panel card-surface" style="min-width: 0;" id="diff-viewer-panel">
-                                    @if (_selectedDiffFile != null)
-                                    {
-                                        <DiffViewer File="_selectedDiffFile" />
-                                    }
-                                </div>
-                            </div>
+                            <DiffWorkspace Files="_diffFiles" SelectedFile="_selectedDiffFile" SelectedFileChanged="f => _selectedDiffFile = f" />
                         }
                     </div>
                 }
             </div>
 
             <!-- Right Sidebar Column (Priority, MergeMode, DAG Prerequisites, Metadata) -->
-            <div class="grid-column-sidebar">
+            @if (_activeTab != "changes")
+            {
+                <div class="grid-column-sidebar">
                 <!-- Priority Scheduling Card -->
                 <div class="forge-card card-glass form-section" style="padding: 1.25rem; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); background: var(--bg-card); margin-bottom: 1.25rem;">
                     <label class="form-label" style="display: block; font-weight: 600; font-size: 0.92rem; margin-bottom: 0.35rem; color: var(--text-primary);">
@@ -582,7 +568,8 @@
                     </div>
                 </div>
             </div>
-        </div>
+        }
+    </div>
 
         <!-- Dependency Linking Modal -->
         <DependencyLinkingModal IsOpen="_showDepModal"
@@ -622,7 +609,6 @@
 
     // Changes Diff state
     private IReadOnlyList<FileDiffSummary> _diffFiles = Array.Empty<FileDiffSummary>();
-    private List<ReviewFileTreeNode> _diffTreeNodes = new();
     private FileDiffSummary? _selectedDiffFile;
     private bool _isLoadingChanges;
 
@@ -665,7 +651,6 @@
     protected override async Task OnParametersSetAsync()
     {
         _diffFiles = Array.Empty<FileDiffSummary>();
-        _diffTreeNodes = new();
         _selectedDiffFile = null;
         await LoadTaskDataAsync();
         if (_activeTab == "changes")
@@ -724,14 +709,12 @@
         {
             var previousPath = _selectedDiffFile?.Path;
             _diffFiles = await TaskDiffService.GetTaskDiffFilesAsync(_task.Id);
-            _diffTreeNodes = ReviewFileTreeBuilder.BuildTree(_diffFiles);
             _selectedDiffFile = _diffFiles.FirstOrDefault(f => f.Path == previousPath) ?? _diffFiles.FirstOrDefault();
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to load diff files for Task #{TaskId}", _task.Id);
             _diffFiles = Array.Empty<FileDiffSummary>();
-            _diffTreeNodes = new();
             _selectedDiffFile = null;
         }
         finally
@@ -739,82 +722,6 @@
             _isLoadingChanges = false;
         }
     }
-
-    private RenderFragment RenderDiffTreeNode(ReviewFileTreeNode node) => builder =>
-    {
-        if (node.IsDirectory)
-        {
-            builder.OpenElement(0, "div");
-            builder.AddAttribute(1, "class", "review-dir-node");
-
-            builder.OpenElement(2, "div");
-            builder.AddAttribute(3, "class", "review-dir-header");
-            builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => node.IsExpanded = !node.IsExpanded));
-
-            builder.OpenElement(5, "span");
-            builder.AddAttribute(6, "class", "review-dir-chevron");
-            builder.AddContent(7, node.IsExpanded ? "▼" : "▶");
-            builder.CloseElement();
-
-            builder.OpenElement(8, "span");
-            builder.AddAttribute(9, "class", "review-dir-icon");
-            builder.AddContent(10, "📁 ");
-            builder.CloseElement();
-
-            builder.OpenElement(11, "span");
-            builder.AddAttribute(12, "class", "review-dir-name");
-            builder.AddContent(13, node.Name);
-            builder.CloseElement();
-
-            if (node.TotalAdditions > 0 || node.TotalDeletions > 0)
-            {
-                builder.OpenElement(14, "span");
-                builder.AddAttribute(15, "class", "file-counts ms-auto text-muted small");
-                builder.AddContent(16, $"+{node.TotalAdditions} -{node.TotalDeletions}");
-                builder.CloseElement();
-            }
-
-            builder.CloseElement(); // review-dir-header
-
-            if (node.IsExpanded)
-            {
-                builder.OpenElement(17, "div");
-                builder.AddAttribute(18, "class", "review-dir-children");
-                foreach (var child in node.Children)
-                {
-                    builder.AddContent(19, RenderDiffTreeNode(child));
-                }
-                builder.CloseElement();
-            }
-
-            builder.CloseElement(); // review-dir-node
-        }
-        else
-        {
-            var isSelected = _selectedDiffFile?.Path == node.File?.Path;
-            builder.OpenElement(0, "div");
-            builder.AddAttribute(1, "class", $"review-file-node file-item {(isSelected ? "active" : "")}");
-            builder.AddAttribute(2, "onclick", EventCallback.Factory.Create(this, () => _selectedDiffFile = node.File));
-
-            builder.OpenElement(3, "span");
-            builder.AddAttribute(4, "class", $"file-type badge-{node.File?.ChangeType.ToString().ToLowerInvariant()}");
-            builder.AddContent(5, node.File?.ChangeType.ToString()[0].ToString());
-            builder.CloseElement();
-
-            builder.OpenElement(6, "span");
-            builder.AddAttribute(7, "class", "review-file-name file-path");
-            builder.AddAttribute(8, "title", node.File?.Path);
-            builder.AddContent(9, node.Name);
-            builder.CloseElement();
-
-            builder.OpenElement(10, "span");
-            builder.AddAttribute(11, "class", "file-counts text-muted small");
-            builder.AddContent(12, $"+{node.File?.Additions} -{node.File?.Deletions}");
-            builder.CloseElement();
-
-            builder.CloseElement(); // review-file-node
-        }
-    };
 
     private async Task ReloadTaskAsync()
     {

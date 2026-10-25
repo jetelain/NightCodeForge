@@ -10,7 +10,7 @@
 @inject ITaskRepository TaskRepository
 @inject ITaskOrchestrator TaskOrchestrator
 
-<div class="stage-conversation-viewer card-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem;">
+<div class="stage-conversation-viewer card-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; min-width: 0;">
     @if (Conversation == null && string.IsNullOrEmpty(LiveStreamingThinking) && string.IsNullOrEmpty(LiveStreamingMessage))
     {
         <div style="text-align: center; color: var(--text-muted); padding: 2rem 0;">
@@ -101,7 +101,7 @@
         </div>
 
         <!-- Turns Stream -->
-        <div class="conversation-turns-list chat-messages-container" style="display: flex; flex-direction: column; gap: 0.85rem;">
+        <div class="conversation-turns-list chat-messages-container" style="display: flex; flex-direction: column; gap: 0.85rem; min-width: 0;">
             @{
                 var turns = Conversation?.Turns?.OrderBy(t => t.TurnIndex).ToList() ?? new List<ConversationTurn>();
                 var (mergedResults, hiddenResults) = StageConversationParser.PairToolResults(turns);
@@ -120,7 +120,7 @@
                 {
                     continue;
                 }
-                <div class="turn-item" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <div class="turn-item" style="display: flex; flex-direction: column; gap: 0.5rem; min-width: 0;">
                     @switch (turn.Role)
                     {
                         case StageTurnRole.User:
@@ -136,7 +136,7 @@
                                             @turn.Timestamp.ToLocalTime().ToString("HH:mm:ss")
                                         </span>
                                     </div>
-                                    <div class="chat-content-wrap forge-markdown turn-content-markdown" style="font-size: 0.86rem; line-height: 1.55; max-height: 450px; overflow-y: auto;">
+                                    <div class="chat-content-wrap forge-markdown turn-content-markdown" style="font-size: 0.86rem; line-height: 1.55; max-height: 450px; overflow-y: auto; overflow-x: auto; max-width: 100%; min-width: 0; box-sizing: border-box;">
                                         @MarkdownHelper.ToMarkupString(turn.Content)
                                     </div>
                                 </div>
@@ -262,7 +262,7 @@
                                         </details>
                                     }
 
-                                    <div class="chat-content-wrap forge-markdown turn-content-markdown" style="font-size: 0.88rem; line-height: 1.6;">
+                                    <div class="chat-content-wrap forge-markdown turn-content-markdown" style="font-size: 0.88rem; line-height: 1.6; overflow-x: auto; max-width: 100%; min-width: 0; box-sizing: border-box;">
                                         @MarkdownHelper.ToMarkupString(turn.Content)
                                     </div>
                                 </div>
@@ -321,7 +321,7 @@
                             <span class="step-badge badge-gpu live-badge">LIVE STREAMING</span>
                             <span class="cursor-blink">▊</span>
                         </div>
-                        <div class="chat-content-wrap forge-markdown turn-content-markdown" style="font-size: 0.88rem; line-height: 1.6;">
+                        <div class="chat-content-wrap forge-markdown turn-content-markdown" style="font-size: 0.88rem; line-height: 1.6; overflow-x: auto; max-width: 100%; min-width: 0; box-sizing: border-box;">
                             @MarkdownHelper.ToMarkupString(LiveStreamingMessage)
                         </div>
                     </div>

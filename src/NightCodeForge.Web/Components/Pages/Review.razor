@@ -152,37 +152,7 @@
         </div>
 
         <!-- 2. Diff Navigation & DiffPlex Canvas -->
-        <div class="diff-workspace-grid" id="diff-workspace-grid">
-            <div class="file-tree card-surface">
-                <h4>Changed Files (@_snapshot.Files.Count)</h4>
-                @if (_snapshot.Files.Count == 0)
-                {
-                    <p class="text-muted small">No file modifications recorded in diff.</p>
-                }
-                else
-                {
-                    <div class="file-list" id="file-list">
-                        @foreach (var node in _fileTreeNodes)
-                        {
-                            @RenderTreeNode(node)
-                        }
-                    </div>
-                }
-            </div>
-
-            <div class="diff-viewer-panel card-surface" id="diff-viewer-panel">
-                @if (_selectedFile != null)
-                {
-                    <DiffViewer File="_selectedFile" />
-                }
-                else
-                {
-                    <div class="p-4 text-center text-muted">
-                        Select a file on the left to inspect diff and add inline comments.
-                    </div>
-                }
-            </div>
-        </div>
+        <DiffWorkspace Files="_snapshot.Files" SelectedFile="_selectedFile" SelectedFileChanged="SelectFile" />
     }
 </div>
 
@@ -209,7 +179,6 @@
 
     private TaskReviewSnapshot? _snapshot;
     private IReadOnlyList<TaskReviewSnapshot> _pendingReviews = Array.Empty<TaskReviewSnapshot>();
-    private List<ReviewFileTreeNode> _fileTreeNodes = new();
     private FileDiffSummary? _selectedFile;
     private bool _showChangeRequestModal;
     private bool _showApproveModal;
@@ -270,7 +239,6 @@
 
             if (_snapshot != null && _snapshot.Files.Count > 0)
             {
-                _fileTreeNodes = ReviewFileTreeBuilder.BuildTree(_snapshot.Files);
                 if (_selectedFile == null || !_snapshot.Files.Any(f => f.Path == _selectedFile.Path))
                 {
                     _selectedFile = _snapshot.Files[0];
@@ -278,7 +246,6 @@
             }
             else
             {
-                _fileTreeNodes = new();
                 _selectedFile = null;
             }
         }
@@ -287,82 +254,6 @@
             _isLoading = false;
         }
     }
-
-    private RenderFragment RenderTreeNode(ReviewFileTreeNode node) => builder =>
-    {
-        if (node.IsDirectory)
-        {
-            builder.OpenElement(0, "div");
-            builder.AddAttribute(1, "class", "review-dir-node");
-
-            builder.OpenElement(2, "div");
-            builder.AddAttribute(3, "class", "review-dir-header");
-            builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => node.IsExpanded = !node.IsExpanded));
-
-            builder.OpenElement(5, "span");
-            builder.AddAttribute(6, "class", "review-dir-chevron");
-            builder.AddContent(7, node.IsExpanded ? "▼" : "▶");
-            builder.CloseElement();
-
-            builder.OpenElement(8, "span");
-            builder.AddAttribute(9, "class", "review-dir-icon");
-            builder.AddContent(10, "📁 ");
-            builder.CloseElement();
-
-            builder.OpenElement(11, "span");
-            builder.AddAttribute(12, "class", "review-dir-name");
-            builder.AddContent(13, node.Name);
-            builder.CloseElement();
-
-            if (node.TotalAdditions > 0 || node.TotalDeletions > 0)
-            {
-                builder.OpenElement(14, "span");
-                builder.AddAttribute(15, "class", "file-counts ms-auto text-muted small");
-                builder.AddContent(16, $"+{node.TotalAdditions} -{node.TotalDeletions}");
-                builder.CloseElement();
-            }
-
-            builder.CloseElement(); // review-dir-header
-
-            if (node.IsExpanded)
-            {
-                builder.OpenElement(17, "div");
-                builder.AddAttribute(18, "class", "review-dir-children");
-                foreach (var child in node.Children)
-                {
-                    builder.AddContent(19, RenderTreeNode(child));
-                }
-                builder.CloseElement();
-            }
-
-            builder.CloseElement(); // review-dir-node
-        }
-        else
-        {
-            var isSelected = _selectedFile?.Path == node.File?.Path;
-            builder.OpenElement(0, "div");
-            builder.AddAttribute(1, "class", $"review-file-node file-item {(isSelected ? "active" : "")}");
-            builder.AddAttribute(2, "onclick", EventCallback.Factory.Create(this, () => SelectFile(node.File!)));
-
-            builder.OpenElement(3, "span");
-            builder.AddAttribute(4, "class", $"file-type badge-{node.File?.ChangeType.ToString().ToLowerInvariant()}");
-            builder.AddContent(5, node.File?.ChangeType.ToString()[0].ToString());
-            builder.CloseElement();
-
-            builder.OpenElement(6, "span");
-            builder.AddAttribute(7, "class", "review-file-name file-path");
-            builder.AddAttribute(8, "title", node.File?.Path);
-            builder.AddContent(9, node.Name);
-            builder.CloseElement();
-
-            builder.OpenElement(10, "span");
-            builder.AddAttribute(11, "class", "file-counts text-muted small");
-            builder.AddContent(12, $"+{node.File?.Additions} -{node.File?.Deletions}");
-            builder.CloseElement();
-
-            builder.CloseElement(); // review-file-node
-        }
-    };
 
     private void SelectFile(FileDiffSummary file)
     {

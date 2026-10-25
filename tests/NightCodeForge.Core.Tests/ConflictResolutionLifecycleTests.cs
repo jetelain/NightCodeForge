@@ -27,6 +27,13 @@ public class ConflictResolutionLifecycleTests
         };
     }
 
+    private static IWorkspacePathResolver CreateMockPathResolver()
+    {
+        var mock = new Mock<IWorkspacePathResolver>();
+        mock.Setup(p => p.ToHostPath(It.IsAny<string>())).Returns<string>(path => path);
+        return mock.Object;
+    }
+
     private static IExecutionEnvironmentProvider CreateMockEnvironmentProvider()
     {
         var env = new Mock<IExecutionEnvironment>();
@@ -65,7 +72,7 @@ public class Test
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var customWorkspace = new Workspace
             {
@@ -119,7 +126,7 @@ Some resolved documentation.
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var customWorkspace = new Workspace
             {
@@ -437,7 +444,7 @@ Some resolved documentation.
 
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var result = await verifier.VerifyResolutionAsync(new Workspace { Id = 1, RepositoryPath = tempDir }, 10, "main", new[] { "kept.cs" });
 
@@ -859,7 +866,7 @@ Some resolved documentation.
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var result = await verifier.VerifyResolutionAsync(new Workspace { Id = 1, RepositoryPath = tempDir }, 10, "main", new[] { "resolved.cs" });
 
@@ -890,7 +897,7 @@ Some resolved documentation.
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var result = await verifier.VerifyResolutionAsync(new Workspace { Id = 1, RepositoryPath = tempDir }, 10, "main", new[] { "deleted.cs" });
 
@@ -923,7 +930,7 @@ Some resolved documentation.
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var result = await verifier.VerifyResolutionAsync(new Workspace { Id = 1, RepositoryPath = tempDir }, 10, "main", new[] { "image.png" });
 
@@ -960,7 +967,7 @@ Some resolved documentation.
             var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
             gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(tempDir);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, CreateMockEnvironmentProvider(), CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var result = await verifier.VerifyResolutionAsync(new Workspace { Id = 1, RepositoryPath = tempDir }, 10, "main", new[] { "file.cs" });
 
@@ -1509,7 +1516,7 @@ Some resolved documentation.
             envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
                 .Returns(env.Object);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var workspace = new Workspace
             {
@@ -1570,7 +1577,7 @@ Some resolved documentation.
             envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
                 .Returns(env.Object);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var workspace = new Workspace
             {
@@ -1632,7 +1639,7 @@ Some resolved documentation.
             envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
                 .Returns(env.Object);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var workspace = new Workspace
             {
@@ -1704,7 +1711,7 @@ Some resolved documentation.
             envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
                 .Returns(env.Object);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var workspace = new Workspace
             {
@@ -1769,7 +1776,7 @@ Some resolved documentation.
             envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
                 .Returns(env.Object);
 
-            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
             var workspace = new Workspace
             {
@@ -2180,6 +2187,83 @@ Some resolved documentation.
             StandardStageIds.CodeReviewAndFix,
             StandardStageIds.PostReviewVerification
         }, stagesVisited);
+    }
+
+    [Fact]
+    public async Task Verifier_WithWslLinuxWorktree_ResolvesHostPathForMarkerScanAndSelectiveStaging()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var resolvedFile = Path.Combine(tempDir, "OllamaRoutingMiddleware.cs");
+            await File.WriteAllTextAsync(resolvedFile, "public class OllamaRoutingMiddleware { }");
+
+            var stagedFiles = new List<string>();
+
+            var gitRunner = new Mock<IGitCliRunner>();
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("add")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .Callback<string, IEnumerable<string>, int?, CancellationToken>((_, args, _, _) =>
+                {
+                    var file = args.LastOrDefault();
+                    if (file != null) stagedFiles.Add(file);
+                })
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("ls-files")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("status")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("rev-parse")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "mock-sha", "", TimeSpan.Zero));
+
+            gitRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("commit")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "", "", TimeSpan.Zero));
+
+            var linuxWorktreePath = "/home/gruearbre/.nightcodeforge/wks/1/task-8";
+
+            var gitWorkspaceManager = new Mock<IGitWorkspaceManager>();
+            gitWorkspaceManager.Setup(m => m.GetWorktreePath(It.IsAny<Workspace>(), It.IsAny<int>())).Returns(linuxWorktreePath);
+
+            var pathResolver = new Mock<IWorkspacePathResolver>();
+            pathResolver.Setup(p => p.ToHostPath(linuxWorktreePath)).Returns(tempDir);
+
+            var env = new Mock<IExecutionEnvironment>();
+            env.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new CommandResult(0, "Build succeeded", "", TimeSpan.FromSeconds(1)));
+
+            var envProvider = new Mock<IExecutionEnvironmentProvider>();
+            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
+                .Returns(env.Object);
+
+            var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, pathResolver.Object, NullLogger<ConflictResolutionVerifier>.Instance);
+
+            var workspace = new Workspace
+            {
+                Id = 1,
+                RepositoryPath = "/test/repo",
+                DefaultBaseBranch = "main"
+            };
+
+            var result = await verifier.VerifyResolutionAsync(workspace, 8, "main", new[] { "OllamaRoutingMiddleware.cs" });
+
+            Assert.True(result.IsSuccess);
+            Assert.Contains("OllamaRoutingMiddleware.cs", stagedFiles);
+            // Verify git add was called with linuxWorktreePath for execution, not host path
+            gitRunner.Verify(r => r.ExecuteAsync(linuxWorktreePath, It.Is<IEnumerable<string>>(args => args.Contains("add") && args.Contains("OllamaRoutingMiddleware.cs")), It.IsAny<int?>(), It.IsAny<CancellationToken>()), Times.Once);
+            // Verify git rm was NEVER called
+            gitRunner.Verify(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("rm")), It.IsAny<int?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
     }
 }
 

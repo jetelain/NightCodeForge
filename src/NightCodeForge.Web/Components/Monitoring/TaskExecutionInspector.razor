@@ -166,7 +166,7 @@
                 </div>
 
                 <!-- Right: Active / Selected Conversation Viewer -->
-                <div>
+                <div style="min-width: 0;">
                     <StageConversationViewer Conversation="@_selectedConversation"
                                              Task="@_task"
                                              WorkflowStages="@_workflowStages"
@@ -288,45 +288,7 @@
                 }
                 else
                 {
-                    <div style="display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 1.25rem; align-items: start;">
-                        <!-- File List Sidebar -->
-                        <div class="card-surface" style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.75rem;">
-                            <div style="font-weight: 700; font-size: 0.84rem; color: var(--text-primary); margin-bottom: 0.5rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border-subtle);">
-                                Changed Files (@_diffFiles.Count)
-                            </div>
-                            <div style="display: flex; flex-direction: column; gap: 0.35rem; max-height: 550px; overflow-y: auto;">
-                                @foreach (var file in _diffFiles)
-                                {
-                                    var isSelected = _selectedDiffFile?.Path == file.Path;
-                                    <button type="button"
-                                            class="forge-btn @(isSelected ? "forge-btn-primary" : "forge-btn-secondary")"
-                                            style="text-align: left; padding: 0.4rem 0.6rem; font-size: 0.78rem; display: flex; justify-content: space-between; align-items: center; width: 100%; border-radius: var(--radius-sm);"
-                                            @onclick="() => _selectedDiffFile = file">
-                                        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px;" title="@file.Path">
-                                            @file.Path
-                                        </span>
-                                        <span style="font-size: 0.7rem; font-family: var(--font-mono); opacity: 0.85;">
-                                            +@file.Additions -@file.Deletions
-                                        </span>
-                                    </button>
-                                }
-                            </div>
-                        </div>
-
-                        <!-- Diff Viewer Pane -->
-                        <div>
-                            @if (_selectedDiffFile != null)
-                            {
-                                <DiffViewer File="_selectedDiffFile" />
-                            }
-                            else
-                            {
-                                <div style="text-align: center; padding: 3rem 0; color: var(--text-muted);">
-                                    Select a changed file from the list to view its diff.
-                                </div>
-                            }
-                        </div>
-                    </div>
+                    <DiffWorkspace Files="_diffFiles" SelectedFile="_selectedDiffFile" SelectedFileChanged="f => _selectedDiffFile = f" />
                 }
             </div>
         }
@@ -511,7 +473,7 @@
                 }
 
                 _workflowStages = _task.Workflow?.Stages?.OrderBy(s => s.SequenceOrder).ToList();
-                _conversations = _task.Conversations?.OrderBy(c => c.StartedAt).ToList() ?? new List<Conversation>();
+                _conversations = _task.Conversations?.OrderBy(c => c.StartedAt).ThenBy(c => c.AttemptIndex).ThenBy(c => c.Id).ToList() ?? new List<Conversation>();
                 if (_conversations.Any())
                 {
                     var previousId = _selectedConversation?.Id;
