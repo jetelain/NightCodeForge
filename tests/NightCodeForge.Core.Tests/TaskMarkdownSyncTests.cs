@@ -751,5 +751,105 @@ Enriched description formulated by review agent directly on disk.
 
         Assert.Null(resolved);
     }
+
+    [Fact]
+    public async Task SyncAllTasksFromDiskAsync_WhenBaselineUnchanged_DoesNotOverwriteDatabaseMergeMode()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var workspace = new Workspace
+        {
+            Id = 950,
+            Name = "SyncBaselineRepo",
+            RepositoryPath = _tempWorkspaceDir,
+            DefaultBaseBranch = "main"
+        };
+
+        var task = new ForgeTask
+        {
+            Id = 951,
+            WorkspaceId = workspace.Id,
+            Title = "Task 951",
+            Description = "Baseline description",
+            Priority = 2,
+            MergeMode = MergeMode.ManualReviewRequired,
+            Status = TaskOverallStatus.Open
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Created");
+
+        // Sync to disk to create initial markdown and snapshot
+        var syncResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, _tempWorkspaceDir);
+        var snapshot = syncResult.Baseline;
+
+        // User concurrently updates task MergeMode to Automatic in the DB
+        task.MergeMode = MergeMode.Automatic;
+        await repo.UpdateWithHistoryAsync(task, null, AuditActors.User, "User enabled auto-merge");
+
+        // Now post-stage disk sync runs against the worktree where markdown was unchanged
+        var refreshedTasks = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            _tempWorkspaceDir,
+            snapshot,
+            AuditActors.GetActorForStage("implementation"),
+            "Stage completed disk synchronization");
+
+        // The database task MergeMode must remain Automatic!
+        var dbTask = await repo.GetByIdAsync(951);
+        Assert.NotNull(dbTask);
+        Assert.Equal(MergeMode.Automatic, dbTask.MergeMode);
+
+        var refreshed = refreshedTasks.FirstOrDefault(t => t.Id == 951);
+        Assert.NotNull(refreshed);
+        Assert.Equal(MergeMode.Automatic, refreshed.MergeMode);
+    }
+
+    [Fact]
+    public async Task ProcessFileContentAsync_WhenFrontmatterMergeModeMissing_PreservesDatabaseMergeMode()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var workspace = new Workspace
+        {
+            Id = 960,
+            Name = "PreserveMergeModeRepo",
+            RepositoryPath = _tempWorkspaceDir,
+            DefaultBaseBranch = "main"
+        };
+
+        var task = new ForgeTask
+        {
+            Id = 961,
+            WorkspaceId = workspace.Id,
+            Title = "Task 961",
+            Description = "Task description",
+            Priority = 2,
+            MergeMode = MergeMode.Automatic,
+            Status = TaskOverallStatus.Open
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Created");
+
+        // Markdown content with NO merge_mode property
+        var markdownWithoutMergeMode = @"---
+id: 961
+title: Task 961 Updated Title
+priority: 2
+---
+
+Task description with updated content.";
+
+        var filePath = Path.Combine(_tempWorkspaceDir, "docs", "tasks", "task-961.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        await File.WriteAllTextAsync(filePath, markdownWithoutMergeMode);
+
+        await sync.ProcessFileChangedAsync(filePath, workspace.Id);
+
+        var dbTask = await repo.GetByIdAsync(961);
+        Assert.NotNull(dbTask);
+        Assert.Equal(MergeMode.Automatic, dbTask.MergeMode);
+        Assert.Equal("Task 961 Updated Title", dbTask.Title);
+    }
 }
 

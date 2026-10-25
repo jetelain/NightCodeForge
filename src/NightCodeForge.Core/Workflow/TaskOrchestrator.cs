@@ -1283,6 +1283,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 task.Title = refreshedTask.Title;
                 task.Description = refreshedTask.Description;
                 task.Priority = refreshedTask.Priority;
+                task.MergeMode = refreshedTask.MergeMode;
                 task.BaseBranch = refreshedTask.BaseBranch;
                 task.FeatureBranch = refreshedTask.FeatureBranch;
                 task.UpdatedAt = refreshedTask.UpdatedAt;

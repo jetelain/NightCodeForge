@@ -282,6 +282,22 @@ public class InMemoryTaskRepository : ITaskRepository
     {
         lock (_lock)
         {
+            if (_tasks.TryGetValue(task.Id, out var existing) && !ReferenceEquals(existing, task))
+            {
+                if (existing.Version > task.Version)
+                {
+                    task.Version = existing.Version;
+                    task.MergeMode = existing.MergeMode;
+                    task.Priority = existing.Priority;
+                    task.Title = existing.Title;
+                    task.Description = existing.Description;
+                }
+                else
+                {
+                    task.Version = existing.Version;
+                }
+            }
+
             _tasks[task.Id] = task;
             if (dependsOn != null)
             {

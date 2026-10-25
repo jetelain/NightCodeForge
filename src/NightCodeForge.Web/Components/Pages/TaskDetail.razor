@@ -668,6 +668,10 @@
             if (_task != null)
             {
                 _workspace = await WorkspaceRepository.GetByIdAsync(_task.WorkspaceId);
+                if (_workspace != null && WorkspaceState.ActiveWorkspace?.Id != _workspace.Id)
+                {
+                    WorkspaceState.SetActiveWorkspace(_workspace);
+                }
                 var workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(_task.WorkspaceId);
                 _allWorkspaceTasks = workspaceTasks.ToList();
 

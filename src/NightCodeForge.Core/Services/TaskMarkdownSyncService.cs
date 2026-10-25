@@ -1168,6 +1168,15 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 var taskId = item.Frontmatter.Id!.Value;
                 var task = dbTasks[taskId];
 
+                // If syncing against a baseline snapshot (e.g. from an agent worktree) and the file has not changed on disk,
+                // do not clobber any database changes that happened concurrently during the stage execution.
+                if (baselineSnapshot != null && baselineSnapshot.TryGetValue(taskId, out var baseline) &&
+                    string.Equals(item.Hash, baseline.ContentHash, StringComparison.Ordinal))
+                {
+                    refreshedTasks.Add(task);
+                    continue;
+                }
+
                 var newTitle = !string.IsNullOrWhiteSpace(item.Frontmatter.Title) ? item.Frontmatter.Title.Trim() : task.Title;
                 var newDesc = !string.IsNullOrWhiteSpace(item.Description) ? item.Description : task.Description;
                 var newPriority = item.Frontmatter.Priority > 0 ? item.Frontmatter.Priority : task.Priority;
@@ -1183,9 +1192,11 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     finalDepIds = finalDepIds.Distinct().ToList();
                 }
 
-                var newMergeMode = string.Equals(item.Frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
-                    ? Domain.MergeMode.Automatic
-                    : Domain.MergeMode.ManualReviewRequired;
+                var newMergeMode = string.IsNullOrWhiteSpace(item.Frontmatter.MergeMode)
+                    ? task.MergeMode
+                    : (string.Equals(item.Frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
+                        ? Domain.MergeMode.Automatic
+                        : Domain.MergeMode.ManualReviewRequired);
                 var newBaseBranch = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) ? item.Frontmatter.BaseBranch.Trim() : task.BaseBranch;
                 var newOrigin = ParseOrigin(item.Frontmatter.Origin);
 
@@ -1568,9 +1579,11 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         }
                     }
 
-                    var newMergeMode = string.Equals(frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
-                        ? Domain.MergeMode.Automatic
-                        : Domain.MergeMode.ManualReviewRequired;
+                    var newMergeMode = string.IsNullOrWhiteSpace(frontmatter.MergeMode)
+                        ? task.MergeMode
+                        : (string.Equals(frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
+                            ? Domain.MergeMode.Automatic
+                            : Domain.MergeMode.ManualReviewRequired);
                     var newBaseBranch = !string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? frontmatter.BaseBranch.Trim() : task.BaseBranch;
                     var newOrigin = ParseOrigin(frontmatter.Origin);
 

@@ -315,4 +315,67 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
         Assert.Single(dbDeps);
         Assert.Equal(dep2.Id, dbDeps[0]);
     }
+
+    [Fact]
+    public async Task UpdateAsync_WhenTaskUpdatedConcurrentlyWithHistory_PreservesMaintainerFieldsAndUpdatesInMemoryTask()
+    {
+        using var context = new AppDbContext(_options);
+        var repo = new EfCoreTaskRepository(context);
+
+        var workspace = new Workspace
+        {
+            Name = "ConcurrencyTestRepo",
+            RepositoryPath = "/test/repo-concurrency",
+            DefaultBaseBranch = "main"
+        };
+        context.Workspaces.Add(workspace);
+        await context.SaveChangesAsync();
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Original Title",
+            Description = "Original Description",
+            Priority = 2,
+            MergeMode = MergeMode.ManualReviewRequired,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "stage1"
+        };
+        var created = await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Created", CancellationToken.None);
+
+        // Simulate background orchestrator holding a copy of 'created' (Version 1, ManualReviewRequired)
+        var staleInMemoryTask = new ForgeTask
+        {
+            Id = created.Id,
+            WorkspaceId = created.WorkspaceId,
+            Title = created.Title,
+            Description = created.Description,
+            Priority = created.Priority,
+            MergeMode = created.MergeMode,
+            Status = created.Status,
+            Version = created.Version, // 1
+            CurrentStageId = "stage2" // orchestrator advancing stage
+        };
+
+        // User changes MergeMode to Automatic via UpdateWithHistoryAsync in UI
+        created.MergeMode = MergeMode.Automatic;
+        created.Priority = 1;
+        await repo.UpdateWithHistoryAsync(created, null, AuditActors.User, "User enabled auto-merge", CancellationToken.None);
+
+        // Orchestrator updates execution state via UpdateAsync with its stale task
+        await repo.UpdateAsync(staleInMemoryTask, null, CancellationToken.None);
+
+        // Authoritative task in database must have preserved Automatic merge mode and Priority 1
+        var dbTask = await repo.GetByIdAsync(created.Id, CancellationToken.None);
+        Assert.NotNull(dbTask);
+        Assert.Equal(MergeMode.Automatic, dbTask.MergeMode);
+        Assert.Equal(1, dbTask.Priority);
+        Assert.Equal(2, dbTask.Version);
+        Assert.Equal("stage2", dbTask.CurrentStageId);
+
+        // Stale in-memory task must have been synced with latest maintainer fields
+        Assert.Equal(MergeMode.Automatic, staleInMemoryTask.MergeMode);
+        Assert.Equal(1, staleInMemoryTask.Priority);
+        Assert.Equal(2, staleInMemoryTask.Version);
+    }
 }

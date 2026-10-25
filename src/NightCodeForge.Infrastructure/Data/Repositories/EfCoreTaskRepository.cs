@@ -165,17 +165,57 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task UpdateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
     {
-        var existing = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == task.Id)
-                       ?? await _context.Tasks.FindAsync(new object[] { task.Id }, cancellationToken);
+        var existing = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == task.Id);
+        if (existing != null)
+        {
+            if (!ReferenceEquals(existing, task))
+            {
+                await _context.Entry(existing).ReloadAsync(cancellationToken);
+            }
+        }
+        else
+        {
+            existing = await _context.Tasks.FindAsync(new object[] { task.Id }, cancellationToken);
+        }
 
         if (existing != null)
         {
             if (!ReferenceEquals(existing, task))
             {
-                // The version token is owned by UpdateWithHistoryAsync: a stale in-memory copy must never regress it.
-                var currentVersion = existing.Version;
+                // The version token and maintainer-controlled fields are owned by UpdateWithHistoryAsync:
+                // a background execution state update must never regress them.
+                var authoritativeVersion = existing.Version;
+                var authoritativeMergeMode = existing.MergeMode;
+                var authoritativePriority = existing.Priority;
+                var authoritativeTitle = existing.Title;
+                var authoritativeDescription = existing.Description;
+
                 _context.Entry(existing).CurrentValues.SetValues(task);
-                existing.Version = currentVersion;
+
+                // If the database has a newer version than the incoming in-memory task,
+                // maintainer properties owned by UpdateWithHistoryAsync were modified concurrently.
+                // A background execution state update must not regress them.
+                if (authoritativeVersion > task.Version)
+                {
+                    existing.Version = authoritativeVersion;
+                    existing.MergeMode = authoritativeMergeMode;
+                    existing.Priority = authoritativePriority;
+                    existing.Title = authoritativeTitle;
+                    existing.Description = authoritativeDescription;
+
+                    // Sync latest maintainer values back to caller's in-memory instance
+                    task.Version = authoritativeVersion;
+                    task.MergeMode = authoritativeMergeMode;
+                    task.Priority = authoritativePriority;
+                    task.Title = authoritativeTitle;
+                    task.Description = authoritativeDescription;
+                }
+                else
+                {
+                    // Version token is strictly owned by UpdateWithHistoryAsync
+                    existing.Version = authoritativeVersion;
+                }
+
                 _context.Entry(existing).State = EntityState.Modified;
             }
         }
@@ -239,8 +279,18 @@ public class EfCoreTaskRepository : ITaskRepository
 
         task.Version = Math.Max(task.Version + 1, currentMaxVersion + 1);
 
-        var existing = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == task.Id)
-                       ?? await _context.Tasks.FindAsync(new object[] { task.Id }, cancellationToken);
+        var existing = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == task.Id);
+        if (existing != null)
+        {
+            if (!ReferenceEquals(existing, task))
+            {
+                await _context.Entry(existing).ReloadAsync(cancellationToken);
+            }
+        }
+        else
+        {
+            existing = await _context.Tasks.FindAsync(new object[] { task.Id }, cancellationToken);
+        }
 
         if (existing != null)
         {
