@@ -56,6 +56,59 @@ public class ModelCapabilityResolverTests
     }
 
     [Fact]
+    public void BuildCompactionStrategy_WithExplicitTokens_ResolvesToAgentProfile()
+    {
+        var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(
+            new LlmProviderOptions { ContextWindowTokens = 225280 },
+            "test-model",
+            explicitContextWindowTokens: 65536);
+
+        Assert.Equal(65536, strategy.Options.ContextWindowTokens);
+        Assert.Equal("AgentProfile", strategy.Options.ResolutionSource);
+    }
+
+    [Fact]
+    public void BuildCompactionStrategy_WithModelProfileTokens_ResolvesToModelCapabilityProfile()
+    {
+        var options = new LlmProviderOptions { ContextWindowTokens = 225280 };
+        options.ModelProfiles["custom-model"] = new ModelCapabilityProfile
+        {
+            ContextWindowTokens = 180000
+        };
+
+        var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(
+            options,
+            "custom-model:latest");
+
+        Assert.Equal(180000, strategy.Options.ContextWindowTokens);
+        Assert.Equal("ModelCapabilityProfile", strategy.Options.ResolutionSource);
+    }
+
+    [Fact]
+    public void BuildCompactionStrategy_WithOptionsTokens_ResolvesToLlmProviderOptions()
+    {
+        var options = new LlmProviderOptions { ContextWindowTokens = 225280 };
+
+        var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(
+            options,
+            "unmatched-model");
+
+        Assert.Equal(225280, strategy.Options.ContextWindowTokens);
+        Assert.Equal("LlmProviderOptions (appsettings.json)", strategy.Options.ResolutionSource);
+    }
+
+    [Fact]
+    public void BuildCompactionStrategy_WithNullOrZeroOptions_ResolvesToDefaultFallback()
+    {
+        var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(
+            null,
+            "unmatched-model");
+
+        Assert.Equal(LlmProviderOptions.DefaultContextWindowTokens, strategy.Options.ContextWindowTokens);
+        Assert.Equal("Default (128k fallback)", strategy.Options.ResolutionSource);
+    }
+
+    [Fact]
     public void Transcript_FormatOffset_RendersElapsedMinutesAndSeconds()
     {
         Assert.Equal("[ 00:00 ]", SessionTranscriptService.FormatOffset(TimeSpan.Zero));

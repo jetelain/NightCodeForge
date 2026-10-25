@@ -9,7 +9,7 @@ using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Agents.Tools;
 
-public record EditChunk(string OldText, string NewText);
+public record EditChunk(string OldText, string NewText, bool ReplaceAll = false);
 
 /// <summary>
 /// Handler that presents batched questions to a live human and returns the numbered answers without ending the agent turn.
@@ -257,7 +257,7 @@ public partial class CanonicalTools
     }
 
     /// <summary>
-    /// edit: Precision search-and-replace chunk editing supporting multi-disjoint edits and indentation tolerance.
+    /// edit: Precision search-and-replace chunk editing supporting multi-disjoint edits, indentation tolerance, and multi-match replacement.
     /// </summary>
     public async Task<string> EditAsync(string path, IReadOnlyList<EditChunk> edits, CancellationToken cancellationToken = default)
     {
@@ -292,11 +292,14 @@ public partial class CanonicalTools
         var currentContent = originalContent;
         var ext = Path.GetExtension(fullPath).ToLowerInvariant();
         bool isStrictWhitespace = IsIndentationSignificant(ext);
+        int totalOccurrencesReplaced = 0;
 
         for (int i = 0; i < edits.Count; i++)
         {
             var edit = edits[i];
-            currentContent = ApplySingleEdit(currentContent, edit.OldText, edit.NewText, isStrictWhitespace, path, i + 1);
+            var (updatedContent, occurrences) = ApplySingleEdit(currentContent, edit.OldText, edit.NewText, edit.ReplaceAll, isStrictWhitespace, path, i + 1);
+            currentContent = updatedContent;
+            totalOccurrencesReplaced += occurrences;
         }
 
         // Apply EditorConfig compliance
@@ -304,19 +307,59 @@ public partial class CanonicalTools
         var formattedBytes = _editorConfigFileApplier.ApplyFormattingAndEncode(currentContent, editorConfig, originalContent, fullPath);
 
         await File.WriteAllBytesAsync(fullPath, formattedBytes, cancellationToken);
-        return $"Successfully applied {edits.Count} edit(s) to '{path}'.";
+        return $"Successfully applied {edits.Count} edit(s) ({totalOccurrencesReplaced} occurrence(s) replaced) to '{path}'.";
     }
 
     /// <summary>
     /// edit: Precision search-and-replace for a single chunk.
     /// </summary>
-    public Task<string> EditAsync(string path, string oldText, string newText, CancellationToken cancellationToken = default)
+    public Task<string> EditAsync(string path, string oldText, string newText, bool replaceAll = false, CancellationToken cancellationToken = default)
     {
-        return EditAsync(path, new[] { new EditChunk(oldText, newText) }, cancellationToken);
+        return EditAsync(path, new[] { new EditChunk(oldText, newText, replaceAll) }, cancellationToken);
     }
 
-    private string ApplySingleEdit(string source, string oldText, string newText, bool isStrictWhitespace, string path, int editIndex)
+    private (string Content, int Occurrences) ApplySingleEdit(string source, string oldText, string newText, bool replaceAll, bool isStrictWhitespace, string path, int editIndex)
     {
+        if (replaceAll)
+        {
+            if (string.IsNullOrEmpty(oldText))
+            {
+                throw new InvalidOperationException($"Edit #{editIndex} failed: oldText cannot be empty.");
+            }
+
+            string effectiveOldText = oldText;
+            string effectiveNewText = newText ?? string.Empty;
+            if (effectiveOldText.Contains('\n') && source.IndexOf(effectiveOldText, StringComparison.Ordinal) == -1)
+            {
+                if (source.Contains("\r\n") && !effectiveOldText.Contains("\r\n"))
+                {
+                    effectiveOldText = effectiveOldText.Replace("\n", "\r\n");
+                    effectiveNewText = effectiveNewText.Replace("\n", "\r\n");
+                }
+                else if (!source.Contains("\r\n") && effectiveOldText.Contains("\r\n"))
+                {
+                    effectiveOldText = effectiveOldText.Replace("\r\n", "\n");
+                    effectiveNewText = effectiveNewText.Replace("\r\n", "\n");
+                }
+            }
+
+            int count = 0;
+            int searchIdx = 0;
+            while ((searchIdx = source.IndexOf(effectiveOldText, searchIdx, StringComparison.Ordinal)) != -1)
+            {
+                count++;
+                searchIdx += effectiveOldText.Length;
+            }
+
+            if (count == 0)
+            {
+                throw new InvalidOperationException($"Edit #{editIndex} failed: could not locate target chunk in '{path}'.");
+            }
+
+            var replaced = source.Replace(effectiveOldText, effectiveNewText, StringComparison.Ordinal);
+            return (replaced, count);
+        }
+
         // Pass 1: Exact substring match
         int matchIndex = source.IndexOf(oldText, StringComparison.Ordinal);
         if (matchIndex >= 0)
@@ -325,10 +368,10 @@ public partial class CanonicalTools
             int nextMatch = source.IndexOf(oldText, matchIndex + oldText.Length, StringComparison.Ordinal);
             if (nextMatch >= 0)
             {
-                throw new InvalidOperationException($"Edit #{editIndex} failed: oldText matches multiple locations in '{path}'. Please provide more surrounding context to disambiguate.");
+                throw new InvalidOperationException($"Edit #{editIndex} failed: oldText matches multiple locations in '{path}'. Please provide more surrounding context to disambiguate or use replaceAll: true.");
             }
 
-            return source.Substring(0, matchIndex) + newText + source.Substring(matchIndex + oldText.Length);
+            return (source.Substring(0, matchIndex) + newText + source.Substring(matchIndex + oldText.Length), 1);
         }
 
         // If language has significant indentation (e.g. Python, YAML), reject non-exact match
@@ -338,7 +381,7 @@ public partial class CanonicalTools
         }
 
         // Pass 2: Fuzzy Indentation-Tolerant Matching
-        return ApplyIndentationTolerantEdit(source, oldText, newText, path, editIndex);
+        return (ApplyIndentationTolerantEdit(source, oldText, newText, path, editIndex), 1);
     }
 
     private string ApplyIndentationTolerantEdit(string source, string oldText, string newText, string path, int editIndex)
@@ -560,6 +603,11 @@ public partial class CanonicalTools
                 {
                     output = $"{output}\n\n[Structured Diagnostics Extracted]:\n{diag.FormattedMarkdown}";
                 }
+            }
+
+            if (output.Length > WorkflowDefaults.MaxStageOutputChars)
+            {
+                output = WorkflowDefaults.TruncateStageOutput(output);
             }
 
             return $"Exit Code: {res.ExitCode}\n{output}".TrimEnd();

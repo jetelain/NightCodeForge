@@ -446,12 +446,10 @@ public class Step917DiffStatAndBatchedClarificationTests
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 
-        // Task description appears once under header, but not under [Approved Implementation Plan]:
-        Assert.Contains("Specification requirements for feature 99.", prompt);
+        // Under Step 11.31 prompt deduplication, standard template omits task description,
+        // and because ApprovedPlan matches Description, it is also suppressed:
+        Assert.DoesNotContain("Specification requirements for feature 99.", prompt);
         Assert.DoesNotContain("[Approved Implementation Plan]:", prompt);
-
-        int descCount = prompt.Split("Specification requirements for feature 99.").Length - 1;
-        Assert.Equal(1, descCount);
     }
 
     [Fact]
@@ -482,7 +480,9 @@ public class Step917DiffStatAndBatchedClarificationTests
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 
-        Assert.Contains("Specification requirements for feature 100.", prompt);
+        // Under Step 11.31 prompt deduplication, standard template omits raw task description,
+        // while distinct approved plan is preserved:
+        Assert.DoesNotContain("Specification requirements for feature 100.", prompt);
         Assert.Contains("[Approved Implementation Plan]:", prompt);
         Assert.Contains("Step 1: Create service\nStep 2: Add unit tests", prompt);
     }

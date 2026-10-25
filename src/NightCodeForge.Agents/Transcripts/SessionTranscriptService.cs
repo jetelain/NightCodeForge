@@ -13,6 +13,14 @@ public record TranscriptEntry(
     string? ToolResult = null,
     string? CallId = null);
 
+public record TranscriptCompactionMetadata(
+    string Strategy,
+    int ContextWindowTokens,
+    int ReserveTokens,
+    int TriggerThresholdTokens,
+    int KeepRecentTokens,
+    string ResolutionSource);
+
 public record TranscriptMetadata(
     int TaskId,
     string StageId,
@@ -28,7 +36,8 @@ public record TranscriptMetadata(
     IReadOnlyList<string>? ActiveSkills = null,
     string? MafConfiguration = null,
     IReadOnlyList<ModelCallSnapshot>? ModelCalls = null,
-    int AttemptIndex = 1);
+    int AttemptIndex = 1,
+    TranscriptCompactionMetadata? Compaction = null);
 
 /// <summary>
 /// Saves turn-by-turn markdown execution logs embedding active optimization flags in YAML frontmatter,
@@ -37,7 +46,7 @@ public record TranscriptMetadata(
 /// </summary>
 public class SessionTranscriptService
 {
-    public const int MaxEntryChars = 32768;
+    public const int MaxEntryChars = 65536;
 
     private readonly string _transcriptsDirectory;
 
@@ -96,6 +105,16 @@ public class SessionTranscriptService
         {
             sb.AppendLine(CultureInfo.InvariantCulture, $"kv_cache_hit_rate: {metadata.KvCacheHitRate.Value:F2}");
         }
+        if (metadata.Compaction != null)
+        {
+            sb.AppendLine("compaction:");
+            sb.AppendLine($"  strategy: {metadata.Compaction.Strategy}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"  context_window_tokens: {metadata.Compaction.ContextWindowTokens}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"  reserve_tokens: {metadata.Compaction.ReserveTokens}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"  trigger_threshold_tokens: {metadata.Compaction.TriggerThresholdTokens}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"  keep_recent_tokens: {metadata.Compaction.KeepRecentTokens}");
+            sb.AppendLine($"  resolution_source: \"{metadata.Compaction.ResolutionSource}\"");
+        }
         sb.AppendLine($"status: {metadata.Status}");
         sb.AppendLine("---");
         sb.AppendLine();
@@ -107,11 +126,22 @@ public class SessionTranscriptService
         // Environment section
         bool hasEnv = !string.IsNullOrWhiteSpace(metadata.SystemPrompt)
             || (metadata.AvailableTools != null && metadata.AvailableTools.Count > 0)
-            || (metadata.ActiveSkills != null && metadata.ActiveSkills.Count > 0);
+            || (metadata.ActiveSkills != null && metadata.ActiveSkills.Count > 0)
+            || metadata.Compaction != null;
         if (hasEnv)
         {
             sb.AppendLine("### Environment");
             sb.AppendLine();
+            if (metadata.Compaction != null)
+            {
+                sb.AppendLine("**Context Compaction Budget**");
+                sb.AppendLine($"- Strategy: `{metadata.Compaction.Strategy}`");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"- Context Window: {metadata.Compaction.ContextWindowTokens:N0} tokens (Resolution Source: `{metadata.Compaction.ResolutionSource}`)");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"- Trigger Threshold: {metadata.Compaction.TriggerThresholdTokens:N0} tokens | Reserve Headroom: {metadata.Compaction.ReserveTokens:N0} tokens");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"- Keep Recent Budget: {metadata.Compaction.KeepRecentTokens:N0} tokens");
+                sb.AppendLine();
+            }
+
             if (metadata.AvailableTools != null && metadata.AvailableTools.Count > 0)
             {
                 sb.AppendLine("**Available tools**");
@@ -324,6 +354,6 @@ public class SessionTranscriptService
     {
         if (string.IsNullOrEmpty(content)) return string.Empty;
         if (content.Length <= MaxEntryChars) return content;
-        return content.Substring(0, MaxEntryChars) + $"\n... [Output truncated; exceeded {MaxEntryChars} characters]";
+        return string.Create(CultureInfo.InvariantCulture, $"{content.Substring(0, MaxEntryChars)}\n... [Output truncated; {content.Length:N0} chars total; showing first {MaxEntryChars:N0} characters]");
     }
 }

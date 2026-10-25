@@ -170,7 +170,7 @@ public class SessionTranscriptServiceTests
                 "load_skill: Loads modular skill"
             };
 
-            var hugeOutput = new string('A', 40000);
+            var hugeOutput = new string('A', 80000);
 
             var meta = new TranscriptMetadata(
                 TaskId: 99,
@@ -222,8 +222,141 @@ public class SessionTranscriptServiceTests
             // Verify 4-tick safe fences and truncation
             Assert.Contains("````json", content);
             Assert.Contains("````", content);
-            Assert.Contains("... [Output truncated; exceeded 32768 characters]", content);
-            Assert.DoesNotContain(new string('A', 35000), content);
+            Assert.Contains("... [Output truncated; 80,000 chars total; showing first 65,536 characters]", content);
+            Assert.DoesNotContain(new string('A', 70000), content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task SessionTranscriptService_RendersCompactionMetadata_InFrontmatterAndEnvironment()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-transcripts-compaction-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var service = new SessionTranscriptService();
+            var compactionMeta = new TranscriptCompactionMetadata(
+                Strategy: "PiStyleCrucibleCompactionStrategy",
+                ContextWindowTokens: 131072,
+                ReserveTokens: 8192,
+                TriggerThresholdTokens: 122880,
+                KeepRecentTokens: 16384,
+                ResolutionSource: "LlmProviderOptions (appsettings.json)");
+
+            var meta = new TranscriptMetadata(
+                TaskId: 10,
+                StageId: "stage-impl",
+                AgentProfile: "Coder",
+                ModelName: "qwen2.5-coder:32b",
+                DurationMs: 5000,
+                Metrics: new AgentRunMetrics(5000, 2000, 500, 2500),
+                Optimizations: new LocalOptimizationFlags(),
+                Status: AgentRunStatus.Completed,
+                SystemPrompt: "System instructions",
+                AvailableTools: new[] { "read", "edit" },
+                Compaction: compactionMeta);
+
+            var entries = new List<TranscriptEntry>
+            {
+                new(DateTime.UtcNow, "USER", "Start task"),
+                new(DateTime.UtcNow, "COMPACTION", "[CONTEXT COMPACTION CHECKPOINT]\n## Goal\nRefactor parser"),
+                new(DateTime.UtcNow, "ASSISTANT", "Continuing with parser refactor")
+            };
+
+            var path = await service.SaveTranscriptAsync(meta, entries, tempDir);
+            var content = await File.ReadAllTextAsync(path);
+
+            // Frontmatter checks
+            Assert.Contains("compaction:", content);
+            Assert.Contains("strategy: PiStyleCrucibleCompactionStrategy", content);
+            Assert.Contains("context_window_tokens: 131072", content);
+            Assert.Contains("reserve_tokens: 8192", content);
+            Assert.Contains("trigger_threshold_tokens: 122880", content);
+            Assert.Contains("keep_recent_tokens: 16384", content);
+            Assert.Contains("resolution_source: \"LlmProviderOptions (appsettings.json)\"", content);
+
+            // Environment checks
+            Assert.Contains("**Context Compaction Budget**", content);
+            Assert.Contains("- Strategy: `PiStyleCrucibleCompactionStrategy`", content);
+            Assert.Contains("- Context Window: 131,072 tokens (Resolution Source: `LlmProviderOptions (appsettings.json)`)", content);
+            Assert.Contains("- Trigger Threshold: 122,880 tokens | Reserve Headroom: 8,192 tokens", content);
+            Assert.Contains("- Keep Recent Budget: 16,384 tokens", content);
+
+            // Role formatting check
+            Assert.Contains("✂️ COMPACTION", content);
+            Assert.Contains("Refactor parser", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public void BuildTranscriptEntries_StampsCompactionRole_ForCheckpointMessages()
+    {
+        var chatHistory = new List<ChatMessage>
+        {
+            new(ChatRole.System, "System prompt"),
+            new(ChatRole.User, "User prompt"),
+            new(ChatRole.User, "[CONTEXT COMPACTION CHECKPOINT]\nThe conversation history prior to this point was compacted"),
+            new(ChatRole.Assistant, "Working on it")
+        };
+
+        var entries = CrucibleAgentHarness.BuildTranscriptEntries(chatHistory);
+
+        Assert.Equal(4, entries.Count);
+        Assert.Equal("system", entries[0].Role);
+        Assert.Equal("user", entries[1].Role);
+        Assert.Equal("COMPACTION", entries[2].Role);
+        Assert.Equal("assistant", entries[3].Role);
+    }
+
+    [Fact]
+    public async Task SessionTranscriptService_PreservesSystemPromptUpTo65536Characters_WithoutTruncation()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-transcripts-sysprompt-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var service = new SessionTranscriptService();
+            // Exactly ~50,000 chars: well within 65,536 chars, but would have been truncated under old 32k limit
+            var largeSystemPrompt = "SYSTEM_START\n" + new string('S', 49950) + "\nSYSTEM_END";
+
+            var meta = new TranscriptMetadata(
+                TaskId: 11,
+                StageId: "stage-task-review",
+                AgentProfile: "Architect",
+                ModelName: "qwen2.5:32b",
+                DurationMs: 1000,
+                Metrics: new AgentRunMetrics(1000, 500, 100, 600),
+                Optimizations: new LocalOptimizationFlags(),
+                Status: AgentRunStatus.Completed,
+                SystemPrompt: largeSystemPrompt);
+
+            var entries = new List<TranscriptEntry>
+            {
+                new(DateTime.UtcNow, "USER", "Start stage")
+            };
+
+            var path = await service.SaveTranscriptAsync(meta, entries, tempDir);
+            var content = await File.ReadAllTextAsync(path);
+
+            // Verify the system prompt was preserved in its entirety without truncation marker
+            Assert.Contains("SYSTEM_START", content);
+            Assert.Contains("SYSTEM_END", content);
+            Assert.Contains(new string('S', 1000), content);
+            Assert.DoesNotContain("... [Output truncated", content);
         }
         finally
         {

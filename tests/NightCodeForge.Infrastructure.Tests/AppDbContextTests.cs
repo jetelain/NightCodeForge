@@ -594,6 +594,43 @@ public class AppDbContextTests : IDisposable
     }
 
     [Fact]
+    public async Task EnsureDefaultWorkflowsAsync_RefreshesPromptTemplates_WhenExistingDatabaseContainsOutdatedTemplates()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var workflow = await context.EnsureDefaultWorkflowsAsync();
+
+        // Artificially inject legacy prompt templates containing {{ task.description }}
+        foreach (var stage in workflow.Stages)
+        {
+            if (stage.Kind == WorkflowStageKind.Agentic)
+            {
+                stage.ConfigurationJson = stage.ConfigurationJson.Replace(
+                    "Please review the task specification in the system prompt",
+                    "Please review:\n{{ task.description }}");
+            }
+        }
+        await context.SaveChangesAsync();
+
+        // Run EnsureDefaultWorkflowsAsync again
+        var refreshedWorkflow = await context.EnsureDefaultWorkflowsAsync();
+
+        // Verify that agentic stages were updated to canonical deduplicated prompt templates
+        var implStage = refreshedWorkflow.Stages.First(s => s.StageId == StandardStageIds.Implementation);
+        var reviewStage = refreshedWorkflow.Stages.First(s => s.StageId == StandardStageIds.TaskReview);
+        var codeReviewStage = refreshedWorkflow.Stages.First(s => s.StageId == StandardStageIds.CodeReviewAndFix);
+
+        Assert.DoesNotContain("{{ task.description }}", implStage.ConfigurationJson);
+        Assert.DoesNotContain("{{ task.description }}", reviewStage.ConfigurationJson);
+        Assert.DoesNotContain("{{ task.description }}", codeReviewStage.ConfigurationJson);
+
+        Assert.Contains("docs/tasks/", implStage.ConfigurationJson);
+        Assert.Contains("docs/tasks/", reviewStage.ConfigurationJson);
+        Assert.Contains("docs/tasks/", codeReviewStage.ConfigurationJson);
+    }
+
+    [Fact]
     public async Task EfCoreTaskRepository_IdeationConversationLifecycle_AndTurnsPersistence_WorksCorrectly()
     {
         using var context = new AppDbContext(_options);

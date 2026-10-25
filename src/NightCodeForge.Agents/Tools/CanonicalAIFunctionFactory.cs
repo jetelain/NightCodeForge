@@ -41,25 +41,29 @@ public static class CanonicalAIFunctionFactory
 
             AIFunctionFactory.Create(
                 ([Description("Workspace-relative path to edit")] string path,
-                 [Description("One or more disjoint edits applied in order; each chunk provides oldText (or old_text) and newText (or new_text)")] IReadOnlyList<EditChunk>? edits = null,
+                 [Description("One or more disjoint edits applied in order; each chunk provides oldText (or old_text), newText (or new_text), and optional replaceAll (or replace_all)")] IReadOnlyList<EditChunk>? edits = null,
                  [Description("Shortcut for a single edit: exact character sequence to be replaced")] string? old_text = null,
                  [Description("Shortcut for a single edit: replacement character sequence")] string? new_text = null,
+                 [Description("When true, replaces all occurrences of old_text")] bool replace_all = false,
                  CancellationToken ct = default) =>
                 {
                     if (edits is { Count: > 0 } && edits.Any(c => !string.IsNullOrEmpty(c.OldText) || !string.IsNullOrEmpty(c.NewText)))
                     {
-                        return tools.EditAsync(path, edits, ct);
+                        var effectiveEdits = replace_all
+                            ? edits.Select(e => e.ReplaceAll ? e : e with { ReplaceAll = true }).ToList()
+                            : edits;
+                        return tools.EditAsync(path, effectiveEdits, ct);
                     }
 
                     if (old_text != null && new_text != null)
                     {
-                        return tools.EditAsync(path, old_text, new_text, ct);
+                        return tools.EditAsync(path, old_text, new_text, replace_all, ct);
                     }
 
                     return Task.FromResult("Error: provide 'edits' (array of { oldText, newText }) or single-edit replacement ('oldText'/'newText' or 'old_text'/'new_text').");
                 },
                 "edit",
-                "Replaces exact text snippets in a workspace file. Use 'edits' for one or several disjoint replacements in a single call."),
+                "Replaces exact text snippets in a workspace file. Use 'edits' for one or several disjoint replacements in a single call, or 'replace_all' to replace all occurrences."),
 
             AIFunctionFactory.Create(
                 ([Description("Shell command line to execute")] string command,

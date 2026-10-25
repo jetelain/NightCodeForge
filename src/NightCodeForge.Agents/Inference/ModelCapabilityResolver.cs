@@ -104,14 +104,27 @@ public static class ModelCapabilityResolver
         IChatClient? summarizerClient = null)
     {
         var profile = FindProfile(options, modelId);
-        int contextWindow = explicitContextWindowTokens
-            ?? profile?.ContextWindowTokens
-            ?? options?.ContextWindowTokens
-            ?? LlmProviderOptions.DefaultContextWindowTokens;
-
-        if (contextWindow <= 0)
+        string resolutionSource;
+        int contextWindow;
+        if (explicitContextWindowTokens.HasValue && explicitContextWindowTokens.Value > 0)
+        {
+            contextWindow = explicitContextWindowTokens.Value;
+            resolutionSource = "AgentProfile";
+        }
+        else if (profile?.ContextWindowTokens is { } profileTokens && profileTokens > 0)
+        {
+            contextWindow = profileTokens;
+            resolutionSource = "ModelCapabilityProfile";
+        }
+        else if (options?.ContextWindowTokens is { } optionsTokens && optionsTokens > 0)
+        {
+            contextWindow = optionsTokens;
+            resolutionSource = "LlmProviderOptions (appsettings.json)";
+        }
+        else
         {
             contextWindow = LlmProviderOptions.DefaultContextWindowTokens;
+            resolutionSource = "Default (128k fallback)";
         }
 
         bool isSmallWindow = contextWindow <= CrucibleCompactionOptions.SmallContextWindowTokens;
@@ -144,7 +157,8 @@ public static class ModelCapabilityResolver
             ContextWindowTokens = contextWindow,
             ReserveTokens = reserveTokens,
             KeepRecentTokens = keepRecentTokens,
-            SummarizerModelId = modelId
+            SummarizerModelId = modelId,
+            ResolutionSource = resolutionSource
         };
 
         return new PiStyleCrucibleCompactionStrategy(compactionOptions, summarizerClient);

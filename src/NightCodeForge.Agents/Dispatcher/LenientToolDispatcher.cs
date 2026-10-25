@@ -475,19 +475,30 @@ public partial class LenientToolDispatcher
         {
             var oldKeys = new[] { "oldText", "old_text", "old_str", "search", "target_string", "targetContent", "TargetContent", "target_content" };
             var newKeys = new[] { "newText", "new_text", "new_str", "replace", "new_string", "replacementContent", "ReplacementContent", "replacement_content" };
+            var replaceAllKeys = new[] { "replaceAll", "replace_all", "all", "ReplaceAll" };
 
             object? oldVal = null;
             object? newVal = null;
+            bool replaceAllVal = false;
             foreach (var ok in oldKeys) if (raw.TryGetValue(ok, out oldVal) && oldVal != null) break;
             foreach (var nk in newKeys) if (raw.TryGetValue(nk, out newVal) && newVal != null) break;
+            foreach (var rk in replaceAllKeys)
+            {
+                if (raw.TryGetValue(rk, out var ra) && ra != null)
+                {
+                    if (ra is bool b) { replaceAllVal = b; break; }
+                    if (bool.TryParse(ra.ToString(), out var parsedB)) { replaceAllVal = parsedB; break; }
+                }
+            }
 
             if (oldVal != null && newVal != null)
             {
                 norm["old_text"] = oldVal;
                 norm["new_text"] = newVal;
+                norm["replace_all"] = replaceAllVal;
                 norm["edits"] = new List<object?>
                 {
-                    new Dictionary<string, object?> { ["oldText"] = oldVal, ["newText"] = newVal }
+                    new Dictionary<string, object?> { ["oldText"] = oldVal, ["newText"] = newVal, ["replaceAll"] = replaceAllVal }
                 };
             }
         }
@@ -541,14 +552,24 @@ public partial class LenientToolDispatcher
 
                 string? effectiveOld = null;
                 string? effectiveNew = null;
+                bool replaceAll = false;
                 var oldKeys = new[] { "oldText", "old_text", "targetContent", "target_content", "old_str", "search" };
                 var newKeys = new[] { "newText", "new_text", "replacementContent", "replacement_content", "new_str", "replace" };
+                var replaceAllKeys = new[] { "replaceAll", "replace_all", "all" };
                 foreach (var k in oldKeys) { if (args.TryGetValue(k, out var ot) && ot != null) { effectiveOld = ot.ToString(); break; } }
                 foreach (var k in newKeys) { if (args.TryGetValue(k, out var nt) && nt != null) { effectiveNew = nt.ToString(); break; } }
+                foreach (var k in replaceAllKeys)
+                {
+                    if (args.TryGetValue(k, out var ra) && ra != null)
+                    {
+                        if (ra is bool b) { replaceAll = b; break; }
+                        if (bool.TryParse(ra.ToString(), out var parsedB)) { replaceAll = parsedB; break; }
+                    }
+                }
 
                 if (effectiveOld != null && effectiveNew != null)
                 {
-                    return await tools.EditAsync(path, effectiveOld, effectiveNew, ct);
+                    return await tools.EditAsync(path, effectiveOld, effectiveNew, replaceAll, ct);
                 }
 
                 return "Error: provide 'edits' (array of { oldText, newText }) or single-edit replacement ('oldText'/'newText' or 'old_text'/'new_text').";
@@ -742,6 +763,17 @@ public partial class LenientToolDispatcher
     private static IReadOnlyList<EditChunk> ExtractEdits(Dictionary<string, object?> args)
     {
         var chunks = new List<EditChunk>();
+        bool defaultReplaceAll = false;
+        var replaceAllKeys = new[] { "replaceAll", "replace_all", "all", "ReplaceAll" };
+        foreach (var k in replaceAllKeys)
+        {
+            if (args.TryGetValue(k, out var ra) && ra != null)
+            {
+                if (ra is bool b) { defaultReplaceAll = b; break; }
+                if (bool.TryParse(ra.ToString(), out var parsedB)) { defaultReplaceAll = parsedB; break; }
+            }
+        }
+
         if (!args.TryGetValue("edits", out var editsObj) || editsObj == null)
         {
             return chunks;
@@ -767,15 +799,12 @@ public partial class LenientToolDispatcher
             {
                 // Fallback
             }
-            return chunks;
         }
-
-        if (editsObj is IEnumerable<EditChunk> typedChunks)
+        else if (editsObj is IEnumerable<EditChunk> typedChunks)
         {
-            return typedChunks.ToList();
+            chunks.AddRange(typedChunks);
         }
-
-        if (editsObj is JsonElement je)
+        else if (editsObj is JsonElement je)
         {
             if (je.ValueKind == JsonValueKind.Array)
             {
@@ -787,10 +816,8 @@ public partial class LenientToolDispatcher
                     }
                 }
             }
-            return chunks;
         }
-
-        if (editsObj is IEnumerable<object?> list)
+        else if (editsObj is IEnumerable<object?> list)
         {
             foreach (var item in list)
             {
@@ -818,6 +845,11 @@ public partial class LenientToolDispatcher
             }
         }
 
+        if (defaultReplaceAll)
+        {
+            return chunks.Select(c => c.ReplaceAll ? c : c with { ReplaceAll = true }).ToList();
+        }
+
         return chunks;
     }
 
@@ -825,9 +857,11 @@ public partial class LenientToolDispatcher
     {
         string old = string.Empty;
         string @new = string.Empty;
+        bool replaceAll = false;
 
         var oldKeys = new[] { "oldText", "old_text", "targetContent", "target_content", "target_string", "search", "old_str", "old" };
         var newKeys = new[] { "newText", "new_text", "replacementContent", "replacement_content", "replacement_string", "replace", "new_str", "new" };
+        var replaceAllKeys = new[] { "replaceAll", "replace_all", "all" };
 
         foreach (var k in oldKeys)
         {
@@ -847,16 +881,27 @@ public partial class LenientToolDispatcher
             }
         }
 
-        return new EditChunk(old, @new);
+        foreach (var k in replaceAllKeys)
+        {
+            if (dict.TryGetValue(k, out var ra) && ra != null)
+            {
+                if (ra is bool b) { replaceAll = b; break; }
+                if (bool.TryParse(ra.ToString(), out var parsedB)) { replaceAll = parsedB; break; }
+            }
+        }
+
+        return new EditChunk(old, @new, replaceAll);
     }
 
     private static EditChunk ExtractChunkFromJsonElement(JsonElement el)
     {
         string old = string.Empty;
         string @new = string.Empty;
+        bool replaceAll = false;
 
         var oldKeys = new[] { "oldText", "old_text", "targetContent", "target_content", "target_string", "search", "old_str", "old" };
         var newKeys = new[] { "newText", "new_text", "replacementContent", "replacement_content", "replacement_string", "replace", "new_str", "new" };
+        var replaceAllKeys = new[] { "replaceAll", "replace_all", "all" };
 
         foreach (var k in oldKeys)
         {
@@ -876,7 +921,17 @@ public partial class LenientToolDispatcher
             }
         }
 
-        return new EditChunk(old, @new);
+        foreach (var k in replaceAllKeys)
+        {
+            if (el.TryGetProperty(k, out var p))
+            {
+                if (p.ValueKind == JsonValueKind.True) { replaceAll = true; break; }
+                if (p.ValueKind == JsonValueKind.False) { replaceAll = false; break; }
+                if (p.ValueKind == JsonValueKind.String && bool.TryParse(p.GetString(), out var parsedB)) { replaceAll = parsedB; break; }
+            }
+        }
+
+        return new EditChunk(old, @new, replaceAll);
     }
 
     private static IReadOnlyList<string>? ExtractStringList(Dictionary<string, object?> args, string key)

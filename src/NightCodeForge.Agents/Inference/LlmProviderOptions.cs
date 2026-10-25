@@ -28,7 +28,7 @@ public class LlmProviderOptions
     /// </summary>
     public string? ReasoningEffort { get; set; } = "xhigh";
 
-    public const int DefaultContextWindowTokens = 32768;
+    public const int DefaultContextWindowTokens = 131072;
     public const int DefaultMaxOutputTokens = 8192;
 
     /// <summary>

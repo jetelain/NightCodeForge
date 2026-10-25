@@ -639,10 +639,21 @@ VALUES ('" + AddIsDeferredByPauseToForgeTaskMigrationId + @"', '10.0.12');";
             foreach (var stage in standardWorkflow.Stages)
             {
                 var canonicalStage = canonical.Stages.FirstOrDefault(s => s.StageId == stage.StageId);
-                if (canonicalStage != null && stage.QueueTier != canonicalStage.QueueTier)
+                if (canonicalStage != null)
                 {
-                    stage.QueueTier = canonicalStage.QueueTier;
-                    modified = true;
+                    if (stage.QueueTier != canonicalStage.QueueTier)
+                    {
+                        stage.QueueTier = canonicalStage.QueueTier;
+                        modified = true;
+                    }
+
+                    if (stage.ConfigurationJson != null &&
+                        stage.ConfigurationJson.Contains("{{ task.description }}", StringComparison.Ordinal) &&
+                        canonicalStage.ConfigurationJson != null)
+                    {
+                        stage.ConfigurationJson = canonicalStage.ConfigurationJson;
+                        modified = true;
+                    }
                 }
             }
 

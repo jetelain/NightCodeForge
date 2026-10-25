@@ -1299,6 +1299,19 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     : null;
                 var entries = BuildTranscriptEntries(chatHistory);
 
+                TranscriptCompactionMetadata? compactionMeta = null;
+                if (harnessOptions?.CompactionStrategy is PiStyleCrucibleCompactionStrategy piCompaction)
+                {
+                    var opts = piCompaction.Options;
+                    compactionMeta = new TranscriptCompactionMetadata(
+                        piCompaction.GetType().Name,
+                        opts.ContextWindowTokens,
+                        opts.ReserveTokens,
+                        opts.TriggerThresholdTokens,
+                        opts.KeepRecentTokens,
+                        opts.ResolutionSource ?? "Unknown");
+                }
+
                 var meta = new TranscriptMetadata(
                     context.ForgeTask.Id,
                     context.StageId,
@@ -1314,7 +1327,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     ActiveSkills: activeSkills,
                     MafConfiguration: mafConfig,
                     ModelCalls: tracingClient?.ModelCalls,
-                    AttemptIndex: attemptIndex);
+                    AttemptIndex: attemptIndex,
+                    Compaction: compactionMeta);
 
                 var repoRoot = context.Workspace?.RepositoryPath ?? workspacePath;
                 var transcriptDir = Path.Combine(repoRoot, "docs", "transcripts");
@@ -1367,6 +1381,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
         {
             var role = msg.Role.Value;
             var text = msg.Text ?? string.Empty;
+
+            if (text.StartsWith(PiStyleCrucibleCompactionStrategy.CheckpointPreamble, StringComparison.Ordinal)
+                || text.StartsWith("[CONTEXT COMPACTION CHECKPOINT]", StringComparison.Ordinal))
+            {
+                role = "COMPACTION";
+            }
 
             // Structured reasoning (TextReasoningContent) is not part of msg.Text; emit it as its own step.
             if (msg.Role == ChatRole.Assistant)

@@ -103,8 +103,12 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
     private readonly CrucibleCompactionOptions _options;
     private readonly IChatClient? _summarizerClient;
+    private int _lastCompactedTurnCount = -1;
+    private int _lastCompactedTokenCount = 0;
 
     public CrucibleCompactionOptions Options => _options;
+    public int LastCompactedTurnCount => _lastCompactedTurnCount;
+    public int LastCompactedTokenCount => _lastCompactedTokenCount;
 
     public PiStyleCrucibleCompactionStrategy(CrucibleCompactionOptions options, IChatClient? summarizerClient = null)
         : base(
@@ -118,6 +122,22 @@ Keep each section concise. Preserve exact file paths, function names, and error 
     private static CrucibleCompactionOptions RequireOptions(CrucibleCompactionOptions? options) =>
         options ?? throw new ArgumentNullException(nameof(options));
 
+    /// <summary>
+    /// Calculates the dynamic budget of recent tokens to preserve verbatim.
+    /// Invariant: AnchorTokens + EffectiveKeepRecent + CheckpointSummary &lt;= TriggerThreshold - HeadroomMargin.
+    /// </summary>
+    public int CalculateEffectiveKeepRecentTokens(int anchorTokens)
+    {
+        int effectiveSafetyMargin = _options.SafetyMarginTokens;
+        if (_options.TriggerThresholdTokens <= _options.SafetyMarginTokens)
+        {
+            effectiveSafetyMargin = Math.Max(0, _options.TriggerThresholdTokens / 4);
+        }
+
+        int dynamicBudget = Math.Max(0, _options.TriggerThresholdTokens - anchorTokens - effectiveSafetyMargin);
+        return Math.Min(_options.KeepRecentTokens, dynamicBudget);
+    }
+
     protected override async ValueTask<bool> CompactCoreAsync(
         CompactionMessageIndex index,
         ILogger logger,
@@ -125,8 +145,8 @@ Keep each section concise. Preserve exact file paths, function names, and error 
     {
         if (!_options.Enabled) return false;
 
-        // Check if total token count exceeds trigger threshold
-        if (index.TotalTokenCount <= _options.TriggerThresholdTokens)
+        // Check if active (included) context token count exceeds trigger threshold
+        if (index.IncludedTokenCount <= _options.TriggerThresholdTokens)
         {
             return false;
         }
@@ -137,6 +157,36 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             // Too few groups to compact without destroying prompt anchors
             return false;
         }
+
+        // Count assistant turns across all groups in index (strictly monotonic)
+        int totalAssistantTurns = groups.Sum(g => g.Messages.Count(m => m.Role == ChatRole.Assistant));
+
+        // Evaluate emergency context limit on active context window (IncludedTokenCount)
+        bool isEmergency = index.IncludedTokenCount >= (int)(_options.ContextWindowTokens * _options.EmergencyThresholdRatio);
+
+        if (!isEmergency && _lastCompactedTurnCount >= 0)
+        {
+            int turnsSinceLastCompaction = totalAssistantTurns - _lastCompactedTurnCount;
+            if (turnsSinceLastCompaction < _options.DebounceTurnCooldown)
+            {
+                logger.LogDebug(
+                    "Compaction skipped by turn cooldown. Turns since last: {Turns}, Cooldown: {Cooldown}",
+                    turnsSinceLastCompaction, _options.DebounceTurnCooldown);
+                return false;
+            }
+
+            int tokensAddedSinceLastCompaction = Math.Max(0, index.TotalTokenCount - _lastCompactedTokenCount);
+            if (tokensAddedSinceLastCompaction < _options.DebounceTokenDelta)
+            {
+                logger.LogDebug(
+                    "Compaction skipped by token delta debounce. Tokens added: {TokensAdded}, Min delta: {MinDelta}",
+                    tokensAddedSinceLastCompaction, _options.DebounceTokenDelta);
+                return false;
+            }
+        }
+
+        // Tier 2 (Compaction Emergency): Clamp oversized tool results in active groups
+        ClampOversizedToolResults(groups, _options.EmergencyToolResultMaxChars, _options.ToolResultMaxChars, logger);
 
         // 1. Locate Task Anchor (System messages + initial User message)
         int anchorEndIndex = -1;
@@ -158,6 +208,14 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         {
             return false;
         }
+
+        int tokensAnchor = 0;
+        for (int i = 0; i <= anchorEndIndex; i++)
+        {
+            tokensAnchor += groups[i].TokenCount;
+        }
+
+        int effectiveKeepRecent = CalculateEffectiveKeepRecentTokens(tokensAnchor);
 
         // Check if there is an existing active (non-excluded) summary group from a prior compaction pass
         CompactionMessageGroup? existingSummaryGroup = null;
@@ -184,7 +242,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
             accumulatedRecentTokens += g.TokenCount;
 
-            if (accumulatedRecentTokens >= _options.KeepRecentTokens)
+            if (accumulatedRecentTokens >= effectiveKeepRecent)
             {
                 cutIndex = i;
                 break;
@@ -288,6 +346,9 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
         index.InsertGroup(anchorEndIndex + 1, CompactionGroupKind.Summary, new[] { summaryMessage }, null);
 
+        _lastCompactedTurnCount = totalAssistantTurns;
+        _lastCompactedTokenCount = index.TotalTokenCount;
+
         logger.LogInformation(
             "Pi-style context compaction succeeded. Summarized {GroupCount} groups ({MessageCount} messages). Injected summary with {FileOpsLength} file ops characters.",
             groupsToSummarize.Count,
@@ -295,6 +356,46 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             fileOpsXml.Length);
 
         return true;
+    }
+
+    private static void ClampOversizedToolResults(
+        IList<CompactionMessageGroup> groups,
+        int emergencyMaxChars,
+        int clampedTargetChars,
+        ILogger logger)
+    {
+        foreach (var group in groups)
+        {
+            if (group.IsExcluded) continue;
+
+            foreach (var msg in group.Messages)
+            {
+                foreach (var content in msg.Contents)
+                {
+                    if (content is FunctionResultContent frc && frc.Result != null)
+                    {
+                        var resStr = frc.Result.ToString();
+                        if (resStr != null && resStr.Length > emergencyMaxChars)
+                        {
+                            int targetLen = Math.Min(clampedTargetChars, resStr.Length);
+                            logger.LogInformation("Clamping emergency tool result in call {CallId} from {Length} to {Target} characters",
+                                frc.CallId, resStr.Length, targetLen);
+                            frc.Result = resStr[..targetLen] + $"\n... [Output clamped to {targetLen.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} characters]";
+                        }
+                    }
+                    else if (content is TextContent tc && tc.Text != null && msg.Role == ChatRole.Tool)
+                    {
+                        if (tc.Text.Length > emergencyMaxChars)
+                        {
+                            int targetLen = Math.Min(clampedTargetChars, tc.Text.Length);
+                            logger.LogInformation("Clamping emergency tool text content from {Length} to {Target} characters",
+                                tc.Text.Length, targetLen);
+                            tc.Text = tc.Text[..targetLen] + $"\n... [Output clamped to {targetLen.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} characters]";
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private static int AdjustCutPointForToolAtomicity(
