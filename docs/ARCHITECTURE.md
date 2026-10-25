@@ -29,11 +29,12 @@ NightCodeForge decouples task execution from human availability through **asynch
 ```mermaid
 flowchart TB
     subgraph UI ["Blazor Web Application (Interactive Server)"]
+        TopNav["⏸️ Top Navigation (Global Pause & GPU VRAM Eviction Toggle)"]
         Ideation["💡 Interactive Ideation & Discovery Chat"]
         Backlog["📋 Backlog & Dependency Graph View"]
         Inbox["📬 Question Inbox (Human-in-the-Loop)"]
-        Monitor["⚡ Live Telemetry & Worker Logs"]
-        Review["🔍 Review Room (Git Diff & Merge)"]
+        Monitor["⚡ Live Telemetry & Inspector (Pipeline Restart: Soft vs. Hard Reset)"]
+        Review["🔍 Review Room (Git Diff & Guarded Merge)"]
     end
 
     subgraph Hubs ["Communication Layer"]
@@ -43,10 +44,19 @@ flowchart TB
     subgraph Core ["Orchestration & Workflow Engine"]
         DepEngine["Dependency Graph & Resolution Engine (DAG)"]
         PipelineEngine["Extensible Workflow Pipeline Engine\n(Stages: Review ➔ Baseline ➔ Implement ➔ Quality Gates ➔ Review & Fix ➔ Verification)"]
-        HangfireEngine["Hangfire Background Processing"]
-        QueueUrgent["Queue: llm-urgent (Priority = 1)"]
-        QueueStandard["Queue: llm-inference (Priority = 2)"]
-        QueueUtility["Queue: default (WorkerCount = 4)"]
+        OpsControl["OperationsControlService (Singleton)\n(Global Pause, Worker Gatekeeping & VRAM Reclaim)"]
+        ConflictEngine["ConflictResolutionVerifier\n(Deterministic Build Check & Gate Re-Traversal)"]
+        HangfireEngine["Hangfire Background Processing\n(WorkerCount = 1 for LLM Inference)"]
+        
+        subgraph StageQueues ["Stage-Priority Inference Queues (Polled in Strict Order)"]
+            QueueUrgent["Q1: llm-urgent (P1 Critical / Maintainer Promotion ONLY)"]
+            QueueCodeReview["Q2: llm-code-review (Tier 1: Review & Fix, Post-Review Verification)"]
+            QueueImplementation["Q3: llm-implementation (Tier 2: Baseline, Impl, Gates, Conflicts)"]
+            QueueTaskReview["Q4: llm-task-review (Tier 3: Task Review, Triage, Backlog)"]
+            QueueLegacy["Q5: llm-inference (Legacy Draining Queue)"]
+        end
+        
+        QueueUtility["Queue: default (Non-GPU WorkerCount = 4)"]
     end
 
     subgraph Harness ["AI Agent Harness Layer (Strategy Pattern)"]
@@ -58,13 +68,13 @@ flowchart TB
 
     subgraph Gateway ["Inference Gateway Layer (OllamaRouter)"]
         Router["OllamaRouter (:11434)\n(Dynamic VRAM & Context Dispatch)"]
-        HostGPU["Host GPU (Local Target)\n(Developer Workstation - Fast, Low Latency)"]
+        HostGPU["Host GPU (Local Target)\n(Workstation - Fast, Low Latency, VRAM Eviction: 0 MB)"]
         LanGPU["Dedicated LAN GPU Server (Remote Target)\n(Local Area Network - High VRAM, ~95% Dev-Queue)"]
         CloudOverflow["Cloud Overflow (Optional External Target)\n(Zero Local VRAM / Instant Complex Chat)"]
     end
 
     subgraph Workspaces ["Workspace & Storage Layer"]
-        GitCli["Git CLI Engine (CliWrap)\n- Ext4 Mirror & Container Reuse\n- Worktrees: task-{id}\n- WIP Commits & Diff -U2"]
+        GitCli["Git CLI Engine (CliWrap)\n- Ext4 Mirror & Container Teardown\n- Worktrees: task-{id}\n- WIP Commits & Hard Reset to Base"]
         EFCore["Entity Framework Core (SQLite/PostgreSQL)"]
         CanonicalClone["Canonical Clone on main/master\n(~/.nightcodeforge/wks/{id}/clone)"]
         Worktrees["Ephemeral ForgeTask Worktrees\n(~/.nightcodeforge/wks/{id}/task-{id})"]
@@ -73,16 +83,17 @@ flowchart TB
 
     UI --> SignalR
     SignalR --> Core
+    TopNav --> OpsControl
+    OpsControl --> Router
     Ideation -.->|Spawns Tasks with Dependencies| DepEngine
     Ideation -.->|Concurrent Interactive Inference| Router
     DepEngine --> PipelineEngine
+    PipelineEngine --> ConflictEngine
     PipelineEngine --> HangfireEngine
-    HangfireEngine --> QueueUrgent
-    HangfireEngine --> QueueStandard
+    HangfireEngine --> StageQueues
     HangfireEngine --> QueueUtility
 
-    QueueUrgent -->|WorkerCount = 1| IHarness
-    QueueStandard -->|WorkerCount = 1| IHarness
+    StageQueues -->|WorkerCount = 1 Polling Sequence Q1..Q5| IHarness
     QueueUtility --> GitCli
 
     IHarness -.->|Primary Target| Crucible
@@ -111,7 +122,7 @@ NightCodeForge integrates with [OllamaRouter](https://github.com/jetelain/Ollama
 
 1. **Local Target (`Local`): Host GPU (Developer Workstation)**
    * **Physical Location:** The developer's primary machine running the NightCodeForge host process (e.g., an NVIDIA RTX 4070/4080/4090 laptop or desktop).
-   * **Role:** Used whenever possible for fast, zero-latency inference when the model and context fit comfortably within host VRAM (typically 8–16 GB). Ideal for Stage 0 Untrusted Intake Triage, quick diff evaluations, or local interactive Ideation Chat.
+   * **Role:** Used whenever possible for fast, zero-latency inference when the model and context fit comfortably within host VRAM (typically 8–16 GB). Ideal for Stage 0 Untrusted Intake Triage, quick diff evaluations, or local interactive Ideation Chat. Can be reclaimed to 0 MB VRAM at any time via Global Operations Pause for gaming or 3D rendering.
 2. **Remote Target (`Remote`): Dedicated Local Network Area (LAN) Server**
    * **Physical Location:** A dedicated compute node residing strictly on the **Local Area Network (LAN)** (e.g., a headless Linux workstation equipped with dual RTX 3090/4090s, RTX 6000 Ada, or 80GB VRAM).
    * **Role:** The primary inference workhorse for **~95% of automated software engineering workloads**. Provides the expansive VRAM necessary to load 32B/70B parameter models (e.g., `qwen2.5-coder:32b`, `deepseek-r1:32b`) and sustain 32k/64k token context windows without quantization degradation or out-of-memory (OOM) crashes.
@@ -126,7 +137,7 @@ NightCodeForge integrates with [OllamaRouter](https://github.com/jetelain/Ollama
 ---
 
 ### 2.1.2 The Single-GPU Dev-Queue Bottleneck Hypothesis
-A foundational operational premise of NightCodeForge is that background dev-queue tasks in Hangfire (`llm-urgent` and `llm-inference`) run with `WorkerCount = 1`.
+A foundational operational premise of NightCodeForge is that background dev-queue tasks in Hangfire (`llm-urgent`, `llm-code-review`, `llm-implementation`, `llm-task-review`, and legacy `llm-inference`) run with `WorkerCount = 1`.
 
 Why this single-GPU hypothesis remains correct and necessary:
 * **The 95% Routing Reality:** Modern software engineering tasks (analyzing entire project ASTs, multi-turn tool loops, generating complex unit tests, and comprehensive code reviews) require high parameter density and large context windows. Consequently, **OllamaRouter routes approximately 95% of background dev-queue workloads to the dedicated Remote LAN GPU server**.
@@ -192,51 +203,75 @@ sequenceDiagram
 
 Rather than binding to a rigid, hardcoded state machine library, NightCodeForge uses a **composable, stage-based Workflow Pipeline Engine**. Each task progresses through a sequence of discrete, pluggable stages executed by dedicated specialized agents and deterministic verification gates.
 
-### 3.1 ForgeTask Creation & Intake Channels
-Tasks enter NightCodeForge through three distinct channels. In all cases, every newly created task starts with the **`Suggested`** status:
+### 3.1 ForgeTask Creation, Origin Provenance & Intake Channels
+Tasks enter NightCodeForge through four distinct authoring channels. Each created task is stamped with an explicit, immutable [TaskOrigin](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/TaskOrigin.cs) enum to ensure provenance tracking and strict portal query scoping:
 
-1. **External Triage Workflow:**
-   - External systems (GitHub tasks, Jira, webhooks) trigger an isolated triage pipeline.
+1. **Dedicated Task Creation Page (`TaskOrigin.Manual`):**
+   - The developer authors a task directly via the dedicated web interface at `/tasks/new` ([CreateTask.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/CreateTask.razor)).
+   - Supports explicit specification of Title, Description, Target Base Branch, Priority (P1 Critical through P5 Low), Merge Mode, and optional dependency prerequisites.
+   - Initialized with `Status = TaskOverallStatus.Suggested`, `Origin = TaskOrigin.Manual`, `HasExecutionRun = false`, and `MaxExecutedStageOrder = 0`.
+2. **Untrusted External Intake & Sandboxed Triage (`TaskOrigin.UntrustedIntake`):**
+   - External systems (GitHub issues, Jira tickets, webhooks) trigger an isolated triage pipeline.
    - Runs a dedicated **Triage Agent** on the base branch (`main` or `master`) in a `RestrictedReadOnly` sandbox (`:ro` workspace mount, `--network none`).
    - Deeply analyzes the request, validates reproducibility, and invokes `propose_tasks` if valid.
-   - Newly proposed tasks enter the database in **`Suggested`** status.
-2. **Ideation & Discovery Chat:**
+   - Proposed tasks are stamped with `Origin = TaskOrigin.UntrustedIntake` and enter the database in **`Suggested`** status.
+   - **Portal Scoping:** The Untrusted Intake portal (`/triage`) strictly filters proposed backlog items by `Status == Suggested && Origin == TaskOrigin.UntrustedIntake`, isolating external triage proposals from internal human ideas.
+3. **Interactive Ideation & Discovery Chat (`TaskOrigin.Ideation`):**
    - The developer converses with the codebase exploration agent (`IIdeationService`) to explore features, refactorings, or architecture questions.
    - Either the developer or the ideation agent creates tasks with dependencies via `propose_tasks`.
-   - Created in **`Suggested`** status.
-3. **Markdown ForgeTask Synchronization (`docs/tasks/*.md`):**
-   - The developer creates a new markdown specification directly in `<WorkspaceRoot>/docs/tasks/YYYY-MM-DD-<slug>.md` on their real workspace.
+   - Created in **`Suggested`** status with `Origin = TaskOrigin.Ideation`.
+4. **Markdown Task Synchronization & CLI Import (`TaskOrigin.Import`):**
+   - The developer creates a new markdown specification directly in `<WorkspaceRoot>/docs/tasks/YYYY-MM-DD-<slug>.md` on their real workspace, or uses `ncf import`.
    - `TaskMarkdownSyncService` detects the file via `FileSystemWatcher`, allocates an ID, and injects frontmatter with initial `status: suggested` and `merge_mode: manual_review_required`.
+   - Stamped with `Origin = TaskOrigin.Import`.
 
-### 3.2 Manual Promotion & Merge Mode Selection
-A task remains dormant in `Suggested` until a maintainer performs a **single manual action** via the Web UI or CLI:
+### 3.2 Maintainer Promotion, Rejection Lifecycle & Execution State Hygiene
+A task remains dormant in `Suggested` until a maintainer performs a **single manual action** via the Web UI (Kanban board, Task Detail drawer, or dedicated detail page) or CLI:
+
 * **Promote to Open:**
   - The maintainer specifies two mandatory properties in the same action:
-    1. **`Priority`** (1 to 5, default = 1).
+    1. **`Priority`** (1 to 5, default = 1; P1 Critical to P5 Low).
     2. **`MergeMode`**:
        - `Automatic`: NightCodeForge will automatically squash and merge the verified branch to `baseBranch` once all quality checks pass.
        - `ManualReviewRequired`: Once verified, the task pauses at `Ready` so the maintainer can review diffs, test locally, and approve before merging.
   - State transitions to **`Open`**.
-* **Reject:**
-  - State transitions to **`Rejected`**; the task is archived and never executed.
+* **Maintainer Rejection Action Lifecycle (`TaskOverallStatus.Rejected`):**
+  - Maintainers can explicitly reject any task from `Suggested` or `Open` (via `TaskDetailDrawer.razor`, `TaskDetail.razor`, or `KanbanCard.razor`).
+  - Executed cleanly via `TaskOrchestrator.RejectTaskAsync(taskId, reason)`:
+    1. **Execution Cancellation:** Cancels active tokens in `ITaskCancellationManager` to halt any running background operations.
+    2. **DevQueue Eviction:** Purges and deletes any pending or queued Hangfire job (`_jobQueue.Delete(task.LastHangfireJobId)`).
+    3. **State Mutation:** Sets `task.Status = TaskOverallStatus.Rejected`, `task.IsWaitingForHuman = false`, and purges transient conflict keys in `task.PipelineDataJson`.
+    4. **Temporal Audit History:** Records an immutable snapshot in `TaskHistories` via `_taskRepository.UpdateWithHistoryAsync` attributed to `AuditActors.User` with the maintainer's rejection reason.
+    5. **Dependency Store Update:** Propagates the rejected status through `ITaskDependencyStore` to prevent blocked child tasks from executing.
+    6. **Sandbox Teardown:** Removes the ephemeral Git worktree (`_gitWorkspaceManager.RemoveWorktreeAsync`) and cleanly destroys the Docker sandbox container (`_environmentProvider.CleanupTaskContainerAsync`).
+    7. **Markdown Archival:** Updates disk markdown frontmatter (`status: rejected`) via `TaskMarkdownSyncService`.
+* **Execution State Hygiene & Stepper Truthfulness:**
+  - `HasExecutionRun` (boolean) and `MaxExecutedStageOrder` (integer) decouple configured workflow stages from actual execution progress.
+  - Open tasks that have not yet started execution (`HasExecutionRun == false`) or are blocked on prerequisite dependencies always reside in the "Open (Backlog)" column in `KanbanBoard.razor`, never appearing in "In-Flight".
+  - The pipeline stepper (`PipelineStepper.razor`) checks active worker state and `HasExecutionRun`: idle/unstarted stages are rendered as clean pending steps without false, distracting "Running" spinner animations.
+  - The Task Execution Inspector (`/inspector`) and Review Room (`/review`) strictly scope their selection lists to tasks meeting `HasExecutionRun == true`, ensuring maintainers only inspect or review tasks that have executed work.
 
 ### 3.3 Main Workflow Execution Engine
-Once a task has `Status == TaskOverallStatus.Open` and **all its dependencies have `Status == TaskOverallStatus.Closed`**, it is enqueued to `llm-inference` (`WorkerCount = 1`) and executes through the main workflow:
+Once a task has `Status == TaskOverallStatus.Open` and **all its dependencies have `Status == TaskOverallStatus.Closed`**, it is enqueued to its initial stage queue (`llm-task-review` via `ITaskJobQueue.EnqueueStage`) and executes sequentially through the single-worker inference pipeline:
 
 ```mermaid
 flowchart TD
     Suggested(["Suggested (Intake)"]) -->|Maintainer Action: Promote| Open(["Open (Dependencies Pending)"])
-    Open -->|All Dependencies Closed| S1["1. ForgeTask Review Stage\n(Agentic - Scope & Q&A)"]
+    Open -->|All Dependencies Closed| S1["1. ForgeTask Review Stage\n(Agentic - Scope & Q&A)\n[Queue: llm-task-review (Tier 3)]"]
     S1 --> Reviewed["Status: Reviewed"]
-    Reviewed --> S2["2. Deterministic Pre-Implementation\n(Baseline Build / Test / Coverage)"]
-    S2 --> S3["3. Implementation Stage\n(Agentic - Code & Test Generation)"]
+    Reviewed --> S2["2. Deterministic Pre-Implementation\n(Baseline Build / Test / Coverage)\n[Queue: llm-implementation (Tier 2)]"]
+    S2 --> S3["3. Implementation Stage\n(Agentic - Code & Test Generation)\n[Queue: llm-implementation (Tier 2)]"]
     S3 --> Implemented["Status: Implemented"]
-    Implemented --> S4["4. Deterministic Post-Implementation\n(Coverage Gate / Warning Ratchet)"]
-    S4 -->|Pass| S5["5. Code Review Stage\n(Agentic - Audit & Direct Polish)"]
+    Implemented --> S4["4. Deterministic Post-Implementation\n(Coverage Gate / Warning Ratchet)\n[Queue: llm-implementation (Tier 2)]"]
+    S4 -->|Pass| S5["5. Code Review Stage\n(Agentic - Audit & Direct Polish)\n[Queue: llm-code-review (Tier 1)]"]
     S4 -.->|Regression| S3
-    S5 --> S6["6. Deterministic Post-Review\n(Build & Test Verification of Review Edits)"]
-    S6 -->|Pass| Ready["Status: Ready"]
+    S5 --> S6["6. Deterministic Post-Review\n(Build & Test Verification of Review Edits)\n[Queue: llm-code-review (Tier 1)]"]
+    S6 -->|Pass| Gate2{"Gate 2: Pre-Review\nMergeability Check\nagainst baseBranch"}
     S6 -.->|Review Introduced Failure| S5
+
+    Gate2 -->|Clean Merge| Ready["Status: Ready\n(Review Room Pending Review)"]
+    Gate2 -.->|Merge Conflict Detected| ConflictResolution["Autonomous Conflict Resolution Turn\n[Queue: llm-implementation (Tier 2)]\n- Top-of-Prompt Header Mandate\n- Selective Staging Before Build\n- Deterministic Build Verification in Sandbox\n- Mandatory Downstream Gate Re-Traversal"]
+    ConflictResolution --> S4
 
     Ready --> MergeGate{"MergeMode?"}
     MergeGate -->|Automatic| AutoMerge["Auto-Squash & Merge to Base Branch"]
@@ -244,34 +279,42 @@ flowchart TD
     ManualWait -->|Approved| ManualMerge["Maintainer Triggers Merge"]
     AutoMerge --> Closed(["Status: Closed"])
     ManualMerge --> Closed
-    Closed --> Cascade["Cascade Unblock Dependent Tasks"]
+    Closed --> Cascade["Cascade Unblock Dependent Tasks\n(Ordered by Priority ASC, CreatedAt ASC)"]
 
     S1 -.->|ask| Blocked["IsWaitingForHuman = true\n(Status preserved; GPU Freed Cleanly)"]
     S3 -.->|ask| Blocked
     S5 -.->|ask| Blocked
-    Blocked -.->|Developer Answers in UI| ResumeUrgent["Enqueue to llm-urgent\n(Resume with exact agent profile)"]
-    ResumeUrgent -.-> S1
-    ResumeUrgent -.-> S3
-    ResumeUrgent -.-> S5
+    Blocked -.->|Developer Answers in UI| ResumeTier["EnqueueStage(taskId, stage.QueueTier, priority)\n(Preserves Stage Tier System; P1 routes to llm-urgent)"]
+    ResumeTier -.-> S1
+    ResumeTier -.-> S3
+    ResumeTier -.-> S5
 ```
 
 #### Main Workflow Stages:
 1. **Stage 1: ForgeTask Review Agent (`TaskReviewStage`):**
+   - **Queue Tier:** Tier 3 (`llm-task-review`).
    - **Mission:** Deeply inspect the codebase against the task request *before* coding begins. Detect ambiguities, uncover hidden constraints, identify impacted files, verify prerequisites, and formulate an approved technical plan.
    - **Transition:** On completion, updates `task.Status = TaskOverallStatus.Reviewed`.
 2. **Stage 2: Deterministic Pre-Implementation:**
+   - **Queue Tier:** Tier 2 (`llm-implementation`).
    - **Mission:** Execute baseline compilation (`dotnet build`), run baseline test suite, and capture baseline coverage and warning metrics without consuming LLM tokens. Metrics are recorded in `PipelineDataBag`.
 3. **Stage 3: Implementation Agent (`ImplementationStage`):**
+   - **Queue Tier:** Tier 2 (`llm-implementation`).
    - **Mission:** Implement the code changes outlined in the approved plan. Modify files, generate unit tests, iterate on compiler/test feedback inside the sandbox.
    - **Transition:** On completion, updates `task.Status = TaskOverallStatus.Implemented`.
 4. **Stage 4: Deterministic Post-Implementation Quality Gates:**
+   - **Queue Tier:** Tier 2 (`llm-implementation`).
    - **Mission:** Run `format,build,test-with-coverage,sast` via `CompositeDeterministicStage` (incorporating `DeterministicFormatStage`, `DeterministicBuildStage`, `DeterministicTestWithCoverageGate` [$\Delta \ge 0$], and `DeterministicSastStage`). If tests fail, coverage regresses, or build breaks, loops back to Stage 3 with structured compiler and assertion diagnostics.
 5. **Stage 5: Code Review Agent (`CodeReviewAndFixStage`):**
-   - **Mission:** Act as a critical reviewer and automated fixer. Inspect the noise-filtered `git diff -U2`, check coding conventions, detect subtle regressions, and apply direct minor polish patches.
-6. **Stage 6: Deterministic Post-Review Verification:**
+   - **Queue Tier:** Tier 1 (`llm-code-review`).
+   - **Mission:** Act as a critical reviewer and automated fixer. Inspect the noise-filtered `git diff -U2`, check coding conventions, detect subtle regressions, and apply direct minor polish patches. Prioritized ahead of implementation turns to close nearly completed work and prevent branch drift.
+6. **Stage 6: Deterministic Post-Review Verification & Gate 2:**
+   - **Queue Tier:** Tier 1 (`llm-code-review`).
    - **Mission:** Because the Code Review agent can modify code and introduce syntax or regression bugs, this deterministic step re-compiles and re-executes unit tests on the final changeset.
-   - **Transition:** On pass, updates `task.Status = TaskOverallStatus.Ready`. On failure, loops back to Stage 5 with diagnostic output.
+   - **Gate 2 (Pre-Review Mergeability Check):** Checks whether `feature/task-{id}` cleanly merges against latest `baseBranch`. If conflicts exist, initiates hardened conflict resolution (see Section 3.11).
+   - **Transition:** On pass, updates `task.Status = TaskOverallStatus.Ready`. On test/build failure, loops back to Stage 5 with diagnostic output.
 7. **Stage 7: Merge Resolution Gate:**
+   - **Guarded Pending Review Contract:** Only tasks with `HasExecutionRun == true && Status == TaskOverallStatus.Ready` are treated as pending review (`TaskReviewService.IsPendingReview`). In-flight tasks in `Implemented` or `Reviewed` status are actively traversing downstream quality gates and cannot be merged prematurely.
    - Evaluates `task.MergeMode`:
      - **Automatic Mode:** NightCodeForge automatically squashes WIP commits into a conventional commit, merges into `baseBranch`, sets `task.Status = TaskOverallStatus.Closed`, and triggers cascade unblocking.
      - **Manual Review Required Mode:** ForgeTask remains in `Ready`. The maintainer inspects the diff in the Review Room, runs manual tests, and clicks "Approve & Merge" $\rightarrow$ sets `task.Status = TaskOverallStatus.Closed`.
@@ -287,10 +330,10 @@ flowchart TD
    - When the user answers the question in the UI:
      - `question.Status = QuestionStatus.Answered; question.Answer = answer;`
      - `task.IsWaitingForHuman = false;`
-     - The task is enqueued to **`llm-urgent`** for immediate priority pickup.
+     - **Stage-Tier Preservation:** The task is re-enqueued using `_jobQueue.EnqueueStage(task.Id, currentStage.QueueTier, task.Priority)`. It strictly preserves the stage tier of the interrupted stage (`llm-task-review`, `llm-implementation`, or `llm-code-review`) and its persisted priority. Only if the task is P1 Critical does `EnqueueStage` route it to `llm-urgent`.
      - When dequeued, the orchestrator retrieves the original agent profile via `InterruptedAgentProfileId` and resumes the exact stage with the appropriate agent and injected answer context.
 
-### 3.2 Agent Profiles: Specializing Intelligence per Stage
+### 3.4 Agent Profiles: Specializing Intelligence per Stage
 Each step in a workflow pipeline is associated with an **Agent Profile** (`AgentProfile`). Different stages of software development demand different model capabilities, reasoning depths, and tool permissions:
 
 | Stage | Typical Profile Needs | Example Configuration |
@@ -347,7 +390,7 @@ public enum ThinkingEffort
 }
 ```
 
-### 3.3 Extensibility & Pipeline Abstraction
+### 3.5 Extensibility & Pipeline Abstraction
 The workflow pipeline is defined via modular contracts. Stages can be **Agentic** (driven by LLMs with exclusive GPU scheduling) or **Deterministic** (driven by native commands, e.g., builds, tests, SAST, running on CPU with zero token usage):
 
 ```csharp
@@ -363,6 +406,7 @@ public interface IWorkflowStage
     string DisplayName { get; }
     int Order { get; }
     WorkflowStageKind StageKind { get; }
+    StageQueueTier QueueTier { get; } // Stage-declared queue tier (TaskReview, Implementation, CodeReview)
     string? DefaultAgentProfileId { get; } // Null for deterministic stages
     
     Task<StageExecutionResult> ExecuteAsync(
@@ -383,7 +427,7 @@ public interface IWorkflowPipeline
 }
 ```
 
-### 3.4 Stage Bootstrap Prompts & Context Injection
+### 3.6 Stage Bootstrap Prompts & Context Injection
 To maximize reasoning effectiveness and ensure consistent agent behavior, each stage relies on a specialized **System Prompt** (defining persona, behavioral boundaries, and available tools) and a dynamic **Bootstrap Prompt** (seeding task-specific context and instructions):
 
 ```csharp
@@ -411,22 +455,26 @@ public class StagePromptTemplate
    - **Injected Context:** Target base branch (`{{BaseBranch}}`), complete `git diff` generated from Stage 2 (`{{GitDiff}}`), project coding standards.
    - **Behavioral Directive:** "Inspect the diff line-by-line. If you find bugs or gaps, use file editing tools to fix them directly. When confident, summarize findings."
 
-### 3.5 Stage Interruption & Universal Context Switching
+### 3.7 Stage Interruption & Universal Context Switching
 At **any point** in **any stage**, an agent may invoke the `ask` tool. When this occurs:
 1. The stage returns `StageExecutionResult.WaitingForHuman(question)`.
 2. The orchestrator records the question in the database, associates `question.AgentProfileId = profile?.Id`, flags `task.IsWaitingForHuman = true`, and preserves the original `task.InterruptedAgentProfileId = profile?.Id`. **Crucially, `task.Status` is never changed to `BlockedQuestion`**; the task retains its current lifecycle status (`Open`, `Reviewed`, or `Implemented`).
 3. The orchestrator triggers a native Git WIP commit on `feature/task-{id}`.
 4. The Hangfire job completes cleanly (`Succeeded`), releasing the single GPU worker immediately.
-5. When the user submits the answer, `task.IsWaitingForHuman = false`, and the task is enqueued into `llm-urgent`. The active stage is resumed with the exact original agent profile (`InterruptedAgentProfileId`), the previous conversation memory checkpoint, and the newly supplied human answer.
+5. When the user submits the answer, `task.IsWaitingForHuman = false`, and the task is re-enqueued using `_jobQueue.EnqueueStage(task.Id, currentStage.QueueTier, task.Priority)`. It preserves the stage queue tier of the interrupted stage (`llm-task-review`, `llm-implementation`, or `llm-code-review`) and its persisted priority, routing to `llm-urgent` only if the task is P1 Critical. The active stage is resumed with the exact original agent profile (`InterruptedAgentProfileId`), the previous conversation memory checkpoint, and the newly supplied human answer context.
 
-### 3.6 Review Room Iteration & Change Requests
+### 3.8 Review Room Iteration & Change Requests
 If the developer inspects the diff in the Review Room and identifies tasks or wants adjustments before merging:
 1. The developer clicks **"Request Changes"** and provides revision notes / feedback.
 2. The orchestrator records the reviewer feedback.
-3. The task transitions from `Review` back to **Stage 2 (`ImplementationStage`)**, with the reviewer feedback injected into the prompt context (`{{PriorAnswers}}` / `{{ReviewerFeedback}}`).
-4. The task is enqueued with highest priority into `llm-urgent` so the Implementation Agent directly addresses the feedback on the existing feature branch.
+3. The task transitions from `Review` back to **Stage 3 (`ImplementationStage`)**, with the reviewer feedback injected into the prompt context (`{{PriorAnswers}}` / `{{ReviewerFeedback}}`).
+4. The task is enqueued using `_jobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority)`, entering the Tier 2 `llm-implementation` queue (or `llm-urgent` if P1 Critical) so the Implementation Agent directly addresses the feedback on the existing feature branch.
+5. **Mandatory Automated Regression Test Authoring Contract:**
+   - Both the Review Agent prompt directives and human change-request loopback protocols strictly mandate automated test creation.
+   - For every defect, missed requirement, or edge-case bug identified in the change request, the Implementation Agent is **strictly required to author a dedicated automated test (unit or integration test)** reproducing or covering the scenario *before* re-submitting.
+   - Patching production code without authoring a corresponding test is forbidden; downstream deterministic gates enforce suite execution and coverage ratcheting.
 
-### 3.7 Explicit Stage Boundary Handover Protocol (Zero-Memory Clean Handoff)
+### 3.9 Explicit Stage Boundary Handover Protocol (Zero-Memory Clean Handoff)
 Carrying forward raw multi-turn conversation histories across stage boundaries causes massive token bloat, increases prompt evaluation latency on local LLMs, and leads to attention drift. NightCodeForge implements an **explicit zero-memory clean handoff**:
 
 ```mermaid
@@ -467,7 +515,7 @@ flowchart TD
    - `CodeReviewAndFixStage` starts at **Turn 0 with an empty chat history**, receiving only the base branch name, the clean `git diff` generated from the feature branch, and coding guidelines.
 3. **Impact:** Eliminates 75%–85% of redundant prompt tokens, maintains high local LLM attention precision, and prevents cross-stage context pollution.
 
-### 3.8 Deterministic Stages: Quality Gates & Agent Input Feeders
+### 3.10 Deterministic Stages: Quality Gates & Agent Input Feeders
 
 Workflows in NightCodeForge are not limited to purely agentic reasoning loops. A robust software engineering pipeline often requires **deterministic steps** (e.g., compilation, unit test suites, Static Application Security Testing [SAST], formatters, or linters) that execute predictable shell commands without AI intervention.
 
@@ -497,7 +545,7 @@ flowchart LR
     S3 -.->|Exceeds Max Retries (3)| Blocked["Blocked: Human Q&A"]
 ```
 
-### 3.8.1 Persistent Pipeline Data Bag & Differential Quality Gates
+### 3.10.1 Persistent Pipeline Data Bag & Differential Quality Gates
 
 Deterministic stages are not merely ephemeral shell runners; they serve as **persistent telemetry and baseline extractors**. NightCodeForge provides a thread-safe, serializable **Pipeline Data Bag** (`PipelineContext.DataBag`) that persists cross-stage data into `AppDbContext.Tasks.PipelineDataJson` and records per-stage snapshots in `STAGE_EXECUTION_RECORD.OutputDataJson`.
 
@@ -590,6 +638,173 @@ public class PipelineDataBag
 
 ---
 
+### 3.11 Hardened Autonomous Conflict Resolution & Downstream Gate Re-Traversal
+
+When autonomous coding tasks execute against an active repository, the target base branch (`main` or `master`) continuously advances as maintainers push commits or other tasks squash-merge. If an in-flight branch drifts, merge conflicts can emerge during pre-review verification (**Gate 2**) or pre-merge validation (**Gate 3**).
+
+#### 3.11.1 The Verification Blind Spot & Forensic Hardening
+Earlier implementations suffered from a dangerous architectural vulnerability: after an agent edited conflicted files to remove conflict markers (`<<<<<<<`), the verifier checked only textual markers and Git unmerged index stages (`git ls-files -u`), immediately committing the merge without running project compilation. Consequently, non-compiling C# code was committed to the branch, bypassed downstream gates, and prematurely presented an "Approve & Merge" button in the Review Room.
+
+NightCodeForge hardens this lifecycle through **deterministic compilation verification** and **mandatory downstream gate re-traversal**:
+
+```mermaid
+flowchart TD
+    subgraph ConflictDetected ["1. Conflict Detection (Gate 2 or Gate 3)"]
+        ConflictHit["Merge Conflict against baseBranch detected"]
+        Initiate["TaskOrchestrator.InitiateConflictResolutionAsync<br/>- Preserves worktree state & MERGE_HEAD<br/>- Sets Status = Open, Stage = Implementation<br/>- Enqueues via StageQueueTier.Implementation to 'llm-implementation'"]
+    end
+
+    subgraph AgentTurn ["2. Implementation Agent Resolution Turn"]
+        PromptMandate["Header Mandate Block PREPENDED AT VERY TOP OF PROMPT<br/>- Conflicted file list & base branch<br/>- Injected previous compiler errors (tail-preserved up to 4000 chars)<br/>- Explicit instructions on constructor/interface reconciliation<br/>- Mandatory execution of build & test commands via bash"]
+        AgentEdit["Agent uses 'read' & 'edit' to reconcile code & remove markers"]
+    end
+
+    subgraph HardenedVerifier ["3. ConflictResolutionVerifier (Deterministic Gates)"]
+        ScanMarkers{"1. Marker Scan<br/>Line-anchored, checks open blocks<br/>(<<<<<<<, |||||||, =======, >>>>>>>)?"}
+        StageFiles["2. Selectively Stage Conflicted & Created Source Files<br/>(BEFORE Build Execution)"]
+        CheckLs{"3. Unmerged Index Check<br/>(git ls-files -u empty)?"}
+        ExecBuild{"4. Run workspace.BuildCommand in Sandbox<br/>with Workspace BuildTimeout"}
+        MergeCommit["5. Create Git Merge Commit<br/>'Resolve merge conflicts with {baseBranch}'"]
+    end
+
+    subgraph ReTraversalGates ["4. Mandatory Downstream Gate Re-Traversal"]
+        PostImpl["Stage 4: Deterministic Post-Implementation Gates<br/>(Enqueued to llm-implementation)"]
+        CodeReview["Stage 5: Code Review & Fix Agent Turn<br/>(Enqueued to llm-code-review)"]
+        PostReview["Stage 6: Deterministic Post-Review Verification<br/>(Enqueued to llm-code-review)"]
+        Gate2["Gate 2: Pre-Review Mergeability Check"]
+        ReadyTransition["Task Status: Ready<br/>(Review Room Banner Displays: 'Autonomous Conflict Resolution Completed')"]
+    end
+
+    ConflictHit --> Initiate --> PromptMandate --> AgentEdit --> ScanMarkers
+    ScanMarkers -- Markers Found --> Loopback["Loopback via Orchestrator to Implementation<br/>(Attempts++ | Preserves MERGE_HEAD)"]
+    ScanMarkers -- Clean --> StageFiles --> CheckLs
+    CheckLs -- Unmerged Entries --> Loopback
+    CheckLs -- Clean --> ExecBuild
+    ExecBuild -- Build FAILED or Timed Out --> CompileLoopback["DO NOT COMMIT.<br/>Capture compiler errors & Loopback via Orchestrator<br/>(Attempts++ | Enqueued to llm-implementation)"]
+    CompileLoopback --> PromptMandate
+    ExecBuild -- Build PASSED (Exit Code 0) --> MergeCommit --> PostImpl
+    PostImpl --> CodeReview --> PostReview --> Gate2 --> ReadyTransition
+```
+
+#### 3.11.2 The 5-Step Verification Sequence ([ConflictResolutionVerifier](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/ConflictResolutionVerifier.cs))
+Verification executes strictly inside the task's isolated container sandbox via [IExecutionEnvironmentProvider](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Interfaces/IExecutionEnvironmentProvider.cs) under the workspace lock:
+
+1. **Line-Anchored Conflict Marker Scan:**
+   Scans every conflicted file. Verifies zero unclosed or malformed conflict blocks (`<<<<<<< `, `||||||| `, `>>>>>>> `). The separator `=======` is verified strictly *inside* an open conflict block; lone lines containing `=======` outside blocks (e.g. Markdown Setext headings or ASCII tables) are permitted to avoid false-positive failures.
+2. **Selective Staging Before Build (Crucial Invariant):**
+   Modifications to conflicted files (`git add -- {file}`), deletions (`git rm --ignore-unmatch -- {file}`), and newly created source files (`.cs`, `.ts`, `.json`) are staged **before running compilation**. This guarantees that compiler build outputs (`bin/`, `obj/`, intermediate binaries) generated during step 4 are never accidentally staged or committed into the repository.
+3. **Unmerged Index Check:**
+   Runs `git ls-files -u`. Ensures that Git's unmerged index is completely cleared.
+4. **Deterministic Build Verification & Timeout:**
+   Executes `workspace.BuildCommand` (e.g. `dotnet build`) inside the sandbox environment. If compilation fails or times out:
+   * Truncates compiler errors to `ConflictResolutionConstants.MaxCompilerErrorsLength` (4,000 characters), keeping the informative tail.
+   * **Does NOT create a Git commit.** The worktree remains in an uncommitted state with `MERGE_HEAD` intact so the agent can resume seamlessly.
+   * Updates `PipelineDataBagKeys.CompilerErrors` and loops back to implementation.
+5. **Atomic Git Merge Commit:**
+   **Only if** steps 1–4 succeed with Exit Code 0, the verifier commits: `git commit --no-edit -m "Resolve merge conflicts with {baseBranch}"`.
+
+#### 3.11.3 Multi-Tier Attempt Budgets & Escalation
+To prevent infinite reasoning loops or runaway token consumption:
+* `ConflictResolutionConstants.MaxConflictResolutionAttempts = 3`: Maximum consecutive build/marker loopbacks for a single conflict event.
+* `ConflictResolutionConstants.MaxTotalConflictResolutionAttempts = 6`: Lifetime conflict resolution turn budget across the entire task run.
+* `ConflictResolutionConstants.MaxLifetimeConflictDetections = 3`: Maximum distinct merge conflict events against an advancing `main`.
+* If any budget is exceeded, the orchestrator escalates to human maintainers by setting `task.IsWaitingForHuman = true` with a detailed audit log.
+
+#### 3.11.4 Mandatory Downstream Gate Re-Traversal
+Once conflict resolution passes verification:
+* The task **never jumps directly to `Ready` or the Review Room**.
+* It must re-traverse all subsequent pipeline quality gates:
+  1. **`PostImplementationGates`** (Tier 2 `llm-implementation`): Full deterministic test suite and differential coverage gates.
+  2. **`CodeReviewAndFix`** (Tier 1 `llm-code-review`): Reviewer agent inspects the newly reconciled diff.
+  3. **`PostReviewVerification`** (Tier 1 `llm-code-review`): Deterministic validation of review patches.
+  4. **Gate 2**: Pre-review mergeability check confirms branch is still cleanly mergeable against latest `main`.
+  5. **`TaskOverallStatus.Ready`**: The task reaches `Ready` only after all 4 downstream gates pass cleanly.
+
+#### 3.11.5 The Three Conflict Touchpoints in the Task Lifecycle
+To protect against code divergence and human review fatigue across long-running task workflows, NightCodeForge guards the repository across three discrete touchpoints:
+
+1. **Touchpoint 1 — Start of Pre-Implementation Baseline (Stage 2):**
+   - In Stage 1 (`task-review`), the architect agent reviews requirements and drafts the technical specification in `docs/tasks/task-{id}.md`. If clarification questions are raised via `ask`, the task may sit dormant for hours or days.
+   - At the beginning of Stage 2, before establishing baseline test coverage or building the project, `GitWorkspaceManager.SyncFromBaseBranchAsync` synchronizes the task branch from `baseBranch`.
+   - Because Stage 1 only touches `docs/tasks/task-{id}.md` (which is committed before synchronization), this synchronization is expected to be clean and guarantees that Stage 3 (`Implementation`) authors code against current upstream APIs. If a conflict occurs, `MergeConflictException` fails fast.
+2. **Touchpoint 2 — Gate 2 Pre-Review Mergeability Check (`git merge-tree`):**
+   - When a task completes Stage 6, it prepares to enter `TaskOverallStatus.Ready`.
+   - Before presenting the task in the Review Room, the orchestrator executes a non-destructive read-only preview using the native Git engine:
+     ```bash
+     git merge-tree --write-tree --name-only <baseBranch> <featureBranch>
+     ```
+   - If clean, the task transitions to `Ready` and appears in `/review`.
+   - If conflicts exist, the task avoids presenting conflicting diffs to human reviewers and immediately enters autonomous conflict resolution.
+3. **Touchpoint 3 — Squash & Merge Validation & Atomic Rollback:**
+   - At final merge time (whether manual maintainer click or `MergeMode.Automatic`), the canonical clone attempts `SquashAndMergeAsync`.
+   - If `main` advanced in the milliseconds since review, Git raises a merge conflict.
+   - The operation executes an **atomic rollback** (resetting the canonical clone back to clean `main`), catches `MergeConflictException`, and safely returns the task to autonomous conflict resolution without corrupting the canonical repository.
+
+---
+
+### 3.12 Pipeline Restart Strategies: Soft Resume vs. Hard Reset & Base Branch Rebase
+
+In the **Task Execution Inspector** (`/inspector/{taskId}` via [TaskExecutionInspector.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Monitoring/TaskExecutionInspector.razor)), developers can restart task execution from Stage 1 (`task-review`). Operators choose between two fundamentally distinct restart strategies via [RestartPipelineModal.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Monitoring/RestartPipelineModal.razor):
+
+```mermaid
+flowchart TD
+    subgraph UI ["Task Execution Inspector"]
+        ClickRestart["User clicks '⏮ Restart Pipeline'"]
+        OpenModal["Display Restart Pipeline Modal"]
+        SelectMode{"Select TaskRestartGitMode"}
+        SoftOption["Option 1: PreserveWork (Soft Restart)<br/>- Keep existing branch commits<br/>- Preserve worktree files<br/>- Re-run pipeline from Stage 1 on top of code"]
+        HardOption["Option 2: HardResetToBaseBranch (Hard Reset & Rebase)<br/>- Discard all WIP commits & files<br/>- Reset branch directly to latest baseBranch<br/>- Teardown sandbox container first<br/>- Purge pipeline execution data bag<br/>- Re-align remote branch (host-origin)<br/>- Re-run Stage 1 from clean baseline"]
+    end
+
+    subgraph Orchestration ["Core Workflow Engine (ITaskOrchestrator.RestartTaskPipelineAsync)"]
+        GuardMerged{"Task already merged / closed?<br/>(SquashCommitSha != null || Status == Closed)"}
+        RejectMerged["Throw InvalidOperationException<br/>(Merged tasks cannot be restarted)"]
+        CancelActive["1. Cancel running execution via ITaskCancellationManager<br/>2. Delete enqueued job via ITaskJobQueue.Delete(LastHangfireJobId)"]
+        AcquireLock["Acquire Workspace Mutual Exclusion Lock"]
+        
+        subgraph HardResetPath ["Hard Reset Operations (Container-First Order)"]
+            CleanContainer["1. Teardown Sandbox Container<br/>(CleanupTaskContainerAsync releases file locks)"]
+            FetchBase["2. Synchronize baseBranch from upstream / mirror"]
+            ResetGit["3. GitWorkspaceManager.ResetTaskBranchToBaseAsync<br/>- Discard edits: git reset --hard HEAD<br/>- Purge untracked: git clean -fdx<br/>- Hard reset: git reset --hard baseBranch<br/>- Verify relative paths"]
+            SyncRemote["4. Reconcile remote branch<br/>(git push --force host-origin feature/task-{id})"]
+        end
+
+        ResetDB["Reset DB State & Mark Runs Superseded<br/>- Purge execution artifacts from PipelineDataJson<br/>- Set HasExecutionRun = false<br/>- Mark active conversations as StageExecutionStatus.Superseded<br/>- Set Status = Open, CurrentStageId = initialStage.StageId"]
+        Enqueue["ITaskJobQueue.EnqueueStage<br/>(Dispatches initialStage using initialStage.QueueTier)"]
+    end
+
+    ClickRestart --> OpenModal --> SelectMode
+    SelectMode -->|PreserveWork| SoftOption --> GuardMerged
+    SelectMode -->|HardResetToBaseBranch| HardOption --> GuardMerged
+    GuardMerged -- Yes --> RejectMerged
+    GuardMerged -- No --> CancelActive --> AcquireLock
+    AcquireLock -->|HardResetToBaseBranch| CleanContainer --> FetchBase --> ResetGit --> SyncRemote --> ResetDB
+    AcquireLock -->|PreserveWork| ResetDB
+    ResetDB --> Enqueue
+```
+
+#### 3.12.1 The Two Restart Modes ([TaskRestartGitMode](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/TaskRestartGitMode.cs))
+
+1. **Soft Restart (`TaskRestartGitMode.PreserveWork = 0`):**
+   * **Use Case:** The operator wants to re-run pipeline stages on top of existing code (e.g. re-verifying quality gates with updated test configurations, retrying review with a different prompt/model profile, or continuing to iterate on authored code).
+   * **Git Strategy:** Preserves existing feature branch commits and modified worktree files. Pipeline state resets to Stage 1, allowing downstream agents to inspect existing work.
+
+2. **Hard Reset & Rebase (`TaskRestartGitMode.HardResetToBaseBranch = 1`):**
+   * **Use Case:** The previous attempt produced broken code, architectural dead ends, or corrupt worktrees. The operator wants to restart the task **from scratch on a clean state directly aligned with the latest `main`**, exactly as if the task were being executed for the first time.
+   * **Container-First Teardown Order:** The Docker sandbox container (`ncf-sandbox-{workspaceId}-task-{taskId}`) is torn down **first** via `CleanupTaskContainerAsync`. This releases open file handles, file-system locks, and volume mounts that would otherwise block `git clean -fdx` or file deletions on Windows/WSL mounts.
+   * **Worktree Clean & Rebase:**
+     ```bash
+     git -C <worktreePath> reset --hard HEAD
+     git -C <worktreePath> clean -fdx
+     git -C <worktreePath> reset --hard <baseBranch>
+     ```
+   * **Relative Path Re-Verification:** Bidirectional relative path pointers (`.git` gitdir relative paths) are re-verified via `EnsureWorktreeRelativePathsAsync` to ensure container/WSL mount integrity.
+   * **Remote Branch Reconciliation:** If `host-origin` is configured, force-pushes the reset branch (`git push --force host-origin feature/task-{id}`).
+   * **Pipeline Bag & Conversation Hygiene:** Purges conflict metadata (`HasResolvedConflict`, `ConflictFiles`, `CompilerErrors`) from `PipelineDataJson`, marks existing stage conversations with `StageExecutionStatus.Superseded`, sets `HasExecutionRun = false`, and resets `Status = TaskOverallStatus.Open`.
+   * **Protected Invariant:** Merged or closed tasks cannot be restarted (`SquashCommitSha != null || Status == TaskOverallStatus.Closed` throws `InvalidOperationException`).
+
+---
+
 ## 4. ForgeTask Dependency Management (DAG)
 
 Complex features and refactoring tasks naturally break down into interdependent tasks. NightCodeForge natively manages dependencies via a **Directed Acyclic Graph (DAG)**.
@@ -597,7 +812,7 @@ Complex features and refactoring tasks naturally break down into interdependent 
 ### 4.1 Dependency Rules & State Propagation
 * A task can declare one or more prerequisite tasks (`DependsOnTaskIds`).
 * **Execution Gate:** A task with `Status == TaskOverallStatus.Open` and unsatisfied dependencies (i.e. one or more prerequisites do not have `Status == TaskOverallStatus.Closed`) is marked as dependency-blocked in the UI and **will not be enqueued** to Hangfire until all dependencies are met.
-* **Cascade Activation:** When a task reaches the terminal `TaskOverallStatus.Closed` state (squashed and merged into the base branch), the orchestrator triggers cascade unblocking (`CascadeUnblockAsync`). Any dependent task whose prerequisites are now all `Closed` is automatically enqueued to the `llm-inference` queue for autonomous execution.
+* **Cascade Activation:** When a task reaches the terminal `TaskOverallStatus.Closed` state (squashed and merged into the base branch), the orchestrator triggers cascade unblocking (`ResolveCascadeUnblockedTasksAsync`). Dependent tasks whose prerequisites are now all `Closed` are sorted by priority (`Priority ASC`, i.e. P1 Critical before P2 before P3...), then `CreatedAt ASC`. Each unblocked task explicitly clears any lingering pause flag (`IsDeferredByPause = false`) and is enqueued via `ITaskJobQueue.EnqueueStage(unblockedTask.Id, initialStage.QueueTier, unblockedTask.Priority)` to its stage-designated Hangfire queue.
 * **Cycle Prevention:** When creating or modifying dependencies, the `DependencyResolutionEngine` performs topological sorting to detect and reject circular references (cycles).
 
 ```mermaid
@@ -794,25 +1009,110 @@ flowchart TD
 
 ## 7. Orchestration Engine & Queue Design
 
-### 7.1 Queue Concurrency Architecture
-The background job system uses **Hangfire** backed by persistent storage. Hangfire servers are separated into two distinct worker pools:
+### 7.1 Stage-Priority Inference Queue Architecture
 
-| Queue Name | Worker Count | Purpose | Constraints |
+In local LLM orchestration backed by [OllamaRouter](https://github.com/jetelain/OllamaRouter), the dedicated Remote LAN GPU server constitutes a shared single-worker bottleneck (~95% of background dev-queue workloads). To eliminate VRAM thrashing and model contention, background dev-queue tasks run with **`WorkerCount = 1`**.
+
+However, under a simple FIFO scheduling model, newly intake tasks starting `task-review` or `implementation` can queue ahead of tasks that are already 90% completed (`code-review-fix`). When nearly finished tasks are delayed:
+1. The target base branch (`main`) continues to advance as other tasks merge or maintainers push changes.
+2. The delayed task branch drifts from `main`, dramatically increasing the probability of Git merge conflicts.
+3. Earlier stages like `task-review` frequently invoke the `ask` tool to resolve ambiguities, pausing in `IsWaitingForHuman = true`.
+
+#### 7.1.1 The "Task as a Whole" Principle
+NightCodeForge solves this priority inversion through the **"Task as a Whole"** strategy: tasks are scheduled by their **proximity to completion**, pushing downstream tasks through merge or review readiness first to keep `main` clean and minimize branch drift:
+
+```mermaid
+flowchart TD
+    subgraph HangfireWorkers ["Single GPU Inference Worker (WorkerCount = 1)"]
+        Worker["NCF-LLM-Inference-Worker<br/>Strict Sequential Queue Polling: [Q1 -> Q2 -> Q3 -> Q4 -> Q5]"]
+    end
+
+    subgraph Q1 ["Queue 1: 'llm-urgent' (Highest Priority)"]
+        UrgentHotfix["P1 Critical Tasks (Any Stage)"]
+        UrgentManual["Maintainer Manual Promotion ('Promote to Urgent')"]
+        UrgentScope["Used ONLY for maintainer promotion & P1 Critical.<br/>Crash recovery & human replies preserve stage tiers."]
+    end
+
+    subgraph Q2 ["Queue 2: 'llm-code-review' (Tier 1 Stage Priority)"]
+        CR1["Stage 5: Code Review & Fix ('code-review-fix')"]
+        CR2["Stage 6: Post-Review Verification ('deterministic-post-review')"]
+        CR_Goal["Rationale: Tasks are ~90% complete.<br/>Finishing review triggers auto-merge or Ready status,<br/>preventing branch drift and merge conflicts."]
+    end
+
+    subgraph Q3 ["Queue 3: 'llm-implementation' (Tier 2 Stage Priority)"]
+        Impl1["Stage 2: Pre-Implementation Baseline ('deterministic-pre-impl')"]
+        Impl2["Stage 3: Implementation Agent Turn ('implementation')"]
+        Impl3["Stage 4: Post-Implementation Quality Gates ('deterministic-post-impl')"]
+        Impl4["Autonomous Conflict Resolution Turns & Verifier Loopbacks"]
+    end
+
+    subgraph Q4 ["Queue 4: 'llm-task-review' (Tier 3 Stage Priority)"]
+        TR1["Stage 1: ForgeTask Review / Architecture ('task-review')"]
+        TR2["Triage ('triage') and Unstarted Backlog Tasks"]
+        TR_Goal["Rationale: Intake & spec drafting.<br/>If clarification is needed ('ask'), task pauses in<br/>waiting state without starving downstream code."]
+    end
+
+    subgraph Q5 ["Queue 5: 'llm-inference' (Legacy Draining Queue)"]
+        Fallback["In-flight jobs during rolling upgrade (No new jobs enqueued here)"]
+    end
+
+    Q1 --> Worker
+    Q2 --> Worker
+    Q3 --> Worker
+    Q4 --> Worker
+    Q5 --> Worker
+```
+
+#### 7.1.2 Queue Polling Hierarchy & Server Configuration
+In [HangfireConfigurationExtensions.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/BackgroundJobs/HangfireConfigurationExtensions.cs), the single dedicated inference worker (`NCF-LLM-Inference-Worker`, `WorkerCount = 1`) polls queues in strict descending priority order:
+
+| Queue Name | Worker Count | Priority Tier | Workload Scope & Purpose |
 | :--- | :--- | :--- | :--- |
-| `llm-urgent` | **1** (Shared pool) | Resumed tasks that just received developer answers. | Highest priority for GPU inference. |
-| `llm-inference` | **1** (Shared pool) | Normal queued tasks awaiting execution. | Strictly sequential to protect VRAM. |
-| `default` | **4** | Non-GPU background tasks: Git diff calculation, log cleanup, telemetry broadcasts. | Parallel execution allowed. |
+| `llm-urgent` | **1** (Shared pool) | **Priority 1 (Emergency)** | **P1 Critical Tasks** (any stage) and explicit maintainer manual promotion ("Promote to Urgent") ONLY. |
+| `llm-code-review` | **1** (Shared pool) | **Priority 2 (Tier 1: Code Review)** | Tasks ready for **Code Review & Fix** (`code-review-fix`) and **Post-Review Verification** (`deterministic-post-review`). Pushing these through triggers automated merge or Ready status. |
+| `llm-implementation` | **1** (Shared pool) | **Priority 3 (Tier 2: Implementation)** | Tasks ready for **Pre-Implementation Baseline**, **Implementation**, **Post-Implementation Quality Gates**, and **Autonomous Conflict Resolution** turns. |
+| `llm-task-review` | **1** (Shared pool) | **Priority 4 (Tier 3: Task Review)** | Tasks ready for **ForgeTask Review** (`task-review`), **Triage** (`triage`), and unstarted backlog tasks. If clarification is needed, tasks pause without blocking downstream code. |
+| `llm-inference` | **1** (Shared pool) | **Priority 5 (Legacy Draining)** | Legacy draining queue for in-flight jobs during rolling upgrades. Polled last; jobs are migrated to their correct tier queue at startup. No new jobs are ever enqueued here. |
+| `default` | **4** | *Non-GPU Utility* | Non-GPU background tasks: Git diff generation, log cleanup, telemetry broadcasting, container image preparation. Parallel execution allowed. |
 
-> [!IMPORTANT]
-> The `llm-urgent` and `llm-inference` queues share a dedicated Hangfire `BackgroundJobServer` configured with `WorkerCount = 1` and ordered queue processing:
-> `Queues = new[] { "llm-urgent", "llm-inference" }`.
-> This guarantees that:
-> 1. At most **one** AI task runs on the GPU at any millisecond, strictly guarding VRAM against out-of-memory crashes.
-> 2. Resumed tasks in `llm-urgent` receive **priority pick-up**: as soon as the single worker completes its active turn/task, jobs in `llm-urgent` are dequeued before standard items in `llm-inference` (non-preemptive priority dispatch without concurrent VRAM oversubscription).
+#### 7.1.3 Stage-Declared Queue Tiers (`StageQueueTier`)
+Stages designate their own queue tier rather than relying on a hardcoded ID lookup:
+* The `StageQueueTier` enum (`TaskReview`, `Implementation`, `CodeReview`) is defined in `Core` and persisted as a required property on [StageDefinition.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/StageDefinition.cs).
+* Exposed at runtime via `IWorkflowStage.QueueTier`. When constructing stage instances in [WorkflowStageFactory.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/WorkflowStageFactory.cs), `QueueTier` is populated directly from the definition.
+* [StandardWorkflowDefinitions.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/StandardWorkflowDefinitions.cs) maps:
+  - `CodeReview`: `StandardStageIds.CodeReviewAndFix`, `StandardStageIds.PostReviewVerification`.
+  - `Implementation`: `StandardStageIds.PreImplementationBaseline`, `StandardStageIds.Implementation`, `StandardStageIds.PostImplementationGates`.
+  - `TaskReview`: `StandardStageIds.TaskReview`, `StandardStageIds.Triage`.
+
+#### 7.1.4 `ITaskJobQueue` Stage Dispatch Contract
+Under the Clean Break policy:
+* Legacy `EnqueueInference(int taskId)` is completely removed.
+* Dispatch is governed by:
+  ```csharp
+  string EnqueueStage(int taskId, StageQueueTier tier, int priority);
+  ```
+* **Dispatch Rules:**
+  - If `priority == TaskPriority.Critical` (P1) $\rightarrow$ `HangfireQueues.LlmUrgent`. (P1 always overrides the stage tier).
+  - Else `StageQueueTier.CodeReview` $\rightarrow$ `HangfireQueues.LlmCodeReview`.
+  - Else `StageQueueTier.Implementation` $\rightarrow$ `HangfireQueues.LlmImplementation`.
+  - Else `StageQueueTier.TaskReview` $\rightarrow$ `HangfireQueues.LlmTaskReview`.
+* **Human Replies & Reboot Crash Recovery Dispatch:**
+  When a developer submits answers to pending questions or when `StartupRecoveryService` recovers orphaned tasks after an OS crash, tasks **strictly preserve the stage tier system**. They call `_jobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority)` using the blocked stage's tier and persisted priority. They are not dumped into `llm-urgent` unless already marked P1 Critical.
+
+#### 7.1.5 DevQueue Priority Reordering & Starvation Observability
+In [DevQueueService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Services/DevQueueService.cs) and [DevQueueTable.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/DevQueue/DevQueueTable.razor):
+* `GetSnapshotAsync` queries all active queues: `rawUrgent`, `rawCodeReview`, `rawImplementation`, `rawTaskReview`, `rawInference`, `rawDefault`, `rawProcessing`, `rawFailed`.
+* `ReorderInferenceQueueByPriorityAsync`:
+  - Inspects only jobs confirmed in the `Enqueued` state (`EnqueuedJobs`). If a job has already transitioned to `Processing` or `Scheduled`, it is skipped immediately to prevent worker race conditions.
+  - Sorts waiting jobs by:
+    1. Task Priority (`Priority ASC`, numerically lowest value first: P1 $\rightarrow$ P5).
+    2. Original enqueue time ascending (FIFO aging within equal priority, preserved across re-enqueues via job parameters).
+  - Misplaced jobs (where stage tier or priority changed, or legacy jobs) are verified deleted (`Delete` returns `true`) before calling `EnqueueStage`, atomically updating `ForgeTask.LastHangfireJobId` to guarantee no job executes twice.
+* **Starvation Observability:** `DevQueueTable.razor` displays the age of the oldest waiting job per tier so operators can observe intake delays under heavy review/implementation bursts.
 
 ### 7.2 Workspace & ForgeTask-Level Concurrency: Dual-Tiered Git Locking (`IWorkspaceLockProvider`)
 
-While GPU inference is strictly serialized globally (`WorkerCount = 1` across `llm-urgent` and `llm-inference`), background utility tasks (`WorkerCount = 4` in the `default` queue), deterministic pipeline stages (compilation, unit tests, SAST scanning on CPU), and interactive developer actions (ideation chat, automated triage) can and should operate concurrently.
+While GPU inference is strictly serialized globally (`WorkerCount = 1` across `llm-urgent`, `llm-code-review`, `llm-implementation`, `llm-task-review`, and `llm-inference`), background utility tasks (`WorkerCount = 4` in the `default` queue), deterministic pipeline stages (compilation, unit tests, SAST scanning on CPU), and interactive developer actions (ideation chat, automated triage) can and should operate concurrently.
 
 To prevent race conditions, concurrent Git index mutations, and `.git/index.lock` collisions while maximizing throughput, `IWorkspaceLockProvider` enforces a **dual-tiered locking hierarchy**:
 
@@ -832,7 +1132,7 @@ flowchart TD
         Task3Lock["AcquireTaskLockAsync(wks, 103)\nWorktree: task-103"]
 
         Task1Task["ForgeTask #101: Deterministic Tests & SAST\n(Runs on CPU via default queue)"]
-        Task2Task["ForgeTask #102: Agentic Implementation\n(Runs on GPU via llm-inference)"]
+        Task2Task["ForgeTask #102: Agentic Implementation\n(Runs on GPU via llm-implementation)"]
         Task3Task["ForgeTask #103: Waiting for Human (ask)\n(Preserved in worktree on disk)"]
 
         Task1Lock --- Task1Task
@@ -856,6 +1156,26 @@ flowchart TD
 3. **Non-Blocking Ideation & Triage:**
    - Because the canonical clone stays checked out on `main`/`master` and normal task execution happens in isolated worktrees, discovery chat (`IIdeationService`) and untrusted triage (`TriageStage`) inspect `main` without waiting for task locks.
 
+#### 7.2.1 Fine-Grained Workspace Concurrency & Non-Blocking Git Merge Operations
+Earlier designs suffered from a **writer starvation** bottleneck: `AcquireTaskLockAsync` maintained a shared reader lock on the workspace (`state.ActiveReaders++`) for the entire duration of a task's multi-turn LLM reasoning loop (often 5 to 15+ minutes). As a result, when a maintainer clicked *"🚀 Approve & Merge"* in the Review Room, the operation was blocked indefinitely waiting for all concurrent background reasoning tasks in that workspace to finish.
+
+NightCodeForge eliminates this starvation through **fine-grained concurrency decoupling**:
+1. **Decoupled Task Execution Loops:**
+   - Long-running reasoning and tool loops hold strictly the per-task execution semaphore (`wks:{id}:task:{id}`).
+   - Because agent tool invocations (`read_file`, `edit_file`, `run_command`) operate strictly inside the isolated Git worktree (`task-{id}/`), they have zero interaction with the canonical repository clone (`main`).
+   - The task execution loop releases all workspace-level locks while inferring and testing.
+2. **Instantaneous Review Room Merges:**
+   - The exclusive workspace lock (`AcquireLockAsync(workspaceId)`) is acquired solely during discrete, sub-second canonical operations:
+     - Ephemeral worktree allocation (`EnsureWorktreeAsync`: ~100–200ms)
+     - Squash and merge into base branch (`SquashAndMergeAsync`: ~200–400ms)
+     - Host mirror push/pull (`PushBaseBranchToHostAsync`, `PullFromHostAsync`: ~100–300ms)
+     - Task markdown specification archiving (`ArchiveOrCleanupTaskFileAsync`: ~10–20ms)
+   - Maintainers can approve and squash-merge completed tasks instantaneously in the Review Room without blocking behind active background dev-queue tasks.
+3. **Lock Observability & Emergency Recovery:**
+   - `IWorkspaceLockProvider.GetActiveLocks()`: Returns a real-time list of [ActiveLockSnapshot](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Interfaces/IWorkspaceLockProvider.cs) records, capturing `WorkspaceId`, `TaskId`, `LockType` (`WorkspaceExclusive` vs `TaskExclusive`), `AcquiredAt`, and `DurationHeld`.
+   - Surfaced directly in the DevQueue dashboard for operator transparency.
+   - `EmergencyRelease(workspaceId, taskId)` and `EmergencyReleaseAll()`: Expose administrative overrides to forcibly release hung or orphaned semaphores without restarting the host process.
+
 ---
 
 ## 8. Git Workspace & Context-Switching Subsystem
@@ -872,6 +1192,7 @@ To ensure zero data loss during context switches:
    git commit -m "WIP: [ForgeTask #{id}][Stage: {stageName}] Awaiting human input: {QuestionSummary}" --no-verify
    ```
 3. When the task passes all stages and is approved in the Review Room, the orchestrator squashes the WIP commits into a clean, conventional commit before merging.
+4. **Clean Slate Hard Reset (`ResetTaskBranchToBaseAsync`):** When an operator restarts a task with `TaskRestartGitMode.HardResetToBaseBranch`, `GitWorkspaceManager` recycles sandbox containers first, purges all WIP commits and untracked files (`git reset --hard HEAD`, `git clean -fdx`), hard-resets the branch reference to `baseBranch`, validates relative worktree paths, and reconciles the remote `host-origin` branch (see Section 3.12).
 
 ### 8.3 Cross-Environment Architecture & Working Clone Protocol
 
@@ -1012,16 +1333,24 @@ sequenceDiagram
    - If previously allocated (e.g. resuming from an interruption), it reuses the existing working directory without reinitializing.
    - If new, it creates the worktree bound to `feature/task-{id}`.
    - Automatically writes `task-*/` and `wt/` to `.git/info/exclude` in the canonical repository, guaranteeing that local worktrees never pollute `git status --porcelain` on the canonical repository.
+   - **Bidirectional Relative Worktree Pointer Normalization (`EnsureWorktreeRelativePathsAsync`):**
+     - Standard Git `worktree add` writes an absolute host filesystem path into `.git`. Inside container sandboxes or cross-environment mounts, this absolute path does not exist, causing Git to fail with `Exit Code 128: fatal: not a git repository`.
+     - `GitWorkspaceManager.EnsureWorktreeRelativePathsAsync` strictly normalizes both pointers to relative POSIX paths:
+       - **Forward Pointer:** In `<worktree>/.git`, sets `gitdir: ../{cloneDirName}/.git/worktrees/task-{taskId}`.
+       - **Reverse Pointer:** In `<canonicalClone>/.git/worktrees/task-{taskId}/gitdir`, sets `../../../../task-{taskId}/.git`.
+     - **Windows WSL UNC Path Resolution:** When running on Windows with a WSL target, paths are POSIX (`/home/{user}/...`). Using standard .NET `Path.Combine` would cause Windows `File.Exists` to check `C:\home\...` and fail. NightCodeForge invokes `ResolveHostAccessiblePath` to translate paths into Windows UNC shares (`\\wsl.localhost\{distro}\...`), allowing the host process to write relative pointers accurately.
+     - **MSBuild Worktree Compatibility:** Configures `worktree.useRelativePaths = true`, but explicitly unsets `extensions.relativeworktrees`. This prevents `Microsoft.Build.Tasks.Git` in MSBuild from crashing during .NET builds on unsupported extension errors.
 2. **Multi-Stage Reuse:**
    - The same worktree directory persists across all stages of a task. File edits made during `ImplementationStage` are immediately present for `DeterministicTestStage` and `CodeReviewAndFixStage` without checkout hops or stash pops.
    - Deterministic stages execute with `context.WorkingDirectory` pointed to the worktree.
    - AI agent tools (`view_file`, `write_to_file`, `replace_file_content`, `grep_search`) resolve relative paths against the worktree via `IWorkspacePathResolver.ResolveCruciblePath(workspaceId, path, taskId)`.
    - Checkpoints (`CreateWipCheckpointAsync`) commit directly in the worktree.
    - Noise-filtered diffs (`GenerateDiffAsync -U2`) compare `baseBranch...feature/task-{id}` within the worktree.
-3. **Teardown & Clean Up (`RemoveWorktreeAsync`):**
-   - Once all stages pass and the task is squashed and merged (or if rejected), `SquashAndMergeAsync` invokes `RemoveWorktreeAsync`.
+3. **Teardown & Clean Up (`RemoveWorktreeAsync` & Container Reaper):**
+   - Once all stages pass and the task is squashed and merged (or if rejected), `SquashAndMergeAsync` or `RejectTaskAsync` invokes `RemoveWorktreeAsync`.
    - Executes `git worktree remove "<worktreePath>" --force` and `git worktree prune`.
-   - Disk space is reclaimed immediately.
+   - **Container Sandbox Teardown:** Simultaneously calls `_environmentProvider.CleanupTaskContainerAsync(workspace, taskId)` to destroy the per-task container (`docker rm -f ncf-sandbox-{workspaceId}-task-{taskId}`), freeing RAM and Docker resources.
+   - Disk space and container allocations are reclaimed immediately.
 
 #### 3. Cross-Environment Path Resolution & Crucible UNC Bridge
 
@@ -1180,7 +1509,12 @@ flowchart LR
    - Long-context reviews, broad codebase lookups, or large-parameter models to the remote high-VRAM server.
    - NightCodeForge's `WorkerCount = 1` constraint guarantees that the local GPU is never overloaded by concurrent background jobs, while OllamaRouter ensures each sequential job runs on the most capable hardware.
 3. **Dynamic Model Discovery:** NightCodeForge queries OllamaRouter's unified `/api/tags` endpoint to automatically populate available local and remote models in the web dashboard.
-4. **Telemetry & Target Transparency:** The monitoring dashboard can query `/monitor` or capture response headers to display whether the current inference step was processed by the **Local GPU**, **Remote Instance**, or **Cloud Overflow**, along with exact token metrics.
+4. **Deep Cluster Telemetry & Target Transparency (`IOllamaRouterGatewayService`):**
+   - The monitoring and operations console directly queries OllamaRouter's management endpoints:
+     - Real-time resident models in GPU memory via `/api/ps` (model name, size in VRAM, processor distribution between CPU and GPU).
+     - Health status, latency, and wire-level auto-heal counters across target backends (Local Host GPU, Dedicated LAN GPU Server, Cloud Overflow).
+     - Accurate target routing attribution (`X-OllamaRouter-Target` response headers) identifying which node executed each inference call.
+   - One-click memory eviction integration that flushes resident models on demand or automatically when Global Operations are paused.
 
 ### 9.3 Supported Harness Implementations
 
@@ -1337,6 +1671,39 @@ flowchart TD
 
 By automatically loading `AGENTS.md`, NightCodeForge ensures that all 3 workflow stages—and all harness engines—adhere strictly to repository-specific rules without requiring developers to retype instructions for each task.
 
+### 10.4 Deterministic Project Preparation & Onboarding (The `ncf` CLI Tool)
+Onboarding an existing repository into NightCodeForge requires deterministic hygiene steps: establishing `.gitignore` exclusions, aligning `.editorconfig` line endings, detecting toolchains, running an initial format pass, and installing external agent skills. Rather than delegating these tasks to an LLM, NightCodeForge packages a dedicated NuGet global tool: **`NightCodeForge.Cli` (`ncf`)**.
+
+```bash
+dotnet tool install --global NightCodeForge.Cli
+cd /path/to/target/repo
+ncf init       # Deterministic repository preparation
+ncf audit      # Pre-flight readiness scorecard (🟢 / 🟡 / 🔴)
+```
+
+#### 1. Deterministic Repository Initialization (`ncf init`)
+Executes deterministic onboarding without prompt fatigue:
+1. **`.gitignore` Merging:** Appends mandatory NightCodeForge exclusions (`bin/`, `obj/`, `.vs/`, `TestResults/`, `*.trx`, `.nightcodeforge/` runtime artifacts) without clobbering existing developer entries.
+2. **`.editorconfig` Normalization:** Enforces `root = true`, `end_of_line = lf`, and language-specific indent rules, ensuring alignment with `EditorConfigFileApplier` to prevent cross-platform CRLF/LF churn and phantom Git diffs.
+3. **Deterministic Stack Detection:** Inspects repository files (`.sln`/`.csproj`, `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`) and resolves configurations against the shared [CodeStackPresets](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/CodeStack.cs) registry (dotnet, node, python, rust, go), guaranteeing identical command resolution between CLI and server pipelines.
+4. **Baseline Format Pass:** Runs the stack's native formatter (`dotnet format --no-restore`, `cargo fmt`, `ruff format .`, `gofmt -w .`) to establish a clean, consistent baseline.
+5. **Packaged Agent Skills Installation:** Installs embedded agent skills into `.agents/skills/ncf-*/SKILL.md` wrapped with managed block markers (`ManagedBlockConstants`), discoverable by both external IDE agents (Claude Code, Cursor, Antigravity) and the internal `SkillsService`:
+   - `ncf-backlog`: Markdown specification authoring and frontmatter schema rules.
+   - `ncf-backlog-migrator`: Structured migration of legacy issues, PR descriptions, and markdown plans into NightCodeForge task cards.
+   - `ncf-project-readiness`: Interactive remediation assistant guiding developers through audit failures.
+6. **Configuration Bootstrap:** Writes `.nightcodeforge/config.json` stamped with detected commands, base branch, and `ncfVersion`.
+
+#### 2. Pre-Flight Readiness Audit (`ncf audit`)
+A fast, read-only pre-flight inspection producing an interactive console scorecard and generating `.nightcodeforge/audit-report.md` across 5 architectural pillars:
+
+| Pillar | Verification Criteria | Evaluation |
+| :--- | :--- | :--- |
+| **1. Git Health** | Clean working tree, committed HEAD, verified base branch (`main` / `master`). | 🟢 Clean / 🔴 Dirty |
+| **2. Build Determinism** | Headless CLI build succeeds without human prompts or interactive licenses. | 🟢 Success / 🔴 Failure |
+| **3. Test Fast Feedback** | Base unit/integration tests pass with fast category filters (`Category!=Acceptance&Category!=E2E`). | 🟢 Passing / 🟡 Skipped / 🔴 Failing |
+| **4. Isolation Readiness** | Heuristic scan for hardcoded host paths or unmocked external socket calls in test code. | 🟢 Isolated / 🟡 Warnings |
+| **5. NCF Configuration** | `.nightcodeforge/config.json` present, `ncfVersion` aligned with installed CLI, skills up to date. | 🟢 Aligned / 🟡 Drift / 🔴 Missing |
+
 ---
 
 ## 11. Session Transcripts & Cloud LLM Failure Diagnostics
@@ -1474,6 +1841,7 @@ erDiagram
     TASK ||--o{ STAGE_CHECKPOINT : "records"
     TASK ||--o{ STAGE_EXECUTION_RECORD : "measures"
     TASK ||--o{ EXECUTION_LOG : "generates"
+    TASK ||--o{ TASK_HISTORY : "tracks"
     
     WORKSPACE {
         int Id PK
@@ -1484,6 +1852,22 @@ erDiagram
         string ContainerImage
         string Ext4MirrorPath
         datetime CreatedAt
+    }
+
+    STAGE_DEFINITION {
+        string StageId PK
+        string PipelineId FK
+        string DisplayName
+        int Order
+        string StageKind
+        string QueueTier
+        string DefaultAgentProfileId
+    }
+
+    SYSTEM_SETTINGS {
+        string Key PK
+        string Value
+        datetime UpdatedAt
     }
 
     AGENT_PROFILE {
@@ -1507,15 +1891,39 @@ erDiagram
         string BaseBranch
         string FeatureBranch
         string Status
+        string Origin
+        bool HasExecutionRun
+        int MaxExecutedStageOrder
         string CurrentStageId
         int Priority
         string MergeMode
         bool IsWaitingForHuman
+        bool IsDeferredByPause
+        string InterruptedStageId
         string InterruptedAgentProfileId
         datetime CreatedAt
         datetime UpdatedAt
         string LastHangfireJobId
         string PipelineDataJson
+        int Version
+    }
+
+    TASK_HISTORY {
+        int Id PK
+        int TaskId FK
+        int Version
+        string Title
+        string Description
+        string Status
+        int Priority
+        string MergeMode
+        string BaseBranch
+        string FeatureBranch
+        string CurrentStageId
+        string SerializedDependencies
+        datetime ChangedAt
+        string ChangedBy
+        string ChangeReason
     }
 
     TASK_DEPENDENCY {
@@ -1584,30 +1992,61 @@ erDiagram
 ## 13. User Interface (Blazor Interactive Server)
 
 ### 13.1 Key Dashboard Modules
-1. **Interactive Ideation & Codebase Discovery:**
-   - Chat interface with the codebase exploration agent.
-   - Natural language Q&A about architecture and requirements.
-   - Interactive task proposal cards with one-click creation into backlog.
-2. **Backlog & Dependency DAG:**
-   - Visual Kanban and dependency graph view showing tasks and blocking links.
-   - Status indicators: `Suggested`, `Open` (with dependency/in-flight markers), `Running [Stage]`, `Waiting for Human` (`IsWaitingForHuman`), `Ready` (awaiting merge), `Closed`.
-   - Manual priority adjustment and dependency linking.
-3. **Monitoring & Terminal:**
+1. **Dedicated Task Creation Page (`/tasks/new`):**
+   - First-class authoring form ([CreateTask.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/CreateTask.razor)) for manual task definition.
+   - Form inputs for Title, Description, Base Branch, Priority selection (P1 Critical through P5 Low), Merge Mode (`Automatic` vs `ManualReviewRequired`), and optional dependency prerequisites.
+   - Automatically stamps newly created tasks with `Origin = TaskOrigin.Manual`, `Status = TaskOverallStatus.Suggested`, and `HasExecutionRun = false`.
+2. **Interactive Ideation & Codebase Discovery (`/ideation`):**
+   - Chat interface with the codebase exploration agent (`IIdeationService`).
+   - Natural language Q&A about architecture and requirements running concurrently on Host GPU or Cloud Overflow.
+   - Interactive task proposal cards with one-click creation into backlog, stamped with `Origin = TaskOrigin.Ideation`.
+3. **Untrusted Intake & Sandboxed Triage Portal (`/triage`):**
+   - Security-focused portal for evaluating external issues, bug reports, and webhooks.
+   - **Scoped Backlog Query:** Strictly displays proposed tasks with `Status == Suggested && Origin == TaskOrigin.UntrustedIntake`, isolating external triage proposals from internal human ideas.
+   - Triage run status, confidence scoring, acceptance criteria, and one-click promotion or rejection.
+4. **Backlog & Kanban Board (`/backlog`):**
+   - Visual Kanban and dependency graph view showing tasks, priorities, and blocking links.
+   - Status indicators: `Suggested`, `Open`, `Running [Stage]`, `Waiting for Human` (`IsWaitingForHuman`), `Ready` (awaiting merge), `Closed`, and `Rejected`.
+   - **First-Class Maintainer Rejection Action:** Supports rejecting tasks directly from the drawer, detail page, or Kanban card, recording an audit reason and evicting pending jobs from Hangfire.
+   - **Column Hygiene:** Tasks without execution (`HasExecutionRun == false`) or blocked on prerequisites strictly reside in "Open (Backlog)", never falsely appearing in "In-Flight".
+   - High-contrast priority filter chips and stat chips for clear readability on dark surfaces.
+   - Operations Paused warning banner when background processing is suspended.
+5. **Task State History & Temporal Snapshot Timeline:**
+   - Visual audit timeline ([TaskHistoryTimeline.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Backlog/TaskHistoryTimeline.razor)) embedded in Task Detail drawer and Task Execution Inspector.
+   - Captures immutable snapshots on every task mutation (`TaskHistories` table) with author attribution (`ChangedBy`), timestamp, and reason.
+   - Interactive diff viewer powered by `DiffPlex` showing side-by-side or inline text diffs across Title, Description, Priority, Status, MergeMode, and Dependencies.
+6. **Task Execution Inspector (`/inspector` and `/tasks/{id}`):**
+   - Scoped task dropdown listing strictly tasks with `HasExecutionRun == true` (in-flight, waiting for human, or completed).
+   - **Pipeline Stepper Hygiene:** Authoritative worker state checks ensure unstarted stages display clean pending icons without false "Running" spinners.
    - Real-time streaming of active agent reasoning, tool invocations, compiler logs, and Git operations via SignalR.
-   - Visual stage progression indicator (`Task Review ➔ Pre-Impl Baseline ➔ Implementation ➔ Quality Gates ➔ Review & Fix ➔ Verification`).
-   - Hardware routing badge (Local GPU vs Remote Server) and real-time token/timing metrics.
-4. **Inbox (Human-in-the-Loop):**
+   - **Pipeline Restart Modal ([RestartPipelineModal.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Monitoring/RestartPipelineModal.razor)):** Operator-facing dialog supporting **Soft Restart (`PreserveWork`)** to re-verify existing code or **Hard Reset & Rebase (`HardResetToBaseBranch`)** with container teardown and clean base alignment.
+7. **Live Developer Operations & Hardware Telemetry Console (`/monitoring`):**
+   - **Active Operations Hero ([ActiveOperationsHero.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Monitoring/ActiveOperationsHero.razor)):** Displays in-flight LLM reasoning and running shell operations with an active 500ms duration ticking timer, preventing frozen elapsed time during large token generation.
+   - **Real-Time LLM Call Stream:** Tracks in-flight calls and a bounded ring buffer ($N=50$) with exact full-message prompt context size, completion tokens, generation speed (tokens/sec), latency, model, and target backend route.
+   - **Real-Time Shell Operations Stream:** Captures unmasked container commands (`dotnet test`, `git diff`, etc., via sentinel pipe) with container working directory, exit code, duration, and output logs.
+   - **Deep OllamaRouter Cluster & VRAM Telemetry:** Direct runtime integration querying `/api/ps` resident models, backend health (Local Host GPU, Dedicated LAN GPU Server, Cloud Overflow), and one-click GPU VRAM eviction.
+   - Clean, static status badges eliminating distracting pulsing CSS animations.
+8. **Inbox (Human-in-the-Loop) (`/inbox`):**
    - Central view for all pending questions across blocked tasks.
    - Rich answer form supporting freeform text, code snippets, or multiple-choice options.
-5. **Review Room:**
+9. **Review Room (`/review`):**
    - Visual side-by-side / unified `git diff` against base branch.
-   - Displays pending tasks awaiting manual review.
-   - Action buttons: "Approve & Merge" (squashes WIP commits into base branch and triggers cascade unblocking) or "Request Changes" (opens revision notes input modal and routes task back to Stage 3 `ImplementationStage` with highest priority via `llm-urgent`).
-6. **Workspace, Profiles & MCP Settings:**
-   - Manage target repositories, configure MCP servers (`mcp_config.json`), and tune Agent Profiles per stage.
-7. **Session Transcripts & Cloud AI Diagnostics:**
-   - Inspect full turn-by-turn markdown execution transcripts for any past or ongoing stage.
-   - One-click "Diagnose with Cloud AI" to evaluate reasoning breakdowns, hallucinations, or harness bugs using Ollama Cloud or external cloud models.
+   - **Guarded Pending Review Contract:** Strictly displays tasks meeting `TaskReviewService.IsPendingReview` (`HasExecutionRun == true && Status == TaskOverallStatus.Ready`). If a maintainer opens `/review/{taskId}` for an in-flight task, an informational notice directs them to the live execution inspector.
+   - Action buttons: "Approve & Merge" (squashes WIP commits into base branch and triggers cascade unblocking) or "Request Changes" (opens revision notes input modal and routes task back to Stage 3 `ImplementationStage` via Tier 2 `llm-implementation`).
+   - **Conflict Resolved Banner:** Displays *"⚠️ Autonomous Conflict Resolution Completed"* truthfully only after all downstream verification gates and Gate 2 pass.
+10. **Top Navigation Bar & Global Operations Control (`TopNavBar.razor`):**
+    - **Global Pause Toggle:** One-click button (`⏸️ Pause Operations`) to checkpoint running tasks, suspend worker polling, and immediately evict resident models from host GPU VRAM for gaming or 3D workloads.
+    - **Pulsing Amber State Badge:** Indicates *"⏸️ Operations Paused (GPU Free)"* with a one-click *"▶️ Resume Operations"* action.
+    - **Deferred Task Dispatch Retry:** Displays a warning button (*"🔄 Retry Deferred (N)"*) when open deferred tasks require reconciliation retry.
+11. **DevQueue Management Table (`DevQueueTable.razor`):**
+    - 5-Tier queue view (`llm-urgent`, `llm-code-review`, `llm-implementation`, `llm-task-review`, `llm-inference`).
+    - Displays age of oldest waiting task per tier for starvation observability.
+    - Clean break drag/reorder controls delegating to `DevQueueService.ReorderInferenceQueueByPriorityAsync`.
+12. **Workspace, Profiles & MCP Settings:**
+    - Manage target repositories, configure MCP servers (`mcp_config.json`), and tune Agent Profiles per stage.
+13. **Session Transcripts & Cloud AI Diagnostics:**
+    - Inspect full turn-by-turn markdown execution transcripts for any past or ongoing stage.
+    - One-click "Diagnose with Cloud AI" to evaluate reasoning breakdowns, hallucinations, or harness bugs using Ollama Cloud or external cloud models.
 
 ---
 
@@ -1696,18 +2135,34 @@ public enum ExecutionMode
 | **Path Mapping** | Real path | Real path in WSL | Transparent `/workspace` $\rightarrow$ Real UNC/Host |
 | **Tooling & SDKs** | Uses host/WSL SDKs | Distro-installed SDKs | Bind-mounted host package caches |
 
-### 14.3 Shared SDKs & Persistent Package Caches
-To prevent containers from downloading gigabytes of SDKs and package dependencies for every task:
+### 14.3 Shared SDKs, Persistent Package Caches & User Identity Preservation
+To prevent containers from downloading gigabytes of SDKs and package dependencies for every task, while guaranteeing file permission safety:
 
 1. **Persistent Package Caches (Read-Write Bind Mounts):**
    Package managers write to host-mounted shared cache directories:
-   - **NuGet:** Host `~/.nuget/packages` $\rightarrow$ Container `/root/.nuget/packages`
-   - **npm / pnpm:** Host `~/.npm` $\rightarrow$ Container `/root/.npm` and `/root/.local/share/pnpm/store`
-   - **Maven / Gradle:** Host `~/.m2` $\rightarrow$ Container `/root/.m2/repository`
-   - **Python:** Host `~/.cache/uv` $\rightarrow$ Container `/root/.cache/uv`
+   - **NuGet:** Host `~/.nuget/packages` $\rightarrow$ Container `/cache/nuget`
+   - **npm / pnpm:** Host `~/.npm` and `~/.local/share/pnpm/store` $\rightarrow$ Container `/cache/npm` and `/cache/pnpm`
+   - **Maven / Gradle:** Host `~/.m2` $\rightarrow$ Container `/cache/m2`
+   - **Python:** Host `~/.cache/uv` $\rightarrow$ Container `/cache/uv`
    *Result:* When Container 1 downloads a package, Container 2 gets an immediate local cache hit.
 
-2. **Heavy SDK Sharing (Read-Only Mounts or Base Images):**
+2. **Host User Identity Preservation (`HostUserIdentityResolver`):**
+   - By default, Docker containers run commands as `root` (UID 0, GID 0). If an agent creates files in the bind-mounted workspace (`/workspace`), they become owned by `root:root`, leading to `EACCES: permission denied` or `UnauthorizedAccessException` when the developer attempts to edit files or run Git commands on the host.
+   - [HostUserIdentityResolver](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Execution/HostUserIdentityResolver.cs) discovers and caches the host or WSL user credentials (e.g. `1000:1000` via `id -u` and `id -g`).
+   - All `docker run` and `docker exec` invocations pass `--user <uid>:<gid>`.
+   - Toolchains (git, dotnet, npm) execute under non-root identities with writable user configuration directories (`HOME=/tmp/ncf-home`), eliminating host permission collisions.
+
+3. **Container Globalization & Internationalization (Full ICU):**
+   - Base sandbox images install `libicu-dev` / `libicu74` and generate UTF-8 locales (`locale-gen en_US.UTF-8 fr_FR.UTF-8`).
+   - Injects `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0`, `LANG=en_US.UTF-8`, and `LC_ALL=en_US.UTF-8`.
+   - Eliminates `NETSDK1188` international resource assembly warnings during .NET compilation.
+
+4. **Dynamic Bash Tool Timeout Calculation:**
+   - In [CanonicalTools.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Tools/CanonicalTools.cs), tool timeouts are computed dynamically rather than hardcoded to a static 60s or 180s threshold:
+     $$\text{Timeout} = \max(300\text{s (5 mins)}, \text{BuildTimeout} + \text{TestTimeout})$$
+   - Combined build and test suites run with sufficient runway on large codebases while still providing a strict ceiling against infinite test loops or hangs.
+
+5. **Heavy SDK Sharing (Read-Only Mounts or Base Images):**
    - **Strategy A (Host Toolchain Mounts):** On Linux/WSL2 hosts with existing toolchains, SDK directories (e.g. `/usr/share/dotnet`, `/usr/lib/jvm`, `/opt/android-sdk`) are mounted **read-only (`:ro`)** into the container.
    - **Strategy B (On-the-Fly Slim Runner):** NightCodeForge synthesizes a minimal runtime layer on the fly, mounting the host toolchains where possible.
 
@@ -1765,6 +2220,22 @@ For untrusted external input (such as incoming GitHub tasks processed by `Triage
 * **Secret & Environment Sanitization:** Container environment variables are scrubbed of all host secrets (Ollama/OpenAI API keys, GitHub personal access tokens, database connection strings, JWT signing keys).
 * **Host Execution Prohibition:** Invocations with `SecurityTier == SandboxSecurityTier.RestrictedReadOnly` strictly refuse to run under `BareHostExecutionEnvironment` or unconfined WSL; they must execute inside the hardened container.
 
+#### 14.5.2 Container Reuse Validation & Task Lifecycle Cleanup
+To maximize execution throughput while preventing resource leaks and stale configuration traps:
+
+1. **Mount & Image Drift Detection (`EnsureContainerRunning`):**
+   - When reusing an existing long-lived task container, [NightCodeForgeContainerExecutor.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Execution/NightCodeForgeContainerExecutor.cs) runs `docker inspect` to verify active container metadata against current [ContainerExecutorOptions](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Execution/NightCodeForgeContainerExecutor.cs).
+   - **Volume Mount Verification:** Confirms that all expected mounts (`/workspace`, `/clone`, and package caches `/cache/nuget`, `/cache/npm`, `/cache/pnpm`, `/cache/uv`, `/cache/m2`) exist with correct host sources and read/write flags.
+   - **Image Tag Verification:** Confirms that the running container image matches the expected base image.
+   - If drift is detected (e.g. package cache relocated or new toolchain mounted), the executor destroys the stale container (`docker rm -f`) and spawns a fresh instance, completely eliminating runtime `EACCES` permission errors from missing cache directories.
+2. **Terminal State Container Teardown:**
+   - When a task reaches a terminal lifecycle state (`TaskOverallStatus.Closed` after squash-and-merge, or `TaskOverallStatus.Rejected`), the orchestrator immediately invokes `IExecutionEnvironmentProvider.CleanupTaskContainerAsync`.
+   - Forcefully removes the container (`docker rm -f ncf-sandbox-{workspaceId}-task-{taskId}`), ensuring containers never linger in the background consuming host memory and file descriptors.
+3. **Background Orphan Container Sweep ([TaskContainerReaper](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/TaskContainerReaper.cs)):**
+   - At host startup (inside [StartupRecoveryService.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/StartupRecoveryService.cs)) and during periodic maintenance, `TaskContainerReaper.ReapAsync` enumerates active sandbox containers in Docker/WSL.
+   - Queries `ITaskRepository` to cross-reference each container with its task status.
+   - Automatically reaps containers whose associated tasks are `Closed`, `Rejected`, `Cancelled`, or deleted from the database, while preserving containers of in-flight and paused tasks.
+
 ### 14.6 Crash & Hang Protection
 * Every LLM step and Git command is bound to a strict timeout policy.
 * Hangfire automatic retry is disabled for LLM inference tasks (`[AutomaticRetry(Attempts = 0)]`) to prevent duplicate code edits on unexpected runtime exceptions; unhandled errors transition the task cleanly to `Failed`.
@@ -1793,10 +2264,10 @@ flowchart TD
         DeterministicStage["Deterministic Stage:\n- Reset stage execution metrics\n- Mark ready for fresh execution"]
     end
 
-    subgraph Resumption ["3. Urgent Re-Enqueueing"]
-        EnqueueUrgent["Transition ForgeTask to 'Pending'\nEnqueue to 'llm-urgent' queue"]
+    subgraph Resumption ["3. Stage-Tier Re-Enqueueing"]
+        EnqueueTier["Resolve Stage Queue Tier\nEnqueueStage(taskId, stage.QueueTier, priority)"]
         AuditLog["Log Recovery in EXECUTION_LOG\nAppend entry to docs/transcripts/"]
-        StartWorker["Start Hangfire Background Queue\n(Immediate pickup of recovered task)"]
+        StartWorker["Start Hangfire Background Queue\n(Sequential pickup by Queue Priority)"]
     end
 
     RunRecovery --> CleanLocks
@@ -1804,9 +2275,9 @@ flowchart TD
     CheckDirty -->|Yes| RescueCommit --> FindRunning
     CheckDirty -->|Clean| FindRunning
     FindRunning --> CheckStage
-    CheckStage -->|Agentic| AgenticStage --> EnqueueUrgent
-    CheckStage -->|Deterministic| DeterministicStage --> EnqueueUrgent
-    EnqueueUrgent --> AuditLog --> StartWorker
+    CheckStage -->|Agentic| AgenticStage --> EnqueueTier
+    CheckStage -->|Deterministic| DeterministicStage --> EnqueueTier
+    EnqueueTier --> AuditLog --> StartWorker
 ```
 
 #### Detailed Recovery Procedures:
@@ -1815,6 +2286,146 @@ flowchart TD
 3. **Session Rehydration:**
    * For **Agentic Stages**, Crucible rehydrates the serialized conversation memory up to the last successful turn from `STAGE_CHECKPOINT.SerializedMemory`, appending a system notice informing the model that the environment was restarted and workspace files were restored.
    * For **Deterministic Stages** (e.g. interrupted midway through `dotnet test`), the stage is reset to run freshly from the beginning.
-4. **Immediate Priority Re-Enqueueing (`llm-urgent`):** The recovered task is placed directly at the head of `llm-urgent`. When Hangfire initializes (`WorkerCount = 1`), the single GPU worker immediately resumes the interrupted overnight task before touching any other backlog items.
-5. **Auditing & Notification:** The recovery event is permanently recorded in `EXECUTION_LOG`, noted in the task's session transcript under `docs/transcripts/`, and broadcasted via SignalR to the web UI.
+4. **Stage-Tier Preservation & Reboot Re-Enqueueing ([StartupRecoveryService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/StartupRecoveryService.cs)):**
+   * Rescued tasks **strictly preserve the stage queue tier hierarchy** instead of being dumped into `llm-urgent`.
+   * The recovery service resolves the target stage definition from the workflow (based on `task.CurrentStageId`) and calls `_jobQueue.EnqueueStage(task.Id, stage.QueueTier, task.Priority)`.
+   * Only if the rescued task was already marked P1 Critical does `EnqueueStage` route it to `llm-urgent`; otherwise it re-enters its respective tier queue (`llm-code-review`, `llm-implementation`, or `llm-task-review`).
+5. **Global Operations Pause Interplay:**
+   * [StartupRecoveryService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/StartupRecoveryService.cs) injects [IOperationsControlService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Interfaces/IOperationsControlService.cs) as a required dependency.
+   * If `_operationsControlService.IsPaused` is `true` on host boot, Git locks and container resources are reconciled normally, but active/orphaned tasks are checkpointed with `InterruptedStageId`, flagged with `IsDeferredByPause = true`, and held in `TaskOverallStatus.Open` without Hangfire dispatch. They are automatically enqueued when the operator clicks **"▶️ Resume Operations"**.
+6. **Auditing & Notification:** The recovery event is permanently recorded in `EXECUTION_LOG`, noted in the task's session transcript under `docs/transcripts/`, and broadcasted via SignalR to the web UI.
+
+---
+
+## 15. Global Operations Control & GPU VRAM Reclamation (Gamer / Dedicated Workload Mode)
+
+### 15.1 The "Gamer Problem" & Host Workstation Contention
+Developer workstations running NightCodeForge are frequently shared, dual-use machines. During work hours, developers orchestrate automated local coding tasks. During breaks, evenings, or weekends, they use the same machine for gaming, 3D graphics, video rendering, or other VRAM-intensive workloads.
+
+When local background pipelines are running:
+1. **Resident LLM Models Pin GPU VRAM:** Models such as Qwen 2.5 Coder 32B or DeepSeek-R1 32B reserve between 14 GB and 32+ GB of dedicated GPU VRAM continuously via default `keep_alive` timeouts.
+2. **Compute Contention:** Background agent turns and compiler/test suites saturate CUDA cores, CPU threads, and memory bandwidth.
+3. If an operator launches a 3D video game while models are resident, the game stutters severely, drops frame rates, or crashes immediately with `DXGI_ERROR_DEVICE_RESET` or CUDA out-of-memory errors.
+4. Previously, the developer's only recourse was terminating the web host process (`ncf-web.cmd`), risking dirty Git index locks, orphaned containers, and interrupted state loss.
+
+### 15.2 The Solution: One-Click Operations Pause & Hardware VRAM Eviction
+NightCodeForge provides a first-class, centralized **"Pause Operations"** toggle in the global navigation bar (`TopNavBar.razor`) and operations console (`ActiveOperationsHero.razor`):
+* **Immediate In-Flight Task Suspension:** Gracefully pauses the active task without failing or cancelling it, checkpointing conversation turns and preserving uncommitted worktree changes.
+* **Instant GPU VRAM Eviction:** Drops host GPU VRAM consumption to **0 MB** using [IOllamaRouterGatewayService.ReclaimVramAsync](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Interfaces/IOllamaRouterGatewayService.cs) (setting `keep_alive: 0s`).
+* **Inference Gatekeeping:** Rejects new inference attempts with [OperationsPausedException](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Exceptions/OperationsPausedException.cs), guaranteeing models are not accidentally reloaded into VRAM while gaming.
+* **Worker Queue Gate:** Hangfire workers dequeuing tasks while paused defer execution cleanly (`IsDeferredByPause = true`) without failing the jobs.
+* **One-Click Resumption:** Clicking **"▶️ Resume Operations"** restores queue consumption, validates DAG readiness, and re-enqueues waiting tasks into their designated stage queues.
+
+```mermaid
+flowchart TD
+    subgraph UI ["TopNavBar.razor / Operations Console"]
+        UserAction["User clicks '⏸️ Pause Operations'"]
+        ActiveBadge["TopNavBar displays pulsing Amber Badge:<br/>'⏸️ Operations Paused (GPU Free)'<br/>Action: '▶️ Resume Operations'"]
+    end
+
+    subgraph OperationsControl ["OperationsControlService (Singleton)"]
+        SetState["Set IsPaused = true<br/>Persist state to SystemSettings ('Operations.IsPaused')"]
+        BroadcastSignalR["Broadcast ReceiveOperationsStatusChanged(IsPaused = true)<br/>Updates all browser tabs & telemetry"]
+    end
+
+    subgraph TaskSuspension ["Task Orchestrator & Harness (Crucible)"]
+        CheckActive{"Is any task actively executing?<br/>(WorkerState.ActiveTaskId != null)"}
+        SignalPause["Signal Pause via ITaskCancellationManager<br/>TaskCancellationManager.RequestPause(activeTaskId)"]
+        TeardownSocket["1. Abort LLM stream socket<br/>2. Terminate container subprocesses<br/>3. Await worker release (10s timeout)"]
+        CheckpointTask["Checkpoint In-Flight Task:<br/>- Mark active conversation as StageExecutionStatus.Interrupted<br/>- Roll back incomplete assistant tool-call turn<br/>- Preserve InterruptedStageId & InterruptedAgentProfileId<br/>- Set IsDeferredByPause = true<br/>- Keep task.Status = Open (NOT Failed / Cancelled)"]
+    end
+
+    subgraph VramEviction ["GPU VRAM Reclaim Subsystem"]
+        TriggerReclaim["IOllamaRouterGatewayService.ReclaimVramAsync()"]
+        UnloadModels["OllamaRouter /monitor/reclaim-vram OR<br/>POST /api/generate with { model, keep_alive: '0s' }"]
+        FreeGPU["Host GPU VRAM dropped to 0 MB<br/>GPU 100% available for Gaming / 3D Workloads"]
+        ReclaimFail["Capture failure & update ReclaimStatus = Failed<br/>Surface alert in UI (No silent drop)"]
+    end
+
+    subgraph InferenceGate ["Global Inference Client Gate"]
+        InferenceReq["Incoming LLM Inference Request<br/>(Triage, Suggestion, Router Health, Agent Turn)"]
+        CheckGate{"IsPaused?"}
+        BlockInference["Throw OperationsPausedException<br/>Prevents reloading models into GPU VRAM"]
+    end
+
+    subgraph WorkerGateAndResume ["Worker Queue Gate & Resume Reconciler"]
+        WorkerPoll["Worker dequeues job while paused"]
+        DeferJob["Exit cleanly; task flagged IsDeferredByPause = true"]
+        UserResume["User clicks '▶️ Resume Operations'"]
+        ReconcileResume["ResumeOperationsAsync:<br/>1. Persist IsPaused = false to database<br/>2. Clear pause flags via ClearAllPauses()<br/>3. Query Open tasks with IsDeferredByPause = true<br/>4. Validate DAG readiness via IsReadyForExecutionAsync<br/>5. Re-enqueue DAG-ready tasks via TaskJobQueue.EnqueueStage<br/>6. Broadcast resume event via SignalR"]
+    end
+
+    UserAction --> SetState
+    SetState --> BroadcastSignalR
+    BroadcastSignalR --> ActiveBadge
+    SetState --> CheckActive
+    CheckActive -- Yes --> SignalPause
+    SignalPause --> TeardownSocket
+    TeardownSocket --> CheckpointTask
+    CheckpointTask --> TriggerReclaim
+    CheckActive -- No --> TriggerReclaim
+    TriggerReclaim --> UnloadModels
+    UnloadModels --> FreeGPU
+    UnloadModels -. Reclaim Failed .-> ReclaimFail
+
+    InferenceReq --> CheckGate
+    CheckGate -- Yes --> BlockInference
+
+    WorkerPoll --> DeferJob
+    UserResume --> ReconcileResume
+```
+
+### 15.3 Core Architecture & Component Contracts
+
+#### 1. Operations State Store Abstraction ([IOperationsStateStore](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Interfaces/IOperationsStateStore.cs))
+Conforming to clean architecture layering, persistence is abstracted from `Core`:
+```csharp
+namespace NightCodeForge.Core.Interfaces;
+
+public interface IOperationsStateStore
+{
+    Task<bool> GetIsPausedAsync(CancellationToken cancellationToken = default);
+    Task SetIsPausedAsync(bool isPaused, CancellationToken cancellationToken = default);
+}
+```
+Implemented in [OperationsStateStore.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Data/OperationsStateStore.cs) using `IDbContextFactory<AppDbContext>`, storing `"Operations.IsPaused"` in the `SystemSettings` table.
+
+#### 2. Operations Control Service ([OperationsControlService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Services/OperationsControlService.cs))
+Registered as a **Singleton** in dependency injection:
+* **Concurrency Serialization:** Uses `SemaphoreSlim(1, 1)` (`_operationsLock`) to serialize pause and resume executions, preventing overlapping state mutations or premature VRAM eviction.
+* **Dependency Lifetime Governance:** To prevent captive dependency bugs, `OperationsControlService` injects `IServiceScopeFactory` to resolve scoped services (`ITaskRepository`, `IWorkflowPipelineProvider`, `ITaskJobQueue`, `IDependencyResolutionEngine`, `IExecutionEnvironmentProvider`) per pause/resume cycle.
+* **Rollback & Fail-Fast Semantics:**
+  - In `PauseOperationsAsync`: task pauses are signaled before database persistence. If database persistence throws, the pause request is rolled back via `ClearPause`, in-memory states remain untouched, and `InvalidOperationException` is thrown.
+  - In `ResumeOperationsAsync`: database persistence executes before mutating in-memory flags. If persistence throws, `_isPaused` remains `true` and no jobs are re-enqueued.
+
+#### 3. In-Flight Task Suspension & Conversational Rollback
+When an active task is paused:
+1. [TaskCancellationManager](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Services/TaskCancellationManager.cs) signals `RequestPause(activeTaskId)`.
+2. Crucible immediately aborts streaming sockets and terminates long-running container subprocesses (`docker kill --signal=SIGTERM`).
+3. **Conversational Turn Sanitization:** An assistant message with `tool_calls` that has not received matching tool responses violates OpenAI/Ollama protocol specifications, causing HTTP 400 Bad Request on resume. Crucible detects uncompleted tool calls and safely **rolls back the incomplete assistant turn** from chat history.
+4. Active conversations are closed with `StageExecutionStatus.Interrupted`.
+5. The task remains in **`TaskOverallStatus.Open`** (never marked `Failed` or `Cancelled`) with `InterruptedStageId` checkpointed and `IsDeferredByPause = true`.
+6. Atomic Git critical sections (committing merge resolutions, squash merges) execute under non-cancellable scopes so pauses never leave corrupt intermediate indices.
+
+#### 4. Hardware VRAM Eviction Subsystem ([IOllamaRouterGatewayService.ReclaimVramAsync](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Interfaces/IOllamaRouterGatewayService.cs))
+* **Eviction Strategy:** Sends `POST /monitor/reclaim-vram?disableTarget=false` to OllamaRouter, or queries resident models via `GET /api/ps` and posts `keep_alive: "0s"` to `/api/generate` for every resident model.
+* **Status Tracking:** Tracked via [OperationsReclaimStatus](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/OperationsReclaimStatus.cs) (`Idle`, `Evicting`, `Evicted`, `Failed`). If eviction fails or times out, the error is surfaced in the UI rather than failing silently.
+
+#### 5. Global Inference Gatekeeping ([OperationsPausedException](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Exceptions/OperationsPausedException.cs))
+To prevent any service (triage, suggestion, model preloading) from loading models back into GPU VRAM while the developer is gaming:
+* All inference calls pass through `OperationsPauseGatingChatClient`, which wraps `IChatClient` and verifies `_operationsControlService.IsPaused`.
+* If paused, it immediately throws `OperationsPausedException`.
+* Both `CrucibleAgentHarness` and `TaskOrchestrator` catch `OperationsPausedException` and handle it as a graceful pause suspension rather than a pipeline error.
+
+#### 6. Resumption Reconciler & DAG Cascade Guarantees
+When the operator clicks **"▶️ Resume Operations"**:
+1. `_stateStore.SetIsPausedAsync(false)` persists the unpaused state, clears pause tracking via `ClearAllPauses()`, and sets `_isPaused = false`.
+2. Queries all candidate tasks: `t.Status == TaskOverallStatus.Open && !t.IsWaitingForHuman && t.IsDeferredByPause`.
+3. For each task:
+   - Validates prerequisite readiness via `_dependencyEngine.IsReadyForExecutionAsync(task.Id)`.
+   - **Prerequisite Validation:** If a task's prerequisites are not yet completed, `task.IsDeferredByPause` is cleared to `false` and persisted, skipping Hangfire dispatch. Because operations are unpaused, the task is simply waiting on standard DAG completion; when its prerequisites merge, `ResolveCascadeUnblockedTasksAsync` will naturally enqueue it.
+   - For DAG-ready tasks: resolves the target stage (using `InterruptedStageId` to preserve uncommitted disk edits and reset the conflict budget), clears `task.IsDeferredByPause = false`, and enqueues via `_taskJobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority)`.
+4. **Cascade Unblocking Guarantee:** When prerequisite tasks merge, `ResolveCascadeUnblockedTasksAsync` explicitly sets `unblockedTask.IsDeferredByPause = false`, guaranteeing dependent tasks never remain stuck in a deferred state.
+5. **UI Granular Dispatch Retry:** If transient errors prevent a task from enqueuing during resume, `TopNavBar.razor` renders `🔄 Retry Deferred (N)` and `ActiveOperationsHero.razor` displays an alert card with a one-click retry dispatch button.
+
 
