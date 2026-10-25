@@ -221,6 +221,7 @@
                              TaskDependencies="_dependenciesMap"
                              ActiveTaskId="@WorkerState.Current.ActiveTaskId"
                              OnTaskSelected="OpenTask"
+                             OnInspectTask="OpenInspector"
                              OnPromoteTask="OpenPromoteModal"
                              OnRejectTask="OpenRejectModal"
                              OnLinkDependencies="OpenDependencyModal"
@@ -592,6 +593,11 @@
     private void OpenTask(ForgeTask task)
     {
         Navigation.NavigateTo($"/tasks/{task.Id}");
+    }
+
+    private void OpenInspector(ForgeTask task)
+    {
+        Navigation.NavigateTo($"/inspector/{task.Id}");
     }
 
     private void OpenPromoteModal(ForgeTask task)

@@ -31,6 +31,7 @@
                                     PrerequisiteIds="prereqs"
                                     IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
                                     OnClick="OnTaskSelected"
+                                    OnInspect="OnInspectTask"
                                     OnPromote="OnPromoteTask"
                                     OnReject="OnRejectTask"
                                     OnLinkDependencies="OnLinkDependencies"
@@ -67,6 +68,7 @@
                                     PrerequisiteIds="prereqs"
                                     IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
                                     OnClick="OnTaskSelected"
+                                    OnInspect="OnInspectTask"
                                     OnPromote="OnPromoteTask"
                                     OnReject="OnRejectTask"
                                     OnLinkDependencies="OnLinkDependencies"
@@ -103,6 +105,7 @@
                                     PrerequisiteIds="prereqs"
                                     IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
                                     OnClick="OnTaskSelected"
+                                    OnInspect="OnInspectTask"
                                     OnPromote="OnPromoteTask"
                                     OnReject="OnRejectTask"
                                     OnLinkDependencies="OnLinkDependencies"
@@ -139,6 +142,7 @@
                                     PrerequisiteIds="prereqs"
                                     IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
                                     OnClick="OnTaskSelected"
+                                    OnInspect="OnInspectTask"
                                     OnPromote="OnPromoteTask"
                                     OnReject="OnRejectTask"
                                     OnLinkDependencies="OnLinkDependencies"
@@ -175,6 +179,7 @@
                                     PrerequisiteIds="prereqs"
                                     IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
                                     OnClick="OnTaskSelected"
+                                    OnInspect="OnInspectTask"
                                     OnPromote="OnPromoteTask"
                                     OnReject="OnRejectTask"
                                     OnLinkDependencies="OnLinkDependencies"
@@ -191,6 +196,7 @@
     [Parameter] public IReadOnlyDictionary<int, IReadOnlyList<int>> TaskDependencies { get; set; } = new Dictionary<int, IReadOnlyList<int>>();
     [Parameter] public int? ActiveTaskId { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnTaskSelected { get; set; }
+    [Parameter] public EventCallback<ForgeTask> OnInspectTask { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnPromoteTask { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnRejectTask { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnLinkDependencies { get; set; }

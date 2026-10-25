@@ -4,6 +4,7 @@
 @using NightCodeForge.Core.Services
 @using NightCodeForge.Web.Services
 @inject IServiceProvider ServiceProvider
+@inject NavigationManager Navigation
 
 <div class="kanban-card task-card card-glass @(Task.IsWaitingForHuman ? "card-waiting-human" : "") @(CheckIsRunning() ? "card-running" : "")"
      @onclick="HandleClick"
@@ -78,10 +79,15 @@
         }
         else if (CheckIsRunning())
         {
-            <span class="badge-running" id="badge-running-@Task.Id" title="Task actively running inference or execution">
+            <a href="/inspector/@Task.Id"
+               class="badge-running"
+               id="badge-running-@Task.Id"
+               title="Task actively running - Click to open Task Inspector"
+               @onclick="HandleInspect"
+               @onclick:stopPropagation="true">
                 <span class="pulse-dot"></span>
                 <span>Running</span>
-            </span>
+            </a>
             @if (!string.IsNullOrWhiteSpace(Task.CurrentStageId))
             {
                 <span class="forge-badge badge-purple" style="font-size: 0.75rem;">
@@ -181,6 +187,7 @@
     [Parameter] public IReadOnlyList<int> PrerequisiteIds { get; set; } = Array.Empty<int>();
     [Parameter] public bool IsRunning { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnClick { get; set; }
+    [Parameter] public EventCallback<ForgeTask> OnInspect { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnPromote { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnReject { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnLinkDependencies { get; set; }
@@ -281,6 +288,17 @@
     }
 
     private async Task HandleClick() => await OnClick.InvokeAsync(Task);
+    private async Task HandleInspect()
+    {
+        if (OnInspect.HasDelegate)
+        {
+            await OnInspect.InvokeAsync(Task);
+        }
+        else
+        {
+            Navigation.NavigateTo($"/inspector/{Task.Id}");
+        }
+    }
     private async Task HandlePromote() => await OnPromote.InvokeAsync(Task);
     private async Task HandleReject() => await OnReject.InvokeAsync(Task);
     private async Task HandleLinkDependencies() => await OnLinkDependencies.InvokeAsync(Task);

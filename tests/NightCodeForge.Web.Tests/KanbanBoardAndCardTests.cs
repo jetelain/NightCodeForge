@@ -1,4 +1,6 @@
 using Bunit;
+using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Web.Components.Backlog;
 using Xunit;
@@ -217,4 +219,86 @@ public class KanbanBoardAndCardTests : BunitContext
         // Stage badge rendered
         Assert.Contains("Stage: stage-codegen", card.TextContent);
     }
+
+    [Fact]
+    public void KanbanCard_WhenRunning_ClickingRunningBadge_NavigatesToInspectorAndStopsPropagation()
+    {
+        var nav = Services.GetRequiredService<NavigationManager>();
+        var task = new ForgeTask
+        {
+            Id = 55,
+            Title = "Active Inference Task",
+            Status = TaskOverallStatus.Open
+        };
+
+        bool cardClicked = false;
+
+        var cut = Render<KanbanCard>(p => p
+            .Add(c => c.Task, task)
+            .Add(c => c.IsRunning, true)
+            .Add(c => c.OnClick, EventCallback.Factory.Create<ForgeTask>(this, _ => cardClicked = true)));
+
+        var badge = cut.Find(".badge-running");
+        Assert.Equal("/inspector/55", badge.GetAttribute("href"));
+
+        badge.Click();
+
+        Assert.EndsWith("/inspector/55", nav.Uri);
+        Assert.False(cardClicked, "Clicking the running badge must not trigger card details OnClick due to stopPropagation");
+    }
+
+    [Fact]
+    public void KanbanCard_WhenRunning_ClickingRunningBadge_WithCustomOnInspect_InvokesCallback()
+    {
+        var task = new ForgeTask
+        {
+            Id = 77,
+            Title = "Active Testing Task",
+            Status = TaskOverallStatus.Open
+        };
+
+        ForgeTask? inspectedTask = null;
+        bool cardClicked = false;
+
+        var cut = Render<KanbanCard>(p => p
+            .Add(c => c.Task, task)
+            .Add(c => c.IsRunning, true)
+            .Add(c => c.OnInspect, EventCallback.Factory.Create<ForgeTask>(this, t => inspectedTask = t))
+            .Add(c => c.OnClick, EventCallback.Factory.Create<ForgeTask>(this, _ => cardClicked = true)));
+
+        var badge = cut.Find(".badge-running");
+        badge.Click();
+
+        Assert.NotNull(inspectedTask);
+        Assert.Equal(77, inspectedTask.Id);
+        Assert.False(cardClicked, "Clicking the running badge must not trigger card details OnClick");
+    }
+
+    [Fact]
+    public void KanbanBoard_WhenRunningTask_ClickingRunningBadge_InvokesOnInspectTask()
+    {
+        var runningTask = new ForgeTask
+        {
+            Id = 88,
+            Title = "Executing In-Flight Task",
+            Status = TaskOverallStatus.Open
+        };
+
+        ForgeTask? inspectedTask = null;
+        bool cardSelected = false;
+
+        var cut = Render<KanbanBoard>(p => p
+            .Add(b => b.Tasks, new[] { runningTask })
+            .Add(b => b.ActiveTaskId, 88)
+            .Add(b => b.OnInspectTask, EventCallback.Factory.Create<ForgeTask>(this, t => inspectedTask = t))
+            .Add(b => b.OnTaskSelected, EventCallback.Factory.Create<ForgeTask>(this, _ => cardSelected = true)));
+
+        var badge = cut.Find(".badge-running");
+        badge.Click();
+
+        Assert.NotNull(inspectedTask);
+        Assert.Equal(88, inspectedTask.Id);
+        Assert.False(cardSelected, "Clicking the running badge on the Kanban board must not trigger OnTaskSelected");
+    }
 }
+
