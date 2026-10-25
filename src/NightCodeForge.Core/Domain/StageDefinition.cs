@@ -31,6 +31,7 @@ public class StageDefinition
     /// <summary>
     /// Execution priority queue tier designated by this stage (Tier 1 CodeReview, Tier 2 Implementation, Tier 3 TaskReview).
     /// Required; stages without a valid designated tier fail workflow validation.
+    /// Contiguous stages with the same QueueTier form an atomic cohort.
     /// </summary>
     public StageQueueTier QueueTier { get; set; }
 

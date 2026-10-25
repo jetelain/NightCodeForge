@@ -530,7 +530,10 @@ public class Step917DiffStatAndBatchedClarificationTests
             "Review",
             new AgenticStageConfig(),
             new ScribanPromptTemplateRenderer(),
-            TimeProvider.System);
+            TimeProvider.System)
+        {
+            QueueTier = StageQueueTier.CodeReview
+        };
 
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { gateStage, reviewStage });
         var orchestrator = new TestOrchestratorBuilder

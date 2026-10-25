@@ -1196,6 +1196,11 @@ public class DevQueueServiceTests : IDisposable
             DeletedJobs.Add(jobId);
             return true;
         }
+
+        public Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(EnqueuedUrgentTaskIds.Count > 0);
+        }
     }
 
     private class TestDevQueueMarkdownSyncService : ITaskMarkdownSyncService

@@ -2,6 +2,7 @@ using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Components.Settings;
 using NightCodeForge.Web.Services;
 using Xunit;
@@ -124,6 +125,7 @@ public class WorkflowManagementTabTests : BunitContext
                     DisplayName = "Security Audit",
                     Icon = "🛡️",
                     Kind = WorkflowStageKind.Agentic,
+                    QueueTier = StageQueueTier.TaskReview,
                     CsharpImplementationType = "agentic"
                 }
             }
@@ -145,5 +147,8 @@ public class WorkflowManagementTabTests : BunitContext
         Assert.Single(cloned.Stages);
         Assert.Equal("audit", cloned.Stages.First().StageId);
         Assert.Equal("Security Audit", cloned.Stages.First().DisplayName);
+        Assert.Equal(StageQueueTier.TaskReview, cloned.Stages.First().QueueTier);
+        // Assert cloned workflow passes cohort validation
+        WorkflowDefinitionValidator.Validate(cloned);
     }
 }

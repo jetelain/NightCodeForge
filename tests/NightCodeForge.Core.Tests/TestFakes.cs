@@ -52,6 +52,12 @@ public class FakeTaskJobQueue : ITaskJobQueue
         DeletedJobs.Add(jobId);
         return true;
     }
+
+    public bool HasUrgentJobs { get; set; }
+    public Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(HasUrgentJobs || UrgentQueue.Count > 0);
+    }
 }
 
 public class FakeGitWorkspaceManager : IGitWorkspaceManager

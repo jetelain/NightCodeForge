@@ -62,6 +62,7 @@ public class EndToEndWorkflowScenario : IScenario
 
         var reviewStage = new GenericAgenticStage(StandardStageIds.TaskReview, "ForgeTask Review", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer, timeProvider)
         {
+            QueueTier = StageQueueTier.TaskReview,
             Handler = (pipelineCtx, ct) =>
             {
                 pipelineCtx.DataBag.Set(PipelineDataBagKeys.ApprovedPlan, "Technical Plan: Add Multiply(int a, int b) returning a * b to Calculator.cs.");
@@ -71,6 +72,7 @@ public class EndToEndWorkflowScenario : IScenario
 
         var implStage = new GenericAgenticStage(StandardStageIds.Implementation, "Implementation", new AgenticStageConfig { RequiredMode = AgentMode.Full }, renderer, timeProvider)
         {
+            QueueTier = StageQueueTier.Implementation,
             Handler = (pipelineCtx, ct) =>
             {
                 // Implement Multiply in Calculator.cs in the active task worktree
@@ -81,6 +83,7 @@ public class EndToEndWorkflowScenario : IScenario
 
         var reviewFixStage = new GenericAgenticStage(StandardStageIds.CodeReviewAndFix, "Code Review & Fix", new AgenticStageConfig { RequiredMode = AgentMode.Review, LoopBackStageId = StandardStageIds.Implementation }, renderer, timeProvider)
         {
+            QueueTier = StageQueueTier.CodeReview,
             Handler = (pipelineCtx, ct) =>
             {
                 // Verify diff
@@ -92,6 +95,7 @@ public class EndToEndWorkflowScenario : IScenario
         {
             StageId = StandardStageIds.PreImplementationBaseline,
             DisplayName = "Pre-Implementation Baseline",
+            QueueTier = StageQueueTier.Implementation,
             Kind = WorkflowStageKind.Deterministic,
             CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
             ConfigurationJson = "{\"Action\": \"CompositeBaseline\", \"FailOnError\": false, \"ExtraParameters\": {\"Stages\": \"build,test\"}}"
@@ -101,6 +105,7 @@ public class EndToEndWorkflowScenario : IScenario
         {
             StageId = StandardStageIds.PostImplementationGates,
             DisplayName = "Post-Implementation Gates",
+            QueueTier = StageQueueTier.Implementation,
             Kind = WorkflowStageKind.Deterministic,
             CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
             ConfigurationJson = $"{{\"Action\": \"CompositeVerification\", \"LoopBackStageId\": \"{StandardStageIds.Implementation}\", \"FailOnError\": true, \"ExtraParameters\": {{\"Stages\": \"build,test\"}}}}"
@@ -110,6 +115,7 @@ public class EndToEndWorkflowScenario : IScenario
         {
             StageId = StandardStageIds.PostReviewVerification,
             DisplayName = "Post-Review Verification",
+            QueueTier = StageQueueTier.CodeReview,
             Kind = WorkflowStageKind.Deterministic,
             CsharpImplementationType = StageImplementationTypes.DeterministicComposite,
             ConfigurationJson = $"{{\"Action\": \"CompositeVerification\", \"LoopBackStageId\": \"{StandardStageIds.CodeReviewAndFix}\", \"FailOnError\": true, \"ExtraParameters\": {{\"Stages\": \"build,test\"}}}}"

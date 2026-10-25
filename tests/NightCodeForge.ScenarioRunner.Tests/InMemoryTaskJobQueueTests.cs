@@ -82,4 +82,34 @@ public class InMemoryTaskJobQueueTests
 
         Assert.False(queue.TryDequeue(out _));
     }
+
+    [Fact]
+    public async Task HasUrgentJobsWaitingAsync_ReturnsTrueOnlyWhenUrgentJobsPending()
+    {
+        var queue = new InMemoryTaskJobQueue();
+
+        // 1. Initially empty
+        Assert.False(await queue.HasUrgentJobsWaitingAsync());
+
+        // 2. Normal priority job does not trigger urgent waiting
+        queue.EnqueueStage(201, StageQueueTier.CodeReview, TaskPriority.Normal);
+        Assert.False(await queue.HasUrgentJobsWaitingAsync());
+
+        // 3. Urgent job triggers urgent waiting
+        var urgentId = queue.EnqueueUrgent(101);
+        Assert.True(await queue.HasUrgentJobsWaitingAsync());
+
+        // 4. Dequeuing the urgent job clears urgent waiting
+        Assert.True(queue.TryDequeue(out var dequeued));
+        Assert.Equal(101, dequeued!.TaskId);
+        Assert.False(await queue.HasUrgentJobsWaitingAsync());
+
+        // 5. Critical priority stage job also triggers urgent waiting
+        var critId = queue.EnqueueStage(301, StageQueueTier.Implementation, TaskPriority.Critical);
+        Assert.True(await queue.HasUrgentJobsWaitingAsync());
+
+        // 6. Deleting the critical job removes it from waiting
+        queue.Delete(critId);
+        Assert.False(await queue.HasUrgentJobsWaitingAsync());
+    }
 }

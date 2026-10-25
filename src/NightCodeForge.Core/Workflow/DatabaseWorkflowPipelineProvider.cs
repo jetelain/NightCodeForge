@@ -47,6 +47,8 @@ public class DatabaseWorkflowPipelineProvider : IWorkflowPipelineProvider
             task.WorkflowId = workflow.Id;
         }
 
+        WorkflowDefinitionValidator.Validate(workflow);
+
         var stages = workflow.Stages
             .OrderBy(s => s.SequenceOrder)
             .Select(_stageFactory.CreateStage)

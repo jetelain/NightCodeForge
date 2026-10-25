@@ -35,4 +35,10 @@ public class MockTaskJobQueue : ITaskJobQueue
         DeletedJobs.Add(jobId);
         return true;
     }
+
+    public bool HasUrgentJobs { get; set; }
+    public Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(HasUrgentJobs || UrgentEnqueued.Count > 0);
+    }
 }

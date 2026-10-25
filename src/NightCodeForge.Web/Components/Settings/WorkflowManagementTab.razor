@@ -195,6 +195,7 @@
                                         <div style="margin-top: 0.6rem; font-size: 0.8rem; color: var(--text-secondary); display: flex; gap: 1.25rem; flex-wrap: wrap;">
                                             <span>Handler: <code>@stage.CsharpImplementationType</code></span>
                                             <span>Kind: <strong>@stage.Kind</strong></span>
+                                            <span>Tier: <strong>@stage.QueueTier</strong></span>
                                         </div>
 
                                         @if (isExpanded)
@@ -408,6 +409,7 @@
                         DisplayName = s.DisplayName,
                         Icon = s.Icon,
                         SequenceOrder = s.SequenceOrder,
+                        QueueTier = s.QueueTier,
                         Kind = s.Kind,
                         CsharpImplementationType = s.CsharpImplementationType,
                         ConfigurationJson = s.ConfigurationJson,

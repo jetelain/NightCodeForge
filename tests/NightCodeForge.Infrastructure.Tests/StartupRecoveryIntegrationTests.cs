@@ -515,4 +515,9 @@ public class FakeTestJobQueue : ITaskJobQueue
     }
 
     public bool Delete(string jobId) => true;
+
+    public Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(UrgentQueue.Count > 0);
+    }
 }

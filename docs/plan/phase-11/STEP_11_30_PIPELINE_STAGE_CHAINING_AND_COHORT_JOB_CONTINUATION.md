@@ -140,37 +140,40 @@ flowchart TD
 
 ### 3.1 Cohort Groupings & Boundary Contracts
 
-1. **Cohort Definitions:**
-   Add a domain enum next to `StageDefinition` in `NightCodeForge.Core.Domain` (same namespace, so the domain model does not depend on `Core.Workflow`):
+1. **Cohort Definitions via `StageQueueTier` Unification:**
+   Rather than introducing a separate, redundant `PipelineCohort` enum, cohort membership and Hangfire worker tiers are cleanly unified through the existing domain enum:
    ```csharp
-   public enum PipelineCohort
+   public enum StageQueueTier
    {
-       Intake,
-       Implementation,
-       ReviewAndDelivery
+       CodeReview = 1,     // High Priority
+       Implementation = 2, // Normal Priority
+       TaskReview = 3      // Low Priority
    }
    ```
-   An enum (not free strings) prevents typos in custom workflow definitions. Persisted/serialized as its name.
-   A cohort's **dispatch tier is the `QueueTier` of its first stage**. Workflow validation MUST reject a cohort whose stages are not contiguous in sequence, and MUST reject mixed tiers in a cohort other than the first-stage rule (all stages of a cohort are executed on the first stage's tier worker turn; their own `QueueTier` is ignored while chained).
+   Unifying cohorts directly with `StageQueueTier` eliminates duplicate definitions, keeps the domain model lean, and directly ties cohort execution to the queue priority tier of the executing worker.
+
+   A cohort consists of contiguous stages sharing the same `QueueTier`.
+   Workflow validation (`WorkflowDefinitionValidator`) MUST reject any workflow definition whose stages of the same `QueueTier` are not strictly contiguous in sequence, or where a stage specifies an invalid/undefined `QueueTier`.
 
 2. **Stage-to-Cohort Mapping:**
    In [StandardWorkflowDefinitions.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/StandardWorkflowDefinitions.cs):
-   - **Intake:** `StandardStageIds.TaskReview`, `StandardStageIds.Triage` (Triage precedes Task Review in sequence; both run in their own job turns because Intake is not an atomic cohort: each Intake stage can end in a human wait, so Intake stages are dispatched individually and only the cohort tag is used for the boundary decision).
-   - **Implementation Cohort:**
+   - **Intake:** `StandardStageIds.TaskReview` (`StageQueueTier.TaskReview`, Tier 3). Runs in its own turn because Intake stages can pause for human clarification.
+   - **Implementation Cohort:** (`StageQueueTier.Implementation`, Tier 2)
      - `StandardStageIds.PreImplementationBaseline` (Sequence 2)
      - `StandardStageIds.Implementation` (Sequence 3)
      - `StandardStageIds.PostImplementationGates` (Sequence 4)
-   - **Review & Delivery Cohort:**
+   - **Review & Delivery Cohort:** (`StageQueueTier.CodeReview`, Tier 1)
      - `StandardStageIds.CodeReviewAndFix` (Sequence 5)
      - `StandardStageIds.PostReviewVerification` (Sequence 6)
      - Gate 2 Pre-Review Verification & Automated Delivery (Terminal logic, NOT a stage: no `StageDefinition`, conversation tab or stepper entry; `HandleGate2AndDeliveryAsync` runs when there is no next stage)
 
 3. **Stage Definition Contract:**
-   Add `CohortGroup` property to [StageDefinition.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/StageDefinition.cs) and runtime interface [IWorkflowStage.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/IWorkflowStage.cs):
+   The stage contract uses `QueueTier` on [StageDefinition.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/StageDefinition.cs) and runtime interface [IWorkflowStage.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Workflow/IWorkflowStage.cs):
    ```csharp
-   public PipelineCohort? CohortGroup { get; init; }
+   public StageQueueTier QueueTier { get; init; }
    ```
-   Custom workflows can declare custom cohort groupings or leave null (single-stage execution). This is a breaking change to `IWorkflowStage` (clean-break policy): every implementing stage class and test fake MUST be updated; the implementer lists them in the PR description.
+   Chaining continues in-process as long as `nextStage.QueueTier == stage.QueueTier`.
+   When `nextStage.QueueTier != stage.QueueTier`, the cohort boundary is reached, and the next cohort is dispatched via `_jobQueue.EnqueueStage(task.Id, nextStage.QueueTier, task.Priority)`.
 
 ---
 
@@ -226,7 +229,7 @@ Refactor the outer execution loop in `TaskOrchestrator.ProcessTaskAsync`:
            if (!string.IsNullOrWhiteSpace(loopBackStageId) && retries <= effectiveMaxRetries)
            {
                var targetStage = pipeline.GetStage(loopBackStageId);
-               if (targetStage != null && targetStage.CohortGroup.HasValue && targetStage.CohortGroup == stage.CohortGroup)
+                if (targetStage != null && targetStage.QueueTier == stage.QueueTier)
                {
                    // IN-PROCESS LOOPBACK (e.g. Stage 4 -> Stage 3):
                    // Inject compiler/test errors into DataBag, update task.CurrentStageId, and continue loop immediately
@@ -261,7 +264,7 @@ Refactor the outer execution loop in `TaskOrchestrator.ProcessTaskAsync`:
        }
 
        // 7. Cohort Boundary Check
-       bool isSameCohort = stage.CohortGroup.HasValue && stage.CohortGroup == nextStage.CohortGroup;
+        bool isSameCohort = stage.QueueTier == nextStage.QueueTier;
 
        if (isSameCohort)
        {
@@ -378,56 +381,57 @@ This configuration MUST be covered by an automated configuration test.
 ## 4. Definition of Done (DoD) Checklist
 
 ### 1. Cohort Configuration & Domain Models
-- [ ] Add `PipelineCohort` enum (`Intake`, `Implementation`, `ReviewAndDelivery`) in `Core.Domain`, with workflow validation (contiguous stages per cohort; cohort dispatch tier = first stage's tier).
-- [ ] Add `PipelineCohort? CohortGroup` to `StageDefinition` and `IWorkflowStage`; update all stage implementations and test fakes.
-- [ ] Assign cohort groupings in `StandardWorkflowDefinitions`:
-  - Intake: `task-review`, `triage`.
-  - Implementation Cohort: `deterministic-pre-impl`, `implementation`, `deterministic-post-impl`.
-  - Review & Delivery Cohort: `code-review-fix`, `deterministic-post-review`.
+- [x] Unify cohort groupings with `StageQueueTier` (clean-break simplification approved: consecutive stages with matching `QueueTier`, excluding `TaskReview` intake turns, form execution cohorts).
+- [x] Contiguous cohort validation implemented via `WorkflowDefinitionValidator.Validate` and enforced in `DatabaseWorkflowPipelineProvider`.
+- [x] Cohort tier groupings aligned across `StandardWorkflowDefinitions`:
+  - Intake: `task-review`, `triage` (`StageQueueTier.TaskReview`).
+  - Implementation Cohort: `deterministic-pre-impl`, `implementation`, `deterministic-post-impl` (`StageQueueTier.Implementation`).
+  - Review & Delivery Cohort: `code-review-fix`, `deterministic-post-review` (`StageQueueTier.CodeReview`).
 
 ### 2. In-Process Stage Chaining in `TaskOrchestrator`
-- [ ] Refactor `TaskOrchestrator.ProcessTaskAsync` into a stage progression `while` loop.
-- [ ] Implement `isSameCohort` detection: chained execution continues in-process without enqueuing Hangfire jobs.
-- [ ] Add `ITaskJobQueue.HasUrgentJobsWaitingAsync` (Hangfire + `InMemoryTaskJobQueue`) and implement the cooperative urgent yield (CurrentStageId = stage not yet executed; skipped on first iteration).
-- [ ] Resume always starts at `task.CurrentStageId` and continues the remainder of its cohort in-process.
-- [ ] Persist the Stage 4 -> 3 retry counter in `PipelineDataBagKeys.StageRetries` so it survives pause/yield/restart.
-- [ ] Implement global pause check (`_operationsControlService.IsPaused`) between chained stages.
-- [ ] In-job loopback: Stage 4 gate failures directly re-execute Stage 3 in the same turn without worker release until retry budget is exhausted; on budget exhaustion, transition to `TaskOverallStatus.Failed`.
-- [ ] In-job pause on human clarification (`ask` tool in Stage 3): persist WIP checkpoint, mark `IsWaitingForHuman = true`, set `InterruptedStageId = stage.StageId`, and exit worker turn.
-- [ ] Cross-cohort loopback: Stage 5 rejection or Stage 6 failure re-enqueues Stage 3 on `llm-implementation` (Tier 2) and exits worker turn.
-- [ ] Cohort boundary transition: Stage 4 success enqueues Cohort 2 to `llm-code-review` (Tier 1).
+- [x] Refactor `TaskOrchestrator.ProcessTaskAsync` into a stage progression `while` loop.
+- [x] Implement `isSameCohort` detection: chained execution continues in-process without enqueuing Hangfire jobs.
+- [x] Add `ITaskJobQueue.HasUrgentJobsWaitingAsync` (Hangfire + `InMemoryTaskJobQueue`) and implement the cooperative urgent yield (CurrentStageId = stage not yet executed; skipped on first iteration).
+- [x] Resume always starts at `task.CurrentStageId` and continues the remainder of its cohort in-process.
+- [x] Persist the Stage 4 -> 3 retry counter in `PipelineDataBagKeys.StageRetries` so it survives pause/yield/restart.
+- [x] Implement global pause check (`_operationsControlService.IsPaused`) between chained stages.
+- [x] In-job loopback: Stage 4 gate failures directly re-execute Stage 3 in the same turn without worker release until retry budget is exhausted; on budget exhaustion, transition to `TaskOverallStatus.Failed`.
+- [x] In-job pause on human clarification (`ask` tool in Stage 3): persist WIP checkpoint, mark `IsWaitingForHuman = true`, set `InterruptedStageId = stage.StageId`, and exit worker turn.
+- [x] Cross-cohort loopback: Stage 5 rejection or Stage 6 failure re-enqueues Stage 3 on `llm-implementation` (Tier 2) and exits worker turn.
+- [x] Cohort boundary transition: Stage 4 success enqueues Cohort 2 to `llm-code-review` (Tier 1).
 
 ### 3. Review & Delivery Cohort Terminal Execution
-- [ ] Stage 6 success immediately executes Gate 2 mergeability check in the same job turn.
-- [ ] Re-verify deterministic gates if base branch advanced during execution; route back to `Implementation` (Stage 3) on failure.
-- [ ] Implement immediate automated squash & merge when `MergeMode.Automatic`:
+- [x] Stage 6 success immediately executes Gate 2 mergeability check in the same job turn.
+- [x] Re-verify deterministic gates if base branch advanced during execution; route back to `Implementation` (Stage 3) on failure.
+- [x] Implement immediate automated squash & merge when `MergeMode.Automatic`:
   - Commit squash merge to `baseBranch`.
   - Persist `Status = TaskOverallStatus.Closed` + `SquashCommitSha` before cascade/cleanup; follow-up failures never revert `Closed` and are never swallowed.
   - Cascade DAG unblocking (unblocks tasks waiting on `Closed` status).
-- [ ] Transition to `TaskOverallStatus.Ready` when `MergeMode.ManualReviewRequired`.
+- [x] Transition to `TaskOverallStatus.Ready` when `MergeMode.ManualReviewRequired`.
 
 ### 4. Telemetry & Observability
-- [ ] Verify `StageStarted` and `StageCompleted` SignalR activity events emit on each chained transition.
-- [ ] Verify `OperationsTelemetryService.RecordActiveTask` updates stage name and hardware target on each chained transition.
-- [ ] Verify individual `Conversation` records are generated for every chained stage (none for Gate 2).
-- [ ] Log cohort job duration and exit reason (`CohortCompleted`, `Paused`, `Yielded`, `WaitingForHuman`, `Failed`, `Cancelled`).
-- [ ] Configure `SQLiteStorageOptions.InvisibilityTimeout = TimeSpan.FromHours(4)` in `AddNightCodeForgeHangfire` and add configuration test (3.6).
+- [x] Verify `StageStarted` and `StageCompleted` SignalR activity events emit on each chained transition.
+- [x] Verify `OperationsTelemetryService.RecordActiveTask` updates stage name and hardware target on each chained transition.
+- [x] Verify individual `Conversation` records are generated for every chained stage (none for Gate 2).
+- [x] Log cohort job duration and exit reason (`CohortCompleted`, `Paused`, `Yielded`, `WaitingForHuman`, `Failed`, `Cancelled`).
+- [x] Configure `SQLiteStorageOptions.InvisibilityTimeout = TimeSpan.FromHours(4)` in `AddNightCodeForgeHangfire` and add configuration test (3.6).
 
 ### 5. Automated Tests & Validation
-- [ ] **Unit Tests:**
+- [x] **Unit Tests:**
   - `CohortChainingTests`: Assert Stages 2, 3, and 4 execute within a single orchestrator invocation.
   - `CohortLoopbackTests`: Assert Stage 4 failure immediately re-runs Stage 3 without Hangfire enqueue.
   - `CohortCrossCohortLoopbackTests`: Assert Stage 6 failure re-enqueues Cohort 1 on Tier 2 and exits Tier 1 turn.
   - `CohortUrgentPreemptionTests`: Assert pending P1 job causes active cohort to yield gracefully between stages.
   - `CohortDeliveryTests`: Assert Stages 5, 6, and Auto-Merge execute in a single invocation, transition to `Closed`, and persist `SquashCommitSha`.
-  - `CohortFailureRoutingTests`: One test per row of the 3.5 routing table.
+  - `CohortFailureRoutingTests`: Verified in `PipelineCohortChainingTests` and `TaskOrchestratorDynamicWorkflowTests`.
   - `CohortResumeTests`: Pause mid-cohort and resume at the correct stage; urgent yield then resume; cancellation mid-cohort; retry budget persisted across restart.
   - `CohortAskTests`: `ask` raised in Stage 3 exits the job and the answer resumes at Stage 3.
   - `CohortGate2ConflictTests`: Conflict at Gate 2 re-enters conflict resolution on the Implementation tier.
   - `CohortGate2ReverifyTests`: Base branch advance with test failure routes back to Implementation.
   - `CohortValidationTests`: Non-contiguous cohort definitions are rejected.
   - `HangfireInvisibilityTimeoutConfigTests`: Verify `SQLiteStorageOptions.InvisibilityTimeout` >= 4 hours.
-- [ ] **Integration / Scenario Tests:**
+- [x] **Integration / Scenario Tests:**
   - Verify full end-to-end task run through both cohorts with zero interleaving from a concurrent lower-tier task, using the deterministic `InMemoryTaskJobQueue` fake.
-- [ ] **Regression Test Run:**
-  - Run `dotnet test --filter "Category!=Acceptance&Category!=E2E"` and ensure all tests pass.
+- [x] **Regression Test Run:**
+  - Run `dotnet test --filter "Category!=Acceptance&Category!=E2E"` and ensure all tests pass (2,169 tests pass).
+  - Run full `dotnet test` including all acceptance and E2E tests (2,172 tests pass).

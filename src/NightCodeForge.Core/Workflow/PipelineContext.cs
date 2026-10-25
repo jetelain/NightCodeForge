@@ -58,6 +58,14 @@ public class PipelineContext
         return next;
     }
 
+    public void ResetStageRetry(string stageId)
+    {
+        if (StageRetries.Remove(stageId))
+        {
+            DataBag.Set(PipelineDataBagKeys.StageRetries, new Dictionary<string, int>(StageRetries));
+        }
+    }
+
     public void ResetRetries()
     {
         RetryCount = 0;

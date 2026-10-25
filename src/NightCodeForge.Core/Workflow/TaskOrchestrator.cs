@@ -114,6 +114,8 @@ public class TaskOrchestrator : ITaskOrchestrator
         CancellationTokenSource? taskCts = null;
         IWorkflowStage? currentExecutingStage = null;
         AgentProfile? currentExecutingProfile = null;
+        var cohortSw = System.Diagnostics.Stopwatch.StartNew();
+        CohortExitReason cohortExitReason = CohortExitReason.Aborted;
 
         try
         {
@@ -157,6 +159,10 @@ public class TaskOrchestrator : ITaskOrchestrator
         if (reloadedTask.Status == TaskOverallStatus.Cancelled || reloadedTask.Status == TaskOverallStatus.Closed || reloadedTask.Status == TaskOverallStatus.Rejected)
         {
             _logger.LogInformation("ForgeTask #{TaskId} is now in {Status} status; aborting execution.", taskId, reloadedTask.Status);
+            if (reloadedTask.Status == TaskOverallStatus.Cancelled)
+            {
+                cohortExitReason = CohortExitReason.Cancelled;
+            }
             return;
         }
 
@@ -173,6 +179,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         if (_operationsControlService.IsPaused)
         {
             _logger.LogInformation("Task #{TaskId} execution deferred after acquiring lock: operations are globally paused.", taskId);
+            cohortExitReason = CohortExitReason.Paused;
             if (task.Status == TaskOverallStatus.Open)
             {
                 task.IsDeferredByPause = true;
@@ -189,6 +196,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             var err = $"Workspace #{task.WorkspaceId} not found for task #{taskId}.";
             _logger.LogError(err);
+            cohortExitReason = CohortExitReason.Failed;
             task.Status = TaskOverallStatus.Failed;
             await _taskRepository.UpdateWithHistoryAsync(
                 task,
@@ -261,6 +269,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed checking out feature branch for task #{TaskId}", taskId);
+            cohortExitReason = CohortExitReason.Failed;
             task.Status = TaskOverallStatus.Failed;
             await _taskRepository.UpdateWithHistoryAsync(
                 task,
@@ -300,6 +309,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             var err = $"Stage '{task.CurrentStageId}' not found in pipeline for task #{taskId}.";
             _logger.LogError(err);
+            cohortExitReason = CohortExitReason.Failed;
             task.Status = TaskOverallStatus.Failed;
             await _taskRepository.UpdateWithHistoryAsync(
                 task,
@@ -316,80 +326,6 @@ public class TaskOrchestrator : ITaskOrchestrator
                 Timestamp = DateTime.UtcNow
             }, cancellationToken);
             return;
-        }
-
-        currentExecutingStage = stage;
-
-        // Persist current stage immediately so UI / Kanban / DAG shows task is actively executing
-        var stageIndex = pipeline.Stages.ToList().FindIndex(s => string.Equals(s.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase));
-        var stageOrder = stageIndex >= 0 ? stageIndex + 1 : 1;
-        task.HasExecutionRun = true;
-        task.MaxExecutedStageOrder = Math.Max(task.MaxExecutedStageOrder, stageOrder);
-        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-
-        // Record active executing task authoritatively in telemetry
-        var isDeterministic = stage.Kind == WorkflowStageKind.Deterministic;
-        var queueName = isDeterministic
-            ? DeterministicStageConstants.CpuDeterministicQueue
-            : DeterministicStageConstants.LlmInferenceQueue;
-        var hardwareTarget = isDeterministic ? "Deterministic CPU" : "Local GPU";
-
-        _telemetryService.RecordActiveTask(new ActiveTaskSummary(
-            task.Id,
-            task.Title,
-            stage.StageId,
-            task.Priority,
-            queueName,
-            DateTime.UtcNow,
-            hardwareTarget));
-
-        // Resolve Agent Profile matching interrupted profile or current stage, or fallback to first
-        AgentProfile? profile = null;
-        if (!string.IsNullOrWhiteSpace(task.InterruptedAgentProfileId))
-        {
-            profile = workspace.AgentProfiles?.FirstOrDefault(p =>
-                string.Equals(p.Id, task.InterruptedAgentProfileId, StringComparison.OrdinalIgnoreCase));
-            task.InterruptedAgentProfileId = null;
-        }
-
-        if (profile == null)
-        {
-            profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, stage.StageId, cancellationToken);
-        }
-
-        if (profile == null)
-        {
-            profile = workspace.AgentProfiles?.FirstOrDefault(p =>
-                string.Equals(p.Id, stage.StageId, StringComparison.OrdinalIgnoreCase) ||
-                (p.StageDirectives != null && p.StageDirectives.ContainsKey(stage.StageId)));
-        }
-
-        currentExecutingProfile = profile;
-
-        if (stage.Kind == WorkflowStageKind.Agentic && !HasCustomHandler(stage))
-        {
-            if (profile == null)
-            {
-                var notFoundEx = new AgentProfileNotFoundException(stage.StageId, workspace.Id);
-                _logger.LogError(notFoundEx, "Agent profile not found for stage '{StageId}' in workspace #{WorkspaceId}", stage.StageId, workspace.Id);
-                task.Status = TaskOverallStatus.Failed;
-                await _taskRepository.UpdateWithHistoryAsync(
-                    task,
-                    dependsOn: null,
-                    changedBy: AuditActors.TaskOrchestrator,
-                    reason: notFoundEx.Message,
-                    cancellationToken: cancellationToken);
-                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
-                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
-                {
-                    TaskId = task.Id,
-                    Level = LogLevel.Error,
-                    Message = notFoundEx.Message,
-                    Timestamp = DateTime.UtcNow
-                }, cancellationToken);
-
-                throw notFoundEx;
-            }
         }
 
         bool isResumedRun = task.IsWaitingForHuman || !string.IsNullOrWhiteSpace(task.InterruptedStageId);
@@ -412,8 +348,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         var pipelineContext = new PipelineContext(task, workspace)
         {
             WorkingDirectory = taskWorkingPath,
-            Pipeline = pipeline,
-            CurrentProfile = profile
+            Pipeline = pipeline
         };
 
         var hostWorkingPath = !string.IsNullOrWhiteSpace(taskWorkingPath) ? _pathResolver.ToHostPath(taskWorkingPath) : null;
@@ -439,11 +374,118 @@ public class TaskOrchestrator : ITaskOrchestrator
             pipelineContext.DataBag.Set(PipelineDataBagKeys.ConflictResolutionAttempts, 0);
         }
 
-        // Start Conversation immediately for deterministic stages so Task Inspector tracks active run and progression in real-time
-        Conversation? deterministicConv = null;
-        bool deterministicConvFinalized = false;
-        IReadOnlyDictionary<int, Services.TaskBaselineEntry>? baselineSnapshot = null;
-        StageExecutionResult? result = null;
+        var isFirstIteration = true;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            // 1. Check Global Pause
+            if (_operationsControlService.IsPaused)
+            {
+                _logger.LogInformation("Task #{TaskId} execution deferred: operations are globally paused.", taskId);
+                task.IsDeferredByPause = true;
+                task.CurrentStageId = stage.StageId;
+                pipelineContext.SyncDataBagToTask();
+                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                cohortExitReason = CohortExitReason.Paused;
+                return;
+            }
+
+            // 2. Check Urgent Preemption (skipped on the first iteration)
+            if (!isFirstIteration && await _jobQueue.HasUrgentJobsWaitingAsync(cancellationToken))
+            {
+                _logger.LogInformation("Cooperatively yielding task #{TaskId} before stage '{StageId}' (not yet executed; CurrentStageId == StageId, resume re-enters here) for pending P1 Urgent job.", task.Id, stage.StageId);
+                task.CurrentStageId = stage.StageId;
+                pipelineContext.SyncDataBagToTask();
+                task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, stage.QueueTier, task.Priority);
+                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                cohortExitReason = CohortExitReason.Yielded;
+                return;
+            }
+
+            isFirstIteration = false;
+
+            currentExecutingStage = stage;
+            task.CurrentStageId = stage.StageId;
+
+            // Persist current stage immediately so UI / Kanban / DAG shows task is actively executing
+            var stageIndex = pipeline.Stages.ToList().FindIndex(s => string.Equals(s.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase));
+            var stageOrder = stageIndex >= 0 ? stageIndex + 1 : 1;
+            task.HasExecutionRun = true;
+            task.MaxExecutedStageOrder = Math.Max(task.MaxExecutedStageOrder, stageOrder);
+            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+
+            // Record active executing task authoritatively in telemetry
+            var isDeterministic = stage.Kind == WorkflowStageKind.Deterministic;
+            var queueName = isDeterministic
+                ? DeterministicStageConstants.CpuDeterministicQueue
+                : DeterministicStageConstants.LlmInferenceQueue;
+            var hardwareTarget = isDeterministic ? "Deterministic CPU" : "Local GPU";
+
+            _telemetryService.RecordActiveTask(new ActiveTaskSummary(
+                task.Id,
+                task.Title ?? string.Empty,
+                stage.StageId,
+                task.Priority,
+                queueName,
+                DateTime.UtcNow,
+                hardwareTarget));
+
+            // Resolve Agent Profile matching interrupted profile or current stage, or fallback to first
+            AgentProfile? profile = null;
+            if (!string.IsNullOrWhiteSpace(task.InterruptedAgentProfileId))
+            {
+                profile = workspace.AgentProfiles?.FirstOrDefault(p =>
+                    string.Equals(p.Id, task.InterruptedAgentProfileId, StringComparison.OrdinalIgnoreCase));
+                task.InterruptedAgentProfileId = null;
+            }
+
+            if (profile == null)
+            {
+                profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, stage.StageId, cancellationToken);
+            }
+
+            if (profile == null)
+            {
+                profile = workspace.AgentProfiles?.FirstOrDefault(p =>
+                    string.Equals(p.Id, stage.StageId, StringComparison.OrdinalIgnoreCase) ||
+                    (p.StageDirectives != null && p.StageDirectives.ContainsKey(stage.StageId)));
+            }
+
+            currentExecutingProfile = profile;
+            pipelineContext.CurrentProfile = profile;
+
+            if (stage.Kind == WorkflowStageKind.Agentic && !HasCustomHandler(stage))
+            {
+                if (profile == null)
+                {
+                    var notFoundEx = new AgentProfileNotFoundException(stage.StageId, workspace.Id);
+                    _logger.LogError(notFoundEx, "Agent profile not found for stage '{StageId}' in workspace #{WorkspaceId}", stage.StageId, workspace.Id);
+                    task.Status = TaskOverallStatus.Failed;
+                    await _taskRepository.UpdateWithHistoryAsync(
+                        task,
+                        dependsOn: null,
+                        changedBy: AuditActors.TaskOrchestrator,
+                        reason: notFoundEx.Message,
+                        cancellationToken: cancellationToken);
+                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
+                    await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                    {
+                        TaskId = task.Id,
+                        Level = LogLevel.Error,
+                        Message = notFoundEx.Message,
+                        Timestamp = DateTime.UtcNow
+                    }, cancellationToken);
+
+                    cohortExitReason = CohortExitReason.Failed;
+                    throw notFoundEx;
+                }
+            }
+
+            // Start Conversation immediately for deterministic stages so Task Inspector tracks active run and progression in real-time
+            Conversation? deterministicConv = null;
+            bool deterministicConvFinalized = false;
+            IReadOnlyDictionary<int, Services.TaskBaselineEntry>? baselineSnapshot = null;
+            StageExecutionResult? result = null;
         if (stage.Kind == WorkflowStageKind.Deterministic)
         {
             try
@@ -517,6 +559,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                         preserveActor,
                         TaskSyncConstants.PreserveEditsBeforeResumeReason,
                         cancellationToken);
+                    isResumedRun = false;
                 }
 
                 var preSyncResult = await _markdownSyncService.SyncAllTasksToDiskAsync(
@@ -1312,6 +1355,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     Timestamp = DateTime.UtcNow
                 }, ct);
 
+                cohortExitReason = CohortExitReason.Paused;
                 return;
             }
 
@@ -1366,6 +1410,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 Timestamp = DateTime.UtcNow
             }, ct);
 
+            cohortExitReason = CohortExitReason.Cancelled;
             return;
         }
 
@@ -1434,6 +1479,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 Timestamp = DateTime.UtcNow
             }, cancellationToken);
 
+            cohortExitReason = CohortExitReason.WaitingForHuman;
             // Clean return: Hangfire marks job as Succeeded, GPU worker freed
             return;
         }
@@ -1456,6 +1502,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                         cancellationToken: CancellationToken.None);
                     await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
                 }
+                cohortExitReason = CohortExitReason.Cancelled;
                 return;
             }
 
@@ -1488,6 +1535,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                         cancellationToken: CancellationToken.None);
                     await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, CancellationToken.None);
                 }
+                cohortExitReason = CohortExitReason.Paused;
                 return;
             }
 
@@ -1502,6 +1550,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             task.Status = TaskOverallStatus.Cancelled;
             task.IsWaitingForHuman = false;
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
+            cohortExitReason = CohortExitReason.Cancelled;
             return;
         }
 
@@ -1552,6 +1601,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             Timestamp = DateTime.UtcNow
                         }, cancellationToken);
 
+                        cohortExitReason = CohortExitReason.WaitingForHuman;
                         return;
                     }
 
@@ -1598,6 +1648,7 @@ public class TaskOrchestrator : ITaskOrchestrator
 
                     task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, implementationStage.QueueTier, task.Priority);
                     await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                    cohortExitReason = CohortExitReason.Failed;
                     return;
                 }
                 else
@@ -1632,7 +1683,12 @@ public class TaskOrchestrator : ITaskOrchestrator
         if (result.IsSuccess)
         {
             // Case B: Stage Completed
-            pipelineContext.ResetRetries();
+            pipelineContext.ResetStageRetry(stage.StageId);
+            if (string.Equals(stage.StageId, StandardStageIds.PostImplementationGates, StringComparison.OrdinalIgnoreCase))
+            {
+                pipelineContext.DataBag.Remove(PipelineDataBagKeys.CompilerErrors);
+                pipelineContext.DataBag.Remove(PipelineDataBagKeys.FailedTests);
+            }
 
             if (stage.Kind != WorkflowStageKind.Deterministic)
             {
@@ -1693,9 +1749,16 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
 
             var nextStageId = result.TargetRoutingStageId;
-            IWorkflowStage? nextStage = !string.IsNullOrWhiteSpace(nextStageId)
-                ? pipeline.GetStage(nextStageId)
-                : pipeline.GetNextStage(stage.StageId);
+            IWorkflowStage? nextStage;
+            if (!string.IsNullOrWhiteSpace(nextStageId))
+            {
+                nextStage = pipeline.GetStage(nextStageId)
+                    ?? throw new WorkflowValidationException($"Task #{task.Id} stage '{stage.StageId}' routed dynamically to unknown target stage '{nextStageId}'.");
+            }
+            else
+            {
+                nextStage = pipeline.GetNextStage(stage.StageId);
+            }
 
             if (nextStage != null)
             {
@@ -1725,9 +1788,24 @@ public class TaskOrchestrator : ITaskOrchestrator
                 await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
                 await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
 
-                // Enqueue next stage with stage-priority routing
-                task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, nextStage.QueueTier, task.Priority);
-                await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                bool isSameCohort = IsSameCohort(stage.QueueTier, nextStage.QueueTier);
+                if (isSameCohort)
+                {
+                    _logger.LogInformation("Chaining stage '{CurrentStage}' -> '{NextStage}' in-process for task #{TaskId} (QueueTier: {Tier})",
+                        stage.StageId, nextStage.StageId, task.Id, stage.QueueTier);
+                    stage = nextStage;
+                    continue;
+                }
+                else
+                {
+                    // Cohort Boundary: Enqueue next stage and exit worker turn
+                    _logger.LogInformation("Cohort boundary reached after '{CurrentStage}' for task #{TaskId}. Enqueuing next stage '{NextStage}' to {Tier}.",
+                        stage.StageId, task.Id, nextStage.StageId, nextStage.QueueTier);
+                    task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, nextStage.QueueTier, task.Priority);
+                    await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                    cohortExitReason = CohortExitReason.CohortCompleted;
+                    return;
+                }
             }
             else
             {
@@ -1755,6 +1833,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     _logger.LogWarning("Gate 2 detected merge conflict for task #{TaskId} with '{BaseBranch}' in {Count} files",
                         task.Id, task.BaseBranch, mergeCheck.ConflictedFiles.Count);
                     await InitiateConflictResolutionAsync(task, workspace, pipelineContext, mergeCheck.ConflictedFiles, cancellationToken);
+                    cohortExitReason = task.IsWaitingForHuman ? CohortExitReason.WaitingForHuman : CohortExitReason.Failed;
                     return;
                 }
 
@@ -1763,6 +1842,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 if (syncResult != null && syncResult.HasConflict)
                 {
                     await InitiateConflictResolutionAsync(task, workspace, pipelineContext, syncResult.ConflictedFiles, cancellationToken);
+                    cohortExitReason = task.IsWaitingForHuman ? CohortExitReason.WaitingForHuman : CohortExitReason.Failed;
                     return;
                 }
 
@@ -1776,13 +1856,31 @@ public class TaskOrchestrator : ITaskOrchestrator
                         _logger.LogWarning("Re-verification after sync failed for task #{TaskId}: {Error}. Routing back to Implementation.",
                             task.Id, reverifyResult.ErrorMessage);
                         var loopBackStageId = stage.LoopBackStageId ?? StandardStageIds.Implementation;
-                        await HandleLoopBackAsync(task, workspace, pipelineContext, stage, loopBackStageId, reverifyResult, cancellationToken);
+                        var reverifyRetries = pipelineContext.IncrementRetry(stage.StageId);
+                        var reverifyMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
+
+                        if (!string.IsNullOrWhiteSpace(loopBackStageId) && reverifyRetries <= reverifyMaxRetries)
+                        {
+                            var targetStage = pipeline.GetStage(loopBackStageId);
+                            if (targetStage != null && IsSameCohort(stage.QueueTier, targetStage.QueueTier))
+                            {
+                                await PrepareInProcessLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, reverifyRetries, reverifyMaxRetries, reverifyResult, cancellationToken);
+                                stage = targetStage;
+                                continue;
+                            }
+                            else if (targetStage != null)
+                            {
+                                await HandleCrossCohortLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, reverifyRetries, reverifyMaxRetries, reverifyResult, cancellationToken);
+                                cohortExitReason = CohortExitReason.Failed;
+                                return;
+                            }
+                        }
+
+                        await HandleStageFatalFailureAsync(task, workspace, pipelineContext, stage, reverifyResult, cancellationToken);
+                        cohortExitReason = CohortExitReason.Failed;
                         return;
                     }
                 }
-
-                // Final stage reached: Transition to Ready and generate review diff stat
-                task.Status = TaskOverallStatus.Ready;
 
                 string diffStat = string.Empty;
                 try
@@ -1795,30 +1893,40 @@ public class TaskOrchestrator : ITaskOrchestrator
                 }
 
                 pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, diffStat);
-                var hasResolvedConflict = pipelineContext.DataBag.Get<bool?>(PipelineDataBagKeys.HasResolvedConflict) == true;
-                var readyReason = hasResolvedConflict
-                    ? ConflictResolutionConstants.AuditPostReviewVerificationPassedReopened
-                    : $"Pipeline completed all stages at '{stage.StageId}'. Status: {task.Status}";
-
-                pipelineContext.SyncDataBagToTask();
-                await _taskRepository.UpdateWithHistoryAsync(
-                    task,
-                    dependsOn: null,
-                    changedBy: AuditActors.TaskOrchestrator,
-                    reason: readyReason,
-                    cancellationToken: cancellationToken);
-                await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Ready, cancellationToken);
 
                 if (task.MergeMode == MergeMode.Automatic)
                 {
-                    _logger.LogInformation("ForgeTask #{TaskId} reached Ready with MergeMode.Automatic; executing auto-merge.", task.Id);
+                    _logger.LogInformation("ForgeTask #{TaskId} completed all stages with MergeMode.Automatic; executing auto-merge.", task.Id);
+                    pipelineContext.SyncDataBagToTask();
+                    CompleteTaskResult mergeResult;
                     using (await _workspaceLockProvider.AcquireLockAsync(workspace.Id, cancellationToken))
                     {
-                        await CompleteTaskAndCascadeInternalAsync(task, workspace, $"Auto-merge task #{task.Id}: {task.Title}", cancellationToken);
+                        mergeResult = await CompleteTaskAndCascadeInternalAsync(task, workspace, $"Auto-merge task #{task.Id}: {task.Title}", cancellationToken);
+                    }
+
+                    if (mergeResult.Status == CompleteTaskStatus.ConflictResolutionDispatched)
+                    {
+                        cohortExitReason = task.IsWaitingForHuman ? CohortExitReason.WaitingForHuman : CohortExitReason.Failed;
+                        return;
                     }
                 }
                 else
                 {
+                    task.Status = TaskOverallStatus.Ready;
+                    var hasResolvedConflict = pipelineContext.DataBag.Get<bool?>(PipelineDataBagKeys.HasResolvedConflict) == true;
+                    var readyReason = hasResolvedConflict
+                        ? ConflictResolutionConstants.AuditPostReviewVerificationPassedReopened
+                        : $"Pipeline completed all stages at '{stage.StageId}'. Status: {task.Status}";
+
+                    pipelineContext.SyncDataBagToTask();
+                    await _taskRepository.UpdateWithHistoryAsync(
+                        task,
+                        dependsOn: null,
+                        changedBy: AuditActors.TaskOrchestrator,
+                        reason: readyReason,
+                        cancellationToken: cancellationToken);
+                    await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Ready, cancellationToken);
+
                     await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
                     await _taskRepository.AddExecutionLogAsync(new ExecutionLog
                     {
@@ -1828,36 +1936,43 @@ public class TaskOrchestrator : ITaskOrchestrator
                         Timestamp = DateTime.UtcNow
                     }, cancellationToken);
                 }
+
+                cohortExitReason = CohortExitReason.CohortCompleted;
+                return;
             }
-            return;
         }
 
         // Loopback / Retry Routing (e.g. deterministic build, test, or lint quality gate failed and routed back to implementation)
         var targetLoopBackId = result.TargetRoutingStageId ?? stage.LoopBackStageId;
-        if (!string.IsNullOrWhiteSpace(targetLoopBackId))
+        var retries = pipelineContext.IncrementRetry(stage.StageId);
+        var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
+
+        if (!string.IsNullOrWhiteSpace(targetLoopBackId) && retries <= effectiveMaxRetries)
         {
-            await HandleLoopBackAsync(task, workspace, pipelineContext, stage, targetLoopBackId, result, cancellationToken);
-            return;
+            var targetStage = pipeline.GetStage(targetLoopBackId);
+            if (targetStage != null && IsSameCohort(stage.QueueTier, targetStage.QueueTier))
+            {
+                // IN-PROCESS LOOPBACK
+                await PrepareInProcessLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, retries, effectiveMaxRetries, result, cancellationToken);
+                stage = targetStage;
+                continue;
+            }
+            else if (targetStage != null)
+            {
+                // CROSS-COHORT LOOPBACK
+                await HandleCrossCohortLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, retries, effectiveMaxRetries, result, cancellationToken);
+                cohortExitReason = CohortExitReason.Failed;
+                return;
+            }
         }
 
         // Case C: Permanent Failure
-        task.Status = TaskOverallStatus.Failed;
-        pipelineContext.SyncDataBagToTask();
-        await _taskRepository.UpdateWithHistoryAsync(
-            task,
-            dependsOn: null,
-            changedBy: AuditActors.TaskOrchestrator,
-            reason: $"Pipeline failed at stage '{stage.StageId}'. Error: {result.ErrorMessage ?? "Unknown failure"}",
-            cancellationToken: cancellationToken);
-        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
-        await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
-        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
-        {
-            TaskId = task.Id,
-            Level = LogLevel.Error,
-            Message = $"Stage '{stage.StageId}' failed: {result.ErrorMessage}",
-            Timestamp = DateTime.UtcNow
-        }, cancellationToken);
+        await HandleStageFatalFailureAsync(task, workspace, pipelineContext, stage, result, cancellationToken);
+        cohortExitReason = CohortExitReason.Failed;
+        return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
         }
         catch (Exception ocex) when (ocex is OperationCanceledException or NightCodeForge.Core.Exceptions.OperationsPausedException)
         {
@@ -1868,6 +1983,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             {
                 if (_cancellationManager.IsCancelRequested(taskId))
                 {
+                    cohortExitReason = CohortExitReason.Cancelled;
                     _logger.LogInformation("Task #{TaskId} execution cancelled by user.", taskId);
                     await CloseActiveConversationsAsync(taskId, StageExecutionStatus.Cancelled, "Task cancelled by user.", ct);
 
@@ -1889,6 +2005,7 @@ public class TaskOrchestrator : ITaskOrchestrator
 
                 if (_cancellationManager.IsPauseRequested(taskId) || _operationsControlService.IsPaused)
                 {
+                    cohortExitReason = CohortExitReason.Paused;
                     _logger.LogInformation("Task #{TaskId} paused due to global operations suspension.", taskId);
 
                     await CloseActiveConversationsAsync(taskId, StageExecutionStatus.Interrupted, "Operations paused by user (GPU VRAM reclaimed).", ct);
@@ -1913,6 +2030,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     return;
                 }
 
+                cohortExitReason = CohortExitReason.Cancelled;
                 // Parent cancellation (e.g. shutdown or external token): close conversations as Cancelled and leave status untouched
                 await CloseActiveConversationsAsync(taskId, StageExecutionStatus.Cancelled, "Execution interrupted by application shutdown or cancellation token.", ct);
             }
@@ -1923,6 +2041,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
         catch (Exception ex)
         {
+            cohortExitReason = CohortExitReason.Failed;
             _logger.LogError(ex, "ForgeTask #{TaskId} execution failed with an unhandled exception.", taskId);
             try
             {
@@ -1959,6 +2078,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
         finally
         {
+            _logger.LogInformation("Task #{TaskId} cohort execution completed in {DurationMs}ms with reason '{ExitReason}'.", taskId, cohortSw.ElapsedMilliseconds, cohortExitReason);
             _telemetryService.ClearActiveTask(taskId);
             if (taskCts != null)
             {
@@ -2592,8 +2712,25 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
 
             task.SquashCommitSha = squashSha;
+            task.Status = TaskOverallStatus.Closed;
+            task.CurrentStageId = string.Empty;
 
-            // Push succeeded! Remove task worktree now
+            var closedBag = PipelineDataBag.FromJson(task.PipelineDataJson);
+            closedBag.Remove(PipelineDataBagKeys.HasResolvedConflict);
+            closedBag.Remove(PipelineDataBagKeys.ConflictResolutionAttempts);
+            closedBag.Remove(PipelineDataBagKeys.TotalConflictResolutionAttempts);
+            closedBag.Remove(PipelineDataBagKeys.LifetimeConflictDetections);
+            task.PipelineDataJson = closedBag.ToJson();
+
+            await _taskRepository.UpdateWithHistoryAsync(
+                task,
+                dependsOn: null,
+                changedBy: AuditActors.TaskOrchestrator,
+                reason: $"ForgeTask #{task.Id} completed and squash-merged to {task.BaseBranch}.",
+                cancellationToken: cancellationToken);
+            await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Closed, cancellationToken);
+
+            // Push succeeded and Closed status persisted! Remove task worktree now
             try
             {
                 await _gitWorkspaceManager.RemoveWorktreeAsync(workspace, task.Id, CancellationToken.None);
@@ -2605,24 +2742,6 @@ public class TaskOrchestrator : ITaskOrchestrator
 
             break;
         }
-
-        // 2. Mark task as completed (Closed)
-        task.Status = TaskOverallStatus.Closed;
-        task.CurrentStageId = string.Empty;
-
-        var closedBag = PipelineDataBag.FromJson(task.PipelineDataJson);
-        closedBag.Remove(PipelineDataBagKeys.HasResolvedConflict);
-        closedBag.Remove(PipelineDataBagKeys.ConflictResolutionAttempts);
-        closedBag.Remove(PipelineDataBagKeys.TotalConflictResolutionAttempts);
-        closedBag.Remove(PipelineDataBagKeys.LifetimeConflictDetections);
-        task.PipelineDataJson = closedBag.ToJson();
-        await _taskRepository.UpdateWithHistoryAsync(
-            task,
-            dependsOn: null,
-            changedBy: AuditActors.TaskOrchestrator,
-            reason: $"ForgeTask #{task.Id} completed and squash-merged to {task.BaseBranch}.",
-            cancellationToken: cancellationToken);
-        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Closed, cancellationToken);
 
         try
         {
@@ -2786,74 +2905,97 @@ public class TaskOrchestrator : ITaskOrchestrator
         }, cancellationToken);
     }
 
-    private async Task HandleLoopBackAsync(
+    private async Task PrepareInProcessLoopBackAsync(
+        ForgeTask task,
+        Workspace workspace,
+        PipelineContext pipelineContext,
+        IWorkflowStage currentStage,
+        IWorkflowStage targetStage,
+        int retries,
+        int effectiveMaxRetries,
+        StageExecutionResult result,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogWarning("Stage '{StageId}' failed, routing backward in-process to '{TargetStage}' (Retry {Retry}/{Max}): {Reason}",
+            currentStage.StageId, targetStage.StageId, retries, effectiveMaxRetries, result.ErrorMessage);
+
+        PopulateDiagnosticsIntoDataBag(pipelineContext, currentStage, retries, result);
+
+        task.CurrentStageId = targetStage.StageId;
+        pipelineContext.SyncDataBagToTask();
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.TaskOrchestrator,
+            reason: $"Quality gate '{currentStage.StageId}' failed. Looping back in-process to '{targetStage.StageId}' (attempt {retries}/{effectiveMaxRetries}).",
+            cancellationToken: cancellationToken);
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
+        await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+
+        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+        {
+            TaskId = task.Id,
+            Level = LogLevel.Warning,
+            Message = $"Quality gate '{currentStage.StageId}' failed: {result.ErrorMessage}. Looping back in-process to '{targetStage.StageId}' (attempt {retries}/{effectiveMaxRetries}).",
+            Timestamp = DateTime.UtcNow
+        }, cancellationToken);
+    }
+
+    private async Task HandleCrossCohortLoopBackAsync(
+        ForgeTask task,
+        Workspace workspace,
+        PipelineContext pipelineContext,
+        IWorkflowStage currentStage,
+        IWorkflowStage targetStage,
+        int retries,
+        int effectiveMaxRetries,
+        StageExecutionResult result,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogWarning("Stage '{StageId}' failed, routing backward cross-cohort to '{TargetStage}' (Retry {Retry}/{Max}): {Reason}",
+            currentStage.StageId, targetStage.StageId, retries, effectiveMaxRetries, result.ErrorMessage);
+
+        PopulateDiagnosticsIntoDataBag(pipelineContext, currentStage, retries, result);
+
+        task.CurrentStageId = targetStage.StageId;
+        pipelineContext.SyncDataBagToTask();
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.TaskOrchestrator,
+            reason: $"Quality gate '{currentStage.StageId}' failed. Looping back to '{targetStage.StageId}' (attempt {retries}/{effectiveMaxRetries}).",
+            cancellationToken: cancellationToken);
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
+        await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+
+        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+        {
+            TaskId = task.Id,
+            Level = LogLevel.Warning,
+            Message = $"Quality gate '{currentStage.StageId}' failed: {result.ErrorMessage}. Looping back cross-cohort to '{targetStage.StageId}' (attempt {retries}/{effectiveMaxRetries}).",
+            Timestamp = DateTime.UtcNow
+        }, cancellationToken);
+
+        task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority);
+        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+    }
+
+    private async Task HandleStageFatalFailureAsync(
         ForgeTask task,
         Workspace workspace,
         PipelineContext pipelineContext,
         IWorkflowStage stage,
-        string targetLoopBackId,
         StageExecutionResult result,
         CancellationToken cancellationToken)
     {
-        var retries = pipelineContext.IncrementRetry(stage.StageId);
         var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
-        if (retries <= effectiveMaxRetries)
-        {
-            _logger.LogWarning("Stage '{StageId}' failed, routing backward to '{TargetStage}' (Retry {Retry}/{Max}): {Reason}",
-                stage.StageId, targetLoopBackId, retries, effectiveMaxRetries, result.ErrorMessage);
-
-            var errors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors) ?? new List<string>();
-            var failedTests = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
-            if (failedTests is { Count: > 0 })
-            {
-                errors.AddRange(failedTests.Select(ft => $"[{stage.StageId} test failure] {ft}"));
-            }
-            var newWarnings = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.WarningsNew);
-            if (newWarnings is { Count: > 0 } && (string.Equals(stage.StageId, StageImplementationTypes.DeterministicRatchet, StringComparison.OrdinalIgnoreCase) || stage.StageId.Contains("ratchet", StringComparison.OrdinalIgnoreCase)))
-            {
-                errors.AddRange(newWarnings.Select(w => $"[warning ratchet] {w}"));
-            }
-            if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
-            {
-                errors.Add($"[{stage.StageId} attempt {retries}] {result.ErrorMessage}");
-            }
-            pipelineContext.DataBag.Set(PipelineDataBagKeys.CompilerErrors, errors);
-
-            task.CurrentStageId = targetLoopBackId;
-            pipelineContext.SyncDataBagToTask();
-            await _taskRepository.UpdateWithHistoryAsync(
-                task,
-                dependsOn: null,
-                changedBy: AuditActors.TaskOrchestrator,
-                reason: $"Quality gate '{stage.StageId}' failed. Looping back to '{targetLoopBackId}' (attempt {retries}/{effectiveMaxRetries}).",
-                cancellationToken: cancellationToken);
-            await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
-            await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
-
-            await _taskRepository.AddExecutionLogAsync(new ExecutionLog
-            {
-                TaskId = task.Id,
-                Level = LogLevel.Warning,
-                Message = $"Quality gate '{stage.StageId}' failed: {result.ErrorMessage}. Looping back to '{targetLoopBackId}' (attempt {retries}/{effectiveMaxRetries}).",
-                Timestamp = DateTime.UtcNow
-            }, cancellationToken);
-
-            var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
-            var targetStage = pipeline.GetStage(targetLoopBackId)
-                ?? throw new WorkflowValidationException($"Task #{task.Id} workflow does not contain loopback target stage '{targetLoopBackId}'.");
-
-            task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority);
-            await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-            return;
-        }
-
         task.Status = TaskOverallStatus.Failed;
         pipelineContext.SyncDataBagToTask();
         await _taskRepository.UpdateWithHistoryAsync(
             task,
             dependsOn: null,
             changedBy: AuditActors.TaskOrchestrator,
-            reason: $"Stage '{stage.StageId}' failed and exceeded max retry limit ({effectiveMaxRetries}). Error: {result.ErrorMessage}",
+            reason: $"Pipeline failed at stage '{stage.StageId}'. Exceeded max retry limit ({effectiveMaxRetries}). Error: {result.ErrorMessage ?? "Unknown failure"}",
             cancellationToken: cancellationToken);
         await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
         await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
@@ -2865,6 +3007,33 @@ public class TaskOrchestrator : ITaskOrchestrator
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
     }
+
+    private static void PopulateDiagnosticsIntoDataBag(
+        PipelineContext pipelineContext,
+        IWorkflowStage stage,
+        int retries,
+        StageExecutionResult result)
+    {
+        var errors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors) ?? new List<string>();
+        var failedTests = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
+        if (failedTests is { Count: > 0 })
+        {
+            errors.AddRange(failedTests.Select(ft => $"[{stage.StageId} test failure] {ft}"));
+        }
+        var newWarnings = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.WarningsNew);
+        if (newWarnings is { Count: > 0 } && (string.Equals(stage.StageId, StageImplementationTypes.DeterministicRatchet, StringComparison.OrdinalIgnoreCase) || stage.StageId.Contains("ratchet", StringComparison.OrdinalIgnoreCase)))
+        {
+            errors.AddRange(newWarnings.Select(w => $"[warning ratchet] {w}"));
+        }
+        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+        {
+            errors.Add($"[{stage.StageId} attempt {retries}] {result.ErrorMessage}");
+        }
+        pipelineContext.DataBag.Set(PipelineDataBagKeys.CompilerErrors, errors);
+    }
+
+    private static bool IsSameCohort(StageQueueTier current, StageQueueTier next) =>
+        current == next && current != StageQueueTier.TaskReview;
 
     private static bool HasCustomHandler(IWorkflowStage stage)
     {

@@ -219,25 +219,21 @@ public class TaskOrchestratorDynamicWorkflowTests
 
         var orchestrator = CreateOrchestrator();
 
-        var expectedSequence = new[]
-        {
-            "deterministic-pre-impl",
-            "implementation",
-            "deterministic-post-impl",
-            "code-review-fix",
-            "deterministic-post-review"
-        };
+        // Turn 1: Task Review (Stage 1) -> transitions to Stage 2 and enqueues Implementation cohort
+        await orchestrator.ProcessTaskAsync(task.Id);
+        var afterTurn1 = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.Equal("deterministic-pre-impl", afterTurn1!.CurrentStageId);
+        Assert.Contains(task.Id, _jobQueue.InferenceQueue);
+        _jobQueue.InferenceQueue.Clear();
 
-        foreach (var expectedNextStage in expectedSequence)
-        {
-            await orchestrator.ProcessTaskAsync(task.Id);
-            var updated = await _taskRepo.GetByIdAsync(task.Id);
-            Assert.Equal(expectedNextStage, updated!.CurrentStageId);
-            Assert.Contains(task.Id, _jobQueue.InferenceQueue);
-            _jobQueue.InferenceQueue.Clear();
-        }
+        // Turn 2: Implementation Cohort (Stages 2, 3, 4 execute in-process) -> transitions to Stage 5 and enqueues Delivery cohort
+        await orchestrator.ProcessTaskAsync(task.Id);
+        var afterTurn2 = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.Equal("code-review-fix", afterTurn2!.CurrentStageId);
+        Assert.Contains(task.Id, _jobQueue.InferenceQueue);
+        _jobQueue.InferenceQueue.Clear();
 
-        // Final stage execution
+        // Turn 3: Review & Delivery Cohort (Stages 5, 6 + Gate 2 execute in-process) -> reaches Ready
         await orchestrator.ProcessTaskAsync(task.Id);
         var finalTask = await _taskRepo.GetByIdAsync(task.Id);
         Assert.Equal(TaskOverallStatus.Ready, finalTask!.Status);
@@ -319,7 +315,7 @@ public class TaskOrchestratorDynamicWorkflowTests
                     StageId = "strict-gate",
                     DisplayName = "Strict Gate",
                     SequenceOrder = 2,
-                    QueueTier = StageQueueTier.Implementation,
+                    QueueTier = StageQueueTier.CodeReview,
                     CsharpImplementationType = "failing-gate",
                     ConfigurationJson = """{"LoopBackStageId": "dev-step"}"""
                 }
@@ -481,7 +477,7 @@ public class TaskOrchestratorDynamicWorkflowTests
                     StageId = "stage-4",
                     DisplayName = "Stage 4 Failing Gate",
                     SequenceOrder = 4,
-                    QueueTier = StageQueueTier.Implementation,
+                    QueueTier = StageQueueTier.CodeReview,
                     CsharpImplementationType = "failing-stage-4",
                     ConfigurationJson = """{"LoopBackStageId": "stage-3"}"""
                 }

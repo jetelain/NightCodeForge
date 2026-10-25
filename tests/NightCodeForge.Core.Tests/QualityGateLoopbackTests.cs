@@ -82,6 +82,7 @@ public class QualityGateLoopbackTests
             new TestWorkflowStage("implementation", WorkflowStageKind.Agentic),
             new TestWorkflowStage("quality-gate", WorkflowStageKind.Deterministic)
             {
+                QueueTier = StageQueueTier.CodeReview,
                 Handler = (ctx, ct) => Task.FromResult(
                     StageExecutionResult.Failure("Unit tests failed: 2 broken", loopBackStageId: "implementation"))
             }
@@ -309,6 +310,9 @@ public class QualityGateLoopbackTests
                 Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success())
             },
             new TestWorkflowStage("stage2", WorkflowStageKind.Deterministic)
+            {
+                QueueTier = StageQueueTier.CodeReview
+            }
         });
 
         var orchestrator = new TestOrchestratorBuilder
@@ -380,6 +384,9 @@ public class QualityGateLoopbackTests
         {
             new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic),
             new TestWorkflowStage(StandardStageIds.CodeReviewAndFix, WorkflowStageKind.Agentic, AgentMode.Review)
+            {
+                QueueTier = StageQueueTier.CodeReview
+            }
         });
 
         var orchestrator = new TestOrchestratorBuilder
@@ -451,6 +458,7 @@ public class QualityGateLoopbackTests
             new TestWorkflowStage("implementation", WorkflowStageKind.Agentic),
             new TestWorkflowStage("deterministic-test", WorkflowStageKind.Deterministic)
             {
+                QueueTier = StageQueueTier.CodeReview,
                 Handler = (ctx, ct) => Task.FromResult(
                     StageExecutionResult.Failure("Deterministic tests failed: 1 failed test(s)", loopBackStageId: "implementation"))
             }

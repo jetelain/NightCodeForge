@@ -1245,6 +1245,7 @@ Some resolved documentation.
             new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic),
             new TestWorkflowStage(StandardStageIds.PostReviewVerification, WorkflowStageKind.Deterministic)
             {
+                QueueTier = StageQueueTier.CodeReview,
                 Handler = (ctx, ct) =>
                 {
                     executionCount++;
@@ -1461,7 +1462,10 @@ Some resolved documentation.
         var pipeline = new WorkflowPipeline(new IWorkflowStage[]
         {
             new TestWorkflowStage(StandardStageIds.PreImplementationBaseline, WorkflowStageKind.Deterministic),
-            new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic)
+            new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Deterministic)
+            {
+                QueueTier = StageQueueTier.CodeReview
+            }
         });
 
         var orchestrator = new TestOrchestratorBuilder
@@ -2146,32 +2150,18 @@ Some resolved documentation.
             PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline)
         }.Build();
 
-        // Step 1: Implementation agent turn verifies conflict resolution
+        // Step 1: Implementation cohort (Implementation + PostImplementationGates) executes in-process
         await orchestrator.ProcessTaskAsync(task.Id);
-        var taskAfterImpl = await taskRepo.GetByIdAsync(task.Id);
-        Assert.NotNull(taskAfterImpl);
-        Assert.Equal(StandardStageIds.PostImplementationGates, taskAfterImpl.CurrentStageId);
-        Assert.Equal(TaskOverallStatus.Open, taskAfterImpl.Status);
+        var taskAfterCohort1 = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(taskAfterCohort1);
+        Assert.Equal(StandardStageIds.CodeReviewAndFix, taskAfterCohort1.CurrentStageId);
+        Assert.Equal(TaskOverallStatus.Open, taskAfterCohort1.Status);
 
-        var bagAfterImpl = PipelineDataBag.FromJson(taskAfterImpl.PipelineDataJson);
+        var bagAfterImpl = PipelineDataBag.FromJson(taskAfterCohort1.PipelineDataJson);
         Assert.True(bagAfterImpl.Get<bool?>(PipelineDataBagKeys.HasResolvedConflict));
         Assert.Null(bagAfterImpl.Get<List<string>>(PipelineDataBagKeys.ConflictFiles));
 
-        // Step 2: PostImplementationGates
-        await orchestrator.ProcessTaskAsync(task.Id);
-        var taskAfterPostImpl = await taskRepo.GetByIdAsync(task.Id);
-        Assert.NotNull(taskAfterPostImpl);
-        Assert.Equal(StandardStageIds.CodeReviewAndFix, taskAfterPostImpl.CurrentStageId);
-        Assert.Equal(TaskOverallStatus.Open, taskAfterPostImpl.Status);
-
-        // Step 3: CodeReviewAndFix
-        await orchestrator.ProcessTaskAsync(task.Id);
-        var taskAfterCR = await taskRepo.GetByIdAsync(task.Id);
-        Assert.NotNull(taskAfterCR);
-        Assert.Equal(StandardStageIds.PostReviewVerification, taskAfterCR.CurrentStageId);
-        Assert.Equal(TaskOverallStatus.Open, taskAfterCR.Status);
-
-        // Step 4: PostReviewVerification and Gate 2
+        // Step 2: Review & Delivery cohort (CodeReviewAndFix + PostReviewVerification + Gate 2) executes in-process
         await orchestrator.ProcessTaskAsync(task.Id);
         var taskAfterAll = await taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(taskAfterAll);

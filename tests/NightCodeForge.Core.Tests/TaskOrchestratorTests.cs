@@ -112,8 +112,8 @@ public class TaskOrchestratorTests
         });
         _depStore.AddTask(20, 1, TaskOverallStatus.Open);
 
-        var stage1 = new TestWorkflowStage("stage-1") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
-        var stage2 = new TestWorkflowStage("stage-2") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
+        var stage1 = new TestWorkflowStage("stage-1") { QueueTier = StageQueueTier.Implementation, Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
+        var stage2 = new TestWorkflowStage("stage-2") { QueueTier = StageQueueTier.CodeReview, Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2 });
 
         var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
@@ -139,8 +139,8 @@ public class TaskOrchestratorTests
         }, null, AuditActors.User, "Created baseline");
         _depStore.AddTask(25, 1, TaskOverallStatus.Open);
 
-        var stage1 = new TestWorkflowStage("stage-1") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
-        var stage2 = new TestWorkflowStage("stage-2") { Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
+        var stage1 = new TestWorkflowStage("stage-1") { QueueTier = StageQueueTier.Implementation, Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
+        var stage2 = new TestWorkflowStage("stage-2") { QueueTier = StageQueueTier.CodeReview, Handler = (ctx, ct) => Task.FromResult(StageExecutionResult.Success()) };
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2 });
 
         var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));

@@ -25,4 +25,9 @@ public interface ITaskJobQueue
     /// Deletes or cancels an enqueued job by its Hangfire job identifier.
     /// </summary>
     bool Delete(string jobId);
+
+    /// <summary>
+    /// Checks whether any P1 urgent execution jobs are waiting in the queue.
+    /// </summary>
+    Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default);
 }

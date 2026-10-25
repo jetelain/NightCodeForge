@@ -72,6 +72,21 @@ public class HangfireTaskJobQueue : ITaskJobQueue
         return _backgroundJobClient.Delete(jobId);
     }
 
+    public Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var monitoringApi = _jobStorage.GetMonitoringApi();
+            var urgentCount = monitoringApi.EnqueuedCount(HangfireQueues.LlmUrgent);
+            return Task.FromResult(urgentCount > 0);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed querying Hangfire monitoring API for urgent queue status");
+            return Task.FromResult(false);
+        }
+    }
+
     private void SetOriginalEnqueuedAt(string jobId, DateTime? originalEnqueuedAt)
     {
         var timestamp = originalEnqueuedAt ?? DateTime.UtcNow;

@@ -115,6 +115,15 @@ public class InMemoryTaskJobQueue : ITaskJobQueue
         }
     }
 
+    public Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_allJobs)
+        {
+            var activeJobIds = new HashSet<string>(_allJobs.Select(j => j.JobId));
+            return Task.FromResult(_urgentJobs.Any(j => activeJobIds.Contains(j.JobId)));
+        }
+    }
+
     public void Clear()
     {
         while (_urgentJobs.TryDequeue(out _)) { }

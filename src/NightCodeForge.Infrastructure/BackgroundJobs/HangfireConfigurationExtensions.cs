@@ -40,10 +40,7 @@ public static class HangfireConfigurationExtensions
                 .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
                 .UseSimpleAssemblyNameTypeSerializer()
                 .UseRecommendedSerializerSettings()
-                .UseSQLiteStorage(dbPath, storageOptions ?? new SQLiteStorageOptions
-                {
-                    QueuePollInterval = TimeSpan.FromSeconds(1)
-                });
+                .UseSQLiteStorage(dbPath, storageOptions ?? CreateDefaultStorageOptions());
         });
 
         services.AddScoped<ITaskJobQueue, HangfireTaskJobQueue>();
@@ -111,5 +108,13 @@ public static class HangfireConfigurationExtensions
         app.UseHangfireServer(CreateUtilityServerOptions());
         return app;
     }
+    /// <summary>
+    /// Creates the default SQLiteStorageOptions with 4-hour InvisibilityTimeout to support atomic cohorts.
+    /// </summary>
+    public static SQLiteStorageOptions CreateDefaultStorageOptions() => new()
+    {
+        QueuePollInterval = TimeSpan.FromSeconds(1),
+        InvisibilityTimeout = TimeSpan.FromHours(4)
+    };
 #pragma warning restore CS0618
 }
