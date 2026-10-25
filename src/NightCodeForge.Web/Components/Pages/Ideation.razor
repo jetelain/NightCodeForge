@@ -242,44 +242,16 @@
                                     }
                                     else if (part is QuestionContentPart qp)
                                     {
-                                        <div class="agent-question-card @(qp.IsAnswered ? "answered" : "pending")">
-                                            <div class="agent-question-header">
-                                                <span class="agent-question-title">
-                                                    @(qp.IsAnswered ? "✓ Agent Clarification" : "❓ Agent Question")
-                                                </span>
-                                                @if (qp.IsAnswered)
-                                                {
-                                                    <span class="forge-badge badge-success tool-trace-badge">Answered</span>
-                                                }
-                                                else
-                                                {
-                                                    <span class="forge-badge badge-indigo tool-trace-badge">Pending</span>
-                                                }
-                                            </div>
-                                            <div class="agent-question-prompt">@qp.Prompt</div>
-                                            @if (!string.IsNullOrWhiteSpace(qp.Rationale))
-                                            {
-                                                <div class="agent-question-rationale text-muted">@qp.Rationale</div>
-                                            }
-                                            @if (qp.Options != null && qp.Options.Count > 0)
-                                            {
-                                                <div class="agent-question-options">
-                                                    @foreach (var option in qp.Options)
-                                                    {
-                                                        var isSelected = qp.IsAnswered && string.Equals(qp.Answer, option, StringComparison.OrdinalIgnoreCase);
-                                                        <span class="agent-choice-pill @(isSelected ? "selected" : "muted")">
-                                                            @(isSelected ? "✓ " : "")@option
-                                                        </span>
-                                                    }
-                                                </div>
-                                            }
-                                            @if (qp.IsAnswered)
-                                            {
-                                                <div class="agent-answer-summary">
-                                                    <span class="agent-answer-label">Your Answer:</span>
-                                                    <span class="agent-answer-value font-mono">@qp.Answer</span>
-                                                </div>
-                                            }
+                                        <div class="turn-ask-tool" style="width: 100%;">
+                                            <AgentQuestionTurnCard Questions="@qp.EffectiveQuestions"
+                                                                   Answer="@qp.Answer"
+                                                                   MetadataJson="@qp.MetadataJson"
+                                                                   IsWaitingForAnswer="@(!qp.IsAnswered)"
+                                                                   RequireAllAnswers="true"
+                                                                   SubmitButtonText="@IdeationPresentationHelper.GetSubmitButtonLabel(qp.EffectiveQuestions.Count)"
+                                                                   HelperText="⚡ Submitting will resume architect agent deliberation."
+                                                                   OnBatchAnswersSubmitted="@(ans => HandleQuestionGroupAnswersSubmittedAsync(qp, ans))"
+                                                                   OnAnswerSubmitted="@(ans => HandleQuestionGroupSingleAnswerSubmittedAsync(qp, ans))" />
                                         </div>
                                     }
                                     else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
@@ -368,64 +340,16 @@
                                     }
                                     else if (part is QuestionContentPart qp)
                                     {
-                                        <div class="agent-question-card @(qp.IsAnswered ? "answered" : "pending")">
-                                            <div class="agent-question-header">
-                                                <span class="agent-question-title">
-                                                    @(qp.IsAnswered ? "✓ Agent Clarification" : "❓ The Agent Needs Your Input")
-                                                </span>
-                                                @if (qp.IsAnswered)
-                                                {
-                                                    <span class="forge-badge badge-success tool-trace-badge">Answered</span>
-                                                }
-                                                else
-                                                {
-                                                    <span class="forge-badge badge-indigo tool-trace-badge">Waiting for Answer</span>
-                                                }
-                                            </div>
-                                            <div class="agent-question-prompt">@qp.Prompt</div>
-                                            @if (!string.IsNullOrWhiteSpace(qp.Rationale))
-                                            {
-                                                <div class="agent-question-rationale text-muted">@qp.Rationale</div>
-                                            }
-                                            @if (qp.Options != null && qp.Options.Count > 0)
-                                            {
-                                                <div class="agent-question-options">
-                                                    @foreach (var option in qp.Options)
-                                                    {
-                                                        var captured = option;
-                                                        var isSelected = qp.IsAnswered && string.Equals(qp.Answer, option, StringComparison.OrdinalIgnoreCase);
-                                                        if (qp.IsAnswered)
-                                                        {
-                                                            <span class="agent-choice-pill @(isSelected ? "selected" : "muted")">
-                                                                @(isSelected ? "✓ " : "")@captured
-                                                            </span>
-                                                        }
-                                                        else
-                                                        {
-                                                            <button type="button" class="forge-btn forge-btn-secondary" @onclick="() => SubmitQuestionAnswer(captured)">@captured</button>
-                                                        }
-                                                    }
-                                                </div>
-                                            }
-                                            @if (qp.IsAnswered)
-                                            {
-                                                <div class="agent-answer-summary">
-                                                    <span class="agent-answer-label">Your Answer:</span>
-                                                    <span class="agent-answer-value font-mono">@qp.Answer</span>
-                                                </div>
-                                            }
-                                            else
-                                            {
-                                                <div class="agent-question-freetext">
-                                                    <input type="text" class="form-control-dark" placeholder="Type your answer..."
-                                                           @bind="_questionAnswer" @bind:event="oninput"
-                                                           @onkeydown="HandleQuestionKeyDownAsync"
-                                                           aria-label="Answer to agent question" />
-                                                    <button type="button" class="forge-btn forge-btn-primary"
-                                                            disabled="@string.IsNullOrWhiteSpace(_questionAnswer)"
-                                                            @onclick="() => SubmitQuestionAnswer(_questionAnswer)">Answer</button>
-                                                </div>
-                                            }
+                                        <div class="turn-ask-tool" style="width: 100%;">
+                                            <AgentQuestionTurnCard Questions="@qp.EffectiveQuestions"
+                                                                   Answer="@qp.Answer"
+                                                                   MetadataJson="@qp.MetadataJson"
+                                                                   IsWaitingForAnswer="@(!qp.IsAnswered)"
+                                                                   RequireAllAnswers="true"
+                                                                   SubmitButtonText="@IdeationPresentationHelper.GetSubmitButtonLabel(qp.EffectiveQuestions.Count)"
+                                                                   HelperText="⚡ Submitting will resume architect agent deliberation."
+                                                                   OnBatchAnswersSubmitted="@(ans => HandleQuestionGroupAnswersSubmittedAsync(qp, ans))"
+                                                                   OnAnswerSubmitted="@(ans => HandleQuestionGroupSingleAnswerSubmittedAsync(qp, ans))" />
                                         </div>
                                     }
                                     else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
@@ -680,20 +604,84 @@
                     Timestamp: turn.Timestamp,
                     Parts: [new TextContentPart(turn.Content ?? string.Empty)]));
             }
+            else if (turn.Role == StageTurnRole.Tool)
+            {
+                if (string.Equals(turn.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
+                {
+                    var questions = StageConversationParser.ExtractQuestions(turn);
+                    var qPart = new QuestionContentPart
+                    {
+                        Questions = questions,
+                        Answer = string.IsNullOrWhiteSpace(turn.ToolResult) ? null : turn.ToolResult,
+                        MetadataJson = turn.MetadataJson
+                    };
+                    pendingParts.Add(qPart);
+                }
+                else
+                {
+                    var vm = new IdeationToolCallViewModel
+                    {
+                        ToolCallId = Guid.NewGuid().ToString("N")[..8],
+                        ToolName = turn.ToolName ?? "tool",
+                        Arguments = turn.ToolArguments ?? string.Empty,
+                        Result = turn.ToolResult ?? turn.Content,
+                        IsCompleted = false,
+                        IsError = turn.IsError,
+                        DurationMs = turn.DurationMs ?? 0
+                    };
+                    pendingTools.Add(vm);
+                    pendingParts.Add(new ToolCallContentPart(vm));
+                }
+            }
             else if (turn.Role == StageTurnRole.ToolResult)
             {
-                var vm = new IdeationToolCallViewModel
+                if (string.Equals(turn.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
                 {
-                    ToolCallId = Guid.NewGuid().ToString("N")[..8],
-                    ToolName = turn.ToolName ?? "tool",
-                    Arguments = turn.ToolArguments ?? string.Empty,
-                    Result = turn.ToolResult ?? turn.Content,
-                    IsCompleted = true,
-                    IsError = turn.IsError,
-                    DurationMs = turn.DurationMs ?? 0
-                };
-                pendingTools.Add(vm);
-                pendingParts.Add(new ToolCallContentPart(vm));
+                    var existingQPart = pendingParts.OfType<QuestionContentPart>().LastOrDefault(q => string.IsNullOrWhiteSpace(q.Answer));
+                    if (existingQPart != null)
+                    {
+                        existingQPart.Answer = turn.ToolResult ?? turn.Content;
+                        if (!string.IsNullOrWhiteSpace(turn.MetadataJson))
+                            existingQPart.MetadataJson = turn.MetadataJson;
+                    }
+                    else
+                    {
+                        var questions = StageConversationParser.ExtractQuestions(turn);
+                        var qPart = new QuestionContentPart
+                        {
+                            Questions = questions,
+                            Answer = turn.ToolResult ?? turn.Content,
+                            MetadataJson = turn.MetadataJson
+                        };
+                        pendingParts.Add(qPart);
+                    }
+                }
+                else
+                {
+                    var existingTool = pendingTools.LastOrDefault(t => !t.IsCompleted && t.ToolName == turn.ToolName);
+                    if (existingTool != null)
+                    {
+                        existingTool.Result = turn.ToolResult ?? turn.Content;
+                        existingTool.IsCompleted = true;
+                        existingTool.IsError = turn.IsError;
+                        existingTool.DurationMs = turn.DurationMs ?? 0;
+                    }
+                    else
+                    {
+                        var vm = new IdeationToolCallViewModel
+                        {
+                            ToolCallId = Guid.NewGuid().ToString("N")[..8],
+                            ToolName = turn.ToolName ?? "tool",
+                            Arguments = turn.ToolArguments ?? string.Empty,
+                            Result = turn.ToolResult ?? turn.Content,
+                            IsCompleted = true,
+                            IsError = turn.IsError,
+                            DurationMs = turn.DurationMs ?? 0
+                        };
+                        pendingTools.Add(vm);
+                        pendingParts.Add(new ToolCallContentPart(vm));
+                    }
+                }
             }
             else if (turn.Role == StageTurnRole.Assistant)
             {
@@ -762,6 +750,19 @@
                 }
             }
         }
+
+        if (pendingParts.Count > 0 || pendingTools.Count > 0)
+        {
+            Session.Messages.Add(new ChatMessage(
+                "assistant",
+                string.Empty,
+                null,
+                DateTime.UtcNow,
+                pendingTools.Count > 0 ? new List<IdeationToolCallViewModel>(pendingTools) : null,
+                pendingParts.Count > 0 ? new List<ChatContentPart>(pendingParts) : null));
+            pendingTools.Clear();
+            pendingParts.Clear();
+        }
     }
 
     private async Task HandleSessionSelectedAsync(ChangeEventArgs e)
@@ -810,40 +811,26 @@
         }
     }
 
-    private string _questionAnswer = string.Empty;
-
-    private void SubmitQuestionAnswer(string? answer)
+    private async Task HandleQuestionGroupAnswersSubmittedAsync(QuestionContentPart qp, IReadOnlyDictionary<int, string> answersByIndex)
     {
-        if (string.IsNullOrWhiteSpace(answer))
-            return;
+        if (answersByIndex == null || answersByIndex.Count == 0) return;
 
-        var cleanAnswer = answer.Trim();
+        var pending = qp.PendingQuestions ?? Session.PendingQuestions;
+        IdeationPresentationHelper.SubmitAnswersToPendingQuestions(pending, answersByIndex);
 
-        var qPart = Session.CurrentParts.OfType<QuestionContentPart>()
-            .LastOrDefault(q => !q.IsAnswered);
-        if (qPart != null)
-        {
-            qPart.Answer = cleanAnswer;
-        }
+        var (formattedAnswer, metadataJson) = IdeationPresentationHelper.FormatSubmission(answersByIndex, qp.EffectiveQuestions);
+        qp.Answer = formattedAnswer;
+        qp.MetadataJson = metadataJson;
 
-        if (Session.PendingQuestion != null)
-        {
-            Session.PendingQuestion.Submit(cleanAnswer);
-            Session.PendingQuestion = null;
-        }
-
-        _questionAnswer = string.Empty;
+        Session.PendingQuestions.Clear();
         StateHasChanged();
-        _ = ScrollChatToBottomAsync(true);
+        await ScrollChatToBottomAsync(true);
     }
 
-    private Task HandleQuestionKeyDownAsync(KeyboardEventArgs e)
+    private Task HandleQuestionGroupSingleAnswerSubmittedAsync(QuestionContentPart qp, string answer)
     {
-        if (e.Key == "Enter")
-        {
-            SubmitQuestionAnswer(_questionAnswer);
-        }
-        return Task.CompletedTask;
+        var dict = new Dictionary<int, string> { [0] = answer };
+        return HandleQuestionGroupAnswersSubmittedAsync(qp, dict);
     }
 
     private bool _showTranscriptModal;
@@ -1052,18 +1039,28 @@
                         StateHasChanged();
                         break;
 
-                    case IdeationStreamUpdateKind.QuestionAsked when update.Question != null:
-                        Session.PendingQuestion = update.Question;
-                        _questionAnswer = string.Empty;
-                        if (!Session.CurrentParts.OfType<QuestionContentPart>().Any(q => q.QuestionId == update.Question.Id))
+                    case IdeationStreamUpdateKind.QuestionAsked:
+                        var batch = update.Questions ?? (update.Question != null ? new[] { update.Question } : Array.Empty<IdeationQuestion>());
+                        if (batch.Count > 0)
                         {
-                            Session.CurrentParts.Add(new QuestionContentPart
+                            Session.PendingQuestions.Clear();
+                            Session.PendingQuestions.AddRange(batch);
+
+                            var questionItems = IdeationPresentationHelper.MapToQuestionItems(batch);
+                            var existingPart = Session.CurrentParts.OfType<QuestionContentPart>().LastOrDefault(q => !q.IsAnswered);
+                            if (existingPart == null)
                             {
-                                QuestionId = update.Question.Id,
-                                Prompt = update.Question.Prompt,
-                                Rationale = update.Question.Rationale,
-                                Options = update.Question.Options ?? Array.Empty<string>()
-                            });
+                                Session.CurrentParts.Add(new QuestionContentPart
+                                {
+                                    Questions = questionItems,
+                                    PendingQuestions = batch
+                                });
+                            }
+                            else
+                            {
+                                existingPart.Questions = questionItems;
+                                existingPart.PendingQuestions = batch;
+                            }
                         }
                         StateHasChanged();
                         await ScrollChatToBottomAsync();
@@ -1139,8 +1136,20 @@
                 {
                     if (Session.CurrentToolCalls.Count > 0)
                     {
+                        var askParts = Session.CurrentParts.OfType<QuestionContentPart>().ToList();
+                        int askIdx = 0;
                         foreach (var tc in Session.CurrentToolCalls)
                         {
+                            string? turnMeta = null;
+                            if (string.Equals(tc.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (askIdx < askParts.Count)
+                                {
+                                    turnMeta = askParts[askIdx].MetadataJson;
+                                    askIdx++;
+                                }
+                            }
+
                             await TaskRepository.AddConversationTurnAsync(
                                 Session.ActiveConversationId.Value,
                                 StageTurnRole.ToolResult,
@@ -1150,6 +1159,7 @@
                                 toolResult: tc.Result,
                                 durationMs: tc.DurationMs,
                                 isError: tc.IsError,
+                                metadataJson: turnMeta,
                                 cancellationToken: CancellationToken.None);
                         }
                     }
@@ -1222,8 +1232,7 @@
         }
         finally
         {
-            Session.PendingQuestion?.Cancel();
-            Session.PendingQuestion = null;
+            Session.CancelPendingQuestions();
             Session.IsGenerating = false;
             Session.CurrentThinkingBuffer = string.Empty;
             Session.CurrentMessageBuffer = string.Empty;
@@ -1238,6 +1247,7 @@
     {
         try
         {
+            Session.CancelPendingQuestions();
             _cts?.Cancel();
         }
         catch

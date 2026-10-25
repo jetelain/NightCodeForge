@@ -30,12 +30,49 @@ public record ToolCallContentPart(IdeationToolCallViewModel ToolCall) : ChatCont
 
 public record QuestionContentPart : ChatContentPart
 {
-    public Guid QuestionId { get; init; } = Guid.NewGuid();
-    public string Prompt { get; set; } = string.Empty;
-    public string? Rationale { get; set; }
-    public IReadOnlyList<string> Options { get; set; } = Array.Empty<string>();
+    private string? _prompt;
+    private string? _rationale;
+    private IReadOnlyList<string>? _options;
+
+    public Guid GroupId { get; init; } = Guid.NewGuid();
+    public IReadOnlyList<QuestionItem> Questions { get; set; } = Array.Empty<QuestionItem>();
+    public IReadOnlyList<IdeationQuestion>? PendingQuestions { get; set; }
     public string? Answer { get; set; }
+    public string? MetadataJson { get; set; }
     public bool IsAnswered => !string.IsNullOrWhiteSpace(Answer);
+
+    public Guid QuestionId => PendingQuestions?.FirstOrDefault()?.Id ?? GroupId;
+
+    public string Prompt
+    {
+        get => Questions.FirstOrDefault()?.Prompt ?? _prompt ?? string.Empty;
+        set => _prompt = value;
+    }
+
+    public string? Rationale
+    {
+        get => Questions.FirstOrDefault()?.Rationale ?? _rationale;
+        set => _rationale = value;
+    }
+
+    public IReadOnlyList<string> Options
+    {
+        get => Questions.FirstOrDefault()?.Options ?? _options ?? Array.Empty<string>();
+        set => _options = value;
+    }
+
+    public IReadOnlyList<QuestionItem> EffectiveQuestions
+    {
+        get
+        {
+            if (Questions.Count > 0) return Questions;
+            if (!string.IsNullOrWhiteSpace(Prompt))
+            {
+                return new[] { new QuestionItem(Prompt, Rationale, Options) };
+            }
+            return Array.Empty<QuestionItem>();
+        }
+    }
 }
 
 /// <summary>
@@ -62,7 +99,18 @@ public record ChatMessage(
                 }
                 else if (part is QuestionContentPart qp)
                 {
-                    sb.AppendLine($"[Agent Question: {qp.Prompt}]");
+                    var questions = qp.EffectiveQuestions;
+                    if (questions.Count > 1)
+                    {
+                        for (int i = 0; i < questions.Count; i++)
+                        {
+                            sb.AppendLine($"[Agent Question {i + 1}: {questions[i].Prompt}]");
+                        }
+                    }
+                    else if (questions.Count == 1)
+                    {
+                        sb.AppendLine($"[Agent Question: {questions[0].Prompt}]");
+                    }
                     if (!string.IsNullOrWhiteSpace(qp.Answer))
                     {
                         sb.AppendLine($"[User Answer: {qp.Answer}]");
@@ -181,7 +229,29 @@ public class IdeationSessionState
     public string? ActiveConversationTitle { get; set; }
     public string? LatestTranscriptPath { get; set; }
     public string? LatestFullTranscriptMarkdown { get; set; }
-    public IdeationQuestion? PendingQuestion { get; set; }
+    public List<IdeationQuestion> PendingQuestions { get; } = new();
+
+    public void CancelPendingQuestions()
+    {
+        foreach (var pq in PendingQuestions)
+        {
+            pq.Cancel();
+        }
+        PendingQuestions.Clear();
+    }
+
+    public IdeationQuestion? PendingQuestion
+    {
+        get => PendingQuestions.FirstOrDefault();
+        set
+        {
+            CancelPendingQuestions();
+            if (value != null)
+            {
+                PendingQuestions.Add(value);
+            }
+        }
+    }
 
     /// <summary>
     /// Active target policy for ideation inference dispatch via OllamaRouter.
@@ -224,8 +294,7 @@ public class IdeationSessionState
         Messages.Clear();
         Proposals.Clear();
         CurrentToolCalls.Clear();
-        PendingQuestion?.Cancel();
-        PendingQuestion = null;
+        CancelPendingQuestions();
         CurrentParts.Clear();
         CurrentThinkingBuffer = string.Empty;
         CurrentMessageBuffer = string.Empty;

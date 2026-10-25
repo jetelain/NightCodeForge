@@ -551,6 +551,29 @@ public class MockIdeationService : IIdeationService
 
             yield return update;
             await Task.Yield();
+
+            if (update.Kind == IdeationStreamUpdateKind.QuestionAsked)
+            {
+                var questions = update.Questions ?? (update.Question != null ? new[] { update.Question } : null);
+                if (questions != null && questions.Count > 0)
+                {
+                    using var reg = cancellationToken.Register(() =>
+                    {
+                        foreach (var q in questions)
+                        {
+                            q.Cancel();
+                        }
+                    });
+                    try
+                    {
+                        await Task.WhenAll(questions.Select(q => q.AnswerTask));
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        yield break;
+                    }
+                }
+            }
         }
     }
 

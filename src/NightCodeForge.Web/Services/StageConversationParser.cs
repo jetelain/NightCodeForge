@@ -417,15 +417,48 @@ public static class StageConversationParser
         try
         {
             using var doc = JsonDocument.Parse(metadataJson);
-            if (doc.RootElement.TryGetProperty("Answers", out var ansProp) && ansProp.ValueKind == JsonValueKind.Array)
+            var root = doc.RootElement;
+            JsonElement ansProp = default;
+            bool foundAnswers = (root.TryGetProperty("Answers", out ansProp) || root.TryGetProperty("answers", out ansProp))
+                && ansProp.ValueKind == JsonValueKind.Array;
+
+            if (foundAnswers)
             {
                 foreach (var el in ansProp.EnumerateArray())
                 {
-                    var qIdx = el.TryGetProperty("QuestionIndex", out var qiProp) ? qiProp.GetInt32() : -1;
-                    int? qId = el.TryGetProperty("QuestionId", out var idProp) && idProp.ValueKind == JsonValueKind.Number ? idProp.GetInt32() : null;
-                    int? optIdx = el.TryGetProperty("SelectedOptionIndex", out var oiProp) && oiProp.ValueKind == JsonValueKind.Number ? oiProp.GetInt32() : null;
-                    string? optText = el.TryGetProperty("SelectedOption", out var soProp) && soProp.ValueKind == JsonValueKind.String ? soProp.GetString() : null;
-                    string ansText = el.TryGetProperty("AnswerText", out var atProp) && atProp.ValueKind == JsonValueKind.String ? atProp.GetString() ?? string.Empty : string.Empty;
+                    int qIdx = -1;
+                    if (el.TryGetProperty("QuestionIndex", out var qiProp) || el.TryGetProperty("questionIndex", out qiProp))
+                    {
+                        qIdx = qiProp.GetInt32();
+                    }
+
+                    int? qId = null;
+                    if ((el.TryGetProperty("QuestionId", out var idProp) || el.TryGetProperty("questionId", out idProp))
+                        && idProp.ValueKind == JsonValueKind.Number)
+                    {
+                        qId = idProp.GetInt32();
+                    }
+
+                    int? optIdx = null;
+                    if ((el.TryGetProperty("SelectedOptionIndex", out var oiProp) || el.TryGetProperty("selectedOptionIndex", out oiProp))
+                        && oiProp.ValueKind == JsonValueKind.Number)
+                    {
+                        optIdx = oiProp.GetInt32();
+                    }
+
+                    string? optText = null;
+                    if ((el.TryGetProperty("SelectedOption", out var soProp) || el.TryGetProperty("selectedOption", out soProp))
+                        && soProp.ValueKind == JsonValueKind.String)
+                    {
+                        optText = soProp.GetString();
+                    }
+
+                    string ansText = string.Empty;
+                    if ((el.TryGetProperty("AnswerText", out var atProp) || el.TryGetProperty("answerText", out atProp))
+                        && atProp.ValueKind == JsonValueKind.String)
+                    {
+                        ansText = atProp.GetString() ?? string.Empty;
+                    }
 
                     if (qIdx >= 0)
                     {
@@ -455,6 +488,48 @@ public static class StageConversationParser
         }
 
         return string.Join("\n\n", answeredDict.OrderBy(kv => kv.Key).Select(kv => $"Q{kv.Key + 1}: {kv.Value}"));
+    }
+
+    /// <summary>
+    /// Builds structured answers metadata JSON from answered questions dictionary and optional question definitions.
+    /// </summary>
+    public static string BuildStructuredAnswersJson(
+        IReadOnlyDictionary<int, string> answersDict,
+        IReadOnlyList<QuestionItem>? questions = null)
+    {
+        if (answersDict == null || answersDict.Count == 0) return string.Empty;
+
+        var entries = new List<object>();
+        foreach (var (idx, ans) in answersDict.OrderBy(kv => kv.Key))
+        {
+            int? optIdx = null;
+            string? selectedOpt = null;
+            var cleanAns = ans?.Trim();
+            if (questions != null && idx < questions.Count && questions[idx].Options != null)
+            {
+                var options = questions[idx].Options!;
+                for (int i = 0; i < options.Count; i++)
+                {
+                    var opt = options[i];
+                    if (opt != null && string.Equals(opt.Trim(), cleanAns, StringComparison.OrdinalIgnoreCase))
+                    {
+                        optIdx = i;
+                        selectedOpt = opt;
+                        break;
+                    }
+                }
+            }
+
+            entries.Add(new
+            {
+                QuestionIndex = idx,
+                SelectedOptionIndex = optIdx,
+                SelectedOption = selectedOpt,
+                AnswerText = ans ?? string.Empty
+            });
+        }
+
+        return JsonSerializer.Serialize(new { Answers = entries });
     }
 
     /// <summary>

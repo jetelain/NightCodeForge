@@ -12,8 +12,8 @@
     <!-- Optional External Task Context Header -->
     @if (HasExternalTaskContext)
     {
-        <div class="question-card-header agent-question-task-context" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.85rem; padding-bottom: 0.65rem; border-bottom: 1px solid var(--border-subtle);">
-            <div class="header-left" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+        <div class="question-card-header agent-question-task-context">
+            <div class="header-left">
                 @if (!string.IsNullOrWhiteSpace(StageId))
                 {
                     <span class="badge-stage forge-badge badge-purple" id="badge-stage-@(QuestionId ?? TaskId ?? 0)">@StageId</span>
@@ -24,7 +24,7 @@
                 }
                 @if (TaskId.HasValue)
                 {
-                    <a href="/inspector/@TaskId.Value" class="task-link" id="task-link-@(QuestionId ?? TaskId.Value)" style="color: var(--accent-indigo); text-decoration: none; font-weight: 600; font-size: 0.88rem;">
+                    <a href="/inspector/@TaskId.Value" class="task-link" id="task-link-@(QuestionId ?? TaskId.Value)">
                         ForgeTask #@TaskId.Value: @(TaskTitle ?? $"Task #{TaskId.Value}")
                     </a>
                 }
@@ -34,12 +34,12 @@
                 }
                 @if (isMulti || !string.IsNullOrWhiteSpace(BatchIdentifier))
                 {
-                    <span class="badge font-mono bg-info text-dark">📦 Batch (@items.Count questions)</span>
+                    <span class="forge-badge badge-teal font-mono">📦 Batch (@items.Count questions)</span>
                 }
             </div>
             @if (AskedAt.HasValue)
             {
-                <span class="timestamp font-mono text-muted" style="font-size: 0.78rem;">@AskedAt.Value.ToString("g")</span>
+                <span class="timestamp font-mono text-muted">@AskedAt.Value.ToString("g")</span>
             }
         </div>
     }
@@ -79,7 +79,7 @@
             <div class="prompt-title agent-question-prompt d-flex align-items-center mb-1">
                 @if (isMulti)
                 {
-                    <span class="badge bg-secondary me-2">Q@(index + 1)</span>
+                    <span class="agent-question-badge-num">Q@(index + 1)</span>                    
                 }
                 <span>@q.Prompt</span>
             </div>
@@ -117,18 +117,17 @@
             @if (IsWaitingForAnswer)
             {
                 <div class="agent-question-input-row form-group">
-                    <div class="form-label-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
-                        <span style="font-size: 0.8rem; color: var(--text-secondary);">Your Response / Clarification@(isMulti ? $" to Q{index + 1}" : ""):</span>
+                    <div class="form-label-row">
+                        <span class="agent-question-input-label">Your Response / Clarification@(isMulti ? $" to Q{index + 1}" : ""):</span>
                         <button type="button" 
-                                class="btn btn-sm btn-subtle snippet-helper-btn forge-btn forge-btn-secondary"
-                                style="font-size: 0.75rem; padding: 0.2rem 0.5rem;"
+                                class="forge-btn forge-btn-secondary forge-btn-sm snippet-helper-btn"
                                 title="Insert code snippet block"
                                 @onclick="() => InsertCodeSnippet(index)">
                             💻 + Code Snippet
                         </button>
                     </div>
                     <textarea id="clarification-input-@curQId"
-                              class="agent-question-input form-control-dark font-sans question-textarea"
+                              class="agent-question-input form-control-dark question-textarea"
                               placeholder="@(isMulti ? $"Type your answer for question #{index + 1}..." : "Type your response or select an option above...")"
                               value="@_answerTexts.GetValueOrDefault(index, string.Empty)"
                               @oninput="(e) => OnInputChanged(index, e.Value?.ToString())"></textarea>
@@ -156,9 +155,20 @@
             ? $"submit-all-btn-{BatchIdentifier}"
             : $"submit-answer-btn-{(QuestionId ?? TaskId ?? 0)}";
 
-        <div class="agent-question-actions question-card-footer" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
-            <div class="text-muted small" style="font-size: 0.78rem;">
-                ⚡ Submitting will resume autonomous execution on <code>llm-urgent</code>.
+        <div class="agent-question-actions question-card-footer">
+            <div class="agent-question-hint">
+                @if (!string.IsNullOrWhiteSpace(HelperText))
+                {
+                    @HelperText
+                }
+                else if (TaskId.HasValue)
+                {
+                    <text>⚡ Submitting will resume autonomous execution on <code>llm-urgent</code>.</text>
+                }
+                else
+                {
+                    <text>⚡ Submitting will resume agent deliberation.</text>
+                }
             </div>
             <button type="button"
                     class="forge-btn forge-btn-primary submit-answer-btn @(isMulti ? "submit-all-btn" : "")"
@@ -169,13 +179,21 @@
                 {
                     <span>Submitting...</span>
                 }
+                else if (!string.IsNullOrWhiteSpace(SubmitButtonText))
+                {
+                    <span>@SubmitButtonText</span>
+                }
                 else if (isMulti)
                 {
                     <span>Submit All Clarifications (@items.Count) ➔</span>
                 }
-                else
+                else if (TaskId.HasValue)
                 {
                     <span>Submit &amp; Resume ForgeTask ➔</span>
+                }
+                else
+                {
+                    <span>Submit Clarification ➔</span>
                 }
             </button>
         </div>
@@ -200,6 +218,9 @@
     [Parameter] public int? QuestionId { get; set; }
     [Parameter] public IReadOnlyList<int>? QuestionIds { get; set; }
     [Parameter] public string? BatchIdentifier { get; set; }
+    [Parameter] public string? SubmitButtonText { get; set; }
+    [Parameter] public string? HelperText { get; set; }
+    [Parameter] public bool RequireAllAnswers { get; set; }
 
     private bool HasExternalTaskContext =>
         TaskId.HasValue || !string.IsNullOrWhiteSpace(TaskTitle) || !string.IsNullOrWhiteSpace(StageId) || !string.IsNullOrWhiteSpace(WorkspaceName);
@@ -228,6 +249,18 @@
         get
         {
             var count = Questions?.Count > 0 ? Questions.Count : 1;
+            if (RequireAllAnswers && count > 1)
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    if (string.IsNullOrWhiteSpace(_answerTexts.GetValueOrDefault(i)))
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
             for (int i = 0; i < count; i++)
             {
                 if (!string.IsNullOrWhiteSpace(_answerTexts.GetValueOrDefault(i)))

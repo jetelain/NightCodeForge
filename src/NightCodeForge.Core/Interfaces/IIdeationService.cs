@@ -67,7 +67,8 @@ public record IdeationStreamUpdate(
     IdeationProposal? Proposal = null,
     IdeationToolCallInfo? ToolCall = null,
     IdeationResult? FinalResult = null,
-    IdeationQuestion? Question = null);
+    IdeationQuestion? Question = null,
+    IReadOnlyList<IdeationQuestion>? Questions = null);
 
 /// <summary>
 /// Service contract for interactive discovery chat and autonomous backlog task formulation.

@@ -422,7 +422,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
         var sessionProposals = new List<IdeationProposal>();
 
         // In-turn ask: the tool awaits the user's answers while the stream surfaces questions to the UI.
-        var questionChannel = System.Threading.Channels.Channel.CreateUnbounded<IdeationQuestion>();
+        var questionChannel = System.Threading.Channels.Channel.CreateUnbounded<IReadOnlyList<IdeationQuestion>>();
         canonicalTools.AskHandler = async (questions, ct) =>
         {
             var registrations = new List<CancellationTokenRegistration>();
@@ -436,8 +436,9 @@ When proposing implementation tasks to the developer, adhere to the following ru
                     questionList.Add(question);
                     registrations.Add(ct.Register(() => question.Cancel()));
                     tasks.Add(question.AnswerTask);
-                    questionChannel.Writer.TryWrite(question);
                 }
+
+                questionChannel.Writer.TryWrite(questionList);
 
                 var answers = await Task.WhenAll(tasks).ConfigureAwait(false);
 
@@ -528,10 +529,14 @@ When proposing implementation tasks to the developer, adhere to the following ru
                         var waitQuestion = questionChannel.Reader.WaitToReadAsync(waitCts.Token).AsTask();
                         await Task.WhenAny(moveTask, waitQuestion).ConfigureAwait(false);
                         waitCts.Cancel();
-                        while (questionChannel.Reader.TryRead(out var pendingQuestion))
+                        while (questionChannel.Reader.TryRead(out var pendingQuestionBatch))
                         {
-                            await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolStarted, $"ask: {pendingQuestion.Prompt}", cancellationToken, metadata);
-                            yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.QuestionAsked, Question: pendingQuestion);
+                            var firstQ = pendingQuestionBatch.FirstOrDefault();
+                            var promptSummary = pendingQuestionBatch.Count > 1
+                                ? $"Batch ({pendingQuestionBatch.Count} questions): {firstQ?.Prompt}"
+                                : (firstQ?.Prompt ?? "Clarification requested");
+                            await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolStarted, $"ask: {promptSummary}", cancellationToken, metadata);
+                            yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.QuestionAsked, Question: firstQ, Questions: pendingQuestionBatch);
                         }
                     }
 
