@@ -26,12 +26,13 @@ The roadmap is prioritized into three strategic delivery tiers:
    - **Step 12.14:** Global Skills Injection & Stack-Specific Tool Provisioning (csnav, mdfetch, codecondenser) — central skill store on host (`~/.nightcodeforge/skills/`) and container sandbox (`/opt/nightcodeforge/skills/`), stack-driven provisioning via `CodeStackPresets`, transparent worktree injection via relative symlinks or bind-mounts with `.git/info/exclude` registration to avoid repository pollution, and first-class integration of PmadCSharpNav (`csnav`), MarkdownFetch (`mdfetch`), and PmadCodeCondenser (`codecondenser`).
 
 3. **Tier 3: Deep Integrations & Remote Experience:**
-   - **Step 12.8:** Mobile-Responsive Web UI & Remote Tailscale Experience (formerly Step 11.6) — off-canvas hamburger navigation drawer, touch targets $\ge 44\text{px}$, bottom sheet drawer, and SignalR reconnect resilience over Tailscale.
+   - **Step 12.8:** Mobile-Responsive Web UI, PWA & Web Worker Notifications (formerly Step 11.6) — off-canvas hamburger navigation drawer, touch targets $\ge 44\text{px}$, bottom sheet drawer, installable Progressive Web App (`manifest.webmanifest`, `service-worker.js`), and browser web notifications (dispatched via Web Worker / Service Worker on mobile) for human intervention (question inbox, review room) and task merges with per-subject user preferences.
    - **Step 12.9:** Custom Repository Scripts for Deterministic Steps (Bash, Python, PowerShell) (formerly Step 11.8) — execution of custom repository scripts in `.nightcodeforge/scripts/` during deterministic stages with `PipelineDataBag` environment variable injection.
    - **Step 12.10:** Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio (formerly Step 11.9) — first-class MCP tool discovery and execution via Microsoft Agent Framework standards (`ModelContextProtocol`), supporting streamable HTTP/SSE remote servers and isolated stdio MCP servers in `ContainerSandbox`.
    - **Step 12.11:** GitHub Integration: Untrusted Intake Triage, PR Delivery & Task Mirroring (formerly Step 11.10) — modular GitHub integration: untrusted issue intake routed to sandboxed triage to generate proposals, Pull Request delivery mode with rich PR metadata, and bi-directional status mirroring.
-   - **Step 12.12:** Voice Support, Continuous Dictation & PWA Mobile Experience (formerly Step 11.11) — hands-free mobile voice operations via Web Speech API (`SpeechRecognition`) and Blazor JS Interop, continuous dictation with 1500ms silence detection, and PWA manifest for persistent mic permissions.
+   - **Step 12.12:** Voice Support, Continuous Dictation & Hands-Free Operations (formerly Step 11.11) — hands-free voice operations via Web Speech API (`SpeechRecognition`) and Blazor JS Interop, continuous dictation with 1500ms silence detection, and ergonomic visual feedback.
    - **Step 12.15:** Deep OllamaRouter Fleet Provisioning & In-App Setup — in-app fleet management UI (`/settings` -> OllamaRouter tab) enabling developers to add, test, configure, and remove compute nodes across the local area network, pre-flight connectivity/latency testing, secure Cloud Overflow API key management, and interactive dynamic context visual tuning.
+   - **Step 12.16:** Remote Tailscale Mesh Access, HTTPS & Transient Network Resilience — zero-firewall private mesh VPN access, automated MagicDNS Let's Encrypt TLS termination via attached `TailscaleServeHostedService` (or CLI trap), graceful shutdown cleanup with `tailscale serve reset` (zero desktop overhead when disabled), WebSocket reverse proxying for Blazor Interactive Server and SignalR telemetry, and transient network reconnection handling.
 
 ---
 
@@ -60,12 +61,13 @@ The roadmap is prioritized into three strategic delivery tiers:
 
 | Step | Specification | Focus & Key Deliverables | Status |
 | :--- | :--- | :--- | :--- |
-| **12.8** | [📱 Step 12.8: Mobile-Responsive Web UI & Remote Tailscale Experience](phase-12/STEP_12_8_MOBILE_RESPONSIVE_UI_AND_TAILSCALE_ACCESS.md) | First-class mobile/tablet responsiveness: off-canvas hamburger navigation drawer, touch targets $\ge 44\text{px}$, fixed-bottom ideation chat, mobile bottom sheet drawer, and SignalR reconnect resilience over Tailscale. *(formerly Step 11.6)* | Planned |
+| **12.8** | [📱 Step 12.8: Mobile-Responsive Web UI, PWA & Web Worker Notifications](phase-12/STEP_12_8_MOBILE_RESPONSIVE_UI_AND_PWA.md) | First-class mobile/tablet responsiveness: off-canvas hamburger navigation drawer, touch targets $\ge 44\text{px}$, fixed-bottom ideation chat, mobile bottom sheet drawer, installable PWA (`manifest.webmanifest`, `service-worker.js`), and browser web notifications (dispatched via Web Worker / Service Worker on mobile) with per-subject user preferences. *(formerly Step 11.6)* | Planned |
 | **12.9** | [📜 Step 12.9: Custom Repository Scripts for Deterministic Steps (Bash, Python, PowerShell)](phase-12/STEP_12_9_CUSTOM_SCRIPTS_FOR_DETERMINISTIC_STEPS.md) | Execution of custom repository scripts in `.nightcodeforge/scripts/` during deterministic stages across Bash, Python, and PowerShell. Injection of `PipelineDataBag` environment variables and output directives. *(formerly Step 11.8)* | Planned |
 | **12.10** | [⚡ Step 12.10: Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio](phase-12/STEP_12_10_MCP_HTTP_AND_CONTAINER_SANDBOX_INTEGRATION.md) | First-class MCP tool discovery and execution via Microsoft Agent Framework standards (`ModelContextProtocol`), streamable HTTP/SSE remote servers, and isolated stdio MCP servers in `ContainerSandbox`. *(formerly Step 11.9)* | Planned |
 | **12.11** | [🐙 Step 12.11: GitHub Integration (Untrusted Intake Triage, PR Delivery & Task Mirroring)](phase-12/STEP_12_11_GITHUB_INTEGRATION_ISSUES_AND_PRS.md) | Modular GitHub integration: untrusted issue intake routed to sandboxed triage to generate proposals, Pull Request delivery mode with rich PR metadata, and bi-directional status mirroring. *(formerly Step 11.10)* | Planned |
-| **12.12** | [🎙️ Step 12.12: Voice Support, Continuous Dictation & PWA Mobile Experience](phase-12/STEP_12_12_VOICE_SUPPORT_PWA_AND_MOBILE_SPEECH.md) | Hands-free mobile voice operations via Web Speech API (`SpeechRecognition`) and Blazor JS Interop. Continuous dictation with 1500ms silence detection and PWA configuration for persistent mic permissions. *(formerly Step 11.11)* | Planned |
+| **12.12** | [🎙️ Step 12.12: Voice Support, Continuous Dictation & Hands-Free Operations](phase-12/STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md) | Hands-free voice operations via Web Speech API (`SpeechRecognition`) and Blazor JS Interop. Continuous dictation with 1500ms silence detection and visual audio feedback. *(formerly Step 11.11)* | Planned |
 | **12.15** | [🌐 Step 12.15: Deep OllamaRouter Fleet Provisioning & In-App Setup](phase-12/STEP_12_15_DEEP_OLLAMAROUTER_FLEET_PROVISIONING_AND_IN_APP_SETUP.md) | In-app fleet provisioning UI in `/settings` to add, test, configure, and remove LAN compute nodes, live connectivity testing, secure Cloud Overflow API key management, and dynamic context visual tuning. Consumes OllamaRouter Tasks #19 and #20 (durable user configuration layer). | Planned |
+| **12.16** | [🔒 Step 12.16: Remote Tailscale Mesh Access, HTTPS & Transient Network Resilience](phase-12/STEP_12_16_TAILSCALE_REMOTE_ACCESS.md) | Zero-firewall private mesh VPN remote access, automated MagicDNS Let's Encrypt TLS termination via attached `TailscaleServeHostedService`, graceful shutdown cleanup (`tailscale serve reset`), WebSocket reverse proxying for Blazor circuits, and network shift resilience. | Planned |
 
 ---
 
@@ -193,9 +195,11 @@ flowchart LR
   - [ ] Loopback diagnostics on security violations.
 
 ### Tier 3 Deliverables (Deep Integrations & Remote Experience)
-- [ ] **Step 12.8 (Mobile Responsive UI & Tailscale):**
+- [ ] **Step 12.8 (Mobile Responsive UI & PWA):**
   - [ ] Off-canvas navigation drawer and touch targets $\ge 44\text{px}$.
-  - [ ] Mobile bottom sheet drawer and SignalR reconnect resilience.
+  - [ ] Mobile bottom sheet drawer and touch-friendly question cards.
+  - [ ] Progressive Web App (PWA) manifest (`manifest.webmanifest`) and service worker (`service-worker.js`).
+  - [ ] Browser web notifications (dispatched via Web Worker / Service Worker on mobile) for human intervention (question inbox, review room) and task merges with per-subject preference toggles.
 - [ ] **Step 12.9 (Custom Repository Scripts):**
   - [ ] Support `.nightcodeforge/scripts/` (.sh, .py, .ps1).
   - [ ] PipelineDataBag environment variable injection.
@@ -203,5 +207,10 @@ flowchart LR
   - [ ] Streamable HTTP/SSE and containerized stdio MCP transports.
 - [ ] **Step 12.11 (GitHub Integration):**
   - [ ] Sandboxed issue triage, Pull Request delivery, and bi-directional status mirroring.
-- [ ] **Step 12.12 (Voice Support & PWA):**
-  - [ ] Web Speech API JS interop, 1500ms silence detection, and PWA manifest.
+- [ ] **Step 12.12 (Voice Support & Continuous Dictation):**
+  - [ ] Web Speech API JS interop, 1500ms silence detection, and `VoiceInputButton.razor` component.
+  - [ ] Integration with Ideation prompt bar, Quick Notes modal, and Question Inbox.
+- [ ] **Step 12.16 (Remote Tailscale Mesh Access):**
+  - [ ] Kestrel `ForwardedHeadersOptions` for `X-Forwarded-Proto` and `X-Forwarded-For`.
+  - [ ] Tailscale Serve configuration with MagicDNS Let's Encrypt TLS termination.
+  - [ ] Transient network reconnection resilience and operational tooling (`tools/tailscale-serve.ps1`).
