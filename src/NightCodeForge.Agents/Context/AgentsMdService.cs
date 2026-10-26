@@ -76,6 +76,7 @@ public class AgentsMdService
 Active repository execution commands and timeout limits:
 - Build Command: `{buildCmd}` (Timeout: {buildTimeout}s)
 - Test Command: `{testCmd}` (Timeout: {testTimeout}s)
+- Incremental Compilation Invariant: Whenever source code or test files are edited or added, execute Build Command (`{buildCmd}`) before running Test Command (`{testCmd}`). Never run test commands with `--no-build` after source modifications without building first.
 - Automated Quality Gate Enforcement: Build and test runners will terminate and fail if execution exceeds these timeouts.
 - CRITICAL RESOURCE PROTECTION: Never write or leave hanging tests, infinite loops, deadlocks, or unmocked blocking network calls. All tests and builds must run quickly and finish strictly within their timeout limits.
 </execution_guidelines>";

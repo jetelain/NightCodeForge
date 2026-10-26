@@ -19,6 +19,7 @@ public static class WorkflowDefaults
     public const string ModelPreloadKeepAlive = "15m";
     public const string FastTestCategoryFilter = "Category!=Acceptance&Category!=E2E";
     public const string DefaultBaseBranch = "main";
+    public const int MaxInlineReviewDiffChars = 20000;
 
     /// <summary>
     /// Tail-truncates stage output if it exceeds <see cref="MaxStageOutputChars"/> to prevent DataBag bloat.

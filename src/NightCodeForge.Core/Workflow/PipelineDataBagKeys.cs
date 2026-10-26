@@ -14,6 +14,7 @@ public static class PipelineDataBagKeys
     public const string SerializedMemory = "SerializedMemory";
     public const string ReviewerFeedback = "ReviewerFeedback";
     public const string ReviewDiffStat = "ReviewDiffStat";
+    public const string ReviewDiff = "ReviewDiff";
     public const string MaxRetries = "Workflow.MaxRetries";
     public const string RetryCount = "Workflow.RetryCount";
     public const string StageRetries = "Workflow.StageRetries";

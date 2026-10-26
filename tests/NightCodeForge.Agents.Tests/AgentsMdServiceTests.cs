@@ -15,6 +15,7 @@ public class AgentsMdServiceTests
         Assert.Contains("<execution_guidelines>", guidelines);
         Assert.Contains("Build Command: `dotnet build` (Timeout: 120s)", guidelines);
         Assert.Contains("Test Command: `dotnet test --no-build` (Timeout: 120s)", guidelines);
+        Assert.Contains("Incremental Compilation Invariant", guidelines);
         Assert.Contains("CRITICAL RESOURCE PROTECTION", guidelines);
         Assert.Contains("infinite loops", guidelines);
     }

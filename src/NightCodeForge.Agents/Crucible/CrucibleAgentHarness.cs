@@ -566,8 +566,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             },
             _logger);
 
-        var reasoningPruningClient = new HistoricalReasoningCompactionChatClient(persistingClient);
-        var activeClient = new LenientToolCallChatClient(reasoningPruningClient);
+        var activeClient = new LenientToolCallChatClient(persistingClient);
 
         // 10. Main Agentic Reasoning Loop with HarnessAgent & Real-Time Streaming
         int maxTurns = ResolveMaxTurns(harnessConfig, context.Profile);

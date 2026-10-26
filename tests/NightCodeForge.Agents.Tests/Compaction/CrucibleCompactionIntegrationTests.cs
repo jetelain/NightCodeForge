@@ -35,7 +35,6 @@ public class CrucibleCompactionIntegrationTests
         }, "edit", "Edit a file on disk");
 
         var mockModelClient = new MultiTurnCompactingMockChatClient(capturedRequests);
-        var reasoningPruner = new HistoricalReasoningCompactionChatClient(mockModelClient);
 
         var strategy = new PiStyleCrucibleCompactionStrategy(compactionOptions);
 
@@ -57,7 +56,7 @@ public class CrucibleCompactionIntegrationTests
             DisableWebSearch = true
         };
 
-        var agent = new HarnessAgent(reasoningPruner, harnessOptions);
+        var agent = new HarnessAgent(mockModelClient, harnessOptions);
         var session = await agent.CreateSessionAsync();
 
         var taskAnchor = "Task #42 requirements: implement context compaction integration test with 32k budget.";

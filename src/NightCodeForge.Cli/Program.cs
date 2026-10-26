@@ -4,6 +4,7 @@ using System.Text;
 using NightCodeForge.Cli.Commands;
 using NightCodeForge.Cli.Common;
 using NightCodeForge.Core.Execution;
+using NightCodeForge.Core.Services;
 
 public static class Program
 {
@@ -82,6 +83,29 @@ public static class Program
 
                 var auditCommand = new AuditCommand(processRunner);
                 return await auditCommand.ExecuteAsync(options, Console.WriteLine, cts.Token);
+            }
+
+            if (firstArg.Equals("transcript", StringComparison.OrdinalIgnoreCase) ||
+                firstArg.Equals("analyze", StringComparison.OrdinalIgnoreCase) ||
+                firstArg.Equals("analyze-transcript", StringComparison.OrdinalIgnoreCase))
+            {
+                var remainingArgs = args.Skip(1).ToArray();
+                if (remainingArgs.Any(a => a is "--help" or "-h" or "help"))
+                {
+                    PrintUsage();
+                    return 0;
+                }
+
+                var options = ParseTranscriptOptions(remainingArgs, out var error);
+                if (options == null)
+                {
+                    Console.Error.WriteLine($"[ncf] Error: {error}\n");
+                    PrintUsage();
+                    return 2;
+                }
+
+                var transcriptCommand = new TranscriptCommand(new TranscriptAnalysisService());
+                return await transcriptCommand.ExecuteAsync(options, Console.WriteLine, cts.Token);
             }
 
             Console.Error.WriteLine($"[ncf] Unknown command: '{firstArg}'\n");
@@ -175,26 +199,69 @@ public static class Program
         return options;
     }
 
+    public static TranscriptOptions? ParseTranscriptOptions(string[] args, out string? error)
+    {
+        error = null;
+        var options = new TranscriptOptions();
+        bool pathSet = false;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            var arg = args[i].Trim();
+            if (arg.Equals("--verbose", StringComparison.OrdinalIgnoreCase) || arg.Equals("-v", StringComparison.OrdinalIgnoreCase))
+            {
+                options.Verbose = true;
+            }
+            else if (arg.Equals("--json", StringComparison.OrdinalIgnoreCase))
+            {
+                options.Json = true;
+            }
+            else if (arg.StartsWith("-"))
+            {
+                error = $"Unrecognized option '{arg}'.";
+                return null;
+            }
+            else
+            {
+                if (pathSet)
+                {
+                    error = $"Unexpected extra argument '{arg}'.";
+                    return null;
+                }
+                options.TargetPath = arg;
+                pathSet = true;
+            }
+        }
+
+        return options;
+    }
+
     private static void PrintUsage()
     {
         Console.WriteLine(@"NightCodeForge CLI (ncf) — Deterministic repository preparation & readiness audit
 
 USAGE:
-  ncf init [path] [options]    Prepare repository: gitignore, editorconfig, stack detection, format, skills
-  ncf audit [path]             Audit repository readiness across the 5 pillars (green/yellow/red scorecard)
-  ncf --version                Display version information
-  ncf --help                   Display this help message
+  ncf init [path] [options]        Prepare repository: gitignore, editorconfig, stack detection, format, skills
+  ncf audit [path]                 Audit repository readiness across the 5 pillars (green/yellow/red scorecard)
+  ncf transcript [path] [options]  Standard analysis of execution transcript(s) for friction, metrics & recommendations
+  ncf --version                    Display version information
+  ncf --help                       Display this help message
 
 INIT OPTIONS:
-  [path]                       Path to the repository (default: current directory)
-  --dry-run                    Preview changes without writing to disk or formatting
-  --skip-format                Skip the initial format pass
-  --stack <name>               Explicit technology stack override (dotnet, node, python, rust, go)
+  [path]                           Path to the repository (default: current directory)
+  --dry-run                        Preview changes without writing to disk or formatting
+  --skip-format                    Skip the initial format pass
+  --stack <name>                   Explicit technology stack override (dotnet, node, python, rust, go)
+
+TRANSCRIPT OPTIONS:
+  [path]                           Path to transcript markdown file or directory (default: current directory)
+  --verbose, -v                    Display detailed breakdowns including top read files and turn details
+  --json                           Output analysis in machine-readable JSON format
 
 AUDIT EXIT CODES:
-  0                            🟢 Healthy — all 5 pillars passed verification
-  1                            🟡 Warnings — advisory warnings present (isolation heuristics, version drift)
-  2                            🔴 Blockers — critical issues detected (build failure, failing tests, dirty git)
+  0                                🟢 Healthy — all 5 pillars passed verification
+  1                                🟡 Warnings — advisory warnings present (isolation heuristics, version drift)
+  2                                🔴 Blockers — critical issues detected (build failure, failing tests, dirty git)
 ");
     }
 }

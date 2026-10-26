@@ -36,6 +36,7 @@ public static class DefaultBootstrapPromptBuilder
 
         var reviewerFeedback = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewerFeedback);
         var reviewDiffStat = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiffStat);
+        var reviewDiff = context.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiff);
         var approvedPlan = context.DataBag.Get<string>(PipelineDataBagKeys.ApprovedPlan) ?? context.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview));
         if (!string.IsNullOrWhiteSpace(approvedPlan) &&
             !string.IsNullOrWhiteSpace(task.Description) &&
@@ -95,6 +96,7 @@ public static class DefaultBootstrapPromptBuilder
                 task_markdown_path = string.IsNullOrWhiteSpace(taskPath) ? null : taskPath,
                 approved_plan = string.IsNullOrWhiteSpace(approvedPlan) ? null : approvedPlan,
                 reviewer_feedback = string.IsNullOrWhiteSpace(reviewerFeedback) ? null : reviewerFeedback,
+                review_diff = string.IsNullOrWhiteSpace(reviewDiff) ? null : reviewDiff,
                 review_diff_stat = string.IsNullOrWhiteSpace(reviewDiffStat) ? null : reviewDiffStat,
                 implementation_summary = string.IsNullOrWhiteSpace(implSummary) ? null : implSummary,
                 compiler_errors = compilerErrors is { Count: > 0 } ? compilerErrors : null,
@@ -128,9 +130,19 @@ public static class DefaultBootstrapPromptBuilder
             rendered = $"{rendered}\n\n[Stage Directive]:\n{effectiveDirective}".Trim();
         }
 
-        if (!string.IsNullOrWhiteSpace(reviewDiffStat) && !rendered.Contains(reviewDiffStat))
+        bool diffAlreadyRendered = (!string.IsNullOrWhiteSpace(reviewDiff) && rendered.Contains(reviewDiff)) ||
+                                   (!string.IsNullOrWhiteSpace(reviewDiffStat) && rendered.Contains(reviewDiffStat));
+
+        if (!diffAlreadyRendered)
         {
-            rendered = $"{rendered}\n\n[Git Diff Summary]:\n```diff\n{reviewDiffStat}\n```\nTo inspect the diff of a specific file against base branch '{baseBranch}', run:\ngit diff {baseBranch}...{branchName} -- <file-path>".Trim();
+            if (!string.IsNullOrWhiteSpace(reviewDiff))
+            {
+                rendered = $"{rendered}\n\n[Git Diff ({baseBranch}...{branchName})]:\n```diff\n{reviewDiff}\n```\nTo inspect additional details or run git commands, use 'bash' (e.g. git diff, git log).".Trim();
+            }
+            else if (!string.IsNullOrWhiteSpace(reviewDiffStat))
+            {
+                rendered = $"{rendered}\n\n[Git Diff Summary]:\n```diff\n{reviewDiffStat}\n```\nTo inspect the diff of a specific file against base branch '{baseBranch}', run:\ngit diff {baseBranch}...{branchName} -- <file-path>".Trim();
+            }
         }
 
         var conflictFiles = context.DataBag.Get<List<string>>(PipelineDataBagKeys.ConflictFiles);

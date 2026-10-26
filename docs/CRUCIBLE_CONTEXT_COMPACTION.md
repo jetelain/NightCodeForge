@@ -144,11 +144,8 @@ When context compaction triggers repeatedly in an extended session:
 * For deterministic fallback, sections such as `## Goal` and `### Done` are preserved and merged from the earlier summary.
 * The summarizer response token budget is dynamically scaled to $0.8 \times \text{ReserveTokens}$ (clamped between 1,024 and 8,192 tokens), preventing summarizer token truncation.
 
-### 3.6 Historical Reasoning Pruning (`HistoricalReasoningCompactionChatClient`)
-Reasoning models (such as Qwen 3.8) emit extensive thinking traces on every turn. Even within the uncompacted recent window, historical reasoning traces quickly consume thousands of tokens.
-`HistoricalReasoningCompactionChatClient` sits in the client middleware stack:
-* Preserves `TextReasoningContent` on the most recent assistant turn (the active turn).
-* Strips `TextReasoningContent` from all older assistant turns before sending messages to the model.
+### 3.6 Reasoning Trace Handling in Compaction
+Reasoning models (such as Qwen 3.8 and DeepSeek-R1) emit extensive thinking traces. Rather than mutating active conversational history on each turn (which invalidates LLM prompt prefix / KV caching), thinking traces remain in the uncompacted recent window and are omitted during Pi-style context compaction (`ConversationSerializer`), freeing tokens cleanly without history rewrite thrashing.
 
 ---
 
@@ -176,6 +173,5 @@ The compaction strategy is verified through dedicated automated tests in `tests/
 
 1. **`FileOperationTrackerTests`:** Verifies accurate extraction and disjoint categorization of read vs. modified files.
 2. **`ConversationSerializerTests`:** Verifies plain-text formatting, thinking omission, and 2,000-character tool output clamping.
-3. **`HistoricalReasoningCompactionChatClientTests`:** Verifies that only the active assistant turn retains reasoning tokens.
-4. **`PiStyleCrucibleCompactionStrategyTests`:** Verifies threshold evaluation, Task Anchor immutability, cut-point selection, and summary injection on `CompactionMessageIndex`.
-5. **`CrucibleCompactionIntegrationTests`:** End-to-end integration test running `HarnessAgent` under an artificial **32,768-token budget**, validating multi-turn tool execution, context bounded execution, and task completion.
+3. **`PiStyleCrucibleCompactionStrategyTests`:** Verifies threshold evaluation, Task Anchor immutability, cut-point selection, and summary injection on `CompactionMessageIndex`.
+4. **`CrucibleCompactionIntegrationTests`:** End-to-end integration test running `HarnessAgent` under an artificial **32,768-token budget**, validating multi-turn tool execution, context bounded execution, and task completion.

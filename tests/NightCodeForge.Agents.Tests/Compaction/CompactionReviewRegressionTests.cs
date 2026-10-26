@@ -135,41 +135,6 @@ public class CompactionReviewRegressionTests
         Assert.Contains("more characters truncated", text);
     }
 
-    [Fact]
-    public async Task ReasoningClient_DropsReasoningOnlyTurns_AndPreservesMessageMetadata()
-    {
-        IList<ChatMessage>? captured = null;
-        var inner = new Mock<IChatClient>();
-        inner
-            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions>(), It.IsAny<CancellationToken>()))
-            .Callback<IEnumerable<ChatMessage>, ChatOptions?, CancellationToken>((m, _, _) => captured = m.ToList())
-            .ReturnsAsync(new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));
-
-        var created = new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
-        var messages = new List<ChatMessage>
-        {
-            new(ChatRole.User, "q1"),
-            new(ChatRole.Assistant, new List<AIContent> { new TextReasoningContent("only thinking") }),
-            new(ChatRole.Assistant, new List<AIContent> { new TextReasoningContent("old"), new TextContent("answer") })
-            {
-                MessageId = "msg-1",
-                CreatedAt = created
-            },
-            new(ChatRole.User, "q2"),
-            new(ChatRole.Assistant, new List<AIContent> { new TextReasoningContent("latest"), new TextContent("final") })
-        };
-
-        await new HistoricalReasoningCompactionChatClient(inner.Object).GetResponseAsync(messages);
-
-        Assert.NotNull(captured);
-        Assert.Equal(4, captured!.Count); // reasoning-only turn removed
-        Assert.DoesNotContain(captured, m => m.Contents.Count == 0);
-        var pruned = captured[1];
-        Assert.Equal("msg-1", pruned.MessageId);
-        Assert.Equal(created, pruned.CreatedAt);
-        Assert.DoesNotContain(pruned.Contents, c => c is TextReasoningContent);
-    }
-
     [Theory]
     [InlineData("Path")]
     [InlineData("FILEPATH")]

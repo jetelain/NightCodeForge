@@ -522,8 +522,7 @@ Crucible replaces Microsoft Agent Framework's (MAF) default arbitrary percentage
 ```mermaid
 flowchart TD
     TurnReq["Incoming Turn Request"] --> Check{"Tokens > ContextWindow - ReserveTokens?"}
-    Check -- No --> Pruner["Historical Reasoning Pruner\n(HistoricalReasoningCompactionChatClient)"]
-    Pruner --> Invocation["Model Inference"]
+    Check -- No --> Invocation["Model Inference"]
     Check -- Yes --> Strategy["PiStyleCrucibleCompactionStrategy"]
     Strategy --> Anchor["1. Anchor Initial User Prompt (messages[0])"]
     Strategy --> CutPoint["2. Calculate Cut Point (keepRecentTokens)"]
@@ -531,7 +530,7 @@ flowchart TD
     Strategy --> Clamp["4. Pre-Serialization\n(2,000 Char Tool Clamping)"]
     Strategy --> Summary["5. Structured Summary Generation\n(Goal, Progress, Decisions, Next Steps)"]
     Strategy --> Replace["6. Replace History in CompactionMessageIndex"]
-    Replace --> Pruner
+    Replace --> Invocation
 ```
 
 #### Key Architecture Principles:
@@ -593,10 +592,8 @@ When advancing from a successful `DeterministicTestStage` to `CodeReviewAndFixSt
 * Pre-seeds a synthetic `dotnet test` execution returning: `Test run successful. Total: 42. Passed: 42. Failed: 0.`
 * The Code Review agent recognizes that tests are already green and focuses immediately on diff analysis, code quality, and security rather than wasting turns re-running the test suite.
 
-### 6.6 Thinking Trace Compaction (`HistoricalReasoningCompactionChatClient`)
-For reasoning models (DeepSeek-R1, QwQ, Qwen-Thinking), chain-of-thought `<think>...</think>` monologues and `TextReasoningContent` blocks are streamed live via SignalR to the developer console via `ThinkingAndActivityTracingChatClient`, but pruned or summarized in historical assistant turns via `HistoricalReasoningCompactionChatClient` when persisted to memory or sent back to the model.
-* **Gating Flag:** Controlled by `LocalOptimizationFlags.ThinkingTraceCompaction` (default: `true`).
-* **Opt-Out Benefit:** When toggled to `false`, the exact verbatim `<think>` blocks are preserved for debugging or uncompressed benchmark comparisons.
+### 6.6 Thinking Trace Handling
+For reasoning models (DeepSeek-R1, QwQ, Qwen-Thinking), chain-of-thought `<think>...</think>` monologues and `TextReasoningContent` blocks are streamed live via SignalR to the developer console via `ThinkingAndActivityTracingChatClient`. Active reasoning traces are preserved in conversational history to maintain stable prompt prefixes for KV cache reuse, and are cleanly omitted during Pi-style context compaction (`ConversationSerializer`) when past history is summarized.
 
 ### 6.7 Degenerate Loop & Repetition Circuit Breakers (`ToolLoopCircuitBreaker`)
 Prevents local models from locking up the single-worker GPU queue in runaway token loops or ping-pong tool invocations:

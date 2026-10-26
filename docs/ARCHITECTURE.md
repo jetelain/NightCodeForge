@@ -1810,7 +1810,7 @@ For the complete technical specification of the native Crucible harness—includ
 * **The "Forgiving" Tool Dispatcher:** Tool name aliasing, parameter normalization, markdown code fence stripping, and indentation tolerance
 * **EditorConfig Enforcement for File Operations:** Automatic application of `.editorconfig` rules (`end_of_line` [LF/CRLF], `indent_style`, `indent_size`, `insert_final_newline`, `trim_trailing_whitespace`, `charset`) on `write` and `edit` to prevent cross-platform line ending churn and formatting diff noise
 * **Stage-Scoped Tool Visibility Matrix:** Gating tool schemas across all 6 stages of the default workflow to reduce static prompt overhead
-* **Pi-Style Context Compaction Engine:** Non-destructive context compaction (`PiStyleCrucibleCompactionStrategy`) with dynamic headroom budgeting, immutable task anchor (`messages[0]`), lossless file operation tracking (`<read-files>`, `<modified-files>`), 2,000-character tool clamping, and historical reasoning trace pruning (`HistoricalReasoningCompactionChatClient`)
+* **Pi-Style Context Compaction Engine:** Non-destructive context compaction (`PiStyleCrucibleCompactionStrategy`) with dynamic headroom budgeting, immutable task anchor (`messages[0]`), lossless file operation tracking (`<read-files>`, `<modified-files>`), 2,000-character tool clamping, and thinking trace omission during summarization
 * **Local LLM Token Minimization:** Prompt prefix stabilization for KV cache reuse, compiler error extraction, synthetic conversation priming, and noise-filtered git diffs
 
 Please refer directly to the dedicated specification documents: **[CRUCIBLE.md](CRUCIBLE.md)** and **[CRUCIBLE_CONTEXT_COMPACTION.md](CRUCIBLE_CONTEXT_COMPACTION.md)**.

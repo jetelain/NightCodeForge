@@ -654,6 +654,24 @@ VALUES ('" + AddIsDeferredByPauseToForgeTaskMigrationId + @"', '10.0.12');";
                         stage.ConfigurationJson = canonicalStage.ConfigurationJson;
                         modified = true;
                     }
+
+                    if (stage.StageId == StandardStageIds.CodeReviewAndFix &&
+                        canonicalStage.ConfigurationJson != null &&
+                        stage.ConfigurationJson != null &&
+                        !stage.ConfigurationJson.Contains("review_diff", StringComparison.Ordinal))
+                    {
+                        stage.ConfigurationJson = canonicalStage.ConfigurationJson;
+                        modified = true;
+                    }
+
+                    if (stage.StageId == StandardStageIds.Implementation &&
+                        canonicalStage.ConfigurationJson != null &&
+                        stage.ConfigurationJson != null &&
+                        !stage.ConfigurationJson.Contains("always run 'dotnet build'", StringComparison.Ordinal))
+                    {
+                        stage.ConfigurationJson = canonicalStage.ConfigurationJson;
+                        modified = true;
+                    }
                 }
             }
 

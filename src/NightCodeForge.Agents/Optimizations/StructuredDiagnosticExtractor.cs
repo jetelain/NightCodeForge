@@ -42,7 +42,7 @@ public partial class StructuredDiagnosticExtractor
     [GeneratedRegex(@"(?<file>[^\s:]+\.go):(?<line>\d+):(?<col>\d+):\s*(?<msg>[^\r\n]+)")]
     private static partial Regex GoErrorRegex();
 
-    [GeneratedRegex(@"Failed\s+(?<test>[^\r\n\s]+)(?:[\r\n]+(?:\s*Error Message:[\r\n]+\s*(?<msg>[^\r\n]+))?(?:[\r\n]+\s*Stack Trace:[\r\n]+\s*(?<stack>[^\r\n]+))?)?")]
+    [GeneratedRegex(@"(?:^|\r?\n)\s*Failed\s+(?<test>[A-Za-z0-9_]+(?:\.[A-Za-z0-9_<>]+)+(?:\([^\r\n]*\))?)[^\r\n]*(?:[\r\n]+(?:\s*Error Message:[\r\n]+\s*(?<msg>[^\r\n]+))?(?:[\r\n]+\s*Stack Trace:[\r\n]+\s*(?<stack>[^\r\n]+))?)?")]
     private static partial Regex TestFailedRegex();
 
     public DiagnosticSummary ExtractDiagnostics(string rawBuildOrTestOutput, LocalOptimizationFlags? flags = null)

@@ -75,4 +75,70 @@ Build FAILED.
         Assert.Equal(22, rustSummary.CompilerErrors[0].Line);
         Assert.Equal("src/main.rs", rustSummary.CompilerErrors[0].File);
     }
+
+    [Fact]
+    public void ExtractDiagnostics_ParsesTestFailures_WhenQualified()
+    {
+        var output = @"
+  Failed OllamaRouter.Tests.Services.TerminalMonitorRendererTests.Render_FleetNamedTarget [9 ms]
+  Error Message:
+   System.InvalidOperationException : Sequence contains more than one matching element
+  Stack Trace:
+     at OllamaRouter.Tests.Services.TerminalMonitorRendererTests.cs:line 529
+";
+        var summary = _extractor.ExtractDiagnostics(output, new LocalOptimizationFlags());
+
+        Assert.Single(summary.TestFailures);
+        Assert.Equal("OllamaRouter.Tests.Services.TerminalMonitorRendererTests.Render_FleetNamedTarget", summary.TestFailures[0].TestName);
+        Assert.Contains("Sequence contains more than one matching element", summary.TestFailures[0].ErrorMessage);
+        Assert.Contains("line 529", summary.TestFailures[0].StackTraceLine);
+    }
+
+    [Fact]
+    public void ExtractDiagnostics_IgnoresFailedToFalsePositives()
+    {
+        var output = @"
+Scenario failed: Failed to connect to server.
+Failed to start process.
+";
+        var summary = _extractor.ExtractDiagnostics(output, new LocalOptimizationFlags());
+
+        Assert.Empty(summary.TestFailures);
+    }
+
+    [Fact]
+    public void ExtractDiagnostics_ParsesParameterizedTheoryTestFailures()
+    {
+        var output = @"
+  Failed NightCodeForge.Agents.Tests.CompactionTests.MyTheory(foo: ""bar"", count: 42) [12 ms]
+  Error Message:
+   System.ArgumentException : Invalid parameter
+  Stack Trace:
+     at NightCodeForge.Agents.Tests.CompactionTests.cs:line 120
+";
+        var summary = _extractor.ExtractDiagnostics(output, new LocalOptimizationFlags());
+
+        Assert.Single(summary.TestFailures);
+        Assert.Equal(@"NightCodeForge.Agents.Tests.CompactionTests.MyTheory(foo: ""bar"", count: 42)", summary.TestFailures[0].TestName);
+        Assert.Equal("System.ArgumentException : Invalid parameter", summary.TestFailures[0].ErrorMessage);
+        Assert.Equal("at NightCodeForge.Agents.Tests.CompactionTests.cs:line 120", summary.TestFailures[0].StackTraceLine);
+    }
+
+    [Fact]
+    public void ExtractDiagnostics_ParsesSubMillisecondDurationTestFailures()
+    {
+        var output = @"
+  Failed NightCodeForge.Core.Tests.FastTest [< 1 ms]
+  Error Message:
+   Assert.True() Failure
+  Stack Trace:
+     at NightCodeForge.Core.Tests.FastTest.cs:line 45
+";
+        var summary = _extractor.ExtractDiagnostics(output, new LocalOptimizationFlags());
+
+        Assert.Single(summary.TestFailures);
+        Assert.Equal("NightCodeForge.Core.Tests.FastTest", summary.TestFailures[0].TestName);
+        Assert.Equal("Assert.True() Failure", summary.TestFailures[0].ErrorMessage);
+        Assert.Equal("at NightCodeForge.Core.Tests.FastTest.cs:line 45", summary.TestFailures[0].StackTraceLine);
+    }
 }

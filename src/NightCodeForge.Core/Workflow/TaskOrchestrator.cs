@@ -811,15 +811,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             (string.Equals(stage.StageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase) ||
                              string.Equals(stage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase)))
                         {
-                            try
-                            {
-                                reviewDiffStat = await _gitWorkspaceManager.GenerateDiffStatAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
-                                pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, reviewDiffStat);
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogWarning(ex, "Failed generating review diff stat during stage setup for {StageId} (task #{TaskId})", stage.StageId, task.Id);
-                            }
+                            await PopulateReviewDiffsAsync(workspace, task, pipelineContext, cancellationToken);
                         }
 
                         var agentContext = new AgentSessionContext
@@ -1738,15 +1730,7 @@ public class TaskOrchestrator : ITaskOrchestrator
 
             if (string.Equals(stage.StageId, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
             {
-                try
-                {
-                    var diffStat = await _gitWorkspaceManager.GenerateDiffStatAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
-                    pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, diffStat);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed generating review diff stat after implementation for task #{TaskId}", task.Id);
-                }
+                await PopulateReviewDiffsAsync(workspace, task, pipelineContext, cancellationToken);
             }
 
             var nextStageId = result.TargetRoutingStageId;
@@ -1768,15 +1752,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 if (string.Equals(nextStage.StageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(nextStage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
                 {
-                    try
-                    {
-                        var diffStat = await _gitWorkspaceManager.GenerateDiffStatAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
-                        pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, diffStat);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed generating review diff stat on transition to {StageId} for task #{TaskId}", nextStage.StageId, task.Id);
-                    }
+                    await PopulateReviewDiffsAsync(workspace, task, pipelineContext, cancellationToken);
                 }
 
                 pipelineContext.SyncDataBagToTask();
@@ -3307,5 +3283,35 @@ public class TaskOrchestrator : ITaskOrchestrator
             taskId, gitMode, initialStage.StageId, newJobId);
 
         return true;
+    }
+
+    private async Task PopulateReviewDiffsAsync(Workspace workspace, ForgeTask task, PipelineContext pipelineContext, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var diffStat = await _gitWorkspaceManager.GenerateDiffStatAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+            pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, diffStat);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed generating review diff stat for task #{TaskId}", task.Id);
+        }
+
+        try
+        {
+            var liveDiff = await _gitWorkspaceManager.GenerateLiveDiffAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(liveDiff) && liveDiff.Length <= WorkflowDefaults.MaxInlineReviewDiffChars)
+            {
+                pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiff, liveDiff.Trim());
+            }
+            else
+            {
+                pipelineContext.DataBag.Remove(PipelineDataBagKeys.ReviewDiff);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed generating live diff for review stage for task #{TaskId}", task.Id);
+        }
     }
 }

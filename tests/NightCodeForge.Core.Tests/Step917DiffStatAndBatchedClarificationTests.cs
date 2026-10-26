@@ -556,6 +556,115 @@ public class Step917DiffStatAndBatchedClarificationTests
 
         var bag = PipelineDataBag.FromJson(updatedTask.PipelineDataJson);
         Assert.Equal("src/ReviewTarget.cs | 4 ++--\n 1 file changed", bag.Get<string>(PipelineDataBagKeys.ReviewDiffStat));
+        Assert.Equal("diff --git a/file.cs b/file.cs\n+Added line", bag.Get<string>(PipelineDataBagKeys.ReviewDiff));
+    }
+
+    [Fact]
+    public void PromptConstruction_WithReviewDiff_RendersDirectDiffBlock()
+    {
+        var task = new ForgeTask
+        {
+            Id = 89,
+            Title = "Implement Feature 89",
+            Description = "Task Description 89",
+            BaseBranch = "develop",
+            FeatureBranch = "feature/task-89"
+        };
+        var workspace = new Workspace { Id = 1, Name = "RepoWS" };
+        var pipelineContext = new PipelineContext(task, workspace);
+
+        var diffContent = "--- a/Service.cs\n+++ b/Service.cs\n@@ -1,3 +1,4 @@\n+line added";
+        pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiff, diffContent);
+        pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, " Service.cs | 1 +\n 1 file changed");
+
+        var workflow = StandardWorkflowDefinitions.CreateStandard3AgentWorkflow();
+        var reviewStageDef = workflow.Stages.First(s => s.StageId == StandardStageIds.CodeReviewAndFix);
+        var config = JsonSerializer.Deserialize<AgenticStageConfig>(reviewStageDef.ConfigurationJson)!;
+
+        var stage = new GenericAgenticStage(
+            reviewStageDef.StageId,
+            reviewStageDef.DisplayName,
+            config,
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
+
+        var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
+
+        Assert.Contains("[Git Diff (develop...feature/task-89)]:", prompt);
+        Assert.Contains("```diff\n" + diffContent + "\n```", prompt);
+        Assert.DoesNotContain("[Git Diff Summary]:", prompt);
+    }
+
+    [Fact]
+    public async Task Orchestrator_TransitionToReviewStage_WhenDiffExceedsLimit_OmitsReviewDiff()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var depStore = new InMemoryTaskDependencyStore();
+        var depEngine = new DependencyResolutionEngine(depStore);
+        var lockProvider = new WorkspaceLockProvider();
+        var gitManager = new FakeGitWorkspaceManager
+        {
+            GeneratedDiffStat = "src/Massive.cs | 1000 +++\n 1 file changed",
+            GeneratedDiff = new string('x', WorkflowDefaults.MaxInlineReviewDiffChars + 50)
+        };
+        var jobQueue = new FakeTaskJobQueue();
+
+        var workspace = new Workspace { Id = 1, Name = "ReviewWS", RepositoryPath = "/repo" };
+        await workspaceRepo.CreateAsync(workspace);
+
+        var task = await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 601,
+            WorkspaceId = 1,
+            Title = "Task Massive Diff",
+            Description = "Task Desc",
+            CurrentStageId = StandardStageIds.PostImplementationGates,
+            Status = TaskOverallStatus.Open
+        });
+        depStore.AddTask(601, 1, TaskOverallStatus.Open);
+
+        var gateStage = new GenericAgenticStage(
+            StandardStageIds.PostImplementationGates,
+            "Gates",
+            new AgenticStageConfig(),
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System)
+        {
+            Handler = (_, _) => Task.FromResult(StageExecutionResult.Success(StandardStageIds.CodeReviewAndFix))
+        };
+        var reviewStage = new GenericAgenticStage(
+            StandardStageIds.CodeReviewAndFix,
+            "Review",
+            new AgenticStageConfig(),
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System)
+        {
+            QueueTier = StageQueueTier.CodeReview
+        };
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { gateStage, reviewStage });
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyEngine = depEngine,
+            LockProvider = lockProvider,
+            GitWorkspaceManager = gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = jobQueue,
+            DependencyStore = depStore
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(601);
+
+        var updatedTask = await taskRepo.GetByIdAsync(601);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(StandardStageIds.CodeReviewAndFix, updatedTask.CurrentStageId);
+
+        var bag = PipelineDataBag.FromJson(updatedTask.PipelineDataJson);
+        Assert.Equal("src/Massive.cs | 1000 +++\n 1 file changed", bag.Get<string>(PipelineDataBagKeys.ReviewDiffStat));
+        Assert.Null(bag.Get<string>(PipelineDataBagKeys.ReviewDiff));
     }
 }
 
