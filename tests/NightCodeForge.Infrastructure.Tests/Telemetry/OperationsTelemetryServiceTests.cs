@@ -257,4 +257,26 @@ public class OperationsTelemetryServiceTests
         _service.ClearActiveTask(2);
         Assert.Equal(1, _service.GetActiveTask()?.TaskId);
     }
+
+    [Fact]
+    public void RecordActiveTask_WithNonPositiveTaskIdOrIdeationStage_IsIgnored()
+    {
+        var task5 = new ActiveTaskSummary(5, "Real Task", "stage-impl", 1, "default", DateTime.UtcNow);
+        _service.RecordActiveTask(task5);
+        Assert.Equal(5, _service.GetActiveTask()?.TaskId);
+
+        // Task with Id 0
+        var task0 = new ActiveTaskSummary(0, "Task #0", "stage-impl", 1, "default", DateTime.UtcNow.AddMinutes(1));
+        _service.RecordActiveTask(task0);
+        Assert.Equal(5, _service.GetActiveTask()?.TaskId);
+
+        // Task with Ideation stage
+        var taskIdeation = new ActiveTaskSummary(99, "Ideation Session", NightCodeForge.Core.Domain.StandardStageIds.Ideation, 1, "default", DateTime.UtcNow.AddMinutes(2));
+        _service.RecordActiveTask(taskIdeation);
+        Assert.Equal(5, _service.GetActiveTask()?.TaskId);
+
+        // Clearing with non-positive ID is a no-op
+        _service.ClearActiveTask(0);
+        Assert.Equal(5, _service.GetActiveTask()?.TaskId);
+    }
 }

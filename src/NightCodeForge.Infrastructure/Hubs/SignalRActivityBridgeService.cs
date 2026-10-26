@@ -148,12 +148,18 @@ public class SignalRActivityBridgeService : BackgroundService
                     var kind = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.StageKind, out var sk) == true && sk != null
                         ? sk.ToString()!
                         : "Agentic";
-                    await _hubContext.Clients.All
-                        .ReceiveStageTransition(evt.TaskId, evt.StageId, kind, status);
+                    var isAutonomousTask = AutonomousTaskClassifier.IsAutonomousTask(evt);
+
+                    if (isAutonomousTask)
+                    {
+                        await _hubContext.Clients.All
+                            .ReceiveStageTransition(evt.TaskId, evt.StageId, kind, status);
+                    }
+
                     if (evt.Kind == AgentActivityKind.StageStarted)
                     {
                         var isRestart = evt.Metadata?.TryGetValue("IsRestart", out var irObj) == true && irObj is bool ir && ir;
-                        if (isRestart)
+                        if (isRestart || !isAutonomousTask)
                         {
                             break;
                         }
@@ -186,8 +192,9 @@ public class SignalRActivityBridgeService : BackgroundService
                         await _hubContext.Clients.All
                             .ReceiveWorkerStatus(WorkerStatusConstants.Running, evt.TaskId, evt.StageId, hardwareTarget);
                     }
-                    else if (string.Equals(evt.StageId, StandardStageIds.Merge, StringComparison.OrdinalIgnoreCase) ||
-                             string.Equals(evt.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
+                    else if (isAutonomousTask &&
+                             (string.Equals(evt.StageId, StandardStageIds.Merge, StringComparison.OrdinalIgnoreCase) ||
+                              string.Equals(evt.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase)))
                     {
                         _telemetryService.ClearActiveTask(evt.TaskId);
                         var remainingActive = _telemetryService.GetActiveTask();
@@ -205,32 +212,38 @@ public class SignalRActivityBridgeService : BackgroundService
                     break;
 
                 case AgentActivityKind.Interrupted:
-                    _telemetryService.ClearActiveTask(evt.TaskId);
-                    var remainingAfterInterrupted = _telemetryService.GetActiveTask();
-                    if (remainingAfterInterrupted != null)
+                    if (AutonomousTaskClassifier.IsAutonomousTask(evt))
                     {
-                        await _hubContext.Clients.All
-                            .ReceiveWorkerStatus(WorkerStatusConstants.Running, remainingAfterInterrupted.TaskId, remainingAfterInterrupted.CurrentStageId, remainingAfterInterrupted.HardwareTarget);
-                    }
-                    else
-                    {
-                        await _hubContext.Clients.All
-                            .ReceiveWorkerStatus(WorkerStatusConstants.WaitingForHuman, evt.TaskId, evt.StageId, "Local GPU");
+                        _telemetryService.ClearActiveTask(evt.TaskId);
+                        var remainingAfterInterrupted = _telemetryService.GetActiveTask();
+                        if (remainingAfterInterrupted != null)
+                        {
+                            await _hubContext.Clients.All
+                                .ReceiveWorkerStatus(WorkerStatusConstants.Running, remainingAfterInterrupted.TaskId, remainingAfterInterrupted.CurrentStageId, remainingAfterInterrupted.HardwareTarget);
+                        }
+                        else
+                        {
+                            await _hubContext.Clients.All
+                                .ReceiveWorkerStatus(WorkerStatusConstants.WaitingForHuman, evt.TaskId, evt.StageId, "Local GPU");
+                        }
                     }
                     break;
 
                 case AgentActivityKind.Error:
-                    _telemetryService.ClearActiveTask(evt.TaskId);
-                    var remainingAfterError = _telemetryService.GetActiveTask();
-                    if (remainingAfterError != null)
+                    if (AutonomousTaskClassifier.IsAutonomousTask(evt))
                     {
-                        await _hubContext.Clients.All
-                            .ReceiveWorkerStatus(WorkerStatusConstants.Running, remainingAfterError.TaskId, remainingAfterError.CurrentStageId, remainingAfterError.HardwareTarget);
-                    }
-                    else
-                    {
-                        await _hubContext.Clients.All
-                            .ReceiveWorkerStatus(WorkerStatusConstants.Idle, null, null, "Local GPU");
+                        _telemetryService.ClearActiveTask(evt.TaskId);
+                        var remainingAfterError = _telemetryService.GetActiveTask();
+                        if (remainingAfterError != null)
+                        {
+                            await _hubContext.Clients.All
+                                .ReceiveWorkerStatus(WorkerStatusConstants.Running, remainingAfterError.TaskId, remainingAfterError.CurrentStageId, remainingAfterError.HardwareTarget);
+                        }
+                        else
+                        {
+                            await _hubContext.Clients.All
+                                .ReceiveWorkerStatus(WorkerStatusConstants.Idle, null, null, "Local GPU");
+                        }
                     }
                     await _hubContext.Clients.Group(groupName)
                         .ReceiveExecutionLog(evt.TaskId, evt.StageId, "Error", evt.Content, evt.Timestamp);

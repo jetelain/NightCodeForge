@@ -1,5 +1,6 @@
 @namespace NightCodeForge.Web.Components.Monitoring
 @implements IDisposable
+@using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Services
 @inject OperationsTelemetryUiService TelemetryUi
@@ -191,12 +192,17 @@
         <!-- In-Flight Autonomous Task Card -->
         <div id="active-task-card" class="forge-subcard" style="padding: 1.25rem; border-radius: var(--radius-md); background: var(--bg-surface); border: 1px solid var(--border-subtle); display: flex; flex-direction: column; justify-content: space-between;">
             <div>
+                @{
+                    var active = AutonomousTaskClassifier.IsAutonomousTask(TelemetryUi.ActiveTask)
+                        ? TelemetryUi.ActiveTask
+                        : null;
+                }
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
                     <div style="display: flex; align-items: center; gap: 0.5rem;">
                         <span style="font-size: 1.3rem;">🎯</span>
                         <strong style="font-size: 0.95rem; color: var(--text-primary);">In-Flight Autonomous Task</strong>
                     </div>
-                    @if (TelemetryUi.ActiveTask != null)
+                    @if (active != null)
                     {
                         <span class="badge-running" id="badge-active-task-running">
                             <span class="pulse-dot"></span> Running
@@ -210,9 +216,8 @@
                     }
                 </div>
 
-                @if (TelemetryUi.ActiveTask != null)
+                @if (active != null)
                 {
-                    var active = TelemetryUi.ActiveTask;
                     <div style="margin-bottom: 0.75rem;">
                         <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem;">
                             <span class="font-mono text-secondary" style="font-weight: 700;">#@active.TaskId</span>

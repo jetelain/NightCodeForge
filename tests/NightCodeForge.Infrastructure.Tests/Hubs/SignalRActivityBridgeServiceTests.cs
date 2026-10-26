@@ -487,6 +487,74 @@ public class SignalRActivityBridgeServiceTests
         Assert.Null(allClient.OperationsStatusChanges[0].LastReclaimError);
     }
 
+    [Fact]
+    public async Task DispatchActivityEventAsync_WhenTaskInFlight_IdeationStageEvents_DoNotClobberActiveTaskOrBroadcastWorkerStatus()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, telemetryService: telemetry);
+
+        var task42 = new ActiveTaskSummary(42, "Refactor Parser", "stage-implementation", 1, "default", DateTime.UtcNow.AddMinutes(-5), "Local GPU");
+        telemetry.RecordActiveTask(task42);
+
+        var ideationStart = new AgentActivityEvent(
+            "ideation-sess-1",
+            0,
+            StandardStageIds.Ideation,
+            AgentActivityKind.StageStarted,
+            "Starting ideation discovery",
+            DateTime.UtcNow);
+
+        var ideationInterrupted = new AgentActivityEvent(
+            "ideation-sess-1",
+            0,
+            StandardStageIds.Ideation,
+            AgentActivityKind.Interrupted,
+            "Question for user",
+            DateTime.UtcNow);
+
+        var ideationCompleted = new AgentActivityEvent(
+            "ideation-sess-1",
+            0,
+            StandardStageIds.Ideation,
+            AgentActivityKind.StageCompleted,
+            "Ideation complete",
+            DateTime.UtcNow);
+
+        await bridge.DispatchActivityEventAsync(ideationStart);
+        await bridge.DispatchActivityEventAsync(ideationInterrupted);
+        await bridge.DispatchActivityEventAsync(ideationCompleted);
+
+        var currentActive = telemetry.GetActiveTask();
+        Assert.NotNull(currentActive);
+        Assert.Equal(42, currentActive.TaskId);
+        Assert.Equal("Refactor Parser", currentActive.TaskTitle);
+
+        Assert.DoesNotContain(fakeHubContext.AllClient.WorkerStatuses, ws => ws.ActiveTaskId == 0);
+        Assert.DoesNotContain(fakeHubContext.AllClient.StageTransitions, st => st.TaskId == 0);
+    }
+
+    [Fact]
+    public async Task DispatchActivityEventAsync_WhenIdle_IdeationStageEvents_DoNotCreateActiveTask()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, telemetryService: telemetry);
+
+        var ideationStart = new AgentActivityEvent(
+            "ideation-sess-1",
+            0,
+            StandardStageIds.Ideation,
+            AgentActivityKind.StageStarted,
+            "Starting ideation discovery",
+            DateTime.UtcNow);
+
+        await bridge.DispatchActivityEventAsync(ideationStart);
+
+        Assert.Null(telemetry.GetActiveTask());
+        Assert.DoesNotContain(fakeHubContext.AllClient.WorkerStatuses, ws => ws.ActiveTaskId == 0);
+    }
+
     private class FakeHubContext : IHubContext<OrchestratorHub, IOrchestratorHubClient>
     {
         private readonly FakeHubClients _clients = new();

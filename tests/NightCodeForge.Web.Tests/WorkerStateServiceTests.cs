@@ -328,5 +328,38 @@ public class WorkerStateServiceTests
         Assert.NotNull(task2StartedAt);
         Assert.True(task2StartedAt >= task1StartedAt);
     }
+
+    [Fact]
+    public void HandleWorkerStatus_IdeationOrPlaceholderTask_DoesNotClobberRunningTask()
+    {
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
+            42, "Refactor Parser", "impl", 1, "default", DateTime.UtcNow, "Local GPU"));
+
+        var service = new WorkerStateService(_telemetryMock.Object);
+        Assert.Equal(42, service.Current.ActiveTaskId);
+
+        // Ideation chat status arrived (task 0)
+        service.HandleWorkerStatus(WorkerStatusConstants.Running, 0, "ideation", "Local GPU");
+
+        Assert.Equal(WorkerExecutionStatus.Running, service.Current.Status);
+        Assert.Equal(42, service.Current.ActiveTaskId);
+        Assert.Equal("Refactor Parser", service.Current.ActiveTaskTitle);
+    }
+
+    [Fact]
+    public void HandleTelemetryActiveTaskChanged_IdeationOrPlaceholderTask_DoesNotClobberRunningTask()
+    {
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
+            42, "Refactor Parser", "impl", 1, "default", DateTime.UtcNow, "Local GPU"));
+
+        var service = new WorkerStateService(_telemetryMock.Object);
+
+        // Telemetry emits Task 0 with ideation stage
+        _telemetryMock.Raise(t => t.OnActiveTaskChanged += null, new ActiveTaskSummary(
+            0, "Task #0", NightCodeForge.Core.Domain.StandardStageIds.Ideation, 1, "default", DateTime.UtcNow));
+
+        Assert.Equal(42, service.Current.ActiveTaskId);
+        Assert.Equal("Refactor Parser", service.Current.ActiveTaskTitle);
+    }
 }
 

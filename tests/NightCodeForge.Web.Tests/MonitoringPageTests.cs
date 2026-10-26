@@ -692,4 +692,43 @@ public class MonitoringPageTests : BunitContext
         Assert.NotNull(_uiService.ActiveTask);
         Assert.Equal(8, _uiService.ActiveTask.TaskId);
     }
+
+    [Fact]
+    public void ActiveOperationsHero_WhenIdeationActiveTaskReceived_KeepsRealActiveTask()
+    {
+        var cut = Render<ActiveOperationsHero>();
+
+        _hubConnection.TriggerActiveTask(new ActiveTaskSummary(
+            42, "Real Autonomous Task", "impl", 1, "default", DateTime.UtcNow));
+        cut.WaitForState(() => cut.Find("#badge-active-task-running") != null);
+        Assert.Contains("#42", cut.Find("#active-task-card").TextContent);
+        Assert.Contains("Real Autonomous Task", cut.Find("#active-task-card").TextContent);
+
+        // Ideation chat placeholder task received
+        _hubConnection.TriggerActiveTask(new ActiveTaskSummary(
+            0, "Task #0", NightCodeForge.Core.Domain.StandardStageIds.Ideation, 1, "default", DateTime.UtcNow));
+        _hubConnection.TriggerWorkerStatus(WorkerStatusConstants.Running, 0, "ideation", "Local GPU");
+
+        // The real active task must still be displayed
+        Assert.Contains("#42", cut.Find("#active-task-card").TextContent);
+        Assert.Contains("Real Autonomous Task", cut.Find("#active-task-card").TextContent);
+        Assert.DoesNotContain("#0", cut.Find("#active-task-card").TextContent);
+    }
+
+    [Fact]
+    public void ActiveOperationsHero_WhenIdleAndIdeationReceived_RendersIdle()
+    {
+        var cut = Render<ActiveOperationsHero>();
+        Assert.Contains("Idle", cut.Find("#active-task-card").TextContent);
+
+        // Ideation chat placeholder task received
+        _hubConnection.TriggerActiveTask(new ActiveTaskSummary(
+            0, "Task #0", NightCodeForge.Core.Domain.StandardStageIds.Ideation, 1, "default", DateTime.UtcNow));
+        _hubConnection.TriggerWorkerStatus(WorkerStatusConstants.Running, 0, "ideation", "Local GPU");
+
+        // Should remain idle
+        Assert.Contains("Idle", cut.Find("#active-task-card").TextContent);
+        Assert.DoesNotContain("#0", cut.Find("#active-task-card").TextContent);
+        Assert.Null(cut.FindAll("#badge-active-task-running").FirstOrDefault());
+    }
 }

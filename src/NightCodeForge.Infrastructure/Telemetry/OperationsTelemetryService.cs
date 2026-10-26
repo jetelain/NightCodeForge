@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Hubs;
@@ -273,6 +274,11 @@ public class OperationsTelemetryService : IOperationsTelemetryService
     public void RecordActiveTask(ActiveTaskSummary summary)
     {
         ArgumentNullException.ThrowIfNull(summary);
+        if (!AutonomousTaskClassifier.IsAutonomousTask(summary))
+        {
+            return;
+        }
+
         lock (_taskLock)
         {
             _activeTasks[summary.TaskId] = summary;
@@ -295,6 +301,11 @@ public class OperationsTelemetryService : IOperationsTelemetryService
 
     public void ClearActiveTask(int? taskId = null)
     {
+        if (taskId.HasValue && taskId.Value <= 0)
+        {
+            return;
+        }
+
         bool cleared = false;
         ActiveTaskSummary? remaining = null;
         lock (_taskLock)
@@ -309,7 +320,9 @@ public class OperationsTelemetryService : IOperationsTelemetryService
                 _activeTasks.Clear();
             }
 
-            remaining = _activeTasks.Values.MaxBy(t => t.StartedAt);
+            remaining = _activeTasks.Values
+                .Where(AutonomousTaskClassifier.IsAutonomousTask)
+                .MaxBy(t => t.StartedAt);
         }
 
         if (cleared)
@@ -336,10 +349,14 @@ public class OperationsTelemetryService : IOperationsTelemetryService
         {
             if (taskId.HasValue)
             {
-                return _activeTasks.GetValueOrDefault(taskId.Value);
+                if (taskId.Value <= 0) return null;
+                var task = _activeTasks.GetValueOrDefault(taskId.Value);
+                return AutonomousTaskClassifier.IsAutonomousTask(task) ? task : null;
             }
 
-            return _activeTasks.Values.MaxBy(t => t.StartedAt);
+            return _activeTasks.Values
+                .Where(AutonomousTaskClassifier.IsAutonomousTask)
+                .MaxBy(t => t.StartedAt);
         }
     }
 

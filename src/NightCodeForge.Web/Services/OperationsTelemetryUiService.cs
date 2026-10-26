@@ -68,7 +68,8 @@ public class OperationsTelemetryUiService : IDisposable
             RecentShellCommands = _recentShellCommands.ToArray();
             ActiveShellCommand = _telemetryService.GetActiveShellCommand() ?? RecentShellCommands.FirstOrDefault(c => c.Status == ShellCommandStatus.Running);
 
-            ActiveTask = _telemetryService.GetActiveTask();
+            var active = _telemetryService.GetActiveTask();
+            ActiveTask = AutonomousTaskClassifier.IsAutonomousTask(active) ? active : null;
         }
         NotifyStateChanged();
     }
@@ -77,6 +78,10 @@ public class OperationsTelemetryUiService : IDisposable
     {
         lock (_lock)
         {
+            if (task != null && !AutonomousTaskClassifier.IsAutonomousTask(task))
+            {
+                return;
+            }
             ActiveTask = task;
         }
         NotifyStateChanged();
@@ -368,6 +373,10 @@ public class OperationsTelemetryUiService : IDisposable
     {
         lock (_lock)
         {
+            if (task != null && !AutonomousTaskClassifier.IsAutonomousTask(task))
+            {
+                return;
+            }
             ActiveTask = task;
         }
         NotifyStateChanged();
@@ -377,6 +386,11 @@ public class OperationsTelemetryUiService : IDisposable
     {
         lock (_lock)
         {
+            if (activeTaskId.HasValue && !AutonomousTaskClassifier.IsAutonomousTask(activeTaskId, stageId))
+            {
+                return;
+            }
+
             if (WorkerStatusConstants.IsIdle(status) ||
                 WorkerStatusConstants.IsWaitingForHuman(status) ||
                 WorkerStatusConstants.IsBlocked(status))

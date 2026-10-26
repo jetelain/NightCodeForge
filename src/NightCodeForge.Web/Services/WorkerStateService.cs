@@ -1,5 +1,6 @@
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Services;
 
@@ -43,11 +44,11 @@ public class WorkerStateService : IWorkerStateService, IDisposable
         _telemetryService.OnActiveTaskChanged += HandleTelemetryActiveTaskChanged;
 
         var active = _telemetryService.GetActiveTask();
-        if (active != null)
+        if (AutonomousTaskClassifier.IsAutonomousTask(active))
         {
             _current = new WorkerStatusSnapshot(
                 WorkerExecutionStatus.Running,
-                active.TaskId,
+                active!.TaskId,
                 active.TaskTitle,
                 active.CurrentStageId,
                 null,
@@ -74,6 +75,10 @@ public class WorkerStateService : IWorkerStateService, IDisposable
         {
             if (active != null)
             {
+                if (!AutonomousTaskClassifier.IsAutonomousTask(active))
+                {
+                    return;
+                }
                 _lastIdleTaskId = null;
                 _current = _current with
                 {
@@ -110,6 +115,10 @@ public class WorkerStateService : IWorkerStateService, IDisposable
             lock (_lock)
             {
                 var active = _telemetryService.GetActiveTask();
+                if (!AutonomousTaskClassifier.IsAutonomousTask(active))
+                {
+                    active = null;
+                }
                 if (_current.ActiveTaskId == null)
                 {
                     if (active != null && active.TaskId != _lastIdleTaskId)
@@ -178,6 +187,11 @@ public class WorkerStateService : IWorkerStateService, IDisposable
 
     public void HandleWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget, string? taskTitle = null, string? branchName = null)
     {
+        if (activeTaskId.HasValue && !AutonomousTaskClassifier.IsAutonomousTask(activeTaskId, stageId))
+        {
+            return;
+        }
+
         var execStatus = WorkerStatusConstants.IsRunning(status)
             ? WorkerExecutionStatus.Running
             : WorkerStatusConstants.IsWaitingForHuman(status)
