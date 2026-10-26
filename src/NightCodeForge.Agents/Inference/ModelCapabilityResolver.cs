@@ -94,6 +94,8 @@ public static class ModelCapabilityResolver
 
     /// <summary>
     /// Builds the Pi-style in-loop context compaction strategy sized for the model's context window.
+    /// In multi-node fleet environments, the context window should reflect the largest capability of the fleet
+    /// to prevent premature compaction while capable larger nodes or cloud overflow can service the context.
     /// </summary>
     public static CompactionStrategy BuildCompactionStrategy(
         LlmProviderOptions? options,

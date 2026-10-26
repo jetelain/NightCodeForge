@@ -31,6 +31,7 @@ The roadmap is prioritized into three strategic delivery tiers:
    - **Step 12.10:** Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio (formerly Step 11.9) — first-class MCP tool discovery and execution via Microsoft Agent Framework standards (`ModelContextProtocol`), supporting streamable HTTP/SSE remote servers and isolated stdio MCP servers in `ContainerSandbox`.
    - **Step 12.11:** GitHub Integration: Untrusted Intake Triage, PR Delivery & Task Mirroring (formerly Step 11.10) — modular GitHub integration: untrusted issue intake routed to sandboxed triage to generate proposals, Pull Request delivery mode with rich PR metadata, and bi-directional status mirroring.
    - **Step 12.12:** Voice Support, Continuous Dictation & PWA Mobile Experience (formerly Step 11.11) — hands-free mobile voice operations via Web Speech API (`SpeechRecognition`) and Blazor JS Interop, continuous dictation with 1500ms silence detection, and PWA manifest for persistent mic permissions.
+   - **Step 12.15:** Deep OllamaRouter Fleet Provisioning & In-App Setup — in-app fleet management UI (`/settings` -> OllamaRouter tab) enabling developers to add, test, configure, and remove compute nodes across the local area network, pre-flight connectivity/latency testing, secure Cloud Overflow API key management, and interactive dynamic context visual tuning.
 
 ---
 
@@ -64,6 +65,7 @@ The roadmap is prioritized into three strategic delivery tiers:
 | **12.10** | [⚡ Step 12.10: Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio](phase-12/STEP_12_10_MCP_HTTP_AND_CONTAINER_SANDBOX_INTEGRATION.md) | First-class MCP tool discovery and execution via Microsoft Agent Framework standards (`ModelContextProtocol`), streamable HTTP/SSE remote servers, and isolated stdio MCP servers in `ContainerSandbox`. *(formerly Step 11.9)* | Planned |
 | **12.11** | [🐙 Step 12.11: GitHub Integration (Untrusted Intake Triage, PR Delivery & Task Mirroring)](phase-12/STEP_12_11_GITHUB_INTEGRATION_ISSUES_AND_PRS.md) | Modular GitHub integration: untrusted issue intake routed to sandboxed triage to generate proposals, Pull Request delivery mode with rich PR metadata, and bi-directional status mirroring. *(formerly Step 11.10)* | Planned |
 | **12.12** | [🎙️ Step 12.12: Voice Support, Continuous Dictation & PWA Mobile Experience](phase-12/STEP_12_12_VOICE_SUPPORT_PWA_AND_MOBILE_SPEECH.md) | Hands-free mobile voice operations via Web Speech API (`SpeechRecognition`) and Blazor JS Interop. Continuous dictation with 1500ms silence detection and PWA configuration for persistent mic permissions. *(formerly Step 11.11)* | Planned |
+| **12.15** | [🌐 Step 12.15: Deep OllamaRouter Fleet Provisioning & In-App Setup](phase-12/STEP_12_15_DEEP_OLLAMAROUTER_FLEET_PROVISIONING_AND_IN_APP_SETUP.md) | In-app fleet provisioning UI in `/settings` to add, test, configure, and remove LAN compute nodes, live connectivity testing, secure Cloud Overflow API key management, and dynamic context visual tuning. Consumes OllamaRouter Tasks #19 and #20 (durable user configuration layer). | Planned |
 
 ---
 

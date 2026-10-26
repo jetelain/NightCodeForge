@@ -47,6 +47,9 @@ public sealed class CrucibleCompactionOptions
 
     /// <summary>
     /// Total context window in tokens (e.g. 131072 for 128k baseline, 225280 for full production models).
+    /// In a multi-node fleet or reverse-proxy cluster, this should be based on the largest capability of the fleet
+    /// (the highest context ceiling across capable targets or cloud overflow) to avoid premature compaction
+    /// when high-VRAM nodes can service the extended context.
     /// </summary>
     public int ContextWindowTokens { get; set; } = 131072;
 
