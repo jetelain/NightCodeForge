@@ -167,6 +167,12 @@
 
                         case StageTurnRole.Tool:
                         case StageTurnRole.ToolResult:
+                            if (turn.Role == StageTurnRole.ToolResult && string.Equals(turn.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
+                            {
+                                // Orphan / rogue ask tool result turn: do not render as raw tool card
+                                break;
+                            }
+
                             var pairedResult = mergedResults.TryGetValue(turn.Id, out var resultTurn) ? resultTurn : null;
                             var effectiveDuration = pairedResult?.DurationMs ?? turn.DurationMs;
                             if (turn.Role == StageTurnRole.Tool && string.Equals(turn.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
@@ -199,7 +205,9 @@
                             }
                             else
                             {
-                                var isRunning = IsActiveStage &&
+                                var isPrimed = StageConversationParser.IsPrimedTurn(turn) || (pairedResult != null && StageConversationParser.IsPrimedTurn(pairedResult));
+                                var isRunning = !isPrimed &&
+                                                IsActiveStage &&
                                                 Conversation?.Status == StageExecutionStatus.Running &&
                                                 pairedResult == null &&
                                                 string.IsNullOrEmpty(turn.ToolResult);
@@ -211,6 +219,9 @@
                                     ? LiveRunningToolOutput
                                     : (pairedResult?.ToolResult ?? turn.ToolResult);
 
+                                var primingBadge = StageConversationParser.GetPrimingBadge(turn) ?? (pairedResult != null ? StageConversationParser.GetPrimingBadge(pairedResult) : null);
+                                var primingTooltip = StageConversationParser.GetPrimingTooltip(turn) ?? (pairedResult != null ? StageConversationParser.GetPrimingTooltip(pairedResult) : null);
+
                                 <div class="chat-bubble assistant turn-tool">
                                     <div class="chat-avatar">⚙️</div>
                                     <div class="chat-bubble-body" style="width: 100%;">
@@ -219,7 +230,9 @@
                                                       Result="@liveResult"
                                                       IsRunning="@isRunning"
                                                       IsError="@(turn.IsError || (pairedResult?.IsError ?? false))"
-                                                      Offset="@(effectiveDuration.HasValue ? $"{effectiveDuration.Value}ms" : null)" />
+                                                      Offset="@(effectiveDuration.HasValue ? $"{effectiveDuration.Value}ms" : null)"
+                                                      BadgeText="@primingBadge"
+                                                      BadgeTooltip="@primingTooltip" />
                                     </div>
                                 </div>
                             }

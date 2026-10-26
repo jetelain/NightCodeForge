@@ -4,6 +4,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Components.Monitoring;
+using NightCodeForge.Web.Components.Transcripts;
 using Xunit;
 
 namespace NightCodeForge.Web.Tests;
@@ -784,4 +785,119 @@ public class StageConversationViewerAskToolTests : BunitContext
         Assert.Contains("Waiting for Answer", cut.Markup);
         Assert.DoesNotContain("Clarification Provided (Queued)", cut.Markup);
     }
+
+    [Fact]
+    public void StageConversationViewer_DownstreamStage_DoesNotRenderRogueAskCard()
+    {
+        // Simulate a downstream stage (e.g. implementation) conversation containing an orphan ask ToolResult
+        var conv = new Conversation
+        {
+            Id = 99,
+            TaskId = 50,
+            StageId = StandardStageIds.Implementation,
+            Status = StageExecutionStatus.Running,
+            Turns = new List<ConversationTurn>
+            {
+                new()
+                {
+                    Id = 901,
+                    TurnIndex = 0,
+                    Role = StageTurnRole.User,
+                    Content = "Implement the feature"
+                },
+                new()
+                {
+                    Id = 902,
+                    TurnIndex = 1,
+                    Role = StageTurnRole.ToolResult,
+                    ToolName = CanonicalToolNames.Ask,
+                    ToolResult = "Q: Which DB?\nA: PostgreSQL"
+                },
+                new()
+                {
+                    Id = 903,
+                    TurnIndex = 2,
+                    Role = StageTurnRole.Tool,
+                    ToolName = CanonicalToolNames.Bash,
+                    ToolArguments = "dotnet test",
+                    MetadataJson = "{\"CallId\":\"prime_123\",\"IsPrimed\":true,\"SourceStageId\":\"deterministic-pre-impl\",\"PrimingType\":\"ForwardPass\"}"
+                }
+            }
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.IsActiveStage, true));
+
+        // Must not render AgentQuestionTurnCard or any tool card for "ask"
+        Assert.Empty(cut.FindComponents<AgentQuestionTurnCard>());
+        Assert.DoesNotContain("❓", cut.Markup);
+        Assert.DoesNotContain("ask", cut.Markup);
+
+        // Primed bash turn must be rendered with badge
+        Assert.Contains("Quality Gate Handover", cut.Markup);
+        Assert.Contains("dotnet test", cut.Markup);
+    }
+
+    [Fact]
+    public void StageConversationViewer_PrimedTurn_DoesNotShowRunningOrOverwrittenOutput_WhenLiveToolIsStreaming()
+    {
+        const string primedCallId = "prime_abc123";
+        var primedMeta = $"{{\"CallId\":\"{primedCallId}\",\"IsPrimed\":true,\"SourceStageId\":\"deterministic-pre-impl\",\"PrimingType\":\"ForwardPass\"}}";
+
+        var conv = new Conversation
+        {
+            Id = 100,
+            TaskId = 51,
+            StageId = StandardStageIds.Implementation,
+            Status = StageExecutionStatus.Running,
+            Turns = new List<ConversationTurn>
+            {
+                new()
+                {
+                    Id = 1001,
+                    TurnIndex = 0,
+                    Role = StageTurnRole.User,
+                    Content = "Begin implementation"
+                },
+                new()
+                {
+                    Id = 1002,
+                    TurnIndex = 1,
+                    Role = StageTurnRole.Tool,
+                    ToolName = CanonicalToolNames.Bash,
+                    ToolArguments = "{\"command\":\"dotnet test\"}",
+                    MetadataJson = primedMeta
+                },
+                new()
+                {
+                    Id = 1003,
+                    TurnIndex = 2,
+                    Role = StageTurnRole.ToolResult,
+                    ToolName = CanonicalToolNames.Bash,
+                    ToolResult = "Exit Code: 0\nPassed: 42 tests.",
+                    MetadataJson = primedMeta
+                }
+            }
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.IsActiveStage, true)
+            .Add(x => x.LiveRunningToolName, CanonicalToolNames.Bash)
+            .Add(x => x.LiveRunningToolArguments, "git status")
+            .Add(x => x.LiveRunningToolOutput, "On branch feature/123, active changes"));
+
+        // Primed card must retain its deterministic test output and not be overwritten by live streaming output
+        Assert.Contains("Passed: 42 tests.", cut.Markup);
+        Assert.Contains("Quality Gate Handover", cut.Markup);
+
+        // Finding the tool call cards: the primed card should not have "status-dot running"
+        var toolCards = cut.FindComponents<ToolCallCard>();
+        var primedCard = toolCards.FirstOrDefault(c => c.Instance.BadgeText == "⚡ Quality Gate Handover");
+        Assert.NotNull(primedCard);
+        Assert.False(primedCard.Instance.IsRunning);
+        Assert.Equal("Exit Code: 0\nPassed: 42 tests.", primedCard.Instance.Result);
+    }
 }
+

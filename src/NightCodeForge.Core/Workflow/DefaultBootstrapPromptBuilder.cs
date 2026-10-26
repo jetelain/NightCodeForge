@@ -48,6 +48,12 @@ public static class DefaultBootstrapPromptBuilder
         var implSummary = context.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.Implementation));
         var compilerErrors = context.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
         var failedTests = context.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
+        var pendingPriming = context.DataBag.Get<SyntheticPrimingExecution>(PipelineDataBagKeys.PendingSyntheticPriming);
+        var optimizationFlags = context.DataBag.Get<LocalOptimizationFlags>(PipelineDataBagKeys.OptimizationFlags)
+            ?? context.CurrentProfile?.OptimizationFlags;
+        bool isPrimingActive = optimizationFlags == null || optimizationFlags.SyntheticConversationPriming;
+        bool omitDuplicateDiagnostics = isPrimingActive && pendingPriming is { IsSuccess: false };
+
         var buildFailure = context.DataBag.Get<string>(PipelineDataBagKeys.BuildFailureReason);
         var testFailure = context.DataBag.Get<string>(PipelineDataBagKeys.TestFailureReason);
         var latestAnsweredBatchId = task.Questions?
@@ -99,8 +105,8 @@ public static class DefaultBootstrapPromptBuilder
                 review_diff = string.IsNullOrWhiteSpace(reviewDiff) ? null : reviewDiff,
                 review_diff_stat = string.IsNullOrWhiteSpace(reviewDiffStat) ? null : reviewDiffStat,
                 implementation_summary = string.IsNullOrWhiteSpace(implSummary) ? null : implSummary,
-                compiler_errors = compilerErrors is { Count: > 0 } ? compilerErrors : null,
-                failed_tests = failedTests is { Count: > 0 } ? failedTests : null,
+                compiler_errors = (!omitDuplicateDiagnostics && compilerErrors is { Count: > 0 }) ? compilerErrors : null,
+                failed_tests = (!omitDuplicateDiagnostics && failedTests is { Count: > 0 }) ? failedTests : null,
                 failure_reason = testFailure ?? buildFailure,
                 build_failure_reason = string.IsNullOrWhiteSpace(buildFailure) ? null : buildFailure,
                 test_failure_reason = string.IsNullOrWhiteSpace(testFailure) ? null : testFailure,
@@ -151,7 +157,7 @@ public static class DefaultBootstrapPromptBuilder
             var conflictBaseBranch = context.DataBag.Get<string>(PipelineDataBagKeys.ConflictBaseBranch) ?? baseBranch;
             var fileListText = string.Join("\n", conflictFiles.Select(f => $"- {f}"));
             var diagnosticsBlock = string.Empty;
-            if (compilerErrors is { Count: > 0 })
+            if (compilerErrors is { Count: > 0 } && !omitDuplicateDiagnostics)
             {
                 var errorsText = string.Join("\n", compilerErrors);
                 diagnosticsBlock = $"\nPREVIOUS COMPILER DIAGNOSTICS (Resolve these compilation errors):\n```\n{errorsText}\n```\n";

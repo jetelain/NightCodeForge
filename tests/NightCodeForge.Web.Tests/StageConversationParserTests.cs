@@ -833,4 +833,101 @@ public class StageConversationParserTests
     }
 
     #endregion
+
+    #region Synthetic Priming Tests
+
+    [Fact]
+    public void IsPrimedTurn_ReturnsTrue_WhenIsPrimedMetadataIsTrue()
+    {
+        var turn = new ConversationTurn
+        {
+            MetadataJson = "{\"CallId\":\"prime_123\",\"IsPrimed\":true,\"SourceStageId\":\"deterministic-pre-impl\",\"PrimingType\":\"ForwardPass\"}"
+        };
+
+        Assert.True(StageConversationParser.IsPrimedTurn(turn));
+    }
+
+    [Fact]
+    public void IsPrimedTurn_ReturnsFalse_WhenIsPrimedIsMissingOrFalse()
+    {
+        Assert.False(StageConversationParser.IsPrimedTurn(null));
+        Assert.False(StageConversationParser.IsPrimedTurn(new ConversationTurn()));
+        Assert.False(StageConversationParser.IsPrimedTurn(new ConversationTurn { MetadataJson = "{\"CallId\":\"call-1\"}" }));
+        Assert.False(StageConversationParser.IsPrimedTurn(new ConversationTurn { MetadataJson = "{\"IsPrimed\":false}" }));
+        Assert.False(StageConversationParser.IsPrimedTurn(new ConversationTurn { MetadataJson = "not-json" }));
+    }
+
+    [Fact]
+    public void GetPrimingBadge_ReturnsCorrectBadge_ForForwardPassAndLoopbackDiagnostic()
+    {
+        var forwardTurn = new ConversationTurn
+        {
+            MetadataJson = "{\"CallId\":\"p1\",\"IsPrimed\":true,\"PrimingType\":\"ForwardPass\"}"
+        };
+        var loopbackTurn = new ConversationTurn
+        {
+            MetadataJson = "{\"CallId\":\"p2\",\"IsPrimed\":true,\"PrimingType\":\"LoopbackDiagnostic\"}"
+        };
+        var unprimedTurn = new ConversationTurn
+        {
+            MetadataJson = "{\"CallId\":\"p3\"}"
+        };
+
+        Assert.Equal("⚡ Quality Gate Handover", StageConversationParser.GetPrimingBadge(forwardTurn));
+        Assert.Equal("🔁 Quality Gate Diagnostic", StageConversationParser.GetPrimingBadge(loopbackTurn));
+        Assert.Null(StageConversationParser.GetPrimingBadge(unprimedTurn));
+        Assert.Null(StageConversationParser.GetPrimingBadge(null));
+    }
+
+    [Fact]
+    public void GetPrimingTooltip_ReturnsInformativeExplanation()
+    {
+        var forwardTurn = new ConversationTurn
+        {
+            MetadataJson = "{\"CallId\":\"p1\",\"IsPrimed\":true,\"PrimingType\":\"ForwardPass\"}"
+        };
+        var loopbackTurn = new ConversationTurn
+        {
+            MetadataJson = "{\"CallId\":\"p2\",\"IsPrimed\":true,\"PrimingType\":\"LoopbackDiagnostic\"}"
+        };
+
+        Assert.Contains("without GPU inference", StageConversationParser.GetPrimingTooltip(forwardTurn));
+        Assert.Contains("failure diagnostic", StageConversationParser.GetPrimingTooltip(loopbackTurn));
+        Assert.Null(StageConversationParser.GetPrimingTooltip(null));
+    }
+
+    [Fact]
+    public void PairToolResults_CorrectlyPairsPrimedToolCallAndResult()
+    {
+        const string callId = "prime_abc123";
+        var meta = $"{{\"CallId\":\"{callId}\",\"IsPrimed\":true,\"SourceStageId\":\"deterministic-pre-impl\",\"PrimingType\":\"ForwardPass\"}}";
+
+        var turns = new List<ConversationTurn>
+        {
+            new() { Id = 1, Role = StageTurnRole.Tool, ToolName = "bash", ToolArguments = "dotnet test", MetadataJson = meta },
+            new() { Id = 2, Role = StageTurnRole.ToolResult, ToolName = "bash", ToolResult = "Exit Code: 0\nPassed: 10", MetadataJson = meta }
+        };
+
+        var (merged, hidden) = StageConversationParser.PairToolResults(turns);
+
+        Assert.Single(merged);
+        Assert.Equal("Exit Code: 0\nPassed: 10", merged[1].ToolResult);
+        Assert.Contains(2, hidden);
+    }
+
+    [Theory]
+    [InlineData("{\"command\":\"dotnet test\"}", "(dotnet test)")]
+    [InlineData("dotnet test", "(dotnet test)")]
+    [InlineData("{\"CommandLine\":\"git status\"}", "(git status)")]
+    [InlineData("{\"path\":\"src/Program.cs\"}", "(src/Program.cs)")]
+    [InlineData("", "")]
+    [InlineData(null, "")]
+    public void ChatPresentationHelper_GetToolSummary_FormatsArgumentsCleanly(string? input, string expected)
+    {
+        var summary = ChatPresentationHelper.GetToolSummary(input);
+        Assert.Equal(expected, summary);
+    }
+
+    #endregion
 }
+

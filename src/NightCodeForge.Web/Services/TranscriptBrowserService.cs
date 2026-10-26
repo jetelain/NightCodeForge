@@ -259,6 +259,10 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             case "jit_model_preload":
                 copy.JitModelPreload = value;
                 break;
+            case "syntheticconversationpriming":
+            case "synthetic_conversation_priming":
+                copy.SyntheticConversationPriming = value;
+                break;
         }
 
         return copy;
@@ -524,6 +528,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                             case "deterministic_symbol_map": optimizations.DeterministicSymbolMap = boolVal; break;
                             case "structured_diagnostic_extraction": optimizations.StructuredDiagnosticExtraction = boolVal; break;
                             case "jit_model_preload": optimizations.JitModelPreload = boolVal; break;
+                            case "synthetic_conversation_priming": optimizations.SyntheticConversationPriming = boolVal; break;
                         }
                     }
                     else

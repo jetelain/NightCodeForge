@@ -103,6 +103,7 @@ public class SessionTranscriptServiceTests
             Assert.Contains("completion: 120", content);
             Assert.Contains("guided_grammar_decoding: true", content);
             Assert.Contains("jit_model_preload: true", content);
+            Assert.Contains("synthetic_conversation_priming: true", content);
             Assert.Contains("kv_cache_hit_rate: 0.94", content);
             Assert.Contains("status: Completed", content);
 

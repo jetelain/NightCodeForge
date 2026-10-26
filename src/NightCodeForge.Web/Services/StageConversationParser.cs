@@ -766,5 +766,95 @@ public static class StageConversationParser
 
         return conversation?.Status == StageExecutionStatus.WaitingForHuman;
     }
+
+    /// <summary>
+    /// Evaluates whether a conversation turn represents a synthetic primed execution from a prior deterministic stage.
+    /// </summary>
+    public static bool IsPrimedTurn(ConversationTurn? turn)
+    {
+        if (turn == null || string.IsNullOrWhiteSpace(turn.MetadataJson))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(turn.MetadataJson);
+            if (doc.RootElement.TryGetProperty("IsPrimed", out var prop))
+            {
+                return prop.ValueKind == JsonValueKind.True;
+            }
+        }
+        catch (JsonException)
+        {
+            // Ignore malformed metadata
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Returns the UI badge text for a primed conversation turn (e.g. forward pass or loopback diagnostic),
+    /// or null if the turn is not primed.
+    /// </summary>
+    public static string? GetPrimingBadge(ConversationTurn? turn)
+    {
+        if (!IsPrimedTurn(turn) || string.IsNullOrWhiteSpace(turn!.MetadataJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(turn.MetadataJson);
+            if (doc.RootElement.TryGetProperty("PrimingType", out var typeProp))
+            {
+                var type = typeProp.GetString();
+                if (string.Equals(type, "ForwardPass", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "⚡ Quality Gate Handover";
+                }
+                if (string.Equals(type, "LoopbackDiagnostic", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "🔁 Quality Gate Diagnostic";
+                }
+            }
+            return "⚡ Quality Gate Handover";
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Returns the informative tooltip explaining the deterministic origin of a primed conversation turn,
+    /// or null if the turn is not primed.
+    /// </summary>
+    public static string? GetPrimingTooltip(ConversationTurn? turn)
+    {
+        if (!IsPrimedTurn(turn) || string.IsNullOrWhiteSpace(turn!.MetadataJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(turn.MetadataJson);
+            if (doc.RootElement.TryGetProperty("PrimingType", out var typeProp))
+            {
+                var type = typeProp.GetString();
+                if (string.Equals(type, "LoopbackDiagnostic", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "Deterministic verification failure diagnostic from prior stage without GPU inference.";
+                }
+            }
+            return "Verified in prior deterministic stage without GPU inference.";
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 }
 

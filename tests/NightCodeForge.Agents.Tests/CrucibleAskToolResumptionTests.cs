@@ -271,9 +271,10 @@ public class CrucibleAskToolResumptionTests : IDisposable
         var task = new ForgeTask { Id = 13, Title = "Cold Resume Task", WorkspaceId = 1 };
         await repo.CreateAsync(task);
 
-        // Pre-create a paused conversation that was waiting for human
+        // Pre-create a paused conversation that was waiting for human with an ask tool call
         var waitingConv = await repo.StartConversationAsync(task.Id, "task-review", WorkflowStageKind.Agentic, 1);
         await repo.AddConversationTurnAsync(waitingConv.Id, StageTurnRole.User, content: "Initial prompt");
+        await repo.AddConversationTurnAsync(waitingConv.Id, StageTurnRole.Tool, toolName: CanonicalToolNames.Ask, toolArguments: "{\"questions\":[{\"prompt\":\"Confirm branch\"}]}", metadataJson: "{\"CallId\":\"call-ask-cold\"}");
         await repo.CompleteConversationAsync(waitingConv.Id, StageExecutionStatus.WaitingForHuman, summary: "Waiting for human");
 
         var client = new ScriptedChatClient(async (messages, options, ct) =>

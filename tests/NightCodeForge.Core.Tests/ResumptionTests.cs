@@ -170,7 +170,7 @@ public class ResumptionTests
         string? consumedAnswer = null;
         var stage = TestWorkflowPipelines.CreateImplementationStage((ctx, ct) =>
         {
-            consumedAnswer = ctx.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswer);
+            consumedAnswer ??= ctx.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswer);
             return Task.FromResult(StageExecutionResult.Success());
         });
         var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });

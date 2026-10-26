@@ -14,7 +14,11 @@
             }
         </span>
         <span class="tool-trace-status" style="display: inline-flex; align-items: center; gap: 0.4rem;">
-            @if (IsRunning)
+            @if (!string.IsNullOrWhiteSpace(BadgeText))
+            {
+                <span class="forge-badge @(IsError ? "badge-crimson" : "badge-indigo") tool-trace-badge" title="@BadgeTooltip">@BadgeText</span>
+            }
+            else if (IsRunning)
             {
                 <span class="status-dot running" style="margin-right: 0.35rem;"></span>
                 <span class="forge-badge badge-indigo tool-trace-badge">Running</span>
@@ -81,6 +85,8 @@
     [Parameter] public bool IsError { get; set; }
     [Parameter] public bool IsRunning { get; set; }
     [Parameter] public bool InitiallyExpanded { get; set; }
+    [Parameter] public string? BadgeText { get; set; }
+    [Parameter] public string? BadgeTooltip { get; set; }
 
     private bool _copiedArgs;
     private bool _copiedResult;

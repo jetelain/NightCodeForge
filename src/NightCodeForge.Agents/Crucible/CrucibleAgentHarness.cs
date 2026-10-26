@@ -370,7 +370,86 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
         }
 
-        // 8. Preemptive Resumption: Complete pending 'ask' tool call with human answers as tool result
+        // 8. Synthetic Conversation Priming: Pre-seed ChatHistory and database Conversation
+        if (string.IsNullOrEmpty(context.SerializedStateJson) && context.SyntheticPriming != null)
+        {
+            var priming = context.SyntheticPriming;
+            var primeCallId = $"prime_{Guid.NewGuid():N}";
+            writtenToolCallIds.TryAdd(primeCallId, true);
+
+            // 1. Assistant Bash call
+            chatHistory.Add(new ChatMessage(ChatRole.Assistant, new List<AIContent>
+            {
+                new FunctionCallContent(primeCallId, CanonicalToolNames.Bash, new Dictionary<string, object?> { ["command"] = priming.Command })
+            }));
+
+            // 2. Tool result
+            chatHistory.Add(new ChatMessage(ChatRole.Tool, new List<AIContent>
+            {
+                new FunctionResultContent(primeCallId, priming.Output)
+            }));
+
+            var primingMeta = JsonSerializer.Serialize(new PrimingTurnMetadata(
+                CallId: primeCallId,
+                IsPrimed: true,
+                SourceStageId: priming.SourceStageId,
+                PrimingType: priming.IsSuccess ? "ForwardPass" : "LoopbackDiagnostic"
+            ));
+
+            if (conversation != null && _taskRepository != null)
+            {
+                var repository = _taskRepository;
+                var convId = conversation.Id;
+
+                var toolArgsJson = JsonSerializer.Serialize(new { command = priming.Command });
+
+                turnWriter.Enqueue(
+                    () => repository.AddConversationTurnAsync(
+                        convId,
+                        StageTurnRole.Tool,
+                        content: $"Execute {priming.Command}",
+                        toolName: CanonicalToolNames.Bash,
+                        toolArguments: toolArgsJson,
+                        metadataJson: primingMeta,
+                        durationMs: (int?)priming.DurationMs,
+                        cancellationToken: cancellationToken),
+                    $"Failed to record primed Tool turn for conversation #{convId}");
+
+                turnWriter.Enqueue(
+                    () => repository.AddConversationTurnAsync(
+                        convId,
+                        StageTurnRole.ToolResult,
+                        content: priming.Output,
+                        toolName: CanonicalToolNames.Bash,
+                        toolResult: priming.Output,
+                        isError: !priming.IsSuccess,
+                        metadataJson: primingMeta,
+                        durationMs: (int?)priming.DurationMs,
+                        cancellationToken: cancellationToken),
+                    $"Failed to record primed ToolResult turn for conversation #{convId}");
+            }
+
+            if (!priming.IsSuccess)
+            {
+                const string fixDirective = "Please fix the compilation/test errors shown above.";
+                chatHistory.Add(new ChatMessage(ChatRole.User, fixDirective));
+
+                if (conversation != null && _taskRepository != null)
+                {
+                    var repository = _taskRepository;
+                    var convId = conversation.Id;
+                    turnWriter.Enqueue(
+                        () => repository.AddConversationTurnAsync(
+                            convId,
+                            StageTurnRole.User,
+                            content: fixDirective,
+                            cancellationToken: cancellationToken),
+                        $"Failed to record fix directive User turn for conversation #{convId}");
+                }
+            }
+        }
+
+        // 9. Preemptive Resumption: Complete pending 'ask' tool call with human answers as tool result
         if (!string.IsNullOrWhiteSpace(context.PendingHumanAnswer))
         {
             var pendingCallIds = new HashSet<string>();
@@ -402,28 +481,35 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 }
                 chatHistory.Add(new ChatMessage(ChatRole.User, followUpPrompt));
             }
-            else if (!chatHistory.Any(m => (m.Text != null && m.Text.Contains(context.PendingHumanAnswer, StringComparison.Ordinal))
-                     || m.Contents.OfType<FunctionResultContent>().Any(frc => frc.Result?.ToString()?.Contains(context.PendingHumanAnswer, StringComparison.Ordinal) == true)))
+            else if (conversation != null && waitingConversation != null && conversation == waitingConversation &&
+                     !chatHistory.Any(m => (m.Text != null && m.Text.Contains(context.PendingHumanAnswer, StringComparison.Ordinal))
+                         || m.Contents.OfType<FunctionResultContent>().Any(frc => frc.Result?.ToString()?.Contains(context.PendingHumanAnswer, StringComparison.Ordinal) == true)))
             {
-                chatHistory.Add(new ChatMessage(ChatRole.User, $"[Human Clarification]:\n{context.PendingHumanAnswer}\n\nPlease proceed with your plan."));
+                // Resuming a paused conversation that was interrupted/waiting for human without pending call IDs in memory
+                chatHistory.Add(new ChatMessage(ChatRole.User, $"[Human Clarification]\n{context.PendingHumanAnswer}\n\nPlease proceed with your plan based on the clarified answers."));
             }
 
             // Persist ToolResult and follow-up turns in the resumed database conversation
-            if (conversation != null)
+            if (conversation != null && _taskRepository != null)
             {
                 var targetCallIds = pendingCallIds.ToList();
-                if (targetCallIds.Count == 0)
+                if (targetCallIds.Count == 0 && waitingConversation != null && conversation == waitingConversation)
                 {
                     var askTurn = conversation.Turns?.LastOrDefault(t => t.Role == StageTurnRole.Tool && string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase));
-                    var cid = ExtractCallId(askTurn);
-                    if (!string.IsNullOrEmpty(cid)) targetCallIds.Add(cid);
+                    if (askTurn != null)
+                    {
+                        var cid = ExtractCallId(askTurn);
+                        targetCallIds.Add(!string.IsNullOrEmpty(cid) ? cid : $"call_{Guid.NewGuid():N}");
+                    }
                 }
 
-                var repository = _taskRepository;
-                var convId = conversation.Id;
-
+                // Strictly guard: only record ToolResult and followUp if an ask call was actually present.
+                // Never record orphan ask ToolResult turns in un-interrupted or fresh conversations!
                 if (targetCallIds.Count > 0)
                 {
+                    var repository = _taskRepository;
+                    var convId = conversation.Id;
+
                     foreach (var callId in targetCallIds)
                     {
                         bool alreadyHasToolResult = conversation.Turns != null && conversation.Turns.Any(t =>
@@ -445,47 +531,24 @@ public partial class CrucibleAgentHarness : IAgentHarness
                                 $"Failed to record ToolResult turn for conversation #{convId}");
                         }
                     }
-                }
-                else
-                {
-                    // Fallback: If no call id was found in history or metadata, ensure human answer is still persisted
-                    bool alreadyHasToolResult = conversation.Turns != null && conversation.Turns.Any(t =>
-                        t.Role == StageTurnRole.ToolResult &&
-                        string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase) &&
-                        t.ToolResult == context.PendingHumanAnswer);
 
-                    if (!alreadyHasToolResult)
+                    var lastAskTurnIndex = conversation.Turns?
+                        .LastOrDefault(t => t.Role == StageTurnRole.Tool && string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
+                        ?.TurnIndex ?? -1;
+
+                    bool alreadyHasFollowUp = conversation.Turns != null && conversation.Turns.Any(t =>
+                        t.TurnIndex > lastAskTurnIndex && t.Role == StageTurnRole.User && t.Content == followUpPrompt);
+
+                    if (!alreadyHasFollowUp)
                     {
-                        var fallbackCallId = Guid.NewGuid().ToString("N");
-                        var meta = BuildToolResultMetadata(fallbackCallId, context.PendingHumanAnswerJson);
                         turnWriter.Enqueue(
                             () => repository.AddConversationTurnAsync(
                                 convId,
-                                StageTurnRole.ToolResult,
-                                toolName: CanonicalToolNames.Ask,
-                                toolResult: context.PendingHumanAnswer,
-                                metadataJson: meta,
+                                StageTurnRole.User,
+                                content: followUpPrompt,
                                 cancellationToken: cancellationToken),
-                            $"Failed to record ToolResult turn for conversation #{convId}");
+                            $"Failed to record follow-up turn for conversation #{convId}");
                     }
-                }
-
-                var lastAskTurnIndex = conversation.Turns?
-                    .LastOrDefault(t => t.Role == StageTurnRole.Tool && string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
-                    ?.TurnIndex ?? -1;
-
-                bool alreadyHasFollowUp = conversation.Turns != null && conversation.Turns.Any(t =>
-                    t.TurnIndex > lastAskTurnIndex && t.Role == StageTurnRole.User && t.Content == followUpPrompt);
-
-                if (!alreadyHasFollowUp)
-                {
-                    turnWriter.Enqueue(
-                        () => repository.AddConversationTurnAsync(
-                            convId,
-                            StageTurnRole.User,
-                            content: followUpPrompt,
-                            cancellationToken: cancellationToken),
-                        $"Failed to record follow-up prompt for conversation #{convId}");
                 }
             }
         }
@@ -695,7 +758,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
 
             // Exactly one Tool turn for ask with callId must be present in DB
-            if (!writtenToolCallIds.ContainsKey(callId) && conversation != null)
+            if (!writtenToolCallIds.ContainsKey(callId) && conversation != null && _taskRepository != null)
             {
                 writtenToolCallIds.TryAdd(callId, true);
                 var questionItems = interruption.Questions.Select(q => new QuestionItem(

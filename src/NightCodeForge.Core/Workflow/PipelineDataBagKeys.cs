@@ -50,6 +50,7 @@ public static class PipelineDataBagKeys
     public const string ReviewFiles = "ReviewFiles";
     public const string DiscoveredSymbols = "DiscoveredSymbols";
     public const string OptimizationFlags = "OptimizationFlags";
+    public const string PendingSyntheticPriming = "PendingSyntheticPriming";
     /// <summary>Conversation history rebuilt from database turns by startup recovery; consumed once by the orchestrator.</summary>
     public const string RecoveredSerializedMemory = "RecoveredSerializedMemory";
 

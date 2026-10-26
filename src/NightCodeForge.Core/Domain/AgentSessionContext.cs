@@ -20,6 +20,7 @@ public class AgentSessionContext
     public string WorkspacePath { get; init; } = string.Empty;
     public string? PendingHumanAnswer { get; init; }
     public string? PendingHumanAnswerJson { get; init; }
+    public SyntheticPrimingExecution? SyntheticPriming { get; init; }
     public IReadOnlyList<string>? DiscoveredSymbols { get; init; }
 
     // --- Promoted Typed Properties ---

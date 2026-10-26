@@ -28,6 +28,11 @@ public static class ChatPresentationHelper
     public static string GetToolSummary(string? argumentsJson)
     {
         if (string.IsNullOrWhiteSpace(argumentsJson)) return string.Empty;
+        var trimmed = argumentsJson.Trim();
+        if (!trimmed.StartsWith('{'))
+        {
+            return $"({Truncate(trimmed, 45)})";
+        }
         try
         {
             using var doc = JsonDocument.Parse(argumentsJson);

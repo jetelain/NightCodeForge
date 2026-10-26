@@ -222,6 +222,15 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains("Deterministic Symbol Map", cut.Markup);
         Assert.Contains("Structured Diagnostics", cut.Markup);
         Assert.Contains("JIT Model Preload", cut.Markup);
+        Assert.Contains("Synthetic Conversation Priming", cut.Markup);
+    }
+
+    [Fact]
+    public void GlobalOptimizationSettingsTab_RendersSyntheticConversationPrimingSwitch()
+    {
+        var cut = Render<GlobalOptimizationSettingsTab>();
+        Assert.Contains("Synthetic Conversation Priming", cut.Markup);
+        Assert.Contains("chkSyntheticPriming", cut.Markup);
     }
 
     [Fact]

@@ -30,6 +30,13 @@ public class LocalOptimizationFlags
     public bool JitModelPreload { get; set; } = true;
 
     /// <summary>
+    /// Pre-seed agent ChatHistory with synthetic bash tool call/result pairs from prior deterministic stages
+    /// to prevent redundant exploratory build/test tool calls.
+    /// Default: true.
+    /// </summary>
+    public bool SyntheticConversationPriming { get; set; } = true;
+
+    /// <summary>
     /// Creates a deep memberwise clone of this configuration.
     /// </summary>
     public LocalOptimizationFlags Clone() => new()
@@ -37,7 +44,8 @@ public class LocalOptimizationFlags
         GuidedGrammarDecoding = GuidedGrammarDecoding,
         DeterministicSymbolMap = DeterministicSymbolMap,
         StructuredDiagnosticExtraction = StructuredDiagnosticExtraction,
-        JitModelPreload = JitModelPreload
+        JitModelPreload = JitModelPreload,
+        SyntheticConversationPriming = SyntheticConversationPriming
     };
 }
 

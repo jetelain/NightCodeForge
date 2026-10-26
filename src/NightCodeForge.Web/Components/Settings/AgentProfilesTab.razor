@@ -260,6 +260,13 @@
                                             <span style="font-size: 0.78rem; color: var(--text-muted);">Pre-warms weights in VRAM before turn starts</span>
                                         </div>
                                     </label>
+                                    <label class="forge-checkbox-tile">
+                                        <input type="checkbox" @bind="profile.OptimizationFlags.SyntheticConversationPriming" />
+                                        <div>
+                                            <strong style="display: block; font-size: 0.9rem; color: var(--text-primary);">Synthetic Conversation Priming</strong>
+                                            <span style="font-size: 0.78rem; color: var(--text-muted);">Seeds ChatHistory with deterministic stage results</span>
+                                        </div>
+                                    </label>
                                 </div>
                             </div>
                         </div>

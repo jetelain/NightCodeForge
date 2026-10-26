@@ -329,6 +329,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         bool isResumedRun = task.IsWaitingForHuman || !string.IsNullOrWhiteSpace(task.InterruptedStageId);
+        string? activeInterruptedStageId = task.InterruptedStageId ?? (task.IsWaitingForHuman ? task.CurrentStageId : null);
         if (task.IsWaitingForHuman)
         {
             task.IsWaitingForHuman = false;
@@ -384,6 +385,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 _logger.LogInformation("Task #{TaskId} execution deferred: operations are globally paused.", taskId);
                 task.IsDeferredByPause = true;
                 task.CurrentStageId = stage.StageId;
+                task.InterruptedStageId = activeInterruptedStageId ?? stage.StageId;
                 pipelineContext.SyncDataBagToTask();
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
                 cohortExitReason = CohortExitReason.Paused;
@@ -395,6 +397,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             {
                 _logger.LogInformation("Cooperatively yielding task #{TaskId} before stage '{StageId}' (not yet executed; CurrentStageId == StageId, resume re-enters here) for pending P1 Urgent job.", task.Id, stage.StageId);
                 task.CurrentStageId = stage.StageId;
+                task.InterruptedStageId = activeInterruptedStageId;
                 pipelineContext.SyncDataBagToTask();
                 task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, stage.QueueTier, task.Priority);
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
@@ -486,6 +489,8 @@ public class TaskOrchestrator : ITaskOrchestrator
             bool deterministicConvFinalized = false;
             IReadOnlyDictionary<int, Services.TaskBaselineEntry>? baselineSnapshot = null;
             StageExecutionResult? result = null;
+            var startedAt = DateTime.UtcNow;
+            int durationMs = 0;
         if (stage.Kind == WorkflowStageKind.Deterministic)
         {
             try
@@ -764,7 +769,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
         }
 
-        var startedAt = DateTime.UtcNow;
+        startedAt = DateTime.UtcNow;
 
         try
         {
@@ -776,7 +781,27 @@ public class TaskOrchestrator : ITaskOrchestrator
                 if (_harnessRegistry.TryGetHarness(harnessId, out var harness) && harness != null)
                 {
                     var lastCheckpoint = task.Checkpoints?.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
-                    var lastHumanAnswer = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswer);
+                    bool isInterruptedStage = !string.IsNullOrWhiteSpace(activeInterruptedStageId) &&
+                        string.Equals(stage.StageId, activeInterruptedStageId, StringComparison.OrdinalIgnoreCase);
+
+                    string? pendingHumanAnswer = null;
+                    string? pendingHumanAnswerJson = null;
+
+                    if (isInterruptedStage)
+                    {
+                        pendingHumanAnswer = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswer);
+                        pendingHumanAnswerJson = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswerJson);
+                        // Single-consumption: remove immediately upon consumption
+                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswer);
+                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswerJson);
+                        activeInterruptedStageId = null;
+                    }
+                    else if (string.IsNullOrWhiteSpace(activeInterruptedStageId))
+                    {
+                        // Defensive: ensure stale keys are purged if there is no pending interrupted stage waiting to consume them
+                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswer);
+                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswerJson);
+                    }
 
                     var defaultDirective = (profile.StageDirectives != null && profile.StageDirectives.TryGetValue(stage.StageId, out var customDirective) && !string.IsNullOrWhiteSpace(customDirective))
                         ? customDirective
@@ -814,6 +839,22 @@ public class TaskOrchestrator : ITaskOrchestrator
                             await PopulateReviewDiffsAsync(workspace, task, pipelineContext, cancellationToken);
                         }
 
+                        var bootstrapPrompt = stage.BuildBootstrapPrompt(task, pipelineContext, stageDirective);
+
+                        SyntheticPrimingExecution? syntheticPriming = null;
+                        var pendingPriming = pipelineContext.DataBag.Get<SyntheticPrimingExecution>(PipelineDataBagKeys.PendingSyntheticPriming);
+                        var effectiveOptimizationFlags = pipelineContext.DataBag.Get<LocalOptimizationFlags>(PipelineDataBagKeys.OptimizationFlags)
+                            ?? profile.OptimizationFlags ?? new LocalOptimizationFlags();
+
+                        if (pendingPriming != null)
+                        {
+                            pipelineContext.DataBag.Remove(PipelineDataBagKeys.PendingSyntheticPriming);
+                            if (effectiveOptimizationFlags.SyntheticConversationPriming)
+                            {
+                                syntheticPriming = pendingPriming;
+                            }
+                        }
+
                         var agentContext = new AgentSessionContext
                         {
                             ForgeTask = task,
@@ -824,17 +865,17 @@ public class TaskOrchestrator : ITaskOrchestrator
                             RequiredMode = stage.RequiredMode,
                             WorkspacePath = taskWorkingPath,
                             SerializedStateJson = resumeMemory,
-                            PendingHumanAnswer = lastHumanAnswer,
-                            PendingHumanAnswerJson = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswerJson),
+                            PendingHumanAnswer = pendingHumanAnswer,
+                            PendingHumanAnswerJson = pendingHumanAnswerJson,
+                            SyntheticPriming = syntheticPriming,
                             TaskMarkdownPath = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath),
                             ReviewDiffStat = reviewDiffStat,
                             ApprovedPlan = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ApprovedPlan)
                                 ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview)),
                             ReviewerFeedback = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ReviewerFeedback),
                             PriorDiagnostics = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors),
-                            BootstrapPrompt = stage.BuildBootstrapPrompt(task, pipelineContext, stageDirective),
-                            OptimizationFlags = pipelineContext.DataBag.Get<LocalOptimizationFlags>(PipelineDataBagKeys.OptimizationFlags)
-                                ?? profile.OptimizationFlags ?? new LocalOptimizationFlags(),
+                            BootstrapPrompt = bootstrapPrompt,
+                            OptimizationFlags = effectiveOptimizationFlags,
                             DiscoveredSymbols = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.DiscoveredSymbols),
                             PipelineContext = pipelineContext
                         };
@@ -1005,7 +1046,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         var completedAt = DateTime.UtcNow;
-        var durationMs = (int)(completedAt - startedAt).TotalMilliseconds;
+        durationMs = (int)(completedAt - startedAt).TotalMilliseconds;
 
         // Save execution metrics record
         var record = result.ExecutionRecord ?? new StageExecutionRecord();
@@ -1675,6 +1716,10 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         if (result.IsSuccess)
         {
+            if (stage.Kind == WorkflowStageKind.Deterministic)
+            {
+                SetSyntheticPrimingFromDeterministicStage(stage, pipelineContext, result, durationMs);
+            }
             // Case B: Stage Completed
             pipelineContext.ResetStageRetry(stage.StageId);
             if (string.Equals(stage.StageId, StandardStageIds.PostImplementationGates, StringComparison.OrdinalIgnoreCase))
@@ -1727,6 +1772,11 @@ public class TaskOrchestrator : ITaskOrchestrator
             };
             await _taskRepository.AddCheckpointAsync(checkpoint, cancellationToken);
             pipelineContext.DataBag.Remove(PipelineDataBagKeys.SerializedMemory);
+            if (string.IsNullOrWhiteSpace(activeInterruptedStageId))
+            {
+                pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswer);
+                pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswerJson);
+            }
 
             if (string.Equals(stage.StageId, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
             {
@@ -1832,6 +1882,10 @@ public class TaskOrchestrator : ITaskOrchestrator
                     {
                         _logger.LogWarning("Re-verification after sync failed for task #{TaskId}: {Error}. Routing back to Implementation.",
                             task.Id, reverifyResult.ErrorMessage);
+                        if (stage.Kind == WorkflowStageKind.Deterministic)
+                        {
+                            SetSyntheticPrimingFromDeterministicStage(stage, pipelineContext, reverifyResult, (int)(DateTime.UtcNow - startedAt).TotalMilliseconds);
+                        }
                         var loopBackStageId = stage.LoopBackStageId ?? StandardStageIds.Implementation;
                         var reverifyRetries = pipelineContext.IncrementRetry(stage.StageId);
                         var reverifyMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
@@ -1926,6 +1980,10 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         if (!string.IsNullOrWhiteSpace(targetLoopBackId) && retries <= effectiveMaxRetries)
         {
+            if (stage.Kind == WorkflowStageKind.Deterministic)
+            {
+                SetSyntheticPrimingFromDeterministicStage(stage, pipelineContext, result, durationMs);
+            }
             var targetStage = pipeline.GetStage(targetLoopBackId);
             if (targetStage != null && IsSameCohort(stage.QueueTier, targetStage.QueueTier))
             {
@@ -3314,4 +3372,112 @@ public class TaskOrchestrator : ITaskOrchestrator
             _logger.LogWarning(ex, "Failed generating live diff for review stage for task #{TaskId}", task.Id);
         }
     }
+
+    private static void SetSyntheticPrimingFromDeterministicStage(
+        IWorkflowStage stage,
+        PipelineContext pipelineContext,
+        StageExecutionResult result,
+        int stageDurationMs)
+    {
+        var commandExecutions = pipelineContext.DataBag.Get<List<StageCommandExecution>>(PipelineDataBagKeys.StageCommands(stage.StageId));
+        if (result.IsSuccess)
+        {
+            StageCommandExecution? selected = null;
+            if (commandExecutions is { Count: > 0 })
+            {
+                selected = commandExecutions.FirstOrDefault(c =>
+                    string.Equals(c.StageName, DeterministicStageConstants.TestWithCoverageSubStage, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(c.StageName, DeterministicStageConstants.TestSubStage, StringComparison.OrdinalIgnoreCase))
+                    ?? commandExecutions.Last();
+            }
+
+            var command = selected?.Command
+                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId))
+                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TestCommand)
+                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.BuildCommand)
+                ?? DeterministicStageConstants.DefaultTestCommand;
+
+            var rawOutput = selected?.Output
+                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId))
+                ?? "Verification completed successfully with exit code 0.";
+
+            var formattedOutput = rawOutput.StartsWith("Exit Code:", StringComparison.OrdinalIgnoreCase)
+                ? rawOutput
+                : $"Exit Code: 0\n{rawOutput}".TrimEnd();
+
+            formattedOutput = WorkflowDefaults.TruncateStageOutput(formattedOutput);
+
+            var duration = selected?.DurationMs > 0 ? selected.DurationMs : (stageDurationMs > 0 ? stageDurationMs : (long?)null);
+
+            pipelineContext.DataBag.Set(PipelineDataBagKeys.PendingSyntheticPriming, new SyntheticPrimingExecution(
+                SourceStageId: stage.StageId,
+                ToolName: CanonicalToolNames.Bash,
+                Command: command,
+                Output: formattedOutput,
+                IsSuccess: true,
+                DurationMs: duration));
+        }
+        else
+        {
+            StageCommandExecution? failed = null;
+            if (commandExecutions is { Count: > 0 })
+            {
+                failed = commandExecutions.LastOrDefault(c => !c.IsSuccess) ?? commandExecutions.Last();
+            }
+
+            var command = failed?.Command
+                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId))
+                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TestCommand)
+                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.BuildCommand)
+                ?? DeterministicStageConstants.DefaultTestCommand;
+
+            var rawOutput = failed?.Output
+                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId))
+                ?? result.ErrorMessage
+                ?? "Deterministic step failed.";
+
+            var compilerErrors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
+            var failedTests = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
+
+            var diagSb = new StringBuilder();
+            if (compilerErrors is { Count: > 0 } && !rawOutput.Contains("[Compiler Diagnostics]", StringComparison.OrdinalIgnoreCase))
+            {
+                diagSb.AppendLine().AppendLine("[Compiler Diagnostics]:");
+                foreach (var err in compilerErrors)
+                {
+                    diagSb.AppendLine(err);
+                }
+            }
+            if (failedTests is { Count: > 0 } && !rawOutput.Contains("[Failed Tests]", StringComparison.OrdinalIgnoreCase))
+            {
+                diagSb.AppendLine().AppendLine("[Failed Tests]:");
+                foreach (var ft in failedTests)
+                {
+                    diagSb.AppendLine(ft);
+                }
+            }
+
+            if (diagSb.Length > 0)
+            {
+                rawOutput = $"{rawOutput.TrimEnd()}\n{diagSb.ToString().TrimEnd()}";
+            }
+
+            var formattedOutput = rawOutput.StartsWith("Exit Code:", StringComparison.OrdinalIgnoreCase)
+                ? rawOutput
+                : $"Exit Code: 1\n{rawOutput}".TrimEnd();
+
+            formattedOutput = WorkflowDefaults.TruncateStageOutput(formattedOutput);
+
+            var duration = failed?.DurationMs > 0 ? failed.DurationMs : (stageDurationMs > 0 ? stageDurationMs : (long?)null);
+
+            pipelineContext.DataBag.Set(PipelineDataBagKeys.PendingSyntheticPriming, new SyntheticPrimingExecution(
+                SourceStageId: stage.StageId,
+                ToolName: CanonicalToolNames.Bash,
+                Command: command,
+                Output: formattedOutput,
+                IsSuccess: false,
+                DurationMs: duration));
+        }
+    }
 }
+

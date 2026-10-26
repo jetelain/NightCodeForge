@@ -79,6 +79,7 @@ optimizations:
   deterministic_symbol_map: true
   structured_diagnostic_extraction: false
   jit_model_preload: true
+  synthetic_conversation_priming: false
 kv_cache_hit_rate: 0.92
 status: Completed
 ---
@@ -105,6 +106,7 @@ Body text
         Assert.True(summary.Optimizations.DeterministicSymbolMap);
         Assert.False(summary.Optimizations.StructuredDiagnosticExtraction);
         Assert.True(summary.Optimizations.JitModelPreload);
+        Assert.False(summary.Optimizations.SyntheticConversationPriming);
     }
 
     [Fact]

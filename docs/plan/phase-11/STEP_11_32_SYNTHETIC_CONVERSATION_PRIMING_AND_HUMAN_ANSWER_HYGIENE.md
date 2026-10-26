@@ -3,7 +3,7 @@
 > **Phase 11 Implementation Step (Post-MVP - Real-Project Hardening, Token Efficiency & Agent Ergonomics)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* [`src/NightCodeForge.Core`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core), [`src/NightCodeForge.Agents`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents), [`src/NightCodeForge.Web`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web), [`tests/NightCodeForge.Agents.Tests`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/tests/NightCodeForge.Agents.Tests), [`tests/NightCodeForge.Core.Tests`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/tests/NightCodeForge.Core.Tests)  
-> *Status:* Proposed / Specified | *Target Framework:* .NET 10 (C# 13)  
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [docs/PLAN.md line 324](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/PLAN.md#L324), [docs/CRUCIBLE.md §6.5](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/CRUCIBLE.md#L567-L594), [docs/ARCHITECTURE.md §3.10 & §7.1.6.3](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/ARCHITECTURE.md#L567)
 
 ---
@@ -279,15 +279,15 @@ public sealed record PrimingTurnMetadata(
 
 ## 5. Definition of Done
 
-- [ ] `task.InterruptedStageId` identity is captured into a scoped execution variable during resumption so only the interrupted stage consumes human clarification answers.
-- [ ] `LastHumanAnswer` and `LastHumanAnswerJson` are strictly scoped and consumed once upon stage resumption.
-- [ ] No subsequent stage receives stale human clarification answers.
-- [ ] `CrucibleAgentHarness` fallback logic prevents orphan `ask` `ToolResult` turns and duplicate `[Human Clarification]` chat history injection on un-interrupted conversations.
-- [ ] `LocalOptimizationFlags.SyntheticConversationPriming` flag is available, defaults to `true`, and is included in `Clone()`.
-- [ ] `PipelineDataBagKeys.PendingSyntheticPriming` contract is established and follows single-consumption lifecycle.
-- [ ] Multi-sub-stage command selection correctly prioritizes test sub-stages on forward pass, and the failing command on loopback.
-- [ ] Primed output is realistically formatted (`Exit Code: X` and structured diagnostics) and truncated via `WorkflowDefaults.TruncateStageOutput`.
-- [ ] `DefaultBootstrapPromptBuilder` deduplicates failure diagnostics when primed, avoiding repeated prompt tokens.
-- [ ] Synthetic `callId` is registered into `writtenToolCallIds` to avoid tracer re-recording.
-- [ ] `StageConversationParser` encapsulates priming turn detection and badge formatting, keeping Razor components purely presentation-focused.
-- [ ] All tests pass cleanly under `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] `task.InterruptedStageId` identity is captured into a scoped execution variable during resumption so only the interrupted stage consumes human clarification answers.
+- [x] `LastHumanAnswer` and `LastHumanAnswerJson` are strictly scoped and consumed once upon stage resumption.
+- [x] No subsequent stage receives stale human clarification answers.
+- [x] `CrucibleAgentHarness` fallback logic prevents orphan `ask` `ToolResult` turns and duplicate `[Human Clarification]` chat history injection on un-interrupted conversations.
+- [x] `LocalOptimizationFlags.SyntheticConversationPriming` flag is available, defaults to `true`, and is included in `Clone()`.
+- [x] `PipelineDataBagKeys.PendingSyntheticPriming` contract is established and follows single-consumption lifecycle.
+- [x] Multi-sub-stage command selection correctly prioritizes test sub-stages on forward pass, and the failing command on loopback.
+- [x] Primed output is realistically formatted (`Exit Code: X` and structured diagnostics) and truncated via `WorkflowDefaults.TruncateStageOutput`.
+- [x] `DefaultBootstrapPromptBuilder` deduplicates failure diagnostics when primed, avoiding repeated prompt tokens.
+- [x] Synthetic `callId` is registered into `writtenToolCallIds` to avoid tracer re-recording.
+- [x] `StageConversationParser` encapsulates priming turn detection and badge formatting, keeping Razor components purely presentation-focused.
+- [x] All tests pass cleanly under `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
