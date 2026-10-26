@@ -276,7 +276,7 @@ public class WorkspaceProvisioningServiceTests : IDisposable
         };
 
         var progressMessages = new List<string>();
-        var progress = new Progress<string>(msg => progressMessages.Add(msg));
+        var progress = new SynchronousProgress<string>(msg => progressMessages.Add(msg));
 
         var workspace = await _service.ProvisionWorkspaceAsync(model, progress);
 
@@ -415,6 +415,11 @@ public class WorkspaceProvisioningServiceTests : IDisposable
         public Task ProcessFileChangedAsync(string filePath, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive = true, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public void Dispose() { }
+    }
+
+    private sealed class SynchronousProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => handler(value);
     }
 
     #endregion

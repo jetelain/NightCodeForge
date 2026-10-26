@@ -23,6 +23,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
     private readonly IGlobalOptimizationSettingsService _globalOptService;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IOllamaChatClientFactory _chatClientFactory;
+    private readonly NightCodeForge.Core.Services.ITranscriptAnalysisService _analysisService;
     private readonly ILogger<TranscriptBrowserService> _logger;
 
     [GeneratedRegex(@"^---\r?\n(?<frontmatter>[\s\S]*?)\r?\n---\r?\n?", RegexOptions.Multiline)]
@@ -47,11 +48,13 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         IGlobalOptimizationSettingsService globalOptService,
         IServiceScopeFactory scopeFactory,
         IOllamaChatClientFactory chatClientFactory,
+        NightCodeForge.Core.Services.ITranscriptAnalysisService analysisService,
         ILogger<TranscriptBrowserService> logger)
     {
         _globalOptService = globalOptService ?? throw new ArgumentNullException(nameof(globalOptService));
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
+        _analysisService = analysisService ?? throw new ArgumentNullException(nameof(analysisService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -98,10 +101,46 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         if (!File.Exists(filePath)) return null;
 
         var content = await File.ReadAllTextAsync(filePath, cancellationToken);
+        var fileName = Path.GetFileName(filePath);
+        var analysis = _analysisService.Analyze(content, fileName, filePath);
+
         var summary = ParseSummaryFromContent(filePath, content);
         if (summary == null) return null;
+        summary = summary with { HasFriction = analysis.HasFriction, TotalErrors = analysis.TotalErrors };
 
-        return ParseDetail(summary, content);
+        var detail = ParseDetail(summary, content);
+        return detail with { Analysis = analysis };
+    }
+
+    public async Task<NightCodeForge.Core.Services.TranscriptAnalysis?> GetTranscriptAnalysisAsync(string filePath, CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(filePath)) return null;
+        return await _analysisService.AnalyzeFileAsync(filePath, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis>> GetFleetAnalysisAsync(string? workspacePath = null, CancellationToken cancellationToken = default)
+    {
+        var directoriesToSearch = GetCandidateDirectories(workspacePath);
+        var results = new List<NightCodeForge.Core.Services.TranscriptAnalysis>();
+        var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dir in directoriesToSearch)
+        {
+            if (!Directory.Exists(dir)) continue;
+
+            var dirAnalyses = await _analysisService.AnalyzeDirectoryAsync(dir, cancellationToken);
+            foreach (var analysis in dirAnalyses)
+            {
+                if (seenFiles.Contains(analysis.FileName)) continue;
+                seenFiles.Add(analysis.FileName);
+                results.Add(analysis);
+            }
+        }
+
+        return results
+            .OrderByDescending(r => r.Frontmatter?.TaskId ?? 0)
+            .ThenBy(r => r.Frontmatter?.StageId ?? string.Empty)
+            .ToList();
     }
 
     public async Task<ParsedTranscriptDetail?> GetTranscriptDetailByNameAsync(string fileName, string? workspacePath = null, CancellationToken cancellationToken = default)
@@ -417,10 +456,10 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
     {
         // Read file header or full file
         var content = await File.ReadAllTextAsync(filePath, ct);
-        return ParseSummaryFromContent(filePath, content);
+        return ParseSummaryFromContent(filePath, content, _analysisService);
     }
 
-    public static TranscriptSummary? ParseSummaryFromContent(string filePath, string content)
+    public static TranscriptSummary? ParseSummaryFromContent(string filePath, string content, NightCodeForge.Core.Services.ITranscriptAnalysisService? analysisService = null)
     {
         var fileName = Path.GetFileName(filePath);
         var fileInfo = new FileInfo(filePath);
@@ -437,6 +476,8 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         double? kvCacheHitRate = null;
         var optimizations = new LocalOptimizationFlags();
         bool hasValidTranscriptData = false;
+        bool hasFriction = false;
+        int totalErrors = 0;
 
         var fmMatch = FrontmatterRegex().Match(content);
         if (fmMatch.Success)
@@ -536,6 +577,13 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             return null;
         }
 
+        if (analysisService != null)
+        {
+            var analysis = analysisService.Analyze(content, fileName, filePath);
+            hasFriction = analysis.HasFriction;
+            totalErrors = analysis.TotalErrors;
+        }
+
         // Try extracting timestamp from filename (e.g. 2026-10-15-task...)
         if (fileName.Length >= 10 && DateTime.TryParseExact(fileName.Substring(0, 10), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var fnDate))
         {
@@ -555,7 +603,9 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             Status: status,
             AgentProfile: agentProfile,
             KvCacheHitRate: kvCacheHitRate,
-            Optimizations: optimizations);
+            Optimizations: optimizations,
+            HasFriction: hasFriction,
+            TotalErrors: totalErrors);
     }
 
     public static ParsedTranscriptDetail ParseDetail(TranscriptSummary summary, string content)

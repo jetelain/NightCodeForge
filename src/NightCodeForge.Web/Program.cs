@@ -45,6 +45,7 @@ builder.Services.AddScoped<IdeationSessionState>();
 builder.Services.AddScoped<IWorkspaceProvisioningService, WorkspaceProvisioningService>();
 builder.Services.AddScoped<ReviewCommentStateService>();
 builder.Services.AddScoped<ITaskReviewService, TaskReviewService>();
+builder.Services.AddSingleton<ITranscriptAnalysisService, TranscriptAnalysisService>();
 builder.Services.AddScoped<ITranscriptBrowserService, TranscriptBrowserService>();
 builder.Services.AddScoped<IGitSyncService, GitSyncService>();
 builder.Services.AddSingleton<IDevQueueSkippedJobRegistry, DevQueueSkippedJobRegistry>();

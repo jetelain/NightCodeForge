@@ -32,4 +32,14 @@ public interface ITranscriptBrowserService
     /// to SQLite agent profiles and global optimization settings.
     /// </summary>
     Task ApplyRemediationAsync(RemediationSuggestion suggestion, int? workspaceId = null, string? profileName = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Analyzes an individual transcript file using the standard transcript analysis engine.
+    /// </summary>
+    Task<NightCodeForge.Core.Services.TranscriptAnalysis?> GetTranscriptAnalysisAsync(string filePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Analyzes all session transcripts across candidate directories for fleet-wide friction and metrics.
+    /// </summary>
+    Task<IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis>> GetFleetAnalysisAsync(string? workspacePath = null, CancellationToken cancellationToken = default);
 }

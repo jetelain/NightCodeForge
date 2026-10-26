@@ -1,4 +1,5 @@
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Services;
 
 namespace NightCodeForge.Web.Services;
 
@@ -18,7 +19,9 @@ public record TranscriptSummary(
     string Status,
     string? AgentProfile = null,
     double? KvCacheHitRate = null,
-    LocalOptimizationFlags? Optimizations = null)
+    LocalOptimizationFlags? Optimizations = null,
+    bool HasFriction = false,
+    int TotalErrors = 0)
 {
     public int TotalTokens => PromptTokens + CompletionTokens;
 }
@@ -67,4 +70,5 @@ public record ParsedTranscriptDetail(
     IReadOnlyList<string> AvailableTools,
     IReadOnlyList<string> ActiveSkills,
     IReadOnlyList<ParsedTranscriptTurn> Turns,
-    string? ModelCallsMarkdown = null);
+    string? ModelCallsMarkdown = null,
+    TranscriptAnalysis? Analysis = null);

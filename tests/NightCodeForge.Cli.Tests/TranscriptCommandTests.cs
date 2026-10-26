@@ -2,6 +2,7 @@ namespace NightCodeForge.Cli.Tests;
 
 using NightCodeForge.Cli.Commands;
 using NightCodeForge.Core.Services;
+using Moq;
 
 public class TranscriptCommandTests
 {
@@ -168,5 +169,45 @@ error CS0103: The name 'Foo' does not exist in the current context
     {
         var result = TranscriptCommand.FormatDuration(durationMs);
         Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithMockedAnalysisService_DispatchesExpectedAnalysisCall()
+    {
+        var filePath = Path.Combine(_testDir, "mock-transcript.md");
+        await File.WriteAllTextAsync(filePath, "mock-content");
+
+        var mockService = new Mock<ITranscriptAnalysisService>();
+        var fakeAnalysis = new TranscriptAnalysis(
+            FilePath: filePath,
+            FileName: "mock-transcript.md",
+            Frontmatter: null,
+            TotalTurns: 1,
+            UserTurns: 1,
+            AssistantTurns: 0,
+            ToolTurns: 0,
+            ThinkingTurns: 0,
+            ToolUsage: new Dictionary<string, int>(),
+            BashErrors: 0,
+            EditFailures: 0,
+            ToolErrors: 0,
+            CompilerErrors: 0,
+            TestFailures: 0,
+            CompactionEvents: 0,
+            HistoryRewrites: 0,
+            TopReadFiles: new List<KeyValuePair<string, int>>(),
+            TopEditedFiles: new List<KeyValuePair<string, int>>(),
+            HighChurnFiles: new List<KeyValuePair<string, int>>(),
+            FrictionPoints: Array.Empty<string>(),
+            Recommendations: Array.Empty<string>());
+
+        mockService.Setup(s => s.AnalyzeFileAsync(filePath, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(fakeAnalysis);
+
+        var command = new TranscriptCommand(mockService.Object);
+        var exitCode = await command.ExecuteAsync(new TranscriptOptions { TargetPath = filePath });
+
+        Assert.Equal(0, exitCode);
+        mockService.Verify(s => s.AnalyzeFileAsync(filePath, It.IsAny<CancellationToken>()), Times.Once);
     }
 }

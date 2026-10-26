@@ -44,12 +44,15 @@ public class TranscriptBrowserServiceTests : IDisposable
         _serviceProvider = services.BuildServiceProvider();
     }
 
-    private TranscriptBrowserService CreateService(IOllamaChatClientFactory? chatClientFactory = null)
+    private TranscriptBrowserService CreateService(
+        IOllamaChatClientFactory? chatClientFactory = null,
+        NightCodeForge.Core.Services.ITranscriptAnalysisService? customAnalysisService = null)
     {
         var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
         var factory = chatClientFactory ?? new Mock<IOllamaChatClientFactory>().Object;
+        var analysisService = customAnalysisService ?? new NightCodeForge.Core.Services.TranscriptAnalysisService();
         var logger = NullLogger<TranscriptBrowserService>.Instance;
-        return new TranscriptBrowserService(_fakeGlobalOptService, scopeFactory, factory, logger);
+        return new TranscriptBrowserService(_fakeGlobalOptService, scopeFactory, factory, analysisService, logger);
     }
 
     public void Dispose()
@@ -425,6 +428,166 @@ Done refactoring.
                 try { Directory.Delete(tempDir, true); } catch { }
             }
         }
+    }
+
+    [Fact]
+    public async Task GetTranscriptAnalysisAsync_And_GetFleetAnalysisAsync_ReturnExpectedAnalyses()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf_fleet_test_" + Guid.NewGuid().ToString("N"));
+        var transcriptsDir = Path.Combine(tempDir, "docs", "transcripts");
+        Directory.CreateDirectory(transcriptsDir);
+
+        try
+        {
+            var file1 = Path.Combine(transcriptsDir, "2026-10-15-task-10-stage-1-failed.md");
+            var content1 = @"---
+task_id: 10
+stage_id: stage-1
+status: Failed
+duration_ms: 1000
+tokens:
+  total: 500
+---
+### [ 00:01 ] 🤖 ASSISTANT
+**Tool Invocation:** `EditFile`
+```json
+{ ""path"": ""foo.cs"" }
+```
+### [ 00:02 ] 🛠️ TOOL
+neither exact nor fuzzy indentation match succeeded
+";
+            await File.WriteAllTextAsync(file1, content1);
+
+            var service = CreateService();
+            var analysis = await service.GetTranscriptAnalysisAsync(file1);
+            Assert.NotNull(analysis);
+            Assert.True(analysis.HasFriction);
+            Assert.Equal(1, analysis.EditFailures);
+
+            var fleet = await service.GetFleetAnalysisAsync(tempDir);
+            Assert.NotEmpty(fleet);
+            Assert.Contains(fleet, a => a.FileName.Contains("task-10"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GetTranscriptDetailAsync_WithMockedAnalysisService_AttachesCustomAnalysis()
+    {
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var content = @"---
+task_id: 99
+stage_id: test-stage
+status: Completed
+---
+# Transcript
+";
+            await File.WriteAllTextAsync(tempFile, content);
+
+            var mockAnalysisService = new Mock<NightCodeForge.Core.Services.ITranscriptAnalysisService>();
+            var expectedAnalysis = new NightCodeForge.Core.Services.TranscriptAnalysis(
+                FilePath: tempFile,
+                FileName: Path.GetFileName(tempFile),
+                Frontmatter: null,
+                TotalTurns: 5,
+                UserTurns: 1,
+                AssistantTurns: 2,
+                ToolTurns: 2,
+                ThinkingTurns: 1,
+                ToolUsage: new Dictionary<string, int>(),
+                BashErrors: 0,
+                EditFailures: 0,
+                ToolErrors: 0,
+                CompilerErrors: 0,
+                TestFailures: 0,
+                CompactionEvents: 0,
+                HistoryRewrites: 0,
+                TopReadFiles: new List<KeyValuePair<string, int>>(),
+                TopEditedFiles: new List<KeyValuePair<string, int>>(),
+                HighChurnFiles: new List<KeyValuePair<string, int>>(),
+                FrictionPoints: new[] { "Mocked friction point" },
+                Recommendations: new[] { "Mocked recommendation" });
+
+            mockAnalysisService.Setup(s => s.Analyze(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+                .Returns(expectedAnalysis);
+
+            var service = CreateService(customAnalysisService: mockAnalysisService.Object);
+            var detail = await service.GetTranscriptDetailAsync(tempFile);
+
+            Assert.NotNull(detail);
+            Assert.NotNull(detail.Analysis);
+            Assert.Contains("Mocked friction point", detail.Analysis.FrictionPoints);
+            Assert.True(detail.Metadata.HasFriction);
+            mockAnalysisService.Verify(s => s.Analyze(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Once);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void ParseSummaryFromContent_InvalidTranscript_ReturnsNullWithoutCallingAnalysisService()
+    {
+        var mockAnalysisService = new Mock<NightCodeForge.Core.Services.ITranscriptAnalysisService>();
+        var nonTranscriptContent = "# Project Overview\nThis is just a regular documentation file without frontmatter.";
+
+        var summary = TranscriptBrowserService.ParseSummaryFromContent("overview.md", nonTranscriptContent, mockAnalysisService.Object);
+
+        Assert.Null(summary);
+        mockAnalysisService.Verify(s => s.Analyze(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public void ParseSummaryFromContent_WithAnalysisService_SetsHasFrictionAndTotalErrors()
+    {
+        var validContent = @"---
+task_id: 42
+stage_id: test-stage
+status: Failed
+---
+# Transcript Content
+";
+        var mockAnalysisService = new Mock<NightCodeForge.Core.Services.ITranscriptAnalysisService>();
+        var fakeAnalysis = new NightCodeForge.Core.Services.TranscriptAnalysis(
+            FilePath: "test.md",
+            FileName: "test.md",
+            Frontmatter: null,
+            TotalTurns: 2,
+            UserTurns: 1,
+            AssistantTurns: 1,
+            ToolTurns: 0,
+            ThinkingTurns: 0,
+            ToolUsage: new Dictionary<string, int>(),
+            BashErrors: 1,
+            EditFailures: 1,
+            ToolErrors: 2,
+            CompilerErrors: 1,
+            TestFailures: 1,
+            CompactionEvents: 0,
+            HistoryRewrites: 0,
+            TopReadFiles: new List<KeyValuePair<string, int>>(),
+            TopEditedFiles: new List<KeyValuePair<string, int>>(),
+            HighChurnFiles: new List<KeyValuePair<string, int>>(),
+            FrictionPoints: new[] { "Some error" },
+            Recommendations: Array.Empty<string>());
+
+        mockAnalysisService.Setup(s => s.Analyze(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(fakeAnalysis);
+
+        var summary = TranscriptBrowserService.ParseSummaryFromContent("test.md", validContent, mockAnalysisService.Object);
+
+        Assert.NotNull(summary);
+        Assert.True(summary.HasFriction);
+        Assert.Equal(6, summary.TotalErrors); // 1 + 1 + 2 + 1 + 1 = 6
     }
 
     private class FakeGlobalOptService : IGlobalOptimizationSettingsService

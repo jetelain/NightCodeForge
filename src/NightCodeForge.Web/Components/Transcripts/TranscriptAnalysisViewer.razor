@@ -1,0 +1,334 @@
+@namespace NightCodeForge.Web.Components.Transcripts
+@using NightCodeForge.Core.Services
+
+<div class="transcript-analysis-viewer" style="display: flex; flex-direction: column; gap: 1.5rem;">
+    <!-- 1. Hero Friction Banner -->
+    @if (Analysis.HasFriction)
+    {
+        <div class="card-surface p-4" style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-lg); padding: 1.5rem; box-shadow: 0 4px 20px rgba(239, 68, 68, 0.1);">
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+                <span style="font-size: 1.5rem;">⚠️</span>
+                <div>
+                    <h4 style="margin: 0; font-weight: 700; color: #fca5a5; font-size: 1.1rem;">
+                        Execution Friction Detected (@Analysis.FrictionPoints.Count pattern@(Analysis.FrictionPoints.Count > 1 ? "s" : ""))
+                    </h4>
+                    <p style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">
+                        This session encountered compiler errors, tool failures, edit mismatches, or context saturation.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Friction Points List -->
+            <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.25rem;">
+                @foreach (var fp in Analysis.FrictionPoints)
+                {
+                    <div style="display: flex; align-items: flex-start; gap: 0.5rem; background: rgba(0, 0, 0, 0.25); padding: 0.65rem 0.85rem; border-radius: var(--radius-sm); border-left: 3px solid #ef4444; font-size: 0.88rem; color: var(--text-primary);">
+                        <span>⚠️</span>
+                        <span>@fp</span>
+                    </div>
+                }
+            </div>
+
+            <!-- Actionable Recommendations -->
+            @if (Analysis.Recommendations.Count > 0)
+            {
+                <div style="border-top: 1px solid rgba(239, 68, 68, 0.2); padding-top: 1rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                        <span>💡</span>
+                        <strong style="color: #fde047; font-size: 0.9rem;">Actionable Recommendations:</strong>
+                    </div>
+                    <ul style="margin: 0; padding-left: 1.5rem; color: var(--text-primary); font-size: 0.88rem; line-height: 1.6;">
+                        @foreach (var rec in Analysis.Recommendations)
+                        {
+                            <li style="margin-bottom: 0.35rem;">@rec</li>
+                        }
+                    </ul>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="card-surface p-4" style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: var(--radius-lg); padding: 1.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <span style="font-size: 1.5rem;">🟢</span>
+                <div>
+                    <h4 style="margin: 0; font-weight: 700; color: #6ee7b7; font-size: 1.1rem;">Clean Execution Trace</h4>
+                    <p style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">
+                        Zero edit mismatches, compiler errors, bash failures, or prompt prefix cache invalidations detected.
+                    </p>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- 2. Diagnostic & Error Scorecard Grid -->
+    <div>
+        <h4 style="font-weight: 700; margin-bottom: 0.75rem; color: var(--text-primary); font-size: 1rem;">
+            Execution Diagnostics Scorecard
+        </h4>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem;">
+            <div class="stat-card @(Analysis.EditFailures > 0 ? "card-error" : "")">
+                <span class="stat-icon">✏️</span>
+                <div class="stat-info">
+                    <span class="stat-label">Edit Mismatches</span>
+                    <strong class="stat-value @(Analysis.EditFailures > 0 ? "text-error" : "text-muted")">@Analysis.EditFailures</strong>
+                </div>
+            </div>
+
+            <div class="stat-card @(Analysis.BashErrors > 0 ? "card-error" : "")">
+                <span class="stat-icon">💻</span>
+                <div class="stat-info">
+                    <span class="stat-label">Bash Errors</span>
+                    <strong class="stat-value @(Analysis.BashErrors > 0 ? "text-error" : "text-muted")">@Analysis.BashErrors</strong>
+                </div>
+            </div>
+
+            <div class="stat-card @(Analysis.CompilerErrors > 0 ? "card-error" : "")">
+                <span class="stat-icon">🛠️</span>
+                <div class="stat-info">
+                    <span class="stat-label">Compiler Errors</span>
+                    <strong class="stat-value @(Analysis.CompilerErrors > 0 ? "text-error" : "text-muted")">@Analysis.CompilerErrors</strong>
+                </div>
+            </div>
+
+            <div class="stat-card @(Analysis.TestFailures > 0 ? "card-error" : "")">
+                <span class="stat-icon">🧪</span>
+                <div class="stat-info">
+                    <span class="stat-label">Test Failures</span>
+                    <strong class="stat-value @(Analysis.TestFailures > 0 ? "text-error" : "text-muted")">@Analysis.TestFailures</strong>
+                </div>
+            </div>
+
+            <div class="stat-card @(Analysis.ToolErrors > 0 ? "card-error" : "")">
+                <span class="stat-icon">🔧</span>
+                <div class="stat-info">
+                    <span class="stat-label">Generic Tool Errors</span>
+                    <strong class="stat-value @(Analysis.ToolErrors > 0 ? "text-error" : "text-muted")">@Analysis.ToolErrors</strong>
+                </div>
+            </div>
+
+            <div class="stat-card @(Analysis.CompactionEvents > 5 ? "card-warning" : "")">
+                <span class="stat-icon">✂️</span>
+                <div class="stat-info">
+                    <span class="stat-label">Compactions</span>
+                    <strong class="stat-value @(Analysis.CompactionEvents > 5 ? "text-warning" : "text-muted")">@Analysis.CompactionEvents</strong>
+                </div>
+            </div>
+
+            <div class="stat-card @(Analysis.HistoryRewrites > 10 ? "card-warning" : "")">
+                <span class="stat-icon">🔁</span>
+                <div class="stat-info">
+                    <span class="stat-label">History Rewrites</span>
+                    <strong class="stat-value @(Analysis.HistoryRewrites > 10 ? "text-warning" : "text-muted")">@Analysis.HistoryRewrites</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. High-Churn Files (if any) -->
+    @if (Analysis.HighChurnFiles.Count > 0)
+    {
+        <div class="card-surface p-4" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: var(--radius-lg); padding: 1.25rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                <span>⚠️</span>
+                <strong style="color: #fbbf24; font-size: 0.95rem;">High-Churn Files Detected (≥ 3 edits)</strong>
+            </div>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                Files undergoing repetitive edit cycles often indicate imprecise indentation, ambiguous task specifications, or missing helper abstractions.
+            </p>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                @foreach (var churn in Analysis.HighChurnFiles)
+                {
+                    <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-surface); border: 1px solid var(--border-subtle); padding: 0.5rem 0.85rem; border-radius: var(--radius-sm); font-size: 0.88rem;">
+                        <span class="font-mono text-primary">@churn.Key</span>
+                        <span class="forge-badge badge-amber font-mono">@churn.Value edits</span>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    <!-- 4. Tool Invocations & File Activity Grid -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+        <!-- Left: Tool Usage Breakdown -->
+        <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.25rem;">
+            <h4 style="font-weight: 700; margin-bottom: 1rem; color: var(--text-primary); font-size: 0.95rem;">
+                Tool Usage Frequency (@TotalToolCalls calls)
+            </h4>
+            @if (Analysis.ToolUsage.Count == 0)
+            {
+                <p class="text-muted" style="font-size: 0.85rem;">No tool calls detected.</p>
+            }
+            else
+            {
+                <div style="display: flex; flex-direction: column; gap: 0.6rem;">
+                    @foreach (var kvp in Analysis.ToolUsage.OrderByDescending(x => x.Value))
+                    {
+                        var pct = TotalToolCalls > 0 ? (kvp.Value * 100.0 / TotalToolCalls) : 0;
+                        var roundedPct = Math.Min(100, (int)Math.Round(pct));
+                        <div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.25rem;">
+                                <span class="font-mono text-primary">@kvp.Key</span>
+                                <span class="font-mono text-muted">@kvp.Value call(s) (@pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture)%)</span>
+                            </div>
+                            <div style="height: 6px; background: var(--bg-input); border-radius: 3px; overflow: hidden;">
+                                <div style="height: 100%; width: @(roundedPct)%; background: var(--accent-indigo); border-radius: 3px;"></div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- Right: Turn Distribution -->
+        <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.25rem;">
+            <h4 style="font-weight: 700; margin-bottom: 1rem; color: var(--text-primary); font-size: 0.95rem;">
+                Turn Composition (@Analysis.TotalTurns Total Messages)
+            </h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                <div class="turn-mini-card">
+                    <span style="font-size: 1.25rem;">👤</span>
+                    <div>
+                        <div class="turn-label">User</div>
+                        <strong class="turn-val">@Analysis.UserTurns</strong>
+                    </div>
+                </div>
+                <div class="turn-mini-card">
+                    <span style="font-size: 1.25rem;">🤖</span>
+                    <div>
+                        <div class="turn-label">Assistant</div>
+                        <strong class="turn-val">@Analysis.AssistantTurns</strong>
+                    </div>
+                </div>
+                <div class="turn-mini-card">
+                    <span style="font-size: 1.25rem;">🔧</span>
+                    <div>
+                        <div class="turn-label">Tool Turns</div>
+                        <strong class="turn-val">@Analysis.ToolTurns</strong>
+                    </div>
+                </div>
+                <div class="turn-mini-card">
+                    <span style="font-size: 1.25rem;">💭</span>
+                    <div>
+                        <div class="turn-label">Thinking</div>
+                        <strong class="turn-val">@Analysis.ThinkingTurns</strong>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 5. Top Read & Edited Files -->
+    @if (Analysis.TopReadFiles.Count > 0 || Analysis.TopEditedFiles.Count > 0)
+    {
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+            <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.25rem;">
+                <h4 style="font-weight: 700; margin-bottom: 0.75rem; color: var(--text-primary); font-size: 0.95rem;">
+                    📖 Top Read Files
+                </h4>
+                @if (Analysis.TopReadFiles.Count == 0)
+                {
+                    <p class="text-muted" style="font-size: 0.85rem;">No file read operations detected.</p>
+                }
+                else
+                {
+                    <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                        @foreach (var file in Analysis.TopReadFiles.Take(6))
+                        {
+                            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; padding: 0.35rem 0.5rem; background: var(--bg-surface); border-radius: var(--radius-sm);">
+                                <span class="font-mono text-primary text-truncate" title="@file.Key">@file.Key</span>
+                                <span class="forge-badge badge-teal font-mono">@file.Value reads</span>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.25rem;">
+                <h4 style="font-weight: 700; margin-bottom: 0.75rem; color: var(--text-primary); font-size: 0.95rem;">
+                    ✏️ Top Edited Files
+                </h4>
+                @if (Analysis.TopEditedFiles.Count == 0)
+                {
+                    <p class="text-muted" style="font-size: 0.85rem;">No file edit operations detected.</p>
+                }
+                else
+                {
+                    <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                        @foreach (var file in Analysis.TopEditedFiles.Take(6))
+                        {
+                            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; padding: 0.35rem 0.5rem; background: var(--bg-surface); border-radius: var(--radius-sm);">
+                                <span class="font-mono text-primary text-truncate" title="@file.Key">@file.Key</span>
+                                <span class="forge-badge badge-indigo font-mono">@file.Value edits</span>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+<style>
+    .stat-card {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        padding: 0.75rem 1rem;
+        transition: transform var(--transition-fast);
+    }
+    .stat-card.card-error {
+        border-color: rgba(239, 68, 68, 0.4);
+        background: rgba(239, 68, 68, 0.06);
+    }
+    .stat-card.card-warning {
+        border-color: rgba(245, 158, 11, 0.4);
+        background: rgba(245, 158, 11, 0.06);
+    }
+    .stat-icon {
+        font-size: 1.25rem;
+    }
+    .stat-info {
+        display: flex;
+        flex-direction: column;
+    }
+    .stat-label {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+    }
+    .stat-value {
+        font-size: 1.1rem;
+        font-weight: 700;
+        font-family: var(--font-mono);
+    }
+    .text-error { color: #f87171 !important; }
+    .text-warning { color: #fbbf24 !important; }
+    .turn-mini-card {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        padding: 0.65rem 0.85rem;
+    }
+    .turn-label {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+    }
+    .turn-val {
+        font-size: 1rem;
+        color: var(--text-primary);
+        font-family: var(--font-mono);
+    }
+</style>
+
+@code {
+    [Parameter, EditorRequired] public TranscriptAnalysis Analysis { get; set; } = null!;
+
+    private int TotalToolCalls => Analysis.ToolUsage.Count > 0 ? Analysis.ToolUsage.Values.Sum() : Analysis.ToolTurns;
+}

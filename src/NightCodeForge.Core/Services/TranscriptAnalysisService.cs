@@ -1,10 +1,11 @@
 namespace NightCodeForge.Core.Services;
 
 using System.Text.RegularExpressions;
+using NightCodeForge.Core.Domain;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
-public partial class TranscriptAnalysisService
+public partial class TranscriptAnalysisService : ITranscriptAnalysisService
 {
     private static readonly IDeserializer YamlDeserializer = new DeserializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
@@ -28,6 +29,9 @@ public partial class TranscriptAnalysisService
 
     [GeneratedRegex(@"""command""\s*:\s*""(?<cmd>(?:\\.|[^""\\])*)""")]
     private static partial Regex BashCommandArgRegex();
+
+    [GeneratedRegex(@"(?:^|[;&|\r\n]\s*|\$\()\s*git(?:\s+--?[^\s]+)*\s+diff\b", RegexOptions.IgnoreCase)]
+    private static partial Regex GitDiffCommandRegex();
 
     [GeneratedRegex(@"Exit Code:\s*(?<code>-?[1-9]\d*)")]
     private static partial Regex ExitCodeRegex();
@@ -118,6 +122,7 @@ public partial class TranscriptAnalysisService
         // Find tool invocations with arguments
         bool lastActionWasEditOrWrite = false;
         bool ranStaleTest = false;
+        int gitDiffCommands = 0;
 
         // Count tool invocations
         foreach (Match m in AssistantToolInvocationRegex().Matches(content))
@@ -179,6 +184,11 @@ public partial class TranscriptAnalysisService
                     if (cmd.Contains("dotnet build"))
                     {
                         lastActionWasEditOrWrite = false;
+                    }
+                    var diffMatches = GitDiffCommandRegex().Matches(cmd);
+                    if (diffMatches.Count > 0)
+                    {
+                        gitDiffCommands += diffMatches.Count;
                     }
                 }
             }
@@ -273,6 +283,11 @@ public partial class TranscriptAnalysisService
             frictionPoints.Add($"Shell command errors: {bashErrors} non-zero bash exit code(s) occurred.");
         }
 
+        if (toolErrors > 0)
+        {
+            frictionPoints.Add($"Tool execution errors: {toolErrors} generic tool error(s) occurred.");
+        }
+
         if (compactionEvents > 0)
         {
             frictionPoints.Add($"Context compaction: {compactionEvents} context compaction checkpoint(s) occurred during execution.");
@@ -291,12 +306,12 @@ public partial class TranscriptAnalysisService
             }
         }
 
-        // Review stage specific friction (e.g. 15+ bash commands for minor edit)
-        if (frontmatter?.StageId?.Contains("review", StringComparison.OrdinalIgnoreCase) == true &&
-            toolUsage.GetValueOrDefault("bash", 0) > 15 && editedFiles.Count <= 1)
+        // Code review stage specific friction (e.g. 3+ git diff commands for minor/zero-file edit)
+        if (IsCodeReviewStage(frontmatter?.StageId) && gitDiffCommands >= 3 && editedFiles.Count <= 1)
         {
-            frictionPoints.Add($"Review exploration overhead: Agent ran {toolUsage["bash"]} bash commands to inspect git diff and grep files for a 1-file edit.");
-            recommendations.Add("Pre-inject git diff summary and changed files directly into the review stage prompt to avoid redundant exploratory bash commands.");
+            var editSummary = editedFiles.Count == 0 ? "zero-file" : $"{editedFiles.Count}-file";
+            frictionPoints.Add($"Code review exploration overhead: Agent ran {gitDiffCommands} 'git diff' command(s) to inspect changes for a {editSummary} edit.");
+            recommendations.Add("Pre-inject git diff summary and changed files directly into the code review stage prompt to avoid redundant exploratory bash commands.");
         }
 
         return new TranscriptAnalysis(
@@ -349,5 +364,42 @@ public partial class TranscriptAnalysisService
                ext.Equals(".yaml", StringComparison.OrdinalIgnoreCase) ||
                ext.Equals(".yml", StringComparison.OrdinalIgnoreCase) ||
                path.EndsWith(".gitignore", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCodeReviewStage(string? stageId)
+    {
+        if (string.IsNullOrWhiteSpace(stageId))
+        {
+            return false;
+        }
+
+        if (string.Equals(stageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (stageId.Contains("task-review", StringComparison.OrdinalIgnoreCase) ||
+            stageId.Contains("task_review", StringComparison.OrdinalIgnoreCase) ||
+            stageId.Contains("post-review", StringComparison.OrdinalIgnoreCase) ||
+            stageId.Contains("deterministic", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return stageId.Contains("code-review", StringComparison.OrdinalIgnoreCase) ||
+               stageId.Contains("code_review", StringComparison.OrdinalIgnoreCase) ||
+               stageId.Contains("codereview", StringComparison.OrdinalIgnoreCase) ||
+               stageId.Contains("review-code", StringComparison.OrdinalIgnoreCase) ||
+               stageId.Contains("review_code", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static string FormatDuration(long? durationMs)
+    {
+        if (!durationMs.HasValue || durationMs < 0) return "-";
+        var ts = TimeSpan.FromMilliseconds(durationMs.Value);
+        var totalHours = (int)ts.TotalHours;
+        return totalHours > 0
+            ? $"{totalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
+            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
     }
 }

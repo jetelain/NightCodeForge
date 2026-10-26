@@ -1,0 +1,335 @@
+@namespace NightCodeForge.Web.Components.Transcripts
+@using NightCodeForge.Core.Services
+
+<div class="fleet-analysis-dashboard" style="display: flex; flex-direction: column; gap: 1.5rem;">
+    <!-- 1. Header & Description -->
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+        <div>
+            <h3 style="margin: 0; font-size: 1.35rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
+                <span>📊</span>
+                <span>Fleet Execution &amp; Friction Analysis</span>
+            </h3>
+            <p style="margin: 0.25rem 0 0 0; font-size: 0.88rem; color: var(--text-secondary);">
+                Aggregated cross-session metrics, recurring friction patterns, and automated prompt/tooling recommendations across @Fleet.Count session(s).
+            </p>
+        </div>
+    </div>
+
+    <!-- 2. KPI Stat Cards Grid -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+        <div class="kpi-card">
+            <div class="kpi-icon">📜</div>
+            <div class="kpi-content">
+                <span class="kpi-label">Analyzed Sessions</span>
+                <strong class="kpi-value text-primary">@Fleet.Count</strong>
+                <span class="kpi-subtext">Across workspace sessions</span>
+            </div>
+        </div>
+
+        <div class="kpi-card">
+            <div class="kpi-icon">⚡</div>
+            <div class="kpi-content">
+                <span class="kpi-label">Token Volume</span>
+                <strong class="kpi-value" style="color: var(--accent-indigo);">@TotalTokens.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)</strong>
+                <span class="kpi-subtext">Total inference tokens</span>
+            </div>
+        </div>
+
+        <div class="kpi-card">
+            <div class="kpi-icon">⏱️</div>
+            <div class="kpi-content">
+                <span class="kpi-label">Cumulative Duration</span>
+                <strong class="kpi-value" style="color: var(--accent-teal);">@TranscriptAnalysisService.FormatDuration(TotalDurationMs)</strong>
+                <span class="kpi-subtext">Total model execution time</span>
+            </div>
+        </div>
+
+        <div class="kpi-card @(TotalErrors > 0 ? "kpi-danger" : "")">
+            <div class="kpi-icon">⚠️</div>
+            <div class="kpi-content">
+                <span class="kpi-label">Diagnostics &amp; Errors</span>
+                <strong class="kpi-value @(TotalErrors > 0 ? "text-error" : "text-muted")">@TotalErrors</strong>
+                <span class="kpi-subtext">Edit, bash, tool, build &amp; test failures</span>
+            </div>
+        </div>
+
+        <div class="kpi-card @(FrictionSessionsCount > 0 ? "kpi-warning" : "")">
+            <div class="kpi-icon">🛑</div>
+            <div class="kpi-content">
+                <span class="kpi-label">Friction Rate</span>
+                <strong class="kpi-value @(FrictionSessionsCount > 0 ? "text-warning" : "text-muted")">
+                    @FrictionSessionsCount / @Fleet.Count
+                    <small style="font-size: 0.8rem; font-weight: normal;">(@(Fleet.Count > 0 ? (FrictionSessionsCount * 100.0 / Fleet.Count).ToString("F0") : "0")%)</small>
+                </strong>
+                <span class="kpi-subtext">Sessions with detected friction</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. Two-Column Insights: Friction Patterns vs Recommendations -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+        <!-- Left: Recurring Friction Patterns -->
+        <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
+                <span style="font-size: 1.25rem;">⚠️</span>
+                <h4 style="margin: 0; font-weight: 700; color: #fca5a5; font-size: 1rem;">
+                    Key Friction Patterns Across Fleet (@AllFriction.Count)
+                </h4>
+            </div>
+
+            @if (AllFriction.Count == 0)
+            {
+                <div style="padding: 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.88rem;">
+                    🟢 No execution friction detected across any sessions.
+                </div>
+            }
+            else
+            {
+                <div style="display: flex; flex-direction: column; gap: 0.65rem;">
+                    @foreach (var fp in AllFriction)
+                    {
+                        <div style="display: flex; align-items: flex-start; gap: 0.5rem; background: rgba(239, 68, 68, 0.08); border-left: 3px solid #ef4444; border-radius: var(--radius-sm); padding: 0.65rem 0.85rem; font-size: 0.85rem; color: var(--text-primary); line-height: 1.5;">
+                            <span>⚠️</span>
+                            <span>@fp</span>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- Right: Fleet Recommendations -->
+        <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
+                <span style="font-size: 1.25rem;">💡</span>
+                <h4 style="margin: 0; font-weight: 700; color: #fde047; font-size: 1rem;">
+                    Fleet Recommendations for Prompts &amp; Tooling (@AllRecommendations.Count)
+                </h4>
+            </div>
+
+            @if (AllRecommendations.Count == 0)
+            {
+                <div style="padding: 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.88rem;">
+                    ✨ Workflows are operating smoothly. No tuning adjustments recommended.
+                </div>
+            }
+            else
+            {
+                <div style="display: flex; flex-direction: column; gap: 0.65rem;">
+                    @foreach (var rec in AllRecommendations)
+                    {
+                        <div style="display: flex; align-items: flex-start; gap: 0.5rem; background: rgba(245, 158, 11, 0.08); border-left: 3px solid #f59e0b; border-radius: var(--radius-sm); padding: 0.65rem 0.85rem; font-size: 0.85rem; color: var(--text-primary); line-height: 1.5;">
+                            <span>💡</span>
+                            <span>@rec</span>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- 4. Fleet Comparison Matrix Table -->
+    <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+            <div>
+                <h4 style="margin: 0; font-weight: 700; color: var(--text-primary); font-size: 1rem;">
+                    Fleet Sessions Comparison
+                </h4>
+                <p style="margin: 0.2rem 0 0 0; font-size: 0.82rem; color: var(--text-secondary);">
+                    Detailed breakdown of each transcript's execution metrics, error scorecard, and friction status.
+                </p>
+            </div>
+            <input type="text"
+                   class="forge-input"
+                   style="max-width: 250px; font-size: 0.82rem; padding: 0.35rem 0.75rem; min-height: 32px;"
+                   placeholder="Search task, stage, model..."
+                   @bind="_tableFilter"
+                   @bind:event="oninput" />
+        </div>
+
+        <div style="overflow-x: auto;">
+            <table class="forge-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-subtle); text-align: left; color: var(--text-muted); font-size: 0.78rem; text-transform: uppercase;">
+                        <th style="padding: 0.75rem 0.5rem;">Task</th>
+                        <th style="padding: 0.75rem 0.5rem;">Stage</th>
+                        <th style="padding: 0.75rem 0.5rem;">Status</th>
+                        <th style="padding: 0.75rem 0.5rem;">Duration</th>
+                        <th style="padding: 0.75rem 0.5rem;">Tokens</th>
+                        <th style="padding: 0.75rem 0.5rem;">Tool Calls</th>
+                        <th style="padding: 0.75rem 0.5rem;">Errors</th>
+                        <th style="padding: 0.75rem 0.5rem;">Friction</th>
+                        <th style="padding: 0.75rem 0.5rem; text-align: right;">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (FilteredFleet.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="9" style="padding: 2rem; text-align: center; color: var(--text-muted);">
+                                No sessions match the search filter.
+                            </td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var a in FilteredFleet)
+                        {
+                            var fm = a.Frontmatter;
+                            var taskId = fm?.TaskId?.ToString() ?? "?";
+                            var stage = fm?.StageId ?? "unknown";
+                            var status = fm?.Status ?? "unknown";
+                            var duration = TranscriptAnalysisService.FormatDuration(fm?.DurationMs);
+                            var tokens = fm?.Tokens != null ? (fm.Tokens.Total > 0 ? fm.Tokens.Total : (fm.Tokens.Prompt + fm.Tokens.Completion)) : 0;
+                            var errs = a.TotalErrors;
+
+                            <tr class="fleet-row" style="border-bottom: 1px solid rgba(45, 51, 69, 0.4); transition: background var(--transition-fast);">
+                                <td style="padding: 0.75rem 0.5rem; font-weight: 700; color: var(--text-primary); font-family: var(--font-mono);">
+                                    #@taskId
+                                </td>
+                                <td style="padding: 0.75rem 0.5rem;">
+                                    <span class="forge-badge badge-indigo" style="font-size: 0.78rem;">@stage</span>
+                                </td>
+                                <td style="padding: 0.75rem 0.5rem;">
+                                    <span class="badge-status @status.ToLowerInvariant()" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;">
+                                        @status
+                                    </span>
+                                </td>
+                                <td style="padding: 0.75rem 0.5rem; font-family: var(--font-mono); color: var(--text-secondary);">
+                                    @duration
+                                </td>
+                                <td style="padding: 0.75rem 0.5rem; font-family: var(--font-mono); color: var(--text-secondary);">
+                                    @tokens.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)
+                                </td>
+                                <td style="padding: 0.75rem 0.5rem; font-family: var(--font-mono);">
+                                    @(a.ToolUsage.Count > 0 ? a.ToolUsage.Values.Sum() : a.ToolTurns)
+                                </td>
+                                <td style="padding: 0.75rem 0.5rem; font-family: var(--font-mono);">
+                                    @if (errs > 0)
+                                    {
+                                        <span class="forge-badge badge-crimson" style="font-size: 0.75rem;">⚠️ @errs</span>
+                                    }
+                                    else
+                                    {
+                                        <span style="color: var(--text-muted);">0</span>
+                                    }
+                                </td>
+                                <td style="padding: 0.75rem 0.5rem;">
+                                    @if (a.HasFriction)
+                                    {
+                                        <span class="forge-badge badge-amber" style="font-size: 0.75rem;">⚠️ Friction</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="forge-badge badge-teal" style="font-size: 0.75rem;">🟢 Clean</span>
+                                    }
+                                </td>
+                                <td style="padding: 0.75rem 0.5rem; text-align: right;">
+                                    <button type="button"
+                                            class="forge-btn forge-btn-outline"
+                                            style="padding: 0.25rem 0.65rem; font-size: 0.78rem;"
+                                            @onclick="() => OnSelectTranscript.InvokeAsync(a.FileName)">
+                                        Inspect 🔍
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<style>
+    .kpi-card {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
+        padding: 1rem 1.25rem;
+        box-shadow: var(--shadow-sm);
+        transition: transform var(--transition-fast), border-color var(--transition-fast);
+    }
+    .kpi-card:hover {
+        transform: translateY(-2px);
+        border-color: var(--border-focus);
+    }
+    .kpi-card.kpi-danger {
+        border-color: rgba(239, 68, 68, 0.4);
+        background: rgba(239, 68, 68, 0.05);
+    }
+    .kpi-card.kpi-warning {
+        border-color: rgba(245, 158, 11, 0.4);
+        background: rgba(245, 158, 11, 0.05);
+    }
+    .kpi-icon {
+        font-size: 1.75rem;
+    }
+    .kpi-content {
+        display: flex;
+        flex-direction: column;
+    }
+    .kpi-label {
+        font-size: 0.78rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+    }
+    .kpi-value {
+        font-size: 1.35rem;
+        font-weight: 800;
+        font-family: var(--font-mono);
+        line-height: 1.2;
+        margin: 0.15rem 0;
+    }
+    .kpi-subtext {
+        font-size: 0.72rem;
+        color: var(--text-muted);
+    }
+    .fleet-row:hover {
+        background: var(--bg-card-hover) !important;
+    }
+</style>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<TranscriptAnalysis> Fleet { get; set; } = Array.Empty<TranscriptAnalysis>();
+    [Parameter] public EventCallback<string> OnSelectTranscript { get; set; }
+
+    private string _tableFilter = string.Empty;
+
+    private long TotalTokens => Fleet.Sum(a =>
+    {
+        var t = a.Frontmatter?.Tokens;
+        if (t == null) return 0L;
+        return t.Total > 0 ? t.Total : (long)(t.Prompt + t.Completion);
+    });
+    private long TotalDurationMs => Fleet.Sum(a => a.Frontmatter?.DurationMs ?? 0);
+    private int TotalErrors => Fleet.Sum(a => a.TotalErrors);
+    private int FrictionSessionsCount => Fleet.Count(a => a.HasFriction);
+
+    private IReadOnlyList<string> AllFriction => Fleet.SelectMany(a => a.FrictionPoints).Distinct().ToList();
+    private IReadOnlyList<string> AllRecommendations => Fleet.SelectMany(a => a.Recommendations).Distinct().ToList();
+
+    private IReadOnlyList<TranscriptAnalysis> FilteredFleet
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_tableFilter))
+            {
+                return Fleet;
+            }
+
+            var term = _tableFilter.Trim();
+            return Fleet.Where(a =>
+                (a.Frontmatter?.TaskId?.ToString() ?? "").Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                $"#{a.Frontmatter?.TaskId}".Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                (a.Frontmatter?.StageId ?? "").Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                (a.Frontmatter?.Model ?? "").Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                a.FileName.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                (a.Frontmatter?.Status ?? "").Contains(term, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+    }
+}

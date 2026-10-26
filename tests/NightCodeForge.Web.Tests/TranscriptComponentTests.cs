@@ -1,4 +1,5 @@
 using Bunit;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Web.Components.Pages;
@@ -208,13 +209,25 @@ public class TranscriptComponentTests : BunitContext
         Assert.Contains("Session Transcripts", cut.Markup);
         Assert.Contains("Task #101: stage-compile", cut.Markup);
 
+        // Mode switcher and Friction filter chip render
+        Assert.Contains("Fleet Analysis", cut.Markup);
+        Assert.Contains("⚠️ Friction", cut.Markup);
+
         // Metadata card renders for selected transcript
         Assert.Contains("2026-10-15-task-101-stage-compile-failed.md", cut.Markup);
 
         // Tabs render
         Assert.Contains("Turn-by-Turn Dialogue", cut.Markup);
+        Assert.Contains("Analysis &amp; Friction", cut.Markup);
         Assert.Contains("Environment &amp; Tools", cut.Markup);
         Assert.Contains("Model Call Snapshots", cut.Markup);
+
+        // Switch to Analysis & Friction tab
+        var analysisBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Analysis & Friction"));
+        analysisBtn.Click();
+
+        Assert.Contains("Execution Friction Detected", cut.Markup);
+        Assert.Contains("Edit Mismatches", cut.Markup);
 
         // Switch to Environment tab
         var envBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Environment & Tools"));
@@ -228,12 +241,204 @@ public class TranscriptComponentTests : BunitContext
         modelCallBtn.Click();
 
         Assert.Contains("Model Calls (Requests As Sent To The LLM)", cut.Markup);
+
+        // Switch to Fleet mode
+        var fleetModeBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Fleet Analysis (1)"));
+        fleetModeBtn.Click();
+
+        Assert.Contains("Fleet Execution &amp; Friction Analysis", cut.Markup);
+    }
+
+    [Fact]
+    public void TranscriptAnalysisViewer_RendersFrictionScorecardAndRecommendations()
+    {
+        var analysis = new NightCodeForge.Core.Services.TranscriptAnalysis(
+            FilePath: "path/to/test.md",
+            FileName: "test.md",
+            Frontmatter: new NightCodeForge.Core.Services.TranscriptFrontmatter { TaskId = 1, StageId = "test", DurationMs = 2000 },
+            TotalTurns: 10,
+            UserTurns: 2,
+            AssistantTurns: 4,
+            ToolTurns: 1,
+            ThinkingTurns: 2,
+            ToolUsage: new Dictionary<string, int> { ["ReadFile"] = 2, ["EditFile"] = 2 },
+            BashErrors: 1,
+            EditFailures: 2,
+            ToolErrors: 3,
+            CompilerErrors: 1,
+            TestFailures: 1,
+            CompactionEvents: 1,
+            HistoryRewrites: 2,
+            TopReadFiles: new List<KeyValuePair<string, int>> { new("App.cs", 2) },
+            TopEditedFiles: new List<KeyValuePair<string, int>> { new("App.cs", 2) },
+            HighChurnFiles: new List<KeyValuePair<string, int>> { new("App.cs", 2) },
+            FrictionPoints: new[] { "Edit mismatch detected on App.cs" },
+            Recommendations: new[] { "Use search-and-replace instead of full file rewrite" });
+
+        var cut = Render<TranscriptAnalysisViewer>(p => p.Add(x => x.Analysis, analysis));
+
+        Assert.Contains("Execution Friction Detected", cut.Markup);
+        Assert.Contains("Edit mismatch detected on App.cs", cut.Markup);
+        Assert.Contains("Use search-and-replace", cut.Markup);
+        Assert.Contains("Edit Mismatches", cut.Markup);
+        Assert.Contains("High-Churn Files Detected", cut.Markup);
+        Assert.Contains("Tool Usage Frequency (4 calls)", cut.Markup);
+        Assert.Contains("50%", cut.Markup);
+        Assert.Contains("width: 50%", cut.Markup);
+        Assert.DoesNotContain("200%", cut.Markup);
+    }
+
+    [Fact]
+    public void TranscriptAnalysisViewer_RendersCleanBannerWhenNoFriction()
+    {
+        var cleanAnalysis = new NightCodeForge.Core.Services.TranscriptAnalysis(
+            FilePath: "clean.md",
+            FileName: "clean.md",
+            Frontmatter: new NightCodeForge.Core.Services.TranscriptFrontmatter { TaskId = 2, StageId = "clean", DurationMs = 1500 },
+            TotalTurns: 4,
+            UserTurns: 1,
+            AssistantTurns: 2,
+            ToolTurns: 1,
+            ThinkingTurns: 1,
+            ToolUsage: new Dictionary<string, int> { ["ReadFile"] = 1 },
+            BashErrors: 0,
+            EditFailures: 0,
+            ToolErrors: 0,
+            CompilerErrors: 0,
+            TestFailures: 0,
+            CompactionEvents: 0,
+            HistoryRewrites: 0,
+            TopReadFiles: new List<KeyValuePair<string, int>>(),
+            TopEditedFiles: new List<KeyValuePair<string, int>>(),
+            HighChurnFiles: new List<KeyValuePair<string, int>>(),
+            FrictionPoints: Array.Empty<string>(),
+            Recommendations: Array.Empty<string>());
+
+        var cut = Render<TranscriptAnalysisViewer>(p => p.Add(x => x.Analysis, cleanAnalysis));
+
+        Assert.Contains("Clean Execution Trace", cut.Markup);
+        Assert.DoesNotContain("Execution Friction Detected", cut.Markup);
+    }
+
+    [Fact]
+    public void FleetAnalysisDashboard_RendersKpisAndRespondsToFilterAndSelection()
+    {
+        var fleet = new List<NightCodeForge.Core.Services.TranscriptAnalysis>
+        {
+            new(
+                FilePath: "t1.md",
+                FileName: "2026-10-15-task-1-stage-1-failed.md",
+                Frontmatter: new NightCodeForge.Core.Services.TranscriptFrontmatter
+                {
+                    TaskId = 1,
+                    StageId = "stage-1",
+                    Model = "model-alpha",
+                    DurationMs = 5000,
+                    Tokens = new NightCodeForge.Core.Services.TranscriptTokensFrontmatter { Total = 2000 },
+                    Status = "Failed"
+                },
+                TotalTurns: 6,
+                UserTurns: 1,
+                AssistantTurns: 3,
+                ToolTurns: 2,
+                ThinkingTurns: 1,
+                ToolUsage: new Dictionary<string, int> { ["EditFile"] = 2 },
+                BashErrors: 0,
+                EditFailures: 1,
+                ToolErrors: 1,
+                CompilerErrors: 1,
+                TestFailures: 0,
+                CompactionEvents: 0,
+                HistoryRewrites: 0,
+                TopReadFiles: new List<KeyValuePair<string, int>>(),
+                TopEditedFiles: new List<KeyValuePair<string, int>>(),
+                HighChurnFiles: new List<KeyValuePair<string, int>>(),
+                FrictionPoints: new[] { "Edit mismatch" },
+                Recommendations: new[] { "Check indentation" })
+        };
+
+        string selectedFileName = string.Empty;
+        var cut = Render<FleetAnalysisDashboard>(p => p
+            .Add(x => x.Fleet, fleet)
+            .Add(x => x.OnSelectTranscript, EventCallback.Factory.Create<string>(this, s => selectedFileName = s)));
+
+        Assert.Contains("Fleet Execution &amp; Friction Analysis", cut.Markup);
+        Assert.Contains("Token Volume", cut.Markup);
+        Assert.Contains("2,000", cut.Markup);
+        Assert.Contains("Key Friction Patterns Across Fleet", cut.Markup);
+        Assert.Contains("Fleet Sessions Comparison", cut.Markup);
+        Assert.Contains("⚠️ 3", cut.Markup); // TotalErrors includes ToolErrors (1 edit + 1 tool + 1 compiler = 3)
+
+        // Click Inspect button
+        var inspectBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Inspect"));
+        inspectBtn.Click();
+
+        Assert.Equal("2026-10-15-task-1-stage-1-failed.md", selectedFileName);
+    }
+
+    [Fact]
+    public void FleetAnalysisDashboard_WhenTotalTokensZero_FallsBackToPromptAndCompletion()
+    {
+        var fleet = new List<NightCodeForge.Core.Services.TranscriptAnalysis>
+        {
+            new(
+                FilePath: "t2.md",
+                FileName: "session-2.md",
+                Frontmatter: new NightCodeForge.Core.Services.TranscriptFrontmatter
+                {
+                    TaskId = 2,
+                    StageId = "stage-2",
+                    Model = "model-beta",
+                    DurationMs = 3000,
+                    Tokens = new NightCodeForge.Core.Services.TranscriptTokensFrontmatter { Prompt = 300, Completion = 150, Total = 0 },
+                    Status = "Completed"
+                },
+                TotalTurns: 3,
+                UserTurns: 1,
+                AssistantTurns: 1,
+                ToolTurns: 1,
+                ThinkingTurns: 0,
+                ToolUsage: new Dictionary<string, int> { ["ReadFile"] = 1 },
+                BashErrors: 0,
+                EditFailures: 0,
+                ToolErrors: 0,
+                CompilerErrors: 0,
+                TestFailures: 0,
+                CompactionEvents: 0,
+                HistoryRewrites: 0,
+                TopReadFiles: new List<KeyValuePair<string, int>>(),
+                TopEditedFiles: new List<KeyValuePair<string, int>>(),
+                HighChurnFiles: new List<KeyValuePair<string, int>>(),
+                FrictionPoints: Array.Empty<string>(),
+                Recommendations: Array.Empty<string>())
+        };
+
+        var cut = Render<FleetAnalysisDashboard>(p => p.Add(x => x.Fleet, fleet));
+
+        Assert.Contains("450", cut.Markup); // 300 + 150
+    }
+
+    [Fact]
+    public void TranscriptsPage_WhenActiveTabIsAnalysisAndAnalysisNull_RendersFallbackNotice()
+    {
+        _browserService.ReturnNullAnalysis = true;
+        var cut = Render<Transcripts>();
+
+        // Switch to Fleet mode and click Inspect to navigate into session analysis tab
+        var fleetModeBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Fleet Analysis (1)"));
+        fleetModeBtn.Click();
+
+        var inspectBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Inspect"));
+        inspectBtn.Click();
+
+        Assert.Contains("Analysis data is not available for this transcript.", cut.Markup);
     }
 
     private class FakeTranscriptBrowserService : ITranscriptBrowserService
     {
         public bool RemediationApplied { get; private set; }
         public DiagnosticReport? CustomReport { get; set; }
+        public bool ReturnNullAnalysis { get; set; }
 
         private readonly TranscriptSummary _sampleSummary = new(
             FileName: "2026-10-15-task-101-stage-compile-failed.md",
@@ -248,7 +453,41 @@ public class TranscriptComponentTests : BunitContext
             Status: "Failed",
             AgentProfile: "RefactorEngineer",
             KvCacheHitRate: 0.88,
-            Optimizations: new LocalOptimizationFlags { JitModelPreload = false, GuidedGrammarDecoding = true });
+            Optimizations: new LocalOptimizationFlags { JitModelPreload = false, GuidedGrammarDecoding = true },
+            HasFriction: true,
+            TotalErrors: 2);
+
+        private readonly NightCodeForge.Core.Services.TranscriptAnalysis _sampleAnalysis = new(
+            FilePath: "docs/transcripts/2026-10-15-task-101-stage-compile-failed.md",
+            FileName: "2026-10-15-task-101-stage-compile-failed.md",
+            Frontmatter: new NightCodeForge.Core.Services.TranscriptFrontmatter
+            {
+                TaskId = 101,
+                StageId = "stage-compile",
+                AgentProfile = "RefactorEngineer",
+                Model = "qwen2.5-coder:32b",
+                DurationMs = 4500,
+                Tokens = new NightCodeForge.Core.Services.TranscriptTokensFrontmatter { Prompt = 3200, Completion = 840, Total = 4040 },
+                Status = "Failed"
+            },
+            TotalTurns: 4,
+            UserTurns: 1,
+            AssistantTurns: 2,
+            ToolTurns: 1,
+            ThinkingTurns: 1,
+            ToolUsage: new Dictionary<string, int> { ["ReadFile"] = 1, ["EditFile"] = 2 },
+            BashErrors: 0,
+            EditFailures: 1,
+            ToolErrors: 0,
+            CompilerErrors: 1,
+            TestFailures: 0,
+            CompactionEvents: 0,
+            HistoryRewrites: 0,
+            TopReadFiles: new List<KeyValuePair<string, int>> { new("UserProfile.cs", 2) },
+            TopEditedFiles: new List<KeyValuePair<string, int>> { new("UserProfile.cs", 2) },
+            HighChurnFiles: new List<KeyValuePair<string, int>> { new("UserProfile.cs", 2) },
+            FrictionPoints: new[] { "Edit mismatch detected on UserProfile.cs", "Compiler error CS0117" },
+            Recommendations: new[] { "Enable Deterministic Symbol Map" });
 
         public Task<IReadOnlyList<TranscriptSummary>> GetTranscriptsAsync(string? workspacePath = null, CancellationToken cancellationToken = default)
         {
@@ -272,7 +511,8 @@ public class TranscriptComponentTests : BunitContext
                 AvailableTools: new[] { "ReadFile", "EditFile" },
                 ActiveSkills: new[] { "csharp-refactoring" },
                 Turns: turns,
-                ModelCallsMarkdown: "#### Call 1\nMessages: 2 total");
+                ModelCallsMarkdown: "#### Call 1\nMessages: 2 total",
+                Analysis: ReturnNullAnalysis ? null : _sampleAnalysis);
 
             return Task.FromResult<ParsedTranscriptDetail?>(detail);
         }
@@ -310,6 +550,16 @@ public class TranscriptComponentTests : BunitContext
         {
             RemediationApplied = true;
             return Task.CompletedTask;
+        }
+
+        public Task<NightCodeForge.Core.Services.TranscriptAnalysis?> GetTranscriptAnalysisAsync(string filePath, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<NightCodeForge.Core.Services.TranscriptAnalysis?>(_sampleAnalysis);
+        }
+
+        public Task<IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis>> GetFleetAnalysisAsync(string? workspacePath = null, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis>>(new[] { _sampleAnalysis });
         }
     }
 }

@@ -12,9 +12,9 @@ public class TranscriptOptions
 
 public class TranscriptCommand
 {
-    private readonly TranscriptAnalysisService _analysisService;
+    private readonly ITranscriptAnalysisService _analysisService;
 
-    public TranscriptCommand(TranscriptAnalysisService analysisService)
+    public TranscriptCommand(ITranscriptAnalysisService analysisService)
     {
         _analysisService = analysisService ?? throw new ArgumentNullException(nameof(analysisService));
     }
@@ -232,13 +232,5 @@ public class TranscriptCommand
         log($"================================================================================\n");
     }
 
-    public static string FormatDuration(long? durationMs)
-    {
-        if (!durationMs.HasValue || durationMs < 0) return "-";
-        var ts = TimeSpan.FromMilliseconds(durationMs.Value);
-        var totalHours = (int)ts.TotalHours;
-        return totalHours > 0
-            ? $"{totalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
-            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
-    }
+    public static string FormatDuration(long? durationMs) => TranscriptAnalysisService.FormatDuration(durationMs);
 }

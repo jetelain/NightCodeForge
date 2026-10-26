@@ -67,5 +67,6 @@ public record TranscriptAnalysis(
     IReadOnlyList<string> FrictionPoints,
     IReadOnlyList<string> Recommendations)
 {
-    public bool HasFriction => FrictionPoints.Count > 0 || EditFailures > 0 || BashErrors > 0 || CompilerErrors > 0 || TestFailures > 0 || CompactionEvents > 5 || HistoryRewrites > 10;
+    public int TotalErrors => BashErrors + EditFailures + ToolErrors + CompilerErrors + TestFailures;
+    public bool HasFriction => FrictionPoints.Count > 0 || EditFailures > 0 || ToolErrors > 0 || BashErrors > 0 || CompilerErrors > 0 || TestFailures > 0 || CompactionEvents > 5 || HistoryRewrites > 10;
 }
