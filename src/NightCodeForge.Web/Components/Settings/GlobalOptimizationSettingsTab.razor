@@ -107,24 +107,6 @@
                 </div>
             </div>
 
-            <!-- Prefix Stabilization -->
-            <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem; display: flex; flex-direction: column; justify-content: space-between;">
-                <div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                        <label style="font-weight: 600; font-size: 0.9rem; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 0.5rem;" for="chkPrefixStabilization">
-                            <input id="chkPrefixStabilization" type="checkbox" @bind="_flags.PrefixStabilization" style="width: 1.1rem; height: 1.1rem; cursor: pointer;" />
-                            Prompt Prefix Stabilization
-                        </label>
-                        <span class="forge-badge @(_flags.PrefixStabilization ? "badge-teal" : "badge-gray")">
-                            @(_flags.PrefixStabilization ? "Active" : "Off")
-                        </span>
-                    </div>
-                    <p style="margin: 0; font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4;">
-                        Enforces 4-layer byte-identical prompt prefix ordering (directives, tools, skills, project context) to maximize KV cache hit rates in llama.cpp / vLLM.
-                    </p>
-                </div>
-            </div>
-
             <!-- JIT Model Preload -->
             <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem; display: flex; flex-direction: column; justify-content: space-between;">
                 <div>

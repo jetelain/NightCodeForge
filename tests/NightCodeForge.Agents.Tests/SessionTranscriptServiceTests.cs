@@ -74,7 +74,7 @@ public class SessionTranscriptServiceTests
                 Optimizations: new LocalOptimizationFlags
                 {
                     GuidedGrammarDecoding = true,
-                    PrefixStabilization = true
+                    JitModelPreload = true
                 },
                 Status: AgentRunStatus.Completed,
                 KvCacheHitRate: 0.94);
@@ -102,7 +102,7 @@ public class SessionTranscriptServiceTests
             Assert.Contains("prompt: 450", content);
             Assert.Contains("completion: 120", content);
             Assert.Contains("guided_grammar_decoding: true", content);
-            Assert.Contains("prefix_stabilization: true", content);
+            Assert.Contains("jit_model_preload: true", content);
             Assert.Contains("kv_cache_hit_rate: 0.94", content);
             Assert.Contains("status: Completed", content);
 

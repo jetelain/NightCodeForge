@@ -50,7 +50,6 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
         Assert.True(flags.GuidedGrammarDecoding);
         Assert.True(flags.DeterministicSymbolMap);
         Assert.True(flags.StructuredDiagnosticExtraction);
-        Assert.True(flags.PrefixStabilization);
         Assert.True(flags.JitModelPreload);
     }
 
@@ -73,7 +72,6 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
             GuidedGrammarDecoding = false,
             DeterministicSymbolMap = false,
             StructuredDiagnosticExtraction = true,
-            PrefixStabilization = false,
             JitModelPreload = true
         };
 
@@ -84,7 +82,6 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
         Assert.False(cached.GuidedGrammarDecoding);
         Assert.False(cached.DeterministicSymbolMap);
         Assert.True(cached.StructuredDiagnosticExtraction);
-        Assert.False(cached.PrefixStabilization);
         Assert.True(cached.JitModelPreload);
 
         // Verify event fired
@@ -108,7 +105,7 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
             db.SystemSettings.Add(new SystemSetting
             {
                 Key = GlobalOptimizationSettingsService.SettingKey,
-                Value = "{\"GuidedGrammarDecoding\":false,\"DeterministicSymbolMap\":false,\"StructuredDiagnosticExtraction\":true,\"PrefixStabilization\":false,\"JitModelPreload\":true}",
+                Value = "{\"GuidedGrammarDecoding\":false,\"DeterministicSymbolMap\":false,\"StructuredDiagnosticExtraction\":true,\"JitModelPreload\":true}",
                 UpdatedAt = DateTimeOffset.UtcNow
             });
             await db.SaveChangesAsync();
@@ -123,7 +120,6 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
         Assert.False(loaded.GuidedGrammarDecoding);
         Assert.False(loaded.DeterministicSymbolMap);
         Assert.True(loaded.StructuredDiagnosticExtraction);
-        Assert.False(loaded.PrefixStabilization);
         Assert.True(loaded.JitModelPreload);
 
         // Check that GetFlags also reflects it

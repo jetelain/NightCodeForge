@@ -64,7 +64,7 @@ public class AppDbContextTests : IDisposable
             OptimizationFlags = new LocalOptimizationFlags
             {
                 GuidedGrammarDecoding = true,
-                PrefixStabilization = false
+                DeterministicSymbolMap = false
             },
             PermittedTools = new[] { "read", "grep", "propose_tasks" },
             SecurityTier = SandboxSecurityTier.Standard
@@ -80,7 +80,7 @@ public class AppDbContextTests : IDisposable
         Assert.NotNull(loaded);
         Assert.NotNull(loaded.OptimizationFlags);
         Assert.True(loaded.OptimizationFlags.GuidedGrammarDecoding);
-        Assert.False(loaded.OptimizationFlags.PrefixStabilization);
+        Assert.False(loaded.OptimizationFlags.DeterministicSymbolMap);
 
         Assert.NotNull(loaded.PermittedTools);
         Assert.Equal(3, loaded.PermittedTools.Count);

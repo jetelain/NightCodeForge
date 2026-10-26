@@ -99,7 +99,6 @@ public class SessionTranscriptService
         sb.AppendLine($"  guided_grammar_decoding: {metadata.Optimizations.GuidedGrammarDecoding.ToString().ToLowerInvariant()}");
         sb.AppendLine($"  deterministic_symbol_map: {metadata.Optimizations.DeterministicSymbolMap.ToString().ToLowerInvariant()}");
         sb.AppendLine($"  structured_diagnostic_extraction: {metadata.Optimizations.StructuredDiagnosticExtraction.ToString().ToLowerInvariant()}");
-        sb.AppendLine($"  prefix_stabilization: {metadata.Optimizations.PrefixStabilization.ToString().ToLowerInvariant()}");
         sb.AppendLine($"  jit_model_preload: {metadata.Optimizations.JitModelPreload.ToString().ToLowerInvariant()}");
         if (metadata.KvCacheHitRate.HasValue)
         {

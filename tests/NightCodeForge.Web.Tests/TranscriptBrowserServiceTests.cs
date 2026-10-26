@@ -75,7 +75,6 @@ optimizations:
   guided_grammar_decoding: false
   deterministic_symbol_map: true
   structured_diagnostic_extraction: false
-  prefix_stabilization: true
   jit_model_preload: true
 kv_cache_hit_rate: 0.92
 status: Completed
@@ -102,7 +101,6 @@ Body text
         Assert.False(summary.Optimizations.GuidedGrammarDecoding);
         Assert.True(summary.Optimizations.DeterministicSymbolMap);
         Assert.False(summary.Optimizations.StructuredDiagnosticExtraction);
-        Assert.True(summary.Optimizations.PrefixStabilization);
         Assert.True(summary.Optimizations.JitModelPreload);
     }
 
@@ -272,7 +270,7 @@ Done refactoring.
     }
 
     [Fact]
-    public async Task RunDiagnosticsAsync_WhenExecutionCompleted_SuggestsPrefixStabilization()
+    public async Task RunDiagnosticsAsync_WhenExecutionCompleted_SuggestsJitModelPreload()
     {
         var service = CreateService();
 
@@ -294,7 +292,7 @@ Done refactoring.
 
         Assert.NotNull(report);
         Assert.Contains("Clean", report.FailureCategory);
-        Assert.Contains(report.SuggestedActions, a => a.TargetKey == "PrefixStabilization");
+        Assert.Contains(report.SuggestedActions, a => a.TargetKey == "JitModelPreload");
     }
 
     [Fact]
@@ -369,19 +367,19 @@ Done refactoring.
         var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
         var service = CreateService();
 
-        _fakeGlobalOptService.Flags.PrefixStabilization = false;
+        _fakeGlobalOptService.Flags.JitModelPreload = false;
 
         var suggestion = new RemediationSuggestion(
-            Title: "Enable Prefix Stabilization",
-            Description: "Stabilizes KV cache",
+            Title: "Enable JIT Model Preload",
+            Description: "Pre-loads model weights",
             ActionType: "ToggleOptimizationFlag",
-            TargetKey: "PrefixStabilization",
+            TargetKey: "JitModelPreload",
             TargetValue: true);
 
         await service.ApplyRemediationAsync(suggestion);
 
         // Global flag updated
-        Assert.True(_fakeGlobalOptService.Flags.PrefixStabilization);
+        Assert.True(_fakeGlobalOptService.Flags.JitModelPreload);
 
         // Database agent profiles updated
         using var scope = scopeFactory.CreateScope();
@@ -390,7 +388,7 @@ Done refactoring.
         Assert.NotEmpty(profiles);
         foreach (var p in profiles)
         {
-            Assert.True(p.OptimizationFlags?.PrefixStabilization ?? false);
+            Assert.True(p.OptimizationFlags?.JitModelPreload ?? false);
         }
     }
 
@@ -444,7 +442,6 @@ Done refactoring.
             Flags.GuidedGrammarDecoding = flags.GuidedGrammarDecoding;
             Flags.DeterministicSymbolMap = flags.DeterministicSymbolMap;
             Flags.StructuredDiagnosticExtraction = flags.StructuredDiagnosticExtraction;
-            Flags.PrefixStabilization = flags.PrefixStabilization;
             Flags.JitModelPreload = flags.JitModelPreload;
             OnFlagsChanged?.Invoke(Flags);
             return Task.CompletedTask;

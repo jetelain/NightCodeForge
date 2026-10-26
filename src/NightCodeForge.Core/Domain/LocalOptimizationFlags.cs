@@ -24,12 +24,6 @@ public class LocalOptimizationFlags
     public bool StructuredDiagnosticExtraction { get; set; } = true;
 
     /// <summary>
-    /// Strictly enforce 4-layer byte-identical prompt prefixes to maximize KV cache hit rates.
-    /// Default: true. Opt-out allows arbitrary dynamic metadata in top-level system prompts.
-    /// </summary>
-    public bool PrefixStabilization { get; set; } = true;
-
-    /// <summary>
     /// Asynchronously pre-load next stage's model weights in OllamaRouter during CPU-bound deterministic stages.
     /// Default: true. Opt-out enforces strictly sequential stage-by-stage model loading.
     /// </summary>
@@ -43,7 +37,6 @@ public class LocalOptimizationFlags
         GuidedGrammarDecoding = GuidedGrammarDecoding,
         DeterministicSymbolMap = DeterministicSymbolMap,
         StructuredDiagnosticExtraction = StructuredDiagnosticExtraction,
-        PrefixStabilization = PrefixStabilization,
         JitModelPreload = JitModelPreload
     };
 }

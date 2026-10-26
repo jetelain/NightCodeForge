@@ -2017,7 +2017,6 @@ optimizations:
   guided_grammar_decoding: true
   deterministic_symbol_map: true
   structured_diagnostic_extraction: true
-  prefix_stabilization: true
   jit_model_preload: true
 kv_cache_hit_rate: 0.92
 status: Failed

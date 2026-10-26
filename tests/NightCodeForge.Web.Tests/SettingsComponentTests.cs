@@ -208,7 +208,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
     }
 
     [Fact]
-    public void AgentProfilesTab_OverridesOptimizationFlags_ExposesComplete5Parameters()
+    public void AgentProfilesTab_OverridesOptimizationFlags_ExposesCompleteParameters()
     {
         var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
 
@@ -216,12 +216,11 @@ public class SettingsComponentTests : BunitContext, IDisposable
         var overrideBtn = cut.FindAll("button.forge-btn-outline").First(b => b.TextContent.Contains("Override"));
         overrideBtn.Click();
 
-        // Verify all 5 boolean switches appear
+        // Verify boolean switches appear
         Assert.Contains("Complete Profile Optimization Overrides", cut.Markup);
         Assert.Contains("Guided Grammar Decoding", cut.Markup);
         Assert.Contains("Deterministic Symbol Map", cut.Markup);
         Assert.Contains("Structured Diagnostics", cut.Markup);
-        Assert.Contains("Prefix Stabilization", cut.Markup);
         Assert.Contains("JIT Model Preload", cut.Markup);
     }
 

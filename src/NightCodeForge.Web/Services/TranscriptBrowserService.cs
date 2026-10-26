@@ -216,10 +216,6 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             case "structured_diagnostic_extraction":
                 copy.StructuredDiagnosticExtraction = value;
                 break;
-            case "prefixstabilization":
-            case "prefix_stabilization":
-                copy.PrefixStabilization = value;
-                break;
             case "jitmodelpreload":
             case "jit_model_preload":
                 copy.JitModelPreload = value;
@@ -272,10 +268,10 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         else
         {
             actions.Add(new RemediationSuggestion(
-                Title: "Enable Prefix Stabilization",
-                Description: "Stabilizes KV cache across multi-turn dialogs to preserve context alignment.",
+                Title: "Enable JIT Model Preload",
+                Description: "Pre-loads model weights into GPU VRAM before stage initiation.",
                 ActionType: "ToggleOptimizationFlag",
-                TargetKey: "PrefixStabilization",
+                TargetKey: "JitModelPreload",
                 TargetValue: true));
         }
 
@@ -336,12 +332,6 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                 SuggestedActions: new[]
                 {
                     new RemediationSuggestion(
-                        Title: "Enable Prefix Stabilization",
-                        Description: "Aligns prompt prefixes to maximize KV cache hit rates for faster future runs.",
-                        ActionType: "ToggleOptimizationFlag",
-                        TargetKey: "PrefixStabilization",
-                        TargetValue: true),
-                    new RemediationSuggestion(
                         Title: "Enable JIT Model Preload",
                         Description: "Pre-loads model weights into GPU VRAM before stage initiation.",
                         ActionType: "ToggleOptimizationFlag",
@@ -361,10 +351,10 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             SuggestedActions: new[]
             {
                 new RemediationSuggestion(
-                    Title: "Enable Prefix Stabilization",
-                    Description: "Stabilizes KV cache across multi-turn dialogs.",
+                    Title: "Enable Guided Grammar Decoding",
+                    Description: "Enforces structured JSON output schema to prevent malformed responses.",
                     ActionType: "ToggleOptimizationFlag",
-                    TargetKey: "PrefixStabilization",
+                    TargetKey: "GuidedGrammarDecoding",
                     TargetValue: true)
             });
     }
@@ -492,7 +482,6 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                             case "guided_grammar_decoding": optimizations.GuidedGrammarDecoding = boolVal; break;
                             case "deterministic_symbol_map": optimizations.DeterministicSymbolMap = boolVal; break;
                             case "structured_diagnostic_extraction": optimizations.StructuredDiagnosticExtraction = boolVal; break;
-                            case "prefix_stabilization": optimizations.PrefixStabilization = boolVal; break;
                             case "jit_model_preload": optimizations.JitModelPreload = boolVal; break;
                         }
                     }

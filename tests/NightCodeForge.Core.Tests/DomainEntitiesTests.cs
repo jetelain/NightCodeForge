@@ -33,20 +33,18 @@ public class DomainEntitiesTests
 
         var defaultFlags = new LocalOptimizationFlags();
         Assert.True(defaultFlags.GuidedGrammarDecoding);
-        Assert.True(defaultFlags.PrefixStabilization);
+        Assert.True(defaultFlags.DeterministicSymbolMap);
 
         var flags = new LocalOptimizationFlags
         {
             GuidedGrammarDecoding = false,
             DeterministicSymbolMap = false,
             StructuredDiagnosticExtraction = false,
-            PrefixStabilization = false,
             JitModelPreload = false
         };
         Assert.False(flags.GuidedGrammarDecoding);
         Assert.False(flags.DeterministicSymbolMap);
         Assert.False(flags.StructuredDiagnosticExtraction);
-        Assert.False(flags.PrefixStabilization);
         Assert.False(flags.JitModelPreload);
 
         var profile = new AgentProfile
