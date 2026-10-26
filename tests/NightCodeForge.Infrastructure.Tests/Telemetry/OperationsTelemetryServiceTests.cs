@@ -279,4 +279,120 @@ public class OperationsTelemetryServiceTests
         _service.ClearActiveTask(0);
         Assert.Equal(5, _service.GetActiveTask()?.TaskId);
     }
+
+    [Fact]
+    public void RecordShellCommandCompleted_WithZeroExitCode_LogsCommandAndExitCode()
+    {
+        var logger = new TestLogger<OperationsTelemetryService>();
+        var service = new OperationsTelemetryService(_mockHubContext.Object, logger);
+
+        var record = new ShellCommandRecord(
+            CommandId: "cmd-success",
+            CommandLine: "dotnet test",
+            WorkingDirectory: "/src",
+            StartTime: DateTime.UtcNow,
+            DurationMs: 120,
+            ExitCode: 0,
+            Status: ShellCommandStatus.Completed,
+            OutputPreview: "All passed",
+            ErrorPreview: null);
+
+        service.RecordShellCommandCompleted(record);
+
+        var log = Assert.Single(logger.Logs, l => l.Level == Microsoft.Extensions.Logging.LogLevel.Information);
+        Assert.Contains("dotnet test", log.Message);
+        Assert.Contains("0", log.Message);
+        Assert.DoesNotContain("All passed", log.Message);
+    }
+
+    [Fact]
+    public void RecordShellCommandCompleted_WithNonZeroExitCode_LogsCommandExitCodeAndOutput()
+    {
+        var logger = new TestLogger<OperationsTelemetryService>();
+        var service = new OperationsTelemetryService(_mockHubContext.Object, logger);
+
+        var record = new ShellCommandRecord(
+            CommandId: "cmd-fail",
+            CommandLine: "dotnet build",
+            WorkingDirectory: "/src",
+            StartTime: DateTime.UtcNow,
+            DurationMs: 450,
+            ExitCode: 1,
+            Status: ShellCommandStatus.Failed,
+            OutputPreview: "CS1002 syntax error",
+            ErrorPreview: "Build failed");
+
+        service.RecordShellCommandCompleted(record);
+
+        var log = Assert.Single(logger.Logs, l => l.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.Contains("dotnet build", log.Message);
+        Assert.Contains("1", log.Message);
+        Assert.Contains("CS1002 syntax error", log.Message);
+        Assert.Contains("Build failed", log.Message);
+    }
+
+    [Fact]
+    public void RecordLlmCallStarted_AndCompleted_LogsEndpointModelAndThinkingEffort()
+    {
+        var logger = new TestLogger<OperationsTelemetryService>();
+        var service = new OperationsTelemetryService(_mockHubContext.Object, logger);
+
+        var record = new LlmCallRecord(
+            CallId: "call-full-log",
+            Model: "qwen3.8:35b",
+            TargetBackend: "Remote",
+            StartTime: DateTime.UtcNow,
+            DurationMs: 0,
+            PromptTokens: 100,
+            CompletionTokens: 0,
+            TokensPerSecond: 0,
+            PromptPreview: "Hello",
+            CompletionPreview: null,
+            Status: LlmCallStatus.Running,
+            ErrorMessage: null,
+            ReasoningTokens: 0,
+            Endpoint: "http://ollama-router:11434",
+            ThinkingEffort: "high");
+
+        service.RecordLlmCallStarted(record);
+
+        var startLog = Assert.Single(logger.Logs, l => l.Level == Microsoft.Extensions.Logging.LogLevel.Information && l.Message.Contains("LLM call started"));
+        Assert.Contains("qwen3.8:35b", startLog.Message);
+        Assert.Contains("http://ollama-router:11434", startLog.Message);
+        Assert.Contains("high", startLog.Message);
+
+        var completed = record with
+        {
+            DurationMs = 1200,
+            CompletionTokens = 85,
+            TokensPerSecond = 70.8,
+            Status = LlmCallStatus.Completed,
+            CompletionPreview = "World"
+        };
+
+        service.RecordLlmCallCompleted(completed);
+
+        var completeLog = Assert.Single(logger.Logs, l => l.Level == Microsoft.Extensions.Logging.LogLevel.Information && l.Message.Contains("LLM call completed"));
+        Assert.Contains("qwen3.8:35b", completeLog.Message);
+        Assert.Contains("http://ollama-router:11434", completeLog.Message);
+        Assert.Contains("high", completeLog.Message);
+    }
+
+    private class TestLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Logs { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Logs.Add((logLevel, formatter(state, exception)));
+        }
+    }
 }

@@ -407,4 +407,157 @@ public class TelemetryChatClientTests
         // Completed PromptTokens must prefer the authoritative response.Usage.InputTokenCount
         Assert.Equal(385, completedRecord.PromptTokens);
     }
+
+    [Fact]
+    public async Task GetResponseAsync_PopulatesEndpointAndThinkingEffort()
+    {
+        var client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "custom-model", "Auto", endpoint: "http://my-ollama:11434");
+        var messages = new List<ChatMessage> { new(ChatRole.User, "test") };
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["think"] = true,
+                ["reasoning_effort"] = "high"
+            }
+        };
+
+        _innerClient
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ChatResponse(new ChatMessage(ChatRole.Assistant, "result")));
+
+        LlmCallRecord? started = null;
+        LlmCallRecord? completed = null;
+
+        _telemetryService.Setup(t => t.RecordLlmCallStarted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => started = r);
+        _telemetryService.Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => completed = r);
+
+        await client.GetResponseAsync(messages, options);
+
+        Assert.NotNull(started);
+        Assert.Equal("http://my-ollama:11434", started.Endpoint);
+        Assert.Equal("high", started.ThinkingEffort);
+
+        Assert.NotNull(completed);
+        Assert.Equal("http://my-ollama:11434", completed.Endpoint);
+        Assert.Equal("high", completed.ThinkingEffort);
+    }
+
+    [Theory]
+    [InlineData(null, "unknown")]
+    public void ResolveThinkingEffort_WhenOptionsNull_ReturnsUnknown(ChatOptions? options, string expected)
+    {
+        Assert.Equal(expected, TelemetryChatClient.ResolveThinkingEffort(options));
+    }
+
+    [Fact]
+    public void ResolveThinkingEffort_WhenAdditionalPropertiesNull_ReturnsUnknown()
+    {
+        var options = new ChatOptions { AdditionalProperties = null };
+        Assert.Equal("unknown", TelemetryChatClient.ResolveThinkingEffort(options));
+    }
+
+    [Fact]
+    public void ResolveThinkingEffort_WhenThinkIsFalse_ReturnsNone()
+    {
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["think"] = false,
+                ["reasoning_effort"] = "high"
+            }
+        };
+        Assert.Equal("none", TelemetryChatClient.ResolveThinkingEffort(options));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ResolveThinkingEffort_WhenThinkIsTrue_AndReasoningEffortMissingOrEmpty_ReturnsDefault(string? reasoningEffort)
+    {
+        var props = new AdditionalPropertiesDictionary { ["think"] = true };
+        if (reasoningEffort != null)
+        {
+            props["reasoning_effort"] = reasoningEffort;
+        }
+
+        var options = new ChatOptions { AdditionalProperties = props };
+        Assert.Equal("default", TelemetryChatClient.ResolveThinkingEffort(options));
+    }
+
+    [Fact]
+    public void ResolveThinkingEffort_WhenThinkMissingFromAdditionalProperties_ReturnsUnknown()
+    {
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["other_key"] = "some_value"
+            }
+        };
+        Assert.Equal("unknown", TelemetryChatClient.ResolveThinkingEffort(options));
+    }
+
+    [Fact]
+    public void ResolveThinkingEffort_WhenThinkNotBoolean_ReturnsUnknown()
+    {
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["think"] = "yes"
+            }
+        };
+        Assert.Equal("unknown", TelemetryChatClient.ResolveThinkingEffort(options));
+    }
+
+    [Theory]
+    [InlineData("low")]
+    [InlineData("medium")]
+    [InlineData("high")]
+    [InlineData("xhigh")]
+    public void ResolveThinkingEffort_WhenThinkIsTrue_WithReasoningEffort_ReturnsEffort(string effort)
+    {
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["think"] = true,
+                ["reasoning_effort"] = effort
+            }
+        };
+        Assert.Equal(effort, TelemetryChatClient.ResolveThinkingEffort(options));
+    }
+
+    [Theory]
+    [InlineData(false, null, "none")]
+    [InlineData(true, null, "default")]
+    [InlineData(true, "medium", "medium")]
+    public async Task GetResponseAsync_PopulatesExpectedThinkingEffort(bool? think, string? effort, string expectedEffort)
+    {
+        var client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "model", "Auto");
+        var props = new AdditionalPropertiesDictionary();
+        if (think.HasValue) props["think"] = think.Value;
+        if (effort != null) props["reasoning_effort"] = effort;
+        if (!think.HasValue && effort == null) props["other"] = 123;
+
+        var options = new ChatOptions { AdditionalProperties = props };
+
+        _innerClient
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ChatResponse(new ChatMessage(ChatRole.Assistant, "ok")));
+
+        LlmCallRecord? started = null;
+        _telemetryService.Setup(t => t.RecordLlmCallStarted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => started = r);
+
+        await client.GetResponseAsync(new[] { new ChatMessage(ChatRole.User, "hi") }, options);
+
+        Assert.NotNull(started);
+        Assert.Equal(expectedEffort, started.ThinkingEffort);
+    }
 }

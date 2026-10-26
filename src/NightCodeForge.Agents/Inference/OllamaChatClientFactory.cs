@@ -167,7 +167,7 @@ public class DefaultOllamaChatClientFactory : IOllamaChatClientFactory
                 _retryOptions.Value,
                 routingTarget);
 
-            var telemetryClient = new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, routingTarget.ToString(), _loggerFactory.CreateLogger<TelemetryChatClient>());
+            var telemetryClient = new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, routingTarget.ToString(), _loggerFactory.CreateLogger<TelemetryChatClient>(), defaultOpts.Endpoint);
             return new OperationsPauseGatingChatClient(telemetryClient, _operationsControlService);
         });
     }

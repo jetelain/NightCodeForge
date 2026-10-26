@@ -27,7 +27,9 @@ public record LlmCallRecord(
     string? CompletionPreview,
     LlmCallStatus Status,
     string? ErrorMessage,
-    int ReasoningTokens = 0);
+    int ReasoningTokens = 0,
+    string? Endpoint = null,
+    string? ThinkingEffort = null);
 
 /// <summary>
 /// Status of an operating system shell command intercepted by telemetry.

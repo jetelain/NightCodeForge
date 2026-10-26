@@ -17,6 +17,7 @@ public class TelemetryChatClient : DelegatingChatClient
     private readonly IOperationsTelemetryService _telemetryService;
     private readonly string _defaultModel;
     private readonly string _defaultTarget;
+    private readonly string _endpoint;
     private readonly ILogger<TelemetryChatClient>? _logger;
 
     public TelemetryChatClient(
@@ -24,12 +25,14 @@ public class TelemetryChatClient : DelegatingChatClient
         IOperationsTelemetryService telemetryService,
         string defaultModel,
         string defaultTarget,
-        ILogger<TelemetryChatClient> logger)
+        ILogger<TelemetryChatClient> logger,
+        string? endpoint = null)
         : base(innerClient ?? throw new ArgumentNullException(nameof(innerClient)))
     {
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
         _defaultModel = !string.IsNullOrWhiteSpace(defaultModel) ? defaultModel : "unknown";
         _defaultTarget = !string.IsNullOrWhiteSpace(defaultTarget) ? defaultTarget : "Auto";
+        _endpoint = !string.IsNullOrWhiteSpace(endpoint) ? endpoint : "http://localhost:11434";
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -37,8 +40,9 @@ public class TelemetryChatClient : DelegatingChatClient
         IChatClient innerClient,
         IOperationsTelemetryService telemetryService,
         string defaultModel,
-        string defaultTarget)
-        : this(innerClient, telemetryService, defaultModel, defaultTarget, Microsoft.Extensions.Logging.Abstractions.NullLogger<TelemetryChatClient>.Instance)
+        string defaultTarget,
+        string? endpoint = null)
+        : this(innerClient, telemetryService, defaultModel, defaultTarget, Microsoft.Extensions.Logging.Abstractions.NullLogger<TelemetryChatClient>.Instance, endpoint)
     {
     }
 
@@ -50,6 +54,7 @@ public class TelemetryChatClient : DelegatingChatClient
         var callId = Guid.NewGuid().ToString("N");
         var model = !string.IsNullOrWhiteSpace(options?.ModelId) ? options.ModelId : _defaultModel;
         var target = ResolveTarget(options);
+        var thinkingEffort = ResolveThinkingEffort(options);
         var messagesList = chatMessages?.ToList() ?? new List<ChatMessage>();
         var promptPreview = ExtractPromptPreview(messagesList);
         var promptTokens = EstimateTotalContextTokens(messagesList);
@@ -67,7 +72,10 @@ public class TelemetryChatClient : DelegatingChatClient
             PromptPreview: promptPreview,
             CompletionPreview: null,
             Status: LlmCallStatus.Running,
-            ErrorMessage: null);
+            ErrorMessage: null,
+            ReasoningTokens: 0,
+            Endpoint: _endpoint,
+            ThinkingEffort: thinkingEffort);
 
         _telemetryService.RecordLlmCallStarted(runningRecord);
         var sw = Stopwatch.StartNew();
@@ -158,6 +166,7 @@ public class TelemetryChatClient : DelegatingChatClient
         var callId = Guid.NewGuid().ToString("N");
         var model = !string.IsNullOrWhiteSpace(options?.ModelId) ? options.ModelId : _defaultModel;
         var target = ResolveTarget(options);
+        var thinkingEffort = ResolveThinkingEffort(options);
         var messagesList = chatMessages?.ToList() ?? new List<ChatMessage>();
         var promptPreview = ExtractPromptPreview(messagesList);
         var promptTokens = EstimateTotalContextTokens(messagesList);
@@ -176,7 +185,9 @@ public class TelemetryChatClient : DelegatingChatClient
             CompletionPreview: null,
             Status: LlmCallStatus.Running,
             ErrorMessage: null,
-            ReasoningTokens: 0);
+            ReasoningTokens: 0,
+            Endpoint: _endpoint,
+            ThinkingEffort: thinkingEffort);
 
         _telemetryService.RecordLlmCallStarted(runningRecord);
         var sw = Stopwatch.StartNew();
@@ -552,5 +563,26 @@ public class TelemetryChatClient : DelegatingChatClient
     {
         if (string.IsNullOrEmpty(text)) return string.Empty;
         return text.Length <= maxLength ? text : text[..maxLength] + "...";
+    }
+
+    public static string ResolveThinkingEffort(ChatOptions? options)
+    {
+        if (options?.AdditionalProperties == null)
+        {
+            return "unknown";
+        }
+        if (options.AdditionalProperties.TryGetValue("think", out var thinkVal) && thinkVal is bool enabled)
+        {
+            if (!enabled)
+            {
+                return "none";
+            }
+            if (options.AdditionalProperties.TryGetValue("reasoning_effort", out var re) && re != null && !string.IsNullOrWhiteSpace(re.ToString()))
+            {
+                return re.ToString()!;
+            }
+            return "default";
+        }
+        return "unknown";
     }
 }

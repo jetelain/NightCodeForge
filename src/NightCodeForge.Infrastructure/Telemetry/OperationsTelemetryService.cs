@@ -49,6 +49,12 @@ public class OperationsTelemetryService : IOperationsTelemetryService
     {
         ArgumentNullException.ThrowIfNull(record);
 
+        _logger.LogInformation(
+            "LLM call started: Model: {Model}, Endpoint: {Endpoint}, Thinking Effort: {ThinkingEffort}",
+            record.Model,
+            record.Endpoint ?? "unknown",
+            record.ThinkingEffort ?? "none");
+
         lock (_llmLock)
         {
             _llmCalls.Insert(0, record);
@@ -108,6 +114,29 @@ public class OperationsTelemetryService : IOperationsTelemetryService
     {
         ArgumentNullException.ThrowIfNull(record);
 
+        if (record.Status == LlmCallStatus.Completed)
+        {
+            _logger.LogInformation(
+                "LLM call completed: Model: {Model}, Endpoint: {Endpoint}, Thinking Effort: {ThinkingEffort}, Duration: {DurationMs:F0}ms, Tokens: {CompletionTokens} ({TokensPerSecond:F1} t/s)",
+                record.Model,
+                record.Endpoint ?? "unknown",
+                record.ThinkingEffort ?? "none",
+                record.DurationMs,
+                record.CompletionTokens,
+                record.TokensPerSecond);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "LLM call {Status}: Model: {Model}, Endpoint: {Endpoint}, Thinking Effort: {ThinkingEffort}, Duration: {DurationMs:F0}ms, Error: {ErrorMessage}",
+                record.Status,
+                record.Model,
+                record.Endpoint ?? "unknown",
+                record.ThinkingEffort ?? "none",
+                record.DurationMs,
+                record.ErrorMessage);
+        }
+
         lock (_llmLock)
         {
             var idx = _llmCalls.FindIndex(r => r.CallId == record.CallId);
@@ -141,6 +170,11 @@ public class OperationsTelemetryService : IOperationsTelemetryService
     public void RecordShellCommandStarted(ShellCommandRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
+
+        _logger.LogInformation(
+            "Shell command started: '{Command}' in '{WorkingDirectory}'",
+            record.CommandLine,
+            record.WorkingDirectory);
 
         lock (_shellLock)
         {
@@ -203,6 +237,31 @@ public class OperationsTelemetryService : IOperationsTelemetryService
     public void RecordShellCommandCompleted(ShellCommandRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
+
+        if (record.ExitCode == 0)
+        {
+            _logger.LogInformation(
+                "Shell command completed: '{Command}' with exit code {ExitCode}",
+                record.CommandLine,
+                record.ExitCode);
+        }
+        else
+        {
+            var output = !string.IsNullOrWhiteSpace(record.ErrorPreview)
+                ? (!string.IsNullOrWhiteSpace(record.OutputPreview) ? $"{record.OutputPreview}\n{record.ErrorPreview}" : record.ErrorPreview)
+                : (record.OutputPreview ?? string.Empty);
+
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                output = "(no output)";
+            }
+
+            _logger.LogWarning(
+                "Shell command failed: '{Command}' with exit code {ExitCode}. Output:\n{Output}",
+                record.CommandLine,
+                record.ExitCode,
+                output);
+        }
 
         lock (_shellLock)
         {

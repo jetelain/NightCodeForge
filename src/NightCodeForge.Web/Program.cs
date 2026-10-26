@@ -6,6 +6,7 @@ using NightCodeForge.Infrastructure.BackgroundJobs;
 using NightCodeForge.Web.Components;
 using NightCodeForge.Web.Services;
 using Serilog;
+using Serilog.Events;
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
@@ -21,11 +22,15 @@ var logsDirectory = Path.IsPathRooted(rawLogsDir)
 Directory.CreateDirectory(logsDirectory);
 var logFilePath = Path.Combine(logsDirectory, "nightcodeforge-.log");
 
+builder.Logging.ClearProviders();
+
 builder.Services.AddSerilog((services, lc) => lc
+    .MinimumLevel.Warning()
+    .MinimumLevel.Override("NightCodeForge", LogEventLevel.Information)
     .ReadFrom.Configuration(builder.Configuration)
     .ReadFrom.Services(services)
     .Enrich.FromLogContext()
-    .WriteTo.Console()
+    .WriteTo.Console(restrictedToMinimumLevel: LogEventLevel.Fatal)
     .WriteTo.File(
         path: logFilePath,
         rollingInterval: RollingInterval.Day,
