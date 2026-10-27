@@ -1882,26 +1882,24 @@ public class TaskOrchestrator : ITaskOrchestrator
                     {
                         _logger.LogWarning("Re-verification after sync failed for task #{TaskId}: {Error}. Routing back to Implementation.",
                             task.Id, reverifyResult.ErrorMessage);
-                        if (stage.Kind == WorkflowStageKind.Deterministic)
-                        {
-                            SetSyntheticPrimingFromDeterministicStage(stage, pipelineContext, reverifyResult, (int)(DateTime.UtcNow - startedAt).TotalMilliseconds);
-                        }
                         var loopBackStageId = stage.LoopBackStageId ?? StandardStageIds.Implementation;
-                        var reverifyRetries = pipelineContext.IncrementRetry(stage.StageId);
+                        var reverifyRetryKey = $"{stage.StageId}:gate2-reverify";
+                        var reverifyRetries = pipelineContext.IncrementRetry(reverifyRetryKey);
                         var reverifyMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
+                        var reverifyDurationMs = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds;
 
                         if (!string.IsNullOrWhiteSpace(loopBackStageId) && reverifyRetries <= reverifyMaxRetries)
                         {
                             var targetStage = pipeline.GetStage(loopBackStageId);
                             if (targetStage != null && IsSameCohort(stage.QueueTier, targetStage.QueueTier))
                             {
-                                await PrepareInProcessLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, reverifyRetries, reverifyMaxRetries, reverifyResult, cancellationToken);
+                                await PrepareInProcessLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, reverifyRetries, reverifyMaxRetries, reverifyResult, reverifyDurationMs, cancellationToken);
                                 stage = targetStage;
                                 continue;
                             }
                             else if (targetStage != null)
                             {
-                                await HandleCrossCohortLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, reverifyRetries, reverifyMaxRetries, reverifyResult, cancellationToken);
+                                await HandleCrossCohortLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, reverifyRetries, reverifyMaxRetries, reverifyResult, reverifyDurationMs, cancellationToken);
                                 cohortExitReason = CohortExitReason.Failed;
                                 return;
                             }
@@ -1980,22 +1978,18 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         if (!string.IsNullOrWhiteSpace(targetLoopBackId) && retries <= effectiveMaxRetries)
         {
-            if (stage.Kind == WorkflowStageKind.Deterministic)
-            {
-                SetSyntheticPrimingFromDeterministicStage(stage, pipelineContext, result, durationMs);
-            }
             var targetStage = pipeline.GetStage(targetLoopBackId);
             if (targetStage != null && IsSameCohort(stage.QueueTier, targetStage.QueueTier))
             {
                 // IN-PROCESS LOOPBACK
-                await PrepareInProcessLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, retries, effectiveMaxRetries, result, cancellationToken);
+                await PrepareInProcessLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, retries, effectiveMaxRetries, result, durationMs, cancellationToken);
                 stage = targetStage;
                 continue;
             }
             else if (targetStage != null)
             {
                 // CROSS-COHORT LOOPBACK
-                await HandleCrossCohortLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, retries, effectiveMaxRetries, result, cancellationToken);
+                await HandleCrossCohortLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, retries, effectiveMaxRetries, result, durationMs, cancellationToken);
                 cohortExitReason = CohortExitReason.Failed;
                 return;
             }
@@ -2949,12 +2943,24 @@ public class TaskOrchestrator : ITaskOrchestrator
         int retries,
         int effectiveMaxRetries,
         StageExecutionResult result,
+        int durationMs,
         CancellationToken cancellationToken)
     {
         _logger.LogWarning("Stage '{StageId}' failed, routing backward in-process to '{TargetStage}' (Retry {Retry}/{Max}): {Reason}",
             currentStage.StageId, targetStage.StageId, retries, effectiveMaxRetries, result.ErrorMessage);
 
         PopulateDiagnosticsIntoDataBag(pipelineContext, currentStage, retries, result);
+        if (currentStage.Kind == WorkflowStageKind.Deterministic)
+        {
+            SetSyntheticPrimingFromDeterministicStage(currentStage, pipelineContext, result, durationMs);
+        }
+
+        if (!string.Equals(targetStage.StageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(targetStage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
+        {
+            pipelineContext.DataBag.Remove(PipelineDataBagKeys.ReviewDiff);
+            pipelineContext.DataBag.Remove(PipelineDataBagKeys.ReviewDiffStat);
+        }
 
         task.CurrentStageId = targetStage.StageId;
         pipelineContext.SyncDataBagToTask();
@@ -2985,12 +2991,24 @@ public class TaskOrchestrator : ITaskOrchestrator
         int retries,
         int effectiveMaxRetries,
         StageExecutionResult result,
+        int durationMs,
         CancellationToken cancellationToken)
     {
         _logger.LogWarning("Stage '{StageId}' failed, routing backward cross-cohort to '{TargetStage}' (Retry {Retry}/{Max}): {Reason}",
             currentStage.StageId, targetStage.StageId, retries, effectiveMaxRetries, result.ErrorMessage);
 
         PopulateDiagnosticsIntoDataBag(pipelineContext, currentStage, retries, result);
+        if (currentStage.Kind == WorkflowStageKind.Deterministic)
+        {
+            SetSyntheticPrimingFromDeterministicStage(currentStage, pipelineContext, result, durationMs);
+        }
+
+        if (!string.Equals(targetStage.StageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(targetStage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
+        {
+            pipelineContext.DataBag.Remove(PipelineDataBagKeys.ReviewDiff);
+            pipelineContext.DataBag.Remove(PipelineDataBagKeys.ReviewDiffStat);
+        }
 
         task.CurrentStageId = targetStage.StageId;
         pipelineContext.SyncDataBagToTask();
@@ -3043,6 +3061,9 @@ public class TaskOrchestrator : ITaskOrchestrator
         }, cancellationToken);
     }
 
+    /// <summary>Separator between the stage id and a failed test entry inside CompilerErrors.</summary>
+    private const string TestFailureMarker = " test failure] ";
+
     private static void PopulateDiagnosticsIntoDataBag(
         PipelineContext pipelineContext,
         IWorkflowStage stage,
@@ -3053,7 +3074,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         var failedTests = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
         if (failedTests is { Count: > 0 })
         {
-            errors.AddRange(failedTests.Select(ft => $"[{stage.StageId} test failure] {ft}"));
+            errors.AddRange(failedTests.Select(ft => $"[{stage.StageId}{TestFailureMarker}{ft}"));
         }
         var newWarnings = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.WarningsNew);
         if (newWarnings is { Count: > 0 } && (string.Equals(stage.StageId, StageImplementationTypes.DeterministicRatchet, StringComparison.OrdinalIgnoreCase) || stage.StageId.Contains("ratchet", StringComparison.OrdinalIgnoreCase)))
@@ -3436,16 +3457,30 @@ public class TaskOrchestrator : ITaskOrchestrator
                 ?? result.ErrorMessage
                 ?? "Deterministic step failed.";
 
+            if (!string.IsNullOrWhiteSpace(result.ErrorMessage) && !rawOutput.Contains(result.ErrorMessage, StringComparison.OrdinalIgnoreCase))
+            {
+                rawOutput = $"{rawOutput.TrimEnd()}\n\n[Quality Gate Failure Reason]:\n{result.ErrorMessage}";
+            }
+
             var compilerErrors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
             var failedTests = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
 
             var diagSb = new StringBuilder();
             if (compilerErrors is { Count: > 0 } && !rawOutput.Contains("[Compiler Diagnostics]", StringComparison.OrdinalIgnoreCase))
             {
-                diagSb.AppendLine().AppendLine("[Compiler Diagnostics]:");
-                foreach (var err in compilerErrors)
+                // Filter out test failures populated into CompilerErrors by PopulateDiagnosticsIntoDataBag
+                // to avoid duplicating them when [Failed Tests] is rendered below.
+                var actualCompilerErrors = compilerErrors
+                    .Where(err => !err.Contains(TestFailureMarker, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (actualCompilerErrors.Count > 0)
                 {
-                    diagSb.AppendLine(err);
+                    diagSb.AppendLine().AppendLine("[Compiler Diagnostics]:");
+                    foreach (var err in actualCompilerErrors)
+                    {
+                        diagSb.AppendLine(err);
+                    }
                 }
             }
             if (failedTests is { Count: > 0 } && !rawOutput.Contains("[Failed Tests]", StringComparison.OrdinalIgnoreCase))

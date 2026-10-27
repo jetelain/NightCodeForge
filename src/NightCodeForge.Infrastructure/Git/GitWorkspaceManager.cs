@@ -452,6 +452,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         }
 
         if (string.IsNullOrWhiteSpace(rawDiff) &&
+            workspace.ExecutionMode != ExecutionMode.ContainerSandbox &&
             !string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
             !string.Equals(workspace.RepositoryPath, workingPath, StringComparison.OrdinalIgnoreCase) &&
             Directory.Exists(workspace.RepositoryPath))
@@ -478,7 +479,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         CancellationToken cancellationToken = default)
     {
         var workingPath = GetWorkingPath(workspace, taskId);
-        if (!WorktreeDirectoryExists(workingPath) && !Directory.Exists(workingPath))
+        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox && !IsPosixPath(workingPath) && !WorktreeDirectoryExists(workingPath) && !Directory.Exists(workingPath))
         {
             return await GenerateDiffAsync(workspace, taskId, baseBranch, cancellationToken);
         }
@@ -517,9 +518,9 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         string[] statArgs = BuildDiffArgs($"{baseBranch}...{branchName}", isStat: true);
 
-        var targetPath = Directory.Exists(workingPath)
+        var targetPath = workspace.ExecutionMode == ExecutionMode.ContainerSandbox || IsPosixPath(workingPath) || WorktreeDirectoryExists(workingPath) || Directory.Exists(workingPath)
             ? workingPath
-            : (Directory.Exists(workspace.RepositoryPath) ? workspace.RepositoryPath : workingPath);
+            : (workspace.ExecutionMode != ExecutionMode.ContainerSandbox && Directory.Exists(workspace.RepositoryPath) ? workspace.RepositoryPath : workingPath);
 
         var result = await _gitCliRunner.ExecuteAsync(targetPath, statArgs, cancellationToken: cancellationToken);
         return FormatStatOutput(result.StandardOutput);
@@ -535,7 +536,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(workspace);
         var workingPath = GetWorkingPath(workspace, taskId);
-        if (!WorktreeDirectoryExists(workingPath) && !Directory.Exists(workingPath))
+        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox && !IsPosixPath(workingPath) && !WorktreeDirectoryExists(workingPath) && !Directory.Exists(workingPath))
         {
             return await GenerateDiffStatAsync(workspace, taskId, baseBranch, cancellationToken);
         }
@@ -576,6 +577,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         }
 
         if (string.IsNullOrWhiteSpace(rawDiff) &&
+            workspace.ExecutionMode != ExecutionMode.ContainerSandbox &&
             !string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
             !string.Equals(workspace.RepositoryPath, canonicalPath, StringComparison.OrdinalIgnoreCase) &&
             Directory.Exists(workspace.RepositoryPath))
@@ -1081,8 +1083,8 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         if (taskId.HasValue)
         {
             var wt = GetWorktreePath(workspace, taskId.Value);
-            // If the worktree directory actually exists, use it
-            if (WorktreeDirectoryExists(wt))
+            // If in container sandbox or POSIX path or the worktree directory actually exists, use it
+            if (workspace.ExecutionMode == ExecutionMode.ContainerSandbox || IsPosixPath(wt) || WorktreeDirectoryExists(wt))
             {
                 return wt;
             }
@@ -1094,6 +1096,11 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     private string GetCanonicalWorkingPath(Workspace workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
+
+        if (workspace.ExecutionMode == ExecutionMode.ContainerSandbox && !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            return workspace.Ext4MirrorPath;
+        }
 
         if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
@@ -1111,9 +1118,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                 }
                 else
                 {
-                    var distro = _wslMetadataService.GetDefaultDistributionName();
-                    var user = _wslMetadataService.GetDefaultUserName();
-                    checkPath = WslPathConverter.ToWslUncPath(workspace.Ext4MirrorPath, distro, user);
+                    checkPath = ToWslUncPathOrThrow(workspace.Ext4MirrorPath);
                 }
 
                 if (Directory.Exists(checkPath))
@@ -1153,9 +1158,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             string targetCanonical = canonicalPath;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (canonicalPath.StartsWith('/') || canonicalPath.StartsWith('~')))
             {
-                var distro = _wslMetadataService.GetDefaultDistributionName();
-                var user = _wslMetadataService.GetDefaultUserName();
-                targetCanonical = WslPathConverter.ToWslUncPath(canonicalPath, distro, user);
+                targetCanonical = ToWslUncPathOrThrow(canonicalPath);
             }
 
             var result = await _gitCliRunner.ExecuteAsync(canonicalPath, ["rev-parse", "--git-path", "info/exclude"], cancellationToken: cancellationToken);
@@ -1199,12 +1202,33 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         if (string.IsNullOrWhiteSpace(path)) return path;
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (path.StartsWith('/') || path.StartsWith('~')))
         {
-            var distro = _wslMetadataService.GetDefaultDistributionName();
-            var user = _wslMetadataService.GetDefaultUserName();
-            return WslPathConverter.ToWslUncPath(path, distro, user);
+            return ToWslUncPathOrThrow(path);
         }
         return path;
     }
+
+    private string ToWslUncPathOrThrow(string posixPath)
+    {
+        var distro = _wslMetadataService.GetDefaultDistributionName();
+        if (string.IsNullOrWhiteSpace(distro))
+        {
+            throw new WslDistributionUnavailableException(posixPath);
+        }
+        var user = _wslMetadataService.GetDefaultUserName();
+        return WslPathConverter.ToWslUncPath(posixPath, distro, user);
+    }
+
+    private const char PosixRootPathPrefix = '/';
+
+    /// <summary>
+    /// A rooted POSIX path is only foreign (WSL/container) when the host is Windows.
+    /// On Linux/macOS every absolute path starts with '/', so it carries no information.
+    /// </summary>
+    public static bool IsForeignPosixPath(string? path, bool isWindowsHost) =>
+        isWindowsHost && !string.IsNullOrEmpty(path) && path[0] == PosixRootPathPrefix;
+
+    private static bool IsPosixPath(string path) =>
+        IsForeignPosixPath(path, RuntimeInformation.IsOSPlatform(OSPlatform.Windows));
 
     private bool WorktreeDirectoryExists(string worktreePath)
     {

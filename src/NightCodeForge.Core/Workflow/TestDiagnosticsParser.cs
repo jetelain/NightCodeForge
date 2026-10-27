@@ -82,7 +82,27 @@ public static class TestDiagnosticsParser
                         var testName = failure.Attribute("testName")?.Value;
                         if (!string.IsNullOrWhiteSpace(testName))
                         {
-                            failedNames.Add(testName);
+                            var errorInfo = failure.Descendants().FirstOrDefault(e => e.Name.LocalName == "ErrorInfo");
+                            var message = errorInfo?.Descendants().FirstOrDefault(e => e.Name.LocalName == "Message")?.Value?.Trim();
+                            var stackTrace = errorInfo?.Descendants().FirstOrDefault(e => e.Name.LocalName == "StackTrace")?.Value?.Trim();
+
+                            if (!string.IsNullOrWhiteSpace(message))
+                            {
+                                var formatted = $"Failed {testName}\n  Error Message:\n   {message}";
+                                if (!string.IsNullOrWhiteSpace(stackTrace))
+                                {
+                                    var firstStack = stackTrace.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+                                    if (!string.IsNullOrWhiteSpace(firstStack))
+                                    {
+                                        formatted += $"\n  Stack Trace:\n   {firstStack}";
+                                    }
+                                }
+                                failedNames.Add(formatted);
+                            }
+                            else
+                            {
+                                failedNames.Add(testName);
+                            }
                         }
                     }
                 }
@@ -103,5 +123,147 @@ public static class TestDiagnosticsParser
         }
 
         return null;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex FailureHeaderPattern =
+        new(@"^\s*(?:Failed|\[FAIL\]|FAIL:|Échec|Echec)\s+([A-Za-z0-9_<>`\-]+(?:\.[A-Za-z0-9_<>`\-]+)+(?:\([^\r\n]*\))?|[A-Za-z0-9_<>`\-]+(?:\([^\r\n]*\)))",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex TrailingDurationRegex =
+        new(@"\s*\[\s*(?:<\s*)?\d+(?:\.\d+)?\s*(?:ms|s|m|min)?\s*\]\s*$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Runner summary lines: "Failed!", "Passed!" or counters such as "Failed:     1".
+    /// A bare "Failed: some message" (no digit after the colon) is NOT a summary.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex SummaryLineRegex =
+        new(@"^(?:Passed|Failed|Réussi|Échec|Echec)(?:!|:\s*\d)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Inside an "Error Message:" section, a header-looking line only starts a new failure
+    /// when it carries a trailing duration (e.g. "Failed Ns.Test [12 ms]", as emitted by dotnet test)
+    /// or is not indented (xunit "[FAIL] ..." / pytest "FAIL: ..." style). Indented message text is not a header.
+    /// </summary>
+    private static bool IsNextFailureHeader(string line, bool inErrorMessage)
+    {
+        var match = FailureHeaderPattern.Match(line);
+        if (!match.Success) return false;
+        return !inErrorMessage
+            || TrailingDurationRegex.IsMatch(line.TrimEnd())
+            || !char.IsWhiteSpace(line[0]);
+    }
+
+    /// <summary>
+    /// Parses detailed test failure records from runner output (e.g. dotnet test / vstest / xunit / nunit),
+    /// extracting test name, error message, and stack trace.
+    /// </summary>
+    public static List<string> ParseTestFailuresFromOutput(string output)
+    {
+        var result = new List<string>();
+        if (string.IsNullOrWhiteSpace(output)) return result;
+
+        var lines = output.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+
+        int i = 0;
+        while (i < lines.Count)
+        {
+            var line = lines[i];
+            var match = FailureHeaderPattern.Match(line);
+            if (match.Success)
+            {
+                var testName = TrailingDurationRegex.Replace(match.Groups[1].Value.Trim(), "").Trim().TrimEnd('.');
+
+                var errorLines = new List<string>();
+                var stackLines = new List<string>();
+                bool inErrorMessage = false;
+                bool inStackTrace = false;
+
+                i++;
+                while (i < lines.Count)
+                {
+                    var nextLine = lines[i];
+                    var trimmed = nextLine.Trim();
+
+                    if (IsNextFailureHeader(nextLine, inErrorMessage) ||
+                        SummaryLineRegex.IsMatch(trimmed) ||
+                        trimmed.StartsWith("Total tests:", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("Au total,", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("Standard Output Messages:", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("Attachments:", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("Test Run ", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("Results File:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        break;
+                    }
+
+                    if (trimmed.StartsWith("Error Message:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        inErrorMessage = true;
+                        inStackTrace = false;
+                        var afterHeader = trimmed.Substring("Error Message:".Length).Trim();
+                        if (!string.IsNullOrEmpty(afterHeader))
+                        {
+                            errorLines.Add(afterHeader);
+                        }
+                    }
+                    else if (trimmed.StartsWith("Stack Trace:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        inErrorMessage = false;
+                        inStackTrace = true;
+                        var afterHeader = trimmed.Substring("Stack Trace:".Length).Trim();
+                        if (!string.IsNullOrEmpty(afterHeader))
+                        {
+                            stackLines.Add(afterHeader);
+                        }
+                    }
+                    else if (inErrorMessage)
+                    {
+                        if (!string.IsNullOrWhiteSpace(trimmed))
+                        {
+                            errorLines.Add(trimmed);
+                        }
+                    }
+                    else if (inStackTrace)
+                    {
+                        if (!string.IsNullOrWhiteSpace(trimmed))
+                        {
+                            stackLines.Add(trimmed);
+                        }
+                    }
+                    else if (!string.IsNullOrWhiteSpace(trimmed))
+                    {
+                        if (trimmed.StartsWith("Assert.", StringComparison.OrdinalIgnoreCase) ||
+                            trimmed.StartsWith("Expected:", StringComparison.OrdinalIgnoreCase) ||
+                            trimmed.StartsWith("Actual:", StringComparison.OrdinalIgnoreCase) ||
+                            trimmed.Contains("Exception", StringComparison.OrdinalIgnoreCase))
+                        {
+                            errorLines.Add(trimmed);
+                        }
+                    }
+
+                    i++;
+                }
+
+                var sb = new System.Text.StringBuilder();
+                sb.Append("Failed ").Append(testName);
+                if (errorLines.Count > 0)
+                {
+                    sb.Append("\n  Error Message:\n   ").Append(string.Join("\n   ", errorLines));
+                }
+                if (stackLines.Count > 0)
+                {
+                    sb.Append("\n  Stack Trace:\n   ").Append(stackLines[0]);
+                }
+
+                result.Add(sb.ToString());
+                continue;
+            }
+
+            i++;
+        }
+
+        return result;
     }
 }

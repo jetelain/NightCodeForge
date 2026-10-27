@@ -110,7 +110,7 @@ public class AgentSessionContextPromotionTests
     }
 
     [Fact]
-    public void DefaultBootstrapPromptBuilder_AppendsReviewDiffStat_WhenTemplateDoesNotContainIt()
+    public void DefaultBootstrapPromptBuilder_DoesNotAppendReviewDiffStat_WhenTemplateDoesNotContainIt()
     {
         var task = new ForgeTask { Id = 42, Title = "Review Feature", Description = "Implement feature" };
         var pipelineContext = new PipelineContext(task, new Workspace { Id = 1 });
@@ -128,9 +128,8 @@ public class AgentSessionContextPromotionTests
 
         var prompt = DefaultBootstrapPromptBuilder.Build(stage, task, pipelineContext);
 
-        Assert.Contains("[Git Diff Summary]:", prompt);
-        Assert.Contains("file.cs | 2 +-", prompt);
-        Assert.Contains("git diff main...feature/task-42 -- <file-path>", prompt);
+        Assert.DoesNotContain("[Git Diff Summary]:", prompt);
+        Assert.DoesNotContain("file.cs | 2 +-", prompt);
     }
 
     [Fact]

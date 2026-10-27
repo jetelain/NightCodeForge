@@ -142,6 +142,179 @@ public class DiffStatTests : IDisposable
             _manager.GenerateLiveDiffStatAsync(null!, 91706, "main"));
     }
 
+    [Fact]
+    public async Task GenerateDiffStatAsync_ContainerSandbox_ExecutesInContainerWorktreePath()
+    {
+        var mockRunner = new Mock<IGitCliRunner>();
+        string? executedWorkingDir = null;
+        mockRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .Returns<string, IEnumerable<string>, int?, CancellationToken>((wd, args, to, ct) =>
+            {
+                executedWorkingDir = wd;
+                return Task.FromResult(new GitCommandResult(0, " 1 file changed, 1 insertion(+)", "", TimeSpan.FromMilliseconds(50)));
+            });
+
+        var wslMeta = new Mock<IWslMetadataService>().Object;
+        var pathResolver = new WorkspacePathResolver(wslMeta, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var manager = new GitWorkspaceManager(
+            mockRunner.Object,
+            pathResolver,
+            wslMeta,
+            new Mock<IGitMirrorSyncService>().Object,
+            new Mock<IWorkspaceLockProvider>().Object,
+            NullLogger<GitWorkspaceManager>.Instance);
+
+        var containerWorkspace = new Workspace
+        {
+            Id = 918,
+            Name = "Container Workspace",
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            Ext4MirrorPath = "/home/runner/.nightcodeforge/wks/918/clone",
+            RepositoryPath = "C:\\host\\repo",
+            DefaultBaseBranch = "main"
+        };
+
+        var stat = await manager.GenerateDiffStatAsync(containerWorkspace, 42, "main");
+
+        Assert.Equal("1 file changed, 1 insertion(+)", stat);
+        Assert.NotNull(executedWorkingDir);
+        Assert.Contains("918", executedWorkingDir);
+        Assert.Contains("task-42", executedWorkingDir);
+        Assert.DoesNotContain("C:\\host\\repo", executedWorkingDir);
+    }
+
+    [Fact]
+    public async Task GenerateLiveDiffAsync_ContainerSandbox_ExecutesInContainerWorktreePath()
+    {
+        var mockRunner = new Mock<IGitCliRunner>();
+        string? executedWorkingDir = null;
+        mockRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .Returns<string, IEnumerable<string>, int?, CancellationToken>((wd, args, to, ct) =>
+            {
+                executedWorkingDir = wd;
+                return Task.FromResult(new GitCommandResult(0, "diff --git a/test.cs b/test.cs", "", TimeSpan.FromMilliseconds(50)));
+            });
+
+        var wslMeta = new Mock<IWslMetadataService>().Object;
+        var pathResolver = new WorkspacePathResolver(wslMeta, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var manager = new GitWorkspaceManager(
+            mockRunner.Object,
+            pathResolver,
+            wslMeta,
+            new Mock<IGitMirrorSyncService>().Object,
+            new Mock<IWorkspaceLockProvider>().Object,
+            NullLogger<GitWorkspaceManager>.Instance);
+
+        var containerWorkspace = new Workspace
+        {
+            Id = 918,
+            Name = "Container Workspace",
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            Ext4MirrorPath = "/home/runner/.nightcodeforge/wks/918/clone",
+            RepositoryPath = "C:\\host\\repo",
+            DefaultBaseBranch = "main"
+        };
+
+        var diff = await manager.GenerateLiveDiffAsync(containerWorkspace, 42, "main");
+
+        Assert.Equal("diff --git a/test.cs b/test.cs", diff);
+        Assert.NotNull(executedWorkingDir);
+        Assert.Contains("task-42", executedWorkingDir);
+        Assert.DoesNotContain("C:\\host\\repo", executedWorkingDir);
+    }
+
+    [Theory]
+    [InlineData("/home/user/repo", true, true)]
+    [InlineData("/home/user/repo", false, false)]
+    [InlineData("C:\\repo", true, false)]
+    [InlineData("", true, false)]
+    [InlineData(null, true, false)]
+    public void IsForeignPosixPath_OnlyTrueForRootedPathsOnWindowsHosts(string? path, bool isWindowsHost, bool expected)
+    {
+        Assert.Equal(expected, GitWorkspaceManager.IsForeignPosixPath(path, isWindowsHost));
+    }
+
+    [Fact]
+    public async Task GenerateDiffStatAsync_WorktreeMissing_FallsBackToRepositoryPath()
+    {
+        // Worktree for this task was never created: the stat must be generated from the repository,
+        // not from a nonexistent worktree directory (regression: POSIX detection on Linux hosts).
+        _repo.RunGit("branch feature/task-91790");
+        var hostWorkspace = CreateBareHostWorkspace();
+        var stat = await _manager.GenerateDiffStatAsync(hostWorkspace, 91790, "main");
+
+        Assert.Equal(GitDiffConstants.NoChanges, stat);
+    }
+
+    private Workspace CreateBareHostWorkspace() => new()
+    {
+        Id = 917,
+        Name = "Bare Host Workspace",
+        ExecutionMode = ExecutionMode.BareHost,
+        RepositoryPath = _repo.RepositoryPath,
+        DefaultBaseBranch = "main"
+    };
+
+    [Fact]
+    public async Task GenerateLiveDiffStatAsync_WorktreeMissing_DoesNotRunGitInMissingDirectory()
+    {
+        var executedDirs = new List<string>();
+        var mockRunner = new Mock<IGitCliRunner>();
+        mockRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .Returns<string, IEnumerable<string>, int?, CancellationToken>((wd, args, to, ct) =>
+            {
+                executedDirs.Add(wd);
+                return Task.FromResult(new GitCommandResult(0, string.Empty, string.Empty, TimeSpan.Zero));
+            });
+
+        var wslMeta = new Mock<IWslMetadataService>().Object;
+        var pathResolver = new WorkspacePathResolver(wslMeta, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var manager = new GitWorkspaceManager(
+            mockRunner.Object,
+            pathResolver,
+            wslMeta,
+            new Mock<IGitMirrorSyncService>().Object,
+            new Mock<IWorkspaceLockProvider>().Object,
+            NullLogger<GitWorkspaceManager>.Instance);
+
+        await manager.GenerateLiveDiffStatAsync(CreateBareHostWorkspace(), 91791, "main");
+
+        Assert.All(executedDirs, d => Assert.True(Directory.Exists(d), $"git was executed in missing directory '{d}'"));
+    }
+
+    [Fact]
+    public async Task GenerateDiffStatAsync_WindowsHostPosixWorktreeWithoutWslDistro_ThrowsDomainException()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return; // POSIX->UNC resolution only applies on Windows hosts.
+        }
+
+        var mockRunner = new Mock<IGitCliRunner>();
+        var wslMeta = new Mock<IWslMetadataService>(); // returns null distro
+        var pathResolver = new WorkspacePathResolver(wslMeta.Object, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var manager = new GitWorkspaceManager(
+            mockRunner.Object,
+            pathResolver,
+            wslMeta.Object,
+            new Mock<IGitMirrorSyncService>().Object,
+            new Mock<IWorkspaceLockProvider>().Object,
+            NullLogger<GitWorkspaceManager>.Instance);
+
+        var workspace = new Workspace
+        {
+            Id = 919,
+            Name = "Wsl Workspace",
+            ExecutionMode = ExecutionMode.BareHost,
+            Ext4MirrorPath = "/home/runner/.nightcodeforge/wks/919/clone",
+            RepositoryPath = _repo.RepositoryPath,
+            DefaultBaseBranch = "main"
+        };
+
+        await Assert.ThrowsAsync<NightCodeForge.Core.Exceptions.WslDistributionUnavailableException>(() =>
+            manager.EnsureWorktreeAsync(workspace, 43, "main"));
+    }
+
     public void Dispose()
     {
         _repo.Dispose();

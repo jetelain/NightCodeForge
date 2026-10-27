@@ -37,7 +37,7 @@ public class Step917DiffStatAndBatchedClarificationTests
             "Code Review",
             new AgenticStageConfig
             {
-                PromptTemplate = "Reviewing task #{{ task.id }}: {{ task.title }}"
+                PromptTemplate = "Reviewing task #{{ task.id }}: {{ task.title }}\n{{- if context.review_diff_stat }}\n\n[Git Diff Summary]:\n```diff\n{{ context.review_diff_stat }}\n```\ngit diff {{ task.base_branch }}...{{ task.feature_branch }} -- <file-path>\n{{- end }}"
             },
             new ScribanPromptTemplateRenderer(),
             TimeProvider.System);

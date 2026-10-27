@@ -160,8 +160,16 @@ public partial class DeterministicTestStage : IWorkflowStage
                     if (int.TryParse(m.Groups[3].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var f))
                         failedTests += f;
                 }
-                var regexFailures = TestFailureLineRegex().Matches(fullOutput).Select(m => m.Value.Trim()).Distinct();
-                failedList.AddRange(regexFailures);
+                var parsedFailures = TestDiagnosticsParser.ParseTestFailuresFromOutput(fullOutput);
+                if (parsedFailures.Count > 0)
+                {
+                    failedList.AddRange(parsedFailures.Distinct());
+                }
+                else
+                {
+                    var regexFailures = TestFailureLineRegex().Matches(fullOutput).Select(m => m.Value.Trim()).Distinct();
+                    failedList.AddRange(regexFailures);
+                }
             }
             else
             {
@@ -198,8 +206,16 @@ public partial class DeterministicTestStage : IWorkflowStage
                     totalTests = passedTests + failedTests;
                 }
 
-                var regexFailures = TestFailureLineRegex().Matches(fullOutput).Select(m => m.Value.Trim()).Distinct();
-                failedList.AddRange(regexFailures);
+                var parsedFailures = TestDiagnosticsParser.ParseTestFailuresFromOutput(fullOutput);
+                if (parsedFailures.Count > 0)
+                {
+                    failedList.AddRange(parsedFailures.Distinct());
+                }
+                else
+                {
+                    var regexFailures = TestFailureLineRegex().Matches(fullOutput).Select(m => m.Value.Trim()).Distinct();
+                    failedList.AddRange(regexFailures);
+                }
             }
         }
 

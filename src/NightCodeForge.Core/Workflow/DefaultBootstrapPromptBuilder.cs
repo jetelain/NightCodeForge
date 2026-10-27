@@ -136,21 +136,6 @@ public static class DefaultBootstrapPromptBuilder
             rendered = $"{rendered}\n\n[Stage Directive]:\n{effectiveDirective}".Trim();
         }
 
-        bool diffAlreadyRendered = (!string.IsNullOrWhiteSpace(reviewDiff) && rendered.Contains(reviewDiff)) ||
-                                   (!string.IsNullOrWhiteSpace(reviewDiffStat) && rendered.Contains(reviewDiffStat));
-
-        if (!diffAlreadyRendered)
-        {
-            if (!string.IsNullOrWhiteSpace(reviewDiff))
-            {
-                rendered = $"{rendered}\n\n[Git Diff ({baseBranch}...{branchName})]:\n```diff\n{reviewDiff}\n```\nTo inspect additional details or run git commands, use 'bash' (e.g. git diff, git log).".Trim();
-            }
-            else if (!string.IsNullOrWhiteSpace(reviewDiffStat))
-            {
-                rendered = $"{rendered}\n\n[Git Diff Summary]:\n```diff\n{reviewDiffStat}\n```\nTo inspect the diff of a specific file against base branch '{baseBranch}', run:\ngit diff {baseBranch}...{branchName} -- <file-path>".Trim();
-            }
-        }
-
         var conflictFiles = context.DataBag.Get<List<string>>(PipelineDataBagKeys.ConflictFiles);
         if (conflictFiles is { Count: > 0 } && !rendered.Contains(ConflictResolutionConstants.ConflictDirectiveHeader))
         {
