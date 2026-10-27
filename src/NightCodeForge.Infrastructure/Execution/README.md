@@ -23,7 +23,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** `TaskOrchestrator`, `NightCodeForge.Agents.Tools.BashTool`, `NightCodeForge.ScenarioRunner`.
+- **Inbound (Who uses this):** `TaskOrchestrator`, `NightCodeForge.Agents.Tools.BashTool`.
 - **Outbound (What this relies on):** `NightCodeForge.Core.Interfaces.IExecutionEnvironment`, `NightCodeForge.Core.Execution.SystemProcessRunner`, `CliWrap`.
 
 ## 4. Invariants & Architectural Rules

@@ -1006,7 +1006,7 @@ public class PipelineCohortChainingTests
     public async Task CohortScenario_ZeroInterleaving_ExecutesEntireCohortWithoutLowerTierInterference()
     {
         // Setup InMemoryTaskJobQueue (deterministic in-memory scheduler)
-        var inMemoryQueue = new NightCodeForge.ScenarioRunner.Environment.InMemoryTaskJobQueue();
+        var inMemoryQueue = new InMemoryTaskJobQueue();
 
         var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();

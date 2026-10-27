@@ -24,7 +24,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** `NightCodeForge.Infrastructure`, `NightCodeForge.Agents`, `NightCodeForge.Web`, `NightCodeForge.ScenarioRunner`, and test projects.
+- **Inbound (Who uses this):** `NightCodeForge.Infrastructure`, `NightCodeForge.Agents`, `NightCodeForge.Web`, and test projects.
 - **Outbound (What this relies on):** Minimal external dependencies: `Scriban` (templating), `Microsoft.Extensions.Logging.Abstractions`, `Microsoft.Extensions.DependencyInjection.Abstractions`. No database or network client packages.
 
 ## 4. Invariants & Architectural Rules

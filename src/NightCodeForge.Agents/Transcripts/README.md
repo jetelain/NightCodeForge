@@ -20,7 +20,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** `CrucibleAgentHarness`, `NightCodeForge.ScenarioRunner`.
+- **Inbound (Who uses this):** `CrucibleAgentHarness`.
 - **Outbound (What this relies on):** `System.IO`, `System.Text.Json`.
 
 ## 4. Invariants & Architectural Rules

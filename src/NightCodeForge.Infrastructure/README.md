@@ -24,7 +24,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** `NightCodeForge.Web`, `NightCodeForge.ScenarioRunner`.
+- **Inbound (Who uses this):** `NightCodeForge.Web`.
 - **Outbound (What this relies on):** `NightCodeForge.Core`, `Microsoft.EntityFrameworkCore.Sqlite`, `Hangfire.Core`, `CliWrap`, `Microsoft.AspNetCore.SignalR`.
 
 ## 4. Invariants & Architectural Rules

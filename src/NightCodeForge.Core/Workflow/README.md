@@ -25,7 +25,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** Background job processors (Hangfire in `Infrastructure`), `NightCodeForge.ScenarioRunner`, and API controllers / UI endpoints.
+- **Inbound (Who uses this):** Background job processors (Hangfire in `Infrastructure`), and API controllers / UI endpoints.
 - **Outbound (What this relies on):** `Domain`, `Repositories`, `Interfaces`, `Streaming`, and `Scriban` template engine.
 
 ## 4. Invariants & Architectural Rules

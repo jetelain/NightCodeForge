@@ -21,7 +21,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** `NightCodeForge.Core.Workflow.WorkflowPipelineEngine`, `NightCodeForge.ScenarioRunner`.
+- **Inbound (Who uses this):** `NightCodeForge.Core.Workflow.WorkflowPipelineEngine`.
 - **Outbound (What this relies on):** `NightCodeForge.Core`, `Microsoft.Extensions.AI`, `System.Text.Json`, `Scriban`.
 
 ## 4. Invariants & Architectural Rules

@@ -18,7 +18,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** `NightCodeForge.Agents.Inference`, `NightCodeForge.ScenarioRunner`, Web Settings controllers.
+- **Inbound (Who uses this):** `NightCodeForge.Agents.Inference`, Web Settings controllers.
 - **Outbound (What this relies on):** `System.Net.Http`, `NightCodeForge.Core.Interfaces.IOllamaRouterGatewayService`.
 
 ## 4. Invariants & Architectural Rules

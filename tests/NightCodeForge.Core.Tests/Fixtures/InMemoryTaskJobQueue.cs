@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Workflow;
 
-namespace NightCodeForge.ScenarioRunner.Environment;
+namespace NightCodeForge.Core.Tests.Fixtures;
 
 /// <summary>
 /// In-memory implementation of ITaskJobQueue capturing all enqueued jobs

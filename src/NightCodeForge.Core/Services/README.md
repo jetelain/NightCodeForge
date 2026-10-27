@@ -22,7 +22,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** Application startup lifecycle (`Program.cs`), `TaskOrchestrator`, `NightCodeForge.ScenarioRunner`.
+- **Inbound (Who uses this):** Application startup lifecycle (`Program.cs`), `TaskOrchestrator`.
 - **Outbound (What this relies on):** `Domain`, `Repositories`, `Interfaces.IGitWorkspaceManager`, `Interfaces.IWorkspaceLockProvider`.
 
 ## 4. Invariants & Architectural Rules

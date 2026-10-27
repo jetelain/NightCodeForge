@@ -1,8 +1,7 @@
 using NightCodeForge.Core.Domain;
-using NightCodeForge.ScenarioRunner.Environment;
 using Xunit;
 
-namespace NightCodeForge.ScenarioRunner.Tests;
+namespace NightCodeForge.Core.Tests.Fixtures;
 
 public class InMemoryTaskJobQueueTests
 {

@@ -22,7 +22,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\NightCodeForge.Core\NightCodeForge.Core.csproj" />
-    <ProjectReference Include="..\..\src\NightCodeForge.ScenarioRunner\NightCodeForge.ScenarioRunner.csproj" />
   </ItemGroup>
 
 </Project>

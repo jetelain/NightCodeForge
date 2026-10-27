@@ -18,7 +18,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** Web API endpoints receiving external webhooks/issues, `NightCodeForge.ScenarioRunner`.
+- **Inbound (Who uses this):** Web API endpoints receiving external webhooks/issues.
 - **Outbound (What this relies on):** `Core.Repositories.ITaskRepository`, `Core.Services.IHarnessRegistry`, `ReadOnlyCommandValidator`.
 
 ## 4. Invariants & Architectural Rules

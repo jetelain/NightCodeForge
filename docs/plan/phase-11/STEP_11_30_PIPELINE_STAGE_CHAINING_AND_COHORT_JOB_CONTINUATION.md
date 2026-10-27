@@ -293,7 +293,7 @@ Refactor the outer execution loop in `TaskOrchestrator.ProcessTaskAsync`:
    A resumed job always starts at `task.CurrentStageId`, never at the first stage of the cohort. The `isSameCohort` logic is evaluated from that stage onward, so a resumed job continues the remainder of its cohort in-process.
 
 4. **New queue contract:**
-   `ITaskJobQueue` gains `Task<bool> HasUrgentJobsWaitingAsync(CancellationToken)`. It MUST be implemented by the Hangfire queue (Infrastructure) and `InMemoryTaskJobQueue` (ScenarioRunner), and be mockable for unit tests. There is no "enqueue at head": a yielded task is simply re-enqueued on its cohort tier, and the strict tier priority of 11.27 determines when it resumes.
+   `ITaskJobQueue` gains `Task<bool> HasUrgentJobsWaitingAsync(CancellationToken)`. It MUST be implemented by the Hangfire queue (Infrastructure) and `InMemoryTaskJobQueue`, and be mockable for unit tests. There is no "enqueue at head": a yielded task is simply re-enqueued on its cohort tier, and the strict tier priority of 11.27 determines when it resumes.
 
 ---
 

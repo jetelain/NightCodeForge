@@ -18,7 +18,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** `WorkflowStageFactory`, `HarnessRegistry`, `NightCodeForge.ScenarioRunner`.
+- **Inbound (Who uses this):** `WorkflowStageFactory`, `HarnessRegistry`.
 - **Outbound (What this relies on):** `NightCodeForge.Core.Interfaces.IAgentHarness`, `NightCodeForge.Agents.Inference`, `NightCodeForge.Agents.Tools`, `Microsoft.Extensions.AI`.
 
 ## 4. Invariants & Architectural Rules
