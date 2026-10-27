@@ -33,6 +33,7 @@ The roadmap is prioritized into three strategic delivery tiers:
    - **Step 12.12:** Voice Support, Continuous Dictation & Hands-Free Operations (formerly Step 11.11) — hands-free voice operations via Web Speech API (`SpeechRecognition`) and Blazor JS Interop, continuous dictation with 1500ms silence detection, and ergonomic visual feedback.
    - **Step 12.15:** Deep OllamaRouter Fleet Provisioning & In-App Setup — in-app fleet management UI (`/settings` -> OllamaRouter tab) enabling developers to add, test, configure, and remove compute nodes across the local area network, pre-flight connectivity/latency testing, secure Cloud Overflow API key management, and interactive dynamic context visual tuning.
    - **Step 12.16:** Remote Tailscale Mesh Access, HTTPS & Transient Network Resilience — zero-firewall private mesh VPN access, automated MagicDNS Let's Encrypt TLS termination via attached `TailscaleServeHostedService` (or CLI trap), graceful shutdown cleanup with `tailscale serve reset` (zero desktop overhead when disabled), WebSocket reverse proxying for Blazor Interactive Server and SignalR telemetry, and transient network reconnection handling.
+   - **Step 12.18:** Cross-Platform Desktop Installer, Updater & Setup Wizard (Avalonia UI) — standalone, self-contained single-file desktop application (`NightCodeForge.Installer`) for Windows, Linux, and macOS delivering a zero-clone, zero-scripting out-of-the-box experience (OOBE); fetches binary distributions of `NightCodeForge.Web` and `ncf` CLI directly from GitHub Releases; provisions WSL2, Docker Engine, .NET 10 SDK, and companion tools with JIT privilege elevation; runs an automated setup micro-benchmark on the host GPU/RAM to determine the optimal mix and context size across curated `jetelain/*` models (`jetelain/qwen3.6-35b-a3b`, `jetelain/qwen3.8-27b` with Q3/Q4, and `jetelain/qwen3.5-9b`) with Unsloth Dynamics, strictly enforcing a minimum 128k context window (`num_ctx >= 131,072`) per role; configures OllamaRouter mesh nodes; and acts as an ongoing desktop maintenance and software updater hub.
 
 ---
 
@@ -69,6 +70,7 @@ The roadmap is prioritized into three strategic delivery tiers:
 | **12.12** | [🎙️ Step 12.12: Voice Support, Continuous Dictation & Hands-Free Operations](phase-12/STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md) | Hands-free voice operations via Web Speech API (`SpeechRecognition`) and Blazor JS Interop. Continuous dictation with 1500ms silence detection and visual audio feedback. *(formerly Step 11.11)* | Planned |
 | **12.15** | [🌐 Step 12.15: Deep OllamaRouter Fleet Provisioning & In-App Setup](phase-12/STEP_12_15_DEEP_OLLAMAROUTER_FLEET_PROVISIONING_AND_IN_APP_SETUP.md) | In-app fleet provisioning UI in `/settings` to add, test, configure, and remove LAN compute nodes, live connectivity testing, secure Cloud Overflow API key management, and dynamic context visual tuning. Consumes OllamaRouter Tasks #19 and #20 (durable user configuration layer). | Planned |
 | **12.16** | [🔒 Step 12.16: Remote Tailscale Mesh Access, HTTPS & Transient Network Resilience](phase-12/STEP_12_16_TAILSCALE_REMOTE_ACCESS.md) | Zero-firewall private mesh VPN remote access, automated MagicDNS Let's Encrypt TLS termination via attached `TailscaleServeHostedService`, graceful shutdown cleanup (`tailscale serve reset`), WebSocket reverse proxying for Blazor circuits, and network shift resilience. | Planned |
+| **12.18** | [🖥️ Step 12.18: Cross-Platform Desktop Installer, Updater & Setup Wizard](phase-12/STEP_12_18_CROSS_PLATFORM_DESKTOP_INSTALLER_AND_ENVIRONMENT_WIZARD.md) | Standalone self-contained Avalonia UI desktop application across Windows, Linux, and macOS. Zero-clone GitHub Releases binary deployment, automated host/WSL2/Docker/.NET provisioning with JIT privilege elevation, in-wizard micro-benchmark finding optimal mix of curated `jetelain/*` Unsloth Dynamic models (`qwen3.6-35b-a3b`, `qwen3.8-27b` Q3/Q4, `qwen3.5-9b`) with strict $\ge 128\text{k}$ context guarantee, OllamaRouter mesh fleet setup, and post-install maintenance & 1-click update hub. | Planned |
 
 ---
 
@@ -125,6 +127,20 @@ flowchart LR
     MCPManager -->|Stdio JSON-RPC Transport| ContainerMcp["Isolated Stdio MCP Servers<br/>(ContainerSandbox)"]
     RemoteMcp --> Tools["Exported Tools (read/write/query)"]
     ContainerMcp --> Tools
+```
+
+### 3.5 Step 12.18: Cross-Platform Desktop Installer & Maintenance Hub
+```mermaid
+flowchart TD
+    Binary["Standalone Single-File Executable (Avalonia UI)"] --> Probe["Hardware & OS Inspector (CPU, RAM, GPU VRAM)"]
+    Probe --> Decision{"Prior Installation Found?"}
+    
+    Decision -- No --> Wizard["OOBE Wizard: JIT WSL/Docker/.NET Setup + Hardware-Aware Models"]
+    Decision -- Yes --> Hub["Forge Hub: 1-Click Update, Feature Manager, System Doctor"]
+    
+    Wizard --> GitHub["Fetch & Unpack Web + CLI from GitHub Releases"]
+    GitHub --> Run["Launch NightCodeForge Web (http://localhost:5000)"]
+    Hub --> Run
 ```
 
 ---
@@ -215,3 +231,12 @@ flowchart LR
   - [ ] Kestrel `ForwardedHeadersOptions` for `X-Forwarded-Proto` and `X-Forwarded-For`.
   - [ ] Tailscale Serve configuration with MagicDNS Let's Encrypt TLS termination.
   - [ ] Transient network reconnection resilience and operational tooling (`tools/tailscale-serve.ps1`).
+- [ ] **Step 12.18 (Cross-Platform Desktop Installer, Updater & Setup Wizard):**
+  - [ ] Scaffold `NightCodeForge.Installer` with Avalonia UI 11+ and `CommunityToolkit.Mvvm` targeting .NET 10.
+  - [ ] Implement `IHardwareInspectorService` detecting CPU architecture, RAM, and GPU VRAM across Windows, Linux, and macOS.
+  - [ ] Implement `IHardwareMicroBenchmarkService` running automated setup micro-benchmarks on curated `jetelain/*` Unsloth Dynamic models (`qwen3.6-35b-a3b`, `qwen3.8-27b` Q3/Q4, `qwen3.5-9b`), enforcing a strict $\ge 128\text{k}$ context guarantee (`num_ctx >= 131,072`) per role with KV cache quantization probing (`q4_0` / `q8_0`).
+  - [ ] Implement `IEnvironmentProvisioner` managing JIT elevation for WSL2 setup, Docker Engine, .NET 10 SDK, and companion CLI tools.
+  - [ ] Implement `IOllamaManager` handling Ollama service verification, model streaming/pulling, and OllamaRouter mesh node setup.
+  - [ ] Implement `IReleaseManager` querying GitHub Releases API, streaming binary assets with SHA-256 verification, and atomic unpacking.
+  - [ ] Implement dual-mode UX: OOBE Wizard on first run with benchmark visualization, Maintenance & Updater Hub on subsequent launches with "Doctor" diagnostics and 1-click update.
+  - [ ] Configure multi-platform self-contained single-file publish workflow for `win-x64`, `linux-x64`, and `osx-arm64`.
