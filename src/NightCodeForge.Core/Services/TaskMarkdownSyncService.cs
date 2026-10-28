@@ -768,7 +768,17 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         bool diskDiffersFromBaseline = !string.Equals(item.Hash, baseline.ContentHash, StringComparison.Ordinal);
                         if (dbTask.Version != baseline.Version && diskDiffersFromBaseline)
                         {
-                            throw new TaskConcurrencyException(taskId, baseline.Version, dbTask.Version);
+                            // 3-way check: A true conflict exists only if both DB and disk concurrently modified
+                            // the same core specification fields (Title or Description) to conflicting values.
+                            // Independent modifications to maintainer-controlled fields (e.g. MergeMode, Priority,
+                            // Dependencies) are reconciled by giving authority to the database.
+                            bool titleConflict = HasTitleConflict(dbTask, baseline, item.Frontmatter);
+                            bool descConflict = HasDescriptionConflict(dbTask, baseline, item.Description);
+
+                            if (titleConflict || descConflict)
+                            {
+                                throw new TaskConcurrencyException(taskId, baseline.Version, dbTask.Version);
+                            }
                         }
                     }
 
@@ -1177,11 +1187,13 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     continue;
                 }
 
-                var newTitle = !string.IsNullOrWhiteSpace(item.Frontmatter.Title) ? item.Frontmatter.Title.Trim() : task.Title;
-                var newDesc = !string.IsNullOrWhiteSpace(item.Description) ? item.Description : task.Description;
-                var newPriority = item.Frontmatter.Priority > 0 ? item.Frontmatter.Priority : task.Priority;
-
+                string newTitle;
+                string newDesc;
+                int newPriority;
+                Domain.MergeMode newMergeMode;
+                string newBaseBranch;
                 List<int>? finalDepIds = null;
+
                 if (resolvedExistingDeps.TryGetValue(taskId, out var resolved))
                 {
                     finalDepIds = new List<int>(resolved.ExistingDepIds);
@@ -1192,12 +1204,64 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     finalDepIds = finalDepIds.Distinct().ToList();
                 }
 
-                var newMergeMode = string.IsNullOrWhiteSpace(item.Frontmatter.MergeMode)
-                    ? task.MergeMode
-                    : (string.Equals(item.Frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
-                        ? Domain.MergeMode.Automatic
-                        : Domain.MergeMode.ManualReviewRequired);
-                var newBaseBranch = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) ? item.Frontmatter.BaseBranch.Trim() : task.BaseBranch;
+                if (baselineSnapshot != null && baselineSnapshot.TryGetValue(taskId, out baseline) && baseline != null)
+                {
+                    // 3-way merge between Baseline, DB (authoritative maintainer fields), and Disk (agent modifications):
+                    // 1. Title: disk modification takes effect only if disk altered it relative to baseline
+                    bool diskTitleChanged = !string.IsNullOrWhiteSpace(item.Frontmatter.Title) &&
+                        !string.Equals(item.Frontmatter.Title.Trim(), baseline.Frontmatter.Title?.Trim(), StringComparison.Ordinal);
+                    newTitle = diskTitleChanged ? item.Frontmatter.Title!.Trim() : (task.Title ?? string.Empty);
+
+                    // 2. Description: disk modification takes effect only if disk altered it relative to baseline
+                    bool diskDescChanged = !string.IsNullOrWhiteSpace(item.Description) &&
+                        !string.Equals(NormalizeLineEndings(item.Description)?.Trim(), NormalizeLineEndings(baseline.Description)?.Trim(), StringComparison.Ordinal);
+                    newDesc = diskDescChanged ? item.Description : task.Description;
+
+                    // 3. Priority: DB takes precedence if DB modified priority; otherwise disk modification takes effect if disk altered it relative to baseline
+                    bool dbPriorityChanged = task.Priority != baseline.Frontmatter.Priority;
+                    bool diskPriorityChanged = item.Frontmatter.Priority > 0 &&
+                        item.Frontmatter.Priority != baseline.Frontmatter.Priority;
+                    newPriority = dbPriorityChanged ? task.Priority : (diskPriorityChanged ? item.Frontmatter.Priority : task.Priority);
+
+                    // 4. MergeMode: disk modification takes effect only if disk altered it relative to baseline
+                    var diskMergeMode = ParseMergeMode(item.Frontmatter.MergeMode);
+                    var baselineMergeMode = ParseMergeMode(baseline.Frontmatter.MergeMode) ?? Domain.MergeMode.ManualReviewRequired;
+                    bool diskMergeModeChanged = diskMergeMode.HasValue && diskMergeMode != baselineMergeMode;
+                    newMergeMode = diskMergeModeChanged && diskMergeMode.HasValue ? diskMergeMode.Value : task.MergeMode;
+
+                    // 5. BaseBranch: DB takes precedence if DB modified base branch; otherwise disk modification takes effect if disk altered it relative to baseline
+                    var fallbackBaseBranch = task.BaseBranch ?? workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch;
+                    bool dbBaseBranchChanged = !string.Equals(task.BaseBranch?.Trim(), baseline.Frontmatter.BaseBranch?.Trim(), StringComparison.Ordinal);
+                    bool diskBaseBranchChanged = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) &&
+                        !string.Equals(item.Frontmatter.BaseBranch.Trim(), baseline.Frontmatter.BaseBranch?.Trim(), StringComparison.Ordinal);
+                    newBaseBranch = dbBaseBranchChanged ? fallbackBaseBranch : (diskBaseBranchChanged ? item.Frontmatter.BaseBranch!.Trim() : fallbackBaseBranch);
+
+                    // 6. Dependencies: if disk frontmatter did not alter dependencies relative to baseline, preserve DB dependencies
+                    if (finalDepIds != null)
+                    {
+                        var baselineDepIds = baseline.Frontmatter.DependsOn?
+                            .Select(r => r is int i ? i : (int.TryParse(r.ToString(), out var parsed) ? parsed : (int?)null))
+                            .Where(id => id.HasValue)
+                            .Select(id => id!.Value)
+                            .OrderBy(x => x)
+                            .ToList() ?? new List<int>();
+
+                        bool diskDepsChanged = !finalDepIds.OrderBy(x => x).SequenceEqual(baselineDepIds);
+                        if (!diskDepsChanged)
+                        {
+                            finalDepIds = null;
+                        }
+                    }
+                }
+                else
+                {
+                    newTitle = !string.IsNullOrWhiteSpace(item.Frontmatter.Title) ? item.Frontmatter.Title.Trim() : (task.Title ?? string.Empty);
+                    newDesc = !string.IsNullOrWhiteSpace(item.Description) ? item.Description : task.Description;
+                    newPriority = item.Frontmatter.Priority > 0 ? item.Frontmatter.Priority : task.Priority;
+                    newMergeMode = ParseMergeMode(item.Frontmatter.MergeMode) ?? task.MergeMode;
+                    newBaseBranch = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) ? item.Frontmatter.BaseBranch.Trim() : task.BaseBranch;
+                }
+
                 var newOrigin = ParseOrigin(item.Frontmatter.Origin);
 
                 bool titleChanged = !string.Equals(newTitle, task.Title, StringComparison.Ordinal);
@@ -1207,7 +1271,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 bool baseBranchChanged = !string.Equals(newBaseBranch, task.BaseBranch, StringComparison.Ordinal);
                 bool originChanged = newOrigin != task.Origin;
 
-                var currentDeps = task.Dependencies.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList();
+                var currentDeps = task.Dependencies?.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList() ?? new List<int>();
                 bool depsChanged = finalDepIds != null && !finalDepIds.OrderBy(x => x).SequenceEqual(currentDeps);
 
                 if (titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged)
@@ -1233,18 +1297,42 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         changeActor,
                         changeReason ?? TaskSyncConstants.DiskModificationsSync,
                         cancellationToken);
+
+                    if (finalDepIds != null)
+                    {
+                        task.Dependencies = finalDepIds.Select(depId => new TaskDependency
+                        {
+                            TaskId = task.Id,
+                            DependsOnTaskId = depId
+                        }).ToList();
+                    }
                 }
 
-                // In-place normalization for existing files if depends_on changed or agent tampered with status
+                // In-place normalization for existing files if depends_on changed, agent tampered with status, or maintainer fields were reconciled
                 bool statusTampered = baselineSnapshot != null &&
                                       !string.IsNullOrWhiteSpace(item.Frontmatter.Status) &&
                                       !string.Equals(item.Frontmatter.Status.Trim(), task.Status.ToString(), StringComparison.OrdinalIgnoreCase);
 
-                if (finalDepIds != null || statusTampered)
+                var effectiveDiskMergeMode = ParseMergeMode(item.Frontmatter.MergeMode) ?? Domain.MergeMode.ManualReviewRequired;
+                var effectiveDiskPriority = item.Frontmatter.Priority > 0 ? item.Frontmatter.Priority : TaskSyncConstants.DefaultPriority;
+                var effectiveDiskBaseBranch = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) ? item.Frontmatter.BaseBranch.Trim() : (workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch);
+
+                var currentDbDepIds = task.Dependencies?.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList() ?? new List<int>();
+                var currentDiskDepIds = (finalDepIds ?? (resolvedExistingDeps.TryGetValue(taskId, out var resDeps)
+                    ? resDeps.ExistingDepIds
+                    : new List<int>())).OrderBy(x => x).ToList();
+                bool depsDifferFromDisk = !currentDiskDepIds.SequenceEqual(currentDbDepIds);
+
+                bool maintainerFieldsSynced = baselineSnapshot != null &&
+                                              (task.MergeMode != effectiveDiskMergeMode ||
+                                               task.Priority != effectiveDiskPriority ||
+                                               !string.Equals(task.BaseBranch, effectiveDiskBaseBranch, StringComparison.Ordinal) ||
+                                               !string.Equals(task.Title?.Trim(), item.Frontmatter.Title?.Trim(), StringComparison.Ordinal) ||
+                                               depsDifferFromDisk);
+
+                if (finalDepIds != null || statusTampered || maintainerFieldsSynced)
                 {
                     var effectiveDeps = finalDepIds ?? task.Dependencies?.Select(d => d.DependsOnTaskId).ToList() ?? new List<int>();
-                    item.Frontmatter.DependsOn = new TaskDependencyReferenceList(effectiveDeps);
-                    item.Frontmatter.Status = task.Status.ToString();
                     var normalizedMarkdown = GenerateMarkdown(task, effectiveDeps, item.Frontmatter.AgentProfile);
                     var normHash = ComputeContentHash(normalizedMarkdown);
                     _suppressedHashes[normHash] = 1;
@@ -1878,6 +1966,43 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         return trimmedBody;
     }
 
+
+    private static bool HasTitleConflict(ForgeTask dbTask, TaskBaselineEntry baseline, TaskFrontmatter diskFrontmatter)
+    {
+        var baselineTitle = baseline.Frontmatter.Title?.Trim() ?? string.Empty;
+        var dbTitle = dbTask.Title?.Trim() ?? string.Empty;
+        var diskTitle = !string.IsNullOrWhiteSpace(diskFrontmatter.Title) ? diskFrontmatter.Title.Trim() : null;
+
+        bool dbTitleChanged = !string.Equals(dbTitle, baselineTitle, StringComparison.Ordinal);
+        bool diskTitleChanged = diskTitle != null && !string.Equals(diskTitle, baselineTitle, StringComparison.Ordinal);
+
+        return dbTitleChanged && diskTitleChanged && !string.Equals(dbTitle, diskTitle, StringComparison.Ordinal);
+    }
+
+    private static bool HasDescriptionConflict(ForgeTask dbTask, TaskBaselineEntry baseline, string? diskDescription)
+    {
+        var baselineDesc = NormalizeLineEndings(baseline.Description)?.Trim() ?? string.Empty;
+        var dbDesc = NormalizeLineEndings(dbTask.Description)?.Trim() ?? string.Empty;
+        var diskDesc = !string.IsNullOrWhiteSpace(diskDescription) ? NormalizeLineEndings(diskDescription)?.Trim() : null;
+
+        bool dbDescChanged = !string.Equals(dbDesc, baselineDesc, StringComparison.Ordinal);
+        bool diskDescChanged = diskDesc != null && !string.Equals(diskDesc, baselineDesc, StringComparison.Ordinal);
+
+        return dbDescChanged && diskDescChanged && !string.Equals(dbDesc, diskDesc, StringComparison.Ordinal);
+    }
+
+    private static string? NormalizeLineEndings(string? text)
+    {
+        return text?.Replace("\r\n", "\n").Replace('\r', '\n');
+    }
+
+    private static Domain.MergeMode? ParseMergeMode(string? mergeModeStr)
+    {
+        if (string.IsNullOrWhiteSpace(mergeModeStr)) return null;
+        return string.Equals(mergeModeStr.Trim(), "automatic", StringComparison.OrdinalIgnoreCase)
+            ? Domain.MergeMode.Automatic
+            : Domain.MergeMode.ManualReviewRequired;
+    }
 
     public void Dispose()
     {

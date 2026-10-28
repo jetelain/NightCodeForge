@@ -1,9 +1,12 @@
+using Microsoft.Extensions.Logging;
 using Moq;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Stages;
@@ -672,5 +675,648 @@ public class TaskOrchestratorTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.ProcessTaskAsync(task.Id));
 
         telemetryMock.Verify(t => t.ClearActiveTask(96), Times.Once);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenPostStageSyncThrowsTaskConcurrencyException_LogsWarningAndDoesNotFailTask()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-test-concurrency-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var workspace = new Workspace
+            {
+                Id = 970,
+                Name = "Temp Concurrency Workspace",
+                RepositoryPath = tempDir,
+                DefaultBaseBranch = "main"
+            };
+            await _workspaceRepo.CreateAsync(workspace);
+
+            var task = await _taskRepo.CreateAsync(new ForgeTask
+            {
+                Id = 97,
+                WorkspaceId = 970,
+                Status = TaskOverallStatus.Open,
+                Title = "Concurrency Handling Test",
+                Priority = TaskPriority.High,
+                BaseBranch = "main"
+            });
+            _depStore.AddTask(97, 970, TaskOverallStatus.Open);
+
+            var mdSyncMock = new Mock<ITaskMarkdownSyncService>();
+            mdSyncMock.Setup(m => m.SyncAllTasksToDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SyncAllToDiskResult(new Dictionary<int, string>(), new Dictionary<int, TaskBaselineEntry>()));
+
+            mdSyncMock.Setup(m => m.SyncAllTasksFromDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new TaskConcurrencyException(97, 1, 2));
+
+            var implStage = TestWorkflowPipelines.CreateImplementationStage(
+                async (ctx, ct) =>
+                {
+                    // Simulate concurrent database modification by maintainer while stage runs
+                    var dbTask = await _taskRepo.GetByIdAsync(97);
+                    if (dbTask != null)
+                    {
+                        dbTask.Title = "Authoritative DB Title";
+                        dbTask.Version = 2;
+                        await _taskRepo.UpdateAsync(dbTask);
+                    }
+                    return StageExecutionResult.Success();
+                });
+            var pipeline = new WorkflowPipeline(new IWorkflowStage[] { implStage });
+
+            var orchestrator = new Fixtures.TestOrchestratorBuilder
+            {
+                TaskRepository = _taskRepo,
+                WorkspaceRepository = _workspaceRepo,
+                DependencyEngine = _depEngine,
+                LockProvider = _lockProvider,
+                GitWorkspaceManager = _gitManager,
+                JobQueue = _jobQueue,
+                DependencyStore = _depStore,
+                PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+                MarkdownSyncService = mdSyncMock.Object
+            }.Build();
+
+            await orchestrator.ProcessTaskAsync(task.Id);
+
+            var updatedTask = await _taskRepo.GetByIdAsync(97);
+            Assert.NotNull(updatedTask);
+            Assert.NotEqual(TaskOverallStatus.Failed, updatedTask.Status);
+            Assert.Equal("Authoritative DB Title", updatedTask.Title);
+            Assert.Equal(3, updatedTask.Version);
+
+            var logs = updatedTask.ExecutionLogs;
+            Assert.Contains(logs, l => l.Level == LogLevel.Warning && l.Message.Contains("concurrency conflict"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenPostStageSyncThrowsTaskMarkdownSyncException_FailsTask()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-test-mdsync-fail-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var workspace = new Workspace
+            {
+                Id = 971,
+                Name = "Temp Fail Workspace",
+                RepositoryPath = tempDir,
+                DefaultBaseBranch = "main"
+            };
+            await _workspaceRepo.CreateAsync(workspace);
+
+            var task = await _taskRepo.CreateAsync(new ForgeTask
+            {
+                Id = 98,
+                WorkspaceId = 971,
+                Status = TaskOverallStatus.Open,
+                Title = "Sync Fail Test",
+                Priority = TaskPriority.High,
+                BaseBranch = "main"
+            });
+            _depStore.AddTask(98, 971, TaskOverallStatus.Open);
+
+            var mdSyncMock = new Mock<ITaskMarkdownSyncService>();
+            mdSyncMock.Setup(m => m.SyncAllTasksToDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SyncAllToDiskResult(new Dictionary<int, string>(), new Dictionary<int, TaskBaselineEntry>()));
+
+            mdSyncMock.Setup(m => m.SyncAllTasksFromDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new TaskMarkdownSyncException("Circular dependency detected", taskId: 98));
+
+            var implStage = TestWorkflowPipelines.CreateImplementationStage(
+                (ctx, ct) => Task.FromResult(StageExecutionResult.Success()));
+            var pipeline = new WorkflowPipeline(new IWorkflowStage[] { implStage });
+
+            var orchestrator = new Fixtures.TestOrchestratorBuilder
+            {
+                TaskRepository = _taskRepo,
+                WorkspaceRepository = _workspaceRepo,
+                DependencyEngine = _depEngine,
+                LockProvider = _lockProvider,
+                GitWorkspaceManager = _gitManager,
+                JobQueue = _jobQueue,
+                DependencyStore = _depStore,
+                PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+                MarkdownSyncService = mdSyncMock.Object
+            }.Build();
+
+            await Assert.ThrowsAsync<TaskMarkdownSyncException>(() => orchestrator.ProcessTaskAsync(task.Id));
+
+            var updatedTask = await _taskRepo.GetByIdAsync(98);
+            Assert.NotNull(updatedTask);
+            Assert.Equal(TaskOverallStatus.Failed, updatedTask.Status);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenPostStageSyncThrowsConcurrencyConflictOnOtherTask_ResolvesOtherTaskAndCompletesSyncForExecutingTask()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-test-crosstask-concurrency-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var workspace = new Workspace
+            {
+                Id = 972,
+                Name = "CrossTask Concurrency Workspace",
+                RepositoryPath = tempDir,
+                DefaultBaseBranch = "main"
+            };
+            await _workspaceRepo.CreateAsync(workspace);
+
+            var executingTask = await _taskRepo.CreateAsync(new ForgeTask
+            {
+                Id = 97,
+                WorkspaceId = 972,
+                Status = TaskOverallStatus.Open,
+                Title = "Executing Task",
+                Description = "Original Desc",
+                Priority = TaskPriority.High,
+                BaseBranch = "main"
+            });
+            _depStore.AddTask(97, 972, TaskOverallStatus.Open);
+
+            var foreignTask = await _taskRepo.CreateAsync(new ForgeTask
+            {
+                Id = 50,
+                WorkspaceId = 972,
+                Status = TaskOverallStatus.Open,
+                Title = "Foreign Task",
+                Description = "Authoritative Foreign DB Desc",
+                Priority = TaskPriority.Normal,
+                BaseBranch = "main"
+            });
+            _depStore.AddTask(50, 972, TaskOverallStatus.Open);
+
+            var mdSyncMock = new Mock<ITaskMarkdownSyncService>();
+            mdSyncMock.Setup(m => m.SyncAllTasksToDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SyncAllToDiskResult(new Dictionary<int, string>(), new Dictionary<int, TaskBaselineEntry>()));
+
+            int callCount = 0;
+            mdSyncMock.Setup(m => m.SyncAllTasksFromDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, CancellationToken>(
+                    (ws, target, host, baseline, actor, reason, ct) =>
+                    {
+                        callCount++;
+                        if (callCount == 1)
+                        {
+                            throw new TaskConcurrencyException(50, 1, 2);
+                        }
+                        var updatedExecuting = new ForgeTask
+                        {
+                            Id = 97,
+                            WorkspaceId = 972,
+                            Status = TaskOverallStatus.Open,
+                            Title = "Executing Task",
+                            Description = "Agent Updated Disk Desc",
+                            Priority = TaskPriority.High,
+                            BaseBranch = "main",
+                            Version = 2
+                        };
+                        return Task.FromResult<IReadOnlyList<ForgeTask>>(new List<ForgeTask> { updatedExecuting });
+                    });
+
+            var implStage = TestWorkflowPipelines.CreateImplementationStage(
+                (ctx, ct) => Task.FromResult(StageExecutionResult.Success()));
+            var pipeline = new WorkflowPipeline(new IWorkflowStage[] { implStage });
+
+            var orchestrator = new Fixtures.TestOrchestratorBuilder
+            {
+                TaskRepository = _taskRepo,
+                WorkspaceRepository = _workspaceRepo,
+                DependencyEngine = _depEngine,
+                LockProvider = _lockProvider,
+                GitWorkspaceManager = _gitManager,
+                JobQueue = _jobQueue,
+                DependencyStore = _depStore,
+                PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+                MarkdownSyncService = mdSyncMock.Object
+            }.Build();
+
+            await orchestrator.ProcessTaskAsync(executingTask.Id);
+
+            // Re-attempt was triggered after foreign task conflict
+            Assert.Equal(2, callCount);
+
+            // Foreign task was synced to disk to clear conflict
+            mdSyncMock.Verify(m => m.SyncTaskToDiskAsync(
+                It.Is<ForgeTask>(t => t.Id == 50),
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<int>?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+
+            // Executing task's disk changes were preserved (not overwritten with Original Desc)
+            var updatedTask = await _taskRepo.GetByIdAsync(97);
+            Assert.NotNull(updatedTask);
+            Assert.Equal("Agent Updated Disk Desc", updatedTask.Description);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenPostStageSyncReturnsRefreshedDependenciesAndOrigin_PropagatesToExecutingTask()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-test-props-propagation-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var workspace = new Workspace
+            {
+                Id = 973,
+                Name = "Props Propagation Workspace",
+                RepositoryPath = tempDir,
+                DefaultBaseBranch = "main"
+            };
+            await _workspaceRepo.CreateAsync(workspace);
+
+            var task = await _taskRepo.CreateAsync(new ForgeTask
+            {
+                Id = 97,
+                WorkspaceId = 973,
+                Status = TaskOverallStatus.Open,
+                Title = "Executing Task",
+                Description = "Original Desc",
+                Priority = TaskPriority.High,
+                BaseBranch = "main",
+                Origin = TaskOrigin.Manual
+            });
+            _depStore.AddTask(97, 973, TaskOverallStatus.Open);
+
+            var mdSyncMock = new Mock<ITaskMarkdownSyncService>();
+            mdSyncMock.Setup(m => m.SyncAllTasksToDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SyncAllToDiskResult(new Dictionary<int, string>(), new Dictionary<int, TaskBaselineEntry>()));
+
+            var updatedExecuting = new ForgeTask
+            {
+                Id = 97,
+                WorkspaceId = 973,
+                Status = TaskOverallStatus.Open,
+                Title = "Executing Task",
+                Description = "Agent Updated Disk Desc",
+                Priority = TaskPriority.High,
+                BaseBranch = "main",
+                Origin = TaskOrigin.GitHubIssue,
+                Version = 2,
+                Dependencies = new List<TaskDependency>
+                {
+                    new TaskDependency { TaskId = 97, DependsOnTaskId = 42 }
+                }
+            };
+
+            mdSyncMock.Setup(m => m.SyncAllTasksFromDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new List<ForgeTask> { updatedExecuting });
+
+            var implStage = TestWorkflowPipelines.CreateImplementationStage(
+                (ctx, ct) => Task.FromResult(StageExecutionResult.Success()));
+            var pipeline = new WorkflowPipeline(new IWorkflowStage[] { implStage });
+
+            var orchestrator = new Fixtures.TestOrchestratorBuilder
+            {
+                TaskRepository = _taskRepo,
+                WorkspaceRepository = _workspaceRepo,
+                DependencyEngine = _depEngine,
+                LockProvider = _lockProvider,
+                GitWorkspaceManager = _gitManager,
+                JobQueue = _jobQueue,
+                DependencyStore = _depStore,
+                PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+                MarkdownSyncService = mdSyncMock.Object
+            }.Build();
+
+            await orchestrator.ProcessTaskAsync(task.Id);
+
+            var updatedTask = await _taskRepo.GetByIdAsync(97);
+            Assert.NotNull(updatedTask);
+            Assert.Equal("Agent Updated Disk Desc", updatedTask.Description);
+            Assert.Equal(TaskOrigin.GitHubIssue, updatedTask.Origin);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenMultipleForeignTasksConflict_ResolvesAllForeignTasksAndCompletesSync()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-test-multiforeign-concurrency-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var workspace = new Workspace
+            {
+                Id = 974,
+                Name = "Multi Foreign Concurrency Workspace",
+                RepositoryPath = tempDir,
+                DefaultBaseBranch = "main"
+            };
+            await _workspaceRepo.CreateAsync(workspace);
+
+            var executingTask = await _taskRepo.CreateAsync(new ForgeTask
+            {
+                Id = 97,
+                WorkspaceId = 974,
+                Status = TaskOverallStatus.Open,
+                Title = "Executing Task",
+                Description = "Original Desc",
+                Priority = TaskPriority.High,
+                BaseBranch = "main"
+            });
+            _depStore.AddTask(97, 974, TaskOverallStatus.Open);
+
+            var foreign1 = await _taskRepo.CreateAsync(new ForgeTask
+            {
+                Id = 50,
+                WorkspaceId = 974,
+                Status = TaskOverallStatus.Open,
+                Title = "Foreign Task 1",
+                Priority = TaskPriority.Normal,
+                BaseBranch = "main"
+            });
+            _depStore.AddTask(50, 974, TaskOverallStatus.Open);
+
+            var foreign2 = await _taskRepo.CreateAsync(new ForgeTask
+            {
+                Id = 51,
+                WorkspaceId = 974,
+                Status = TaskOverallStatus.Open,
+                Title = "Foreign Task 2",
+                Priority = TaskPriority.Normal,
+                BaseBranch = "main"
+            });
+            _depStore.AddTask(51, 974, TaskOverallStatus.Open);
+
+            var mdSyncMock = new Mock<ITaskMarkdownSyncService>();
+            mdSyncMock.Setup(m => m.SyncAllTasksToDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SyncAllToDiskResult(new Dictionary<int, string>(), new Dictionary<int, TaskBaselineEntry>()));
+
+            int callCount = 0;
+            mdSyncMock.Setup(m => m.SyncAllTasksFromDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, CancellationToken>(
+                    (ws, target, host, baseline, actor, reason, ct) =>
+                    {
+                        callCount++;
+                        if (callCount == 1)
+                        {
+                            throw new TaskConcurrencyException(50, 1, 2);
+                        }
+                        if (callCount == 2)
+                        {
+                            throw new TaskConcurrencyException(51, 1, 2);
+                        }
+                        var updatedExecuting = new ForgeTask
+                        {
+                            Id = 97,
+                            WorkspaceId = 974,
+                            Status = TaskOverallStatus.Open,
+                            Title = "Executing Task",
+                            Description = "Agent Updated After Multi-Foreign Conflicts",
+                            Priority = TaskPriority.High,
+                            BaseBranch = "main",
+                            Version = 2
+                        };
+                        return Task.FromResult<IReadOnlyList<ForgeTask>>(new List<ForgeTask> { updatedExecuting });
+                    });
+
+            var implStage = TestWorkflowPipelines.CreateImplementationStage(
+                (ctx, ct) => Task.FromResult(StageExecutionResult.Success()));
+            var pipeline = new WorkflowPipeline(new IWorkflowStage[] { implStage });
+
+            var orchestrator = new Fixtures.TestOrchestratorBuilder
+            {
+                TaskRepository = _taskRepo,
+                WorkspaceRepository = _workspaceRepo,
+                DependencyEngine = _depEngine,
+                LockProvider = _lockProvider,
+                GitWorkspaceManager = _gitManager,
+                JobQueue = _jobQueue,
+                DependencyStore = _depStore,
+                PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+                MarkdownSyncService = mdSyncMock.Object
+            }.Build();
+
+            await orchestrator.ProcessTaskAsync(executingTask.Id);
+
+            // Re-attempt loop handled both foreign tasks and succeeded on 3rd call
+            Assert.Equal(3, callCount);
+
+            // Both foreign tasks were synced to disk to clear conflict
+            mdSyncMock.Verify(m => m.SyncTaskToDiskAsync(
+                It.Is<ForgeTask>(t => t.Id == 50),
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<int>?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+
+            mdSyncMock.Verify(m => m.SyncTaskToDiskAsync(
+                It.Is<ForgeTask>(t => t.Id == 51),
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<int>?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+
+            var updatedTask = await _taskRepo.GetByIdAsync(97);
+            Assert.NotNull(updatedTask);
+            Assert.Equal("Agent Updated After Multi-Foreign Conflicts", updatedTask.Description);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenExecutingTaskConflicts_SyncsAuthoritativeStateToDisk_AndRetriesToCompleteSync()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-test-exec-concurrency-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var workspace = new Workspace
+            {
+                Id = 975,
+                Name = "Executing Task Concurrency Workspace",
+                RepositoryPath = tempDir,
+                DefaultBaseBranch = "main"
+            };
+            await _workspaceRepo.CreateAsync(workspace);
+
+            var executingTask = await _taskRepo.CreateAsync(new ForgeTask
+            {
+                Id = 98,
+                WorkspaceId = 975,
+                Status = TaskOverallStatus.Open,
+                Title = "Executing Task 98",
+                Description = "Original Desc",
+                Priority = TaskPriority.High,
+                BaseBranch = "main"
+            });
+            _depStore.AddTask(98, 975, TaskOverallStatus.Open);
+
+            var mdSyncMock = new Mock<ITaskMarkdownSyncService>();
+            mdSyncMock.Setup(m => m.SyncAllTasksToDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SyncAllToDiskResult(new Dictionary<int, string>(), new Dictionary<int, TaskBaselineEntry>()));
+
+            int callCount = 0;
+            mdSyncMock.Setup(m => m.SyncAllTasksFromDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+                .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, CancellationToken>(
+                    (ws, target, host, baseline, actor, reason, ct) =>
+                    {
+                        callCount++;
+                        if (callCount == 1)
+                        {
+                            throw new TaskConcurrencyException(98, 1, 2);
+                        }
+                        var updatedExecuting = new ForgeTask
+                        {
+                            Id = 98,
+                            WorkspaceId = 975,
+                            Status = TaskOverallStatus.Open,
+                            Title = "Executing Task 98",
+                            Description = "Agent Updated Description",
+                            Priority = TaskPriority.High,
+                            BaseBranch = "main",
+                            Version = 2
+                        };
+                        return Task.FromResult<IReadOnlyList<ForgeTask>>(new List<ForgeTask> { updatedExecuting });
+                    });
+
+            var implStage = TestWorkflowPipelines.CreateImplementationStage(
+                (ctx, ct) => Task.FromResult(StageExecutionResult.Success()));
+            var pipeline = new WorkflowPipeline(new IWorkflowStage[] { implStage });
+
+            var orchestrator = new Fixtures.TestOrchestratorBuilder
+            {
+                TaskRepository = _taskRepo,
+                WorkspaceRepository = _workspaceRepo,
+                DependencyEngine = _depEngine,
+                LockProvider = _lockProvider,
+                GitWorkspaceManager = _gitManager,
+                JobQueue = _jobQueue,
+                DependencyStore = _depStore,
+                PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+                MarkdownSyncService = mdSyncMock.Object
+            }.Build();
+
+            await orchestrator.ProcessTaskAsync(executingTask.Id);
+
+            // Re-attempt loop retried and succeeded on 2nd call
+            Assert.Equal(2, callCount);
+
+            // Executing task was synced to disk to reconcile authoritative state
+            mdSyncMock.Verify(m => m.SyncTaskToDiskAsync(
+                It.Is<ForgeTask>(t => t.Id == 98),
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<int>?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+
+            var updatedTask = await _taskRepo.GetByIdAsync(98);
+            Assert.NotNull(updatedTask);
+            Assert.Equal("Agent Updated Description", updatedTask.Description);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
     }
 }

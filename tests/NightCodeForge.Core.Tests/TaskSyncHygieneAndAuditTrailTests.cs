@@ -322,6 +322,481 @@ title: Concurrent Task - Changed on Disk
     }
 
     [Fact]
+    public async Task ConcurrencyConflict_ConflictingDescription_ThrowsTaskConcurrencyException()
+    {
+        var (sync, repo, _, depStore) = CreateTestEnvironment();
+        var workspace = new Workspace { Id = 1, Name = "Repo1", RepositoryPath = _tempHostDir };
+
+        var task = new ForgeTask { Id = 5, WorkspaceId = 1, Title = "Desc Task", Description = "Baseline description", Status = TaskOverallStatus.Open };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Initial");
+        depStore.AddTask(5, 1);
+
+        var syncResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, _tempHostDir);
+        var baseline = syncResult.Baseline;
+
+        // DB updates description
+        task.Description = "DB modified description";
+        await repo.UpdateWithHistoryAsync(task, null, AuditActors.User, "DB update");
+        Assert.Equal(2, task.Version);
+
+        // Disk also modifies description
+        var taskFile = syncResult.WrittenPaths[5];
+        await File.WriteAllTextAsync(taskFile, @"---
+id: 5
+title: Desc Task
+---
+Disk modified description
+");
+
+        // Sync from disk detects conflict because both modified description
+        var ex = await Assert.ThrowsAsync<TaskConcurrencyException>(() =>
+            sync.SyncAllTasksFromDiskAsync(
+                workspace,
+                _tempWorkspaceDir,
+                _tempHostDir,
+                baseline,
+                AuditActors.GetActorForStage("task-review"),
+                "Read-back"));
+
+        Assert.Equal(5, ex.TaskId);
+        Assert.Equal(1, ex.ExpectedVersion);
+        Assert.Equal(2, ex.ActualVersion);
+    }
+
+    [Fact]
+    public async Task ConcurrencyConflict_NonConflictingMaintainerChange_ReconcilesWithoutException()
+    {
+        var (sync, repo, _, depStore) = CreateTestEnvironment();
+        var workspace = new Workspace { Id = 1, Name = "Repo1", RepositoryPath = _tempHostDir };
+
+        var task = new ForgeTask
+        {
+            Id = 5,
+            WorkspaceId = 1,
+            Title = "Task 5",
+            Description = "Baseline description",
+            Priority = 2,
+            MergeMode = MergeMode.ManualReviewRequired,
+            Status = TaskOverallStatus.Open
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Initial");
+        depStore.AddTask(5, 1);
+
+        var syncResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, _tempHostDir);
+        var baseline = syncResult.Baseline;
+
+        // User concurrently updates MergeMode and Priority in DB (version 2)
+        task.MergeMode = MergeMode.Automatic;
+        task.Priority = 1;
+        await repo.UpdateWithHistoryAsync(task, null, AuditActors.User, "User updated MergeMode to Automatic and Priority to 1");
+        Assert.Equal(2, task.Version);
+
+        // Agent in worktree modifies Description on disk (keeping original frontmatter with manual_review_required)
+        var taskFile = syncResult.WrittenPaths[5];
+        await File.WriteAllTextAsync(taskFile, @"---
+id: 5
+title: Task 5
+priority: 2
+merge_mode: manual_review_required
+---
+Agent updated description with completed acceptance criteria
+");
+
+        // Sync from disk reconciles without throwing TaskConcurrencyException
+        var refreshedTasks = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            _tempHostDir,
+            baseline,
+            AuditActors.GetActorForStage("implementation"),
+            "Stage completed disk synchronization");
+
+        var refreshed = refreshedTasks.FirstOrDefault(t => t.Id == 5);
+        Assert.NotNull(refreshed);
+        Assert.Equal(MergeMode.Automatic, refreshed.MergeMode);
+        Assert.Equal(1, (int)refreshed.Priority);
+        Assert.Equal("Agent updated description with completed acceptance criteria", refreshed.Description);
+
+        var dbTask = await repo.GetByIdAsync(5);
+        Assert.NotNull(dbTask);
+        Assert.Equal(MergeMode.Automatic, dbTask.MergeMode);
+        Assert.Equal(1, (int)dbTask.Priority);
+        Assert.Equal("Agent updated description with completed acceptance criteria", dbTask.Description);
+
+        // Verify normalized file on disk has merge_mode: automatic
+        var updatedDiskContent = await File.ReadAllTextAsync(taskFile);
+        Assert.Contains("automatic", updatedDiskContent);
+        Assert.Contains("Agent updated description with completed acceptance criteria", updatedDiskContent);
+    }
+
+    [Fact]
+    public async Task ConcurrencyConflict_NullVsEmptyDescription_DoesNotThrowConflict()
+    {
+        var (sync, repo, _, depStore) = CreateTestEnvironment();
+        var workspace = new Workspace { Id = 1, Name = "Repo1", RepositoryPath = _tempHostDir };
+
+        var task = new ForgeTask { Id = 5, WorkspaceId = 1, Title = "Null Empty Task", Description = "", Status = TaskOverallStatus.Open };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Initial");
+        depStore.AddTask(5, 1);
+
+        var syncResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, _tempHostDir);
+        var baseline = syncResult.Baseline;
+
+        // DB description becomes null (or was null, version bumped by priority update)
+        task.Description = null!;
+        task.Priority = 1;
+        await repo.UpdateWithHistoryAsync(task, null, AuditActors.User, "DB update priority");
+        Assert.Equal(2, task.Version);
+
+        // Disk modifies description
+        var taskFile = syncResult.WrittenPaths[5];
+        await File.WriteAllTextAsync(taskFile, @"---
+id: 5
+title: Null Empty Task
+---
+New Disk Description
+");
+
+        // Should not throw TaskConcurrencyException because null vs empty string is not a DB modification of description
+        var refreshedTasks = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            _tempHostDir,
+            baseline,
+            AuditActors.GetActorForStage("implementation"),
+            "Sync");
+
+        var refreshed = refreshedTasks.FirstOrDefault(t => t.Id == 5);
+        Assert.NotNull(refreshed);
+        Assert.Equal("New Disk Description", refreshed.Description);
+    }
+
+    [Fact]
+    public async Task ConcurrencyConflict_ConcurrentDbDependencyAddition_WhenBaselineHasNoDependsOn_PreservesDependencies()
+    {
+        var (sync, repo, _, depStore) = CreateTestEnvironment();
+        var workspace = new Workspace { Id = 1, Name = "Repo1", RepositoryPath = _tempHostDir };
+
+        var task8 = new ForgeTask { Id = 8, WorkspaceId = 1, Title = "Prereq Task", Status = TaskOverallStatus.Open };
+        await repo.CreateWithBaselineAsync(task8, null, AuditActors.User, "Initial");
+        depStore.AddTask(8, 1);
+
+        var task5 = new ForgeTask { Id = 5, WorkspaceId = 1, Title = "Task 5", Description = "Baseline desc", Status = TaskOverallStatus.Open };
+        await repo.CreateWithBaselineAsync(task5, null, AuditActors.User, "Initial");
+        depStore.AddTask(5, 1);
+
+        var syncResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, _tempHostDir);
+        var baseline = syncResult.Baseline;
+
+        // Maintainer concurrently adds dependency on task 8 in DB
+        await repo.UpdateWithHistoryAsync(task5, new[] { 8 }, AuditActors.User, "Add dep 8");
+        Assert.Equal(2, task5.Version);
+
+        // Agent modifies description on disk without touching depends_on
+        var taskFile = syncResult.WrittenPaths[5];
+        await File.WriteAllTextAsync(taskFile, @"---
+id: 5
+title: Task 5
+---
+Updated by Agent
+");
+
+        // Sync from disk reconciles without wiping out dependency 8
+        var refreshedTasks = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            _tempHostDir,
+            baseline,
+            AuditActors.GetActorForStage("implementation"),
+            "Sync");
+
+        var dbTask = await repo.GetByIdAsync(5);
+        Assert.NotNull(dbTask);
+        Assert.Contains(dbTask.Dependencies, d => d.DependsOnTaskId == 8);
+
+        var updatedDiskContent = await File.ReadAllTextAsync(taskFile);
+        Assert.Contains("8", updatedDiskContent);
+        Assert.Contains("Updated by Agent", updatedDiskContent);
+
+        var hostTaskFile = Path.Combine(_tempHostDir, "docs", "tasks", Path.GetFileName(taskFile));
+        Assert.True(File.Exists(hostTaskFile));
+        var hostContent = await File.ReadAllTextAsync(hostTaskFile);
+        Assert.Contains("8", hostContent);
+        Assert.Contains("Updated by Agent", hostContent);
+    }
+
+    [Fact]
+    public async Task ConcurrencyConflict_WhenBothDbAndDiskModifyPriority_DbPriorityWins()
+    {
+        var (sync, repo, _, depStore) = CreateTestEnvironment();
+        var workspace = new Workspace { Id = 1, Name = "Repo1", RepositoryPath = _tempHostDir };
+
+        var task = new ForgeTask
+        {
+            Id = 5,
+            WorkspaceId = 1,
+            Title = "Priority Task",
+            Description = "Baseline desc",
+            Priority = 2,
+            Status = TaskOverallStatus.Open
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Initial");
+        depStore.AddTask(5, 1);
+
+        var syncResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, _tempHostDir);
+        var baseline = syncResult.Baseline;
+
+        // Maintainer updates priority to 1 in DB
+        task.Priority = 1;
+        await repo.UpdateWithHistoryAsync(task, null, AuditActors.User, "Maintainer set priority to 1");
+        Assert.Equal(2, task.Version);
+
+        // Agent on disk specifies priority 3 and modifies description
+        var taskFile = syncResult.WrittenPaths[5];
+        await File.WriteAllTextAsync(taskFile, @"---
+id: 5
+title: Priority Task
+priority: 3
+---
+Agent updated description
+");
+
+        var refreshedTasks = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            _tempHostDir,
+            baseline,
+            AuditActors.GetActorForStage("implementation"),
+            "Sync");
+
+        var refreshed = refreshedTasks.FirstOrDefault(t => t.Id == 5);
+        Assert.NotNull(refreshed);
+        // DB priority (1) wins over disk priority (3)
+        Assert.Equal(1, refreshed.Priority);
+        Assert.Equal("Agent updated description", refreshed.Description);
+
+        var dbTask = await repo.GetByIdAsync(5);
+        Assert.NotNull(dbTask);
+        Assert.Equal(1, dbTask.Priority);
+    }
+
+    [Fact]
+    public async Task ConcurrencyConflict_WhenBaselineOmitsMergeMode_AndDbConcurrentlyUpdatesToAutomatic_PreservesAutomatic()
+    {
+        var (sync, repo, _, depStore) = CreateTestEnvironment();
+        var workspace = new Workspace { Id = 1, Name = "Repo1", RepositoryPath = _tempHostDir };
+
+        var task = new ForgeTask
+        {
+            Id = 5,
+            WorkspaceId = 1,
+            Title = "MergeMode Task",
+            Description = "Baseline desc",
+            MergeMode = MergeMode.ManualReviewRequired,
+            Status = TaskOverallStatus.Open
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Initial");
+        depStore.AddTask(5, 1);
+
+        var syncResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, _tempHostDir);
+        var baselineEntry = syncResult.Baseline[5];
+
+        // Simulate baseline having null Frontmatter.MergeMode
+        var baselineWithNullFm = new Dictionary<int, TaskBaselineEntry>
+        {
+            [5] = new TaskBaselineEntry(
+                baselineEntry.TaskId,
+                baselineEntry.Version,
+                baselineEntry.UpdatedAt,
+                baselineEntry.ContentHash,
+                baselineEntry.FilePath,
+                new TaskFrontmatter { Title = "MergeMode Task", MergeMode = null },
+                baselineEntry.Description)
+        };
+
+        // Maintainer updates MergeMode to Automatic in DB
+        task.MergeMode = MergeMode.Automatic;
+        await repo.UpdateWithHistoryAsync(task, null, AuditActors.User, "Maintainer set Automatic");
+        Assert.Equal(2, task.Version);
+
+        // Disk retains manual_review_required and modifies description
+        var taskFile = syncResult.WrittenPaths[5];
+        await File.WriteAllTextAsync(taskFile, @"---
+id: 5
+title: MergeMode Task
+merge_mode: manual_review_required
+---
+Agent updated description
+");
+
+        var refreshedTasks = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            _tempHostDir,
+            baselineWithNullFm,
+            AuditActors.GetActorForStage("implementation"),
+            "Sync");
+
+        var refreshed = refreshedTasks.FirstOrDefault(t => t.Id == 5);
+        Assert.NotNull(refreshed);
+        // Maintainer's Automatic must NOT be reverted
+        Assert.Equal(MergeMode.Automatic, refreshed.MergeMode);
+
+        var dbTask = await repo.GetByIdAsync(5);
+        Assert.NotNull(dbTask);
+        Assert.Equal(MergeMode.Automatic, dbTask.MergeMode);
+    }
+
+    [Fact]
+    public async Task SyncFromDisk_WhenAgentModifiesDependencies_UpdatesTaskDependenciesCollectionOnRefreshedTask()
+    {
+        var (sync, repo, _, depStore) = CreateTestEnvironment();
+        var workspace = new Workspace { Id = 1, Name = "Repo1", RepositoryPath = _tempHostDir };
+
+        var task8 = new ForgeTask { Id = 8, WorkspaceId = 1, Title = "Prereq Task", Status = TaskOverallStatus.Open };
+        await repo.CreateWithBaselineAsync(task8, null, AuditActors.User, "Initial");
+        depStore.AddTask(8, 1);
+
+        var task5 = new ForgeTask { Id = 5, WorkspaceId = 1, Title = "Task 5", Description = "Baseline desc", Status = TaskOverallStatus.Open };
+        await repo.CreateWithBaselineAsync(task5, null, AuditActors.User, "Initial");
+        depStore.AddTask(5, 1);
+
+        var syncResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, _tempHostDir);
+        var baseline = syncResult.Baseline;
+
+        // Agent adds dependency on task 8 on disk
+        var taskFile = syncResult.WrittenPaths[5];
+        await File.WriteAllTextAsync(taskFile, @"---
+id: 5
+title: Task 5
+depends_on:
+  - 8
+---
+Baseline desc
+");
+
+        var refreshedTasks = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            _tempHostDir,
+            baseline,
+            AuditActors.GetActorForStage("implementation"),
+            "Sync");
+
+        var refreshed = refreshedTasks.FirstOrDefault(t => t.Id == 5);
+        Assert.NotNull(refreshed);
+        Assert.NotNull(refreshed.Dependencies);
+        Assert.Contains(refreshed.Dependencies, d => d.DependsOnTaskId == 8);
+    }
+
+    [Fact]
+    public async Task ConcurrencyConflict_WhenAgentUsesTitleForDependency_AndDbAddsNewDep_PreservesDbDependency()
+    {
+        var (sync, repo, _, depStore) = CreateTestEnvironment();
+        var workspace = new Workspace { Id = 1, Name = "Repo1", RepositoryPath = _tempHostDir };
+
+        var task8 = new ForgeTask { Id = 8, WorkspaceId = 1, Title = "Prereq Task", Status = TaskOverallStatus.Open };
+        await repo.CreateWithBaselineAsync(task8, null, AuditActors.User, "Initial 8");
+        depStore.AddTask(8, 1);
+
+        var task9 = new ForgeTask { Id = 9, WorkspaceId = 1, Title = "Concurrent DB Prereq", Status = TaskOverallStatus.Open };
+        await repo.CreateWithBaselineAsync(task9, null, AuditActors.User, "Initial 9");
+        depStore.AddTask(9, 1);
+
+        var task5 = new ForgeTask { Id = 5, WorkspaceId = 1, Title = "Task 5", Description = "Baseline desc", Status = TaskOverallStatus.Open };
+        await repo.CreateWithBaselineAsync(task5, new[] { 8 }, AuditActors.User, "Initial 5");
+        depStore.AddTask(5, 1);
+
+        var syncResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, _tempHostDir);
+        var baseline = syncResult.Baseline;
+
+        // Maintainer adds dependency 9 in DB concurrently
+        await repo.UpdateWithHistoryAsync(task5, new[] { 8, 9 }, AuditActors.User, "Add dep 9");
+        Assert.Equal(2, task5.Version);
+
+        // Agent on disk writes dependency by title ("Prereq Task") instead of integer 8, and updates description
+        var taskFile = syncResult.WrittenPaths[5];
+        await File.WriteAllTextAsync(taskFile, @"---
+id: 5
+title: Task 5
+depends_on:
+  - Prereq Task
+---
+Agent updated description
+");
+
+        var refreshedTasks = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            _tempHostDir,
+            baseline,
+            AuditActors.GetActorForStage("implementation"),
+            "Sync");
+
+        var dbTask = await repo.GetByIdAsync(5);
+        Assert.NotNull(dbTask);
+        // Both dep 8 and concurrently added dep 9 must be preserved
+        Assert.Contains(dbTask.Dependencies, d => d.DependsOnTaskId == 8);
+        Assert.Contains(dbTask.Dependencies, d => d.DependsOnTaskId == 9);
+        Assert.Equal("Agent updated description", dbTask.Description);
+    }
+
+    [Fact]
+    public async Task ConcurrencyConflict_WhenBothDbAndDiskModifyBaseBranch_DbBaseBranchWins()
+    {
+        var (sync, repo, _, depStore) = CreateTestEnvironment();
+        var workspace = new Workspace { Id = 1, Name = "Repo1", RepositoryPath = _tempHostDir, DefaultBaseBranch = "main" };
+
+        var task = new ForgeTask
+        {
+            Id = 5,
+            WorkspaceId = 1,
+            Title = "BaseBranch Task",
+            Description = "Baseline desc",
+            BaseBranch = "main",
+            Status = TaskOverallStatus.Open
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Initial");
+        depStore.AddTask(5, 1);
+
+        var syncResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, _tempHostDir);
+        var baseline = syncResult.Baseline;
+
+        // Maintainer updates base branch to 'develop' in DB
+        task.BaseBranch = "develop";
+        await repo.UpdateWithHistoryAsync(task, null, AuditActors.User, "Maintainer set develop");
+        Assert.Equal(2, task.Version);
+
+        // Agent on disk specifies 'release-1.0' and modifies description
+        var taskFile = syncResult.WrittenPaths[5];
+        await File.WriteAllTextAsync(taskFile, @"---
+id: 5
+title: BaseBranch Task
+base_branch: release-1.0
+---
+Agent updated description
+");
+
+        var refreshedTasks = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            _tempHostDir,
+            baseline,
+            AuditActors.GetActorForStage("implementation"),
+            "Sync");
+
+        var refreshed = refreshedTasks.FirstOrDefault(t => t.Id == 5);
+        Assert.NotNull(refreshed);
+        // DB base branch (develop) wins over disk (release-1.0)
+        Assert.Equal("develop", refreshed.BaseBranch);
+        Assert.Equal("Agent updated description", refreshed.Description);
+
+        var dbTask = await repo.GetByIdAsync(5);
+        Assert.NotNull(dbTask);
+        Assert.Equal("develop", dbTask.BaseBranch);
+    }
+
+    [Fact]
     public async Task StatusTamperGuard_ThrowsTaskMarkdownSyncException()
     {
         var (sync, repo, _, depStore) = CreateTestEnvironment();

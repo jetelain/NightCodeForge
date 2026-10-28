@@ -1278,36 +1278,123 @@ public class TaskOrchestrator : ITaskOrchestrator
             var stageActor = AuditActors.GetActorForStage(stage.StageId);
             var stageReason = $"Stage '{stage.StageId}' completed disk synchronization";
 
-            IReadOnlyList<ForgeTask> refreshedTasks;
-            try
+            IReadOnlyList<ForgeTask>? refreshedTasks = null;
+            const int maxConflictRetries = 5;
+            int conflictRetries = 0;
+
+            while (true)
             {
-                refreshedTasks = await _markdownSyncService.SyncAllTasksFromDiskAsync(
-                    workspace,
-                    targetSyncPath,
-                    hostRepoPath,
-                    baselineSnapshot,
-                    stageActor,
-                    stageReason,
-                    cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (TaskMarkdownSyncException)
-            {
-                throw;
-            }
-            catch (TaskConcurrencyException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                throw new TaskMarkdownSyncException(
-                    $"Post-stage disk synchronization failed for stage '{stage.StageId}' on task #{task.Id}: {ex.Message}",
-                    ex,
-                    taskId: task.Id);
+                try
+                {
+                    refreshedTasks = await _markdownSyncService.SyncAllTasksFromDiskAsync(
+                        workspace,
+                        targetSyncPath,
+                        hostRepoPath,
+                        baselineSnapshot,
+                        stageActor,
+                        stageReason,
+                        cancellationToken);
+                    break;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (TaskConcurrencyException cex)
+                {
+                    conflictRetries++;
+                    _logger.LogWarning(cex, "Post-stage disk synchronization detected a concurrency conflict for task #{TaskId}. Retaining authoritative database state and continuing pipeline.", cex.TaskId);
+                    await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                    {
+                        TaskId = task.Id,
+                        Level = LogLevel.Warning,
+                        Message = $"Post-stage disk synchronization detected a concurrency conflict for task #{cex.TaskId}: {cex.Message}. Retaining authoritative database state and continuing pipeline.",
+                        Timestamp = DateTime.UtcNow
+                    }, cancellationToken);
+
+                    if (cex.TaskId == task.Id)
+                    {
+                        // Reload authoritative database state for the executing task
+                        var authoritativeDbTask = await _taskRepository.GetByIdAsync(task.Id, cancellationToken);
+                        if (authoritativeDbTask != null)
+                        {
+                            task.Title = authoritativeDbTask.Title;
+                            task.Description = authoritativeDbTask.Description;
+                            task.Priority = authoritativeDbTask.Priority;
+                            task.MergeMode = authoritativeDbTask.MergeMode;
+                            task.BaseBranch = authoritativeDbTask.BaseBranch;
+                            task.FeatureBranch = authoritativeDbTask.FeatureBranch;
+                            task.Origin = authoritativeDbTask.Origin;
+                            task.Version = authoritativeDbTask.Version;
+                            task.UpdatedAt = authoritativeDbTask.UpdatedAt;
+                            task.Dependencies = authoritativeDbTask.Dependencies;
+                        }
+
+                        // Sync the authoritative DB state back to hostRepoPath and ext4 mirror
+                        await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+
+                        // Overwrite targetSyncPath (worktree) if different from hostRepoPath so git checkpoints don't commit conflicted markdown
+                        if (!string.IsNullOrWhiteSpace(targetSyncPath) &&
+                            !string.Equals(targetSyncPath, hostRepoPath, StringComparison.OrdinalIgnoreCase) &&
+                            Directory.Exists(targetSyncPath))
+                        {
+                            try
+                            {
+                                await _markdownSyncService.SyncTaskToDiskAsync(task, targetSyncPath, cancellationToken: cancellationToken);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Failed syncing authoritative task #{TaskId} markdown to worktree '{TargetSyncPath}'", task.Id, targetSyncPath);
+                            }
+                        }
+
+                        if (conflictRetries >= maxConflictRetries)
+                        {
+                            _logger.LogWarning("Exceeded max retries ({MaxRetries}) resolving task #{TaskId} concurrency conflicts; continuing pipeline.", maxConflictRetries, task.Id);
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        // The conflict occurred on another task in the workspace.
+                        // Sync that other task's authoritative DB state to host and worktree so it no longer conflicts.
+                        var otherConflictedTask = await _taskRepository.GetByIdAsync(cex.TaskId, cancellationToken);
+                        if (otherConflictedTask != null)
+                        {
+                            await SyncTaskMarkdownAndMirrorAsync(otherConflictedTask, workspace, cancellationToken);
+                            if (!string.IsNullOrWhiteSpace(targetSyncPath) &&
+                                !string.Equals(targetSyncPath, hostRepoPath, StringComparison.OrdinalIgnoreCase) &&
+                                Directory.Exists(targetSyncPath))
+                            {
+                                try
+                                {
+                                    await _markdownSyncService.SyncTaskToDiskAsync(otherConflictedTask, targetSyncPath, cancellationToken: cancellationToken);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogWarning(ex, "Failed syncing authoritative task #{TaskId} markdown to worktree '{TargetSyncPath}'", otherConflictedTask.Id, targetSyncPath);
+                                }
+                            }
+                        }
+
+                        if (conflictRetries >= maxConflictRetries)
+                        {
+                            _logger.LogWarning("Exceeded max retries ({MaxRetries}) resolving foreign task concurrency conflicts; continuing pipeline.", maxConflictRetries);
+                            break;
+                        }
+                    }
+                }
+                catch (TaskMarkdownSyncException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    throw new TaskMarkdownSyncException(
+                        $"Post-stage disk synchronization failed for stage '{stage.StageId}' on task #{task.Id}: {ex.Message}",
+                        ex,
+                        taskId: task.Id);
+                }
             }
 
             var refreshedTask = refreshedTasks?.FirstOrDefault(t => t.Id == task.Id);
@@ -1319,8 +1406,10 @@ public class TaskOrchestrator : ITaskOrchestrator
                 task.MergeMode = refreshedTask.MergeMode;
                 task.BaseBranch = refreshedTask.BaseBranch;
                 task.FeatureBranch = refreshedTask.FeatureBranch;
+                task.Origin = refreshedTask.Origin;
                 task.UpdatedAt = refreshedTask.UpdatedAt;
                 task.Version = refreshedTask.Version;
+                task.Dependencies = refreshedTask.Dependencies;
             }
 
             if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase) && result.IsSuccess && !result.IsCancelled && !result.NeedsClarification)
