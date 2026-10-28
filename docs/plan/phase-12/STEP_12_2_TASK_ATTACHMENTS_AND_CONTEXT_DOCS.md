@@ -33,8 +33,9 @@ This step introduces a first-class **workspace-level Attachments store**:
 ### 2.1 Directory Layout
 ```
 ~/.nightcodeforge/wks/{workspaceId}/
-├── .git/                          # canonical clone (main)
-├── *.cs, ...                      # checked-out files
+├── clone/                         # forked repo files
+│   ├── .git/                      # canonical clone (read-write)
+│   └── *.cs, ...                  # checked-out files
 ├── attachments/                   # NEW — workspace attachments store (read-only for agents)
 │   ├── manifest.json              # NEW — machine-readable attachment registry
 │   ├── 001-poc-router-spikes.md   # SYMLINK -> C:\dev\poc\router-spikes.md (host file)
@@ -46,8 +47,9 @@ This step introduces a first-class **workspace-level Attachments store**:
 
 **ContainerSandbox Mapping (Docker):**
 ```
-/workspace/                        # container working tree (mounted from task-{taskId} or clone)
-├── *.cs, ...                      # worktree files (read-write)
+/workspace/                        # container workspace
+├── clone/                         # forked repo files (read-only, except .git)
+├── task-{taskId}/                 # worktree files (read-write)
 └── attachments/                   # READ-ONLY BIND-MOUNT from ~/.nightcodeforge/wks/{workspaceId}/attachments/ (:ro)
     ├── manifest.json              # read-only registry
     ├── 001-poc-router-spikes.md   # read-only context
