@@ -173,7 +173,54 @@ public interface IOllamaRouterGatewayService
 
 ---
 
-### 2.5 Multi-Agent Session Affinity & KV-Cache Stickiness
+### 2.5 Provider-Agnostic Model Catalog Abstraction (`ILlmModelCatalogService`)
+
+Currently, `AgentProfilesTab.razor` and `WizardStep3Environment.razor` inject `IOllamaModelCatalogService`, directly coupling the UI to Ollama-specific concepts (`OllamaModelInfo`, `Size`, `Digest`, and `/api/tags`).
+
+To support dynamic multi-provider selection (Standalone Ollama, OllamaRouter, and upcoming OpenAI-compatible providers), we replace `IOllamaModelCatalogService` with a clean, provider-agnostic abstraction in `NightCodeForge.Core.Interfaces`:
+
+```csharp
+namespace NightCodeForge.Core.Interfaces;
+
+public record AvailableModelInfo(
+    string ModelId,
+    string DisplayName,
+    int? ContextWindowTokens = null,
+    long? SizeBytes = null,
+    LlmProviderType ProviderType = LlmProviderType.Ollama,
+    bool SupportsReasoning = false,
+    IReadOnlyDictionary<string, object?>? Metadata = null)
+{
+    /// <summary>Formatted badge for UI dropdowns (e.g. "19.8 GB" or "128k ctx").</summary>
+    public string FormattedBadge => ContextWindowTokens.HasValue
+        ? $"{ContextWindowTokens.Value / 1024}k ctx"
+        : (SizeBytes.HasValue ? $"{SizeBytes.Value / (1024.0 * 1024 * 1024):F1} GB" : string.Empty);
+}
+
+public interface ILlmModelCatalogService
+{
+    /// <summary>
+    /// Retrieves the list of available models for the currently active LLM provider.
+    /// - Standalone Ollama: Queries /api/tags
+    /// - OllamaRouter: Queries /api/tags or /api/router/models
+    /// </summary>
+    Task<IReadOnlyList<AvailableModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Flushes any in-memory catalog cache and forces a live re-query of the provider.
+    /// </summary>
+    Task RefreshAsync(CancellationToken cancellationToken = default);
+}
+```
+
+#### Integration with UI:
+- `AgentProfilesTab.razor` injects `ILlmModelCatalogService ModelCatalogService`.
+- Model selection dropdowns render `@m.DisplayName (@m.FormattedBadge)` and bind to `@m.ModelId`.
+- Eliminates Ollama-specific error strings and UI leaks across agent profile configuration and workspace creation wizards.
+
+---
+
+### 2.6 Multi-Agent Session Affinity & KV-Cache Stickiness
 
 In multi-agent environments where NightCodeForge runs multiple concurrent or interleaved agent workflows:
 1. **Outbound Header Injection (`OllamaChatClient.cs`):**
@@ -196,6 +243,7 @@ In multi-agent environments where NightCodeForge runs multiple concurrent or int
 - [ ] Add `LlmProviderType` enum (`Ollama`, `OllamaRouter`) in `NightCodeForge.Core.Domain`.
 - [ ] Update `LlmProviderOptions` in `NightCodeForge.Agents.Inference` with unified baseline and role differentiation settings.
 - [ ] Add `SessionId` support to `InferenceContext` / `ChatRequestOptions` in `NightCodeForge.Agents`.
+- [ ] Introduce `AvailableModelInfo` and `ILlmModelCatalogService` in `NightCodeForge.Core.Interfaces` (replacing legacy `IOllamaModelCatalogService`).
 - [ ] Enhance `IOllamaRouterGatewayService` with clean `GatewayStatusReport`, `FleetTargetStatus`, and `ResolveContextWindowAsync`.
 
 ### Phase 2: Gateway Service & Discovery Engine
@@ -209,6 +257,7 @@ In multi-agent environments where NightCodeForge runs multiple concurrent or int
   - Bypass `X-OllamaRouter-Target` and `X-OllamaRouter-Session-Id` injection completely when `ProviderType == LlmProviderType.Ollama`.
 
 ### Phase 3: Web UI & Settings Ergonomics
+- [ ] Migrate `AgentProfilesTab.razor` and `WizardStep3Environment.razor` from `IOllamaModelCatalogService` to `ILlmModelCatalogService`, dynamically rendering `@m.DisplayName (@m.FormattedBadge)` across model selection dropdowns.
 - [ ] Update `Settings.razor` / `AgentProfilesTab.razor`:
   - Provider selector pill toggle (`Ollama (Single Host)` vs `OllamaRouter (Fleet)`).
   - Default Model & Thinking Effort fields.
