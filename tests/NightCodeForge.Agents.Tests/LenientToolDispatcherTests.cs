@@ -335,6 +335,196 @@ public class LenientToolDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_AskWithStringifiedQuestionsArray_ParsesAndInvokesAskHandler()
+    {
+        var tools = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
+        IReadOnlyList<QuestionItem>? captured = null;
+        tools.AskHandler = (questions, ct) =>
+        {
+            captured = questions;
+            return Task.FromResult("Clarified");
+        };
+
+        var dispatcher = new LenientToolDispatcher(tools);
+        var json = """
+        {
+            "questions": "[{\"prompt\": \"Select database engine\", \"rationale\": \"Storage design\", \"options\": [\"PostgreSQL\", \"SQLite\"]}]"
+        }
+        """;
+        var result = await dispatcher.DispatchAsync("ask", json);
+
+        Assert.Equal("Clarified", result);
+        Assert.NotNull(captured);
+        Assert.Single(captured);
+        Assert.Equal("Select database engine", captured[0].Prompt);
+        Assert.Equal("Storage design", captured[0].Rationale);
+        Assert.Equal(2, captured[0].Options?.Count);
+        Assert.Equal("PostgreSQL", captured[0].Options?[0]);
+        Assert.Equal("SQLite", captured[0].Options?[1]);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_AskWithStringifiedSingleQuestionObject_ParsesAndInvokesAskHandler()
+    {
+        var tools = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
+        IReadOnlyList<QuestionItem>? captured = null;
+        tools.AskHandler = (questions, ct) =>
+        {
+            captured = questions;
+            return Task.FromResult("Clarified");
+        };
+
+        var dispatcher = new LenientToolDispatcher(tools);
+        var json = """
+        {
+            "questions": "{\"prompt\": \"Confirm deploy to staging?\", \"options\": [\"Yes\", \"No\"]}"
+        }
+        """;
+        var result = await dispatcher.DispatchAsync("ask", json);
+
+        Assert.Equal("Clarified", result);
+        Assert.NotNull(captured);
+        Assert.Single(captured);
+        Assert.Equal("Confirm deploy to staging?", captured[0].Prompt);
+        Assert.Equal(2, captured[0].Options?.Count);
+        Assert.Equal("Yes", captured[0].Options?[0]);
+        Assert.Equal("No", captured[0].Options?[1]);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_AskWithBoxedJsonElementString_ParsesAndInvokesAskHandler()
+    {
+        var tools = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
+        IReadOnlyList<QuestionItem>? captured = null;
+        tools.AskHandler = (questions, ct) =>
+        {
+            captured = questions;
+            return Task.FromResult("Clarified");
+        };
+
+        var dispatcher = new LenientToolDispatcher(tools);
+        using var doc = System.Text.Json.JsonDocument.Parse("""
+        "[{\"prompt\": \"Choose environment\", \"options\": [\"Dev\", \"Prod\"]}]"
+        """);
+
+        var args = new Dictionary<string, object?>
+        {
+            ["questions"] = doc.RootElement.Clone()
+        };
+
+        var result = await dispatcher.ExecuteCanonicalCallAsync("ask", args);
+
+        Assert.Equal("Clarified", result);
+        Assert.NotNull(captured);
+        Assert.Single(captured);
+        Assert.Equal("Choose environment", captured[0].Prompt);
+        Assert.Equal(2, captured[0].Options?.Count);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_AskWithStringifiedOptionsArray_ParsesOptionsAndInvokesAskHandler()
+    {
+        var tools = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
+        IReadOnlyList<QuestionItem>? captured = null;
+        tools.AskHandler = (questions, ct) =>
+        {
+            captured = questions;
+            return Task.FromResult("Clarified");
+        };
+
+        var dispatcher = new LenientToolDispatcher(tools);
+        var json = """
+        {
+            "questions": [
+                {
+                    "prompt": "Pick database engine",
+                    "options": "[\"PostgreSQL\", \"SQLite\"]"
+                }
+            ]
+        }
+        """;
+        var result = await dispatcher.DispatchAsync("ask", json);
+
+        Assert.Equal("Clarified", result);
+        Assert.NotNull(captured);
+        Assert.Single(captured);
+        Assert.Equal("Pick database engine", captured[0].Prompt);
+        Assert.NotNull(captured[0].Options);
+        Assert.Equal(2, captured[0].Options!.Count);
+        Assert.Equal("PostgreSQL", captured[0].Options![0]);
+        Assert.Equal("SQLite", captured[0].Options![1]);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_AskWithDictionaryBoxedJsonElementOptionsArray_ParsesOptionsAndInvokesAskHandler()
+    {
+        var tools = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
+        IReadOnlyList<QuestionItem>? captured = null;
+        tools.AskHandler = (questions, ct) =>
+        {
+            captured = questions;
+            return Task.FromResult("Clarified");
+        };
+
+        var dispatcher = new LenientToolDispatcher(tools);
+        using var doc = System.Text.Json.JsonDocument.Parse("""["Blue", "Green"]""");
+
+        var args = new Dictionary<string, object?>
+        {
+            ["questions"] = new Dictionary<string, object?>
+            {
+                ["prompt"] = "Select deployment style",
+                ["options"] = doc.RootElement.Clone()
+            }
+        };
+
+        var result = await dispatcher.ExecuteCanonicalCallAsync("ask", args);
+
+        Assert.Equal("Clarified", result);
+        Assert.NotNull(captured);
+        Assert.Single(captured);
+        Assert.Equal("Select deployment style", captured[0].Prompt);
+        Assert.NotNull(captured[0].Options);
+        Assert.Equal(2, captured[0].Options!.Count);
+        Assert.Equal("Blue", captured[0].Options![0]);
+        Assert.Equal("Green", captured[0].Options![1]);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_AskWithOptionsJson_ParsesOptionsAndInvokesAskHandler()
+    {
+        var tools = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
+        IReadOnlyList<QuestionItem>? captured = null;
+        tools.AskHandler = (questions, ct) =>
+        {
+            captured = questions;
+            return Task.FromResult("Clarified");
+        };
+
+        var dispatcher = new LenientToolDispatcher(tools);
+        var json = """
+        {
+            "questions": [
+                {
+                    "prompt": "Select caching layer",
+                    "optionsJson": "[\"Redis\", \"Memory\"]"
+                }
+            ]
+        }
+        """;
+        var result = await dispatcher.DispatchAsync("ask", json);
+
+        Assert.Equal("Clarified", result);
+        Assert.NotNull(captured);
+        Assert.Single(captured);
+        Assert.Equal("Select caching layer", captured[0].Prompt);
+        Assert.NotNull(captured[0].Options);
+        Assert.Equal(2, captured[0].Options!.Count);
+        Assert.Equal("Redis", captured[0].Options![0]);
+        Assert.Equal("Memory", captured[0].Options![1]);
+    }
+
+    [Fact]
     public async Task DispatchAsync_RequestChangesWithCritiqueAndComment_ThrowsDomainException()
     {
         var tools = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());

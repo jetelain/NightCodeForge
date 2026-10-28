@@ -336,6 +336,162 @@ public class StageConversationParserTests
         Assert.Equal("No", questions[0].Options![1]);
     }
 
+    [Fact]
+    public void ExtractQuestions_WithQuestionsStringContainingJsonArray_ParsesItems()
+    {
+        var json = """
+        {
+            "questions": "[{\"prompt\": \"Select database engine\", \"rationale\": \"Storage design\", \"options\": [\"PostgreSQL\", \"SQLite\"]}]"
+        }
+        """;
+
+        var turn = new ConversationTurn { ToolArguments = json };
+        var questions = StageConversationParser.ExtractQuestions(turn);
+
+        Assert.Single(questions);
+        Assert.Equal("Select database engine", questions[0].Prompt);
+        Assert.Equal("Storage design", questions[0].Rationale);
+        Assert.NotNull(questions[0].Options);
+        Assert.Equal(2, questions[0].Options!.Count);
+        Assert.Equal("PostgreSQL", questions[0].Options![0]);
+        Assert.Equal("SQLite", questions[0].Options![1]);
+    }
+
+    [Fact]
+    public void ExtractQuestions_WithQuestionsStringContainingJsonObject_ParsesItem()
+    {
+        var json = """
+        {
+            "questions": "{\"prompt\": \"Confirm deploy to staging?\", \"options\": [\"Yes\", \"No\"]}"
+        }
+        """;
+
+        var turn = new ConversationTurn { ToolArguments = json };
+        var questions = StageConversationParser.ExtractQuestions(turn);
+
+        Assert.Single(questions);
+        Assert.Equal("Confirm deploy to staging?", questions[0].Prompt);
+        Assert.NotNull(questions[0].Options);
+        Assert.Equal(2, questions[0].Options!.Count);
+        Assert.Equal("Yes", questions[0].Options![0]);
+        Assert.Equal("No", questions[0].Options![1]);
+    }
+
+    [Fact]
+    public void ExtractQuestions_WithQuestionsStringNotJson_ParsesAsPrompt()
+    {
+        var json = """
+        {
+            "questions": "Should we proceed with the migration?"
+        }
+        """;
+
+        var turn = new ConversationTurn { ToolArguments = json };
+        var questions = StageConversationParser.ExtractQuestions(turn);
+
+        Assert.Single(questions);
+        Assert.Equal("Should we proceed with the migration?", questions[0].Prompt);
+    }
+
+    [Fact]
+    public void ExtractQuestions_WithNestedStringifiedOptions_ParsesOptions()
+    {
+        var json = """
+        {
+            "questions": [
+                {
+                    "prompt": "Select target environment",
+                    "options": "[\"Staging\", \"Prod\"]"
+                }
+            ]
+        }
+        """;
+
+        var turn = new ConversationTurn { ToolArguments = json };
+        var questions = StageConversationParser.ExtractQuestions(turn);
+
+        Assert.Single(questions);
+        Assert.Equal("Select target environment", questions[0].Prompt);
+        Assert.NotNull(questions[0].Options);
+        Assert.Equal(2, questions[0].Options!.Count);
+        Assert.Equal("Staging", questions[0].Options![0]);
+        Assert.Equal("Prod", questions[0].Options![1]);
+    }
+
+    [Fact]
+    public void ExtractQuestions_WithQuestionObjectProperty_ParsesPrompt()
+    {
+        var json = """
+        {
+            "question": {
+                "prompt": "Confirm database rollback?",
+                "options": ["Proceed", "Abort"]
+            }
+        }
+        """;
+
+        var turn = new ConversationTurn { ToolArguments = json };
+        var questions = StageConversationParser.ExtractQuestions(turn);
+
+        Assert.Single(questions);
+        Assert.Equal("Confirm database rollback?", questions[0].Prompt);
+        Assert.NotNull(questions[0].Options);
+        Assert.Equal(2, questions[0].Options!.Count);
+        Assert.Equal("Proceed", questions[0].Options![0]);
+        Assert.Equal("Abort", questions[0].Options![1]);
+    }
+
+    [Theory]
+    [InlineData("ask", StageTurnRole.Tool, true)]
+    [InlineData("Ask", StageTurnRole.Tool, true)]
+    [InlineData("ASK", StageTurnRole.Tool, true)]
+    [InlineData("ask", StageTurnRole.ToolResult, false)]
+    [InlineData("bash", StageTurnRole.Tool, false)]
+    [InlineData(null, StageTurnRole.Tool, false)]
+    public void IsAskToolTurn_ReturnsExpected(string? toolName, StageTurnRole role, bool expected)
+    {
+        var turn = new ConversationTurn { ToolName = toolName, Role = role };
+        Assert.Equal(expected, StageConversationParser.IsAskToolTurn(turn));
+    }
+
+    [Fact]
+    public void IsAskError_WhenTurnIsError_ReturnsTrue()
+    {
+        var turn = new ConversationTurn { IsError = true, ToolName = "ask" };
+        Assert.True(StageConversationParser.IsAskError(turn, null));
+    }
+
+    [Fact]
+    public void IsAskError_WhenPairedResultIsError_ReturnsTrue()
+    {
+        var turn = new ConversationTurn { IsError = false, ToolName = "ask" };
+        var paired = new ConversationTurn { IsError = true, ToolName = "ask" };
+        Assert.True(StageConversationParser.IsAskError(turn, paired));
+    }
+
+    [Fact]
+    public void IsAskError_WhenPairedResultStartsWithError_ReturnsTrue()
+    {
+        var turn = new ConversationTurn { IsError = false, ToolName = "ask" };
+        var paired = new ConversationTurn { IsError = false, ToolName = "ask", ToolResult = "Error: At least one question must be provided" };
+        Assert.True(StageConversationParser.IsAskError(turn, paired));
+    }
+
+    [Fact]
+    public void IsAskError_WhenTurnResultStartsWithError_ReturnsTrue()
+    {
+        var turn = new ConversationTurn { IsError = false, ToolName = "ask", ToolResult = "Error: Invalid argument" };
+        Assert.True(StageConversationParser.IsAskError(turn, null));
+    }
+
+    [Fact]
+    public void IsAskError_WhenNoError_ReturnsFalse()
+    {
+        var turn = new ConversationTurn { IsError = false, ToolName = "ask" };
+        var paired = new ConversationTurn { IsError = false, ToolName = "ask", ToolResult = "Clarified" };
+        Assert.False(StageConversationParser.IsAskError(turn, paired));
+    }
+
     #endregion
 
     #region ResolvePendingBatchQuestions Tests

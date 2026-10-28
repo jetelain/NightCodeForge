@@ -945,131 +945,19 @@ public partial class LenientToolDispatcher
 
     private static IReadOnlyList<QuestionItem>? ExtractQuestionItems(Dictionary<string, object?> args)
     {
-        object? qObj = null;
-        var questionKeys = new[] { "questions", "question_items", "questionItems", "items" };
+        var questionKeys = new[] { "questions", "Questions", "question", "Question", "items", "Items", "question_items", "questionItems" };
         foreach (var qk in questionKeys)
         {
-            if (args.TryGetValue(qk, out qObj) && qObj != null) break;
-        }
-
-        if (qObj == null)
-        {
-            return null;
-        }
-
-        if (qObj is string str && !string.IsNullOrWhiteSpace(str) && str.TrimStart().StartsWith("["))
-        {
-            try
+            if (args.TryGetValue(qk, out var qObj) && qObj != null)
             {
-                using var doc = JsonDocument.Parse(str);
-                return ParseQuestionItemsFromJsonElement(doc.RootElement);
-            }
-            catch (JsonException)
-            {
-                // Fallback
-            }
-        }
-
-        if (qObj is IReadOnlyList<QuestionItem> typedList)
-        {
-            return typedList;
-        }
-        if (qObj is IEnumerable<QuestionItem> typedEnum)
-        {
-            return typedEnum.ToList();
-        }
-        if (qObj is JsonElement je)
-        {
-            return ParseQuestionItemsFromJsonElement(je);
-        }
-        if (qObj is Dictionary<string, object?> singleDict)
-        {
-            string prompt = GetQuestionPrompt(singleDict);
-            string? rationale = (singleDict.TryGetValue("rationale", out var r) || singleDict.TryGetValue("Rationale", out r)) ? r?.ToString() : null;
-            List<string>? options = null;
-            if ((singleDict.TryGetValue("options", out var opts) || singleDict.TryGetValue("Options", out opts)) && opts is IEnumerable<object?> optList)
-            {
-                options = optList.Select(o => o?.ToString() ?? "").ToList();
-            }
-            return new List<QuestionItem> { new(prompt, rationale, options) };
-        }
-        if (qObj is IEnumerable<object?> items)
-        {
-            var result = new List<QuestionItem>();
-            foreach (var item in items)
-            {
-                if (item is QuestionItem qi)
+                var parsed = QuestionItemParser.ParseFromObject(qObj);
+                if (parsed != null && parsed.Count > 0)
                 {
-                    result.Add(qi);
-                }
-                else if (item is Dictionary<string, object?> d)
-                {
-                    string prompt = GetQuestionPrompt(d);
-                    string? rationale = (d.TryGetValue("rationale", out var r) || d.TryGetValue("Rationale", out r)) ? r?.ToString() : null;
-                    List<string>? options = null;
-                    if ((d.TryGetValue("options", out var opts) || d.TryGetValue("Options", out opts)) && opts is IEnumerable<object?> optList)
-                    {
-                        options = optList.Select(o => o?.ToString() ?? "").ToList();
-                    }
-                    result.Add(new QuestionItem(prompt, rationale, options));
+                    return parsed;
                 }
             }
-            return result;
         }
-        return null;
+
+        return QuestionItemParser.ParseFromObject(args);
     }
-
-    private static string GetQuestionPrompt(Dictionary<string, object?> dict)
-    {
-        var keys = new[] { "prompt", "Prompt", "question", "Question" };
-        foreach (var k in keys)
-        {
-            if (dict.TryGetValue(k, out var p) && p != null)
-            {
-                return p.ToString() ?? "";
-            }
-        }
-        return "";
-    }
-
-    private static List<QuestionItem> ParseQuestionItemsFromJsonElement(JsonElement je)
-    {
-        var list = new List<QuestionItem>();
-        if (je.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var el in je.EnumerateArray())
-            {
-                list.Add(ParseSingleQuestionElement(el));
-            }
-        }
-        else if (je.ValueKind == JsonValueKind.Object)
-        {
-            list.Add(ParseSingleQuestionElement(je));
-        }
-        return list;
-    }
-
-    private static QuestionItem ParseSingleQuestionElement(JsonElement el)
-    {
-        string prompt = "";
-        var promptKeys = new[] { "prompt", "Prompt", "question", "Question" };
-        foreach (var pk in promptKeys)
-        {
-            if (el.TryGetProperty(pk, out var pProp) && pProp.ValueKind == JsonValueKind.String)
-            {
-                prompt = pProp.GetString() ?? "";
-                break;
-            }
-        }
-
-        string? rationale = (el.TryGetProperty("rationale", out var rProp) || el.TryGetProperty("Rationale", out rProp))
-            ? rProp.GetString() : null;
-        List<string>? options = null;
-        if ((el.TryGetProperty("options", out var oProp) || el.TryGetProperty("Options", out oProp)) && oProp.ValueKind == JsonValueKind.Array)
-        {
-            options = oProp.EnumerateArray().Select(x => x.GetString() ?? "").ToList();
-        }
-        return new QuestionItem(prompt, rationale, options);
-    }
-
 }

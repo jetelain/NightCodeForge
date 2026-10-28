@@ -148,16 +148,52 @@ public class SignalRActivityBridgeServiceTests
         await bridge.DispatchActivityEventAsync(interruptedEvt);
 
         var allClient = fakeHubContext.AllClient;
-        Assert.Single(allClient.StageTransitions);
+        Assert.Equal(2, allClient.StageTransitions.Count);
         Assert.Equal("test-stage", allClient.StageTransitions[0].StageId);
         Assert.Equal("Deterministic", allClient.StageTransitions[0].StageKind);
         Assert.Equal("Running", allClient.StageTransitions[0].Status);
+        Assert.Equal("human-gate", allClient.StageTransitions[1].StageId);
+        Assert.Equal("WaitingForHuman", allClient.StageTransitions[1].Status);
 
         Assert.Equal(2, allClient.WorkerStatuses.Count);
         Assert.Equal("Running", allClient.WorkerStatuses[0].Status);
         Assert.Equal(7, allClient.WorkerStatuses[0].ActiveTaskId);
         Assert.Equal("WaitingForHuman", allClient.WorkerStatuses[1].Status);
         Assert.Equal(7, allClient.WorkerStatuses[1].ActiveTaskId);
+
+        var groupClient = fakeHubContext.GetGroupClient("task-7");
+        Assert.NotNull(groupClient);
+        Assert.Single(groupClient.ToolExecutions);
+        Assert.Equal(CanonicalToolNames.Ask, groupClient.ToolExecutions[0].ToolName);
+        Assert.Equal(WorkerStatusConstants.WaitingForHuman, groupClient.ToolExecutions[0].Status);
+    }
+
+    [Fact]
+    public async Task DispatchActivityEventAsync_Interrupted_WhenOperationsPaused_BroadcastsInterruptedAndNoAskToolExecution()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var bridge = CreateBridge(fakeHubContext);
+
+        var pauseEvt = new AgentActivityEvent(
+            SessionId: "sess-2",
+            TaskId: 15,
+            StageId: "impl",
+            Kind: AgentActivityKind.Interrupted,
+            Content: "Operations paused (GPU VRAM reclaimed)",
+            Timestamp: DateTime.UtcNow);
+
+        await bridge.DispatchActivityEventAsync(pauseEvt);
+
+        var allClient = fakeHubContext.AllClient;
+        Assert.Single(allClient.StageTransitions);
+        Assert.Equal("impl", allClient.StageTransitions[0].StageId);
+        Assert.Equal(StageExecutionStatus.Interrupted.ToString(), allClient.StageTransitions[0].Status);
+
+        Assert.Single(allClient.WorkerStatuses);
+        Assert.Equal(WorkerStatusConstants.Idle, allClient.WorkerStatuses[0].Status);
+
+        var groupClient = fakeHubContext.GetGroupClient("task-15");
+        Assert.Null(groupClient);
     }
 
     [Theory]

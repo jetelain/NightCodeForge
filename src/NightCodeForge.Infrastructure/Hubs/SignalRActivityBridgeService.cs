@@ -212,6 +212,8 @@ public class SignalRActivityBridgeService : BackgroundService
                     break;
 
                 case AgentActivityKind.Interrupted:
+                    var isPauseInterruption = evt.Content?.StartsWith(AgentActivityConstants.OperationsPausedPrefix, StringComparison.OrdinalIgnoreCase) == true;
+
                     if (AutonomousTaskClassifier.IsAutonomousTask(evt))
                     {
                         _telemetryService.ClearActiveTask(evt.TaskId);
@@ -223,9 +225,30 @@ public class SignalRActivityBridgeService : BackgroundService
                         }
                         else
                         {
+                            var workerStatus = isPauseInterruption ? WorkerStatusConstants.Idle : WorkerStatusConstants.WaitingForHuman;
                             await _hubContext.Clients.All
-                                .ReceiveWorkerStatus(WorkerStatusConstants.WaitingForHuman, evt.TaskId, evt.StageId, "Local GPU");
+                                .ReceiveWorkerStatus(workerStatus, evt.TaskId, evt.StageId, "Local GPU");
                         }
+
+                        if (!string.IsNullOrWhiteSpace(evt.StageId))
+                        {
+                            var stageKind = evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.StageKind, out var interruptedKind) == true && interruptedKind != null
+                                ? interruptedKind.ToString()!
+                                : WorkflowStageKind.Agentic.ToString();
+
+                            var transitionStatus = isPauseInterruption
+                                ? StageExecutionStatus.Interrupted.ToString()
+                                : StageExecutionStatus.WaitingForHuman.ToString();
+
+                            await _hubContext.Clients.All
+                                .ReceiveStageTransition(evt.TaskId, evt.StageId, stageKind, transitionStatus);
+                        }
+                    }
+
+                    if (!isPauseInterruption && evt.TaskId > 0)
+                    {
+                        await _hubContext.Clients.Group(groupName)
+                            .ReceiveToolExecution(evt.TaskId, CanonicalToolNames.Ask, evt.Content ?? string.Empty, WorkerStatusConstants.WaitingForHuman, null);
                     }
                     break;
 

@@ -72,6 +72,54 @@ public class StageConversationViewerAskToolTests : BunitContext
     }
 
     [Fact]
+    public void StageConversationViewer_FailedAskTool_RendersToolCallCardInsteadOfQuestionTurnCard()
+    {
+        var conv = new Conversation
+        {
+            Id = 3,
+            TaskId = 10,
+            StageId = "task-review",
+            Status = StageExecutionStatus.Failed,
+            Turns = new List<ConversationTurn>
+            {
+                new()
+                {
+                    Id = 301,
+                    TurnIndex = 0,
+                    Role = StageTurnRole.Tool,
+                    ToolName = CanonicalToolNames.Ask,
+                    ToolArguments = "{\"questions\":[]}",
+                    MetadataJson = "{\"CallId\":\"call-err-1\"}"
+                },
+                new()
+                {
+                    Id = 302,
+                    TurnIndex = 1,
+                    Role = StageTurnRole.ToolResult,
+                    ToolName = CanonicalToolNames.Ask,
+                    ToolResult = "Error: At least one question must be provided in 'questions'. Consolidate all clarifying questions into a list.",
+                    IsError = true,
+                    MetadataJson = "{\"CallId\":\"call-err-1\"}"
+                }
+            }
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, conv)
+            .Add(x => x.IsActiveStage, false));
+
+        // Must NOT render AgentQuestionTurnCard
+        var questionCards = cut.FindComponents<AgentQuestionTurnCard>();
+        Assert.Empty(questionCards);
+
+        // Must render standard ToolCallCard with error state
+        var toolCard = cut.FindComponent<ToolCallCard>();
+        Assert.NotNull(toolCard);
+        Assert.True(toolCard.Instance.IsError);
+        Assert.Contains("Error: At least one question must be provided", cut.Markup);
+    }
+
+    [Fact]
     public void StageConversationViewer_AnsweredQuestions_RendersSelectedOptionAndAnswerText()
     {
         var conv = new Conversation

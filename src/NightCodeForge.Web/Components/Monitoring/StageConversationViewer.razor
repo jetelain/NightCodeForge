@@ -175,7 +175,8 @@
 
                             var pairedResult = mergedResults.TryGetValue(turn.Id, out var resultTurn) ? resultTurn : null;
                             var effectiveDuration = pairedResult?.DurationMs ?? turn.DurationMs;
-                            if (turn.Role == StageTurnRole.Tool && string.Equals(turn.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
+                            var isAskError = StageConversationParser.IsAskError(turn, pairedResult);
+                            if (StageConversationParser.IsAskToolTurn(turn) && !isAskError)
                             {
                                 var questions = StageConversationParser.ExtractQuestions(turn);
                                 var answer = pairedResult?.ToolResult ?? turn.ToolResult;
@@ -229,7 +230,7 @@
                                                       Arguments="@turn.ToolArguments"
                                                       Result="@liveResult"
                                                       IsRunning="@isRunning"
-                                                      IsError="@(turn.IsError || (pairedResult?.IsError ?? false))"
+                                                      IsError="@(isAskError || turn.IsError || (pairedResult?.IsError ?? false))"
                                                       Offset="@(effectiveDuration.HasValue ? $"{effectiveDuration.Value}ms" : null)"
                                                       BadgeText="@primingBadge"
                                                       BadgeTooltip="@primingTooltip" />

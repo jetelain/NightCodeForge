@@ -211,127 +211,40 @@ public static class StageConversationParser
             ? turn.ToolArguments
             : turn.MetadataJson;
 
-        if (string.IsNullOrWhiteSpace(rawJson))
-        {
-            return new[] { new QuestionItem(turn.Content ?? "Clarification requested") };
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(rawJson);
-            var root = doc.RootElement;
-
-            if (root.ValueKind == JsonValueKind.Object)
-            {
-                var arrayKeys = new[] { "questions", "Questions", "items", "Items", "question_items", "questionItems" };
-                foreach (var key in arrayKeys)
-                {
-                    if (root.TryGetProperty(key, out var arr) && arr.ValueKind == JsonValueKind.Array)
-                    {
-                        return ParseQuestionArray(arr);
-                    }
-                }
-
-                if (root.TryGetProperty("prompt", out var p) || root.TryGetProperty("Prompt", out p) ||
-                    root.TryGetProperty("question", out p) || root.TryGetProperty("Question", out p))
-                {
-                    var prompt = p.GetString();
-                    if (!string.IsNullOrWhiteSpace(prompt))
-                    {
-                        string? rationale = null;
-                        if (root.TryGetProperty("rationale", out var r) || root.TryGetProperty("Rationale", out r))
-                        {
-                            rationale = r.GetString();
-                        }
-                        List<string>? options = null;
-                        if ((root.TryGetProperty("options", out var o) || root.TryGetProperty("Options", out o)) && o.ValueKind == JsonValueKind.Array)
-                        {
-                            options = new List<string>();
-                            foreach (var opt in o.EnumerateArray())
-                            {
-                                var optStr = opt.GetString();
-                                if (optStr != null) options.Add(optStr);
-                            }
-                        }
-                        else if ((root.TryGetProperty("optionsJson", out var oj) || root.TryGetProperty("OptionsJson", out oj)) && oj.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(oj.GetString()))
-                        {
-                            try
-                            {
-                                options = JsonSerializer.Deserialize<List<string>>(oj.GetString()!);
-                            }
-                            catch (JsonException)
-                            {
-                                // Ignore malformed options JSON
-                            }
-                        }
-                        return new[] { new QuestionItem(prompt, rationale, options) };
-                    }
-                }
-            }
-            else if (root.ValueKind == JsonValueKind.Array)
-            {
-                return ParseQuestionArray(root);
-            }
-        }
-        catch (JsonException)
-        {
-            // Fallback to raw content
-        }
-
-        return new[] { new QuestionItem(turn.Content ?? turn.ToolArguments ?? "Clarification requested") };
+        return QuestionItemParser.Parse(rawJson, turn.Content);
     }
 
-    private static List<QuestionItem> ParseQuestionArray(JsonElement arrayElement)
+    /// <summary>
+    /// Checks whether the turn represents an ask tool call.
+    /// </summary>
+    public static bool IsAskToolTurn(ConversationTurn? turn)
     {
-        var list = new List<QuestionItem>();
-        foreach (var el in arrayElement.EnumerateArray())
+        return turn != null &&
+               turn.Role == StageTurnRole.Tool &&
+               string.Equals(turn.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Determines whether an ask tool call resulted in an error, checking error flags and tool results.
+    /// </summary>
+    public static bool IsAskError(ConversationTurn? turn, ConversationTurn? pairedResult)
+    {
+        if (turn?.IsError == true || pairedResult?.IsError == true)
         {
-            if (el.ValueKind == JsonValueKind.String)
-            {
-                list.Add(new QuestionItem(el.GetString() ?? string.Empty));
-            }
-            else if (el.ValueKind == JsonValueKind.Object)
-            {
-                string prompt = string.Empty;
-                string? rationale = null;
-                List<string>? options = null;
-
-                if (el.TryGetProperty("prompt", out var p) || el.TryGetProperty("Prompt", out p))
-                {
-                    prompt = p.GetString() ?? string.Empty;
-                }
-                if (el.TryGetProperty("rationale", out var r) || el.TryGetProperty("Rationale", out r))
-                {
-                    rationale = r.GetString();
-                }
-                if ((el.TryGetProperty("options", out var o) || el.TryGetProperty("Options", out o)) && o.ValueKind == JsonValueKind.Array)
-                {
-                    options = new List<string>();
-                    foreach (var opt in o.EnumerateArray())
-                    {
-                        var optStr = opt.GetString();
-                        if (optStr != null) options.Add(optStr);
-                    }
-                }
-                else if ((el.TryGetProperty("optionsJson", out var oj) || el.TryGetProperty("OptionsJson", out oj)) && oj.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(oj.GetString()))
-                {
-                    try
-                    {
-                        options = JsonSerializer.Deserialize<List<string>>(oj.GetString()!);
-                    }
-                    catch (JsonException)
-                    {
-                        // Ignore malformed options JSON
-                    }
-                }
-
-                if (!string.IsNullOrWhiteSpace(prompt))
-                {
-                    list.Add(new QuestionItem(prompt, rationale, options));
-                }
-            }
+            return true;
         }
-        return list.Count > 0 ? list : new List<QuestionItem> { new QuestionItem("Clarification requested") };
+
+        if (turn?.ToolResult != null && turn.ToolResult.StartsWith("Error", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (pairedResult?.ToolResult != null && pairedResult.ToolResult.StartsWith("Error", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
