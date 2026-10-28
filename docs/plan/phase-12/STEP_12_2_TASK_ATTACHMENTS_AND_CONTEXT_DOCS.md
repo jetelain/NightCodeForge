@@ -18,7 +18,7 @@ This step introduces a first-class **workspace-level Attachments store**:
 1. **Dedicated attachments directory** per workspace, a sibling of the canonical clone and the task worktrees at `~/.nightcodeforge/wks/{workspaceId}/attachments/` — always available, **read-only for all agents**, and **outside the repository** (never committed to any branch or worktree).
 2. **Intake channels in Ideation & Task Creation:**
    - **File drop** in the Ideation chat (Web UI upload).
-   - **System host filename & path mapping:** users can cite a host path in chat (e.g. `C:\dev\poc\router-spikes.md`) or explicitly specify a system host filename in the UI/API. Instead of duplicating disk space by copying, host files are **mapped as symbolic links (symlinks)** directly inside the workspace attachments area (`attachments/{seq}-{slug}.{ext}` $\rightarrow$ host target), maintaining real-time ground truth without duplicating large files.
+   - **System host filename & path mapping (WSL2-only symlinks, no NTFS symlinks):** On Windows, NightCodeForge workloads run exclusively inside WSL2. When users cite a host path in chat (e.g. `C:\dev\poc\router-spikes.md`) or explicitly specify a system host filename in the UI/API, the path is translated to its WSL2 mount point (`/mnt/c/dev/poc/router-spikes.md`). Instead of duplicating disk space by copying, host files are **mapped as POSIX symbolic links strictly inside WSL2** (`attachments/{seq}-{slug}.{ext}` $\rightarrow$ `/mnt/c/...`). Absolutely no symbolic links are created on NTFS, completely bypassing Windows Developer Mode and Windows OS privilege restrictions.
    - **URL parsing** in the user message — external pages are downloaded, converted to markdown, and stored with provenance metadata.
 3. **Automatic markdown companions via Pmad.Markitdown:** any file that is not easily readable as plain text (PDF, Office docs, HTML, images with OCR, …), whether uploaded or mapped via symlink to a host file, gets a companion `*.md` generated using the [`Pmad.Markitdown`](https://www.nuget.org/packages/Pmad.Markitdown) .NET library directly in `attachments/`, so every attachment has an agent-consumable text form.
 4. **Agent consumption:** the ideation agent can list, read, and **cite attachments in proposed tasks**; workflow stage agents (Stage 1 Review, Implementation, Code Review) can read the attachments linked to their task when they need the original context.
@@ -38,8 +38,8 @@ This step introduces a first-class **workspace-level Attachments store**:
 │   └── *.cs, ...                  # checked-out files
 ├── attachments/                   # NEW — workspace attachments store (read-only for agents)
 │   ├── manifest.json              # NEW — machine-readable attachment registry
-│   ├── 001-poc-router-spikes.md   # SYMLINK -> C:\dev\poc\router-spikes.md (host file)
-│   ├── 002-openai-api-spec.pdf    # SYMLINK -> C:\specs\openai-api-spec.pdf (or uploaded binary)
+│   ├── 001-poc-router-spikes.md   # SYMLINK -> /mnt/c/dev/poc/router-spikes.md (translated from C:\dev\poc\...)
+│   ├── 002-openai-api-spec.pdf    # SYMLINK -> /mnt/c/specs/openai-api-spec.pdf (or uploaded binary)
 │   ├── 002-openai-api-spec.md     # MarkItDown companion (agent-consumable, generated in attachments/)
 │   └── 003-rfc-9110.html.md       # URL capture (markdown only, URL in frontmatter)
 └── task-{taskId}/                 # ephemeral ForgeTask worktrees (unchanged)
@@ -61,7 +61,7 @@ This step introduces a first-class **workspace-level Attachments store**:
 - The attachments directory is **sibling to the clone and worktrees**, resolved through the existing workspace path resolver (`IWorkspacePathResolver`). It is **not** inside any git working tree, so no branch, worktree, or mirror sync can ever commit it.
 - **Read-only for agents:** no agent tool exposes write/delete on this directory or its symlink targets. The only mutation channel is the intake pipeline (uploads, symlink mappings, URL captures) via the Web UI / API.
 - **Docker Read-Only Mount:** In `ExecutionMode.ContainerSandbox`, the Docker management layer mounts the workspace attachments directory strictly read-only (`:ro`) at `/workspace/attachments`. The container engine enforces write protection at the filesystem boundary.
-- **Symlink Mapping for Host Files:** When an attachment originates from a system host filename/path, a symbolic link is created in `attachments/` pointing to the canonical host path (`File.CreateSymbolicLink`). The original host file is never copied or moved, nor is it ever modified or deleted by NightCodeForge operations.
+- **Symlink Mapping for Host Files (WSL2-Only, No NTFS Symlinks):** On Windows, NightCodeForge workloads run exclusively in WSL2 on ext4. When an attachment originates from a system host filename/path, a POSIX symbolic link is created strictly in the WSL2 workspace attachments area pointing to the translated Linux path (`/mnt/c/...`). No NTFS symbolic links are ever created. The original host file is never copied or moved, nor is it ever modified or deleted by NightCodeForge operations.
 - **Fail-Fast Broken Symlink Guard:** If an external host file mapped as a symlink is moved, renamed, or deleted, any subsequent read operation fails fast with a dedicated `AttachmentTargetNotFoundException` identifying the missing host path. Per repository policy, no synthetic empty placeholder is ever generated.
 - **Content addressing:** file name = `{seq:000}-{slug}.{ext}` (or `{slug}.md` for URL captures); the registry stores the **SHA-256** of the content. Re-intaking identical content (same hash) does not create a duplicate — it reuses the existing attachment.
 - **Manifest:** `manifest.json` is the single source of truth on disk (survives database loss, is human-readable). The database mirrors it (see §2.2) for querying/linking.
@@ -120,21 +120,23 @@ flowchart LR
 - Drop zone in the Ideation chat (and on `/tasks/new` for direct creation).
 - Uploaded bytes are written directly to `attachments/{seq:000}-{slug}.{ext}`.
 
-### 3.2 Channel 2: System Host Filename & Path Mapping (Symlink)
+### 3.2 Channel 2: System Host Filename & Path Mapping (WSL2 Symlink)
 - **Intake Avenues:**
   - **Chat Message Citation:** The intake parser extracts absolute/relative host paths from user messages (regex over Windows drive paths `C:\...`, UNC shares `\\server\share`, POSIX absolute paths `/home/...`, and tilde paths `~/...`).
   - **Explicit Host Filename Input:** Users can directly input or browse for a system host filename in the UI (chat composer or `/tasks/new` Attachments picker) without uploading bytes.
-- **Validation:**
-  - The cited host path is resolved to its canonical absolute path (`Path.GetFullPath`) and verified to exist and be readable.
+- **Validation & WSL2 Path Translation:**
+  - On Windows, NightCodeForge workloads run exclusively inside WSL2.
+  - When a Windows host path is cited (e.g. `C:\dev\poc\router-spikes.md`), the intake service translates it to its canonical WSL2 mount point (`/mnt/c/dev/poc/router-spikes.md`).
+  - The path is validated to exist and be readable.
   - **Fail fast:** A cited host path that does not exist produces an explicit activity-stream error naming the path — never a silent skip or placeholder.
-- **Symlink Creation in Attachment Area:**
-  - Instead of copying large files across disk boundaries, the intake service creates a **symbolic link** in the workspace attachments area (`attachments/{seq:000}-{slug}.{ext}`) pointing directly to the target host path using `File.CreateSymbolicLink`.
-  - On platforms where unprivileged file symlink creation requires specific configuration (e.g. Windows Developer Mode), the service handles symlink creation cleanly and fails fast with a clear descriptive configuration error if symlink creation is denied by OS policy.
+- **Symlink Creation in WSL2 Attachment Area:**
+  - Instead of copying large files across disk boundaries, the intake service creates a **POSIX symbolic link** in the WSL2 workspace attachments area (`attachments/{seq:000}-{slug}.{ext}`) pointing directly to the translated `/mnt/<drive>/...` path (e.g., via `ln -s /mnt/c/...` or Linux `File.CreateSymbolicLink`).
+  - **Zero NTFS Symlinks:** Absolutely no symbolic links are created on Windows NTFS. Workloads and attachments execute on ext4 inside WSL2, completely bypassing Windows Developer Mode (`SeCreateSymbolicLinkPrivilege`) and Windows OS privilege restrictions.
 - **MarkItDown Companion Generation:**
   - If the host target is a non-plain-text format (PDF, DOCX, XLSX, HTML, images), `Pmad.Markitdown` reads the file via the symlink and emits the companion `*.md` directly in `attachments/`.
 - **Integrity & Host Safety:**
   - The host file remains the single source of truth on the developer's filesystem.
-  - Deleting an attachment unlinks the symlink from `attachments/` and purges any companion `*.md`; it **strictly never modifies or deletes the original host file**.
+  - Deleting an attachment unlinks the symlink from `attachments/` in WSL2 and purges any companion `*.md`; it **strictly never modifies or deletes the original host file**.
 
 ### 3.3 Channel 3: URL Capture
 - `http(s)` URLs found in the user message are fetched and converted to markdown via MarkItDown.
@@ -231,14 +233,15 @@ When executing workflows in `ExecutionMode.ContainerSandbox`:
 | Concern | Constraint |
 | :--- | :--- |
 | Path traversal | Cited host paths and all resolved attachment paths are validated. Symlink entries must reside strictly within `attachments/` and point exclusively to their recorded `SourceRef`. |
-| Symlink host safety | Deleting an attachment unlinks the symlink from `attachments/`; the underlying host file is strictly read-only and never deleted or modified. |
+| Symlink host safety | Deleting an attachment unlinks the symlink from `attachments/` in WSL2; the underlying host file is strictly read-only and never deleted or modified. |
+| WSL2-only symlinks | On Windows, NightCodeForge workloads run exclusively inside WSL2. Symbolic links are created strictly on Linux/ext4 pointing to `/mnt/c/...`. No NTFS symlinks are created. |
 | Dangling symlinks | If a host file is deleted/moved externally, attempting to read the attachment raises `AttachmentTargetNotFoundException` — never silent empty content or fabricated data. |
 | Docker container isolation | Docker management layer mounts host `attachments/` strictly read-only (`:ro`) at `/workspace/attachments`. Containerized agents, tools, or hostile subprocesses cannot write, delete, or tamper with workspace attachments on the host. |
 | SSRF | URL captures restricted to `http/https`, loopback/private ranges rejected without explicit opt-in. |
 | Resource exhaustion | Max file size (upload & download), max attachment count per workspace, and fetch timeout are named constants. |
 | Immutability | Stored content is never mutated; same-hash re-intake reuses the existing artifact (deduplication). |
 | No silent failures | Missing file at citation, broken symlink target, failed download, failed conversion, unknown attachment ID → explicit domain exceptions / activity-stream errors, never fabricated content. |
-| Cross-OS | Path resolution uses the workspace path resolver so host, WSL2-UNC, and container contexts resolve identically. |
+| Cross-OS & WSL2 path translation | On Windows, workloads run exclusively in WSL2. Host drive paths are translated to `/mnt/c/...` before creating POSIX symlinks. |
 
 ---
 
@@ -249,7 +252,7 @@ When executing workflows in `ExecutionMode.ContainerSandbox`:
   - [ ] EF Core tables + migration; repository interface with content-hash dedup query.
   - [ ] `manifest.json` writer/reader recording symlink metadata (`isSymlink`, `targetPath`), kept in sync with the database (disk is source of truth on read conflicts).
 - [ ] **Intake Service:**
-  - [ ] `IAttachmentIntakeService`: host-path parser (user message), explicit host filename input handler, URL parser, sanitization, SHA-256 dedup, symlink creation (`File.CreateSymbolicLink`) for host files, direct copy for uploads, Pmad.Markitdown conversion with companion files, registry update.
+  - [ ] `IAttachmentIntakeService`: host-path parser (user message), explicit host filename input handler, URL parser, sanitization, SHA-256 dedup, WSL2 POSIX symlink creation with `/mnt/c/...` path translation (no NTFS symlinks), direct copy for uploads, Pmad.Markitdown conversion with companion files, registry update.
   - [ ] `Pmad.Markitdown` NuGet integration; plain-text passthrough extension list as a constant.
   - [ ] Security guards: path traversal validation, symlink target verification against `SourceRef`, SSRF allow-list, size/count/timeout constants.
 - [ ] **Agent Integration:**
@@ -267,10 +270,33 @@ When executing workflows in `ExecutionMode.ContainerSandbox`:
   - [ ] Update `NightCodeForgeContainerExecutor.BuildVolumeMounts` to add `ContainerVolumeMount` with `ContainerPath = "/workspace/attachments"` and `isReadOnly = true`.
   - [ ] Unit tests in `NightCodeForge.Infrastructure.Tests` verifying `BuildVolumeMounts` and `BuildDockerRunArgs` produce `-v "{hostAttachments}:/workspace/attachments:ro"`.
 - [ ] **Tests:**
-  - [ ] Unit tests: intake pipeline (dedup by hash, symlink mapping for host files, companion generation via Pmad.Markitdown fixtures, path-traversal rejection, SSRF rejection, size caps), registry/manifest synchronization.
+  - [ ] Unit tests: intake pipeline (dedup by hash, WSL2 symlink mapping with `/mnt/c/...` translation, companion generation via Pmad.Markitdown fixtures, path-traversal rejection, SSRF rejection, size caps), registry/manifest synchronization.
   - [ ] Unit tests: broken symlink detection throwing `AttachmentTargetNotFoundException`, ensuring no silent empty fallback.
   - [ ] Unit tests: host file preservation (deleting attachment removes symlink without deleting target host file).
   - [ ] Unit tests: `@attachment:{id}` parsing, unknown-ID hard error, digest rendering.
   - [ ] Integration test: end-to-end intake (file drop + host file symlink + URL capture) → ideation cites attachment → task created with link → stage agent reads attachment.
   - [ ] Integration test (ContainerSandbox): verify containerized agent/tool reads `/workspace/attachments/...` and cannot write (`Read-only file system`).
   - [ ] UI tests: drop zone, host file input, chips, picker on `/tasks/new`, preview drawer, delete flow.
+
+---
+
+## 8. Implementation Nuances & Gaps to Watch
+
+1. **Strict WSL2 Symlink Execution (No NTFS Symlinks):**
+   - NightCodeForge workloads on Windows run exclusively inside WSL2. Symbolic links are created strictly in the WSL2 ext4 filesystem (`~/.nightcodeforge/wks/{workspaceId}/attachments/`) pointing to the translated Linux path (`/mnt/c/...`).
+   - Absolutely no symbolic links are created on Windows NTFS. This completely eliminates Windows Developer Mode (`SeCreateSymbolicLinkPrivilege`) requirements, administrator elevation requirements, and Windows NTFS file-locking quirks.
+
+2. **Automatic Windows-to-WSL Path Translation:**
+   - When a user cites or inputs a Windows host path (`C:\dev\poc\spec.md`), the intake service translates it to its canonical WSL2 equivalent (`/mnt/c/dev/poc/spec.md`).
+   - The service verifies that `/mnt/c/...` is accessible and readable in WSL2 before creating the Linux symlink in the WSL2 attachments directory.
+   - [IWorkspacePathResolver](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Interfaces/IWorkspacePathResolver.cs) ensures that paths resolved for WSL2 execution maintain consistent `/mnt/<drive>/...` pathing across both local WSL and containerized tools.
+
+3. **`Pmad.Markitdown` Execution & Native Dependencies:**
+   - Plain-text and Markdown files (`.txt`, `.md`, `.cs`, `.json`, `.yaml`) must bypass `Pmad.Markitdown` completely with zero overhead (`MarkdownPath = RelativePath`).
+   - For document formats (PDF, DOCX, XLSX, HTML), ensure `Pmad.Markitdown` handles missing binary format converters without crashing the service. If conversion fails, the raw attachment remains stored and flagged as `conversionFailed = true`, but no empty or half-generated markdown companion is exposed to agents.
+
+4. **Database Migration & Concurrency:**
+   - Introducing `TaskAttachments` and `TaskAttachmentLinks` requires an EF Core migration. Ensure unique constraints are enforced on `(WorkspaceId, Sha256)` for attachment deduplication and `(TaskId, TaskAttachmentId)` for links.
+   - When multiple concurrent tasks link the same attachment, deduplication checks must execute atomically within an EF Core execution strategy to avoid duplicate key violations.
+
+

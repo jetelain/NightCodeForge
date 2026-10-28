@@ -132,15 +132,15 @@ public class LlmProviderOptions
     public string Endpoint { get; set; } = "http://localhost:11434";
     public double RequestTimeoutMinutes { get; set; } = 15;
 
-    // Unified baseline configuration
-    public string DefaultModelName { get; set; } = "qwen2.5-coder:32b";
+    // Unified baseline configuration (Standardized identifier replacing legacy ModelId under Clean Break Policy)
+    public string DefaultModelId { get; set; } = "qwen2.5-coder:32b";
     public ThinkingEffort DefaultThinkingEffort { get; set; } = ThinkingEffort.Medium;
 
     // Optional role differentiation (Step 11.33)
     public bool DifferentiateRoles { get; set; } = false;
-    public string? CoderModelName { get; set; }
+    public string? CoderModelId { get; set; }
     public ThinkingEffort? CoderThinkingEffort { get; set; }
-    public string? ArchitectModelName { get; set; }
+    public string? ArchitectModelId { get; set; }
     public ThinkingEffort? ArchitectThinkingEffort { get; set; }
 
     // OpenAI Compatible provider settings
@@ -170,13 +170,15 @@ flowchart TD
 1. **Startup & Configuration Validation:**
    - If `ProviderType == LlmProviderType.OpenAiCompatible`:
      - `OpenAiCompatible.AllowedModels` must not be empty. If empty, the options validator records an error: `"OpenAI Compatible provider requires at least one configured allowed model with context window size."`
-     - `DefaultModelName` must match a configured `ModelId` in `AllowedModels`.
-     - If `DifferentiateRoles` is enabled, `CoderModelName` and `ArchitectModelName` (if specified) must match configured `ModelId`s in `AllowedModels`.
+     - `DefaultModelId` must match a configured `ModelId` in `AllowedModels`.
+     - If `DifferentiateRoles` is enabled, `CoderModelId` and `ArchitectModelId` (if specified) must match configured `ModelId`s in `AllowedModels`.
 2. **Runtime Execution Verification:**
-   - When `IOllamaChatClientFactory` (or unified `ILlmChatClientFactory`) receives a request to create a client for `modelId`:
+   - When `ILlmChatClientFactory` (from Step 11.33) receives a request to create a client for `modelId`:
      - If `modelId` is not found in `AllowedModels`, the factory immediately throws `ModelNotAllowedException`:
        ```csharp
-       public class ModelNotAllowedException : DomainException
+       namespace NightCodeForge.Core.Exceptions;
+
+       public class ModelNotAllowedException : InvalidOperationException
        {
            public ModelNotAllowedException(string modelId, LlmProviderType providerType)
                : base($"Model '{modelId}' is not in the allowed models configuration for provider '{providerType}'. Configure the model and its context size under Settings.")
@@ -199,7 +201,7 @@ public static class ModelCapabilityResolver
     {
         if (options.ProviderType == LlmProviderType.OpenAiCompatible)
         {
-            var effectiveId = !string.IsNullOrWhiteSpace(modelId) ? modelId : options.DefaultModelName;
+            var effectiveId = !string.IsNullOrWhiteSpace(modelId) ? modelId : options.DefaultModelId;
             var allowed = options.OpenAiCompatible.AllowedModels
                 .FirstOrDefault(m => string.Equals(m.ModelId, effectiveId, StringComparison.OrdinalIgnoreCase));
 
@@ -227,7 +229,7 @@ This guaranteed integer feeds directly into:
 ### 2.4 Client Lifecycle, Authentication & Header Hygiene
 
 #### Implementation Contract
-The chat client for `OpenAiCompatible` can be instantiated using `Microsoft.Extensions.AI` (e.g. `Microsoft.Extensions.AI.OpenAI` or `OpenAI.Chat.ChatClient.AsChatClient()`) or a dedicated `OpenAiCompatibleChatClient` implementing `IChatClient`:
+The chat client for `OpenAiCompatible` is instantiated using `Microsoft.Extensions.AI.OpenAI` (wrapping the official `OpenAI` client via `AsChatClient()`) within `DefaultLlmChatClientFactory`:
 
 ```csharp
 public static IChatClient CreateOpenAiCompatible(
@@ -269,17 +271,25 @@ public static IChatClient CreateOpenAiCompatible(
     // Strict header hygiene: suppress OllamaRouter headers completely
     // DO NOT attach X-OllamaRouter-Target or X-OllamaRouter-Session-Id
 
-    ...
+    var clientOptions = new OpenAIClientOptions
+    {
+        Endpoint = new Uri(endpoint.TrimEnd('/') + "/"),
+        Transport = new HttpClientPipelineTransport(httpClient)
+    };
+
+    var credential = new ApiKeyCredential(options.ApiKey ?? "no-key");
+    var openAiClient = new OpenAIClient(credential, clientOptions);
+    return openAiClient.GetChatClient(model.ModelId).AsChatClient();
 }
 ```
 
 #### Protocol Nuances:
 1. **Tool / Function Calling:** Uses standard OpenAI function definitions (`tools: [{ type: "function", function: { ... } }]`) and parses `tool_calls` in streaming chunks.
-2. **Reasoning / Thinking Models:**
-   - For OpenAI `o1` / `o3-mini`: Maps `ThinkingEffort` to the top-level `reasoning_effort` property (`"low"`, `"medium"`, `"high"`).
-   - For DeepSeek-R1 / Qwen reasoning models over vLLM: Transparently parses reasoning content or tags without corrupting tool payload dispatching.
+2. **Standard API Conformance for Reasoning:**
+   - Heterogeneous reasoning parsing hacks (such as custom regex extraction for inline `<think>` tags) are explicitly out of scope. We require a proper, compliant OpenAI API implementation (such as modern vLLM, LM Studio, or cloud endpoints) that cleanly conforms to the OpenAI chat completions specification and streaming tool calling. Where supported, `ThinkingEffort` maps to the standard top-level `reasoning_effort` parameter (`"low"`, `"medium"`, `"high"`).
 3. **Telemetry & Decorators:**
    - The raw OpenAI client is wrapped with `TelemetryChatClient` (`IOperationsTelemetryService`) and `OperationsPauseGatingChatClient` (`IOperationsControlService`), preserving operations transparency and gamer pause mode parity across all providers.
+
 
 ---
 
@@ -375,38 +385,43 @@ In `Settings.razor` (and `AgentProfilesTab.razor`):
 4. **Conditional Surface Rendering:**
    - Target Pinning selectors (`Local`, `Remote`, `Cloud`) are completely hidden.
    - Ollama Modelfile inspection cards and OllamaRouter dynamic cluster hardware cards are hidden.
-   - VRAM Reclaim is indicated as "Managed by Remote Provider" (or disabled gracefully).
+   - **VRAM Reclaim Strictly Hidden:** In OpenAI-compatible mode, GPU VRAM Reclaim controls and actions are completely hidden from the user interface (TopNavBar, Settings, and Monitoring).
 
 ---
 
 ### 2.7 Operations Telemetry & Health Checks
 
 1. **Connectivity Probe:** Clicking **"Test Connection & Verify Models"**:
+   - Dispatches to `ILlmModelCatalogService.VerifyEndpointAsync(cancellationToken)` (strictly encapsulating HTTP transport outside Razor `@code`).
    - Sends `GET {endpoint}/models` with the Bearer token.
-   - If HTTP 200 is returned, compares remote model IDs against the configured `AllowedModels` list.
+   - Compares remote model IDs against the configured `AllowedModels` list and returns a structured `EndpointVerificationResult(bool IsSuccess, IReadOnlyList<string> VerifiedModels, IReadOnlyList<string> MissingModels, string? WarningMessage)`.
    - Renders a green success alert highlighting validated models, or an amber warning if any configured allowed model is missing from the remote endpoint catalog.
 2. **Live Telemetry Hero (`/monitoring`):**
    - Active LLM card displays `Provider: OpenAI Compatible`.
    - Displays real-time streaming tokens/sec, input context size, and output tokens.
-3. **VRAM Eviction Handling:**
-   - Invoking global operations pause (Step 11.29) gracefully halts queue execution.
-   - Because cloud/generic OpenAI endpoints do not support standard Ollama `keep_alive: 0` eviction, the gateway service returns a clean status report indicating that remote VRAM eviction is non-applicable, avoiding failed exceptions or false error alerts.
+3. **VRAM Eviction Handling & UI Suppression:**
+   - In OpenAI-compatible mode, VRAM reclaim actions are not supported and are never exposed to the user in the UI.
+   - Invoking global operations pause (Step 11.29) gracefully halts queue execution without triggering any remote VRAM eviction calls.
 
 ---
 
 ## 3. Implementation Checklist & Deliverables
 
 ### Phase 1: Core Domain, Schemas & Validation
+- [ ] Add `Microsoft.Extensions.AI.OpenAI` package reference to `NightCodeForge.Agents.csproj`.
 - [ ] Add `LlmProviderType.OpenAiCompatible` to `NightCodeForge.Core.Domain.LlmProviderType`.
 - [ ] Implement `OpenAiAllowedModel` and `OpenAiCompatibleOptions` in `NightCodeForge.Agents.Inference`.
-- [ ] Add `ModelNotAllowedException` domain exception in `NightCodeForge.Core.Domain.Exceptions`.
+- [ ] Add `ModelNotAllowedException` in `NightCodeForge.Core.Exceptions` (inheriting from `InvalidOperationException`).
 - [ ] Update `LlmProviderOptions` with `OpenAiCompatible` property and configuration validation.
 - [ ] Author unit tests in `NightCodeForge.Agents.Tests` verifying allowlist validation rules and hard errors on unlisted models.
 
 ### Phase 2: Client Construction & Context Resolution
-- [ ] Extend `ILlmModelCatalogService` implementation in `NightCodeForge.Infrastructure.Inference` to yield `AvailableModelInfo` entries from `OpenAiCompatible.AllowedModels`.
+- [ ] Extend `ILlmModelCatalogService` implementation in `NightCodeForge.Infrastructure.Inference`:
+  - Yield `AvailableModelInfo` entries from `OpenAiCompatible.AllowedModels`.
+  - Implement `VerifyEndpointAsync` for model catalog probing and reconciliation.
 - [ ] Update `ModelCapabilityResolver` to resolve context window sizes directly from `OpenAiCompatible.AllowedModels`.
-- [ ] Implement OpenAI-compatible `IChatClient` factory in `NightCodeForge.Agents.Inference`:
+- [ ] Integrate OpenAI-compatible `IChatClient` into `DefaultLlmChatClientFactory` (Step 11.33):
+  - Configure `OpenAIClientOptions` with `HttpClientPipelineTransport(httpClient)`.
   - Outbound `Authorization: Bearer <ApiKey>` header injection.
   - Organization ID header support.
   - Strict suppression of `X-OllamaRouter-Target` and `X-OllamaRouter-Session-Id` headers.
@@ -420,13 +435,13 @@ In `Settings.razor` (and `AgentProfilesTab.razor`):
   - Render Endpoint, API Key, and Organization ID configuration fields.
   - Build `AllowedModelsTable.razor` component supporting Add, Edit, Delete of allowed models with context presets (32k, 64k, 128k, 200k).
   - Bind Default, Coder, and Architect model selectors strictly to the allowed model list.
-  - Conditionally hide OllamaRouter target pinning and cluster topology cards.
-- [ ] Implement "Test Connection & Verify Models" action with `GET /models` ping and reconciliation report.
+  - Conditionally hide OllamaRouter target pinning, cluster topology cards, and VRAM Reclaim controls.
+- [ ] Wire "Test Connection & Verify Models" action to `ILlmModelCatalogService.VerifyEndpointAsync` and render verification report.
 - [ ] Author bUnit / component tests for allowed models management and provider switching.
 
 ### Phase 4: Telemetry & Hardening
 - [ ] Update `TelemetryChatClient` to label provider as `OpenAI Compatible` in telemetry feeds.
-- [ ] Ensure `IOllamaRouterGatewayService` / unified gateway reports clean non-applicable VRAM eviction status when in OpenAI-compatible mode.
+- [ ] Ensure VRAM Reclaim controls are completely hidden across the UI (TopNavBar, Settings, Monitoring) when in OpenAI-compatible mode.
 - [ ] Run full test suite without E2E tests (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`) ensuring 100% pass rate.
 
 ---
@@ -439,3 +454,25 @@ In `Settings.razor` (and `AgentProfilesTab.razor`):
 4. **Header & Protocol Hygiene:** Requests sent to the OpenAI-compatible endpoint include the configured `Bearer` token (if set) and standard OpenAI chat completion JSON payloads. No `X-OllamaRouter-*` headers are transmitted.
 5. **UI & Configuration Persistence:** Allowed models, their context limits, and the API key persist cleanly in configuration/storage, and the settings UI allows editing them with instant validation.
 6. **Telemetry Parity:** Active inference calls to OpenAI-compatible endpoints appear in the `/monitoring` hero card with real-time tokens/sec, elapsed time, and token counts.
+
+---
+
+## 5. Implementation Nuances & Gaps to Watch
+
+1. **Standard .NET AI SDK vs Custom Streaming Parser:**
+   - Rather than manually implementing Server-Sent Events (SSE) stream parsing for `/v1/chat/completions`, leverage `Microsoft.Extensions.AI.OpenAI` (v10.10.0+). These packages natively handle delta token assembly, streaming tool/function calls (`tool_calls`), and reasoning chunk formatting across various OpenAI-compatible implementations.
+
+2. **Standard API Conformance (No Heterogeneous Reasoning Hacks):**
+   - Heterogeneous reasoning parsing hacks (such as custom regex extraction for inline `<think>` tags) are intentionally ignored and rejected. We strictly require a compliant OpenAI API implementation (latest versions of vLLM cleanly handle chat completions, tool calling, and reasoning natively). Where supported, `ThinkingEffort` maps directly to the standard `reasoning_effort` request parameter.
+
+3. **Graceful Handling of `GET /v1/models` in Test Probes:**
+   - The `ILlmModelCatalogService.VerifyEndpointAsync` action queries `GET /v1/models`. However, some minimal OpenAI proxy servers or local runners (such as simple llama-server instances or custom gateways) either do not implement `/v1/models` (returning 404 Not Found or 501 Not Implemented) or require different permissions.
+   - If `/v1/models` fails but direct completion requests succeed, the probe should report a cautionary diagnostic (`EndpointVerificationResult.WarningMessage`) rather than treating it as a total network outage.
+
+4. **UI Presentation Separation ([AGENTS.md](../../../AGENTS.md)):**
+   - The `AllowedModelsTable.razor` component must remain purely presentational. Dynamic preset token calculations (32k, 64k, 128k, 200k), JSON serialization, allowlist validation, and endpoint verification must be handled by dedicated services (`ILlmModelCatalogService`), never in component `@code` blocks.
+
+5. **VRAM Reclaim Completely Hidden in UI:**
+   - Remote OpenAI endpoints, proxies, and cloud aggregators do not support client-managed GPU memory eviction. In OpenAI-compatible mode, VRAM Reclaim actions and buttons must NOT be exposed to the user anywhere in the UI (Settings, TopNavBar, Monitoring). When entering Global Operations Pause (Step 11.29), queues pause gracefully without attempting any VRAM eviction.
+
+

@@ -51,30 +51,62 @@ public class LlmProviderOptions
     public string Endpoint { get; set; } = "http://localhost:11434";
     public double RequestTimeoutMinutes { get; set; } = 15;
 
-    // Unified baseline configuration
-    public string DefaultModelName { get; set; } = "qwen2.5-coder:32b";
+    public const int DefaultContextWindowTokens = 131072;
+    public const int DefaultMaxOutputTokens = 8192;
+
+    /// <summary>Baseline context window in tokens (used as fallback when provider discovery is unavailable).</summary>
+    public int ContextWindowTokens { get; set; } = DefaultContextWindowTokens;
+
+    /// <summary>Output token budget reserved from the context window.</summary>
+    public int MaxOutputTokens { get; set; } = DefaultMaxOutputTokens;
+
+    // Unified baseline configuration (Standardized identifier replacing legacy ModelId under Clean Break Policy)
+    public string DefaultModelId { get; set; } = "qwen2.5-coder:32b";
     public ThinkingEffort DefaultThinkingEffort { get; set; } = ThinkingEffort.Medium;
 
-    // Optional role differentiation
+    // Optional role differentiation (baseline config; stage dispatch escalation governed by Step 12.5)
     public bool DifferentiateRoles { get; set; } = false;
 
     // Coder role (Implementation stage)
-    public string? CoderModelName { get; set; }
+    public string? CoderModelId { get; set; }
     public ThinkingEffort? CoderThinkingEffort { get; set; }
 
     // Architect role (Triage, Ideation, Task Review, Code Review & Fix)
-    public string? ArchitectModelName { get; set; }
+    public string? ArchitectModelId { get; set; }
     public ThinkingEffort? ArchitectThinkingEffort { get; set; }
+
+    /// <summary>
+    /// Per-model capability overrides and effort maps (e.g. Qwen 3.8 mapping "high" to "xhigh").
+    /// </summary>
+    public Dictionary<string, ModelCapabilityProfile> ModelProfiles { get; set; } = CreateDefaultModelProfiles();
+
+    public static Dictionary<string, ModelCapabilityProfile> CreateDefaultModelProfiles()
+    {
+        ModelCapabilityProfile Qwen38() => new()
+        {
+            SupportedEfforts = ["low", "medium", "xhigh"],
+            EffortMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["high"] = "xhigh" },
+            DefaultEffort = "xhigh"
+        };
+
+        return new Dictionary<string, ModelCapabilityProfile>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["qwen3.8"] = Qwen38(),
+            ["qwen-3.8"] = Qwen38(),
+            ["Qwen3.8-27B:latest"] = Qwen38()
+        };
+    }
 }
 ```
 
-#### Provider Auto-Detection
+#### Provider Auto-Detection (Encapsulated in `ILlmGatewayService.DetectProviderAsync`)
+To adhere to the `AGENTS.md` presentation-logic separation rule, auto-detection logic lives strictly within `ILlmGatewayService` (or `IOllamaRouterGatewayService.DetectProviderAsync`), never directly inside Razor `@code` blocks:
 On startup or when clicking **"Detect Provider"** in the Web UI:
-1. Issue `GET /api/router/info`:
+1. Issue `GET /api/router/info` (timeout: 2s):
    - If HTTP 200 returned with `{ "isRouter": true }` $\rightarrow$ Provider is **OllamaRouter**.
-2. If HTTP 404 or connection failed, issue `GET /api/version`:
+2. If HTTP 404 or connection failed, issue `GET /api/version` (timeout: 2s):
    - If HTTP 200 returned with `{ "version": "..." }` $\rightarrow$ Provider is **Ollama**.
-3. If both fail $\rightarrow$ Endpoint is offline.
+3. If both fail $\rightarrow$ Endpoint is offline (returns null/offline status, failing fast on actual inference attempts).
 
 ---
 
@@ -114,12 +146,12 @@ flowchart TD
      - **Small (< 12 GB):** Laptop (8 GB) — MoE & SmallDense offload.
      - **Desktop (12 GB – 32 GB):** Desktop (16 GB) — capped at 48k context (`49,152` tokens).
      - **Server (≥ 32 GB):** AI Server 2 (64 GB) & AI Server 1 (96 GB) — full 260k context (`262,144` tokens) and Server LargeDense role matching.
-     In a fleet containing AI Server 1 or 2, `recommendedContextWindow` for Qwen 3.8 27B will correctly resolve to **262,144 tokens**.
+     In a fleet containing AI Server 1 or 2, `recommendedContextWindow` for `Qwen3.8-27B:latest` will correctly resolve to **262,144 tokens**.
 2. **Standalone Ollama:** Calls `POST /api/show`:
    - Reads `parameters`: searches for `num_ctx <int>` in Modelfile.
    - If absent, reads `model_info`: searches for keys ending with `.context_length` (e.g. `qwen2.context_length: 32768`).
    - If absent, safely falls back to standard Ollama default (4,096 tokens).
-3. **Caching:** Discovered capabilities are cached in memory (`IOllamaModelCatalogService`) keyed by model name and digest to prevent repeated network requests.
+3. **Caching & Lifecycle Integration:** Discovered capabilities are cached in memory in `ILlmModelCatalogService` keyed by `ModelId`. When an agent stage initializes or an agent profile is instantiated, the harness or stage runner calls `await gateway.ResolveContextWindowAsync(modelId, ct)` (or queries the catalog cache) and supplies the discovered integer as `explicitContextWindowTokens` to `ModelCapabilityResolver.BuildCompactionStrategy(..., explicitContextWindowTokens: discoveredTokens)`. This bridges the asynchronous discovery engine with the synchronous Crucible compaction boundary cleanly.
 
 ---
 
@@ -157,6 +189,7 @@ public record GatewayStatusReport(
 
 public interface IOllamaRouterGatewayService
 {
+    Task<LlmProviderType?> DetectProviderAsync(CancellationToken cancellationToken = default);
     Task<GatewayStatusReport> GetGatewayStatusAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ResidentModelInfo>> GetResidentModelsAsync(CancellationToken cancellationToken = default);
     Task<int> ResolveContextWindowAsync(string modelName, CancellationToken cancellationToken = default);
@@ -173,45 +206,46 @@ public interface IOllamaRouterGatewayService
 
 ---
 
-### 2.5 Provider-Agnostic Model Catalog Abstraction (`ILlmModelCatalogService`)
+### 2.5 Provider-Agnostic Model Catalog & Unified Chat Client Factory Abstractions
 
-Currently, `AgentProfilesTab.razor` and `WizardStep3Environment.razor` inject `IOllamaModelCatalogService`, directly coupling the UI to Ollama-specific concepts (`OllamaModelInfo`, `Size`, `Digest`, and `/api/tags`).
+Currently, `AgentProfilesTab.razor` and `WizardStep3Environment.razor` inject `IOllamaModelCatalogService`, directly coupling the UI to Ollama-specific concepts (`OllamaModelInfo`, `Size`, `Digest`, and `/api/tags`). Furthermore, the inference client factory is named `IOllamaChatClientFactory`.
 
-To support dynamic multi-provider selection (Standalone Ollama, OllamaRouter, and upcoming OpenAI-compatible providers), we replace `IOllamaModelCatalogService` with a clean, provider-agnostic abstraction in `NightCodeForge.Core.Interfaces`:
+Under the **Clean Break Policy** ([AGENTS.md](../../../AGENTS.md)):
+1. We replace `IOllamaModelCatalogService` with a clean, provider-agnostic abstraction in `NightCodeForge.Core.Interfaces`:
+   ```csharp
+   namespace NightCodeForge.Core.Interfaces;
 
-```csharp
-namespace NightCodeForge.Core.Interfaces;
+   public record AvailableModelInfo(
+       string ModelId,
+       string DisplayName,
+       int? ContextWindowTokens = null,
+       long? SizeBytes = null,
+       LlmProviderType ProviderType = LlmProviderType.Ollama,
+       bool SupportsReasoning = false,
+       IReadOnlyDictionary<string, object?>? Metadata = null)
+   {
+       /// <summary>Formatted badge for UI dropdowns (e.g. "19.8 GB" or "128k ctx").</summary>
+       public string FormattedBadge => ContextWindowTokens.HasValue
+           ? $"{ContextWindowTokens.Value / 1024}k ctx"
+           : (SizeBytes.HasValue ? $"{SizeBytes.Value / (1024.0 * 1024 * 1024):F1} GB" : string.Empty);
+   }
 
-public record AvailableModelInfo(
-    string ModelId,
-    string DisplayName,
-    int? ContextWindowTokens = null,
-    long? SizeBytes = null,
-    LlmProviderType ProviderType = LlmProviderType.Ollama,
-    bool SupportsReasoning = false,
-    IReadOnlyDictionary<string, object?>? Metadata = null)
-{
-    /// <summary>Formatted badge for UI dropdowns (e.g. "19.8 GB" or "128k ctx").</summary>
-    public string FormattedBadge => ContextWindowTokens.HasValue
-        ? $"{ContextWindowTokens.Value / 1024}k ctx"
-        : (SizeBytes.HasValue ? $"{SizeBytes.Value / (1024.0 * 1024 * 1024):F1} GB" : string.Empty);
-}
-
-public interface ILlmModelCatalogService
-{
-    /// <summary>
-    /// Retrieves the list of available models for the currently active LLM provider.
-    /// - Standalone Ollama: Queries /api/tags
-    /// - OllamaRouter: Queries /api/tags or /api/router/models
-    /// </summary>
-    Task<IReadOnlyList<AvailableModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Flushes any in-memory catalog cache and forces a live re-query of the provider.
-    /// </summary>
-    Task RefreshAsync(CancellationToken cancellationToken = default);
-}
-```
+   public interface ILlmModelCatalogService
+   {
+       Task<IReadOnlyList<AvailableModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default);
+       Task RefreshAsync(CancellationToken cancellationToken = default);
+   }
+   ```
+2. **Preserve `IOllamaModelPreloadService`:** `IOllamaModelPreloadService` is extracted into its own dedicated file `NightCodeForge.Core.Interfaces.IOllamaModelPreloadService.cs` so JIT model warmup capabilities (used in Phase 12 Step 12.5) remain intact.
+3. **Unified Chat Client Factory (`ILlmChatClientFactory`):**
+   Rename `IOllamaChatClientFactory` $\rightarrow$ `ILlmChatClientFactory` and `DefaultOllamaChatClientFactory` $\rightarrow$ `DefaultLlmChatClientFactory`. The factory signature accepts an optional `sessionId` to support affinity routing:
+   ```csharp
+   public interface ILlmChatClientFactory
+   {
+       IChatClient CreateClient(string? modelId = null, OllamaRoutingTarget routingTarget = OllamaRoutingTarget.Auto, string? sessionId = null);
+       IChatClient CreateClient(AgentProfile? profile, string? sessionId = null);
+   }
+   ```
 
 #### Integration with UI:
 - `AgentProfilesTab.razor` injects `ILlmModelCatalogService ModelCatalogService`.
@@ -223,11 +257,13 @@ public interface ILlmModelCatalogService
 ### 2.6 Multi-Agent Session Affinity & KV-Cache Stickiness
 
 In multi-agent environments where NightCodeForge runs multiple concurrent or interleaved agent workflows:
-1. **Outbound Header Injection (`OllamaChatClient.cs`):**
-   When `ProviderType == LlmProviderType.OllamaRouter`, `OllamaChatClient` inspects the inference context for an active session key:
-   - Primary: `context.SessionId` (e.g., persistent agent conversation UUID or workflow run ID).
-   - Fallback: `context.ConversationId?.ToString()` or `context.TaskId?.ToString()`.
-   - Header Attached: `X-OllamaRouter-Session-Id: {sessionId}` (and optional `X-OllamaRouter-Agent-Id: {role}`).
+1. **Outbound Header Injection via Session-Scoped Client Caching:**
+   To avoid brittle ambient `AsyncLocal` state across asynchronous agent execution boundaries, `DefaultLlmChatClientFactory` caches clients by `(modelId, routingTarget, sessionId)`:
+   - Cache key: `${effectiveModel}:${routingTarget}:${sessionId ?? "none"}`.
+   - When `ProviderType == LlmProviderType.OllamaRouter` and `sessionId` is present, `X-OllamaRouter-Session-Id: {sessionId}` is attached to the client's HTTP request headers.
+   - **Socket Hygiene Invariant:** All `HttpClient` instances created by the factory share the underlying singleton `SocketsHttpHandler` (connection pool, TCP keepalive, DNS refresh), ensuring zero socket exhaustion risk while attaching clean, immutable headers per session.
+   - **Cache Eviction:** An in-memory cache with sliding expiration (e.g. 30 minutes of inactivity) or bounded eviction ensures idle session clients are automatically reclaimed.
+   - Under standalone `Ollama` mode, `X-OllamaRouter-*` headers are strictly suppressed.
 2. **Router-Side Target Binding:**
    - OllamaRouter awards a `SessionAffinityBonus (+150)` in Stage 2 candidate scoring, ensuring consecutive turns from the same agent stick to the same physical node.
    - **KV-Cache Preservation:** Consecutive turns hit the node holding the prompt's pre-computed KV cache, eliminating prompt evaluation latency spikes.
@@ -241,19 +277,23 @@ In multi-agent environments where NightCodeForge runs multiple concurrent or int
 
 ### Phase 1: Core Domain & Abstractions
 - [ ] Add `LlmProviderType` enum (`Ollama`, `OllamaRouter`) in `NightCodeForge.Core.Domain`.
-- [ ] Update `LlmProviderOptions` in `NightCodeForge.Agents.Inference` with unified baseline and role differentiation settings.
-- [ ] Add `SessionId` support to `InferenceContext` / `ChatRequestOptions` in `NightCodeForge.Agents`.
+- [ ] Update `LlmProviderOptions` in `NightCodeForge.Agents.Inference` with unified baseline (`DefaultModelId`, `DefaultThinkingEffort`), preserved `ModelProfiles`, and optional role differentiation settings.
+- [ ] Extract `IOllamaModelPreloadService` into its own dedicated interface file `NightCodeForge.Core.Interfaces.IOllamaModelPreloadService.cs`.
 - [ ] Introduce `AvailableModelInfo` and `ILlmModelCatalogService` in `NightCodeForge.Core.Interfaces` (replacing legacy `IOllamaModelCatalogService`).
-- [ ] Enhance `IOllamaRouterGatewayService` with clean `GatewayStatusReport`, `FleetTargetStatus`, and `ResolveContextWindowAsync`.
+- [ ] Rename `IOllamaChatClientFactory` $\rightarrow$ `ILlmChatClientFactory` in `NightCodeForge.Agents.Inference` supporting `sessionId` parameters.
+- [ ] Enhance `IOllamaRouterGatewayService` with clean `GatewayStatusReport`, `FleetTargetStatus`, `DetectProviderAsync`, and `ResolveContextWindowAsync`.
 
 ### Phase 2: Gateway Service & Discovery Engine
 - [ ] Refactor `OllamaRouterGatewayService` in `NightCodeForge.Infrastructure.Inference`:
+  - Implement `DetectProviderAsync` probing `GET /api/router/info` and `GET /api/version`.
   - Consume `GET /api/router/info` and `GET /api/router/fleet` when connected to OllamaRouter.
   - Implement fallback to `GET /api/version` and `POST /api/show` when connected to standalone Ollama.
   - Implement `ResolveContextWindowAsync` using clean router model capabilities or Ollama `show`.
   - Implement `ReclaimVramAsync` calling `POST /api/router/vram/reclaim` (Router) or `POST /api/generate` `keep_alive: 0` (Ollama).
-- [ ] Update `OllamaChatClient.cs`:
-  - Attach `X-OllamaRouter-Session-Id` header with current session ID when `ProviderType == LlmProviderType.OllamaRouter`.
+- [ ] Implement `DefaultLlmChatClientFactory` (replacing `DefaultOllamaChatClientFactory`):
+  - Cache clients per `(modelId, routingTarget, sessionId)` with sliding expiration eviction.
+  - Attach `X-OllamaRouter-Session-Id` header with current session ID when `ProviderType == LlmProviderType.OllamaRouter` and `sessionId != null`.
+  - Share single underlying `SocketsHttpHandler` across all `HttpClient` instances to eliminate socket exhaustion.
   - Bypass `X-OllamaRouter-Target` and `X-OllamaRouter-Session-Id` injection completely when `ProviderType == LlmProviderType.Ollama`.
 
 ### Phase 3: Web UI & Settings Ergonomics
@@ -272,9 +312,9 @@ In multi-agent environments where NightCodeForge runs multiple concurrent or int
 - [ ] Unit tests for `OllamaRouterGatewayService`:
   - Connect to mocked OllamaRouter (`/api/router/*` responses).
   - Connect to mocked standalone Ollama (`/api/version` and `/api/show` responses).
-- [ ] Unit tests for `OllamaChatClient`:
+- [ ] Unit tests for `DefaultLlmChatClientFactory`:
   - Header suppression under `Ollama` mode.
-  - Header propagation (`X-OllamaRouter-Session-Id`) under `OllamaRouter` mode.
+  - Header propagation (`X-OllamaRouter-Session-Id`) under `OllamaRouter` mode with session-scoped caching.
 - [ ] End-to-end component tests for Settings and Profile tabs.
 
 ---
@@ -283,6 +323,29 @@ In multi-agent environments where NightCodeForge runs multiple concurrent or int
 
 1. **Standalone Ollama Verification:** When pointed to a vanilla Ollama instance without OllamaRouter, NightCodeForge connects cleanly, reports `Provider: Ollama (Single Host)`, lists resident models from `/api/ps`, hides target pinning, and automatically discovers context window size via `POST /api/show`.
 2. **OllamaRouter Multi-Node Verification:** When pointed to OllamaRouter, NightCodeForge connects cleanly, reports `Provider: OllamaRouter`, queries `GET /api/router/fleet`, renders all configured fleet machines (Desktop 16 GB, Laptop 8 GB, Server 1 96 GB, Server 2 64 GB), and routes requests with dynamic context sizing.
-3. **Context Window Accuracy & Fleet Compaction Sizing:** Selecting a model (e.g. `qwen2.5-coder:32b` or `qwen3.8:27b`) dynamically retrieves its safe context window from the provider and updates `ModelCapabilityResolver` without requiring manual user input. In a multi-node fleet with Server-class nodes (≥ 32 GB), `ContextWindowTokens` for compaction is sized according to the **largest capability of the fleet** (262,144 tokens for 27B on Server), ensuring conversations are not compacted prematurely while high-capacity nodes can handle extended context.
+3. **Context Window Accuracy & Fleet Compaction Sizing:** Selecting a model (e.g. `qwen2.5-coder:32b` or `Qwen3.8-27B:latest`) dynamically retrieves its safe context window from the provider and caches it in memory. In a multi-node fleet with Server-class nodes (≥ 32 GB), `ContextWindowTokens` for compaction is sized according to the **largest capability of the fleet** (262,144 tokens for 27B on Server), ensuring conversations are not compacted prematurely while high-capacity nodes can handle extended context.
 4. **Session Affinity & KV-Cache Stickiness:** When NightCodeForge runs multiple agents concurrently against OllamaRouter, each agent transmits its distinct `X-OllamaRouter-Session-Id`. Consecutive LLM turns for Agent A stick to Agent A's node (e.g. `aiserver1`), and turns for Agent B stick to Agent B's node (e.g. `aiserver2` or `desktop`), avoiding cross-node bouncing and preserving prompt prefix KV-cache evaluation speed.
 5. **VRAM Reclaim:** Triggering VRAM reclamation cleanly evicts models in both standalone Ollama and OllamaRouter modes.
+
+---
+
+## 5. Implementation Nuances & Gaps to Watch
+
+1. **Service Constructor Discipline ([AGENTS.md](../../../AGENTS.md)):**
+   - Both [OllamaRouterGatewayService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Inference/OllamaRouterGatewayService.cs) and [LlmModelCatalogService](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/Inference/LlmModelCatalogService.cs) must explicitly inject all required dependencies (`HttpClient`, `IOptions<LlmProviderOptions>`, `ILogger`, etc.) via constructors without default or optional parameters. If an endpoint or service is unavailable, fail fast rather than silently falling back to unconfigured defaults.
+
+2. **Auto-Detection Probe Latency & Timeout Boundaries:**
+   - When auto-detecting the provider (`GET /api/router/info` followed by `GET /api/version`), use a strict, short HTTP timeout (e.g. 2 seconds via a linked `CancellationTokenSource`). This ensures startup probes and the Web UI "Detect Provider" button never block or freeze the UI if an endpoint is offline or firewalled. The probe logic is strictly encapsulated in `IOllamaRouterGatewayService.DetectProviderAsync` rather than Razor component `@code`.
+
+3. **Session ID Propagation via Client Caching with Shared Handler:**
+   - To avoid mutable ambient `AsyncLocal` state across asynchronous agent execution boundaries, [ILlmChatClientFactory](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Inference/IOllamaChatClientFactory.cs) caches clients by `(modelId, routingTarget, sessionId)`. The client wraps an `HttpClient` with `X-OllamaRouter-Session-Id: {sessionId}` set in its `DefaultRequestHeaders`. All `HttpClient` instances share a single underlying `SocketsHttpHandler` to ensure TCP socket pooling, connection reuse, and zero socket exhaustion risk. Under standalone `Ollama` mode, session headers are strictly omitted.
+
+4. **Model Profiles & Effort Mapping Retention:**
+   - [LlmProviderOptions](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Inference/LlmProviderOptions.cs) retains `ModelProfiles` (e.g., mapping Qwen 3.8 requested effort `"high"` to `"xhigh"`). Dynamic context discovery replaces the static fallback `DefaultContextWindowTokens = 131072`, but effort mapping logic must be retained to ensure models with non-standard effort scales (like Qwen 3.8) receive valid parameters.
+
+5. **In-Flight Compaction Fleet Sizing Invariant:**
+   - Crucible turn compaction (`CrucibleCompactionOptions.ContextWindowTokens` in [ModelCapabilityResolver](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Inference/ModelCapabilityResolver.cs)) must be sized to `max(target.contextCeiling)` across all capable nodes in the cluster (or cloud overflow ceiling), as returned by OllamaRouter (`recommendedContextWindow`). Sizing compaction to the smallest node would trigger premature compaction, destroying reasoning context when higher-tier nodes (e.g., 64 GB or 96 GB servers) are available to handle large context windows.
+
+6. **Boundary Division with Step 12.5 (Dual Model Roles):**
+   - Step 11.33 introduces the configuration schema (`LlmProviderOptions`), Settings UI toggles, and baseline profile generation in `AgentProfile.CreateStandardGlobalProfiles`. Full dynamic runtime stage dispatching, difficulty-based escalation (escalating difficult tasks to Architect models during implementation), and deterministic stage JIT warmup (`PreloadModelAsync`) are the explicit responsibility of [Phase 12 Step 12.5](../phase-12/STEP_12_5_DUAL_MODEL_ROLE_CONFIGURATION_AND_DIFFICULTY_ESCALATION.md).
+
