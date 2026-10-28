@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -236,7 +237,20 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         // 2. Reverse pointer in canonical clone: <canonical>/.git/worktrees/task-{taskId}/gitdir
         var hostCanonical = ResolveHostAccessiblePath(canonicalPath);
-        var expectedReverse = $"{reverseGitDir}\n";
+        var gitVersion = await GetInstalledGitVersionAsync(canonicalPath, cancellationToken).ConfigureAwait(false);
+        var supportsRelativeWorktrees = gitVersion is not null && gitVersion >= GitRelativeWorktreeMinimumVersion;
+
+        string expectedReverse;
+        if (!supportsRelativeWorktrees)
+        {
+            expectedReverse = IsPosixPath(normWorktree)
+                ? $"{normWorktree}/.git\n"
+                : $"{normWorktree.Replace('/', '\\')}\\.git\n";
+        }
+        else
+        {
+            expectedReverse = $"{reverseGitDir}\n";
+        }
 
         var reverseGitDirFile = Path.Combine(hostCanonical, ".git", "worktrees", $"task-{taskId}", "gitdir");
         if (File.Exists(reverseGitDirFile))
@@ -256,8 +270,8 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                     }
 
                     await File.WriteAllTextAsync(reverseGitDirFile, expectedReverse, cancellationToken).ConfigureAwait(false);
-                    _logger.LogInformation("Normalized reverse worktree pointer for task #{TaskId} in '{ReverseGitDirFile}' to relative: '{ReverseGitDir}'",
-                        taskId, reverseGitDirFile, reverseGitDir);
+                    _logger.LogInformation("Normalized reverse worktree pointer for task #{TaskId} in '{ReverseGitDirFile}' to: '{ExpectedReverse}'",
+                        taskId, reverseGitDirFile, expectedReverse.Trim());
                 }
             }
             catch (Exception ex)
@@ -441,26 +455,57 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         string[] diffArgs = BuildDiffArgs($"{baseBranch}...{branchName}", isStat: false);
 
         string rawDiff = string.Empty;
+        bool diffSucceeded = false;
         try
         {
             var result = await _gitCliRunner.ExecuteAsync(workingPath, diffArgs, cancellationToken: cancellationToken);
             rawDiff = result.StandardOutput;
+            diffSucceeded = true;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to generate branch diff for ForgeTask #{TaskId} in '{WorkingPath}'", taskId, workingPath);
         }
 
-        if (string.IsNullOrWhiteSpace(rawDiff) &&
-            workspace.ExecutionMode != ExecutionMode.ContainerSandbox &&
+        string? canonicalPath = null;
+        try
+        {
+            canonicalPath = GetCanonicalWorkingPath(workspace);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to resolve canonical path for workspace #{WorkspaceId}", workspace.Id);
+        }
+
+        if (!diffSucceeded &&
+            !string.IsNullOrWhiteSpace(canonicalPath) &&
+            !string.Equals(canonicalPath, workingPath, StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                _logger.LogInformation("Attempting fallback branch diff for ForgeTask #{TaskId} against canonical repo '{CanonicalPath}'", taskId, canonicalPath);
+                var canonicalResult = await _gitCliRunner.ExecuteAsync(canonicalPath, diffArgs, cancellationToken: cancellationToken);
+                rawDiff = canonicalResult.StandardOutput;
+                diffSucceeded = true;
+            }
+            catch (GitCommandException ex)
+            {
+                _logger.LogDebug(ex, "Fallback diff generation against canonical repository '{CanonicalPath}' failed", canonicalPath);
+            }
+        }
+
+        if (!diffSucceeded &&
             !string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
             !string.Equals(workspace.RepositoryPath, workingPath, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(workspace.RepositoryPath, canonicalPath, StringComparison.OrdinalIgnoreCase) &&
             Directory.Exists(workspace.RepositoryPath))
         {
             try
             {
+                _logger.LogInformation("Attempting fallback branch diff for ForgeTask #{TaskId} against host repo '{RepositoryPath}'", taskId, workspace.RepositoryPath);
                 var fallbackResult = await _gitCliRunner.ExecuteAsync(workspace.RepositoryPath, diffArgs, cancellationToken: cancellationToken);
                 rawDiff = fallbackResult.StandardOutput;
+                diffSucceeded = true;
             }
             catch (GitCommandException ex)
             {
@@ -522,8 +567,91 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             ? workingPath
             : (workspace.ExecutionMode != ExecutionMode.ContainerSandbox && Directory.Exists(workspace.RepositoryPath) ? workspace.RepositoryPath : workingPath);
 
-        var result = await _gitCliRunner.ExecuteAsync(targetPath, statArgs, cancellationToken: cancellationToken);
-        return FormatStatOutput(result.StandardOutput);
+        Exception? firstException = null;
+        GitCommandException? lastGitException = null;
+        string rawStat = string.Empty;
+        bool statSucceeded = false;
+        try
+        {
+            var result = await _gitCliRunner.ExecuteAsync(targetPath, statArgs, cancellationToken: cancellationToken);
+            rawStat = result.StandardOutput;
+            statSucceeded = true;
+        }
+        catch (Exception ex)
+        {
+            firstException = ex;
+            if (ex is GitCommandException gce)
+            {
+                lastGitException = gce;
+            }
+            _logger.LogWarning(ex, "Failed to generate diff stat for ForgeTask #{TaskId} in '{TargetPath}'", taskId, targetPath);
+        }
+
+        string? canonicalPath = null;
+        try
+        {
+            canonicalPath = GetCanonicalWorkingPath(workspace);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to resolve canonical path for workspace #{WorkspaceId}", workspace.Id);
+        }
+
+        if (!statSucceeded &&
+            !string.IsNullOrWhiteSpace(canonicalPath) &&
+            !string.Equals(canonicalPath, targetPath, StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                _logger.LogInformation("Attempting fallback diff stat for ForgeTask #{TaskId} against canonical repo '{CanonicalPath}'", taskId, canonicalPath);
+                var canonicalResult = await _gitCliRunner.ExecuteAsync(canonicalPath, statArgs, cancellationToken: cancellationToken);
+                rawStat = canonicalResult.StandardOutput;
+                statSucceeded = true;
+                lastGitException = null;
+                firstException = null;
+            }
+            catch (GitCommandException ex)
+            {
+                lastGitException = ex;
+                _logger.LogDebug(ex, "Fallback diff stat generation against canonical repository '{CanonicalPath}' failed", canonicalPath);
+            }
+        }
+
+        if (!statSucceeded &&
+            !string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
+            !string.Equals(workspace.RepositoryPath, targetPath, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(workspace.RepositoryPath, canonicalPath, StringComparison.OrdinalIgnoreCase) &&
+            Directory.Exists(workspace.RepositoryPath))
+        {
+            try
+            {
+                _logger.LogInformation("Attempting fallback diff stat for ForgeTask #{TaskId} against host repo '{RepositoryPath}'", taskId, workspace.RepositoryPath);
+                var fallbackResult = await _gitCliRunner.ExecuteAsync(workspace.RepositoryPath, statArgs, cancellationToken: cancellationToken);
+                rawStat = fallbackResult.StandardOutput;
+                statSucceeded = true;
+                lastGitException = null;
+                firstException = null;
+            }
+            catch (GitCommandException ex)
+            {
+                lastGitException = ex;
+                _logger.LogDebug(ex, "Fallback diff stat generation against host repository '{RepoPath}' failed", workspace.RepositoryPath);
+            }
+        }
+
+        if (!statSucceeded)
+        {
+            if (lastGitException != null)
+            {
+                throw lastGitException;
+            }
+            if (firstException != null)
+            {
+                throw firstException;
+            }
+        }
+
+        return FormatStatOutput(rawStat);
     }
 
     /// <inheritdoc />
@@ -546,8 +674,16 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         string[] statArgs = BuildDiffArgs(baseBranch, isStat: true);
 
-        var result = await _gitCliRunner.ExecuteAsync(workingPath, statArgs, cancellationToken: cancellationToken);
-        return FormatStatOutput(result.StandardOutput);
+        try
+        {
+            var result = await _gitCliRunner.ExecuteAsync(workingPath, statArgs, cancellationToken: cancellationToken);
+            return FormatStatOutput(result.StandardOutput);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to run live git diff stat in '{WorkingPath}', falling back to branch diff stat", workingPath);
+            return await GenerateDiffStatAsync(workspace, taskId, baseBranch, cancellationToken);
+        }
     }
 
     /// <inheritdoc />
@@ -721,22 +857,45 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         return squashSha;
     }
 
+    public static readonly Version GitRelativeWorktreeMinimumVersion = new(2, 45, 0);
+    private readonly ConcurrentDictionary<string, Version?> _gitVersionCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private async Task<Version?> GetInstalledGitVersionAsync(string workingDirectory, CancellationToken cancellationToken)
+    {
+        if (_gitVersionCache.TryGetValue(workingDirectory, out var cachedVersion))
+        {
+            return cachedVersion;
+        }
+
+        try
+        {
+            var result = await _gitCliRunner.ExecuteAsync(workingDirectory, ["--version"], cancellationToken: cancellationToken).ConfigureAwait(false);
+            var match = System.Text.RegularExpressions.Regex.Match(result.StandardOutput, @"(\d+)\.(\d+)(?:\.(\d+))?");
+            if (match.Success)
+            {
+                var major = int.Parse(match.Groups[1].Value);
+                var minor = int.Parse(match.Groups[2].Value);
+                var build = match.Groups[3].Success ? int.Parse(match.Groups[3].Value) : 0;
+                var version = new Version(major, minor, build);
+                _gitVersionCache[workingDirectory] = version;
+                return version;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to determine Git version in '{WorkingDirectory}'", workingDirectory);
+        }
+
+        return null;
+    }
+
     /// <inheritdoc />
     public async Task ValidateGitVersionAsync(CancellationToken cancellationToken = default)
     {
         var canonicalOrGlobal = AppContext.BaseDirectory;
-        var result = await _gitCliRunner.ExecuteAsync(canonicalOrGlobal, ["--version"], cancellationToken: cancellationToken);
-        var match = System.Text.RegularExpressions.Regex.Match(result.StandardOutput, @"(\d+)\.(\d+)(?:\.(\d+))?");
-        if (!match.Success)
-        {
-            throw new InvalidOperationException(
-                $"Unable to determine the installed Git version from output '{result.StandardOutput.Trim()}'.");
-        }
+        var installedVersion = await GetInstalledGitVersionAsync(canonicalOrGlobal, cancellationToken)
+            ?? throw new InvalidOperationException("Unable to determine the installed Git version.");
 
-        var major = int.Parse(match.Groups[1].Value);
-        var minor = int.Parse(match.Groups[2].Value);
-        var build = match.Groups[3].Success ? int.Parse(match.Groups[3].Value) : 0;
-        var installedVersion = new Version(major, minor, build);
         if (installedVersion < NightCodeForge.Core.Workflow.ConflictResolutionConstants.MinimumRequiredGitVersion)
         {
             throw new InvalidOperationException(

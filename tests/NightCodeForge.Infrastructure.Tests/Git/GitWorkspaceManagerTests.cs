@@ -491,7 +491,167 @@ public class GitWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task EnsureWorktreeRelativePathsAsync_WithGitOlderThan2_45_WritesAbsoluteReversePointer()
+    {
+        // Arrange: Workspace configured with sibling clone and task worktree
+        var tempRoot = Path.Combine(Path.GetTempPath(), "ncf_legacy_git_" + Guid.NewGuid().ToString("N"));
+        var cloneDir = Path.Combine(tempRoot, "clone");
+        var wtDir = Path.Combine(tempRoot, "task-207");
+        Directory.CreateDirectory(Path.Combine(cloneDir, ".git", "worktrees", "task-207"));
+        Directory.CreateDirectory(wtDir);
+
+        var forwardFile = Path.Combine(wtDir, ".git");
+        var reverseFile = Path.Combine(cloneDir, ".git", "worktrees", "task-207", "gitdir");
+        await File.WriteAllTextAsync(forwardFile, "gitdir: dummy\n");
+        await File.WriteAllTextAsync(reverseFile, "../../../../task-207/.git\n"); // Previously corrupted
+
+        try
+        {
+            var mockRunner = new Mock<IGitCliRunner>();
+            mockRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("--version")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "git version 2.43.0", "", TimeSpan.FromMilliseconds(10)));
+
+            var wslMeta = new Mock<IWslMetadataService>().Object;
+            var pathResolver = new WorkspacePathResolver(wslMeta, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+            var manager = new GitWorkspaceManager(
+                mockRunner.Object,
+                pathResolver,
+                wslMeta,
+                new Mock<IGitMirrorSyncService>().Object,
+                new Mock<IWorkspaceLockProvider>().Object,
+                NullLogger<GitWorkspaceManager>.Instance);
+
+            var siblingWorkspace = new Workspace
+            {
+                Id = 89,
+                Name = "Legacy Git Workspace",
+                RepositoryPath = cloneDir,
+                DefaultBaseBranch = "main"
+            };
+
+            // Act: Run pointer normalization on an environment with Git 2.43
+            await manager.EnsureWorktreeRelativePathsAsync(siblingWorkspace, 207);
+
+            // Assert: Reverse pointer is rewritten to absolute path, not relative 4-dot-dots
+            var reverseContent = (await File.ReadAllTextAsync(reverseFile)).Trim();
+            Assert.DoesNotContain("../../../../", reverseContent);
+            Assert.EndsWith("task-207/.git", reverseContent.Replace('\\', '/'));
+        }
+        finally
+        {
+            TestGitRepository.DeleteDirectorySafe(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureWorktreeRelativePathsAsync_WhenGitVersionUnknown_WritesAbsoluteReversePointer()
+    {
+        // Arrange: Workspace configured with sibling clone and corrupted relative reverse pointer
+        var tempRoot = Path.Combine(Path.GetTempPath(), "ncf_unknown_git_" + Guid.NewGuid().ToString("N"));
+        var cloneDir = Path.Combine(tempRoot, "clone");
+        var wtDir = Path.Combine(tempRoot, "task-208");
+        Directory.CreateDirectory(Path.Combine(cloneDir, ".git", "worktrees", "task-208"));
+        Directory.CreateDirectory(wtDir);
+
+        var forwardFile = Path.Combine(wtDir, ".git");
+        var reverseFile = Path.Combine(cloneDir, ".git", "worktrees", "task-208", "gitdir");
+        await File.WriteAllTextAsync(forwardFile, "gitdir: dummy\n");
+        await File.WriteAllTextAsync(reverseFile, "../../../../task-208/.git\n");
+
+        try
+        {
+            var mockRunner = new Mock<IGitCliRunner>();
+            // Git --version throws or returns unparseable output
+            mockRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("--version")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new GitCommandException(cloneDir, ["--version"], 1, "", "git --version failed"));
+
+            var wslMeta = new Mock<IWslMetadataService>().Object;
+            var pathResolver = new WorkspacePathResolver(wslMeta, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+            var manager = new GitWorkspaceManager(
+                mockRunner.Object,
+                pathResolver,
+                wslMeta,
+                new Mock<IGitMirrorSyncService>().Object,
+                new Mock<IWorkspaceLockProvider>().Object,
+                NullLogger<GitWorkspaceManager>.Instance);
+
+            var siblingWorkspace = new Workspace
+            {
+                Id = 90,
+                Name = "Unknown Git Workspace",
+                RepositoryPath = cloneDir,
+                DefaultBaseBranch = "main"
+            };
+
+            // Act: Run pointer normalization when git version is unknown
+            await manager.EnsureWorktreeRelativePathsAsync(siblingWorkspace, 208);
+
+            // Assert: Safe default is absolute path, not relative
+            var reverseContent = (await File.ReadAllTextAsync(reverseFile)).Trim();
+            Assert.DoesNotContain("../../../../", reverseContent);
+            Assert.EndsWith("task-208/.git", reverseContent.Replace('\\', '/'));
+        }
+        finally
+        {
+            TestGitRepository.DeleteDirectorySafe(tempRoot);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureWorktreeRelativePathsAsync_CachesResolvedGitVersion_InvokingCliOnlyOnce()
+    {
+        // Arrange
+        var tempRoot = Path.Combine(Path.GetTempPath(), "ncf_cached_git_" + Guid.NewGuid().ToString("N"));
+        var cloneDir = Path.Combine(tempRoot, "clone");
+        var wtDir = Path.Combine(tempRoot, "task-209");
+        Directory.CreateDirectory(Path.Combine(cloneDir, ".git", "worktrees", "task-209"));
+        Directory.CreateDirectory(wtDir);
+
+        var forwardFile = Path.Combine(wtDir, ".git");
+        var reverseFile = Path.Combine(cloneDir, ".git", "worktrees", "task-209", "gitdir");
+        await File.WriteAllTextAsync(forwardFile, "gitdir: dummy\n");
+        await File.WriteAllTextAsync(reverseFile, "dummy\n");
+
+        try
+        {
+            var mockRunner = new Mock<IGitCliRunner>();
+            mockRunner.Setup(r => r.ExecuteAsync(It.IsAny<string>(), It.Is<IEnumerable<string>>(args => args.Contains("--version")), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GitCommandResult(0, "git version 2.47.0", "", TimeSpan.FromMilliseconds(10)));
+
+            var wslMeta = new Mock<IWslMetadataService>().Object;
+            var pathResolver = new WorkspacePathResolver(wslMeta, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+            var manager = new GitWorkspaceManager(
+                mockRunner.Object,
+                pathResolver,
+                wslMeta,
+                new Mock<IGitMirrorSyncService>().Object,
+                new Mock<IWorkspaceLockProvider>().Object,
+                NullLogger<GitWorkspaceManager>.Instance);
+
+            var siblingWorkspace = new Workspace
+            {
+                Id = 91,
+                Name = "Cached Git Workspace",
+                RepositoryPath = cloneDir,
+                DefaultBaseBranch = "main"
+            };
+
+            // Act: Call twice
+            await manager.EnsureWorktreeRelativePathsAsync(siblingWorkspace, 209);
+            await manager.EnsureWorktreeRelativePathsAsync(siblingWorkspace, 209);
+
+            // Assert: git --version should be invoked only once due to cache
+            mockRunner.Verify(r => r.ExecuteAsync(cloneDir, It.Is<IEnumerable<string>>(args => args.Contains("--version")), It.IsAny<int?>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+        finally
+        {
+            TestGitRepository.DeleteDirectorySafe(tempRoot);
+        }
+    }
+
+    [Fact]
     public async Task ResetTaskBranchToBaseAsync_WhenBranchHasCommits_ResetsHeadToBaseBranchCommit()
+
     {
         // Arrange: Create worktree on feature/task-201 and commit a file
         var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 201, "main");

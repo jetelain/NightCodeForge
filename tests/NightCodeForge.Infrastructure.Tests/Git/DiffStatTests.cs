@@ -315,8 +315,71 @@ public class DiffStatTests : IDisposable
             manager.EnsureWorktreeAsync(workspace, 43, "main"));
     }
 
+    [Fact]
+    public async Task GenerateDiffAsync_WhenWorktreeFails_FallsBackToCanonicalRepository()
+    {
+        // Arrange: Create branch feature/task-91785 in canonical repo and commit a change
+        await _runner.ExecuteAsync(_repo.RepositoryPath, ["checkout", "-b", "feature/task-91785", "main"]);
+        _repo.CreateFile("fallback_test.txt", "Fallback content on branch\n");
+        _repo.CommitAll("Commit on task branch");
+        await _runner.ExecuteAsync(_repo.RepositoryPath, ["checkout", "main"]);
+
+        // Act: Generate diff for a task whose worktree directory does not exist
+        var diff = await _manager.GenerateDiffAsync(_workspace, 91785, "main");
+
+        // Assert: Fallback to canonical repository produces the branch diff
+        Assert.NotEmpty(diff);
+        Assert.Contains("diff --git a/fallback_test.txt b/fallback_test.txt", diff);
+        Assert.Contains("+Fallback content on branch", diff);
+    }
+
+    [Fact]
+    public async Task GenerateDiffStatAsync_WhenWorktreeFails_FallsBackToCanonicalRepository()
+    {
+        // Arrange: Create branch feature/task-91786 in canonical repo and commit a change
+        await _runner.ExecuteAsync(_repo.RepositoryPath, ["checkout", "-b", "feature/task-91786", "main"]);
+        _repo.CreateFile("fallback_stat.txt", "Fallback stat line 1\nFallback stat line 2\n");
+        _repo.CommitAll("Commit on stat task branch");
+        await _runner.ExecuteAsync(_repo.RepositoryPath, ["checkout", "main"]);
+
+        // Act: Generate diff stat for a task whose worktree directory does not exist
+        var stat = await _manager.GenerateDiffStatAsync(_workspace, 91786, "main");
+
+        // Assert: Fallback to canonical repository produces formatted stat output
+        Assert.NotEmpty(stat);
+        Assert.Contains("fallback_stat.txt", stat);
+        Assert.Contains("2 ++", stat);
+    }
+
+    [Fact]
+    public async Task GenerateDiffAsync_WhenWorktreeDiffHasNoChanges_ReturnsEmptyWithoutError()
+    {
+        // Arrange: Worktree exists on task branch with 0 commits ahead of main
+        await _manager.CheckoutTaskBranchAsync(_workspace, 91787, "main");
+
+        // Act: Generate diff
+        var diff = await _manager.GenerateDiffAsync(_workspace, 91787, "main");
+
+        // Assert: Succeeded and empty diff returned
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public async Task GenerateDiffStatAsync_WhenWorktreeDiffStatHasNoChanges_ReturnsNoChangesWithoutFailing()
+    {
+        // Arrange: Worktree exists on task branch with 0 commits ahead of main
+        await _manager.CheckoutTaskBranchAsync(_workspace, 91788, "main");
+
+        // Act: Generate diff stat
+        var stat = await _manager.GenerateDiffStatAsync(_workspace, 91788, "main");
+
+        // Assert: Returns "No changes." rather than throwing an exception
+        Assert.Equal(GitDiffConstants.NoChanges, stat);
+    }
+
     public void Dispose()
     {
         _repo.Dispose();
     }
 }
+
