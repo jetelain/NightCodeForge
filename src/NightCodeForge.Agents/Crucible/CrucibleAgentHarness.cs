@@ -1107,7 +1107,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 }
                 catch (Exception ex)
                 {
-                    var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
+                    var errorMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
                     _logger.LogError(ex, "Error during Crucible streaming LLM invocation: {ErrorMessage}", errorMsg);
                     return await FailAsync(errorMsg);
                 }
@@ -1218,8 +1218,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error during Crucible non-streaming LLM invocation");
-                    return await FailAsync(ex.Message);
+                    var errorMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
+                    _logger.LogError(ex, "Error during Crucible non-streaming LLM invocation: {ErrorMessage}", errorMsg);
+                    return await FailAsync(errorMsg);
                 }
             }
 

@@ -1319,4 +1319,73 @@ public class TaskOrchestratorTests
             }
         }
     }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenStageFailsFatallyOnFirstAttempt_LogsUnrecoverableFailureMessage()
+    {
+        var mockStage = new Mock<IWorkflowStage>();
+        mockStage.Setup(s => s.StageId).Returns("fatal-stage");
+        mockStage.Setup(s => s.Kind).Returns(WorkflowStageKind.Deterministic);
+        mockStage.Setup(s => s.QueueTier).Returns(StageQueueTier.Implementation);
+        mockStage.Setup(s => s.ExecuteAsync(It.IsAny<PipelineContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(StageExecutionResult.Failure("HTTP 503 Service Unavailable: No enabled target"));
+
+        var pipeline = new WorkflowPipeline(new[] { mockStage.Object });
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 999,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "fatal-stage"
+        });
+        _depStore.AddTask(999, 1, TaskOverallStatus.Open);
+
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var updated = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updated);
+        Assert.Equal(TaskOverallStatus.Failed, updated.Status);
+
+        var history = await _taskRepo.GetHistoryAsync(task.Id);
+        Assert.Contains("Unrecoverable stage failure on attempt 1", history[^1].ChangeReason);
+        Assert.DoesNotContain("Exceeded max retry limit", history[^1].ChangeReason);
+
+        var logs = _taskRepo.GetAllLogs();
+        Assert.Contains(logs, l => l.TaskId == task.Id && l.Level == LogLevel.Error && l.Message.Contains("unrecoverable stage failure on attempt 1"));
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenStageExceedsMaxRetries_LogsExceededMaxRetryLimitMessage()
+    {
+        var mockStage = new Mock<IWorkflowStage>();
+        mockStage.Setup(s => s.StageId).Returns("failing-stage");
+        mockStage.Setup(s => s.Kind).Returns(WorkflowStageKind.Deterministic);
+        mockStage.Setup(s => s.QueueTier).Returns(StageQueueTier.Implementation);
+        mockStage.Setup(s => s.LoopBackStageId).Returns((string?)null);
+        mockStage.Setup(s => s.ExecuteAsync(It.IsAny<PipelineContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(StageExecutionResult.Failure("Deterministic check failed"));
+
+        var pipeline = new WorkflowPipeline(new[] { mockStage.Object });
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 998,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "failing-stage",
+            PipelineDataJson = "{\"Workflow.StageRetries\":{\"failing-stage\":3}}"
+        });
+        _depStore.AddTask(998, 1, TaskOverallStatus.Open);
+
+        var orchestrator = CreateOrchestrator(new DefaultWorkflowPipelineProvider(pipeline));
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var updated = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updated);
+        Assert.Equal(TaskOverallStatus.Failed, updated.Status);
+
+        var history = await _taskRepo.GetHistoryAsync(task.Id);
+        Assert.Contains("Exceeded max retry limit", history[^1].ChangeReason);
+        Assert.DoesNotContain("Unrecoverable stage failure", history[^1].ChangeReason);
+    }
 }

@@ -1994,7 +1994,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             }
                         }
 
-                        await HandleStageFatalFailureAsync(task, workspace, pipelineContext, stage, reverifyResult, cancellationToken);
+                        await HandleStageFatalFailureAsync(task, workspace, pipelineContext, stage, reverifyResult, cancellationToken, reverifyRetryKey);
                         cohortExitReason = CohortExitReason.Failed;
                         return;
                     }
@@ -3128,16 +3128,25 @@ public class TaskOrchestrator : ITaskOrchestrator
         PipelineContext pipelineContext,
         IWorkflowStage stage,
         StageExecutionResult result,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? retryKey = null)
     {
         var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
         task.Status = TaskOverallStatus.Failed;
         pipelineContext.SyncDataBagToTask();
+
+        var stageRetries = pipelineContext.StageRetries.GetValueOrDefault(retryKey ?? stage.StageId, 0);
+        var attempt = Math.Max(1, stageRetries);
+        var failureReason = stageRetries >= effectiveMaxRetries
+            ? $"exceeded max retry limit ({effectiveMaxRetries})"
+            : $"unrecoverable stage failure on attempt {attempt}";
+        var reason = $"Pipeline failed at stage '{stage.StageId}'. {char.ToUpperInvariant(failureReason[0])}{failureReason[1..]}. Error: {result.ErrorMessage ?? "Unknown failure"}";
+
         await _taskRepository.UpdateWithHistoryAsync(
             task,
             dependsOn: null,
             changedBy: AuditActors.TaskOrchestrator,
-            reason: $"Pipeline failed at stage '{stage.StageId}'. Exceeded max retry limit ({effectiveMaxRetries}). Error: {result.ErrorMessage ?? "Unknown failure"}",
+            reason: reason,
             cancellationToken: cancellationToken);
         await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
         await SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
@@ -3145,7 +3154,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             TaskId = task.Id,
             Level = LogLevel.Error,
-            Message = $"Stage '{stage.StageId}' exceeded max retry limit ({effectiveMaxRetries}): {result.ErrorMessage}",
+            Message = $"Stage '{stage.StageId}' {failureReason}: {result.ErrorMessage}",
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
     }

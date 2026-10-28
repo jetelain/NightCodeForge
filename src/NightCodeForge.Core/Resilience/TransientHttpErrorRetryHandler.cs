@@ -62,7 +62,7 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
                 if (attempt <= maxRetries && TransientErrorDetector.IsTransientStatusCode(response.StatusCode))
                 {
                     var delay = ResilienceJitterHelper.CalculateJitteredDelay(attempt, _options.BaseDelay, _options.MaxDelay);
-                    var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                    var body = response.Content != null ? await response.Content.ReadAsStringAsync(cancellationToken) : null;
                     _logger.LogWarning(
                         "HTTP request {Method} {Uri} failed with transient status {StatusCode} (Body: {Body}). Retrying attempt {Attempt}/{MaxRetries} after {DelayMs}ms delay...",
                         request.Method, request.RequestUri, response.StatusCode, body, attempt, maxRetries, delay.TotalMilliseconds);
@@ -72,12 +72,14 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
                     continue;
                 }
 
-                if (response.StatusCode == System.Net.HttpStatusCode.InternalServerError)
+                if (!response.IsSuccessStatusCode)
                 {
-                    var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                    var body = response.Content != null ? await response.Content.ReadAsStringAsync(cancellationToken) : null;
                     _logger.LogError(
-                        "HTTP request {Method} {Uri} failed with 500 InternalServerError after {Attempt} attempt(s) (Body: {Body}).",
-                        request.Method, request.RequestUri, attempt, body);
+                        "HTTP request {Method} {Uri} failed with status {StatusCode} ({StatusCodeInt}) after {Attempt} attempt(s) (Body: {Body}).",
+                        request.Method, request.RequestUri, response.StatusCode, (int)response.StatusCode, attempt, body);
+
+                    TryEnrichReasonPhrase(response, body);
                     return response;
                 }
 
@@ -104,6 +106,28 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
                     throw;
                 }
             }
+        }
+    }
+
+    private static void TryEnrichReasonPhrase(HttpResponseMessage response, string? body)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(body)) return;
+
+            var cleanError = HttpErrorDetailHelper.ExtractErrorMessageFromBody(body);
+            if (string.IsNullOrWhiteSpace(cleanError)) return;
+
+            var sanitized = HttpErrorDetailHelper.SanitizeForReasonPhrase(cleanError);
+            if (!string.IsNullOrWhiteSpace(sanitized))
+            {
+                var prefix = !string.IsNullOrWhiteSpace(response.ReasonPhrase) ? response.ReasonPhrase : response.StatusCode.ToString();
+                response.ReasonPhrase = $"{prefix}: {sanitized}";
+            }
+        }
+        catch (Exception)
+        {
+            // Justification: Must 100% safe, to not hide the root cause
         }
     }
 

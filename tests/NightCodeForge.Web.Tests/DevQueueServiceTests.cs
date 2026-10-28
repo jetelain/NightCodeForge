@@ -5,6 +5,7 @@ using Hangfire.States;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
@@ -28,6 +29,7 @@ public class DevQueueServiceTests : IDisposable
     private readonly Mock<ITaskCancellationManager> _cancellationManager;
     private readonly Mock<IWorkspacePathResolver> _pathResolver;
     private readonly Mock<ITaskOrchestrator> _taskOrchestrator;
+    private readonly InMemoryTaskDependencyStore _dependencyStore;
     private readonly IDevQueueSkippedJobRegistry _skippedJobRegistry = new DevQueueSkippedJobRegistry();
     private readonly ServiceProvider _serviceProvider;
     private readonly JobStorage _jobStorage = new MemoryStorage();
@@ -40,15 +42,18 @@ public class DevQueueServiceTests : IDisposable
         _jobQueue = new MockTaskJobQueue();
         _taskRepo = new InMemoryTaskRepository();
         _workspaceRepo = new InMemoryWorkspaceRepository();
+        _workspaceRepo.CreateAsync(new Workspace { Id = 1, Name = "TestWorkspace", RepositoryPath = "/test/repo" }).GetAwaiter().GetResult();
         _markdownSync = new TestDevQueueMarkdownSyncService();
         _cancellationManager = new Mock<ITaskCancellationManager>();
         _pathResolver = new Mock<IWorkspacePathResolver>();
         _taskOrchestrator = new Mock<ITaskOrchestrator>();
+        _dependencyStore = new InMemoryTaskDependencyStore();
 
         var services = new ServiceCollection();
         services.AddSingleton<ITaskRepository>(_taskRepo);
         services.AddSingleton<IWorkspaceRepository>(_workspaceRepo);
         services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
+        services.AddSingleton<ITaskDependencyStore>(_dependencyStore);
 
         var mockStage = new Mock<IWorkflowStage>();
         mockStage.Setup(s => s.StageId).Returns("task-review");
@@ -381,6 +386,38 @@ public class DevQueueServiceTests : IDisposable
     {
         var service = CreateService();
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.RetryCurrentStageAsync(9999));
+    }
+
+    [Fact]
+    public async Task RetryCurrentStageAsync_ClearsStageRetriesAndRetryCount_InPipelineDataJson()
+    {
+        var task = new ForgeTask
+        {
+            Id = 305,
+            WorkspaceId = 1,
+            Title = "Task with accumulated retries",
+            Status = TaskOverallStatus.Failed,
+            CurrentStageId = "deterministic-post-impl",
+            Priority = TaskPriority.Normal,
+            PipelineDataJson = "{\"Workflow.RetryCount\":3,\"Workflow.StageRetries\":{\"deterministic-post-impl\":3}}"
+        };
+        await _taskRepo.CreateAsync(task);
+
+        var service = CreateService();
+        _dependencyStore.AddTask(305, 1, TaskOverallStatus.Failed);
+        var result = await service.RetryCurrentStageAsync(305);
+
+        Assert.True(result);
+        var reloaded = await _taskRepo.GetByIdAsync(305);
+        Assert.NotNull(reloaded);
+        Assert.Equal(TaskOverallStatus.Open, reloaded.Status);
+        Assert.Equal(TaskOverallStatus.Open, await _dependencyStore.GetTaskStatusAsync(305));
+
+        var bag = PipelineDataBag.FromJson(reloaded.PipelineDataJson);
+        Assert.Equal(0, bag.Get<int?>(PipelineDataBagKeys.RetryCount) ?? 0);
+        var retries = bag.Get<Dictionary<string, int>>(PipelineDataBagKeys.StageRetries);
+        Assert.NotNull(retries);
+        Assert.Empty(retries);
     }
 
     [Fact]

@@ -22,6 +22,11 @@ public class TransientHttpErrorRetryHandlerTests
             });
         }
 
+        public void EnqueueRawResponse(HttpResponseMessage response)
+        {
+            _responses.Enqueue(req => response);
+        }
+
         public void EnqueueException(Exception ex)
         {
             _responses.Enqueue(req => throw ex);
@@ -261,5 +266,47 @@ public class TransientHttpErrorRetryHandlerTests
         await Assert.ThrowsAsync<HttpRequestException>(() =>
             client.SendAsync(new HttpRequestMessage(HttpMethod.Get, "http://localhost:11434/api/tags")));
         Assert.Single(mockInner.Invocations);
+    }
+
+    [Fact]
+    public async Task SendAsync_When503ErrorResponse_EnrichesReasonPhraseAndExceptionMessage()
+    {
+        var mockInner = new MockHttpMessageHandler();
+        mockInner.EnqueueResponse(HttpStatusCode.ServiceUnavailable, "{\"error\":\"No enabled routing target is available\"}");
+
+        using var client = new HttpClient(CreateHandler(mockInner, maxRetries: 0));
+        var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "http://localhost:11434/api/chat"));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Contains("No enabled routing target is available", response.ReasonPhrase);
+
+        var ex = Assert.Throws<HttpRequestException>(() => response.EnsureSuccessStatusCode());
+        Assert.Contains("No enabled routing target is available", ex.Message);
+    }
+
+    [Fact]
+    public async Task SendAsync_WhenResponseContentIsNull_DoesNotThrowNullReference()
+    {
+        var mockInner = new MockHttpMessageHandler();
+        mockInner.EnqueueRawResponse(new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = null });
+
+        using var client = new HttpClient(CreateHandler(mockInner, maxRetries: 0));
+        var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "http://localhost:11434/api/chat"));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SendAsync_WhenTransient503WithNullContent_DoesNotThrowNullReferenceDuringRetry()
+    {
+        var mockInner = new MockHttpMessageHandler();
+        mockInner.EnqueueRawResponse(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = null });
+        mockInner.EnqueueResponse(HttpStatusCode.OK, "{\"status\":\"ok\"}");
+
+        using var client = new HttpClient(CreateHandler(mockInner, maxRetries: 1));
+        var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "http://localhost:11434/api/chat"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(2, mockInner.Invocations.Count);
     }
 }

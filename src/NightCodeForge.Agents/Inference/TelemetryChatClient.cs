@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Agents.Inference;
@@ -145,15 +146,16 @@ public class TelemetryChatClient : DelegatingChatClient
         {
             sw.Stop();
             var durationMs = sw.Elapsed.TotalMilliseconds;
+            var detailedError = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
             var failedRecord = runningRecord with
             {
                 DurationMs = durationMs,
                 Status = ex is OperationCanceledException ? LlmCallStatus.Cancelled : LlmCallStatus.Failed,
-                ErrorMessage = ex.Message
+                ErrorMessage = detailedError
             };
 
             _telemetryService.RecordLlmCallCompleted(failedRecord);
-            _logger?.LogDebug(ex, "Intercepted LLM call failure for {CallId}", callId);
+            _logger?.LogDebug(ex, "Intercepted LLM call failure for {CallId}: {ErrorMessage}", callId, detailedError);
             throw;
         }
     }
@@ -223,6 +225,7 @@ public class TelemetryChatClient : DelegatingChatClient
                     var finalPromptTokens = streamingInputTokens.HasValue && streamingInputTokens.Value > 0
                         ? streamingInputTokens.Value
                         : promptTokens;
+                    var detailedError = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
                     var failedRecord = runningRecord with
                     {
                         DurationMs = sw.Elapsed.TotalMilliseconds,
@@ -231,11 +234,11 @@ public class TelemetryChatClient : DelegatingChatClient
                         ReasoningTokens = reasoningTokens,
                         CompletionPreview = BuildCombinedPreview(reasoningBuffer, textBuffer),
                         Status = ex is OperationCanceledException ? LlmCallStatus.Cancelled : LlmCallStatus.Failed,
-                        ErrorMessage = ex.Message
+                        ErrorMessage = detailedError
                     };
                     completionRecorded = true;
                     _telemetryService.RecordLlmCallCompleted(failedRecord);
-                    _logger?.LogDebug(ex, "Intercepted streaming LLM call failure for {CallId}", callId);
+                    _logger?.LogDebug(ex, "Intercepted streaming LLM call failure for {CallId}: {ErrorMessage}", callId, detailedError);
                     throw;
                 }
 

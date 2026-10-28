@@ -6,6 +6,7 @@ using Hangfire.Storage.Monitoring;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
@@ -382,6 +383,10 @@ public class DevQueueService : IDevQueueService
         var task = await taskRepo.GetByIdAsync(taskId, cancellationToken)
             ?? throw new KeyNotFoundException($"Task #{taskId} not found.");
 
+        var workspaceRepo = scope.ServiceProvider.GetRequiredService<IWorkspaceRepository>();
+        var workspace = task.Workspace ?? await workspaceRepo.GetByIdAsync(task.WorkspaceId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Workspace #{task.WorkspaceId} for task #{taskId} not found.");
+
         if (task.Status == TaskOverallStatus.Failed || task.Status == TaskOverallStatus.Cancelled)
         {
             task.Status = TaskOverallStatus.Open;
@@ -392,6 +397,10 @@ public class DevQueueService : IDevQueueService
         task.InterruptedStageId = null;
         task.UpdatedAt = DateTime.UtcNow;
 
+        var pipelineContext = new PipelineContext(task, workspace);
+        pipelineContext.ResetRetries();
+        pipelineContext.SyncDataBagToTask();
+
         var rescheduleReason = $"Rescheduled task execution via DevQueue (Status: {task.Status})";
 
         await taskRepo.UpdateWithHistoryAsync(
@@ -400,6 +409,9 @@ public class DevQueueService : IDevQueueService
             changedBy: AuditActors.User,
             reason: rescheduleReason,
             cancellationToken: cancellationToken);
+
+        var dependencyStore = scope.ServiceProvider.GetRequiredService<ITaskDependencyStore>();
+        await dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
 
         var pipelineProvider = scope.ServiceProvider.GetRequiredService<IWorkflowPipelineProvider>();
         var pipeline = await pipelineProvider.GetPipelineAsync(task, cancellationToken);
