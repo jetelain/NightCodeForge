@@ -72,6 +72,9 @@ if ([string]::IsNullOrWhiteSpace($DataDir)) {
     $DataDir = [System.IO.Path]::GetFullPath($DataDir)
 }
 
+# ConfigDir is imposed by runtime
+$ConfigDir = Join-Path $InstallDir "config"
+
 if ([string]::IsNullOrWhiteSpace($LogsDir)) {
     $LogsDir = Join-Path $InstallDir "logs"
 } else {
@@ -101,19 +104,21 @@ if ($Uninstall) {
     if (Test-Path $InstallDir) {
         try {
             if ($KeepData) {
-                Write-Host "Preserving user databases in: $DataDir" -ForegroundColor Cyan
-                Write-Host "Preserving user logs in:      $LogsDir" -ForegroundColor Cyan
+                Write-Host "Preserving user configuration in: $ConfigDir" -ForegroundColor Cyan
+                Write-Host "Preserving user databases in:     $DataDir" -ForegroundColor Cyan
+                Write-Host "Preserving user logs in:          $LogsDir" -ForegroundColor Cyan
 
-                # Remove everything except DataDir and LogsDir
+                # Remove everything except ConfigDir, DataDir and LogsDir
                 Get-ChildItem -Path $InstallDir -Force | ForEach-Object {
                     $itemPath = $_.FullName
+                    $isConfig = [string]::Equals($itemPath.TrimEnd('\/'), $ConfigDir.TrimEnd('\/'), [System.StringComparison]::OrdinalIgnoreCase)
                     $isData = [string]::Equals($itemPath.TrimEnd('\/'), $DataDir.TrimEnd('\/'), [System.StringComparison]::OrdinalIgnoreCase)
                     $isLogs = [string]::Equals($itemPath.TrimEnd('\/'), $LogsDir.TrimEnd('\/'), [System.StringComparison]::OrdinalIgnoreCase)
-                    if (-not $isData -and -not $isLogs) {
+                    if (-not $isConfig -and -not $isData -and -not $isLogs) {
                         Remove-Item -Path $itemPath -Recurse -Force -ErrorAction SilentlyContinue
                     }
                 }
-                Write-Host "Cleaned NightCodeForge binaries while keeping data & logs." -ForegroundColor Green
+                Write-Host "Cleaned NightCodeForge binaries while keeping config, data & logs." -ForegroundColor Green
             } else {
                 $deleted = $false
                 for ($attempt = 1; $attempt -le 6; $attempt++) {
@@ -186,6 +191,7 @@ Write-Host " Configuration   : $Configuration"
 Write-Host " Runtime         : $Runtime"
 Write-Host " Self-Contained  : $([bool]$SelfContained)"
 Write-Host " Install Dir     : $InstallDir"
+Write-Host " Config Folder   : $ConfigDir"
 Write-Host " Database Folder : $DataDir"
 Write-Host " Logs Folder     : $LogsDir"
 Write-Host " Launcher Bin Dir: $BinDir"
@@ -203,6 +209,9 @@ if ($runningProcesses) {
 # 4. Ensure directories exist
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+}
+if (-not (Test-Path $ConfigDir)) {
+    New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
 }
 if (-not (Test-Path $DataDir)) {
     New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
@@ -418,6 +427,7 @@ Write-Host "`n==========================================================" -Foreg
 Write-Host " NightCodeForge Web Publish & Install Successful!          " -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Green
 Write-Host "Binary Location : $(Join-Path $InstallDir 'NightCodeForge.Web.exe')" -ForegroundColor Green
+Write-Host "Config Folder   : $ConfigDir" -ForegroundColor Green
 Write-Host "Database Folder : $DataDir" -ForegroundColor Green
 Write-Host "Logs Folder     : $LogsDir" -ForegroundColor Green
 Write-Host "Hosting URL     : $Urls" -ForegroundColor Green

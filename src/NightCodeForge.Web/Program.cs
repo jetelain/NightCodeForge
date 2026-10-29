@@ -3,6 +3,7 @@ using NightCodeForge.Agents;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Infrastructure;
 using NightCodeForge.Infrastructure.BackgroundJobs;
+using NightCodeForge.Infrastructure.Configuration;
 using NightCodeForge.Web.Components;
 using NightCodeForge.Web.Services;
 using Serilog;
@@ -13,6 +14,18 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
     Args = args,
     ContentRootPath = AppContext.BaseDirectory
 });
+
+Microsoft.Extensions.Logging.ILogger? appLogger = null;
+
+// User-owned configuration layer (config/config.json next to the executable / content root), layered on top of
+// the read-only factory appsettings.json. Must run before any configuration is consumed.
+// Fail-open: an invalid user file is reported and ignored, never prevents startup.
+var userConfigStatus = HostConfigurationSources.AddUserConfiguration(
+    builder.Configuration,
+    builder.Environment.ContentRootPath,
+    builder.Environment.EnvironmentName,
+    logger: null,
+    loggerAccessor: () => appLogger);
 
 // Configure Serilog file & console logging
 var rawLogsDir = builder.Configuration["Logging:LogsDirectory"] ?? "logs";
@@ -101,6 +114,12 @@ builder.Services.AddNightCodeForgeSignalRBridge();
 builder.Services.AddScoped<OrchestratorHubClientConnection>();
 
 var app = builder.Build();
+appLogger = app.Logger;
+
+app.Logger.LogInformation(
+    "User configuration status: {Status} (Path: {Path})",
+    userConfigStatus,
+    HostConfigurationSources.GetFullPath(builder.Environment.ContentRootPath));
 
 // Run startup DB initialization, recovery, crash reconciliation, and start markdown watchers
 using (var scope = app.Services.CreateScope())

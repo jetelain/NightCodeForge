@@ -444,3 +444,7 @@ docs/transcripts/
 .nightcodeforge/audit-report.md
 
 .codecondenser/
+
+# User-owned configuration layer (local overrides)
+config/config.json
+**/config/config.json
