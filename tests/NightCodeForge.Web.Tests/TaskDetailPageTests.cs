@@ -331,4 +331,62 @@ public class TaskDetailPageTests : BunitContext
         Assert.DoesNotContain("full-width", cut.Find(".task-detail-grid").ClassName);
         Assert.NotEmpty(cut.FindAll(".grid-column-sidebar"));
     }
+
+    [Fact]
+    public async Task ChangesTab_RendersProvenanceBadge()
+    {
+        var bag = new PipelineDataBag();
+        var files = new List<FileDiffSummary>
+        {
+            new("src/Engine.cs", FileChangeType.Modified, 2, 1, "var a = 1;", "var a = 2;")
+        };
+        bag.Set(PipelineDataBagKeys.ReviewFiles, files);
+
+        var task = new ForgeTask
+        {
+            Id = 41,
+            WorkspaceId = 1,
+            Title = "Task with Pipeline Snapshot Badge",
+            Status = TaskOverallStatus.Ready,
+            PipelineDataJson = bag.ToJson()
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<TaskDetail>(p => p.Add(t => t.TaskId, 41));
+
+        var changesTabBtn = cut.Find("#tab-btn-changes");
+        await changesTabBtn.ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        cut.WaitForState(() => cut.Find("#task-changes-panel") != null);
+        Assert.Contains("Pipeline Snapshot", cut.Find("#task-changes-panel").TextContent);
+        Assert.Contains("1 files modified", cut.Find("#task-changes-panel").TextContent);
+        Assert.Contains("+2", cut.Find("#task-changes-panel").TextContent);
+        Assert.Contains("-1", cut.Find("#task-changes-panel").TextContent);
+    }
+
+    [Fact]
+    public async Task ChangesTab_WhenDiffFails_RendersErrorMessage()
+    {
+        var task = new ForgeTask
+        {
+            Id = 42,
+            WorkspaceId = 1,
+            Title = "Task with Failing Diff",
+            Status = TaskOverallStatus.Open
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var mockDiffService = new Moq.Mock<ITaskDiffService>();
+        mockDiffService.Setup(s => s.GetTaskDiffAsync(42, Moq.It.IsAny<CancellationToken>()))
+            .Throws(new InvalidOperationException("Git diff process timed out"));
+        Services.AddSingleton<ITaskDiffService>(mockDiffService.Object);
+
+        var cut = Render<TaskDetail>(p => p.Add(t => t.TaskId, 42));
+
+        var changesTabBtn = cut.Find("#tab-btn-changes");
+        await changesTabBtn.ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        cut.WaitForState(() => cut.Find("#diff-error-state") != null);
+        Assert.Contains("Git diff process timed out", cut.Find("#diff-error-state").TextContent);
+    }
 }

@@ -1,3 +1,4 @@
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Services;

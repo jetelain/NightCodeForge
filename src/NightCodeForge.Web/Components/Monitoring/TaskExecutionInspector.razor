@@ -12,6 +12,7 @@
 @inject IServiceProvider ServiceProvider
 @inject OrchestratorHubClientConnection HubClient
 @inject IJSRuntime JSRuntime
+@inject ITaskDiffService TaskDiffService
 
 <div class="task-execution-inspector card-surface" id="task-execution-inspector" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.5rem; margin-top: 1.5rem;">
     @if (_isLoading)
@@ -258,14 +259,42 @@
         {
             <div class="git-diff-tab">
                 <div style="margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
-                    <div style="font-size: 0.84rem; color: var(--text-secondary);">
-                        @if (!string.IsNullOrWhiteSpace(_task?.SquashCommitSha))
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.84rem; color: var(--text-secondary);">
+                        @if (_diffResult != null)
                         {
-                            <span>Displaying squashed commit diff for closed task (SHA: <code>@_task!.SquashCommitSha![..Math.Min(8, _task!.SquashCommitSha!.Length)]</code>).</span>
+                            @switch (_diffResult.Provenance)
+                            {
+                                case DiffProvenance.LiveWorktree:
+                                    <span class="forge-badge badge-green" title="Diff reflects active worktree including staged, unstaged, and newly created files.">
+                                        🟢 Live Worktree (Includes Uncommitted Changes)
+                                    </span>
+                                    break;
+                                case DiffProvenance.BranchHeadFallback:
+                                    <span class="forge-badge badge-amber" title="Worktree is currently offline or pruned. Displaying committed branch changes against base branch.">
+                                        🟡 Branch Head Commits Only
+                                    </span>
+                                    break;
+                                case DiffProvenance.SquashCommit:
+                                    <span class="forge-badge badge-purple" title="Task is closed. Displaying final squashed commit diff.">
+                                        🟣 Squashed Commit (@(_diffResult.SquashCommitSha?[..Math.Min(8, _diffResult.SquashCommitSha.Length)]))
+                                    </span>
+                                    break;
+                                case DiffProvenance.PipelineSnapshot:
+                                    <span class="forge-badge badge-blue" title="Displaying cached pipeline snapshot files.">
+                                        🔵 Pipeline Snapshot
+                                    </span>
+                                    break;
+                            }
+                            <span>against <code>@(_diffResult.BaseBranch)</code>.</span>
+                            @if (_diffResult.Files.Count > 0)
+                            {
+                                <span style="color: var(--accent-green); margin-left: 0.5rem;">+@_diffResult.TotalAdditions</span>
+                                <span style="color: var(--accent-red); margin-left: 0.25rem;">-@_diffResult.TotalDeletions</span>
+                            }
                         }
                         else
                         {
-                            <span>Displaying live/branch worktree diff against <code>@(_task?.BaseBranch ?? "")</code>.</span>
+                            <span>Displaying diff against <code>@(_task?.BaseBranch ?? "")</code>.</span>
                         }
                     </div>
                     <button type="button" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem;" @onclick="LoadDiffFilesAsync">
@@ -277,6 +306,13 @@
                 {
                     <div style="text-align: center; padding: 2.5rem 0; color: var(--text-muted);">
                         <span>Calculating diff...</span>
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(_diffLoadError))
+                {
+                    <div style="text-align: center; padding: 3rem 0; color: var(--accent-crimson); background: var(--bg-input); border-radius: var(--radius-sm);" id="inspector-diff-error">
+                        <span style="font-size: 1.5rem; display: block; margin-bottom: 0.5rem;">⚠️</span>
+                        <span>Failed to calculate git diff: @_diffLoadError</span>
                     </div>
                 }
                 else if (!_diffFiles.Any())
@@ -324,12 +360,14 @@
     private List<StageDefinition>? _workflowStages;
     private List<Conversation> _conversations = new();
     private Conversation? _selectedConversation;
+    private TaskDiffResult? _diffResult;
     private List<FileDiffSummary> _diffFiles = new();
     private FileDiffSummary? _selectedDiffFile;
 
     private string _activeTab = "conversations";
     private bool _isLoading = true;
     private bool _isLoadingDiff = false;
+    private string? _diffLoadError;
     private bool _isActionInProgress = false;
     private bool _showRestartModal = false;
     private string? _actionMessage;
@@ -370,7 +408,6 @@
     }
 
     private WorkerStateService? WorkerState => ServiceProvider.GetService<WorkerStateService>();
-    private ITaskReviewService? TaskReviewService => ServiceProvider.GetService<ITaskReviewService>();
     private IDevQueueService? DevQueueService => ServiceProvider.GetService<IDevQueueService>();
 
     protected override async Task OnInitializedAsync()
@@ -453,6 +490,7 @@
     private async Task LoadTaskDataAsync()
     {
         _isLoading = true;
+        _diffResult = null;
         _diffFiles.Clear();
         _selectedDiffFile = null;
         try
@@ -505,7 +543,7 @@
     private async Task SwitchToDiffTabAsync()
     {
         _activeTab = "diff";
-        if (!_diffFiles.Any())
+        if (_diffResult == null)
         {
             await LoadDiffFilesAsync();
         }
@@ -513,13 +551,14 @@
 
     private async Task LoadDiffFilesAsync()
     {
-        if (_task == null || TaskReviewService == null) return;
+        if (_task == null) return;
         _isLoadingDiff = true;
+        _diffLoadError = null;
         StateHasChanged();
         try
         {
-            var files = await TaskReviewService.GetTaskDiffFilesAsync(_task.Id);
-            _diffFiles = files.ToList();
+            _diffResult = await TaskDiffService.GetTaskDiffAsync(_task.Id);
+            _diffFiles = _diffResult.Files.ToList();
             if (_diffFiles.Any())
             {
                 if (_selectedDiffFile == null || !_diffFiles.Any(f => f.Path == _selectedDiffFile.Path))
@@ -531,6 +570,13 @@
             {
                 _selectedDiffFile = null;
             }
+        }
+        catch (Exception ex)
+        {
+            _diffLoadError = ex.Message;
+            _diffResult = null;
+            _diffFiles.Clear();
+            _selectedDiffFile = null;
         }
         finally
         {

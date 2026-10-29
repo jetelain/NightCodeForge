@@ -17,7 +17,14 @@ public static class GitDiffConstants
         ":(exclude)*.Designer.cs",
         ":(exclude)*.generated.cs",
         ":(exclude)*.trx",
-        ":(exclude)**/TestResults/**"
+        ":(exclude)TestResults/**",
+        ":(exclude)**/TestResults/**",
+        ":(exclude)bin/**",
+        ":(exclude)**/bin/**",
+        ":(exclude)obj/**",
+        ":(exclude)**/obj/**",
+        ":(exclude).vs/**",
+        ":(exclude)**/.vs/**"
     ];
 
     public const int DefaultStatWidth = 400;

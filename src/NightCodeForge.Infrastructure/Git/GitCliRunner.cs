@@ -35,10 +35,21 @@ public class GitCliRunner : IGitCliRunner
     }
 
     /// <inheritdoc />
-    public async Task<GitCommandResult> ExecuteAsync(
+    public Task<GitCommandResult> ExecuteAsync(
         string workingDirectory,
         IEnumerable<string> argumentsList,
         int? timeoutSeconds = null,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(workingDirectory, argumentsList, timeoutSeconds, null, cancellationToken);
+
+    internal bool SkipDirectoryValidation { get; set; }
+
+    /// <inheritdoc />
+    public async Task<GitCommandResult> ExecuteAsync(
+        string workingDirectory,
+        IEnumerable<string> argumentsList,
+        int? timeoutSeconds,
+        IReadOnlyDictionary<string, string>? environmentVariables,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
@@ -51,15 +62,18 @@ public class GitCliRunner : IGitCliRunner
         string linuxDir = workingDirectory;
         var isWslTarget = isWindows && TryResolveWslTarget(workingDirectory, out distro, out linuxDir);
 
-        if (isWslTarget)
+        if (!SkipDirectoryValidation)
         {
-            ValidateWslDirectoryExists(workingDirectory, distro, linuxDir);
-        }
-        else
-        {
-            if (!Directory.Exists(workingDirectory))
+            if (isWslTarget)
             {
-                throw new DirectoryNotFoundException($"Working directory '{workingDirectory}' does not exist.");
+                ValidateWslDirectoryExists(workingDirectory, distro, linuxDir);
+            }
+            else
+            {
+                if (!Directory.Exists(workingDirectory))
+                {
+                    throw new DirectoryNotFoundException($"Working directory '{workingDirectory}' does not exist.");
+                }
             }
         }
 
@@ -78,30 +92,49 @@ public class GitCliRunner : IGitCliRunner
             ProcessStartSpec spec;
             if (isWslTarget)
             {
-                var wslArgs = new List<string> { "-d", distro, "--exec", "git", "-c", "core.pager=cat", "-C", linuxDir };
+                var wslArgs = new List<string> { "-d", distro, "--exec" };
+                if (environmentVariables != null && environmentVariables.Count > 0)
+                {
+                    wslArgs.Add("env");
+                    foreach (var kvp in environmentVariables)
+                    {
+                        wslArgs.Add($"{kvp.Key}={kvp.Value}");
+                    }
+                }
+                wslArgs.AddRange(["git", "-c", "core.pager=cat", "-C", linuxDir]);
                 wslArgs.AddRange(argsArray);
 
                 spec = new ProcessStartSpec
                 {
                     FileName = "wsl.exe",
                     ArgumentList = wslArgs,
-                    TimeoutSeconds = (int)Math.Max(1, timeoutDuration.TotalSeconds)
+                    TimeoutSeconds = (int)Math.Max(1, timeoutDuration.TotalSeconds),
+                    EnvironmentVariables = environmentVariables
                 };
             }
             else
             {
+                var env = new Dictionary<string, string>
+                {
+                    ["PAGER"] = "cat",
+                    ["GIT_PAGER"] = "cat",
+                    ["GIT_TERMINAL_PROMPT"] = "0"
+                };
+                if (environmentVariables != null)
+                {
+                    foreach (var kvp in environmentVariables)
+                    {
+                        env[kvp.Key] = kvp.Value;
+                    }
+                }
+
                 spec = new ProcessStartSpec
                 {
                     FileName = "git",
                     ArgumentList = argsArray,
                     WorkingDirectory = workingDirectory,
                     TimeoutSeconds = (int)Math.Max(1, timeoutDuration.TotalSeconds),
-                    EnvironmentVariables = new Dictionary<string, string>
-                    {
-                        ["PAGER"] = "cat",
-                        ["GIT_PAGER"] = "cat",
-                        ["GIT_TERMINAL_PROMPT"] = "0"
-                    }
+                    EnvironmentVariables = env
                 };
             }
 

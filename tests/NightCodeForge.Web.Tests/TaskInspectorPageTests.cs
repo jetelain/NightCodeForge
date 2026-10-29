@@ -43,6 +43,7 @@ public class TaskInspectorPageTests : BunitContext
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton<IDevQueueService>(_devQueueService);
         Services.AddSingleton<ITaskReviewService>(_taskReviewService);
+        Services.AddSingleton<ITaskDiffService>(new TaskDiffService(_taskReviewService));
         Services.AddSingleton<ReviewCommentStateService>();
         Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
         Services.AddSingleton<IOperationsTelemetryService>(_telemetryMock.Object);
@@ -392,8 +393,8 @@ public class TaskInspectorPageTests : BunitContext
         public Task<IReadOnlyList<TaskReviewSnapshot>> GetPendingReviewsAsync(int? workspaceId = null, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<TaskReviewSnapshot>>(Array.Empty<TaskReviewSnapshot>());
 
-        public Task<IReadOnlyList<FileDiffSummary>> GetTaskDiffFilesAsync(int taskId, CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<FileDiffSummary>>(Array.Empty<FileDiffSummary>());
+        public Task<TaskDiffResult> GetTaskDiffAsync(int taskId, CancellationToken cancellationToken = default)
+            => Task.FromResult(new TaskDiffResult(Array.Empty<FileDiffSummary>(), DiffProvenance.LiveWorktree, "main"));
 
         public bool IsPendingReview(TaskReviewSnapshot snapshot)
             => snapshot.HasExecutionRun && snapshot.Status == TaskOverallStatus.Ready;

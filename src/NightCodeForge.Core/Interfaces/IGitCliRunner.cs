@@ -72,4 +72,22 @@ public interface IGitCliRunner
         IEnumerable<string> argumentsList,
         int? timeoutSeconds = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Executes a native Git CLI command asynchronously with optional environment variables.
+    /// </summary>
+    /// <param name="workingDirectory">Repository working directory.</param>
+    /// <param name="argumentsList">Git CLI arguments list (without leading 'git').</param>
+    /// <param name="timeoutSeconds">Optional command timeout in seconds.</param>
+    /// <param name="environmentVariables">Optional environment variables to pass to the Git process.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Execution result containing exit code, stdout, stderr, and duration.</returns>
+    /// <exception cref="GitCommandException">Thrown if Git exits with a non-zero exit code.</exception>
+    Task<GitCommandResult> ExecuteAsync(
+        string workingDirectory,
+        IEnumerable<string> argumentsList,
+        int? timeoutSeconds,
+        IReadOnlyDictionary<string, string>? environmentVariables,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(workingDirectory, argumentsList, timeoutSeconds, cancellationToken);
 }

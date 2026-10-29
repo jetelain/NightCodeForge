@@ -20,6 +20,8 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Using Include="NightCodeForge.Core.Domain" />
+    <Using Include="NightCodeForge.Core.Workflow" />
   </ItemGroup>
 
   <ItemGroup>

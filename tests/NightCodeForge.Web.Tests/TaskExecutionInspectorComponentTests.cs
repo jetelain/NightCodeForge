@@ -34,6 +34,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton<IDevQueueService>(_devQueueService);
         Services.AddSingleton<ITaskReviewService>(_taskReviewService);
+        Services.AddSingleton<ITaskDiffService>(new TaskDiffService(_taskReviewService));
         Services.AddSingleton<ReviewCommentStateService>();
         Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
         Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
@@ -480,6 +481,59 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         Assert.NotNull(cut.Find("#diff-viewer-panel"));
         Assert.NotNull(cut.Find(".review-dir-node"));
         Assert.NotNull(cut.Find(".review-file-node"));
+    }
+
+    [Fact]
+    public async Task GitDiffTab_RendersLiveWorktreeBadge()
+    {
+        var task = new ForgeTask
+        {
+            Id = 81,
+            WorkspaceId = 1,
+            Title = "Task with Live Worktree Diff",
+            Status = TaskOverallStatus.Open,
+            BaseBranch = "main"
+        };
+        await _taskRepository.CreateAsync(task);
+
+        _taskReviewService.DiffFilesToReturn = new List<FileDiffSummary>
+        {
+            new("src/LiveService.cs", FileChangeType.Modified, 8, 1, "old", "new")
+        };
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 81));
+
+        var diffBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Git Diff & Changes"));
+        diffBtn.Click();
+
+        cut.WaitForState(() => cut.Markup.Contains("Live Worktree"));
+        Assert.Contains("Live Worktree (Includes Uncommitted Changes)", cut.Markup);
+        Assert.Contains("+8", cut.Markup);
+        Assert.Contains("-1", cut.Markup);
+    }
+
+    [Fact]
+    public async Task GitDiffTab_WhenDiffCalculationFails_RendersErrorMessage()
+    {
+        var task = new ForgeTask
+        {
+            Id = 82,
+            WorkspaceId = 1,
+            Title = "Task with Failing Diff",
+            Status = TaskOverallStatus.Open,
+            BaseBranch = "main"
+        };
+        await _taskRepository.CreateAsync(task);
+
+        _taskReviewService.DiffExceptionToThrow = new InvalidOperationException("Git lock collision in worktree");
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 82));
+
+        var diffBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Git Diff & Changes"));
+        diffBtn.Click();
+
+        cut.WaitForState(() => cut.Find("#inspector-diff-error") != null);
+        Assert.Contains("Git lock collision in worktree", cut.Find("#inspector-diff-error").TextContent);
     }
 
     [Fact]
@@ -1056,6 +1110,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
     private class FakeTaskReviewService : ITaskReviewService
     {
         public List<FileDiffSummary> DiffFilesToReturn { get; set; } = new();
+        public Exception? DiffExceptionToThrow { get; set; }
 
         public Task<TaskReviewSnapshot?> GetSnapshotAsync(int taskId, CancellationToken cancellationToken = default)
             => Task.FromResult<TaskReviewSnapshot?>(null);
@@ -1063,8 +1118,14 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         public Task<IReadOnlyList<TaskReviewSnapshot>> GetPendingReviewsAsync(int? workspaceId = null, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<TaskReviewSnapshot>>(Array.Empty<TaskReviewSnapshot>());
 
-        public Task<IReadOnlyList<FileDiffSummary>> GetTaskDiffFilesAsync(int taskId, CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<FileDiffSummary>>(DiffFilesToReturn);
+        public Task<TaskDiffResult> GetTaskDiffAsync(int taskId, CancellationToken cancellationToken = default)
+        {
+            if (DiffExceptionToThrow != null)
+            {
+                throw DiffExceptionToThrow;
+            }
+            return Task.FromResult(new TaskDiffResult(DiffFilesToReturn, DiffProvenance.LiveWorktree, "main"));
+        }
 
         public bool IsPendingReview(TaskReviewSnapshot snapshot)
             => snapshot.HasExecutionRun && snapshot.Status == TaskOverallStatus.Ready;

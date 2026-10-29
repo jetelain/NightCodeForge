@@ -24,4 +24,7 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="NightCodeForge.Infrastructure.Tests" />
+  </ItemGroup>
 </Project>

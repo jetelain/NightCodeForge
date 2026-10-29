@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
@@ -11,7 +12,7 @@ public interface ITaskReviewService
 {
     Task<TaskReviewSnapshot?> GetSnapshotAsync(int taskId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TaskReviewSnapshot>> GetPendingReviewsAsync(int? workspaceId = null, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<FileDiffSummary>> GetTaskDiffFilesAsync(int taskId, CancellationToken cancellationToken = default);
+    Task<TaskDiffResult> GetTaskDiffAsync(int taskId, CancellationToken cancellationToken = default);
     bool IsPendingReview(TaskReviewSnapshot snapshot);
     bool ShouldDisplayConflictResolvedBanner(TaskReviewSnapshot snapshot);
 }
@@ -97,10 +98,17 @@ public partial class TaskReviewService : ITaskReviewService
         var results = new List<TaskReviewSnapshot>();
         foreach (var task in candidateTasks)
         {
-            var snapshot = await GetSnapshotAsync(task.Id, cancellationToken);
-            if (snapshot != null)
+            try
             {
-                results.Add(snapshot);
+                var snapshot = await GetSnapshotAsync(task.Id, cancellationToken);
+                if (snapshot != null)
+                {
+                    results.Add(snapshot);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load review snapshot for candidate task #{TaskId} in pending reviews", task.Id);
             }
         }
 
@@ -165,12 +173,15 @@ public partial class TaskReviewService : ITaskReviewService
             DurationMs: durationMs);
     }
 
-    public async Task<IReadOnlyList<FileDiffSummary>> GetTaskDiffFilesAsync(int taskId, CancellationToken cancellationToken = default)
+    public async Task<TaskDiffResult> GetTaskDiffAsync(int taskId, CancellationToken cancellationToken = default)
     {
         var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
-        if (task == null) return Array.Empty<FileDiffSummary>();
+        if (task == null)
+        {
+            throw new TaskNotFoundException(taskId);
+        }
         var baseBranch = string.IsNullOrWhiteSpace(task.BaseBranch) ? "main" : task.BaseBranch;
-        return await LoadChangedFilesAsync(task, baseBranch, cancellationToken);
+        return await LoadTaskDiffAsync(task, baseBranch, cancellationToken);
     }
 
     private async Task<IReadOnlyList<FileDiffSummary>> LoadChangedFilesAsync(
@@ -178,53 +189,90 @@ public partial class TaskReviewService : ITaskReviewService
         string baseBranch,
         CancellationToken cancellationToken)
     {
+        try
+        {
+            var diffResult = await LoadTaskDiffAsync(task, baseBranch, cancellationToken);
+            return diffResult.Files;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load changed files for review snapshot of task #{TaskId}", task.Id);
+            return Array.Empty<FileDiffSummary>();
+        }
+    }
+
+    private async Task<TaskDiffResult> LoadTaskDiffAsync(
+        ForgeTask task,
+        string baseBranch,
+        CancellationToken cancellationToken)
+    {
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
         if (bag.TryGet<List<FileDiffSummary>>(PipelineDataBagKeys.ReviewFiles, out var customFiles) && customFiles != null && customFiles.Count > 0)
         {
-            return customFiles;
+            return new TaskDiffResult(customFiles, DiffProvenance.PipelineSnapshot, baseBranch);
         }
 
+        var workspace = await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken);
+        if (workspace == null || (string.IsNullOrWhiteSpace(workspace.RepositoryPath) && string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)))
+        {
+            return new TaskDiffResult(Array.Empty<FileDiffSummary>(), DiffProvenance.BranchHeadFallback, baseBranch);
+        }
+
+        // Case B: If task is finished/merged and has a recorded SquashCommitSha, retrieve commit patch diff
+        if (task.Status == TaskOverallStatus.Closed && !string.IsNullOrWhiteSpace(task.SquashCommitSha))
+        {
+            try
+            {
+                var rawDiff = await _gitWorkspaceManager.GetCommitDiffAsync(workspace, task.SquashCommitSha, cancellationToken);
+                return new TaskDiffResult(ParseGitDiff(rawDiff), DiffProvenance.SquashCommit, baseBranch, task.SquashCommitSha);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to retrieve squashed commit diff for closed task #{TaskId}", task.Id);
+                return new TaskDiffResult(Array.Empty<FileDiffSummary>(), DiffProvenance.SquashCommit, baseBranch, task.SquashCommitSha);
+            }
+        }
+
+        // Case B.2: If terminal task without a SquashCommitSha (e.g. cancelled, rejected, or closed without merge), fallback to branch diff
+        if ((task.Status is TaskOverallStatus.Closed or TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected) && string.IsNullOrWhiteSpace(task.SquashCommitSha))
+        {
+            try
+            {
+                var rawDiff = await _gitWorkspaceManager.GenerateDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
+                return new TaskDiffResult(ParseGitDiff(rawDiff), DiffProvenance.BranchHeadFallback, baseBranch);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to retrieve branch diff for closed/cancelled/rejected task #{TaskId} without squash commit", task.Id);
+                return new TaskDiffResult(Array.Empty<FileDiffSummary>(), DiffProvenance.BranchHeadFallback, baseBranch);
+            }
+        }
+
+        // Case C: Active task worktree
         try
         {
-            var workspace = await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken);
-            if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+            var rawDiff = await _gitWorkspaceManager.GenerateLiveDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
+            return new TaskDiffResult(ParseGitDiff(rawDiff), DiffProvenance.LiveWorktree, baseBranch);
+        }
+        catch (Exception ex) when (ex is WorktreeNotFoundException or DirectoryNotFoundException)
+        {
+            _logger.LogWarning(ex, "Live worktree missing for task #{TaskId}. Falling back to branch diff against '{BaseBranch}'.", task.Id, baseBranch);
+            try
             {
-                string rawDiff = string.Empty;
-
-                // 1. If task is finished/merged and has a recorded SquashCommitSha, retrieve commit patch diff
-                if (task.Status == TaskOverallStatus.Closed && !string.IsNullOrWhiteSpace(task.SquashCommitSha))
-                {
-                    rawDiff = await _gitWorkspaceManager.GetCommitDiffAsync(workspace, task.SquashCommitSha, cancellationToken);
-                }
-
-                // 2. If active (not Closed), retrieve live diff directly from the worktree
-                if (string.IsNullOrWhiteSpace(rawDiff) && task.Status != TaskOverallStatus.Closed)
-                {
-                    rawDiff = await _gitWorkspaceManager.GenerateLiveDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
-                }
-
-                // 3. Fallback to branch diff
-                if (string.IsNullOrWhiteSpace(rawDiff))
-                {
-                    rawDiff = await _gitWorkspaceManager.GenerateDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
-                }
-
-                if (!string.IsNullOrWhiteSpace(rawDiff))
-                {
-                    var parsed = ParseGitDiff(rawDiff);
-                    if (parsed.Count > 0)
-                    {
-                        return parsed;
-                    }
-                }
+                var rawDiff = await _gitWorkspaceManager.GenerateDiffAsync(workspace, task.Id, baseBranch, cancellationToken);
+                return new TaskDiffResult(ParseGitDiff(rawDiff), DiffProvenance.BranchHeadFallback, baseBranch);
+            }
+            catch (Exception branchEx)
+            {
+                _logger.LogWarning(branchEx, "Fallback branch diff also failed for task #{TaskId}", task.Id);
+                throw;
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to retrieve git diff for task #{TaskId}", task.Id);
+            _logger.LogWarning(ex, "Failed to retrieve live diff for active task #{TaskId}", task.Id);
+            throw;
         }
-
-        return Array.Empty<FileDiffSummary>();
     }
 
     public static IReadOnlyList<FileDiffSummary> ParseGitDiff(string diffText)
@@ -245,9 +293,11 @@ public partial class TaskReviewService : ITaskReviewService
 
             var isNewFile = section.Contains("new file mode");
             var isDeletedFile = section.Contains("deleted file mode");
+            var isRenamedFile = section.Contains("rename to ") || section.Contains("similarity index ");
 
             var changeType = isNewFile ? FileChangeType.Added
                 : isDeletedFile ? FileChangeType.Deleted
+                : isRenamedFile ? FileChangeType.Renamed
                 : FileChangeType.Modified;
 
             var lines = section.Split('\n');

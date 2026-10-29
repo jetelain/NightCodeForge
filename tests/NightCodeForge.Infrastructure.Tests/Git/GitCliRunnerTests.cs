@@ -132,6 +132,57 @@ public class GitCliRunnerTests : IDisposable
         Assert.Equal(["status", "--porcelain"], capturedSpec.ArgumentList);
     }
 
+    [Fact]
+    public async Task GitCliRunner_ExecutesInWslDirectlyWithoutUnc()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return; // WSL delegation only runs on Windows hosts.
+        }
+
+        ProcessStartSpec? capturedSpec = null;
+        var mockRunner = new MockTestProcessRunner(spec =>
+        {
+            capturedSpec = spec;
+            return new ProcessExecutionResult(0, "mock-diff-output\n", string.Empty);
+        });
+
+        var mockWslMeta = new Mock<IWslMetadataService>();
+        mockWslMeta.Setup(m => m.GetDefaultDistributionName()).Returns("Ubuntu-24.04");
+        mockWslMeta.Setup(m => m.GetDefaultUserName()).Returns("runner");
+
+        var gitRunner = new GitCliRunner(
+            mockRunner,
+            new WorkspacePathResolver(mockWslMeta.Object, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions())),
+            mockWslMeta.Object,
+            NullLogger<GitCliRunner>.Instance)
+        {
+            SkipDirectoryValidation = true
+        };
+
+        var linuxPath = "/home/runner/.nightcodeforge/wks/42/worktree";
+        var envVars = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = "/tmp/temp.index" };
+
+        var result = await gitRunner.ExecuteAsync(linuxPath, ["diff", "main"], null, envVars);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.NotNull(capturedSpec);
+        Assert.Equal("wsl.exe", capturedSpec.FileName);
+
+        var args = capturedSpec!.ArgumentList!.ToList();
+        Assert.Equal("-d", args[0]);
+        Assert.Equal("Ubuntu-24.04", args[1]);
+        Assert.Equal("--exec", args[2]);
+        Assert.Equal("env", args[3]);
+        Assert.Equal("GIT_INDEX_FILE=/tmp/temp.index", args[4]);
+        Assert.Equal("git", args[5]);
+        Assert.Equal("-c", args[6]);
+        Assert.Equal("core.pager=cat", args[7]);
+        Assert.Equal("-C", args[8]);
+        Assert.Equal(linuxPath, args[9]);
+        Assert.DoesNotContain(@"\\wsl", string.Join(" ", args));
+    }
+
     public void Dispose()
     {
         _repo.Dispose();

@@ -1,17 +1,8 @@
-using NightCodeForge.Core.Domain;
+namespace NightCodeForge.Core.Domain;
 
-namespace NightCodeForge.Web.Services;
-
-public enum FileChangeType { Modified, Added, Deleted, Renamed }
-
-public record FileDiffSummary(
-    string Path,
-    FileChangeType ChangeType,
-    int Additions,
-    int Deletions,
-    string OldContent,
-    string NewContent);
-
+/// <summary>
+/// Snapshot of task review state for presentation in review workflows.
+/// </summary>
 public record TaskReviewSnapshot(
     int TaskId,
     string Title,
@@ -24,6 +15,9 @@ public record TaskReviewSnapshot(
     bool HasResolvedConflict = false,
     bool HasExecutionRun = false);
 
+/// <summary>
+/// Quality gate metrics associated with a task review.
+/// </summary>
 public record QualityGateMetrics(
     double BaselineCoverage,
     double CurrentCoverage,

@@ -322,6 +322,7 @@ public class ContainerGitIntegrationTests : IDisposable
             new Mock<IWslMetadataService>().Object,
             new Mock<IGitMirrorSyncService>().Object,
             new Mock<IWorkspaceLockProvider>().Object,
+            processRunner,
             NullLogger<GitWorkspaceManager>.Instance);
 
         var hostDiff = await manager.GenerateDiffAsync(workspace, 99, "main");

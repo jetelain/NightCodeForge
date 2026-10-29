@@ -20,8 +20,9 @@ public class NoiseFilteredDiffTests : IDisposable
         var wslMeta = new Mock<IWslMetadataService>().Object;
         var pathResolver = new WorkspacePathResolver(wslMeta, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
         _repo = new TestGitRepository("main");
+        var processRunner = new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance);
         _runner = new GitCliRunner(
-            new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance),
+            processRunner,
             pathResolver,
             wslMeta,
             NullLogger<GitCliRunner>.Instance);
@@ -31,6 +32,7 @@ public class NoiseFilteredDiffTests : IDisposable
             wslMeta,
             new Mock<IGitMirrorSyncService>().Object,
             new Mock<IWorkspaceLockProvider>().Object,
+            processRunner,
             NullLogger<GitWorkspaceManager>.Instance);
 
         // Base branch setup

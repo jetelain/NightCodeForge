@@ -1,4 +1,4 @@
-using NightCodeForge.Core.Workflow;
+using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Web.Services;
 
@@ -8,9 +8,9 @@ namespace NightCodeForge.Web.Services;
 public interface ITaskDiffService
 {
     /// <summary>
-    /// Retrieves changed files and diffs for a given task, inspecting either live worktrees or closed squash commits.
+    /// Retrieves comprehensive diff result for a given task, including modified files and provenance.
     /// </summary>
-    Task<IReadOnlyList<FileDiffSummary>> GetTaskDiffFilesAsync(int taskId, CancellationToken cancellationToken = default);
+    Task<TaskDiffResult> GetTaskDiffAsync(int taskId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -25,8 +25,8 @@ public class TaskDiffService : ITaskDiffService
         _taskReviewService = taskReviewService ?? throw new ArgumentNullException(nameof(taskReviewService));
     }
 
-    public Task<IReadOnlyList<FileDiffSummary>> GetTaskDiffFilesAsync(int taskId, CancellationToken cancellationToken = default)
+    public Task<TaskDiffResult> GetTaskDiffAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        return _taskReviewService.GetTaskDiffFilesAsync(taskId, cancellationToken);
+        return _taskReviewService.GetTaskDiffAsync(taskId, cancellationToken);
     }
 }

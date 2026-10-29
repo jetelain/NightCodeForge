@@ -187,7 +187,7 @@
                             id="tab-btn-changes"
                             style="padding: 0.45rem 1rem; font-size: 0.88rem;"
                             @onclick='SelectChangesTabAsync'>
-                        🔀 Changes
+                        🔀 Changes @(_diffFiles.Count > 0 ? $"({_diffFiles.Count})" : "")
                     </button>
                 </div>
 
@@ -371,14 +371,57 @@
                                         🔍 Full Review Room
                                     </a>
                                 }
+                                <button type="button" class="forge-btn forge-btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.78rem;" @onclick="LoadDiffFilesAsync" title="Refresh task diff">
+                                    🔄 Refresh Diff
+                                </button>
                             </div>
-                            <span class="text-secondary" style="font-size: 0.8rem;">@_diffFiles.Count files modified</span>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                                @if (_diffResult != null)
+                                {
+                                    @switch (_diffResult.Provenance)
+                                    {
+                                        case DiffProvenance.LiveWorktree:
+                                            <span class="forge-badge badge-green" title="Diff reflects active worktree including staged, unstaged, and newly created files.">
+                                                🟢 Live Worktree (Includes Uncommitted Changes)
+                                            </span>
+                                            break;
+                                        case DiffProvenance.BranchHeadFallback:
+                                            <span class="forge-badge badge-amber" title="Worktree is currently offline or pruned. Displaying committed branch changes against base branch.">
+                                                🟡 Branch Head Commits Only
+                                            </span>
+                                            break;
+                                        case DiffProvenance.SquashCommit:
+                                            <span class="forge-badge badge-purple" title="Task is closed. Displaying final squashed commit diff.">
+                                                🟣 Squashed Commit (@(_diffResult.SquashCommitSha?[..Math.Min(8, _diffResult.SquashCommitSha.Length)]))
+                                            </span>
+                                            break;
+                                        case DiffProvenance.PipelineSnapshot:
+                                            <span class="forge-badge badge-blue" title="Displaying cached pipeline snapshot files.">
+                                                🔵 Pipeline Snapshot
+                                            </span>
+                                            break;
+                                    }
+                                }
+                                <span class="text-secondary" style="font-size: 0.8rem;">@_diffFiles.Count files modified</span>
+                                @if (_diffResult != null && _diffResult.Files.Count > 0)
+                                {
+                                    <span style="color: var(--accent-green); font-size: 0.8rem; margin-left: 0.25rem;">+@_diffResult.TotalAdditions</span>
+                                    <span style="color: var(--accent-red); font-size: 0.8rem; margin-left: 0.15rem;">-@_diffResult.TotalDeletions</span>
+                                }
+                            </div>
                         </div>
 
                         @if (_isLoadingChanges)
                         {
                             <div class="p-4 text-center text-muted" id="changes-loading-state">
                                 <span>Loading task code diff...</span>
+                            </div>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(_diffLoadError))
+                        {
+                            <div class="p-4 text-center" style="color: var(--accent-crimson);" id="diff-error-state">
+                                <div style="font-size: 2rem; margin-bottom: 0.5rem;">⚠️</div>
+                                <p style="margin: 0;">Failed to load git diff: @_diffLoadError</p>
                             </div>
                         }
                         else if (_diffFiles.Count == 0)
@@ -608,9 +651,11 @@
     private string _activeTab = "spec";
 
     // Changes Diff state
+    private TaskDiffResult? _diffResult;
     private IReadOnlyList<FileDiffSummary> _diffFiles = Array.Empty<FileDiffSummary>();
     private FileDiffSummary? _selectedDiffFile;
     private bool _isLoadingChanges;
+    private string? _diffLoadError;
 
     // Edit Title state
     private bool _isEditingTitle;
@@ -650,6 +695,7 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        _diffResult = null;
         _diffFiles = Array.Empty<FileDiffSummary>();
         _selectedDiffFile = null;
         await LoadTaskDataAsync();
@@ -699,7 +745,7 @@
     private async Task SelectChangesTabAsync()
     {
         _activeTab = "changes";
-        if (_task != null && _diffFiles.Count == 0)
+        if (_task != null && _diffResult == null)
         {
             await LoadDiffFilesAsync();
         }
@@ -709,15 +755,19 @@
     {
         if (_task == null) return;
         _isLoadingChanges = true;
+        _diffLoadError = null;
         try
         {
             var previousPath = _selectedDiffFile?.Path;
-            _diffFiles = await TaskDiffService.GetTaskDiffFilesAsync(_task.Id);
+            _diffResult = await TaskDiffService.GetTaskDiffAsync(_task.Id);
+            _diffFiles = _diffResult.Files;
             _selectedDiffFile = _diffFiles.FirstOrDefault(f => f.Path == previousPath) ?? _diffFiles.FirstOrDefault();
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to load diff files for Task #{TaskId}", _task.Id);
+            _diffLoadError = ex.Message;
+            _diffResult = null;
             _diffFiles = Array.Empty<FileDiffSummary>();
             _selectedDiffFile = null;
         }
@@ -729,6 +779,7 @@
 
     private async Task ReloadTaskAsync()
     {
+        _diffResult = null;
         await LoadTaskDataAsync();
         if (_activeTab == "changes")
         {

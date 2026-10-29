@@ -21,8 +21,9 @@ public class GitWorkspaceManagerTests : IDisposable
         var wslMeta = new Mock<IWslMetadataService>().Object;
         var pathResolver = new WorkspacePathResolver(wslMeta, Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
         _repo = new TestGitRepository("main");
+        var processRunner = new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance);
         _runner = new GitCliRunner(
-            new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance),
+            processRunner,
             pathResolver,
             wslMeta,
             NullLogger<GitCliRunner>.Instance);
@@ -32,6 +33,7 @@ public class GitWorkspaceManagerTests : IDisposable
             wslMeta,
             new Mock<IGitMirrorSyncService>().Object,
             new Mock<IWorkspaceLockProvider>().Object,
+            processRunner,
             NullLogger<GitWorkspaceManager>.Instance);
 
         // Initial base commit on main
@@ -391,6 +393,7 @@ public class GitWorkspaceManagerTests : IDisposable
             wslMetaMock.Object,
             new Mock<IGitMirrorSyncService>().Object,
             new Mock<IWorkspaceLockProvider>().Object,
+            new Mock<IProcessRunner>().Object,
             NullLogger<GitWorkspaceManager>.Instance);
 
         var wslWorkspace = new Workspace
@@ -519,6 +522,7 @@ public class GitWorkspaceManagerTests : IDisposable
                 wslMeta,
                 new Mock<IGitMirrorSyncService>().Object,
                 new Mock<IWorkspaceLockProvider>().Object,
+                new Mock<IProcessRunner>().Object,
                 NullLogger<GitWorkspaceManager>.Instance);
 
             var siblingWorkspace = new Workspace
@@ -573,6 +577,7 @@ public class GitWorkspaceManagerTests : IDisposable
                 wslMeta,
                 new Mock<IGitMirrorSyncService>().Object,
                 new Mock<IWorkspaceLockProvider>().Object,
+                new Mock<IProcessRunner>().Object,
                 NullLogger<GitWorkspaceManager>.Instance);
 
             var siblingWorkspace = new Workspace
@@ -626,6 +631,7 @@ public class GitWorkspaceManagerTests : IDisposable
                 wslMeta,
                 new Mock<IGitMirrorSyncService>().Object,
                 new Mock<IWorkspaceLockProvider>().Object,
+                new Mock<IProcessRunner>().Object,
                 NullLogger<GitWorkspaceManager>.Instance);
 
             var siblingWorkspace = new Workspace

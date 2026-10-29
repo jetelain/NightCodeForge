@@ -18,6 +18,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     private readonly IWslMetadataService _wslMetadataService;
     private readonly IGitMirrorSyncService _gitMirrorSyncService;
     private readonly IWorkspaceLockProvider _workspaceLockProvider;
+    private readonly IProcessRunner _processRunner;
     private readonly ILogger<GitWorkspaceManager> _logger;
 
     public GitWorkspaceManager(
@@ -26,6 +27,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         IWslMetadataService wslMetadataService,
         IGitMirrorSyncService gitMirrorSyncService,
         IWorkspaceLockProvider workspaceLockProvider,
+        IProcessRunner processRunner,
         ILogger<GitWorkspaceManager> logger)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
@@ -33,6 +35,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         _wslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
         _gitMirrorSyncService = gitMirrorSyncService ?? throw new ArgumentNullException(nameof(gitMirrorSyncService));
         _workspaceLockProvider = workspaceLockProvider ?? throw new ArgumentNullException(nameof(workspaceLockProvider));
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -99,10 +102,10 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         }
 
         // If directory exists on disk but is not registered in git, clean it up before worktree add
-        if (WorktreeDirectoryExists(worktreePath))
+        if (WorktreeDirectoryExists(worktreePath, workspace))
         {
             _logger.LogWarning("Worktree directory '{WorktreePath}' exists on disk but is not registered in git; cleaning up", worktreePath);
-            DeleteDirectorySafe(worktreePath);
+            await DeleteDirectorySafeAsync(worktreePath, cancellationToken);
         }
 
         // Prune stale worktrees
@@ -349,9 +352,9 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         try
         {
-            if (WorktreeDirectoryExists(worktreePath))
+            if (WorktreeDirectoryExists(worktreePath, workspace))
             {
-                DeleteDirectorySafe(worktreePath);
+                await DeleteDirectorySafeAsync(worktreePath, cancellationToken);
             }
         }
         catch (Exception ex)
@@ -523,27 +526,23 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         string baseBranch = "main",
         CancellationToken cancellationToken = default)
     {
-        var workingPath = GetWorkingPath(workspace, taskId);
-        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox && !IsPosixPath(workingPath) && !WorktreeDirectoryExists(workingPath) && !Directory.Exists(workingPath))
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(workspace);
+
+        var worktreePath = GetWorktreePath(workspace, taskId);
+        if (!WorktreeDirectoryExists(worktreePath, workspace))
         {
-            return await GenerateDiffAsync(workspace, taskId, baseBranch, cancellationToken);
+            throw new WorktreeNotFoundException(taskId, worktreePath);
         }
 
-        _logger.LogInformation("Generating live diff for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorkingPath}'",
-            taskId, baseBranch, workingPath);
+        _logger.LogInformation("Generating live diff for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorktreePath}'",
+            taskId, baseBranch, worktreePath);
 
-        string[] diffArgs = BuildDiffArgs(baseBranch, isStat: false);
+        var diffTarget = await ResolveMergeBaseAsync(worktreePath, baseBranch, cancellationToken);
+        string[] diffArgs = BuildDiffArgs(diffTarget, isStat: false);
 
-        try
-        {
-            var result = await _gitCliRunner.ExecuteAsync(workingPath, diffArgs, cancellationToken: cancellationToken);
-            return result.StandardOutput;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to run live git diff in '{WorkingPath}', falling back to branch diff", workingPath);
-            return await GenerateDiffAsync(workspace, taskId, baseBranch, cancellationToken);
-        }
+        var result = await ExecuteWithIsolatedIndexAsync(worktreePath, taskId, diffArgs, cancellationToken);
+        return result.StandardOutput;
     }
 
     /// <inheritdoc />
@@ -563,7 +562,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         string[] statArgs = BuildDiffArgs($"{baseBranch}...{branchName}", isStat: true);
 
-        var targetPath = workspace.ExecutionMode == ExecutionMode.ContainerSandbox || IsPosixPath(workingPath) || WorktreeDirectoryExists(workingPath) || Directory.Exists(workingPath)
+        var targetPath = workspace.ExecutionMode == ExecutionMode.ContainerSandbox || IsPosixPath(workingPath) || WorktreeDirectoryExists(workingPath, workspace) || Directory.Exists(workingPath)
             ? workingPath
             : (workspace.ExecutionMode != ExecutionMode.ContainerSandbox && Directory.Exists(workspace.RepositoryPath) ? workspace.RepositoryPath : workingPath);
 
@@ -663,27 +662,21 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(workspace);
-        var workingPath = GetWorkingPath(workspace, taskId);
-        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox && !IsPosixPath(workingPath) && !WorktreeDirectoryExists(workingPath) && !Directory.Exists(workingPath))
+
+        var worktreePath = GetWorktreePath(workspace, taskId);
+        if (!WorktreeDirectoryExists(worktreePath, workspace))
         {
-            return await GenerateDiffStatAsync(workspace, taskId, baseBranch, cancellationToken);
+            throw new WorktreeNotFoundException(taskId, worktreePath);
         }
 
-        _logger.LogInformation("Generating live diff stat for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorkingPath}'",
-            taskId, baseBranch, workingPath);
+        _logger.LogInformation("Generating live diff stat for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorktreePath}'",
+            taskId, baseBranch, worktreePath);
 
-        string[] statArgs = BuildDiffArgs(baseBranch, isStat: true);
+        var statTarget = await ResolveMergeBaseAsync(worktreePath, baseBranch, cancellationToken);
+        string[] statArgs = BuildDiffArgs(statTarget, isStat: true);
 
-        try
-        {
-            var result = await _gitCliRunner.ExecuteAsync(workingPath, statArgs, cancellationToken: cancellationToken);
-            return FormatStatOutput(result.StandardOutput);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to run live git diff stat in '{WorkingPath}', falling back to branch diff stat", workingPath);
-            return await GenerateDiffStatAsync(workspace, taskId, baseBranch, cancellationToken);
-        }
+        var result = await ExecuteWithIsolatedIndexAsync(worktreePath, taskId, statArgs, cancellationToken);
+        return FormatStatOutput(result.StandardOutput);
     }
 
     /// <inheritdoc />
@@ -914,7 +907,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         ArgumentException.ThrowIfNullOrWhiteSpace(baseBranch);
 
         var worktreePath = GetWorktreePath(workspace, taskId);
-        if (!WorktreeDirectoryExists(worktreePath))
+        if (!WorktreeDirectoryExists(worktreePath, workspace))
         {
             await EnsureWorktreeAsync(workspace, taskId, baseBranch, cancellationToken);
         }
@@ -1082,7 +1075,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     {
         ArgumentNullException.ThrowIfNull(workspace);
         var worktreePath = GetWorktreePath(workspace, taskId);
-        if (!WorktreeDirectoryExists(worktreePath)) return;
+        if (!WorktreeDirectoryExists(worktreePath, workspace)) return;
 
         if (await IsMergeInProgressAsync(worktreePath, cancellationToken))
         {
@@ -1189,7 +1182,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             _logger.LogWarning(ex, "Failed to list worktrees in '{CanonicalPath}'", canonicalPath);
         }
 
-        bool worktreeExistsOnDisk = WorktreeDirectoryExists(worktreePath);
+        bool worktreeExistsOnDisk = WorktreeDirectoryExists(worktreePath, workspace);
 
         if (isWorktreeRegistered && worktreeExistsOnDisk)
         {
@@ -1215,7 +1208,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
             if (worktreeExistsOnDisk && !isWorktreeRegistered)
             {
-                DeleteDirectorySafe(worktreePath);
+                await DeleteDirectorySafeAsync(worktreePath, cancellationToken);
             }
 
             await _gitCliRunner.ExecuteAsync(canonicalPath, ["branch", "-f", branchName, targetResetRef], cancellationToken: cancellationToken);
@@ -1243,7 +1236,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         {
             var wt = GetWorktreePath(workspace, taskId.Value);
             // If in container sandbox or POSIX path or the worktree directory actually exists, use it
-            if (workspace.ExecutionMode == ExecutionMode.ContainerSandbox || IsPosixPath(wt) || WorktreeDirectoryExists(wt))
+            if (workspace.ExecutionMode == ExecutionMode.ContainerSandbox || IsPosixPath(wt) || WorktreeDirectoryExists(wt, workspace))
             {
                 return wt;
             }
@@ -1389,14 +1382,181 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     private static bool IsPosixPath(string path) =>
         IsForeignPosixPath(path, RuntimeInformation.IsOSPlatform(OSPlatform.Windows));
 
-    private bool WorktreeDirectoryExists(string worktreePath)
+    private bool WorktreeDirectoryExists(string worktreePath, Workspace workspace)
     {
-        if (Directory.Exists(worktreePath)) return true;
-        var hostPath = ResolveHostAccessiblePath(worktreePath);
-        return !string.Equals(hostPath, worktreePath, StringComparison.OrdinalIgnoreCase) && Directory.Exists(hostPath);
+        if (Directory.Exists(worktreePath))
+        {
+            return true;
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (worktreePath.StartsWith('/') || worktreePath.StartsWith('~')))
+        {
+            try
+            {
+                var hostPath = ResolveHostAccessiblePath(worktreePath);
+                if (!string.Equals(hostPath, worktreePath, StringComparison.OrdinalIgnoreCase) && Directory.Exists(hostPath))
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to resolve host-accessible path for worktree '{WorktreePath}'", worktreePath);
+            }
+
+            // In ContainerSandbox mode, the worktree path resides inside the container/WSL environment
+            // and may not be accessible via Windows host file APIs (or when mocked in unit tests).
+            // Defer existence validation to IGitCliRunner which validates via WSL or container context.
+            if (workspace.ExecutionMode == ExecutionMode.ContainerSandbox)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
-    private void DeleteDirectorySafe(string path)
+    private string ResolveTempIndexPath(string worktreePath, int taskId)
+    {
+        var isWsl = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
+            (worktreePath.StartsWith('/') || worktreePath.StartsWith('~') || WslPathConverter.IsWslUncPath(worktreePath));
+
+        if (isWsl || (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && worktreePath.StartsWith('/')))
+        {
+            return $"/tmp/ncf_diff_{taskId}_{Guid.NewGuid():N}.index";
+        }
+
+        return Path.Combine(Path.GetTempPath(), $"ncf_diff_{taskId}_{Guid.NewGuid():N}.index");
+    }
+
+    private async Task<string> ResolveMergeBaseAsync(string worktreePath, string baseBranch, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _gitCliRunner.ExecuteAsync(worktreePath, ["merge-base", baseBranch, "HEAD"], cancellationToken: cancellationToken);
+            var sha = result.StandardOutput.Trim();
+            if (!string.IsNullOrWhiteSpace(sha))
+            {
+                return sha;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to resolve merge-base against '{BaseBranch}' in '{WorktreePath}'; using base branch directly", baseBranch, worktreePath);
+        }
+
+        return baseBranch;
+    }
+
+    private async Task<GitCommandResult> ExecuteWithIsolatedIndexAsync(
+        string worktreePath,
+        int taskId,
+        string[] gitArgs,
+        CancellationToken cancellationToken)
+    {
+        var tempIndex = ResolveTempIndexPath(worktreePath, taskId);
+        try
+        {
+            var env = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = tempIndex };
+
+            // 1. Initialize temp index from HEAD refs without touching .git/index
+            await _gitCliRunner.ExecuteAsync(
+                worktreePath,
+                ["read-tree", "HEAD"],
+                timeoutSeconds: null,
+                environmentVariables: env,
+                cancellationToken: cancellationToken);
+
+            // 2. Register untracked files into the temporary index only
+            var addArgs = new List<string> { "add", "-N", "--", "." };
+            addArgs.AddRange(GitDiffConstants.ExclusionPathspecs);
+            await _gitCliRunner.ExecuteAsync(
+                worktreePath,
+                addArgs.ToArray(),
+                timeoutSeconds: null,
+                environmentVariables: env,
+                cancellationToken: cancellationToken);
+
+            // 3. Diff comparing base target with working tree via the temporary index
+            return await _gitCliRunner.ExecuteAsync(
+                worktreePath,
+                gitArgs,
+                timeoutSeconds: null,
+                environmentVariables: env,
+                cancellationToken: cancellationToken);
+        }
+        catch (DirectoryNotFoundException dex)
+        {
+            throw new WorktreeNotFoundException(taskId, worktreePath, dex);
+        }
+        finally
+        {
+            await DeleteTempIndexSafeAsync(tempIndex, CancellationToken.None);
+        }
+    }
+
+    private async Task DeleteTempIndexSafeAsync(string tempIndex, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(tempIndex)) return;
+
+        try
+        {
+            if (File.Exists(tempIndex))
+            {
+                File.Delete(tempIndex);
+                return;
+            }
+
+            var hostPath = ResolveHostAccessiblePath(tempIndex);
+            if (!string.Equals(hostPath, tempIndex, StringComparison.OrdinalIgnoreCase) && File.Exists(hostPath))
+            {
+                File.Delete(hostPath);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete temp index via file API at '{TempIndex}'", tempIndex);
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (tempIndex.StartsWith('/') || tempIndex.StartsWith('~')))
+        {
+            try
+            {
+                var distro = _wslMetadataService.GetDefaultDistributionName();
+                if (string.IsNullOrWhiteSpace(distro))
+                {
+                    distro = _pathResolver.GetWslDistributionName();
+                }
+
+                if (string.IsNullOrWhiteSpace(distro))
+                {
+                    _logger.LogWarning("Cannot remove temp index '{TempIndex}' in WSL: No WSL distribution name resolved.", tempIndex);
+                    return;
+                }
+
+                var spec = new ProcessStartSpec
+                {
+                    FileName = "wsl.exe",
+                    ArgumentList = ["-d", distro, "--exec", "rm", "-f", tempIndex],
+                    TimeoutSeconds = 5
+                };
+
+                var result = await _processRunner.RunAsync(spec, cancellationToken).ConfigureAwait(false);
+                if (result.ExitCode != 0)
+                {
+                    _logger.LogWarning("Failed to remove temp index in WSL at '{TempIndex}'. Exit code: {ExitCode}. Stderr: {StdErr}",
+                        tempIndex, result.ExitCode, result.StandardError);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to remove temp index in WSL at '{TempIndex}'", tempIndex);
+            }
+        }
+    }
+
+    private async Task DeleteDirectorySafeAsync(string path, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
 
@@ -1429,24 +1589,31 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         {
             try
             {
-                var distro = _pathResolver.GetWslDistributionName() ?? Environment.GetEnvironmentVariable("NCF_WSL_DISTRIBUTION") ?? "Ubuntu";
-                var psi = new System.Diagnostics.ProcessStartInfo
+                var distro = _wslMetadataService.GetDefaultDistributionName();
+                if (string.IsNullOrWhiteSpace(distro))
+                {
+                    distro = _pathResolver.GetWslDistributionName();
+                }
+
+                if (string.IsNullOrWhiteSpace(distro))
+                {
+                    _logger.LogWarning("Cannot remove directory '{Path}' in WSL: No WSL distribution name resolved.", path);
+                    return;
+                }
+
+                var spec = new ProcessStartSpec
                 {
                     FileName = "wsl.exe",
-                    UseShellExecute = false,
-                    CreateNoWindow = true
+                    ArgumentList = ["-d", distro, "-u", "root", "--", "rm", "-rf", path],
+                    TimeoutSeconds = 10
                 };
-                psi.ArgumentList.Add("-d");
-                psi.ArgumentList.Add(distro);
-                psi.ArgumentList.Add("-u");
-                psi.ArgumentList.Add("root");
-                psi.ArgumentList.Add("--");
-                psi.ArgumentList.Add("rm");
-                psi.ArgumentList.Add("-rf");
-                psi.ArgumentList.Add(path);
 
-                using var p = System.Diagnostics.Process.Start(psi);
-                p?.WaitForExit(3000);
+                var result = await _processRunner.RunAsync(spec, cancellationToken).ConfigureAwait(false);
+                if (result.ExitCode != 0)
+                {
+                    _logger.LogWarning("Failed to remove directory in WSL at '{Path}'. Exit code: {ExitCode}. Stderr: {StdErr}",
+                        path, result.ExitCode, result.StandardError);
+                }
             }
             catch (Exception ex)
             {
