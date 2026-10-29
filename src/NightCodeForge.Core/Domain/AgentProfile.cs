@@ -100,10 +100,13 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        var coderModel = !string.IsNullOrWhiteSpace(options.CoderModelId) ? options.CoderModelId : options.DefaultModelId;
+        var defaultModel = !string.IsNullOrWhiteSpace(options.DefaultModelId) 
+            ? options.DefaultModelId.Trim() 
+            : KnownDefaultModels.DefaultBaseline;
+        var coderModel = !string.IsNullOrWhiteSpace(options.CoderModelId) ? options.CoderModelId.Trim() : defaultModel;
         var coderEffort = options.CoderThinkingEffort ?? options.DefaultThinkingEffort;
 
-        var archModel = !string.IsNullOrWhiteSpace(options.ArchitectModelId) ? options.ArchitectModelId : options.DefaultModelId;
+        var archModel = !string.IsNullOrWhiteSpace(options.ArchitectModelId) ? options.ArchitectModelId.Trim() : defaultModel;
         var archEffort = options.ArchitectThinkingEffort ?? (options.DefaultThinkingEffort == ThinkingEffort.None ? ThinkingEffort.None : ThinkingEffort.High);
 
         var autoOrLocal = OllamaRoutingTarget.Auto;

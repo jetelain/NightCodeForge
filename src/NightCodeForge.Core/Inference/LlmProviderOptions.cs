@@ -1,17 +1,18 @@
+using System.Text.Json.Serialization;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Agents.Inference;
 
 /// <summary>
-/// Configuration options for local or remote LLM inference providers (Ollama / OllamaRouter).
+/// Configuration options for local or remote LLM inference providers (Ollama / OllamaRouter / OpenAI-Compatible).
 /// </summary>
 public class LlmProviderOptions : ILlmProviderOptions
 {
     public const string SectionName = "LlmProvider";
 
     /// <summary>
-    /// LLM inference provider type: Standalone Ollama (single host) or OllamaRouter (multi-node fleet).
+    /// LLM inference provider type: Standalone Ollama (single host), OllamaRouter (multi-node fleet), or OpenAiCompatible.
     /// </summary>
     public LlmProviderType ProviderType { get; set; } = LlmProviderType.OllamaRouter;
 
@@ -39,9 +40,20 @@ public class LlmProviderOptions : ILlmProviderOptions
     public int MaxOutputTokens { get; set; } = DefaultMaxOutputTokens;
 
     /// <summary>
-    /// Standardized default model identifier across pipeline stages.
+    /// Resolves the effective base endpoint URI based on the active provider.
+    /// Prevents endpoint configuration disconnect between root and provider-specific sections.
     /// </summary>
-    public string DefaultModelId { get; set; } = "Qwen3.8-27B:latest";
+    [JsonIgnore]
+    public string EffectiveEndpoint =>
+        ProviderType == LlmProviderType.OpenAiCompatible && !string.IsNullOrWhiteSpace(OpenAiCompatible?.Endpoint)
+            ? OpenAiCompatible.Endpoint.Trim()
+            : (Endpoint?.Trim() ?? string.Empty);
+
+    /// <summary>
+    /// Standardized default model identifier across pipeline stages.
+    /// Optional: if omitted (null or empty), the system automatically selects the default model via DefaultModelResolver.
+    /// </summary>
+    public string? DefaultModelId { get; set; } = KnownDefaultModels.DefaultBaseline;
 
     /// <summary>
     /// Default thinking/reasoning effort across pipeline stages.
@@ -51,6 +63,7 @@ public class LlmProviderOptions : ILlmProviderOptions
     /// <summary>
     /// Legacy ThinkingEffort property forwarding to DefaultThinkingEffort for backwards compatibility.
     /// </summary>
+    [JsonIgnore]
     public ThinkingEffort ThinkingEffort
     {
         get => DefaultThinkingEffort;
@@ -60,7 +73,8 @@ public class LlmProviderOptions : ILlmProviderOptions
     /// <summary>
     /// Legacy ModelId property forwarding to DefaultModelId for backwards compatibility.
     /// </summary>
-    public string ModelId
+    [JsonIgnore]
+    public string? ModelId
     {
         get => DefaultModelId;
         set => DefaultModelId = value;
@@ -91,6 +105,11 @@ public class LlmProviderOptions : ILlmProviderOptions
     /// Architect role thinking effort for Stage 0, Stage 1, Stage 5, and ideation.
     /// </summary>
     public ThinkingEffort? ArchitectThinkingEffort { get; set; }
+
+    /// <summary>
+    /// Provider-specific settings for OpenAI-compatible endpoints.
+    /// </summary>
+    public OpenAiCompatibleOptions OpenAiCompatible { get; set; } = new();
 
     /// <summary>
     /// Per-model capability overrides keyed by a case-insensitive substring of the model id

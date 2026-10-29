@@ -9,7 +9,10 @@ public enum LlmProviderType
     Ollama = 0,
 
     /// <summary>Connection to OllamaRouter reverse proxy (multi-node LAN fleet + cloud overflow).</summary>
-    OllamaRouter = 1
+    OllamaRouter = 1,
+
+    /// <summary>Connection to generic OpenAI-compatible chat completions endpoint (vLLM, LM Studio, OpenRouter, DeepSeek, OpenAI).</summary>
+    OpenAiCompatible = 2
 }
 
 /// <summary>

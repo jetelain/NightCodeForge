@@ -8,7 +8,7 @@ namespace NightCodeForge.Core.Interfaces;
 public interface ILlmProviderOptions
 {
     LlmProviderType ProviderType { get; }
-    string DefaultModelId { get; }
+    string? DefaultModelId { get; }
     ThinkingEffort DefaultThinkingEffort { get; }
     string? CoderModelId { get; }
     ThinkingEffort? CoderThinkingEffort { get; }
@@ -20,7 +20,7 @@ public interface ILlmProviderOptions
 /// Default or custom implementation of <see cref="ILlmProviderOptions"/> for setup, convenience, and testing.
 /// </summary>
 public record DefaultLlmProviderOptions(
-    string DefaultModelId = "Qwen3.8-27B:latest",
+    string? DefaultModelId = KnownDefaultModels.DefaultBaseline,
     ThinkingEffort DefaultThinkingEffort = ThinkingEffort.Medium,
     string? CoderModelId = null,
     ThinkingEffort? CoderThinkingEffort = null,

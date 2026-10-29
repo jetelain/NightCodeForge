@@ -32,7 +32,9 @@ public static class OllamaChatClientFactory
 
         var endpoint = string.IsNullOrWhiteSpace(options.Endpoint) ? "http://localhost:11434" : options.Endpoint;
         var timeoutMinutes = Math.Max(1, options.RequestTimeoutMinutes);
-        var effectiveModel = !string.IsNullOrWhiteSpace(modelId) ? modelId : options.DefaultModelId;
+        var effectiveModel = !string.IsNullOrWhiteSpace(modelId)
+            ? modelId.Trim()
+            : (!string.IsNullOrWhiteSpace(options.DefaultModelId) ? options.DefaultModelId.Trim() : KnownDefaultModels.DefaultBaseline);
 
         var retryHandler = new TransientHttpErrorRetryHandler(
             innerHandler,

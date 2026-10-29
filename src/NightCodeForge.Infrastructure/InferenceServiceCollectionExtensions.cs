@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Infrastructure.Configuration;
 using NightCodeForge.Infrastructure.Inference;
 using NightCodeForge.Infrastructure.Resilience;
 
@@ -19,6 +20,8 @@ public static class InferenceServiceCollectionExtensions
         services.AddOptions<LlmEndpointOptions>();
         services.AddMemoryCache();
         services.TryAddSingleton<ILlmContextWindowCache, LlmContextWindowCache>();
+        services.TryAddSingleton<IOpenAiModelAllowlistCache, OpenAiModelAllowlistCache>();
+        services.TryAddSingleton<ILlmConfigurationWriter, LlmConfigurationWriter>();
 
         switch (providerType)
         {

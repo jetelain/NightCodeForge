@@ -67,7 +67,9 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
     public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget, string? sessionId)
     {
         var options = _options.Value;
-        var effectiveModel = !string.IsNullOrWhiteSpace(modelId) ? modelId : options.DefaultModelId;
+        var effectiveModel = !string.IsNullOrWhiteSpace(modelId)
+            ? modelId.Trim()
+            : (!string.IsNullOrWhiteSpace(options.DefaultModelId) ? options.DefaultModelId.Trim() : KnownDefaultModels.DefaultBaseline);
 
         // Session-bound clients are not cached: session ids are unbounded (one per task stage).
         if (!string.IsNullOrWhiteSpace(sessionId))
@@ -91,7 +93,7 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
             _sharedSocketsHandler,
             httpClient => ConfigureRouting(httpClient, routingTarget, sessionId));
 
-        var telemetryClient = new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, routingTarget.ToString(), _loggerFactory.CreateLogger<TelemetryChatClient>(), options.Endpoint);
+        var telemetryClient = new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, routingTarget.ToString(), _loggerFactory.CreateLogger<TelemetryChatClient>(), options.EffectiveEndpoint);
         return new OperationsPauseGatingChatClient(telemetryClient, _operationsControlService);
     }
 

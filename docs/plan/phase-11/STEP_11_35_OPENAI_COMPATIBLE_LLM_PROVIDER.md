@@ -818,19 +818,19 @@ In `Settings.razor` (and `AgentProfilesTab.razor`), the interface adapts based o
 ## 3. Implementation Checklist & Deliverables
 
 ### Phase 1: Core Domain, Schemas, Validation & Caches
-- [ ] Add `Microsoft.Extensions.AI.OpenAI` package reference to `NightCodeForge.Agents.csproj`.
-- [ ] Add `LlmProviderType.OpenAiCompatible` to `NightCodeForge.Core.Domain.LlmProviderType`.
-- [ ] Define `KnownDefaultModels` in `NightCodeForge.Core.Domain` (`DefaultBaseline = "Qwen3.8-27B:latest"`, `LocalAuthBypassKey = "local-auth-bypass"`).
-- [ ] Extend `AvailableModelInfo` in `NightCodeForge.Core.Interfaces` with `PromptCostPerMillion`, `CompletionCostPerMillion`, and `IsMoE`.
-- [ ] Define `EndpointVerificationResult` in `NightCodeForge.Core.Interfaces`.
-- [ ] Define `IOpenAiModelAllowlistCache` in `NightCodeForge.Core.Interfaces` and implement thread-safe `OpenAiModelAllowlistCache` in `NightCodeForge.Infrastructure.Inference`.
-- [ ] Implement `OpenAiAllowedModel` and `OpenAiCompatibleOptions` in `NightCodeForge.Agents.Inference` (including `DefaultDiscoveredContextTokens = 131072`, `PromptCostPerMillion`, `CompletionCostPerMillion`).
-- [ ] Add `EffectiveEndpoint` property to `LlmProviderOptions`.
-- [ ] Update `ILlmProviderOptions.DefaultModelId` to `string?` and update `AgentProfile.CreateStandardGlobalProfiles` to fall back to `KnownDefaultModels.DefaultBaseline`.
-- [ ] Implement pure static `DefaultModelResolver` supporting lowest cost (OpenAI) and most capable (Ollama / OllamaRouter: context descending, Dense over MoE, size, alphabetical).
-- [ ] Add `ModelNotAllowedException` in `NightCodeForge.Core.Exceptions`.
-- [ ] Implement `ILlmConfigurationWriter` in `NightCodeForge.Infrastructure.Configuration` for atomic mutations of `config/config.json`.
-- [ ] Unit tests in `NightCodeForge.Agents.Tests` verifying `DefaultModelResolver`, allowlist validation, and hard errors on unlisted models.
+- [x] Add `Microsoft.Extensions.AI.OpenAI` package reference to `NightCodeForge.Agents.csproj`.
+- [x] Add `LlmProviderType.OpenAiCompatible` to `NightCodeForge.Core.Domain.LlmProviderType`.
+- [x] Define `KnownDefaultModels` in `NightCodeForge.Core.Domain` (`DefaultBaseline = "Qwen3.8-27B:latest"`, `LocalAuthBypassKey = "local-auth-bypass"`).
+- [x] Extend `AvailableModelInfo` in `NightCodeForge.Core.Interfaces` with `PromptCostPerMillion`, `CompletionCostPerMillion`, and `IsMoE`.
+- [x] Define `EndpointVerificationResult` in `NightCodeForge.Core.Interfaces`.
+- [x] Define `IOpenAiModelAllowlistCache` in `NightCodeForge.Core.Interfaces` and implement thread-safe `OpenAiModelAllowlistCache` in `NightCodeForge.Infrastructure.Inference`.
+- [x] Implement `OpenAiAllowedModel` and `OpenAiCompatibleOptions` in `NightCodeForge.Agents.Inference` (including `DefaultDiscoveredContextTokens = 131072`, `PromptCostPerMillion`, `CompletionCostPerMillion`).
+- [x] Add `EffectiveEndpoint` property to `LlmProviderOptions`.
+- [x] Update `ILlmProviderOptions.DefaultModelId` to `string?` and update `AgentProfile.CreateStandardGlobalProfiles` to fall back to `KnownDefaultModels.DefaultBaseline`.
+- [x] Implement pure static `DefaultModelResolver` supporting lowest cost (OpenAI) and most capable (Ollama / OllamaRouter: context descending, Dense over MoE, size, alphabetical).
+- [x] Add `ModelNotAllowedException` in `NightCodeForge.Core.Exceptions`.
+- [x] Implement `ILlmConfigurationWriter` in `NightCodeForge.Infrastructure.Configuration` for atomic mutations of `config/config.json`.
+- [x] Unit tests in `NightCodeForge.Agents.Tests` verifying `DefaultModelResolver`, allowlist validation, and hard errors on unlisted models.
 
 ### Phase 2: Client Construction, Gateway, Preload & Model Catalog
 - [ ] Extend `ILlmModelCatalogService` with `GetDefaultModelAsync` and `VerifyEndpointAsync`.
