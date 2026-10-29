@@ -3,314 +3,232 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Infrastructure.Inference;
 
-public class OllamaRouterGatewayService : IOllamaRouterGatewayService
+/// <summary>
+/// Gateway to an OllamaRouter fleet. Everything is driven by the router's own <c>/api/router/*</c> API:
+/// the fleet topology (any number of targets, including the Cloud pseudo-target), model context metadata
+/// and fleet VRAM reclaim. No target, hardware or model is assumed client-side.
+/// </summary>
+public sealed class OllamaRouterGatewayService : OllamaGatewayServiceBase
 {
-    private readonly HttpClient _httpClient;
-    private readonly ILogger<OllamaRouterGatewayService> _logger;
-    private readonly string _baseUrl;
-
     public OllamaRouterGatewayService(
         HttpClient httpClient,
-        IOptions<OllamaRouterOptions> options,
+        IOptions<LlmEndpointOptions> options,
+        ILlmContextWindowCache contextWindowCache,
         ILogger<OllamaRouterGatewayService> logger)
+        : base(httpClient, options, contextWindowCache, logger)
     {
-        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        ArgumentNullException.ThrowIfNull(options);
+    }
 
-        _baseUrl = !string.IsNullOrWhiteSpace(options.Value?.BaseUrl)
-            ? options.Value.BaseUrl
-            : "http://localhost:11434";
+    public override LlmProviderType ProviderType => LlmProviderType.OllamaRouter;
 
-        if (_httpClient.BaseAddress == null)
+    public override async Task<GatewayStatusReport> GetGatewayStatusAsync(CancellationToken cancellationToken = default)
+    {
+        try
         {
-            _httpClient.BaseAddress = new Uri(_baseUrl.TrimEnd('/') + "/");
+            var infoTask = TryGetJsonAsync<RouterInfoDto>(OllamaApiPaths.RouterInfo, StatusTimeout, cancellationToken);
+            var fleetTask = TryGetJsonAsync<RouterFleetDto>(OllamaApiPaths.RouterFleet, StatusTimeout, cancellationToken);
+            var info = await infoTask;
+            var fleet = await fleetTask;
+
+            if (info is not { IsRouter: true } || fleet is null)
+            {
+                Logger.LogWarning("No OllamaRouter answered on /api/router/info and /api/router/fleet at {BaseUrl}.", BaseUrl);
+                return new GatewayStatusReport(false, ProviderType, BaseUrl, string.Empty, []);
+            }
+
+            var targets = (fleet.Targets ?? []).Where(t => t != null).Select(MapTarget).ToList();
+            return new GatewayStatusReport(true, ProviderType, BaseUrl, info.Version ?? string.Empty, targets);
+        }
+        catch (Exception ex) when (IsRecoverableProbeFailure(ex, cancellationToken))
+        {
+            Logger.LogWarning(ex, "Failed to parse OllamaRouter status report from {BaseUrl}.", BaseUrl);
+            return new GatewayStatusReport(false, ProviderType, BaseUrl, string.Empty, []);
         }
     }
 
-    public async Task<OllamaRouterStatus> GetGatewayStatusAsync(CancellationToken cancellationToken = default)
+    public override async Task<bool> ReclaimVramAsync(string? targetName, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
+            using var response = await Http.PostAsJsonAsync(
+                OllamaApiPaths.RouterVramReclaim,
+                new RouterVramReclaimRequestDto { Target = string.IsNullOrWhiteSpace(targetName) ? null : targetName },
+                cancellationToken);
 
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-
-            // 1. Try querying native OllamaRouter cluster monitor API
-            HttpResponseMessage? monitorResponse = null;
-            try
+            if (!response.IsSuccessStatusCode)
             {
-                monitorResponse = await _httpClient.GetAsync("monitor/api", timeoutCts.Token);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Failed to query monitor/api, falling back to api/version.");
+                Logger.LogWarning("OllamaRouter VRAM reclaim failed with HTTP {Status}.", (int)response.StatusCode);
+                return false;
             }
 
-            if (monitorResponse != null && monitorResponse.IsSuccessStatusCode)
-            {
-                sw.Stop();
-                long latencyMs = sw.ElapsedMilliseconds;
-
-                OllamaRouterMonitorResponse? monitor = null;
-                try
-                {
-                    monitor = await monitorResponse.Content.ReadFromJsonAsync<OllamaRouterMonitorResponse>(cancellationToken: timeoutCts.Token);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Could not deserialize monitor/api response.");
-                }
-
-                if (monitor != null)
-                {
-                    var targets = new List<TargetBackendStatus>
-                    {
-                        BuildTargetStatus(
-                            name: "Local GPU Target",
-                            isEnabled: GetBoolValue(monitor.Targets, "local", true),
-                            isOnline: GetBoolValue(monitor.Online, "local", true),
-                            isBusy: GetBoolValue(monitor.Busy, "local", false),
-                            baseLatencyMs: latencyMs,
-                            activeState: TargetBackendState.Active,
-                            normalDescription: "Host GPU (Developer Workstation). Fast on-premise execution when model/context fits host VRAM, or for concurrent interactive ideation."),
-
-                        BuildTargetStatus(
-                            name: "Remote Server Target",
-                            isEnabled: GetBoolValue(monitor.Targets, "remote", true),
-                            isOnline: GetBoolValue(monitor.Online, "remote", true),
-                            isBusy: GetBoolValue(monitor.Busy, "remote", false),
-                            baseLatencyMs: latencyMs + 5,
-                            activeState: TargetBackendState.Available,
-                            normalDescription: "Dedicated LAN GPU Server (Local Area Network). High-VRAM on-premise node powering ~95% of background dev-queue tasks."),
-
-                        BuildTargetStatus(
-                            name: "Cloud Overflow Target",
-                            isEnabled: (monitor.CloudEnabled ?? true) && GetBoolValue(monitor.Targets, "cloud", true),
-                            isOnline: GetBoolValue(monitor.Online, "cloud", true),
-                            isBusy: GetBoolValue(monitor.Busy, "cloud", false),
-                            baseLatencyMs: latencyMs + 25,
-                            activeState: TargetBackendState.Active,
-                            normalDescription: "Cloud Overflow. Optional external endpoint for complex ideation or instant zero-VRAM diagnostics without waiting.")
-                    };
-
-                    return new OllamaRouterStatus(true, true, _baseUrl, targets);
-                }
-            }
-
-            // 2. Fallback to standard Ollama api/version check
-            var versionResponse = await _httpClient.GetAsync("api/version", timeoutCts.Token);
-            sw.Stop();
-            long fallbackLatencyMs = sw.ElapsedMilliseconds;
-
-            bool isConnected = versionResponse.IsSuccessStatusCode;
-            bool isRouter = false;
-
-            if (versionResponse.Headers.Contains("x-ollamarouter-version") || versionResponse.Headers.Contains("x-ollama-router-target"))
-            {
-                isRouter = true;
-            }
-
-            var fallbackTargets = new List<TargetBackendStatus>
-            {
-                new("Local GPU Target", isConnected ? TargetBackendState.Active : TargetBackendState.Offline, "Host GPU (Developer Workstation). Fast on-premise execution when model/context fits host VRAM, or for concurrent interactive ideation.", isConnected ? fallbackLatencyMs : null),
-                new("Remote Server Target", isConnected ? TargetBackendState.Available : TargetBackendState.Offline, "Dedicated LAN GPU Server (Local Area Network). High-VRAM on-premise node powering ~95% of background dev-queue tasks.", isConnected ? (long?)(fallbackLatencyMs + 5) : null),
-                new("Cloud Overflow Target", isConnected ? TargetBackendState.Active : TargetBackendState.Offline, "Cloud Overflow. Optional external endpoint for complex ideation or instant zero-VRAM diagnostics without waiting.", isConnected ? (long?)(fallbackLatencyMs + 25) : null)
-            };
-
-            return new OllamaRouterStatus(isConnected, isRouter, _baseUrl, fallbackTargets);
+            var result = await response.Content.ReadFromJsonAsync<RouterVramReclaimResponseDto>(cancellationToken);
+            Logger.LogInformation(
+                "OllamaRouter VRAM reclaim (target: {Target}) unloaded {Total} model(s).",
+                targetName ?? "all",
+                result?.TotalUnloaded ?? 0);
+            return result?.Success == true;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (IsRecoverableProbeFailure(ex, cancellationToken))
         {
-            _logger.LogDebug(ex, "OllamaRouter gateway unreachable at {BaseAddress}", _httpClient.BaseAddress);
-            var targets = new List<TargetBackendStatus>
-            {
-                new("Local GPU Target", TargetBackendState.Offline, "Host GPU (Developer Workstation). Fast on-premise execution when model/context fits host VRAM, or for concurrent interactive ideation."),
-                new("Remote Server Target", TargetBackendState.Offline, "Dedicated LAN GPU Server (Local Area Network). High-VRAM on-premise node powering ~95% of background dev-queue tasks."),
-                new("Cloud Overflow Target", TargetBackendState.Offline, "Cloud Overflow. Optional external endpoint for complex ideation or instant zero-VRAM diagnostics without waiting.")
-            };
-            return new OllamaRouterStatus(false, false, _baseUrl, targets);
-        }
-    }
-
-    public async Task<IReadOnlyList<ResidentModelInfo>> GetResidentModelsAsync(CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
-
-            var response = await _httpClient.GetFromJsonAsync<OllamaPsResponse>("api/ps", timeoutCts.Token);
-            if (response?.Models == null || response.Models.Count == 0)
-            {
-                return Array.Empty<ResidentModelInfo>();
-            }
-
-            return response.Models.Select(m => new ResidentModelInfo(
-                Name: m.Name ?? m.Model ?? string.Empty,
-                Model: m.Model ?? m.Name ?? string.Empty,
-                Size: m.Size,
-                SizeVram: m.SizeVram,
-                ExpiresAt: m.ExpiresAt,
-                Digest: m.Digest
-            )).ToList();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Failed to query resident models from /api/ps at {BaseAddress}", _httpClient.BaseAddress);
-            return Array.Empty<ResidentModelInfo>();
-        }
-    }
-
-    public async Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            // 1. First attempt native OllamaRouter non-destructive reclaim endpoint
-            var reclaimResponse = await _httpClient.PostAsync("monitor/reclaim-vram?disableTarget=false", null, cancellationToken);
-            if (reclaimResponse.IsSuccessStatusCode)
-            {
-                _logger.LogInformation("Successfully triggered OllamaRouter VRAM reclaim via /monitor/reclaim-vram.");
-                return true;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "OllamaRouter /monitor/reclaim-vram not available, falling back to standard model unload.");
-        }
-
-        try
-        {
-            // 2. Fallback: Query resident models and set keep_alive to 0 to unload them without restarting service
-            var residentModels = await GetResidentModelsAsync(cancellationToken);
-            if (residentModels.Count == 0)
-            {
-                return true;
-            }
-
-            bool anySuccess = false;
-            foreach (var model in residentModels)
-            {
-                var payload = new
-                {
-                    model = model.Name,
-                    keep_alive = "0s"
-                };
-                var unloadResponse = await _httpClient.PostAsJsonAsync("api/generate", payload, cancellationToken);
-                if (unloadResponse.IsSuccessStatusCode)
-                {
-                    anySuccess = true;
-                }
-            }
-            return anySuccess;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to reclaim VRAM via fallback model unload.");
+            Logger.LogWarning(ex, "OllamaRouter VRAM reclaim request failed at {BaseAddress}.", Http.BaseAddress);
             return false;
         }
     }
 
-    private static TargetBackendStatus BuildTargetStatus(
-        string name,
-        bool isEnabled,
-        bool isOnline,
-        bool isBusy,
-        long baseLatencyMs,
-        TargetBackendState activeState,
-        string normalDescription)
+    protected override async Task<int?> ProbeProviderContextWindowAsync(string modelName, CancellationToken cancellationToken)
     {
-        if (!isEnabled)
-        {
-            return new TargetBackendStatus(
-                name,
-                TargetBackendState.Disabled,
-                $"{name}. Target disabled in OllamaRouter routing configuration; requests will bypass this node.",
-                LatencyMs: null);
-        }
+        var detail = await TryGetJsonAsync<RouterModelDto>(
+            $"{OllamaApiPaths.RouterModels}/{Uri.EscapeDataString(modelName)}",
+            ProbeTimeout,
+            cancellationToken);
 
-        if (!isOnline)
-        {
-            return new TargetBackendStatus(
-                name,
-                TargetBackendState.Offline,
-                $"{name}. Target node is currently offline or unreachable.",
-                LatencyMs: null);
-        }
-
-        if (isBusy)
-        {
-            return new TargetBackendStatus(
-                name,
-                TargetBackendState.Busy,
-                $"{name}. Currently executing an active inference workload.",
-                LatencyMs: baseLatencyMs);
-        }
-
-        return new TargetBackendStatus(
-            name,
-            activeState,
-            normalDescription,
-            LatencyMs: baseLatencyMs);
+        return detail is null ? null : detail.EffectiveContextWindow;
     }
 
-    private static bool GetBoolValue(Dictionary<string, bool>? dict, string key, bool defaultValue)
+    private static FleetTargetStatus MapTarget(RouterTargetDto target)
     {
-        if (dict == null) return defaultValue;
-        foreach (var (k, v) in dict)
-        {
-            if (string.Equals(k, key, StringComparison.OrdinalIgnoreCase))
-            {
-                return v;
-            }
-        }
-        return defaultValue;
+        var hw = target.Hardware;
+        var exec = target.Execution;
+
+        return new FleetTargetStatus(
+            Name: target.Name ?? "unknown",
+            Url: target.Url,
+            Enabled: target.Enabled,
+            Liveness: target.Liveness ?? FleetLiveness.Offline,
+            LatencyMs: target.LatencyMs,
+            Hardware: new FleetTargetHardware(
+                HardwareHint: hw?.HardwareHint,
+                GpuVendor: hw?.GpuVendor ?? FleetTargetHardware.UnknownGpuVendor,
+                Devices: hw?.Devices ?? [],
+                MaxVramMB: hw?.MaxVramMB,
+                MaxParallel: hw?.MaxParallel,
+                SpeedFactor: hw?.SpeedFactor),
+            Execution: new FleetTargetExecution(
+                InFlightRequests: exec?.InFlightRequests ?? 0,
+                ActiveModel: exec?.ActiveModel,
+                ContextAllocation: exec?.ContextAllocation));
     }
 
-    private class OllamaRouterMonitorResponse
+    private sealed class RouterInfoDto
+    {
+        [JsonPropertyName("isRouter")]
+        public bool IsRouter { get; init; }
+
+        [JsonPropertyName("version")]
+        public string? Version { get; init; }
+    }
+
+    private sealed class RouterFleetDto
     {
         [JsonPropertyName("targets")]
-        public Dictionary<string, bool>? Targets { get; set; }
-
-        [JsonPropertyName("online")]
-        public Dictionary<string, bool>? Online { get; set; }
-
-        [JsonPropertyName("busy")]
-        public Dictionary<string, bool>? Busy { get; set; }
-
-        [JsonPropertyName("cloudEnabled")]
-        public bool? CloudEnabled { get; set; }
+        public required List<RouterTargetDto> Targets { get; init; }
     }
 
-    private class OllamaPsResponse
-    {
-        [JsonPropertyName("models")]
-        public List<OllamaPsModel>? Models { get; set; }
-    }
-
-    private class OllamaPsModel
+    private sealed class RouterTargetDto
     {
         [JsonPropertyName("name")]
-        public string? Name { get; set; }
+        public required string Name { get; init; }
 
-        [JsonPropertyName("model")]
-        public string? Model { get; set; }
+        [JsonPropertyName("url")]
+        public string? Url { get; init; }
 
-        [JsonPropertyName("size")]
-        public long Size { get; set; }
+        [JsonPropertyName("enabled")]
+        public bool Enabled { get; init; }
 
-        [JsonPropertyName("size_vram")]
-        public long SizeVram { get; set; }
+        [JsonPropertyName("liveness")]
+        public string? Liveness { get; init; }
 
-        [JsonPropertyName("expires_at")]
-        public DateTimeOffset? ExpiresAt { get; set; }
+        [JsonPropertyName("latencyMs")]
+        public long? LatencyMs { get; init; }
 
-        [JsonPropertyName("digest")]
-        public string? Digest { get; set; }
+        [JsonPropertyName("hardware")]
+        public RouterHardwareDto? Hardware { get; init; }
+
+        [JsonPropertyName("execution")]
+        public RouterExecutionDto? Execution { get; init; }
+    }
+
+    private sealed class RouterHardwareDto
+    {
+        [JsonPropertyName("hardwareHint")]
+        public string? HardwareHint { get; init; }
+
+        [JsonPropertyName("gpuVendor")]
+        public string? GpuVendor { get; init; }
+
+        [JsonPropertyName("devices")]
+        public IReadOnlyList<string>? Devices { get; init; }
+
+        [JsonPropertyName("maxVramMB")]
+        public int? MaxVramMB { get; init; }
+
+        [JsonPropertyName("maxParallel")]
+        public int? MaxParallel { get; init; }
+
+        [JsonPropertyName("speedFactor")]
+        public double? SpeedFactor { get; init; }
+    }
+
+    private sealed class RouterExecutionDto
+    {
+        [JsonPropertyName("inFlightRequests")]
+        public int InFlightRequests { get; init; }
+
+        [JsonPropertyName("activeModel")]
+        public string? ActiveModel { get; init; }
+
+        [JsonPropertyName("contextAllocation")]
+        public string? ContextAllocation { get; init; }
+    }
+
+    private sealed class RouterModelDto
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
+
+        [JsonPropertyName("architecture")]
+        public string? Architecture { get; init; }
+
+        [JsonPropertyName("parameterCount")]
+        public long? ParameterCount { get; init; }
+
+        [JsonPropertyName("nativeContextWindow")]
+        public int NativeContextWindow { get; init; }
+
+        [JsonPropertyName("recommendedContextWindow")]
+        public int RecommendedContextWindow { get; init; }
+
+        [JsonPropertyName("cloudOverflowAvailable")]
+        public bool CloudOverflowAvailable { get; init; }
+
+        /// <summary>
+        /// Sized to the fleet's recommended context window (server-side pre-calculated as max(Targets.contextCeiling)
+        /// across capable nodes), falling back to the native context window or null.
+        /// </summary>
+        public int? EffectiveContextWindow =>
+            RecommendedContextWindow > 0 ? RecommendedContextWindow
+            : NativeContextWindow > 0 ? NativeContextWindow
+            : null;
+    }
+
+    private sealed class RouterVramReclaimRequestDto
+    {
+        [JsonPropertyName("target")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? Target { get; init; }
+    }
+
+    private sealed class RouterVramReclaimResponseDto
+    {
+        [JsonPropertyName("success")]
+        public bool Success { get; init; }
+
+        [JsonPropertyName("totalUnloaded")]
+        public int TotalUnloaded { get; init; }
     }
 }

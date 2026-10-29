@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Infrastructure.Data;
@@ -597,9 +598,21 @@ VALUES ('" + AddIsDeferredByPauseToForgeTaskMigrationId + @"', '10.0.12');";
     /// Seeds the standard global agent profiles (WorkspaceId == null) if not already present in the database.
     /// Preserves existing profiles and user configurations without overwriting them.
     /// </summary>
-    public async Task EnsureDefaultGlobalAgentProfilesAsync(string defaultModelName, CancellationToken cancellationToken = default)
+    public Task EnsureDefaultGlobalAgentProfilesAsync(
+        string defaultModelName,
+        CancellationToken cancellationToken = default)
+        => EnsureDefaultGlobalAgentProfilesAsync(new DefaultLlmProviderOptions(DefaultModelId: defaultModelName), cancellationToken);
+
+    /// <summary>
+    /// Seeds the standard global agent profiles (WorkspaceId == null) using the configured LLM provider options
+    /// if not already present in the database. Preserves existing profiles and user configurations without overwriting them.
+    /// </summary>
+    public async Task EnsureDefaultGlobalAgentProfilesAsync(
+        ILlmProviderOptions options,
+        CancellationToken cancellationToken = default)
     {
-        var standardProfiles = AgentProfile.CreateStandardGlobalProfiles(defaultModelName);
+        ArgumentNullException.ThrowIfNull(options);
+        var standardProfiles = AgentProfile.CreateStandardGlobalProfiles(options);
         var existingGlobalIds = await AgentProfiles
             .Where(p => p.WorkspaceId == null)
             .Select(p => p.Id)

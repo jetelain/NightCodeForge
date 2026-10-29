@@ -39,7 +39,7 @@ public class OllamaModelPreloadServicePauseTests
             return new HttpResponseMessage(HttpStatusCode.OK);
         }));
 
-        var options = Options.Create(new OllamaRouterOptions { BaseUrl = "http://localhost:11434" });
+        var options = Options.Create(new LlmEndpointOptions { Endpoint = "http://localhost:11434" });
         var service = new OllamaModelPreloadService(
             httpClient,
             opsMock.Object,
@@ -66,7 +66,7 @@ public class OllamaModelPreloadServicePauseTests
             return new HttpResponseMessage(HttpStatusCode.OK);
         }));
 
-        var options = Options.Create(new OllamaRouterOptions { BaseUrl = "http://localhost:11434" });
+        var options = Options.Create(new LlmEndpointOptions { Endpoint = "http://localhost:11434" });
         var service = new OllamaModelPreloadService(
             httpClient,
             opsMock.Object,

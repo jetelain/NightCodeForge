@@ -1,8 +1,8 @@
 using System.Net;
-using System.Text;
-using System.Text.Json;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Inference;
 using Xunit;
@@ -11,264 +11,295 @@ namespace NightCodeForge.Infrastructure.Tests.Inference;
 
 public class OllamaRouterGatewayServiceTests
 {
-    private class FakeHttpMessageHandler : HttpMessageHandler
-    {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
+    private const string InfoJson = """{"version":"2.1.0","isRouter":true,"fleet":{"totalTargets":4,"onlineTargets":3,"cloudEnabled":true}}""";
 
-        public FakeHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
+    private const string FleetJson = """
+        {"targets":[
+          {"name":"desktop","url":"http://a:11434","enabled":true,"liveness":"Online","latencyMs":12,
+           "hardware":{"hardwareHint":"RTX 4090","gpuVendor":"Nvidia","devices":["GPU0"],"maxVramMB":24576,"maxParallel":2,"speedFactor":1.0},
+           "execution":{"inFlightRequests":0,"activeModel":"m1","contextAllocation":null}},
+          {"name":"laptop","url":"http://b:11434","enabled":true,"liveness":"Online","latencyMs":30,
+           "hardware":{"hardwareHint":null,"gpuVendor":"Apple","devices":[],"maxVramMB":null,"maxParallel":1,"speedFactor":null},
+           "execution":{"inFlightRequests":2,"activeModel":"m2","contextAllocation":"64k"}},
+          {"name":"nas","url":"http://c:11434","enabled":false,"liveness":"Online","latencyMs":null,
+           "hardware":{"hardwareHint":null,"gpuVendor":"Unknown","devices":[],"maxVramMB":null,"maxParallel":null,"speedFactor":null},
+           "execution":{"inFlightRequests":0,"activeModel":null,"contextAllocation":null}},
+          {"name":"cloud","url":null,"enabled":true,"liveness":"Offline","latencyMs":null,
+           "hardware":{"hardwareHint":null,"gpuVendor":"Unknown","devices":[],"maxVramMB":null,"maxParallel":null,"speedFactor":null},
+           "execution":{"inFlightRequests":0,"activeModel":null,"contextAllocation":null}},
+          {"name":"gpu-box","url":"http://d:11434","enabled":true,"liveness":"Probing","latencyMs":null,
+           "hardware":{"hardwareHint":null,"gpuVendor":"Amd","devices":[],"maxVramMB":16384,"maxParallel":1,"speedFactor":null},
+           "execution":{"inFlightRequests":0,"activeModel":null,"contextAllocation":null}}
+        ]}
+        """;
+
+    private static OllamaRouterGatewayService CreateService(StubHttpHandler handler, ILlmContextWindowCache? cache = null) =>
+        new(StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), cache ?? new LlmContextWindowCache(new MemoryCache(new MemoryCacheOptions())), NullLogger<OllamaRouterGatewayService>.Instance);
+
+    private static HttpResponseMessage RouterRoutes(HttpRequestMessage req) => req.RequestUri!.AbsolutePath switch
+    {
+        "/api/router/info" => StubHttpHandler.Json(InfoJson),
+        "/api/router/fleet" => StubHttpHandler.Json(FleetJson),
+        _ => StubHttpHandler.Status(HttpStatusCode.NotFound)
+    };
+
+    [Fact]
+    public async Task GetGatewayStatusAsync_MapsEveryFleetTargetDynamically()
+    {
+        var report = await CreateService(new StubHttpHandler(RouterRoutes)).GetGatewayStatusAsync();
+
+        Assert.True(report.IsConnected);
+        Assert.Equal(LlmProviderType.OllamaRouter, report.ProviderType);
+        Assert.Equal("2.1.0", report.Version);
+        Assert.Equal(5, report.FleetTargets.Count);
+        Assert.Equal(["desktop", "laptop", "nas", "cloud", "gpu-box"], report.FleetTargets.Select(t => t.Name));
+        Assert.Equal(24576, report.FleetTargets[0].Hardware.MaxVramMB);
+        Assert.Equal("RTX 4090", report.FleetTargets[0].Hardware.HardwareHint);
+    }
+
+    [Fact]
+    public async Task GetGatewayStatusAsync_DerivesStateFromLivenessEnabledAndInFlight()
+    {
+        var targets = (await CreateService(new StubHttpHandler(RouterRoutes)).GetGatewayStatusAsync()).FleetTargets;
+
+        Assert.Equal(TargetBackendState.Active, targets.Single(t => t.Name == "desktop").State);
+        Assert.Equal(TargetBackendState.Busy, targets.Single(t => t.Name == "laptop").State);
+        Assert.Equal(TargetBackendState.Disabled, targets.Single(t => t.Name == "nas").State);
+        Assert.Equal(TargetBackendState.Offline, targets.Single(t => t.Name == "cloud").State);
+        Assert.Equal(TargetBackendState.Available, targets.Single(t => t.Name == "gpu-box").State);
+    }
+
+    [Fact]
+    public async Task GetGatewayStatusAsync_WhenRouterUnreachable_IsDisconnectedWithNoTargets()
+    {
+        var report = await CreateService(new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.ServiceUnavailable))).GetGatewayStatusAsync();
+
+        Assert.False(report.IsConnected);
+        Assert.Empty(report.FleetTargets);
+    }
+
+    [Fact]
+    public async Task GetGatewayStatusAsync_WhenFleetShapeIsInvalid_IsDisconnected()
+    {
+        var report = await CreateService(new StubHttpHandler(req => req.RequestUri!.AbsolutePath == "/api/router/info"
+            ? StubHttpHandler.Json(InfoJson)
+            : StubHttpHandler.Json("""{"targets":[{"unexpected":1}]}"""))).GetGatewayStatusAsync();
+
+        Assert.False(report.IsConnected);
+        Assert.Empty(report.FleetTargets);
+    }
+
+    [Fact]
+    public async Task DetectProviderAsync_WhenRouterInfoAnswers_ReturnsOllamaRouter()
+    {
+        var detected = await CreateService(new StubHttpHandler(RouterRoutes)).DetectProviderAsync();
+        Assert.Equal(LlmProviderType.OllamaRouter, detected);
+    }
+
+    [Fact]
+    public async Task DetectProviderAsync_WhenOnlyOllamaVersionAnswers_ReturnsOllama()
+    {
+        var detected = await CreateService(new StubHttpHandler(req => req.RequestUri!.AbsolutePath == "/api/version"
+            ? StubHttpHandler.Json("""{"version":"0.6.0"}""")
+            : StubHttpHandler.Status(HttpStatusCode.NotFound))).DetectProviderAsync();
+        Assert.Equal(LlmProviderType.Ollama, detected);
+    }
+
+    [Fact]
+    public async Task DetectProviderAsync_WhenNothingAnswers_ReturnsNull()
+    {
+        var detected = await CreateService(new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.NotFound))).DetectProviderAsync();
+        Assert.Null(detected);
+    }
+
+    [Fact]
+    public async Task ResolveContextWindowAsync_UsesRouterModelMetadata()
+    {
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath.StartsWith("/api/router/models/")
+            ? StubHttpHandler.Json("""{"name":"m1","recommendedContextWindow":65536,"nativeContextWindow":131072}""")
+            : StubHttpHandler.Status(HttpStatusCode.NotFound));
+
+        Assert.Equal(65536, await CreateService(handler).ResolveContextWindowAsync("m1"));
+    }
+
+    [Fact]
+    public async Task ResolveContextWindowAsync_MultiNodeCeiling_ReturnsLargestCapableTargetContextCeiling()
+    {
+        var json = """
         {
-            _handler = handler;
+          "name": "qwen3.8-27b",
+          "architecture": "Dense",
+          "parameterCount": 27800000000,
+          "nativeContextWindow": 32768,
+          "recommendedContextWindow": 262144,
+          "targets": [
+            { "target": "desktop", "capable": true, "contextCeiling": 49152, "isResident": true },
+            { "target": "laptop", "capable": false, "contextCeiling": 4096, "vetoReason": "LargeDense (>= 14B) models are not supported on targets with < 12 GB VRAM" },
+            { "target": "server1", "capable": true, "contextCeiling": 262144, "isResident": false }
+          ]
         }
+        """;
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            return Task.FromResult(_handler(request));
-        }
-    }
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath.StartsWith("/api/router/models/")
+            ? StubHttpHandler.Json(json)
+            : StubHttpHandler.Status(HttpStatusCode.NotFound));
 
-    private static OllamaRouterGatewayService CreateService(Func<HttpRequestMessage, HttpResponseMessage> handler)
-    {
-        var httpClient = new HttpClient(new FakeHttpMessageHandler(handler))
-        {
-            BaseAddress = new Uri("http://localhost:11434/")
-        };
+        var service = CreateService(handler);
+        var resolved = await service.ResolveContextWindowAsync("qwen3.8-27b");
 
-        var options = Options.Create(new OllamaRouterOptions
-        {
-            BaseUrl = "http://localhost:11434"
-        });
-
-        return new OllamaRouterGatewayService(httpClient, options, NullLogger<OllamaRouterGatewayService>.Instance);
+        Assert.Equal(262144, resolved);
     }
 
     [Fact]
-    public async Task GetGatewayStatusAsync_WhenMonitorApiReportsDisabledLocalTarget_MarksLocalDisabled()
+    public async Task ResolveContextWindowAsync_WhenRouterModelUnknown_FallsBackToApiShow()
     {
-        // Simulate monitor/api returning local=false (disabled), remote=true (online/idle), cloud=true
-        var monitorJson = JsonSerializer.Serialize(new
-        {
-            targets = new Dictionary<string, bool>
-            {
-                ["local"] = false,
-                ["remote"] = true,
-                ["cloud"] = true
-            },
-            online = new Dictionary<string, bool>
-            {
-                ["local"] = true,
-                ["remote"] = true,
-                ["cloud"] = true
-            },
-            busy = new Dictionary<string, bool>
-            {
-                ["local"] = false,
-                ["remote"] = false,
-                ["cloud"] = false
-            },
-            cloudEnabled = true
-        });
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath == "/api/show"
+            ? StubHttpHandler.Json("""{"parameters":"num_ctx 32768"}""")
+            : StubHttpHandler.Status(HttpStatusCode.NotFound));
 
-        var service = CreateService(req =>
-        {
-            if (req.RequestUri!.PathAndQuery.Contains("monitor/api"))
-            {
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(monitorJson, Encoding.UTF8, "application/json")
-                };
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        var status = await service.GetGatewayStatusAsync();
-
-        Assert.True(status.IsConnected);
-        Assert.True(status.IsRouterProxy);
-        Assert.Equal(3, status.Targets.Count);
-
-        var localTarget = status.Targets.First(t => t.TargetName == "Local GPU Target");
-        Assert.Equal(TargetBackendState.Disabled, localTarget.State);
-        Assert.Null(localTarget.LatencyMs);
-        Assert.Contains("disabled in OllamaRouter", localTarget.Description, StringComparison.OrdinalIgnoreCase);
-
-        var remoteTarget = status.Targets.First(t => t.TargetName == "Remote Server Target");
-        Assert.Equal(TargetBackendState.Available, remoteTarget.State);
-        Assert.NotNull(remoteTarget.LatencyMs);
-
-        var cloudTarget = status.Targets.First(t => t.TargetName == "Cloud Overflow Target");
-        Assert.Equal(TargetBackendState.Active, cloudTarget.State);
-        Assert.NotNull(cloudTarget.LatencyMs);
+        Assert.Equal(32768, await CreateService(handler).ResolveContextWindowAsync("m1"));
     }
 
     [Fact]
-    public async Task GetGatewayStatusAsync_WhenTargetIsBusy_MarksTargetBusy()
+    public async Task ResolveContextWindowAsync_WhenNothingKnown_UsesOllamaDefaultWithoutCaching()
     {
-        var monitorJson = JsonSerializer.Serialize(new
-        {
-            targets = new Dictionary<string, bool>
-            {
-                ["local"] = true,
-                ["remote"] = true,
-                ["cloud"] = true
-            },
-            online = new Dictionary<string, bool>
-            {
-                ["local"] = false, // local node offline
-                ["remote"] = true,
-                ["cloud"] = true
-            },
-            busy = new Dictionary<string, bool>
-            {
-                ["local"] = false,
-                ["remote"] = true, // remote is busy executing
-                ["cloud"] = false
-            },
-            cloudEnabled = true
-        });
+        var handler = new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.NotFound));
+        var service = CreateService(handler);
 
-        var service = CreateService(req =>
-        {
-            if (req.RequestUri!.PathAndQuery.Contains("monitor/api"))
-            {
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(monitorJson, Encoding.UTF8, "application/json")
-                };
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        var status = await service.GetGatewayStatusAsync();
-
-        var localTarget = status.Targets.First(t => t.TargetName == "Local GPU Target");
-        Assert.Equal(TargetBackendState.Offline, localTarget.State);
-
-        var remoteTarget = status.Targets.First(t => t.TargetName == "Remote Server Target");
-        Assert.Equal(TargetBackendState.Busy, remoteTarget.State);
-        Assert.Contains("workload", remoteTarget.Description, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(OllamaGatewayServiceBase.OllamaDefaultContextTokens, await service.ResolveContextWindowAsync("m1"));
+        var before = handler.Requests.Count;
+        await service.ResolveContextWindowAsync("m1");
+        Assert.True(handler.Requests.Count > before);
     }
 
     [Fact]
-    public async Task GetGatewayStatusAsync_WhenMonitorApiFails_FallsBackToApiVersion()
+    public async Task ReclaimVramAsync_PostsTargetAndReturnsRouterSuccess()
     {
-        var service = CreateService(req =>
-        {
-            if (req.RequestUri!.PathAndQuery.Contains("monitor/api"))
-            {
-                return new HttpResponseMessage(HttpStatusCode.NotFound);
-            }
-            if (req.RequestUri.PathAndQuery.Contains("api/version"))
-            {
-                var msg = new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent("{\"version\":\"0.40.6\"}", Encoding.UTF8, "application/json")
-                };
-                msg.Headers.Add("x-ollamarouter-version", "1.2.0");
-                return msg;
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath == "/api/router/vram/reclaim"
+            ? StubHttpHandler.Json("""{"success":true,"totalUnloaded":2,"targets":[]}""")
+            : StubHttpHandler.Status(HttpStatusCode.NotFound));
 
-        var status = await service.GetGatewayStatusAsync();
-
-        Assert.True(status.IsConnected);
-        Assert.True(status.IsRouterProxy);
-        Assert.Equal(3, status.Targets.Count);
-        Assert.Equal(TargetBackendState.Active, status.Targets.First(t => t.TargetName == "Local GPU Target").State);
+        Assert.True(await CreateService(handler).ReclaimVramAsync("desktop"));
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Contains("\"target\":\"desktop\"", request.Body);
     }
 
     [Fact]
-    public async Task GetGatewayStatusAsync_WhenEndpointThrows_ReturnsOfflineTargets()
+    public async Task ReclaimVramAsync_WhenRouterReportsFailure_ReturnsFalse()
     {
-        var service = CreateService(_ => throw new HttpRequestException("Connection refused"));
-
-        var status = await service.GetGatewayStatusAsync();
-
-        Assert.False(status.IsConnected);
-        Assert.False(status.IsRouterProxy);
-        Assert.All(status.Targets, t => Assert.Equal(TargetBackendState.Offline, t.State));
+        var handler = new StubHttpHandler(_ => StubHttpHandler.Json("""{"success":false,"totalUnloaded":0,"targets":[]}"""));
+        Assert.False(await CreateService(handler).ReclaimVramAsync());
     }
 
     [Fact]
-    public async Task GetResidentModelsAsync_WhenModelHasZeroVram_PreservesZeroVramAndCalculatesZeroPercentage()
+    public async Task ReclaimVramAsync_WhenHttpError_ReturnsFalse()
     {
-        var psJson = JsonSerializer.Serialize(new
-        {
-            models = new[]
-            {
-                new
-                {
-                    name = "qwen2.5-coder:7b",
-                    model = "qwen2.5-coder:7b",
-                    size = 5_000_000_000L,
-                    size_vram = 0L,
-                    expires_at = DateTimeOffset.UtcNow.AddMinutes(5),
-                    digest = "abc123"
-                }
-            }
-        });
-
-        var service = CreateService(req =>
-        {
-            if (req.RequestUri!.PathAndQuery.Contains("api/ps"))
-            {
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(psJson, Encoding.UTF8, "application/json")
-                };
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        var models = await service.GetResidentModelsAsync();
-
-        Assert.Single(models);
-        var model = models[0];
-        Assert.Equal("qwen2.5-coder:7b", model.Name);
-        Assert.Equal(5_000_000_000L, model.Size);
-        Assert.Equal(0L, model.SizeVram);
-        Assert.Equal("0 GB", model.SizeVramFormatted);
-        Assert.Equal(0.0, model.VramPercentage);
-        Assert.Equal("0%", model.VramPercentageFormatted);
+        var handler = new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.InternalServerError));
+        Assert.False(await CreateService(handler).ReclaimVramAsync());
     }
 
     [Fact]
-    public async Task GetResidentModelsAsync_WhenModelHasPartialVram_CalculatesCorrectPercentage()
+    public async Task GetGatewayStatusAsync_WhenFleetPayloadHasNullTargets_ReturnsReportWithEmptyFleet()
     {
-        var psJson = JsonSerializer.Serialize(new
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath switch
         {
-            models = new[]
-            {
-                new
-                {
-                    name = "deepseek-coder:33b",
-                    model = "deepseek-coder:33b",
-                    size = 20_000_000_000L,
-                    size_vram = 10_000_000_000L,
-                    expires_at = (DateTimeOffset?)null,
-                    digest = "def456"
-                }
-            }
+            "/api/router/info" => StubHttpHandler.Json(InfoJson),
+            "/api/router/fleet" => StubHttpHandler.Json("""{"targets":null}"""),
+            _ => StubHttpHandler.Status(HttpStatusCode.NotFound)
         });
 
-        var service = CreateService(req =>
+        var report = await CreateService(handler).GetGatewayStatusAsync();
+        Assert.True(report.IsConnected);
+        Assert.Empty(report.FleetTargets);
+    }
+
+    [Fact]
+    public async Task GetGatewayStatusAsync_WhenTargetHasNullHardwareAndExecution_MapsTargetWithDefaultsWithoutThrowing()
+    {
+        var fleetWithNulls = """
+            {"targets":[
+              {"name":"sparse-node","url":"http://sparse:11434","enabled":true,"liveness":"Online","latencyMs":5,
+               "hardware":null,
+               "execution":null}
+            ]}
+            """;
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath switch
         {
-            if (req.RequestUri!.PathAndQuery.Contains("api/ps"))
-            {
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(psJson, Encoding.UTF8, "application/json")
-                };
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
+            "/api/router/info" => StubHttpHandler.Json(InfoJson),
+            "/api/router/fleet" => StubHttpHandler.Json(fleetWithNulls),
+            _ => StubHttpHandler.Status(HttpStatusCode.NotFound)
         });
 
-        var models = await service.GetResidentModelsAsync();
+        var report = await CreateService(handler).GetGatewayStatusAsync();
+        Assert.True(report.IsConnected);
+        var target = Assert.Single(report.FleetTargets);
+        Assert.Equal("sparse-node", target.Name);
+        Assert.Equal(TargetBackendState.Active, target.State);
+        Assert.NotNull(target.Hardware);
+        Assert.NotNull(target.Execution);
+        Assert.Equal("Unknown", target.Hardware.GpuVendor);
+        Assert.Equal(0, target.Execution.InFlightRequests);
+    }
 
-        Assert.Single(models);
-        var model = models[0];
-        Assert.Equal(50.0, model.VramPercentage);
-        Assert.Equal("50%", model.VramPercentageFormatted);
-        Assert.Equal("Indefinite", model.ExpiresAtFormatted);
+    [Fact]
+    public async Task GetGatewayStatusAsync_WhenEndpointsReturnMalformedJson_ReturnsDisconnectedStatusReport()
+    {
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath switch
+        {
+            "/api/router/info" => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<!DOCTYPE html><html><body>Error</body></html>") },
+            "/api/router/fleet" => StubHttpHandler.Json("Malformed JSON { ["),
+            _ => StubHttpHandler.Status(HttpStatusCode.NotFound)
+        });
+
+        var report = await CreateService(handler).GetGatewayStatusAsync();
+        Assert.False(report.IsConnected);
+        Assert.Empty(report.FleetTargets);
+    }
+
+    [Fact]
+    public async Task ResolveContextWindowAsync_WhenDiscovered_CachesInContextWindowCache()
+    {
+        var cache = new LlmContextWindowCache(new MemoryCache(new MemoryCacheOptions()));
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath switch
+        {
+            "/api/router/models/m1" => StubHttpHandler.Json("""{"name":"m1","recommendedContextWindow":65536}"""),
+            _ => StubHttpHandler.Status(HttpStatusCode.NotFound)
+        });
+        var service = CreateService(handler, cache);
+
+        var first = await service.ResolveContextWindowAsync("m1");
+        Assert.Equal(65536, first);
+        Assert.True(cache.TryGetContextWindow("m1", out var cachedTokens));
+        Assert.Equal(65536, cachedTokens);
+
+        var countBefore = handler.Requests.Count;
+        var second = await service.ResolveContextWindowAsync("m1");
+        Assert.Equal(65536, second);
+        Assert.Equal(countBefore, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task GetGatewayStatusAsync_WhenTargetOmitsHardwareAndExecution_MapsWithoutThrowing()
+    {
+        var fleetOmittingProperties = """
+            {"targets":[
+              {"name":"minimal-node","url":"http://minimal:11434","enabled":true,"liveness":"Online"}
+            ]}
+            """;
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath switch
+        {
+            "/api/router/info" => StubHttpHandler.Json(InfoJson),
+            "/api/router/fleet" => StubHttpHandler.Json(fleetOmittingProperties),
+            _ => StubHttpHandler.Status(HttpStatusCode.NotFound)
+        });
+
+        var report = await CreateService(handler).GetGatewayStatusAsync();
+        Assert.True(report.IsConnected);
+        var target = Assert.Single(report.FleetTargets);
+        Assert.Equal("minimal-node", target.Name);
+        Assert.Equal(TargetBackendState.Active, target.State);
+        Assert.Equal("Unknown", target.Hardware.GpuVendor);
+        Assert.Equal(0, target.Execution.InFlightRequests);
     }
 }

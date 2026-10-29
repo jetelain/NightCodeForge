@@ -1,12 +1,17 @@
-@namespace NightCodeForge.Web.Components.Settings
+@using System.Collections.Concurrent
 @using Microsoft.EntityFrameworkCore
 @using Microsoft.Extensions.DependencyInjection
+@using Microsoft.Extensions.Options
+@using NightCodeForge.Agents.Inference
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Infrastructure.Data
 @using NightCodeForge.Web.Services
 @inject IServiceScopeFactory ScopeFactory
-@inject IOllamaModelCatalogService ModelCatalogService
+@inject ILlmModelCatalogService ModelCatalogService
+@inject IOllamaRouterGatewayService GatewayService
+@inject ILlmContextWindowCache ContextWindowCache
+@inject IOptions<LlmProviderOptions> LlmOptions
 @inject ToastService ToastService
 
 <div class="forge-card mt-3" style="padding: 2rem;">
@@ -51,19 +56,39 @@
         </div>
     </div>
 
-    <!-- OllamaRouter Connection & Model Refresh Strip -->
+    <!-- Provider Connection & Model Refresh Strip -->
     <div style="display: flex; justify-content: space-between; align-items: center; padding: 1.15rem 1.5rem; border-radius: var(--radius-lg); background: var(--bg-surface); border: 1px solid var(--border-subtle); margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem;">
         <div style="display: flex; align-items: center; gap: 0.75rem;">
-            <span class="status-dot @(_isOllamaOnline ? "running" : "blocked")"></span>
-            <span style="font-size: 0.92rem; color: var(--text-primary); font-weight: 500;">
-                @(_isOllamaOnline 
-                    ? $"OllamaRouter Gateway connected ({_availableModels.Count} models available from /api/tags)" 
-                    : "Gateway unreachable at http://localhost:11434 - fallback to manual model entry")
-            </span>
+            @if (_isLoadingModels)
+            {
+                <span class="status-dot waiting"></span>
+                <span style="font-size: 0.92rem; color: var(--text-secondary); font-weight: 500;">
+                    Connecting to @(_providerType == LlmProviderType.OllamaRouter ? "OllamaRouter" : "Ollama") and discovering models...
+                </span>
+            }
+            else if (_isOllamaOnline)
+            {
+                <span class="status-dot running"></span>
+                <span style="font-size: 0.92rem; color: var(--text-primary); font-weight: 500;">
+                    @($"{(_providerType == LlmProviderType.OllamaRouter ? "OllamaRouter Gateway" : "Standalone Ollama")} connected ({_availableModels.Count} models available)")
+                </span>
+            }
+            else
+            {
+                <span class="status-dot blocked"></span>
+                <span style="font-size: 0.92rem; color: var(--text-primary); font-weight: 500;">
+                    @($"Inference endpoint unreachable at {(string.IsNullOrWhiteSpace(LlmOptions.Value.Endpoint) ? "configured endpoint" : LlmOptions.Value.Endpoint)} - fallback to manual model entry")
+                </span>
+            }
         </div>
-        <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="RefreshOllamaModelsAsync" disabled="@_isLoadingModels">
-            @(_isLoadingModels ? "Refreshing..." : "🔄 Refresh Models")
-        </button>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="DetectProviderAsync" disabled="@(_isDetecting || _isLoadingModels)">
+                @(_isDetecting ? "Detecting..." : "🔍 Auto-Detect")
+            </button>
+            <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="RefreshOllamaModelsAsync" disabled="@_isLoadingModels">
+                @(_isLoadingModels ? "Refreshing..." : "🔄 Refresh Models")
+            </button>
+        </div>
     </div>
 
     @if (Scope == ProfileScope.Workspace && !_hasDedicatedProfiles)
@@ -126,7 +151,7 @@
                         <!-- 1. Ollama Model Dropdown -->
                         <div>
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
-                                <label class="forge-field-label" style="margin: 0;">Ollama Model</label>
+                                <label class="forge-field-label" style="margin: 0;">Inference Model</label>
                                 @if (_availableModels.Count > 0)
                                 {
                                     <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;"
@@ -137,36 +162,46 @@
                             </div>
                             @if (_availableModels.Count > 0 && !IsCustomModel(profile.Id))
                             {
-                                <select class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName">
-                                    @if (!string.IsNullOrWhiteSpace(profile.ModelName) && !_availableModels.Any(m => string.Equals(m.Name, profile.ModelName, StringComparison.OrdinalIgnoreCase)))
+                                <select class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" @bind:after="() => OnProfileModelChangedAsync(profile)">
+                                    @if (!string.IsNullOrWhiteSpace(profile.ModelName) && !_availableModels.Any(m => string.Equals(m.ModelId, profile.ModelName, StringComparison.OrdinalIgnoreCase)))
                                     {
                                         <option value="@profile.ModelName">@profile.ModelName (Configured)</option>
                                     }
                                     @foreach (var m in _availableModels)
                                     {
-                                        <option value="@m.Name">@m.Name (@FormatBytes(m.Size))</option>
+                                        <option value="@m.ModelId">@m.DisplayName @(!string.IsNullOrWhiteSpace(m.FormattedBadge) ? $"({m.FormattedBadge})" : "")</option>
                                     }
                                 </select>
                             }
                             else
                             {
-                                <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" placeholder="e.g. qwen2.5-coder:32b" />
+                                <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" @bind:after="() => OnProfileModelChangedAsync(profile)" placeholder="e.g. qwen2.5-coder:32b" />
+                            }
+
+                            @if (!string.IsNullOrWhiteSpace(profile.ModelName) && _discoveredContextWindows.TryGetValue(profile.ModelName, out var pTokens))
+                            {
+                                <span class="forge-badge badge-teal" style="font-size: 0.72rem; margin-top: 0.35rem; display: inline-block;">
+                                    ⚡ @pTokens.ToString("N0") tokens discovered
+                                </span>
                             }
                         </div>
 
-                        <!-- 2. OllamaRouter Target Pinning -->
-                        <div>
-                            <label class="forge-field-label">OllamaRouter Target</label>
-                            <select class="forge-input" style="width: 100%;" @bind="profile.RoutingTarget">
-                                <option value="@OllamaRoutingTarget.Auto">Auto (Dynamic VRAM &amp; Context Routing)</option>
-                                <option value="@OllamaRoutingTarget.Local">Host GPU (Local Workstation - On-Premise)</option>
-                                <option value="@OllamaRoutingTarget.Remote">LAN GPU Server (Remote - Dedicated High-VRAM, ~95% Workloads)</option>
-                                <option value="@OllamaRoutingTarget.Cloud">Cloud Overflow (Optional External / Zero Local VRAM)</option>
-                            </select>
-                            <span class="field-hint" style="display: block; font-size: 0.78rem; color: var(--text-muted); margin-top: 0.35rem;">
-                                Host GPU and LAN Server are both 100% private local workloads.
-                            </span>
-                        </div>
+                        <!-- 2. OllamaRouter Target Pinning (Suppressed in Standalone Ollama mode) -->
+                        @if (_providerType == LlmProviderType.OllamaRouter)
+                        {
+                            <div>
+                                <label class="forge-field-label">OllamaRouter Target</label>
+                                <select class="forge-input" style="width: 100%;" @bind="profile.RoutingTarget">
+                                    <option value="@OllamaRoutingTarget.Auto">Auto (Dynamic VRAM &amp; Context Routing)</option>
+                                    <option value="@OllamaRoutingTarget.Local">Host GPU (Local Workstation - On-Premise)</option>
+                                    <option value="@OllamaRoutingTarget.Remote">LAN GPU Server (Remote - Dedicated High-VRAM, ~95% Workloads)</option>
+                                    <option value="@OllamaRoutingTarget.Cloud">Cloud Overflow (Optional External / Zero Local VRAM)</option>
+                                </select>
+                                <span class="field-hint" style="display: block; font-size: 0.78rem; color: var(--text-muted); margin-top: 0.35rem;">
+                                    Host GPU and LAN Server are both 100% private local workloads.
+                                </span>
+                            </div>
+                        }
 
                         <!-- 3. Thinking Effort -->
                         <div>
@@ -197,7 +232,7 @@
                         <!-- 5. Temperature -->
                         <div>
                             <label class="forge-field-label">Temperature</label>
-                            <input type="number" min="0.0" max="2.0" step="0.1" class="forge-input font-mono" style="width: 100%;" @bind="profile.Temperature" />
+                            <input type="number" min="0.0" max="2.0" step="0.1" class="forge-input font-mono" style="width: 100%;" @bind="profile.Temperature" placeholder="Model default" />
                         </div>
 
                         <!-- 6. Sandbox Security Tier -->
@@ -226,7 +261,7 @@
                                 <span class="forge-badge badge-indigo" style="font-size: 0.75rem; padding: 0.25rem 0.65rem;">Active Override</span>
                             </div>
 
-                            <!-- Section A: 8 Boolean Switches -->
+                            <!-- Section A: 5 Boolean Switches -->
                             <div style="margin-bottom: 1.5rem;">
                                 <label style="display: block; font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.85rem;">
                                     Runtime Optimization &amp; Sampler Flags (5 Switches)
@@ -295,12 +330,16 @@
     [Parameter] public string? WorkspaceName { get; set; }
 
     private List<AgentProfile> _profiles = new();
-    private List<OllamaModelInfo> _availableModels = new();
+    private List<AvailableModelInfo> _availableModels = new();
+    private ConcurrentDictionary<string, int> _discoveredContextWindows = new(StringComparer.OrdinalIgnoreCase);
+    private LlmProviderType _providerType = LlmProviderType.OllamaRouter;
+
     private bool _hasDedicatedProfiles;
     private bool _isOllamaOnline;
     private bool _isLoading = true;
-    private bool _isLoadingModels;
+    private bool _isLoadingModels = true;
     private bool _isSaving;
+    private bool _isDetecting;
     private int? _lastLoadedWorkspaceId;
     private ProfileScope? _lastLoadedScope;
 
@@ -310,9 +349,71 @@
         {
             _lastLoadedScope = Scope;
             _lastLoadedWorkspaceId = WorkspaceId;
+            _providerType = GatewayService.ProviderType;
             await RefreshOllamaModelsAsync();
             await LoadProfilesAsync();
         }
+    }
+
+    private async Task DetectProviderAsync()
+    {
+        _isDetecting = true;
+        try
+        {
+            var detected = await GatewayService.DetectProviderAsync();
+            if (detected.HasValue && detected.Value == _providerType)
+            {
+                ToastService.Show("Provider Verified", $"The endpoint matches the configured provider ({detected.Value}).", ToastLevel.Success);
+            }
+            else if (detected.HasValue)
+            {
+                ToastService.Show("Provider Mismatch", $"The endpoint looks like {detected.Value} but {_providerType} is configured. Set LlmProvider:ProviderType and restart.", ToastLevel.Warning);
+            }
+            else
+            {
+                ToastService.Show("Endpoint Offline", "Neither OllamaRouter nor Ollama could be contacted at the configured endpoint.", ToastLevel.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Detection Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isDetecting = false;
+        }
+    }
+
+    private async Task ResolveModelContextWindowAsync(string modelName)
+    {
+        if (!string.IsNullOrWhiteSpace(modelName) && !_discoveredContextWindows.ContainsKey(modelName))
+        {
+            if (ContextWindowCache.TryGetContextWindow(modelName, out var cached))
+            {
+                _discoveredContextWindows[modelName] = cached;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+
+            try
+            {
+                var tokens = await GatewayService.ResolveContextWindowAsync(modelName);
+                if (tokens > 0)
+                {
+                    _discoveredContextWindows[modelName] = tokens;
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (Exception)
+            {
+                // Non-fatal probe failure: context resolution unavailable or model offline
+            }
+        }
+    }
+
+    private async Task OnProfileModelChangedAsync(AgentProfile profile)
+    {
+        await ResolveModelContextWindowAsync(profile.ModelName);
     }
 
     private async Task RefreshOllamaModelsAsync()
@@ -323,9 +424,18 @@
             var models = await ModelCatalogService.GetAvailableModelsAsync();
             _availableModels = models.ToList();
             _isOllamaOnline = _availableModels.Count > 0;
+            foreach (var m in _availableModels)
+            {
+                if (m.ContextWindowTokens.HasValue)
+                {
+                    _discoveredContextWindows[m.ModelId] = m.ContextWindowTokens.Value;
+                    ContextWindowCache.SetContextWindow(m.ModelId, m.ContextWindowTokens.Value);
+                }
+            }
         }
-        catch
+        catch (Exception)
         {
+            // Non-fatal probe failure: LLM provider is offline or unreachable
             _isOllamaOnline = false;
         }
         finally
@@ -354,6 +464,30 @@
                     ? dedicated 
                     : await db.AgentProfiles.Where(p => p.WorkspaceId == null).OrderBy(p => p.Id).ToListAsync();
             }
+
+            var distinctModels = _profiles
+                .Where(p => !string.IsNullOrWhiteSpace(p.ModelName))
+                .Select(p => p.ModelName!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var probeTasks = new List<Task>();
+            foreach (var modelName in distinctModels)
+            {
+                if (ContextWindowCache.TryGetContextWindow(modelName, out var cached))
+                {
+                    _discoveredContextWindows[modelName] = cached;
+                }
+                else
+                {
+                    probeTasks.Add(ResolveModelContextWindowAsync(modelName));
+                }
+            }
+
+            if (probeTasks.Count > 0)
+            {
+                await Task.WhenAll(probeTasks);
+            }
         }
         catch (Exception ex)
         {
@@ -378,7 +512,7 @@
             var globalProfiles = await db.AgentProfiles.Where(p => p.WorkspaceId == null).ToListAsync();
             if (globalProfiles.Count == 0)
             {
-                globalProfiles = AgentProfile.CreateStandardGlobalProfiles("qwen2.5-coder:32b").ToList();
+                globalProfiles = AgentProfile.CreateStandardGlobalProfiles(LlmOptions.Value).ToList();
             }
 
             foreach (var g in globalProfiles)
@@ -400,6 +534,7 @@
                     ThinkingTokenBudget = g.ThinkingTokenBudget,
                     MaxTurns = g.MaxTurns,
                     OptimizationFlags = g.OptimizationFlags?.Clone(),
+                    ContextWindowTokens = g.ContextWindowTokens,
                     SystemPrompt = g.SystemPrompt
                 };
                 db.AgentProfiles.Add(dedicated);
@@ -459,8 +594,22 @@
             using var scope = ScopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+            // If standalone Ollama, reset routing target to Auto
+            if (_providerType == LlmProviderType.Ollama)
+            {
+                foreach (var p in _profiles)
+                {
+                    p.RoutingTarget = OllamaRoutingTarget.Auto;
+                }
+            }
+
             foreach (var p in _profiles)
             {
+                if (!string.IsNullOrWhiteSpace(p.ModelName) && _discoveredContextWindows.TryGetValue(p.ModelName, out var ctxTokens))
+                {
+                    p.ContextWindowTokens = ctxTokens;
+                }
+
                 var existing = await db.AgentProfiles.FindAsync(p.Id);
                 if (existing != null)
                 {
@@ -473,6 +622,7 @@
                     existing.SecurityTier = p.SecurityTier;
                     existing.SystemPrompt = p.SystemPrompt;
                     existing.OptimizationFlags = p.OptimizationFlags;
+                    existing.ContextWindowTokens = p.ContextWindowTokens;
                     db.Entry(existing).State = EntityState.Modified;
                 }
                 else
@@ -518,6 +668,4 @@
 
     private void CustomizeFlags(AgentProfile profile) => profile.OptimizationFlags = new LocalOptimizationFlags();
     private void RevertFlags(AgentProfile profile) => profile.OptimizationFlags = null;
-
-    private static string FormatBytes(long bytes) => $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
 }

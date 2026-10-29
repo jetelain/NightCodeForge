@@ -13,7 +13,7 @@
 
 | Type | Kind | Description |
 | :--- | :--- | :--- |
-| `IOllamaChatClientFactory` | Interface | Factory contract for generating configured `IChatClient` instances for target models. |
+| `ILlmChatClientFactory` | Interface | Factory contract for generating configured `IChatClient` instances for target models. |
 | `OllamaChatClient` | Class | High-performance HTTP client communicating with Ollama's `/api/chat` streaming endpoint. |
 | `ThinkingAndActivityTracingChatClient` | Class | Middleware extracting thinking blocks (`<think>...</think>`) and emitting activity events. |
 | `LenientToolCallChatClient` | Class | Middleware detecting and repairing unstructured tool calls emitted in standard message content. |

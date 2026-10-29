@@ -38,15 +38,16 @@ public class MonitoringPageTests : BunitContext
         _mockTelemetryService.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(new List<ShellCommandRecord>());
 
         _mockGatewayService.Setup(g => g.GetGatewayStatusAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new OllamaRouterStatus(
+            .ReturnsAsync(new GatewayStatusReport(
                 IsConnected: true,
-                IsRouterProxy: true,
+                ProviderType: NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter,
                 BaseUrl: "http://localhost:11434",
-                Targets: new List<TargetBackendStatus>
+                Version: "1.0.0",
+                FleetTargets: new List<FleetTargetStatus>
                 {
-                    new("Local GPU Target", TargetBackendState.Active, "Workstation GPU", LatencyMs: 12),
-                    new("Remote Server Target", TargetBackendState.Available, "LAN GPU", LatencyMs: 24),
-                    new("Cloud Overflow Target", TargetBackendState.Active, "Cloud fallback", LatencyMs: 80)
+                    new("Local GPU Target", "http://localhost:11434", true, FleetLiveness.Online, 12, new FleetTargetHardware("Workstation GPU", "NVIDIA", ["RTX 4090"], 24576, 2), new FleetTargetExecution(0, null, "Dynamic")),
+                    new("Remote Server Target", null, true, FleetLiveness.Probing, 24, new FleetTargetHardware("LAN GPU", "NVIDIA", ["A100"], 81920, 4), new FleetTargetExecution(0, null, "Dynamic")),
+                    new("Cloud Overflow Target", null, true, FleetLiveness.Online, 80, new FleetTargetHardware("Cloud fallback", "Cloud", ["Cloud"], null, 8), new FleetTargetExecution(0, null, "Dynamic"))
                 }));
 
         _mockGatewayService.Setup(g => g.GetResidentModelsAsync(It.IsAny<CancellationToken>()))
@@ -218,14 +219,15 @@ public class MonitoringPageTests : BunitContext
     public void MonitoringPage_WhenTargetIsDisabled_RendersDisabledBadgeAndGrayStyle()
     {
         _mockGatewayService.Setup(g => g.GetGatewayStatusAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new OllamaRouterStatus(
+            .ReturnsAsync(new GatewayStatusReport(
                 IsConnected: true,
-                IsRouterProxy: true,
+                ProviderType: NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter,
                 BaseUrl: "http://localhost:11434",
-                Targets: new List<TargetBackendStatus>
+                Version: "1.0.0",
+                FleetTargets: new List<FleetTargetStatus>
                 {
-                    new("Local GPU Target", TargetBackendState.Disabled, "Local GPU is disabled"),
-                    new("Remote Server Target", TargetBackendState.Available, "LAN GPU", LatencyMs: 20)
+                    new("Local GPU Target", "http://localhost:11434", false, FleetLiveness.Online, null, new FleetTargetHardware("Local GPU is disabled", "NVIDIA", ["GPU"], 16384, 1), new FleetTargetExecution(0, null, "Dynamic")),
+                    new("Remote Server Target", null, true, FleetLiveness.Probing, 20, new FleetTargetHardware("LAN GPU", "NVIDIA", ["GPU"], 32768, 2), new FleetTargetExecution(0, null, "Dynamic"))
                 }));
 
         var cut = Render<Monitoring>();

@@ -12,6 +12,7 @@ using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Agents.Transcripts;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Services;
@@ -25,7 +26,7 @@ namespace NightCodeForge.Agents;
 /// </summary>
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddNightCodeForgeAgents(this IServiceCollection services)
+    public static IServiceCollection AddNightCodeForgeAgents(this IServiceCollection services, LlmProviderType providerType)
     {
         // 1. Streaming & Realtime Telemetry
         services.TryAddSingleton(TimeProvider.System);
@@ -69,10 +70,20 @@ public static class ServiceCollectionExtensions
         });
 
         // 7. Local LLM Chat Client & Factory (Ollama / OllamaRouter via OllamaSharp with tuned timeout)
-        services.TryAddSingleton<Inference.IOllamaChatClientFactory, Inference.DefaultOllamaChatClientFactory>();
+        switch (providerType)
+        {
+            case LlmProviderType.Ollama:
+                services.TryAddSingleton<Inference.ILlmChatClientFactory, Inference.StandaloneOllamaChatClientFactory>();
+                break;
+            case LlmProviderType.OllamaRouter:
+                services.TryAddSingleton<Inference.ILlmChatClientFactory, Inference.OllamaRouterChatClientFactory>();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(providerType), providerType, "Unsupported LLM provider type.");
+        }
         services.TryAddSingleton(sp =>
         {
-            var factory = sp.GetRequiredService<Inference.IOllamaChatClientFactory>();
+            var factory = sp.GetRequiredService<Inference.ILlmChatClientFactory>();
             return factory.CreateClient();
         });
 

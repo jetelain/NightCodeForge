@@ -36,7 +36,7 @@ public class WorkspaceWizardComponentTests : BunitContext
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton(_toastService);
         Services.AddSingleton<IWorkspaceProvisioningService>(_provisioningService);
-        Services.AddSingleton<IOllamaModelCatalogService>(_modelCatalogService);
+        Services.AddSingleton<ILlmModelCatalogService>(_modelCatalogService);
         Services.AddSingleton<IWslMetadataService>(_wslMetadataService);
         Services.AddSingleton<IConfiguration>(config);
     }
@@ -192,13 +192,15 @@ public class WorkspaceWizardComponentTests : BunitContext
         }
     }
 
-    private class MockModelCatalogService : IOllamaModelCatalogService
+    private class MockModelCatalogService : ILlmModelCatalogService
     {
-        public Task<IReadOnlyList<OllamaModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
+        public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<AvailableModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
         {
-            IReadOnlyList<OllamaModelInfo> list = new List<OllamaModelInfo>
+            IReadOnlyList<AvailableModelInfo> list = new List<AvailableModelInfo>
             {
-                new("Qwen3.8-27B:latest", "Qwen3.8-27B:latest", 1024, DateTime.UtcNow, "sha256:123")
+                new("Qwen3.8-27B:latest", "Qwen3.8-27B:latest", SizeBytes: 1024)
             };
             return Task.FromResult(list);
         }

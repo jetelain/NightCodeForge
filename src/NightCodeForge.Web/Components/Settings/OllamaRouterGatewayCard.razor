@@ -18,22 +18,24 @@
                     <span class="forge-badge @(_status.IsConnected ? "badge-teal" : "badge-gray")" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;">
                         @(_status.IsConnected ? "🟢 Gateway Connected" : "🔴 Gateway Offline")
                     </span>
-                    @if (_status.IsRouterProxy)
-                    {
-                        <span class="forge-badge badge-indigo" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;">
-                            OllamaRouter Active
-                        </span>
-                    }
+                    <span class="forge-badge @(_status.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter ? "badge-indigo" : "badge-teal")" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;">
+                        @(_status.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter ? "OllamaRouter Fleet Active" : "Standalone Ollama Active")
+                    </span>
                 }
             </div>
             <p style="margin: 0; font-size: 0.92rem; color: var(--text-secondary); line-height: 1.6; max-width: 820px;">
-                Reverse proxy gateway status, target backends, resident GPU models, and non-destructive memory release.
+                @(_status?.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter
+                    ? "Multi-node reverse proxy gateway status, target fleet backends, resident GPU models, and non-destructive memory release."
+                    : "Direct standalone Ollama host connection, local resident GPU models, and instant VRAM memory release.")
             </p>
         </div>
         <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
-            <a href="http://localhost:11434/monitor" target="_blank" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem;">
-                ↗ Open Router Monitor
-            </a>
+            @if (_status?.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter)
+            {
+                <a href="@GetRouterMonitorUrl()" target="_blank" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem;">
+                    ↗ Open Router Monitor
+                </a>
+            }
             <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem;" @onclick="RefreshAsync" disabled="@_isLoading">
                 @(_isLoading ? "Refreshing..." : "🔄 Refresh")
             </button>
@@ -43,32 +45,55 @@
         </div>
     </div>
 
-    <!-- Dual-Compute Topology Callout -->
-    <div style="padding: 1.25rem 1.5rem; border-radius: var(--radius-lg); background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 2rem;">
-        <span style="font-size: 1.5rem; line-height: 1;">💡</span>
-        <div style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.6;">
-            <strong style="color: var(--text-primary);">Dual-Compute Architecture:</strong> Both <strong>Host GPU</strong> (Local) and the <strong>Dedicated LAN Server</strong> (Remote) are 100% on-premise private resources. OllamaRouter dispatches ~95% of heavy dev-queue tasks to the high-VRAM LAN server, leaving your Host GPU free to power interactive <strong>Ideation Chat</strong> simultaneously without queue latency. <strong>Cloud Overflow</strong> remains available on-demand for zero-local-VRAM operations.
+    <!-- Dual-Compute Topology Callout (Router mode only) -->
+    @if (_status?.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter)
+    {
+        <div style="padding: 1.25rem 1.5rem; border-radius: var(--radius-lg); background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 2rem;">
+            <span style="font-size: 1.5rem; line-height: 1;">💡</span>
+            <div style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.6;">
+                <strong style="color: var(--text-primary);">Fleet Architecture:</strong> Both <strong>Host GPU</strong> (Desktop) and <strong>Dedicated LAN Server</strong> (Remote) are 100% on-premise private resources. OllamaRouter dynamically routes heavy dev-queue tasks to high-capacity nodes, preserving local GPU for interactive <strong>Ideation Chat</strong> without queue contention.
+            </div>
         </div>
-    </div>
+    }
 
     <!-- Target Backends Status -->
     <div style="margin-bottom: 2rem;">
         <label style="display: block; font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.85rem;">
-            Target Routing Endpoints &amp; Cluster Health
+            @(_status?.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter ? "Fleet Routing Endpoints & Hardware Topology" : "Host Inference Backend & Health")
         </label>
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.25rem;">
-            @if (_status?.Targets != null)
+            @if (_status?.FleetTargets != null && _status.FleetTargets.Count > 0)
             {
-                @foreach (var target in _status.Targets)
+                @foreach (var target in _status.FleetTargets)
                 {
                     <div class="forge-subcard" style="padding: 1.5rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); box-shadow: var(--shadow-sm);">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                            <strong style="font-size: 1.05rem; color: var(--text-primary); font-weight: 700;">@target.TargetName</strong>
-                            <span class="forge-badge @OperationsTelemetryUiService.GetTargetBackendBadgeClass(target.State)" style="padding: 0.25rem 0.65rem; font-size: 0.8rem;">
-                                @target.State
-                            </span>
+                            <strong style="font-size: 1.05rem; color: var(--text-primary); font-weight: 700;">@target.Name</strong>
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                @if (target.LatencyMs.HasValue)
+                                {
+                                    <span class="font-mono" style="font-size: 0.8rem; color: var(--accent-teal); font-weight: 600;">@target.LatencyMs.Value ms</span>
+                                }
+                                <span class="forge-badge @OperationsTelemetryUiService.GetTargetBackendBadgeClass(target.State)" style="padding: 0.25rem 0.65rem; font-size: 0.8rem;">
+                                    @target.State
+                                </span>
+                            </div>
                         </div>
-                        <p style="margin: 0; font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">@target.Description</p>
+                        <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 0.5rem;">
+                            @if (!string.IsNullOrWhiteSpace(target.Hardware?.HardwareHint))
+                            {
+                                <span class="forge-badge badge-indigo" style="font-size: 0.75rem; margin-right: 0.35rem;">@target.Hardware.HardwareHint</span>
+                            }
+                            <span>@(target.Hardware?.GpuVendor ?? "Host")</span>
+                            @if (target.Hardware?.MaxVramMB.HasValue == true)
+                            {
+                                <span> • @(target.Hardware.MaxVramMB.Value / 1024) GB VRAM</span>
+                            }
+                        </div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+                            <span>Active: @(target.Execution?.ActiveModel ?? "Idle")</span>
+                            <span>@(target.Execution?.ContextAllocation ?? "Dynamic")</span>
+                        </div>
                     </div>
                 }
             }
@@ -81,16 +106,6 @@
         </div>
     </div>
 
-    <!-- Wire-Level Healing Strip -->
-    <div style="padding: 1.25rem 1.5rem; border-radius: var(--radius-lg); background: var(--bg-surface); border: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; gap: 1.25rem; margin-bottom: 2.5rem; flex-wrap: wrap;">
-        <div style="display: flex; align-items: center; gap: 1rem; flex: 1; min-width: 280px;">
-            <span style="font-size: 1.75rem;">🛡️</span>
-            <span style="font-size: 0.92rem; color: var(--text-secondary); line-height: 1.6;">
-                <strong>Wire-Level Auto-Healing:</strong> OllamaRouter strips markdown code fences (<code>```json</code>), repairs malformed tool arguments, and auto-promotes <code>&lt;tool_call&gt;</code> pseudo-tags.
-            </span>
-        </div>
-        <span class="forge-badge badge-teal" style="padding: 0.35rem 0.85rem; font-size: 0.85rem; font-weight: 600;">Active</span>
-    </div>
 
     <!-- Resident VRAM Models Table (/api/ps) -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
@@ -115,7 +130,7 @@
                 {
                     <tr>
                         <td colspan="4" style="padding: 3rem 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.95rem;">
-                            @(_status?.IsConnected == true ? "No models currently resident in GPU VRAM." : "Gateway unreachable at " + (_status?.BaseUrl ?? "http://localhost:11434"))
+                            @(_status?.IsConnected == true ? "No models currently resident in GPU VRAM." : "Gateway unreachable at " + (_status?.BaseUrl ?? "configured endpoint"))
                         </td>
                     </tr>
                 }
@@ -137,7 +152,7 @@
 </div>
 
 @code {
-    private OllamaRouterStatus? _status;
+    private GatewayStatusReport? _status;
     private List<ResidentModelInfo> _residentModels = new();
     private bool _isLoading;
     private bool _isReclaiming;
@@ -145,6 +160,12 @@
     protected override async Task OnInitializedAsync()
     {
         await RefreshAsync();
+    }
+
+    private string GetRouterMonitorUrl()
+    {
+        var baseUrl = _status?.BaseUrl;
+        return string.IsNullOrWhiteSpace(baseUrl) ? "/monitor" : $"{baseUrl.TrimEnd('/')}/monitor";
     }
 
     private async Task RefreshAsync()
@@ -174,7 +195,8 @@
             var success = await GatewayService.ReclaimVramAsync();
             if (success)
             {
-                ToastService.Show("VRAM Reclaim Triggered", "Sent non-destructive memory reclaim command to OllamaRouter.", ToastLevel.Success);
+                var providerName = _status?.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter ? "OllamaRouter" : "Ollama";
+                ToastService.Show("VRAM Reclaim Triggered", $"Sent non-destructive memory reclaim command to {providerName}.", ToastLevel.Success);
             }
             else
             {

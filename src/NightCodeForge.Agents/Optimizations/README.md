@@ -20,7 +20,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** `CrucibleAgentHarness`, `Inference.IOllamaChatClientFactory`.
+- **Inbound (Who uses this):** `CrucibleAgentHarness`, `Inference.ILlmChatClientFactory`.
 - **Outbound (What this relies on):** `Microsoft.Extensions.AI`, `Microsoft.CodeAnalysis.CSharp`, `NightCodeForge.Core.Domain`.
 
 ## 4. Invariants & Architectural Rules

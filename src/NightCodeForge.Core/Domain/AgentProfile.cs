@@ -1,3 +1,5 @@
+using NightCodeForge.Core.Interfaces;
+
 namespace NightCodeForge.Core.Domain;
 
 /// <summary>
@@ -85,81 +87,100 @@ public class AgentProfile
 Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.
 Each proposed task represents a full Pull Request / Merge Request unit of work with autonomous build, test, and code review gates.
 Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with sub-tasks and open questions to be answered in the task review process.",
-        Temperature = 1,
         ThinkingEffort = ThinkingEffort.Medium,
         MaxTurns = 300
     };
 
     /// <summary>
     /// Creates the baseline set of 5 standard global agent profiles (WorkspaceId == null)
-    /// configured with the designated default model. OptimizationFlags is null by default to inherit global optimizations.
+    /// configured with the designated default model or differentiated coder/architect roles.
+    /// OptimizationFlags is null by default to inherit global optimizations.
     /// </summary>
-    public static IReadOnlyList<AgentProfile> CreateStandardGlobalProfiles(string defaultModelName) => new List<AgentProfile>
+    public static IReadOnlyList<AgentProfile> CreateStandardGlobalProfiles(ILlmProviderOptions options)
     {
-        new()
+        ArgumentNullException.ThrowIfNull(options);
+
+        var coderModel = !string.IsNullOrWhiteSpace(options.CoderModelId) ? options.CoderModelId : options.DefaultModelId;
+        var coderEffort = options.CoderThinkingEffort ?? options.DefaultThinkingEffort;
+
+        var archModel = !string.IsNullOrWhiteSpace(options.ArchitectModelId) ? options.ArchitectModelId : options.DefaultModelId;
+        var archEffort = options.ArchitectThinkingEffort ?? (options.DefaultThinkingEffort == ThinkingEffort.None ? ThinkingEffort.None : ThinkingEffort.High);
+
+        var autoOrLocal = OllamaRoutingTarget.Auto;
+        var triageTarget = options.ProviderType == LlmProviderType.Ollama ? OllamaRoutingTarget.Auto : OllamaRoutingTarget.Local;
+
+        var ideationProfile = CreateDefaultIdeationProfile(null, archModel);
+        ideationProfile.ThinkingEffort = archEffort;
+
+        return new List<AgentProfile>
         {
-            Id = StandardStageIds.Triage,
-            WorkspaceId = null,
-            Name = "Stage 0 Untrusted Intake Triage Agent",
-            HarnessId = StandardHarnessIds.Crucible,
-            ModelName = defaultModelName,
-            Mode = AgentMode.ReadOnly,
-            SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
-            RoutingTarget = OllamaRoutingTarget.Local, // Pinned to Host GPU for immediate on-premise execution
-            PermittedTools = DefaultAgentTools.ReadOnly,
-            OptimizationFlags = null,
-            Temperature = 1.0,
-            ThinkingEffort = ThinkingEffort.Medium,
-            MaxTurns = 250
-        },
-        CreateDefaultIdeationProfile(null, defaultModelName),
-        new()
-        {
-            Id = StandardStageIds.TaskReview,
-            WorkspaceId = null,
-            Name = "ForgeTask Review Agent",
-            HarnessId = StandardHarnessIds.Crucible,
-            ModelName = defaultModelName,
-            Mode = AgentMode.Full,
-            SecurityTier = SandboxSecurityTier.Standard,
-            RoutingTarget = OllamaRoutingTarget.Auto,
-            PermittedTools = DefaultAgentTools.Full,
-            OptimizationFlags = null,
-            Temperature = 1.0,
-            ThinkingEffort = ThinkingEffort.High,
-            MaxTurns = 500
-        },
-        new()
-        {
-            Id = StandardStageIds.Implementation,
-            WorkspaceId = null,
-            Name = "Implementation Agent",
-            HarnessId = StandardHarnessIds.Crucible,
-            ModelName = defaultModelName,
-            Mode = AgentMode.Full,
-            SecurityTier = SandboxSecurityTier.Standard,
-            RoutingTarget = OllamaRoutingTarget.Auto,
-            PermittedTools = DefaultAgentTools.Full,
-            OptimizationFlags = null,
-            Temperature = 1.0,
-            ThinkingEffort = ThinkingEffort.Medium,
-            MaxTurns = 500
-        },
-        new()
-        {
-            Id = StandardStageIds.CodeReviewAndFix,
-            WorkspaceId = null,
-            Name = "Code Review & Targeted Fix Agent",
-            HarnessId = StandardHarnessIds.Crucible,
-            ModelName = defaultModelName,
-            Mode = AgentMode.Review,
-            SecurityTier = SandboxSecurityTier.Standard,
-            RoutingTarget = OllamaRoutingTarget.Auto,
-            PermittedTools = DefaultAgentTools.Review,
-            OptimizationFlags = null,
-            Temperature = 1.0,
-            ThinkingEffort = ThinkingEffort.High,
-            MaxTurns = 300
-        }
-    };
+            new()
+            {
+                Id = StandardStageIds.Triage,
+                WorkspaceId = null,
+                Name = "Stage 0 Untrusted Intake Triage Agent",
+                HarnessId = StandardHarnessIds.Crucible,
+                ModelName = archModel,
+                Mode = AgentMode.ReadOnly,
+                SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
+                RoutingTarget = triageTarget,
+                PermittedTools = DefaultAgentTools.ReadOnly,
+                OptimizationFlags = null,
+                ThinkingEffort = archEffort,
+                MaxTurns = 250
+            },
+            ideationProfile,
+            new()
+            {
+                Id = StandardStageIds.TaskReview,
+                WorkspaceId = null,
+                Name = "ForgeTask Review Agent",
+                HarnessId = StandardHarnessIds.Crucible,
+                ModelName = archModel,
+                Mode = AgentMode.Full,
+                SecurityTier = SandboxSecurityTier.Standard,
+                RoutingTarget = autoOrLocal,
+                PermittedTools = DefaultAgentTools.Full,
+                OptimizationFlags = null,
+                ThinkingEffort = archEffort,
+                MaxTurns = 500
+            },
+            new()
+            {
+                Id = StandardStageIds.Implementation,
+                WorkspaceId = null,
+                Name = "Implementation Agent",
+                HarnessId = StandardHarnessIds.Crucible,
+                ModelName = coderModel,
+                Mode = AgentMode.Full,
+                SecurityTier = SandboxSecurityTier.Standard,
+                RoutingTarget = autoOrLocal,
+                PermittedTools = DefaultAgentTools.Full,
+                OptimizationFlags = null,
+                ThinkingEffort = coderEffort,
+                MaxTurns = 500
+            },
+            new()
+            {
+                Id = StandardStageIds.CodeReviewAndFix,
+                WorkspaceId = null,
+                Name = "Code Review & Targeted Fix Agent",
+                HarnessId = StandardHarnessIds.Crucible,
+                ModelName = archModel,
+                Mode = AgentMode.Review,
+                SecurityTier = SandboxSecurityTier.Standard,
+                RoutingTarget = autoOrLocal,
+                PermittedTools = DefaultAgentTools.Review,
+                OptimizationFlags = null,
+                ThinkingEffort = archEffort,
+                MaxTurns = 300
+            }
+        };
+    }
+
+    /// <summary>
+    /// Helper overload for convenience in tests and workspace provisioning using a default model identifier.
+    /// </summary>
+    public static IReadOnlyList<AgentProfile> CreateStandardGlobalProfiles(string defaultModelName)
+        => CreateStandardGlobalProfiles(new DefaultLlmProviderOptions(DefaultModelId: defaultModelName));
 }

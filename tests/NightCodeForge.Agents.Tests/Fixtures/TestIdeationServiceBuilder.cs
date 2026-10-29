@@ -23,7 +23,7 @@ using NightCodeForge.Core.Streaming;
 public class TestIdeationServiceBuilder
 {
     public IWorkspacePathResolver PathResolver { get; set; } = CreateDefaultPathResolver();
-    public IOllamaChatClientFactory? ChatClientFactory { get; set; }
+    public ILlmChatClientFactory? ChatClientFactory { get; set; }
 
     private static IWorkspacePathResolver CreateDefaultPathResolver()
     {
@@ -44,10 +44,19 @@ public class TestIdeationServiceBuilder
     public SkillsService SkillsService { get; set; } = new();
     public IWorkspaceRepository WorkspaceRepository { get; set; } = new InMemoryWorkspaceRepository();
     public ITaskMarkdownSyncService MarkdownSyncService { get; set; } = new Mock<ITaskMarkdownSyncService>().Object;
+    public IOllamaRouterGatewayService GatewayService { get; set; } = CreateDefaultGatewayService();
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
     public ILogger<IdeationService> Logger { get; set; } = NullLogger<IdeationService>.Instance;
     public ILogger<CanonicalTools> CanonicalToolsLogger { get; set; } = NullLogger<CanonicalTools>.Instance;
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+
+    private static IOllamaRouterGatewayService CreateDefaultGatewayService()
+    {
+        var mock = new Mock<IOllamaRouterGatewayService>();
+        mock.Setup(m => m.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(131072);
+        return mock.Object;
+    }
 
     public IdeationService Build()
     {
@@ -61,6 +70,7 @@ public class TestIdeationServiceBuilder
         return new IdeationService(
             PathResolver,
             factory,
+            GatewayService,
             EnvProvider,
             WebSearchService,
             EditorConfigService,

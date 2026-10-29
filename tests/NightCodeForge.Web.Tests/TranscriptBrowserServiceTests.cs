@@ -45,11 +45,11 @@ public class TranscriptBrowserServiceTests : IDisposable
     }
 
     private TranscriptBrowserService CreateService(
-        IOllamaChatClientFactory? chatClientFactory = null,
+        ILlmChatClientFactory? chatClientFactory = null,
         NightCodeForge.Core.Services.ITranscriptAnalysisService? customAnalysisService = null)
     {
         var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        var factory = chatClientFactory ?? new Mock<IOllamaChatClientFactory>().Object;
+        var factory = chatClientFactory ?? new Mock<ILlmChatClientFactory>().Object;
         var analysisService = customAnalysisService ?? new NightCodeForge.Core.Services.TranscriptAnalysisService();
         var logger = NullLogger<TranscriptBrowserService>.Instance;
         return new TranscriptBrowserService(_fakeGlobalOptService, scopeFactory, factory, analysisService, logger);
@@ -337,7 +337,7 @@ Done refactoring.
             .ReturnsAsync(new Microsoft.Extensions.AI.ChatResponse(new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant,
                 "Root cause category: InfiniteLoop\nDiagnosis: Model repeatedly tried reading missing file.\nSuggested action: Check file existence.")));
 
-        var mockFactory = new Mock<IOllamaChatClientFactory>();
+        var mockFactory = new Mock<ILlmChatClientFactory>();
         mockFactory
             .Setup(f => f.CreateClient(null, OllamaRoutingTarget.Cloud))
             .Returns(mockChatClient.Object);

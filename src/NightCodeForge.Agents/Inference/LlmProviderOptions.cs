@@ -1,11 +1,19 @@
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
+
 namespace NightCodeForge.Agents.Inference;
 
 /// <summary>
 /// Configuration options for local or remote LLM inference providers (Ollama / OllamaRouter).
 /// </summary>
-public class LlmProviderOptions
+public class LlmProviderOptions : ILlmProviderOptions
 {
     public const string SectionName = "LlmProvider";
+
+    /// <summary>
+    /// LLM inference provider type: Standalone Ollama (single host) or OllamaRouter (multi-node fleet).
+    /// </summary>
+    public LlmProviderType ProviderType { get; set; } = LlmProviderType.OllamaRouter;
 
     /// <summary>
     /// Base HTTP/HTTPS endpoint of the Ollama or OllamaRouter server (defaults to http://localhost:11434).
@@ -13,14 +21,50 @@ public class LlmProviderOptions
     public string Endpoint { get; set; } = "http://localhost:11434";
 
     /// <summary>
-    /// Default model identifier (e.g. qwen2.5-coder:7b or qwen2.5-coder:32b).
-    /// </summary>
-    public string ModelId { get; set; } = "qwen2.5-coder:7b";
-
-    /// <summary>
     /// HTTP client request timeout in minutes to accommodate lengthy code generation and reasoning (default: 15 minutes).
     /// </summary>
     public double RequestTimeoutMinutes { get; set; } = 15;
+
+    public const int DefaultContextWindowTokens = 131072;
+    public const int DefaultMaxOutputTokens = 8192;
+
+    /// <summary>
+    /// Baseline context window in tokens (used as fallback when provider discovery is unavailable).
+    /// </summary>
+    public int ContextWindowTokens { get; set; } = DefaultContextWindowTokens;
+
+    /// <summary>
+    /// Output token budget reserved from the context window.
+    /// </summary>
+    public int MaxOutputTokens { get; set; } = DefaultMaxOutputTokens;
+
+    /// <summary>
+    /// Standardized default model identifier across pipeline stages.
+    /// </summary>
+    public string DefaultModelId { get; set; } = "Qwen3.8-27B:latest";
+
+    /// <summary>
+    /// Default thinking/reasoning effort across pipeline stages.
+    /// </summary>
+    public ThinkingEffort DefaultThinkingEffort { get; set; } = ThinkingEffort.Medium;
+
+    /// <summary>
+    /// Legacy ThinkingEffort property forwarding to DefaultThinkingEffort for backwards compatibility.
+    /// </summary>
+    public ThinkingEffort ThinkingEffort
+    {
+        get => DefaultThinkingEffort;
+        set => DefaultThinkingEffort = value;
+    }
+
+    /// <summary>
+    /// Legacy ModelId property forwarding to DefaultModelId for backwards compatibility.
+    /// </summary>
+    public string ModelId
+    {
+        get => DefaultModelId;
+        set => DefaultModelId = value;
+    }
 
     /// <summary>
     /// Reasoning effort level for models supporting internal chain-of-thought (e.g. "xhigh", "high", "medium", "low").
@@ -28,18 +72,25 @@ public class LlmProviderOptions
     /// </summary>
     public string? ReasoningEffort { get; set; } = "xhigh";
 
-    public const int DefaultContextWindowTokens = 131072;
-    public const int DefaultMaxOutputTokens = 8192;
+    /// <summary>
+    /// Coder role model identifier for Stage 3 (implementation).
+    /// </summary>
+    public string? CoderModelId { get; set; }
 
     /// <summary>
-    /// Default model context window in tokens, used to size MAF in-loop compaction.
+    /// Coder role thinking effort for Stage 3 (implementation).
     /// </summary>
-    public int ContextWindowTokens { get; set; } = DefaultContextWindowTokens;
+    public ThinkingEffort? CoderThinkingEffort { get; set; }
 
     /// <summary>
-    /// Output token budget reserved from the context window when sizing MAF in-loop compaction.
+    /// Architect role model identifier for Stage 0 (triage), Stage 1 (task-review), Stage 5 (code-review-fix), and ideation.
     /// </summary>
-    public int MaxOutputTokens { get; set; } = DefaultMaxOutputTokens;
+    public string? ArchitectModelId { get; set; }
+
+    /// <summary>
+    /// Architect role thinking effort for Stage 0, Stage 1, Stage 5, and ideation.
+    /// </summary>
+    public ThinkingEffort? ArchitectThinkingEffort { get; set; }
 
     /// <summary>
     /// Per-model capability overrides keyed by a case-insensitive substring of the model id
@@ -62,7 +113,8 @@ public class LlmProviderOptions
         return new Dictionary<string, ModelCapabilityProfile>(StringComparer.OrdinalIgnoreCase)
         {
             ["qwen3.8"] = Qwen38(),
-            ["qwen-3.8"] = Qwen38()
+            ["qwen-3.8"] = Qwen38(),
+            ["Qwen3.8-27B:latest"] = Qwen38()
         };
     }
 }

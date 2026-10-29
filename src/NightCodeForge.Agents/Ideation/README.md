@@ -19,7 +19,7 @@
 ## 3. Dependencies & Interaction Graph
 
 - **Inbound (Who uses this):** Web UI (`IdeationModal` / Chat component).
-- **Outbound (What this relies on):** `Inference.IOllamaChatClientFactory`, `Tools.CanonicalTools`, `Core.Repositories.ITaskRepository`.
+- **Outbound (What this relies on):** `Inference.ILlmChatClientFactory`, `Tools.CanonicalTools`, `Core.Repositories.ITaskRepository`.
 
 ## 4. Invariants & Architectural Rules
 

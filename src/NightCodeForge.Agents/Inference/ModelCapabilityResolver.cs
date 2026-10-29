@@ -1,6 +1,7 @@
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
 using NightCodeForge.Agents.Compaction;
+using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Agents.Inference;
 
@@ -11,6 +12,31 @@ namespace NightCodeForge.Agents.Inference;
 public static class ModelCapabilityResolver
 {
     private static readonly string[] EffortRank = ["minimal", "low", "medium", "high", "xhigh"];
+
+    /// <summary>
+    /// Builds the Pi-style in-loop context compaction strategy sized for the agent profile's model and context window.
+    /// In multi-node fleet environments, the context window should reflect the largest capability of the fleet
+    /// to prevent premature compaction while capable larger nodes or cloud overflow can service the context.
+    /// </summary>
+    public static CompactionStrategy BuildCompactionStrategy(
+        AgentProfile profile,
+        LlmProviderOptions? options = null,
+        int? explicitContextWindowTokens = null,
+        int? explicitReserveTokens = null,
+        int? explicitKeepRecentTokens = null,
+        IChatClient? summarizerClient = null)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        int? windowTokens = explicitContextWindowTokens ?? profile.ContextWindowTokens;
+        var modelId = !string.IsNullOrWhiteSpace(profile.ModelName) ? profile.ModelName : options?.DefaultModelId;
+        return BuildCompactionStrategy(
+            options,
+            modelId,
+            explicitContextWindowTokens: windowTokens,
+            explicitReserveTokens: explicitReserveTokens,
+            explicitKeepRecentTokens: explicitKeepRecentTokens,
+            summarizerClient: summarizerClient);
+    }
 
     /// <summary>
     /// Finds the profile whose key is the longest case-insensitive substring of <paramref name="modelId"/>.

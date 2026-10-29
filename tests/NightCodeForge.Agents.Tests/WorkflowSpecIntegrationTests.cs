@@ -122,13 +122,15 @@ public class WorkflowSpecIntegrationTests
         public void Dispose() { }
     }
 
-    private class SingleClientFactory : IOllamaChatClientFactory
+    private class SingleClientFactory : ILlmChatClientFactory
     {
         private readonly WorkflowMockChatClient _client;
         public SingleClientFactory(WorkflowMockChatClient client) => _client = client;
         public IChatClient CreateClient(string? modelId = null) => _client;
         public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget) => _client;
         public IChatClient CreateClient(AgentProfile? profile) => _client;
+        public IChatClient CreateClient(AgentProfile? profile, string? sessionId) => _client;
+        public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget, string? sessionId) => _client;
     }
 
     private class InterceptingHarness : IAgentHarness

@@ -1,6 +1,18 @@
 namespace NightCodeForge.Core.Domain;
 
 /// <summary>
+/// Type of LLM inference backend connection.
+/// </summary>
+public enum LlmProviderType
+{
+    /// <summary>Direct connection to standard Ollama instance (single host GPU).</summary>
+    Ollama = 0,
+
+    /// <summary>Connection to OllamaRouter reverse proxy (multi-node LAN fleet + cloud overflow).</summary>
+    OllamaRouter = 1
+}
+
+/// <summary>
 /// Operational mode defining tool capabilities for an agent or requirements for a stage.
 /// </summary>
 public enum AgentMode

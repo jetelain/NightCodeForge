@@ -18,7 +18,7 @@ public class IdeationServiceTests
 {
     private IdeationService CreateService(
         IChatClient? client = null,
-        IOllamaChatClientFactory? chatClientFactory = null,
+        ILlmChatClientFactory? chatClientFactory = null,
         IWorkspacePathResolver? pathResolver = null,
         IAgentActivityStreamer? activityStreamer = null,
         SessionTranscriptService? transcriptService = null,
@@ -400,13 +400,16 @@ Let me know what you think!";
         public void Dispose() { }
     }
 
-    private class MockChatClientFactory : IOllamaChatClientFactory
+    private class MockChatClientFactory : ILlmChatClientFactory
     {
         private readonly Func<AgentProfile?, IChatClient> _createFunc;
         public MockChatClientFactory(Func<AgentProfile?, IChatClient> createFunc) => _createFunc = createFunc;
         public IChatClient CreateClient(string? modelId = null) => _createFunc(null);
         public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget) => _createFunc(null);
         public IChatClient CreateClient(AgentProfile? profile) => _createFunc(profile);
+
+        public IChatClient CreateClient(AgentProfile? profile, string? sessionId) => _createFunc(profile);
+        public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget, string? sessionId) => _createFunc(null);
     }
 
     private class FakePathResolver : NightCodeForge.Core.Interfaces.IWorkspacePathResolver
@@ -945,6 +948,56 @@ Let me know what you think!";
         {
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
         }
+    }
+
+    [Fact]
+    public async Task ConverseAsync_WhenContextWindowNotSetOnProfile_ResolvesDynamicContextWindowFromGateway()
+    {
+        var mockGateway = new Mock<IOllamaRouterGatewayService>();
+        mockGateway.Setup(g => g.ResolveContextWindowAsync("custom-arch:latest", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(262144);
+
+        var fakeClient = new FakeChatClient { ResponseToReturn = "Acknowledged." };
+        var service = new TestIdeationServiceBuilder
+        {
+            BaseChatClient = fakeClient,
+            GatewayService = mockGateway.Object
+        }.Build();
+
+        var workspace = CreateWorkspace(17);
+        var profile = workspace.AgentProfiles.First();
+        profile.ModelName = "custom-arch:latest";
+        profile.ContextWindowTokens = null;
+
+        var result = await service.ConverseAsync(workspace, "Brainstorm ideas");
+
+        Assert.NotNull(result);
+        mockGateway.Verify(g => g.ResolveContextWindowAsync("custom-arch:latest", It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task ConverseAsync_WhenContextWindowSetOnProfile_SkipsDynamicResolution()
+    {
+        var mockGateway = new Mock<IOllamaRouterGatewayService>();
+        mockGateway.Setup(g => g.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(262144);
+
+        var fakeClient = new FakeChatClient { ResponseToReturn = "Acknowledged." };
+        var service = new TestIdeationServiceBuilder
+        {
+            BaseChatClient = fakeClient,
+            GatewayService = mockGateway.Object
+        }.Build();
+
+        var workspace = CreateWorkspace(18);
+        var profile = workspace.AgentProfiles.First();
+        profile.ModelName = "custom-arch:latest";
+        profile.ContextWindowTokens = 65536;
+
+        var result = await service.ConverseAsync(workspace, "Brainstorm ideas");
+
+        Assert.NotNull(result);
+        mockGateway.Verify(g => g.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }
 

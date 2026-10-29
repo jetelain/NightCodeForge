@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.Extensions.AI;
+using Moq;
 using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
@@ -102,6 +103,86 @@ public class CrucibleMaxTurnsAndRoutingTests
         Assert.NotNull(capturedRequest);
         Assert.True(capturedRequest.Headers.Contains("X-OllamaRouter-Target"));
         Assert.Equal("Cloud", capturedRequest.Headers.GetValues("X-OllamaRouter-Target").First());
+    }
+
+    [Fact]
+    public async Task CrucibleAgentHarness_RunStageAsync_WhenContextWindowNotSetOnProfile_ResolvesDynamicContextWindowFromGateway()
+    {
+        var mockGateway = new Moq.Mock<NightCodeForge.Core.Interfaces.IOllamaRouterGatewayService>();
+        mockGateway.Setup(g => g.ResolveContextWindowAsync("qwen3.8:27b", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(262144);
+
+        var recordingClient = new FakeRecordingClient();
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = recordingClient,
+            GatewayService = mockGateway.Object,
+            PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create()
+        }.Build();
+
+        var task = new ForgeTask { Id = 301, Title = "Context Window Dynamic Discovery", Description = "Test" };
+        var workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory() };
+        var context = new AgentSessionContext
+        {
+            ForgeTask = task,
+            Workspace = workspace,
+            Profile = new AgentProfile { Id = "test-agent", ModelName = "qwen3.8:27b", ContextWindowTokens = null, Mode = AgentMode.Full },
+            StageId = StandardStageIds.Implementation,
+            RequiredMode = AgentMode.Full,
+            WorkspacePath = Directory.GetCurrentDirectory()
+        };
+
+        var result = await harness.RunStageAsync(context);
+
+        Assert.NotNull(result);
+        mockGateway.Verify(g => g.ResolveContextWindowAsync("qwen3.8:27b", It.IsAny<CancellationToken>()), Moq.Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task CrucibleAgentHarness_RunStageAsync_WhenContextWindowSetOnProfile_SkipsDynamicResolution()
+    {
+        var mockGateway = new Moq.Mock<NightCodeForge.Core.Interfaces.IOllamaRouterGatewayService>();
+        mockGateway.Setup(g => g.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(262144);
+
+        var recordingClient = new FakeRecordingClient();
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = recordingClient,
+            GatewayService = mockGateway.Object,
+            PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create()
+        }.Build();
+
+        var task = new ForgeTask { Id = 302, Title = "Context Window Explicit", Description = "Test" };
+        var workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory() };
+        var context = new AgentSessionContext
+        {
+            ForgeTask = task,
+            Workspace = workspace,
+            Profile = new AgentProfile { Id = "test-agent", ModelName = "qwen3.8:27b", ContextWindowTokens = 65536, Mode = AgentMode.Full },
+            StageId = StandardStageIds.Implementation,
+            RequiredMode = AgentMode.Full,
+            WorkspacePath = Directory.GetCurrentDirectory()
+        };
+
+        var result = await harness.RunStageAsync(context);
+
+        Assert.NotNull(result);
+        mockGateway.Verify(g => g.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Moq.Times.Never);
+    }
+
+    private class FakeRecordingClient : IChatClient
+    {
+        public ChatClientMetadata Metadata => new("FakeRecordingClient");
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Done.")));
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "Done.");
+            await Task.CompletedTask;
+        }
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
     }
 
     private class TestHandler : HttpMessageHandler

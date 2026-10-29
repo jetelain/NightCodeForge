@@ -22,7 +22,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
 {
     private readonly IGlobalOptimizationSettingsService _globalOptService;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IOllamaChatClientFactory _chatClientFactory;
+    private readonly ILlmChatClientFactory _chatClientFactory;
     private readonly NightCodeForge.Core.Services.ITranscriptAnalysisService _analysisService;
     private readonly ILogger<TranscriptBrowserService> _logger;
 
@@ -47,7 +47,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
     public TranscriptBrowserService(
         IGlobalOptimizationSettingsService globalOptService,
         IServiceScopeFactory scopeFactory,
-        IOllamaChatClientFactory chatClientFactory,
+        ILlmChatClientFactory chatClientFactory,
         NightCodeForge.Core.Services.ITranscriptAnalysisService analysisService,
         ILogger<TranscriptBrowserService> logger)
     {

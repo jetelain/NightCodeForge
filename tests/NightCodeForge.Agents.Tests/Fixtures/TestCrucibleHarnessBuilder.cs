@@ -24,7 +24,7 @@ using NightCodeForge.Core.Streaming;
 public class TestCrucibleHarnessBuilder
 {
     public IWorkspacePathResolver PathResolver { get; set; } = new Mock<IWorkspacePathResolver>().Object;
-    public IOllamaChatClientFactory? ChatClientFactory { get; set; }
+    public ILlmChatClientFactory? ChatClientFactory { get; set; }
     public IChatClient? BaseChatClient { get; set; }
     public IExecutionEnvironmentProvider EnvProvider { get; set; } = new SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object);
     public IMcpClientManager McpManager { get; set; } = CreateDefaultMcpManager();
@@ -48,6 +48,7 @@ public class TestCrucibleHarnessBuilder
     public ITaskRepository TaskRepository { get; set; } = new InMemoryTaskRepository();
     public ITaskCancellationManager CancellationManager { get; set; } = new NightCodeForge.Core.Concurrency.TaskCancellationManager(NullLogger<NightCodeForge.Core.Concurrency.TaskCancellationManager>.Instance);
     public IOperationsControlService OperationsControlService { get; set; } = CreateDefaultOperationsControlService();
+    public IOllamaRouterGatewayService GatewayService { get; set; } = CreateDefaultGatewayService();
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
     public IOptions<NightCodeForge.Core.Resilience.RetryPolicyOptions> RetryOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
     public ILogger<CrucibleAgentHarness> Logger { get; set; } = NullLogger<CrucibleAgentHarness>.Instance;
@@ -59,6 +60,14 @@ public class TestCrucibleHarnessBuilder
         var mock = new Mock<IOperationsControlService>();
         mock.Setup(m => m.IsPaused).Returns(false);
         mock.Setup(m => m.ReclaimStatus).Returns(OperationsReclaimStatus.Idle);
+        return mock.Object;
+    }
+
+    private static IOllamaRouterGatewayService CreateDefaultGatewayService()
+    {
+        var mock = new Mock<IOllamaRouterGatewayService>();
+        mock.Setup(m => m.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(131072);
         return mock.Object;
     }
 
@@ -74,6 +83,7 @@ public class TestCrucibleHarnessBuilder
         return new CrucibleAgentHarness(
             PathResolver,
             factory,
+            GatewayService,
             EnvProvider,
             McpManager,
             EditorConfigService,
@@ -95,12 +105,14 @@ public class TestCrucibleHarnessBuilder
             TimeProvider);
     }
 
-    public class TestSingleChatClientFactory : IOllamaChatClientFactory
+    public class TestSingleChatClientFactory : ILlmChatClientFactory
     {
         private readonly IChatClient _client;
         public TestSingleChatClientFactory(IChatClient client) => _client = client;
         public IChatClient CreateClient(string? modelId = null) => _client;
         public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget) => _client;
         public IChatClient CreateClient(AgentProfile? profile) => _client;
+        public IChatClient CreateClient(AgentProfile? profile, string? sessionId) => _client;
+        public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget, string? sessionId) => _client;
     }
 }

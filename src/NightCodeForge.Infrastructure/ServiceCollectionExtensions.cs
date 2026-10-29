@@ -67,7 +67,6 @@ public static class ServiceCollectionExtensions
         // 6. Execution Environments, Process Runner & Path Resolution
         services.AddOptions<Execution.ExecutionEnvironmentProviderOptions>();
         services.AddOptions<Execution.ContainerExecutorOptions>();
-        services.AddOptions<Inference.OllamaRouterOptions>();
 
         services.TryAddSingleton<NightCodeForge.Core.Execution.IBackgroundTaskRunner, NightCodeForge.Core.Execution.BackgroundTaskRunner>();
         services.TryAddSingleton<IOperationsTelemetryService, Telemetry.OperationsTelemetryService>();
@@ -86,13 +85,7 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<Execution.NightCodeForgeContainerExecutor>();
         services.TryAddScoped<IExecutionEnvironmentProvider, Execution.ExecutionEnvironmentProvider>();
 
-        // 7. OllamaRouter Services
-        services.AddHttpClient<IOllamaModelCatalogService, Inference.OllamaModelCatalogService>()
-            .AddTransientHttpErrorRetry();
-        services.AddHttpClient<IOllamaModelPreloadService, Inference.OllamaModelPreloadService>()
-            .AddTransientHttpErrorRetry();
-        services.AddHttpClient<IOllamaRouterGatewayService, Inference.OllamaRouterGatewayService>()
-            .AddTransientHttpErrorRetry();
+        // 7. LLM inference services are provider-specific: see AddNightCodeForgeInference.
 
         // 8. Markdown ForgeTask Mirroring
         services.TryAddSingleton<ITaskMarkdownSyncService>(sp =>

@@ -20,17 +20,19 @@ public static class OllamaChatClientFactory
         TimeProvider timeProvider,
         RetryPolicyOptions retryOptions,
         OllamaRoutingTarget routingTarget,
-        HttpMessageHandler innerHandler)
+        HttpMessageHandler innerHandler,
+        Action<HttpClient> configureRouting)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(retryOptions);
         ArgumentNullException.ThrowIfNull(innerHandler);
+        ArgumentNullException.ThrowIfNull(configureRouting);
 
         var endpoint = string.IsNullOrWhiteSpace(options.Endpoint) ? "http://localhost:11434" : options.Endpoint;
         var timeoutMinutes = Math.Max(1, options.RequestTimeoutMinutes);
-        var effectiveModel = !string.IsNullOrWhiteSpace(modelId) ? modelId : options.ModelId;
+        var effectiveModel = !string.IsNullOrWhiteSpace(modelId) ? modelId : options.DefaultModelId;
 
         var retryHandler = new TransientHttpErrorRetryHandler(
             innerHandler,
@@ -38,26 +40,13 @@ public static class OllamaChatClientFactory
             timeProvider,
             retryOptions);
 
-        var httpClient = new HttpClient(retryHandler)
+        var httpClient = new HttpClient(retryHandler, disposeHandler: false)
         {
             BaseAddress = new Uri(endpoint),
             Timeout = TimeSpan.FromMinutes(timeoutMinutes)
         };
 
-        if (routingTarget != OllamaRoutingTarget.Auto)
-        {
-            var targetStr = routingTarget switch
-            {
-                OllamaRoutingTarget.Local => "Local",
-                OllamaRoutingTarget.Remote => "Remote",
-                OllamaRoutingTarget.Cloud => "Cloud",
-                _ => null
-            };
-            if (targetStr != null)
-            {
-                httpClient.DefaultRequestHeaders.Add("X-OllamaRouter-Target", targetStr);
-            }
-        }
+        configureRouting(httpClient);
 
         return new OllamaApiClient(httpClient, effectiveModel, null);
     }
@@ -78,7 +67,7 @@ public static class OllamaChatClientFactory
             KeepAlivePingTimeout = OllamaHttpConstants.DefaultKeepAlivePingTimeout
         };
 
-        return CreateOllama(options, modelId, logger, timeProvider, retryOptions, routingTarget, socketsHandler);
+        return CreateOllama(options, modelId, logger, timeProvider, retryOptions, routingTarget, socketsHandler, client => OllamaRoutingHeaders.Apply(client, routingTarget, sessionId: null));
     }
 
     public static IChatClient CreateOllama(
@@ -118,60 +107,3 @@ public static class OllamaChatClientFactory
     }
 }
 
-/// <summary>
-/// Default implementation of IOllamaChatClientFactory caching clients by model identifier
-/// while falling back to configured LlmProviderOptions (from appsettings.json).
-/// </summary>
-public class DefaultOllamaChatClientFactory : IOllamaChatClientFactory
-{
-    private readonly IOptions<LlmProviderOptions> _options;
-    private readonly ILoggerFactory _loggerFactory;
-    private readonly NightCodeForge.Core.Interfaces.IOperationsTelemetryService _telemetryService;
-    private readonly NightCodeForge.Core.Interfaces.IOperationsControlService _operationsControlService;
-    private readonly TimeProvider _timeProvider;
-    private readonly IOptions<RetryPolicyOptions> _retryOptions;
-    private readonly ConcurrentDictionary<string, IChatClient> _clientCache = new(StringComparer.OrdinalIgnoreCase);
-
-    public DefaultOllamaChatClientFactory(
-        IOptions<LlmProviderOptions> options,
-        ILoggerFactory loggerFactory,
-        NightCodeForge.Core.Interfaces.IOperationsTelemetryService telemetryService,
-        NightCodeForge.Core.Interfaces.IOperationsControlService operationsControlService,
-        TimeProvider timeProvider,
-        IOptions<RetryPolicyOptions> retryOptions)
-    {
-        _options = options ?? throw new ArgumentNullException(nameof(options));
-        _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
-        _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
-        _operationsControlService = operationsControlService ?? throw new ArgumentNullException(nameof(operationsControlService));
-        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
-        _retryOptions = retryOptions ?? throw new ArgumentNullException(nameof(retryOptions));
-    }
-
-    public IChatClient CreateClient(string? modelId = null) =>
-        CreateClient(modelId, OllamaRoutingTarget.Auto);
-
-    public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget)
-    {
-        var defaultOpts = _options.Value;
-        var effectiveModel = !string.IsNullOrWhiteSpace(modelId) ? modelId : defaultOpts.ModelId;
-        var cacheKey = $"{effectiveModel}:{routingTarget}";
-
-        return _clientCache.GetOrAdd(cacheKey, _ =>
-        {
-            var rawClient = OllamaChatClientFactory.CreateOllama(
-                defaultOpts,
-                effectiveModel,
-                _loggerFactory.CreateLogger("OllamaApiClient"),
-                _timeProvider,
-                _retryOptions.Value,
-                routingTarget);
-
-            var telemetryClient = new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, routingTarget.ToString(), _loggerFactory.CreateLogger<TelemetryChatClient>(), defaultOpts.Endpoint);
-            return new OperationsPauseGatingChatClient(telemetryClient, _operationsControlService);
-        });
-    }
-
-    public IChatClient CreateClient(AgentProfile? profile) =>
-        CreateClient(profile?.ModelName, profile?.RoutingTarget ?? OllamaRoutingTarget.Auto);
-}

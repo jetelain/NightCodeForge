@@ -1,3 +1,5 @@
+using NightCodeForge.Core.Domain;
+
 namespace NightCodeForge.Core.Interfaces;
 
 /// <summary>
@@ -18,35 +20,115 @@ public record ResidentModelInfo(
     public string VramPercentageFormatted => $"{VramPercentage:F0}%";
 }
 
+/// <summary>
+/// Liveness wire values reported by OllamaRouter for a fleet target (<c>GET /api/router/fleet</c>),
+/// also produced by the standalone Ollama gateway for its single host.
+/// </summary>
+public static class FleetLiveness
+{
+    public const string Online = "Online";
+    public const string Offline = "Offline";
+    public const string Probing = "Probing";
+}
+
 public enum TargetBackendState
 {
+    /// <summary>Online and idle (ready to serve).</summary>
     Active,
+
+    /// <summary>Being probed by the router; not yet confirmed online.</summary>
     Available,
+
+    /// <summary>Online and currently executing at least one inference request.</summary>
     Busy,
+
+    /// <summary>Administratively disabled in the router routing configuration.</summary>
     Disabled,
+
+    /// <summary>Unreachable.</summary>
     Offline
 }
 
-public record TargetBackendStatus(
-    string TargetName,
-    TargetBackendState State,
-    string Description,
-    long? LatencyMs = null,
-    string? CurrentModel = null);
+public record FleetTargetHardware(
+    string? HardwareHint,
+    string GpuVendor,
+    IReadOnlyList<string> Devices,
+    int? MaxVramMB,
+    int? MaxParallel,
+    double? SpeedFactor = null)
+{
+    /// <summary>GPU vendor reported when the endpoint does not expose hardware information.</summary>
+    public const string UnknownGpuVendor = "Unknown";
+}
 
-public record OllamaRouterStatus(
+public record FleetTargetExecution(
+    int InFlightRequests,
+    string? ActiveModel,
+    string? ContextAllocation);
+
+public record FleetTargetStatus(
+    string Name,
+    string? Url,
+    bool Enabled,
+    string Liveness,
+    long? LatencyMs,
+    FleetTargetHardware Hardware,
+    FleetTargetExecution Execution)
+{
+    public TargetBackendState State
+    {
+        get
+        {
+            if (!Enabled)
+            {
+                return TargetBackendState.Disabled;
+            }
+
+            if (string.Equals(Liveness, FleetLiveness.Probing, StringComparison.OrdinalIgnoreCase))
+            {
+                return TargetBackendState.Available;
+            }
+
+            if (!string.Equals(Liveness, FleetLiveness.Online, StringComparison.OrdinalIgnoreCase))
+            {
+                return TargetBackendState.Offline;
+            }
+
+            return Execution.InFlightRequests > 0 ? TargetBackendState.Busy : TargetBackendState.Active;
+        }
+    }
+}
+
+public record GatewayStatusReport(
     bool IsConnected,
-    bool IsRouterProxy,
+    LlmProviderType ProviderType,
     string BaseUrl,
-    IReadOnlyList<TargetBackendStatus> Targets);
+    string Version,
+    IReadOnlyList<FleetTargetStatus> FleetTargets)
+{
+    public bool IsRouterProxy => IsConnected && ProviderType == LlmProviderType.OllamaRouter;
+}
 
 /// <summary>
-/// Service for querying OllamaRouter gateway status, resident GPU VRAM processes (/api/ps),
-/// and triggering non-destructive memory reclaim (/monitor/reclaim-vram).
+/// Gateway to the configured LLM inference backend: either a standalone Ollama daemon or an
+/// OllamaRouter fleet. The implementation is selected once at startup from
+/// <c>LlmProvider:ProviderType</c> (changing it requires a restart); consumers never branch on the provider.
 /// </summary>
 public interface IOllamaRouterGatewayService
 {
-    Task<OllamaRouterStatus> GetGatewayStatusAsync(CancellationToken cancellationToken = default);
+    /// <summary>The provider this implementation talks to (fixed at startup).</summary>
+    LlmProviderType ProviderType { get; }
+
+    /// <summary>
+    /// Probes the configured endpoint to discover which provider actually answers there
+    /// (diagnostic only: it does not switch the active implementation).
+    /// </summary>
+    Task<LlmProviderType?> DetectProviderAsync(CancellationToken cancellationToken = default);
+
+    Task<GatewayStatusReport> GetGatewayStatusAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ResidentModelInfo>> GetResidentModelsAsync(CancellationToken cancellationToken = default);
+    Task<int> ResolveContextWindowAsync(string modelName, CancellationToken cancellationToken = default);
     Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default);
+    Task<bool> ReclaimVramAsync(string? targetName, CancellationToken cancellationToken = default);
 }
+

@@ -9,6 +9,9 @@
 
 ---
 
+> **Alignment with Step 11.33 (provider fixed at startup):** The provider is selected once at startup (`LlmProvider:ProviderType`, restart required to change). Every `if (ProviderType == ...)` snippet below illustrates the *behaviour* only; the implementation MUST be a dedicated class per provider registered by `AddNightCodeForgeInference(providerType)` / `AddNightCodeForgeAgents(providerType)` (an `OpenAiCompatible` gateway, catalog `LlmModelCatalogServiceBase` subclass and chat client factory), never a runtime condition inside shared services. Chat clients must still receive the session id (`ILlmChatClientFactory.CreateClient(..., sessionId)`).
+
+
 ## 1. Executive Summary & Motivation
 
 ### 1.1 The Need for OpenAI-Compatible Endpoints
@@ -137,7 +140,6 @@ public class LlmProviderOptions
     public ThinkingEffort DefaultThinkingEffort { get; set; } = ThinkingEffort.Medium;
 
     // Optional role differentiation (Step 11.33)
-    public bool DifferentiateRoles { get; set; } = false;
     public string? CoderModelId { get; set; }
     public ThinkingEffort? CoderThinkingEffort { get; set; }
     public string? ArchitectModelId { get; set; }
@@ -257,7 +259,7 @@ This guaranteed integer feeds directly into:
 ### 2.4 Client Lifecycle, Authentication & Header Hygiene
 
 #### Implementation Contract
-The chat client for `OpenAiCompatible` is instantiated using `Microsoft.Extensions.AI.OpenAI` (wrapping the official `OpenAI` client via `AsChatClient()`) within `DefaultLlmChatClientFactory`:
+The chat client for `OpenAiCompatible` is instantiated using `Microsoft.Extensions.AI.OpenAI` (wrapping the official `OpenAI` client via `AsChatClient()`) within a dedicated `OpenAiCompatibleChatClientFactory` (derived from `LlmChatClientFactoryBase`):
 
 ```csharp
 public static IChatClient CreateOpenAiCompatible(
@@ -448,7 +450,7 @@ In `Settings.razor` (and `AgentProfilesTab.razor`):
   - Yield `AvailableModelInfo` entries from `OpenAiCompatible.AllowedModels`.
   - Implement `VerifyEndpointAsync` for model catalog probing and reconciliation.
 - [ ] Update `ModelCapabilityResolver` to resolve context window sizes directly from `OpenAiCompatible.AllowedModels`.
-- [ ] Integrate OpenAI-compatible `IChatClient` into `DefaultLlmChatClientFactory` (Step 11.33):
+- [ ] Integrate OpenAI-compatible `IChatClient` as a dedicated `OpenAiCompatibleChatClientFactory` derived from `LlmChatClientFactoryBase` (Step 11.33):
   - Configure `OpenAIClientOptions` with `HttpClientPipelineTransport(httpClient)`.
   - Outbound `Authorization: Bearer <ApiKey>` header injection.
   - Organization ID header support.

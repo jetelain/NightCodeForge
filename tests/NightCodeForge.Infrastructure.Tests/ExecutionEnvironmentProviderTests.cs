@@ -12,6 +12,7 @@ public class ExecutionEnvironmentProviderTests
     public void GetEnvironment_BareHost_ReturnsBareHostExecutionEnvironment()
     {
         var services = new ServiceCollection();
+        services.AddLogging();
         services.AddNightCodeForgeCoreAndInfrastructure();
         using var provider = services.BuildServiceProvider();
 
@@ -30,6 +31,7 @@ public class ExecutionEnvironmentProviderTests
     public void GetEnvironment_WslDirect_ReturnsWslExecutionEnvironment()
     {
         var services = new ServiceCollection();
+        services.AddLogging();
         services.AddNightCodeForgeCoreAndInfrastructure();
         using var provider = services.BuildServiceProvider();
 
@@ -49,6 +51,7 @@ public class ExecutionEnvironmentProviderTests
     public void GetEnvironment_ContainerSandbox_ReturnsContainerExecutor()
     {
         var services = new ServiceCollection();
+        services.AddLogging();
         services.AddNightCodeForgeCoreAndInfrastructure();
         using var provider = services.BuildServiceProvider();
 

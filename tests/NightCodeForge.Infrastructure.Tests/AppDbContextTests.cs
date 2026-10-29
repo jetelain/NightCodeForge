@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Data;
 using NightCodeForge.Infrastructure.Data.Repositories;
 
@@ -186,6 +187,7 @@ public class AppDbContextTests : IDisposable
         {
             Assert.Null(p.WorkspaceId);
             Assert.Equal("Qwen3.8-27B:latest", p.ModelName);
+            Assert.Null(p.Temperature);
         }
 
         // Verify standard profiles have null OptimizationFlags by default to inherit global optimizations
@@ -221,6 +223,35 @@ public class AppDbContextTests : IDisposable
         var updatedImpl = await context.AgentProfiles.FirstAsync(p => p.Id == "implementation");
         Assert.Equal(0.77, updatedImpl.Temperature);
         Assert.Equal("custom-coder:32b", updatedImpl.ModelName);
+    }
+
+    [Fact]
+    public async Task EnsureDefaultGlobalAgentProfilesAsync_WithLlmProviderOptions_SeedsDifferentiatedProfiles()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var options = new DefaultLlmProviderOptions(
+            DefaultModelId: "qwen3.8:27b",
+            DefaultThinkingEffort: ThinkingEffort.Medium,
+            CoderModelId: "coder-model:32b",
+            CoderThinkingEffort: ThinkingEffort.Low,
+            ArchitectModelId: "architect-model:72b",
+            ArchitectThinkingEffort: ThinkingEffort.High,
+            ProviderType: LlmProviderType.OllamaRouter);
+
+        await context.EnsureDefaultGlobalAgentProfilesAsync(options);
+
+        var profiles = await context.AgentProfiles.Where(p => p.WorkspaceId == null).ToListAsync();
+        Assert.Equal(5, profiles.Count);
+
+        var impl = profiles.First(p => p.Id == "implementation");
+        Assert.Equal("coder-model:32b", impl.ModelName);
+        Assert.Equal(ThinkingEffort.Low, impl.ThinkingEffort);
+
+        var triage = profiles.First(p => p.Id == "triage");
+        Assert.Equal("architect-model:72b", triage.ModelName);
+        Assert.Equal(ThinkingEffort.High, triage.ThinkingEffort);
     }
 
     [Fact]

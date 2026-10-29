@@ -64,11 +64,13 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Services.AddSingleton<IGlobalOptimizationSettingsService>(_optService);
         Services.AddSingleton<IWebSearchSettingsService>(_webSearchSettingsService);
         Services.AddSingleton<NightCodeForge.Agents.Tools.IWebSearchService>(_webSearchService);
-        Services.AddSingleton<IOllamaModelCatalogService>(_catalogService);
+        Services.AddSingleton<ILlmModelCatalogService>(_catalogService);
         Services.AddSingleton<IHostSdkDiscoveryService>(_sdkService);
         Services.AddSingleton<IOllamaRouterGatewayService>(_gatewayService);
         Services.AddSingleton<IWslMetadataService>(_wslService);
         Services.AddSingleton<IGitMirrorSyncService>(_mirrorService);
+        Services.AddMemoryCache();
+        Services.AddSingleton<ILlmContextWindowCache, NightCodeForge.Infrastructure.Inference.LlmContextWindowCache>();
     }
 
     public new void Dispose()
@@ -167,6 +169,13 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains("Host GPU", cut.Markup);
         Assert.Contains("LAN GPU Server", cut.Markup);
         Assert.Contains("Cloud Overflow", cut.Markup);
+
+        // Verify Temperature is empty by default with Model default placeholder
+        var tempInputs = cut.FindAll("input[type=number]")
+            .Where(i => i.GetAttribute("placeholder") == "Model default")
+            .ToList();
+        Assert.NotEmpty(tempInputs);
+        Assert.All(tempInputs, input => Assert.True(string.IsNullOrEmpty(input.GetAttribute("value"))));
     }
 
     [Fact]
@@ -240,7 +249,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
         Assert.Contains("OllamaRouter Gateway &amp; VRAM Inspector", cut.Markup);
         Assert.Contains("🟢 Gateway Connected", cut.Markup);
-        Assert.Contains("OllamaRouter Active", cut.Markup);
+        Assert.Contains("OllamaRouter Fleet Active", cut.Markup);
         Assert.Contains("Local GPU Target", cut.Markup);
         Assert.Contains("Remote Server Target", cut.Markup);
         Assert.Contains("Cloud Overflow Target", cut.Markup);
@@ -302,16 +311,18 @@ public class SettingsComponentTests : BunitContext, IDisposable
         public event Action<LocalOptimizationFlags>? OnFlagsChanged;
     }
 
-    private class MockModelCatalogService : IOllamaModelCatalogService
+    private class MockModelCatalogService : ILlmModelCatalogService
     {
-        public List<OllamaModelInfo> Models { get; set; } = new()
+        public List<AvailableModelInfo> Models { get; set; } = new()
         {
-            new("qwen2.5-coder:32b", "qwen2.5-coder:32b", 19800000000, DateTime.UtcNow, "sha256:abc")
+            new("qwen2.5-coder:32b", "qwen2.5-coder:32b", SizeBytes: 19800000000)
         };
 
-        public Task<IReadOnlyList<OllamaModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
+        public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<AvailableModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
         {
-            return Task.FromResult<IReadOnlyList<OllamaModelInfo>>(Models);
+            return Task.FromResult<IReadOnlyList<AvailableModelInfo>>(Models);
         }
     }
 
@@ -328,15 +339,20 @@ public class SettingsComponentTests : BunitContext, IDisposable
     {
         public bool ReclaimCalled { get; private set; }
 
-        public Task<OllamaRouterStatus> GetGatewayStatusAsync(CancellationToken cancellationToken = default)
+        public LlmProviderType ProviderType => LlmProviderType.OllamaRouter;
+
+        public Task<LlmProviderType?> DetectProviderAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<LlmProviderType?>(LlmProviderType.OllamaRouter);
+
+        public Task<GatewayStatusReport> GetGatewayStatusAsync(CancellationToken cancellationToken = default)
         {
-            var targets = new List<TargetBackendStatus>
+            var targets = new List<FleetTargetStatus>
             {
-                new("Local GPU Target", TargetBackendState.Active, "Local"),
-                new("Remote Server Target", TargetBackendState.Available, "Remote"),
-                new("Cloud Overflow Target", TargetBackendState.Active, "Cloud")
+                new("Local GPU Target", "http://localhost:11434", true, FleetLiveness.Online, 15, new FleetTargetHardware("Desktop", "Nvidia", ["GPU"], 16384, 2), new FleetTargetExecution(0, null, null)),
+                new("Remote Server Target", null, true, FleetLiveness.Probing, 20, new FleetTargetHardware("Server", "Nvidia", ["GPU"], 98304, 4), new FleetTargetExecution(0, null, null)),
+                new("Cloud Overflow Target", null, true, FleetLiveness.Online, 40, new FleetTargetHardware(null, FleetTargetHardware.UnknownGpuVendor, [], null, 8), new FleetTargetExecution(0, null, null))
             };
-            return Task.FromResult(new OllamaRouterStatus(true, true, "http://localhost:11434", targets));
+            return Task.FromResult(new GatewayStatusReport(true, LlmProviderType.OllamaRouter, "http://localhost:11434", "1.0.0", targets));
         }
 
         public Task<IReadOnlyList<ResidentModelInfo>> GetResidentModelsAsync(CancellationToken cancellationToken = default)
@@ -348,13 +364,18 @@ public class SettingsComponentTests : BunitContext, IDisposable
             return Task.FromResult(list);
         }
 
-        public Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default)
+        public Task<int> ResolveContextWindowAsync(string modelName, CancellationToken cancellationToken = default) =>
+            Task.FromResult(131072);
+
+        public Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default) =>
+            ReclaimVramAsync(null, cancellationToken);
+
+        public Task<bool> ReclaimVramAsync(string? targetName, CancellationToken cancellationToken = default)
         {
             ReclaimCalled = true;
             return Task.FromResult(true);
         }
     }
-
     private class MockWslMetadataService : IWslMetadataService
     {
         public string GetDefaultDistributionName() => "Ubuntu";
@@ -475,9 +496,9 @@ public class SettingsComponentTests : BunitContext, IDisposable
     public void AgentProfilesTab_CustomModelToggle_SwitchesBetweenDropdownAndInput()
     {
         // Add a mock model to catalog
-        _catalogService.Models = new List<OllamaModelInfo>
+        _catalogService.Models = new List<AvailableModelInfo>
         {
-            new("llama3:8b", "llama3:8b", 4_000_000_000, DateTime.UtcNow, "sha256:123")
+            new("llama3:8b", "llama3:8b", SizeBytes: 4_000_000_000)
         };
 
         var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
@@ -491,6 +512,55 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
         // Verify button text changed to "Select from list"
         Assert.Contains("Select from list", cut.Markup);
+    }
+
+    [Fact]
+    public void AgentProfilesTab_GlobalScope_ChangingProfileModel_PersistsToDatabase()
+    {
+        _catalogService.Models = new List<AvailableModelInfo>
+        {
+            new("model-a:latest", "model-a:latest", SizeBytes: 1024),
+            new("model-b:latest", "model-b:latest", SizeBytes: 2048)
+        };
+
+        var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
+
+        var modelSelect = cut.Find("select.font-mono");
+        modelSelect.Change("model-b:latest");
+        var saveBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Save Profiles"));
+        saveBtn.Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            using var db = new AppDbContext(_dbOptions);
+            var updatedProfile = db.AgentProfiles.First(p => p.WorkspaceId == null && p.Id == "code-review-fix");
+            Assert.Equal("model-b:latest", updatedProfile.ModelName);
+
+            var implProfile = db.AgentProfiles.First(p => p.WorkspaceId == null && p.Id == "implementation");
+            Assert.Equal("qwen2.5-coder:32b", implProfile.ModelName);
+        });
+    }
+
+    [Fact]
+    public void AgentProfilesTab_GlobalScope_CustomBudget_PreservedOnSave()
+    {
+        using (var dbInit = new AppDbContext(_dbOptions))
+        {
+            var impl = dbInit.AgentProfiles.First(p => p.WorkspaceId == null && p.Id == StandardStageIds.Implementation);
+            impl.ThinkingEffort = ThinkingEffort.CustomBudget;
+            impl.ThinkingTokenBudget = 9999;
+            dbInit.SaveChanges();
+        }
+
+        var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
+
+        var saveBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Save Profiles"));
+        saveBtn.Click();
+
+        using var db = new AppDbContext(_dbOptions);
+        var implAfter = db.AgentProfiles.First(p => p.WorkspaceId == null && p.Id == StandardStageIds.Implementation);
+        Assert.Equal(ThinkingEffort.CustomBudget, implAfter.ThinkingEffort);
+        Assert.Equal(9999, implAfter.ThinkingTokenBudget);
     }
 
     #endregion

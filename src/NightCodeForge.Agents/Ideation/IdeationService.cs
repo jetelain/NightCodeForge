@@ -41,7 +41,8 @@ public partial class IdeationService : IIdeationService
     [GeneratedRegex(@"```(?:json)?\s*\[\s*\{.*?\}\s*\]\s*```", RegexOptions.Singleline)]
     private static partial Regex TaskJsonArrayRegex();
 
-    private readonly IOllamaChatClientFactory _chatClientFactory;
+    private readonly ILlmChatClientFactory _chatClientFactory;
+    private readonly IOllamaRouterGatewayService _gatewayService;
     private readonly IExecutionEnvironmentProvider _envProvider;
     private readonly IWebSearchService _webSearchService;
     private readonly IEditorConfigService _editorConfigService;
@@ -61,7 +62,8 @@ public partial class IdeationService : IIdeationService
 
     public IdeationService(
         IWorkspacePathResolver pathResolver,
-        IOllamaChatClientFactory chatClientFactory,
+        ILlmChatClientFactory chatClientFactory,
+        IOllamaRouterGatewayService gatewayService,
         IExecutionEnvironmentProvider envProvider,
         IWebSearchService webSearchService,
         IEditorConfigService editorConfigService,
@@ -80,6 +82,7 @@ public partial class IdeationService : IIdeationService
     {
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
+        _gatewayService = gatewayService ?? throw new ArgumentNullException(nameof(gatewayService));
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _webSearchService = webSearchService ?? throw new ArgumentNullException(nameof(webSearchService));
         _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
@@ -186,9 +189,8 @@ public partial class IdeationService : IIdeationService
         }
 
         // Resolve client dynamically for the agent profile
-        var client = _chatClientFactory.CreateClient(profile);
-
         var sessionId = $"ideation-{workspace.Id}-{Guid.NewGuid():N}";
+        var client = _chatClientFactory.CreateClient(profile, sessionId);
         var metadata = new Dictionary<string, object?>
         {
             ["workspaceId"] = workspace.Id,
@@ -477,6 +479,23 @@ When proposing implementation tasks to the developer, adhere to the following ru
 
         int maxTurns = profile.MaxTurns.HasValue && profile.MaxTurns.Value > 0 ? profile.MaxTurns.Value : DefaultMaxTurns;
 
+        int? explicitContext = profile.ContextWindowTokens;
+        if (!explicitContext.HasValue && !string.IsNullOrWhiteSpace(effectiveModelId))
+        {
+            try
+            {
+                var discovered = await _gatewayService.ResolveContextWindowAsync(effectiveModelId, cancellationToken);
+                if (discovered > 0)
+                {
+                    explicitContext = discovered;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Failed to resolve context window for ideation model '{Model}', falling back to configured options", effectiveModelId);
+            }
+        }
+
         var harnessOptions = new HarnessAgentOptions
         {
             Id = "ideation-agent",
@@ -484,7 +503,11 @@ When proposing implementation tasks to the developer, adhere to the following ru
             HarnessInstructions = systemPrompt,
             ChatOptions = chatOptions,
             MaximumIterationsPerRequest = maxTurns,
-            CompactionStrategy = ModelCapabilityResolver.BuildCompactionStrategy(_llmOptions, effectiveModelId),
+            CompactionStrategy = ModelCapabilityResolver.BuildCompactionStrategy(
+                profile,
+                _llmOptions,
+                explicitContextWindowTokens: explicitContext,
+                summarizerClient: client),
             DisableTodoProvider = true,
             DisableAgentModeProvider = true,
             DisableFileMemory = true,

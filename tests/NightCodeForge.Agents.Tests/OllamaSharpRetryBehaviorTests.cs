@@ -45,7 +45,8 @@ public class OllamaSharpRetryBehaviorTests
                 MaxDelay = TimeSpan.FromMilliseconds(5)
             },
             OllamaRoutingTarget.Auto,
-            inner);
+            inner,
+            http => OllamaRoutingHeaders.Apply(http, OllamaRoutingTarget.Auto, sessionId: null));
 
     private static readonly IReadOnlyList<ChatMessage> Messages = new[] { new ChatMessage(ChatRole.User, "hello") };
 

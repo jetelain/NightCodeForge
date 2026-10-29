@@ -26,7 +26,7 @@ namespace NightCodeForge.Agents.Crucible;
 
 public partial class CrucibleAgentHarness : IAgentHarness
 {
-    private readonly IOllamaChatClientFactory _chatClientFactory;
+    private readonly ILlmChatClientFactory _chatClientFactory;
     private readonly IExecutionEnvironmentProvider _envProvider;
     private readonly IMcpClientManager _mcpManager;
     private readonly IEditorConfigService _editorConfigService;
@@ -42,6 +42,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
     private readonly ITaskCancellationManager _cancellationManager;
     private readonly IOperationsControlService _operationsControlService;
+    private readonly IOllamaRouterGatewayService _gatewayService;
     private readonly ILogger<CrucibleAgentHarness> _logger;
     private readonly ILogger<CanonicalTools> _canonicalToolsLogger;
     private readonly LlmProviderOptions _llmOptions;
@@ -54,7 +55,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
     public CrucibleAgentHarness(
         IWorkspacePathResolver pathResolver,
-        IOllamaChatClientFactory chatClientFactory,
+        ILlmChatClientFactory chatClientFactory,
+        IOllamaRouterGatewayService gatewayService,
         IExecutionEnvironmentProvider envProvider,
         IMcpClientManager mcpManager,
         IEditorConfigService editorConfigService,
@@ -77,6 +79,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     {
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
+        _gatewayService = gatewayService ?? throw new ArgumentNullException(nameof(gatewayService));
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _mcpManager = mcpManager ?? throw new ArgumentNullException(nameof(mcpManager));
         _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
@@ -554,7 +557,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
 
         // 9. Resolve effective ChatClient for the profile and assemble middlewares
-        var baseClient = _chatClientFactory.CreateClient(context.Profile);
+        var baseClient = _chatClientFactory.CreateClient(context.Profile, LlmSessionIds.ForStage(context.ForgeTask.Id, context.StageId));
 
         var effectiveModel = !string.IsNullOrWhiteSpace(context.Profile.ModelName)
             ? context.Profile.ModelName
@@ -649,6 +652,23 @@ public partial class CrucibleAgentHarness : IAgentHarness
             GuidedGrammarHelper.ApplyGrammarConstraints(chatOptions, context.OptimizationFlags);
         }
 
+        int? explicitContext = context.Profile.ContextWindowTokens;
+        if (!explicitContext.HasValue && !string.IsNullOrWhiteSpace(effectiveModel))
+        {
+            try
+            {
+                var discovered = await _gatewayService.ResolveContextWindowAsync(effectiveModel, cancellationToken);
+                if (discovered > 0)
+                {
+                    explicitContext = discovered;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Failed to resolve context window for '{Model}', falling back to configured options", effectiveModel);
+            }
+        }
+
         var harnessOptions = new HarnessAgentOptions
         {
             Id = context.StageId,
@@ -657,9 +677,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
             ChatOptions = chatOptions,
             MaximumIterationsPerRequest = maxTurns,
             CompactionStrategy = ModelCapabilityResolver.BuildCompactionStrategy(
+                context.Profile,
                 _llmOptions,
-                effectiveModel ?? _llmOptions?.ModelId,
-                explicitContextWindowTokens: context.Profile.ContextWindowTokens,
+                explicitContextWindowTokens: explicitContext,
                 summarizerClient: baseClient),
             DisableTodoProvider = true,
             DisableAgentModeProvider = true,

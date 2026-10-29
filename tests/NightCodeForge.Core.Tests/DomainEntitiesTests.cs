@@ -1,4 +1,5 @@
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Core.Tests;
 
@@ -452,6 +453,78 @@ public class DomainEntitiesTests
         Assert.Equal(3, workspace.DefaultWorkflowId);
         Assert.NotNull(workspace.Workflows);
         Assert.NotNull(workspace.Conversations);
+    }
+
+    [Fact]
+    public void CreateStandardGlobalProfiles_WithOptions_SetsExpectedModelsAndTargets()
+    {
+        var options = new DefaultLlmProviderOptions(
+            DefaultModelId: "qwen3.8:27b",
+            DefaultThinkingEffort: ThinkingEffort.Medium,
+            CoderModelId: "deepseek-coder:33b",
+            CoderThinkingEffort: ThinkingEffort.Low,
+            ArchitectModelId: "qwen3.8:72b",
+            ArchitectThinkingEffort: ThinkingEffort.High,
+            ProviderType: LlmProviderType.OllamaRouter);
+
+        var profiles = AgentProfile.CreateStandardGlobalProfiles(options);
+        Assert.Equal(5, profiles.Count);
+        Assert.All(profiles, p => Assert.Null(p.Temperature));
+
+        var triage = profiles.Single(p => p.Id == StandardStageIds.Triage);
+        Assert.Equal("qwen3.8:72b", triage.ModelName);
+        Assert.Equal(ThinkingEffort.High, triage.ThinkingEffort);
+        Assert.Equal(OllamaRoutingTarget.Local, triage.RoutingTarget);
+
+        var taskReview = profiles.Single(p => p.Id == StandardStageIds.TaskReview);
+        Assert.Equal("qwen3.8:72b", taskReview.ModelName);
+        Assert.Equal(ThinkingEffort.High, taskReview.ThinkingEffort);
+
+        var implementation = profiles.Single(p => p.Id == StandardStageIds.Implementation);
+        Assert.Equal("deepseek-coder:33b", implementation.ModelName);
+        Assert.Equal(ThinkingEffort.Low, implementation.ThinkingEffort);
+
+        var reviewFix = profiles.Single(p => p.Id == StandardStageIds.CodeReviewAndFix);
+        Assert.Equal("qwen3.8:72b", reviewFix.ModelName);
+        Assert.Equal(ThinkingEffort.High, reviewFix.ThinkingEffort);
+    }
+
+    [Fact]
+    public void CreateStandardGlobalProfiles_StandaloneOllama_UsesAutoRoutingForTriage()
+    {
+        var options = new DefaultLlmProviderOptions(
+            DefaultModelId: "qwen3.8:27b",
+            ProviderType: LlmProviderType.Ollama);
+
+        var profiles = AgentProfile.CreateStandardGlobalProfiles(options);
+        var triage = profiles.Single(p => p.Id == StandardStageIds.Triage);
+        Assert.Equal(OllamaRoutingTarget.Auto, triage.RoutingTarget);
+    }
+
+    [Fact]
+    public void CreateStandardGlobalProfiles_WithOptions_SetsExpectedThinkingEffortOnIdeationProfile()
+    {
+        var options = new DefaultLlmProviderOptions(
+            DefaultModelId: "qwen3.8:27b",
+            DefaultThinkingEffort: ThinkingEffort.Medium,
+            CoderModelId: "coder:14b",
+            CoderThinkingEffort: ThinkingEffort.Low,
+            ArchitectModelId: "arch:72b",
+            ArchitectThinkingEffort: ThinkingEffort.High,
+            ProviderType: LlmProviderType.OllamaRouter);
+
+        var profiles = AgentProfile.CreateStandardGlobalProfiles(options);
+        var ideation = profiles.Single(p => p.Id == StandardStageIds.Ideation);
+
+        Assert.Equal("arch:72b", ideation.ModelName);
+        Assert.Equal(ThinkingEffort.High, ideation.ThinkingEffort);
+        Assert.Equal(OllamaRoutingTarget.Auto, ideation.RoutingTarget);
+    }
+
+    [Fact]
+    public void CreateStandardGlobalProfiles_NullOptions_ThrowsArgumentNullException()
+    {
+        Assert.Throws<ArgumentNullException>(() => AgentProfile.CreateStandardGlobalProfiles((ILlmProviderOptions)null!));
     }
 }
 

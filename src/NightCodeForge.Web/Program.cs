@@ -96,9 +96,15 @@ var hangfireConnection = NormalizeSqliteConnectionString(hangfireConnStr, baseDb
 EnsureSqliteDirectoryExists(dbConnection);
 EnsureSqliteDirectoryExists(hangfireConnection);
 
+// The LLM provider is fixed at startup (changing it requires a restart): each provider has dedicated implementations.
+var llmProviderSection = builder.Configuration.GetSection(NightCodeForge.Agents.Inference.LlmProviderOptions.SectionName);
+var llmProviderType = (llmProviderSection.Get<NightCodeForge.Agents.Inference.LlmProviderOptions>()
+    ?? new NightCodeForge.Agents.Inference.LlmProviderOptions()).ProviderType;
 builder.Services.AddNightCodeForgeCoreAndInfrastructure(dbConnection);
-builder.Services.Configure<NightCodeForge.Agents.Inference.LlmProviderOptions>(builder.Configuration.GetSection(NightCodeForge.Agents.Inference.LlmProviderOptions.SectionName));
-builder.Services.AddNightCodeForgeAgents();
+builder.Services.Configure<NightCodeForge.Agents.Inference.LlmProviderOptions>(llmProviderSection);
+builder.Services.Configure<NightCodeForge.Infrastructure.Inference.LlmEndpointOptions>(llmProviderSection);
+builder.Services.AddNightCodeForgeInference(llmProviderType);
+builder.Services.AddNightCodeForgeAgents(llmProviderType);
 builder.Services.AddNightCodeForgeHangfire(hangfireConnection);
 builder.Services.AddNightCodeForgeHangfireServers();
 
@@ -134,8 +140,9 @@ using (var scope = app.Services.CreateScope())
         await dbContext.SeedWorkspaceIdSequenceAsync(nextWsId);
     }
 
-    var defaultModel = builder.Configuration["LlmProvider:ModelId"] ?? "Qwen3.8-27B:latest";
-    await dbContext.EnsureDefaultGlobalAgentProfilesAsync(defaultModel);
+    var llmOptions = builder.Configuration.GetSection(NightCodeForge.Agents.Inference.LlmProviderOptions.SectionName)
+        .Get<NightCodeForge.Agents.Inference.LlmProviderOptions>() ?? new NightCodeForge.Agents.Inference.LlmProviderOptions();
+    await dbContext.EnsureDefaultGlobalAgentProfilesAsync(llmOptions);
     await dbContext.EnsureDefaultWorkflowsAsync();
 
     var globalOptSettings = scope.ServiceProvider.GetRequiredService<NightCodeForge.Core.Interfaces.IGlobalOptimizationSettingsService>();

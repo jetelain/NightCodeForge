@@ -52,7 +52,8 @@ public class ModelCapabilityResolverTests
     public void BuildCompactionStrategy_ReturnsStrategy()
     {
         Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy(new LlmProviderOptions(), "qwen3.8:35b"));
-        Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy(null, null));
+        Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy((LlmProviderOptions?)null, (string?)null));
+        Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy(new AgentProfile { Id = "test", ModelName = "qwen3.8:35b" }));
     }
 
     [Fact]
@@ -65,6 +66,24 @@ public class ModelCapabilityResolverTests
 
         Assert.Equal(65536, strategy.Options.ContextWindowTokens);
         Assert.Equal("AgentProfile", strategy.Options.ResolutionSource);
+    }
+
+    [Fact]
+    public void BuildCompactionStrategy_WithExplicitTokens_SizesCompactionToFleetMaximumCeiling()
+    {
+        var profile = new AgentProfile
+        {
+            Id = "coder",
+            ModelName = "qwen3.8-27b",
+            ContextWindowTokens = 49152 // Desktop node limit
+        };
+
+        var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)
+            ModelCapabilityResolver.BuildCompactionStrategy(
+                profile,
+                explicitContextWindowTokens: 262144);
+
+        Assert.Equal(262144, strategy.Options.ContextWindowTokens);
     }
 
     [Fact]

@@ -5,7 +5,7 @@
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Web.Models
 @inject IWslMetadataService WslService
-@inject IOllamaModelCatalogService ModelCatalogService
+@inject ILlmModelCatalogService ModelCatalogService
 @inject IConfiguration Configuration
 
 <div class="wizard-step-container">
@@ -157,7 +157,7 @@
                     <select id="dedicated-model-select" class="form-control-dark font-mono" @bind="Model.DedicatedModelName">
                         @foreach (var m in _availableModels)
                         {
-                            <option value="@m">@m</option>
+                            <option value="@m.ModelId">@m.DisplayName @(!string.IsNullOrWhiteSpace(m.FormattedBadge) ? $"({m.FormattedBadge})" : "")</option>
                         }
                     </select>
                 }
@@ -181,7 +181,7 @@
 
     private bool _isWindows;
     private string _defaultWslDistro = "Ubuntu";
-    private List<string> _availableModels = new();
+    private List<AvailableModelInfo> _availableModels = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -196,13 +196,14 @@
                     Model.WslDistribution = _defaultWslDistro;
                 }
             }
-            catch
+            catch (Exception)
             {
+                // Non-fatal probe failure: WSL distribution discovery failed on host, default to Ubuntu
                 _defaultWslDistro = "Ubuntu";
             }
         }
 
-        var defaultModel = Configuration["LlmProvider:ModelId"] ?? "Qwen3.8-27B:latest";
+        var defaultModel = Configuration["LlmProvider:DefaultModelId"] ?? Configuration["LlmProvider:ModelId"] ?? "Qwen3.8-27B:latest";
         if (string.IsNullOrWhiteSpace(Model.DedicatedModelName))
         {
             Model.DedicatedModelName = defaultModel;
@@ -213,17 +214,17 @@
             var models = await ModelCatalogService.GetAvailableModelsAsync();
             if (models != null && models.Count > 0)
             {
-                _availableModels = models.Select(m => m.Name).ToList();
-                if (!_availableModels.Contains(Model.DedicatedModelName))
+                _availableModels = models.ToList();
+                if (!_availableModels.Any(m => string.Equals(m.ModelId, Model.DedicatedModelName, StringComparison.OrdinalIgnoreCase)))
                 {
-                    _availableModels.Insert(0, Model.DedicatedModelName);
+                    _availableModels.Insert(0, new AvailableModelInfo(Model.DedicatedModelName, Model.DedicatedModelName));
                 }
             }
         }
-        catch
+        catch (Exception)
         {
-            // Fallback if Ollama router is offline
-            _availableModels = new List<string> { Model.DedicatedModelName ?? defaultModel };
+            // Non-fatal probe failure: LLM provider is offline or unreachable, fallback to configured model
+            _availableModels = new List<AvailableModelInfo> { new(Model.DedicatedModelName ?? defaultModel, Model.DedicatedModelName ?? defaultModel) };
         }
     }
 

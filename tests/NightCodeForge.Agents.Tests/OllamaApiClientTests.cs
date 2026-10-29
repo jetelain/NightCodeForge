@@ -76,7 +76,7 @@ public class OllamaApiClientTests
     }
 
     [Fact]
-    public void DefaultOllamaChatClientFactory_CachesClients_AndResolvesProfileModel()
+    public void OllamaRouterChatClientFactory_CachesClients_AndResolvesProfileModel()
     {
         var options = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions
         {
@@ -87,7 +87,7 @@ public class OllamaApiClientTests
         var mockTelemetry = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object;
         var mockOps = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsControlService>().Object;
         var retryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
-        var factory = new DefaultOllamaChatClientFactory(
+        var factory = new OllamaRouterChatClientFactory(
             options,
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             mockTelemetry,
@@ -112,7 +112,7 @@ public class OllamaApiClientTests
     }
 
     [Fact]
-    public void DefaultOllamaChatClientFactory_CreateClient_WithRoutingTarget_CachesAndResolves()
+    public void OllamaRouterChatClientFactory_CreateClient_WithRoutingTarget_CachesAndResolves()
     {
         var options = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions
         {
@@ -123,7 +123,7 @@ public class OllamaApiClientTests
         var mockTelemetry = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object;
         var mockOps = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsControlService>().Object;
         var retryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
-        var factory = new DefaultOllamaChatClientFactory(
+        var factory = new OllamaRouterChatClientFactory(
             options,
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             mockTelemetry,
@@ -182,13 +182,15 @@ public class OllamaApiClientTests
         Assert.Equal("deepseek-coder:67b", capturedModelId);
     }
 
-    private class TestOllamaChatClientFactory : IOllamaChatClientFactory
+    private class TestOllamaChatClientFactory : ILlmChatClientFactory
     {
         private readonly IChatClient _client;
         public TestOllamaChatClientFactory(IChatClient client) => _client = client;
         public IChatClient CreateClient(string? modelId = null) => _client;
         public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget) => _client;
         public IChatClient CreateClient(Core.Domain.AgentProfile? profile) => _client;
+        public IChatClient CreateClient(Core.Domain.AgentProfile? profile, string? sessionId) => _client;
+        public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget, string? sessionId) => _client;
     }
 
     private class TestCapturingChatClient : IChatClient
