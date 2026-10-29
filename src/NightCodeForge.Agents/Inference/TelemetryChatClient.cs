@@ -586,6 +586,13 @@ public class TelemetryChatClient : DelegatingChatClient
             }
             return "default";
         }
+
+        // For OpenAI-compatible endpoints where "think" flag is omitted, resolve from "reasoning_effort" directly
+        if (options.AdditionalProperties.TryGetValue("reasoning_effort", out var openAiRe) && openAiRe != null && !string.IsNullOrWhiteSpace(openAiRe.ToString()))
+        {
+            return openAiRe.ToString()!;
+        }
+
         return "unknown";
     }
 }

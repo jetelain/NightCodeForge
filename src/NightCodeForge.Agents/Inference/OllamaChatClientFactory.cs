@@ -82,30 +82,6 @@ public static class OllamaChatClientFactory
         ArgumentNullException.ThrowIfNull(profile);
         return CreateOllama(options, profile.ModelName, logger, timeProvider, retryOptions, profile.RoutingTarget);
     }
-
-    public static ChatOptions CreateDefaultChatOptions(
-        string? modelId = null,
-        float? temperature = null,
-        string? reasoningEffort = null,
-        bool isOpenAi = false,
-        LlmProviderOptions? providerOptions = null)
-    {
-        return new ChatOptions
-        {
-            ModelId = modelId,
-            Temperature = temperature,
-            AdditionalProperties = ModelCapabilityResolver.BuildReasoningProperties(providerOptions, modelId, reasoningEffort, isOpenAi)
-        };
-    }
-
-    public static string NormalizeReasoningEffort(string? effort, bool isOpenAi = false)
-    {
-        var val = string.IsNullOrWhiteSpace(effort) ? "xhigh" : effort.Trim().ToLowerInvariant();
-        if (isOpenAi && val == "xhigh")
-        {
-            return "high";
-        }
-        return val;
-    }
 }
+
 

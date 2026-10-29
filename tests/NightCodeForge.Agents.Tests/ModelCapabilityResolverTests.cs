@@ -37,7 +37,8 @@ public class ModelCapabilityResolverTests
 
         var xhigh = new LlmProviderOptions();
         Assert.Equal("xhigh", ModelCapabilityResolver.ResolveReasoningEffort(xhigh, "llama3:8b"));
-        Assert.Equal("high", ModelCapabilityResolver.ResolveReasoningEffort(xhigh, "o3-mini", isOpenAi: true));
+        var openAiResolver = new OpenAiCapabilityResolver(Microsoft.Extensions.Options.Options.Create(xhigh));
+        Assert.Equal("high", openAiResolver.ResolveReasoningEffort("o3-mini"));
     }
 
     [Fact]

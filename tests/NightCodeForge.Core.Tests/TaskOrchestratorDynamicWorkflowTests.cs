@@ -76,7 +76,7 @@ public class TaskOrchestratorDynamicWorkflowTests
         var fakeEnv = new DynamicFakeExecutionEnvironment();
         sp.AddService<IExecutionEnvironment>(fakeEnv);
         sp.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv));
-        sp.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
+        sp.AddService<ILlmModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         sp.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
 
         _registry = new WorkflowStageRegistry();

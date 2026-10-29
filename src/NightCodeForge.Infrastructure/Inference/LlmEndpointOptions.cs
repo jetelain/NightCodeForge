@@ -17,6 +17,16 @@ public class LlmEndpointOptions
 
     /// <summary>Baseline context window (tokens) used when no model name is available to probe.</summary>
     public int ContextWindowTokens { get; set; } = DefaultContextWindowTokens;
+
+    /// <summary>Default model identifier configured in LlmProvider section.</summary>
+    public string? DefaultModelId { get; set; }
+
+    /// <summary>Legacy ModelId property forwarding to DefaultModelId for backwards compatibility.</summary>
+    public string? ModelId
+    {
+        get => DefaultModelId;
+        set => DefaultModelId = value;
+    }
 }
 
 /// <summary>Shared HTTP plumbing for services talking to the configured LLM endpoint.</summary>

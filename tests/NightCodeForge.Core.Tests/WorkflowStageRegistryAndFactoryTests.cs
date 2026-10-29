@@ -67,7 +67,7 @@ public class WorkflowStageRegistryAndFactoryTests
         var fakeEnv = new FakeExecutionEnvironment();
         _serviceProvider.AddService<IExecutionEnvironment>(fakeEnv);
         _serviceProvider.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv));
-        _serviceProvider.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
+        _serviceProvider.AddService<ILlmModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         _serviceProvider.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
         _serviceProvider.AddService<TimeProvider>(TimeProvider.System);
         _serviceProvider.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
@@ -245,7 +245,7 @@ public class WorkflowStageRegistryAndFactoryTests
         };
         sp.AddService<IExecutionEnvironment>(fakeEnv1);
         sp.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv1));
-        sp.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
+        sp.AddService<ILlmModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         sp.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
         RegisterDefaultStageServices(sp);
 
@@ -286,7 +286,7 @@ public class WorkflowStageRegistryAndFactoryTests
         };
         sp.AddService<IExecutionEnvironment>(fakeEnv2);
         sp.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv2));
-        sp.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
+        sp.AddService<ILlmModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         sp.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
         RegisterDefaultStageServices(sp);
 

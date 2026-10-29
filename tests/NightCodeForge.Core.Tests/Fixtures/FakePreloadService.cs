@@ -2,7 +2,7 @@ namespace NightCodeForge.Core.Tests.Fixtures;
 
 using NightCodeForge.Core.Interfaces;
 
-public class FakePreloadService : IOllamaModelPreloadService
+public class FakePreloadService : ILlmModelPreloadService
 {
     public List<(string ModelName, string KeepAlive)> PreloadedModels { get; } = new();
 

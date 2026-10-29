@@ -37,7 +37,7 @@ public class QualityGateCorrectnessTests
         }
     }
 
-    private class FakePreload : IOllamaModelPreloadService
+    private class FakePreload : ILlmModelPreloadService
     {
         public List<(string Model, string KeepAlive)> Calls { get; } = new();
 
@@ -520,7 +520,7 @@ Passed! - Failed: 0, Passed: 10, Total: 10";
             NextResult = new CommandResult(0, "Build succeeded.\nPassed: 5, Failed: 0, Total: 5\n| Total | 85.0% |", string.Empty, TimeSpan.FromMilliseconds(50))
         };
         sp.AddService<IExecutionEnvironmentProvider>(fakeEnv);
-        sp.AddService<IOllamaModelPreloadService>(new FakePreload());
+        sp.AddService<ILlmModelPreloadService>(new FakePreload());
         sp.AddService<IBackgroundTaskRunner>(new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance));
         sp.AddService<IWorkflowStageRegistry>(new WorkflowStageRegistry());
         sp.AddService<IAgentActivityStreamer>(new Moq.Mock<IAgentActivityStreamer>().Object);
@@ -564,7 +564,7 @@ Passed! - Failed: 0, Passed: 10, Total: 10";
             NextResult = new CommandResult(0, "Build succeeded.\nPassed: 5, Failed: 0, Total: 5", string.Empty, TimeSpan.FromMilliseconds(50))
         };
         sp.AddService<IExecutionEnvironmentProvider>(fakeEnv);
-        sp.AddService<IOllamaModelPreloadService>(new FakePreload());
+        sp.AddService<ILlmModelPreloadService>(new FakePreload());
         sp.AddService<IBackgroundTaskRunner>(new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance));
         sp.AddService<IWorkflowStageRegistry>(new WorkflowStageRegistry());
 

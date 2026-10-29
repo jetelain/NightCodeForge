@@ -1,6 +1,7 @@
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Inference;
 using Xunit;

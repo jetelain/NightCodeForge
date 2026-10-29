@@ -53,7 +53,7 @@ public class LlmProviderOptions : ILlmProviderOptions
     /// Standardized default model identifier across pipeline stages.
     /// Optional: if omitted (null or empty), the system automatically selects the default model via DefaultModelResolver.
     /// </summary>
-    public string? DefaultModelId { get; set; } = KnownDefaultModels.DefaultBaseline;
+    public string? DefaultModelId { get; set; }
 
     /// <summary>
     /// Default thinking/reasoning effort across pipeline stages.

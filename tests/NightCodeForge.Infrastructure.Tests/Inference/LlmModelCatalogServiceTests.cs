@@ -2,6 +2,7 @@ using System.Net;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Infrastructure.Inference;
 using Xunit;
 
@@ -22,7 +23,7 @@ public class LlmModelCatalogServiceTests
     public async Task Ollama_EnrichesModelsFromApiShow()
     {
         var service = new OllamaModelCatalogService(
-            StubHttpHandler.Client(new StubHttpHandler(OllamaRoutes)), Options.Create(new LlmEndpointOptions()), NullLogger<OllamaModelCatalogService>.Instance);
+            StubHttpHandler.Client(new StubHttpHandler(OllamaRoutes)), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaModelCatalogService>.Instance);
 
         var models = await service.GetAvailableModelsAsync();
 
@@ -42,7 +43,7 @@ public class LlmModelCatalogServiceTests
             ? StubHttpHandler.Json("""{"capabilities":["completion"],"parameters":"num_ctx 4096"}""")
             : OllamaRoutes(req));
         var service = new OllamaModelCatalogService(
-            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), NullLogger<OllamaModelCatalogService>.Instance);
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaModelCatalogService>.Instance);
 
         var model = (await service.GetAvailableModelsAsync()).First();
 
@@ -57,7 +58,7 @@ public class LlmModelCatalogServiceTests
             ? StubHttpHandler.Json("""{"models":[{"name":"a:1","nativeContextWindow":131072,"recommendedContextWindow":65536},{"name":"b:2","nativeContextWindow":32768,"recommendedContextWindow":0}]}""")
             : OllamaRoutes(req));
         var service = new OllamaRouterModelCatalogService(
-            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), NullLogger<OllamaRouterModelCatalogService>.Instance);
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaRouterModelCatalogService>.Instance);
 
         var models = await service.GetAvailableModelsAsync();
 
@@ -88,7 +89,7 @@ public class LlmModelCatalogServiceTests
             : StubHttpHandler.Status(HttpStatusCode.NotFound));
 
         var service = new OllamaRouterModelCatalogService(
-            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), NullLogger<OllamaRouterModelCatalogService>.Instance);
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaRouterModelCatalogService>.Instance);
 
         var models = await service.GetAvailableModelsAsync();
 
@@ -105,7 +106,7 @@ public class LlmModelCatalogServiceTests
     {
         var service = new OllamaRouterModelCatalogService(
             StubHttpHandler.Client(new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.InternalServerError))),
-            Options.Create(new LlmEndpointOptions()), NullLogger<OllamaRouterModelCatalogService>.Instance);
+            Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaRouterModelCatalogService>.Instance);
 
         Assert.Empty(await service.GetAvailableModelsAsync());
     }
@@ -115,7 +116,7 @@ public class LlmModelCatalogServiceTests
     {
         var service = new OllamaModelCatalogService(
             StubHttpHandler.Client(new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.InternalServerError))),
-            Options.Create(new LlmEndpointOptions()), NullLogger<OllamaModelCatalogService>.Instance);
+            Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaModelCatalogService>.Instance);
 
         Assert.Empty(await service.GetAvailableModelsAsync());
     }
@@ -140,7 +141,7 @@ public class LlmModelCatalogServiceTests
         });
 
         var service = new OllamaModelCatalogService(
-            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), NullLogger<OllamaModelCatalogService>.Instance);
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaModelCatalogService>.Instance);
 
         var models = await service.GetAvailableModelsAsync();
 
@@ -161,7 +162,7 @@ public class LlmModelCatalogServiceTests
         });
 
         var service = new OllamaModelCatalogService(
-            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), NullLogger<OllamaModelCatalogService>.Instance);
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaModelCatalogService>.Instance);
 
         var models = await service.GetAvailableModelsAsync();
         Assert.Empty(models);

@@ -38,13 +38,18 @@ Unlike native Ollama instances (which expose `POST /api/show` to inspect Modelfi
 
 ### 1.3 Architectural Solution
 NightCodeForge introduces **`LlmProviderType.OpenAiCompatible`** as a first-class inference provider:
+- **Polymorphism and Interface-Driven Provider Isolation:** Following clean architecture, non-specialized consumers (`CrucibleAgentHarness`, `IdeationService`, `DeterministicBuildStage`, `OperationsControlService`, `ModelCapabilityResolver`) never execute procedural provider checks (such as `if (isOpenAi)` or `if (ProviderType == OpenAiCompatible)`). Provider behavior is isolated behind clear interfaces and polymorphic implementations:
+  - `ILlmCapabilityResolver` (`OllamaCapabilityResolver`, `OpenAiCapabilityResolver`): Polymorphically resolves thinking parameters, reasoning effort normalization, and `ChatOptions`.
+  - `ILlmGatewayService` (`OllamaRouterGatewayService` / `OllamaGatewayServiceBase`, `OpenAiCompatibleGatewayService`): Encapsulates context window resolution, resident models, and VRAM reclamation.
+  - `ILlmModelPreloadService` (`OllamaModelPreloadService`, `NoOpModelPreloadService`): Polymorphically handles model warm-up without provider branching in workflow stages.
+  - `IDefaultModelSelector` (`OllamaDefaultModelSelector`, `OpenAiDefaultModelSelector`): Polymorphically evaluates candidate models for default selection in catalogs.
 - **Probing-First Catalog Discovery:** Probes `GET /api/v1/models` (with `/v1/models` relative fallback) upon connection. If implemented (HTTP 200), available models and their metadata (such as `context_length` and pricing) are ingested automatically into the model catalog.
-- **Automatic Default Model Resolution (`DefaultModelResolver`):** If `DefaultModelId` is omitted (null or empty), the system resolves the default model automatically according to provider strategy:
-  - **OpenAI-Compatible:** Lowest prompt cost first (if pricing data is available), then alphabetical order.
-  - **Ollama / OllamaRouter:** Most capable model: largest context window first (`ContextWindowTokens` descending, e.g. 128k > 64k > 32k), then Dense architecture over Mixture of Experts (MoE) for maximum reasoning depth and stability, then size/capacity (`SizeBytes`), and alphabetical order as tie-breaker.
+- **Automatic Default Model Resolution (`IDefaultModelSelector`):** If `DefaultModelId` is omitted (null or empty), the system resolves the default model automatically according to provider strategy:
+  - **OpenAI-Compatible (`OpenAiDefaultModelSelector`):** Lowest prompt cost first (if pricing data is available), then completion cost, then alphabetical order.
+  - **Ollama / OllamaRouter (`OllamaDefaultModelSelector`):** Most capable model: largest context window first (`ContextWindowTokens` descending, e.g. 128k > 64k > 32k), then Dense architecture over Mixture of Experts (MoE) for maximum reasoning depth and stability, then size/capacity (`SizeBytes`), and alphabetical order as tie-breaker.
 - **Conditional Manual Configuration (`AllowedModels`):** Manual model entry is only required if `/api/v1/models` is not implemented (HTTP 404 / 501), or when administrators explicitly specify custom allowed models and context overrides.
 - **Fail-Fast Validation:** If `/api/v1/models` is not implemented and no models are configured manually, startup and UI validation fail fast with an actionable diagnostic prompting manual setup. Attempting to invoke an unlisted model fails fast with a dedicated domain exception (`ModelNotAllowedException`), adhering strictly to `AGENTS.md` ("No silent failures... Avoid creating synthetic values for something that should exist in database, make a hard error").
-- **Deterministic Crucible Compaction:** The `ModelCapabilityResolver` resolves context limits directly from discovered metadata or the configured model definition, guaranteeing mathematical compaction precision without heuristics.
+- **Deterministic Crucible Compaction:** The `ModelCapabilityResolver` operates purely on integer context windows and model substring profiles to compute Pi-style compaction budgeting math, completely decoupled from provider-specific logic.
 - **Clean Header & Protocol Hygiene:** Outbound HTTP requests use standard `Authorization: Bearer <ApiKey>` authentication, standard OpenAI streaming tool call protocols, and strictly suppress Ollama-specific headers (`X-OllamaRouter-Target`, `X-OllamaRouter-Session-Id`).
 - **Complete Provider Trifecta (Gateway, Catalog, Factory):** Adhering to the architecture established in Step 11.33, OpenAI-compatible mode registers a dedicated gateway (`OpenAiCompatibleGatewayService`), a catalog (`OpenAiCompatibleModelCatalogService`), and a factory (`OpenAiCompatibleChatClientFactory`), ensuring dependent services such as `OperationsControlService` and `IdeationService` resolve seamlessly without DI errors or runtime branching.
 
@@ -351,79 +356,53 @@ public interface IOpenAiModelAllowlistCache
 
 ### 2.3 Context Window Resolution, Compaction Integration & Default Model Selection
 
-#### Provider-Tailored Default Model Selection (`DefaultModelResolver` & `ILlmModelCatalogService.GetDefaultModelAsync`)
-The pure evaluation logic is isolated in a static utility `DefaultModelResolver` in `NightCodeForge.Agents.Inference`, making it 100% unit-testable in memory without network mocks:
+#### Provider-Tailored Default Model Selection (`IDefaultModelSelector` & `ILlmModelCatalogService.GetDefaultModelAsync`)
+The default model selection strategy is defined by the `IDefaultModelSelector` interface in `NightCodeForge.Core.Interfaces`:
 
 ```csharp
-namespace NightCodeForge.Agents.Inference;
+namespace NightCodeForge.Core.Interfaces;
 
-public static class DefaultModelResolver
+public interface IDefaultModelSelector
 {
-    public static AvailableModelInfo? ResolveDefaultModel(
-        IEnumerable<AvailableModelInfo> candidates,
-        LlmProviderType providerType,
-        string? explicitDefaultModelId = null)
-    {
-        var list = candidates.ToList();
-        if (list.Count == 0) return null;
-
-        // 1. Explicit model check
-        if (!string.IsNullOrWhiteSpace(explicitDefaultModelId))
-        {
-            var matched = list.FirstOrDefault(m => string.Equals(m.ModelId, explicitDefaultModelId, StringComparison.OrdinalIgnoreCase));
-            if (matched != null) return matched;
-        }
-
-        // 2. OpenAI Compatible: lowest prompt cost first, then completion cost, then alphabetical
-        if (providerType == LlmProviderType.OpenAiCompatible)
-        {
-            return list
-                .OrderBy(m => m.PromptCostPerMillion.HasValue ? 0 : 1)
-                .ThenBy(m => m.PromptCostPerMillion ?? decimal.MaxValue)
-                .ThenBy(m => m.CompletionCostPerMillion ?? decimal.MaxValue)
-                .ThenBy(m => m.ModelId, StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault();
-        }
-
-        // 3. Ollama / OllamaRouter: largest context first, Dense over MoE, size, alphabetical
-        return list
-            .OrderByDescending(m => m.ContextWindowTokens ?? 0)
-            .ThenBy(m => m.IsMoE ? 1 : 0) // Dense (false = 0) prioritized over MoE (true = 1)
-            .ThenByDescending(m => m.SizeBytes ?? 0)
-            .ThenBy(m => m.ModelId, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault();
-    }
+    AvailableModelInfo? SelectDefaultModel(IEnumerable<AvailableModelInfo> candidates, string? explicitDefaultModelId = null);
 }
 ```
 
-`LlmModelCatalogServiceBase.GetDefaultModelAsync` simply calls `GetAvailableModelsAsync` and delegates to `DefaultModelResolver`:
+Concrete provider strategies implement this interface polymorphically without procedural branching:
+- **`OpenAiDefaultModelSelector` (`NightCodeForge.Core.Inference`):** Economic efficiency strategy. When no explicit default model is configured, prioritizes models with lowest prompt cost first, then lowest completion cost, and alphabetical order as tie-breaker.
+- **`OllamaDefaultModelSelector` (`NightCodeForge.Core.Inference`):** Capability strategy. When no explicit default model is configured, prioritizes largest context window (`ContextWindowTokens` descending), Dense architectures over Mixture of Experts (MoE), model size (`SizeBytes` descending), and alphabetical order.
+
+`LlmModelCatalogServiceBase` injects `IDefaultModelSelector` directly via constructor DI, delegating default model selection cleanly:
 ```csharp
 public virtual async Task<AvailableModelInfo?> GetDefaultModelAsync(CancellationToken cancellationToken = default)
 {
     var models = await GetAvailableModelsAsync(cancellationToken);
-    return DefaultModelResolver.ResolveDefaultModel(models, ProviderType, _defaultModelId);
+    return _defaultModelSelector.SelectDefaultModel(models, DefaultModelId);
 }
 ```
 
-#### Database Seeding & Startup Edge-Case Handling (Pre-OOBE Setup Wizard)
-During initial application bootstrap (prior to Step 12.18 OOBE Wizard completion), standard global agent profiles must be seeded into `AppDbContext` (`EnsureDefaultGlobalAgentProfilesAsync`). Because agent profiles require a valid `ModelName`, startup seeding in `Program.cs` resolves the default model asynchronously:
+A static facade `DefaultModelResolver` remains available for backward compatibility and test convenience, delegating to the appropriate `IDefaultModelSelector` instance based on `LlmProviderType`.
 
-1. **Catalog Probe:** The startup initialization scope requests `ILlmModelCatalogService` and calls `await catalogService.GetDefaultModelAsync(cancellationToken)`.
-2. **Resolution Hierarchy:**
-   - **Detected Model (Preferred):** If `GetDefaultModelAsync()` resolves a model, its `ModelId` is used to seed the standard global profiles.
-   - **Configured Option:** If the catalog probe returns `null` but `llmOptions.DefaultModelId` was populated, uses `llmOptions.DefaultModelId`.
+#### Database Seeding & Startup Edge-Case Handling (Pre-OOBE Setup Wizard)
+During initial application bootstrap (prior to Step 12.18 OOBE Wizard completion), standard global agent profiles must be seeded into `AppDbContext` (`EnsureDefaultGlobalAgentProfilesAsync`). Because agent profiles require a valid `ModelName`, startup seeding in `Program.cs` resolves the default model with strict preservation of explicit user configuration:
+
+1. **Explicit Configuration Check:** If `llmOptions.DefaultModelId` is already populated (via `DefaultModelId` or `ModelId` in `appsettings.json`), auto-detection is bypassed entirely and the configured model is preserved.
+2. **Catalog Probe (Auto-Detection when Unconfigured):** If `llmOptions.DefaultModelId` is null or empty, `Program.cs` requests `ILlmModelCatalogService` and calls `await catalogService.GetDefaultModelAsync(cancellationToken)`.
+3. **Resolution Hierarchy:**
+   - **Configured Option (Highest):** If `DefaultModelId` or `ModelId` is specified in `appsettings.json`, it is always used directly.
+   - **Detected Model (Preferred Auto-Fallback):** If unconfigured and `GetDefaultModelAsync()` resolves a model, its `ModelId` is assigned to `llmOptions.DefaultModelId` to seed standard global profiles.
    - **Factory Baseline Fallback:** If the endpoint is offline or unreachable on first developer boot (e.g. Ollama daemon not started, remote OpenAI key not yet entered), startup falls back to the compile-time baseline constant (`KnownDefaultModels.DefaultBaseline`).
-3. **Transition to OOBE Wizard (Step 12.18):**
+4. **Transition to OOBE Wizard (Step 12.18):**
    - Once Step 12.18 is installed, the desktop environment wizard runs before first application boot and writes the calibrated model directly to `config/config.json`, making the factory baseline fallback strictly an offline/development safety net.
 
-#### Context Window Resolution Algorithm (`ModelCapabilityResolver`)
-In OpenAI-compatible mode, `ModelCapabilityResolver` resolves context capacity deterministically without network roundtrips:
-1. **Determine Effective Model ID:** Explicit requested `modelId` $\rightarrow$ Configured `DefaultModelId` $\rightarrow$ Resolved default model from `catalogService.GetDefaultModelAsync()`.
-2. **Resolve Token Limits in Prioritized Sequence:**
+#### Context Window Resolution (`ILlmGatewayService`)
+Context capacity is resolved through `ILlmGatewayService.ResolveContextWindowAsync`, preventing agent harnesses and compaction builders from coupling to provider-specific discovery:
+1. **Determine Effective Model ID:** Explicit requested `modelId` $\rightarrow$ Configured `DefaultModelId` $\rightarrow$ Default baseline.
+2. **OpenAI Gateway Sequence (`OpenAiCompatibleGatewayService`):**
    - **Priority 1 (Manual Configuration Override):** Check `OpenAiCompatible.AllowedModels`. If an entry matches the effective model ID, return its configured `ContextWindowTokens`.
    - **Priority 2 (Discovered Metadata):** Check discovered models from `/api/v1/models` probing in `IOpenAiModelAllowlistCache`. If the model includes explicit context metadata (e.g. OpenRouter `context_length`), return it.
-   - **Priority 3 (Default Discovered Tokens):** If the model was discovered but lacks explicit context metadata, return `DefaultDiscoveredContextTokens` (131,072).
-   - **Fail-Fast Hard Error:** If the model is neither discovered nor in `AllowedModels`, immediately throw `ModelNotAllowedException` (no synthetic context guessing).
+   - **Priority 3 (Default Discovered Tokens):** If the model was discovered but lacks explicit context metadata, return `DefaultDiscoveredContextTokens` (131,072 fallback).
+3. **Crucible Compaction Decoupling:** `ModelCapabilityResolver.BuildCompactionStrategy` receives the resolved integer context window from `ILlmGatewayService` as `explicitContextWindowTokens`, performing purely mathematical budget calculations without provider checks or allowlist cache dependencies. Allowlist validation for execution fails fast in `OpenAiCompatibleChatClientFactory.CreateClient` with `ModelNotAllowedException`.
 
 ---
 
@@ -815,6 +794,42 @@ In `Settings.razor` (and `AgentProfilesTab.razor`), the interface adapts based o
 
 ---
 
+### 2.9 Polymorphic Architecture & Interface Contracts
+
+To adhere strictly to clean code and avoid procedural provider branching (`if (isOpenAi)` or `if (ProviderType == OpenAiCompatible)`), provider capabilities are isolated behind first-class polymorphic interfaces:
+
+#### 1. Polymorphic Capability Resolution (`ILlmCapabilityResolver`)
+Classes that execute agent turns or ideation sessions (`CrucibleAgentHarness`, `IdeationService`) must remain completely provider-agnostic. They inject `ILlmCapabilityResolver` in `NightCodeForge.Agents.Inference`:
+
+```csharp
+namespace NightCodeForge.Agents.Inference;
+
+public interface ILlmCapabilityResolver
+{
+    string ResolveReasoningEffort(string? modelId, string? requestedEffort = null);
+    AdditionalPropertiesDictionary BuildReasoningProperties(string? modelId, string? requestedEffort = null);
+    ChatOptions CreateChatOptions(AgentProfile? profile, string? modelId = null);
+}
+```
+
+- **`OllamaCapabilityResolver` (`NightCodeForge.Agents.Inference`):** Specializes in Ollama and OllamaRouter. Sets `think: true` in `AdditionalProperties` and maps thinking effort to Ollama/Qwen supported levels ("low", "medium", "xhigh").
+- **`OpenAiCapabilityResolver` (`NightCodeForge.Agents.Inference`):** Specializes in OpenAI-compatible gateways. Maps reasoning effort strictly to standard `reasoning_effort` ("high", "medium", "low"), normalizes "xhigh" down to "high", and strictly omits the Ollama-specific `think: true` property.
+
+#### 2. Polymorphic Gateway & Preload Services (`ILlmGatewayService` & `ILlmModelPreloadService`)
+- **`ILlmGatewayService` (`NightCodeForge.Core.Interfaces`):** Unifies context window resolution, provider detection, fleet resident models, and VRAM management across providers. `IOllamaRouterGatewayService` extends `ILlmGatewayService`.
+  - `OllamaGatewayServiceBase` / `OllamaRouterGatewayService`: Interacts with Ollama daemon `/api/ps` and router fleet endpoints.
+  - `OpenAiCompatibleGatewayService`: Resolves context windows from manual models, discovered cache, or default tokens, and treats VRAM reclamation as a safe no-op.
+- **`ILlmModelPreloadService` (`NightCodeForge.Core.Interfaces`):** Unifies model warm-up ahead of execution. `IOllamaModelPreloadService` extends `ILlmModelPreloadService`.
+  - `OllamaModelPreloadService`: Sends `keep_alive` warmup requests to Ollama.
+  - `NoOpModelPreloadService`: Implements preload as a non-blocking no-op returning `true` for cloud/remote gateways.
+
+#### 3. Polymorphic Default Model Selection (`IDefaultModelSelector`)
+- **`IDefaultModelSelector` (`NightCodeForge.Core.Interfaces`):** Strategy for picking the default model from a candidate list.
+  - `OllamaDefaultModelSelector`: Capability strategy (largest context window, dense over MoE, size, alphabetical).
+  - `OpenAiDefaultModelSelector`: Economy strategy (lowest prompt cost, completion cost, alphabetical).
+
+---
+
 ## 3. Implementation Checklist & Deliverables
 
 ### Phase 1: Core Domain, Schemas, Validation & Caches
@@ -833,31 +848,36 @@ In `Settings.razor` (and `AgentProfilesTab.razor`), the interface adapts based o
 - [x] Unit tests in `NightCodeForge.Agents.Tests` verifying `DefaultModelResolver`, allowlist validation, and hard errors on unlisted models.
 
 ### Phase 2: Client Construction, Gateway, Preload & Model Catalog
-- [ ] Extend `ILlmModelCatalogService` with `GetDefaultModelAsync` and `VerifyEndpointAsync`.
-- [ ] Implement `OpenAiCompatibleModelCatalogService` in `NightCodeForge.Infrastructure.Inference` (derived from `LlmModelCatalogServiceBase`):
+- [x] Extend `ILlmModelCatalogService` with `GetDefaultModelAsync` and `VerifyEndpointAsync`.
+- [x] Define `IDefaultModelSelector` and implement `OpenAiDefaultModelSelector` (economy: lowest cost) and `OllamaDefaultModelSelector` (capability: largest context, dense over MoE, size, alphabetical).
+- [x] Implement `OpenAiCompatibleModelCatalogService` in `NightCodeForge.Infrastructure.Inference` (derived from `LlmModelCatalogServiceBase`):
   - Proactive probing of `/api/v1/models` and `/v1/models`.
   - JSON parser extracting model IDs, `context_length`, pricing, and populating `IOpenAiModelAllowlistCache`.
   - Fallback to manual `AllowedModels` on HTTP 404/501.
-  - Implement `GetDefaultModelAsync` delegating to `DefaultModelResolver`.
+  - Implement `GetDefaultModelAsync` delegating to `IDefaultModelSelector`.
   - Implement `VerifyEndpointAsync`.
-- [ ] Implement `OpenAiCompatibleGatewayService : IOllamaRouterGatewayService`:
+- [x] Define `ILlmGatewayService` (unifying `IOllamaRouterGatewayService`) and `ILlmModelPreloadService` (unifying `IOllamaModelPreloadService`).
+- [x] Implement `OpenAiCompatibleGatewayService : ILlmGatewayService, IOllamaRouterGatewayService`:
   - `ProviderType = LlmProviderType.OpenAiCompatible`.
   - `ReclaimVramAsync` as no-op returning `true`.
   - `GetResidentModelsAsync` returning `[]`.
   - `ResolveContextWindowAsync` using `AllowedModels`, cache, or default tokens.
   - `GetGatewayStatusAsync` returning OpenAI status report.
-- [ ] Implement `NoOpModelPreloadService : IOllamaModelPreloadService`.
-- [ ] Refactor `LlmChatClientFactoryBase` with `protected abstract IChatClient CreateRawChatClient(...)`.
-- [ ] Implement `OpenAiCompatibleChatClientFactory` (derived from `LlmChatClientFactoryBase`):
+- [x] Implement `NoOpModelPreloadService : ILlmModelPreloadService, IOllamaModelPreloadService`.
+- [x] Define `ILlmCapabilityResolver` and implement `OllamaCapabilityResolver` and `OpenAiCapabilityResolver`:
+  - Decouple agent harnesses (`CrucibleAgentHarness`) and `IdeationService` from provider branching.
+  - Polymorphically build reasoning properties and `ChatOptions` (suppressing `think: true` for OpenAI-compatible endpoints).
+- [x] Refactor `LlmChatClientFactoryBase` with `protected abstract IChatClient CreateRawChatClient(...)`.
+- [x] Implement `OpenAiCompatibleChatClientFactory` (derived from `LlmChatClientFactoryBase`):
   - Handle null/empty `ApiKey` using `KnownDefaultModels.LocalAuthBypassKey`.
   - Pipeline transport with `HttpClientPipelineTransport(httpClient)`.
   - Organization ID header support.
   - Strict suppression of `X-OllamaRouter-Target` and `X-OllamaRouter-Session-Id` headers.
   - Synchronous allowlist check via `IOpenAiModelAllowlistCache` and `AllowedModels`.
-- [ ] Register all provider services in `AddNightCodeForgeInference` and `AddNightCodeForgeAgents`.
-- [ ] Update `Program.cs` startup database initialization to resolve `ILlmModelCatalogService.GetDefaultModelAsync()` for seeding global agent profiles, with factory baseline fallback.
-- [ ] Update `ModelCapabilityResolver` to resolve context window sizes from manual `AllowedModels`, discovered model metadata, or `DefaultDiscoveredContextTokens`.
-- [ ] Unit tests for probing, 404/501 fallback, header hygiene, and retry behavior.
+- [x] Register all provider services in `AddNightCodeForgeInference` and `AddNightCodeForgeAgents`.
+- [x] Update `Program.cs` startup database initialization to resolve `ILlmModelCatalogService.GetDefaultModelAsync()` for seeding global agent profiles only if `DefaultModelId` is null/empty, strictly preserving explicit configuration.
+- [x] Refactor `ModelCapabilityResolver` to remain provider-agnostic, computing Pi-style compaction budgets purely from integer context windows and substring profiles.
+- [x] Unit tests for probing, 404/501 fallback, header hygiene, polymorphic capability resolvers, default model selectors, and retry behavior.
 
 ### Phase 3: Web UI, Settings Ergonomics & Configuration Persistence
 - [ ] Ensure `AgentProfilesTab.razor` populates profile model dropdowns from `ILlmModelCatalogService.GetAvailableModelsAsync()`.

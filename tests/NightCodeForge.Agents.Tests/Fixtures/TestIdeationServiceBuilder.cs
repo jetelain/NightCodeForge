@@ -44,7 +44,8 @@ public class TestIdeationServiceBuilder
     public SkillsService SkillsService { get; set; } = new();
     public IWorkspaceRepository WorkspaceRepository { get; set; } = new InMemoryWorkspaceRepository();
     public ITaskMarkdownSyncService MarkdownSyncService { get; set; } = new Mock<ITaskMarkdownSyncService>().Object;
-    public IOllamaRouterGatewayService GatewayService { get; set; } = CreateDefaultGatewayService();
+    public ILlmGatewayService GatewayService { get; set; } = CreateDefaultGatewayService();
+    public ILlmCapabilityResolver? CapabilityResolver { get; set; }
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
     public ILogger<IdeationService> Logger { get; set; } = NullLogger<IdeationService>.Instance;
     public ILogger<CanonicalTools> CanonicalToolsLogger { get; set; } = NullLogger<CanonicalTools>.Instance;
@@ -71,6 +72,7 @@ public class TestIdeationServiceBuilder
             PathResolver,
             factory,
             GatewayService,
+            CapabilityResolver ?? new OllamaCapabilityResolver(LlmOptions),
             EnvProvider,
             WebSearchService,
             EditorConfigService,

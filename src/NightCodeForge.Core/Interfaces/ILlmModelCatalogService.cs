@@ -34,5 +34,7 @@ public record EndpointVerificationResult(
 public interface ILlmModelCatalogService
 {
     Task<IReadOnlyList<AvailableModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default);
+    Task<AvailableModelInfo?> GetDefaultModelAsync(CancellationToken cancellationToken = default);
+    Task<EndpointVerificationResult> VerifyEndpointAsync(CancellationToken cancellationToken = default);
     Task RefreshAsync(CancellationToken cancellationToken = default);
 }

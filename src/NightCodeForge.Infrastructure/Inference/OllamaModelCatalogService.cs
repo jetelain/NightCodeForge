@@ -14,8 +14,12 @@ public sealed class OllamaModelCatalogService : LlmModelCatalogServiceBase
 {
     private const int MaxParallelShowCalls = 4;
 
-    public OllamaModelCatalogService(HttpClient httpClient, IOptions<LlmEndpointOptions> options, ILogger<OllamaModelCatalogService> logger)
-        : base(httpClient, options, logger)
+    public OllamaModelCatalogService(
+        HttpClient httpClient,
+        IOptions<LlmEndpointOptions> options,
+        IDefaultModelSelector defaultModelSelector,
+        ILogger<OllamaModelCatalogService> logger)
+        : base(httpClient, options, defaultModelSelector, logger)
     {
     }
 

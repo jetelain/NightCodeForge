@@ -11,16 +11,16 @@ namespace NightCodeForge.Agents.Inference;
 /// <summary>
 /// Base for the provider-specific chat client factories. Caches session-less clients by
 /// (model, routing target), shares one <see cref="SocketsHttpHandler"/>, and wraps clients with
-/// telemetry and pause gating. Subclasses decide which HTTP headers the provider understands.
+/// telemetry and pause gating. Subclasses create provider-specific raw chat client instances.
 /// </summary>
 public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposable
 {
-    private readonly IOptions<LlmProviderOptions> _options;
-    private readonly ILoggerFactory _loggerFactory;
-    private readonly IOperationsTelemetryService _telemetryService;
-    private readonly IOperationsControlService _operationsControlService;
-    private readonly TimeProvider _timeProvider;
-    private readonly IOptions<RetryPolicyOptions> _retryOptions;
+    protected readonly IOptions<LlmProviderOptions> _options;
+    protected readonly ILoggerFactory _loggerFactory;
+    protected readonly IOperationsTelemetryService _telemetryService;
+    protected readonly IOperationsControlService _operationsControlService;
+    protected readonly TimeProvider _timeProvider;
+    protected readonly IOptions<RetryPolicyOptions> _retryOptions;
     private readonly ConcurrentDictionary<string, IChatClient> _clientCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly SocketsHttpHandler _sharedSocketsHandler;
     private bool _disposed;
@@ -49,9 +49,6 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
         };
     }
 
-    /// <summary>Attaches the provider-specific routing/session headers to the client.</summary>
-    protected abstract void ConfigureRouting(HttpClient httpClient, OllamaRoutingTarget routingTarget, string? sessionId);
-
     public IChatClient CreateClient(string? modelId = null) =>
         CreateClient(modelId, OllamaRoutingTarget.Auto, sessionId: null);
 
@@ -67,9 +64,7 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
     public IChatClient CreateClient(string? modelId, OllamaRoutingTarget routingTarget, string? sessionId)
     {
         var options = _options.Value;
-        var effectiveModel = !string.IsNullOrWhiteSpace(modelId)
-            ? modelId.Trim()
-            : (!string.IsNullOrWhiteSpace(options.DefaultModelId) ? options.DefaultModelId.Trim() : KnownDefaultModels.DefaultBaseline);
+        var effectiveModel = ResolveEffectiveModelId(modelId, options);
 
         // Session-bound clients are not cached: session ids are unbounded (one per task stage).
         if (!string.IsNullOrWhiteSpace(sessionId))
@@ -81,21 +76,42 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
         return _clientCache.GetOrAdd(cacheKey, _ => BuildClient(options, effectiveModel, routingTarget, null));
     }
 
+    /// <summary>
+    /// Resolves the effective model identifier to instantiate. Subclasses can specialize model resolution
+    /// according to provider-specific strategies (e.g. dynamic discovery / allowlist cache).
+    /// </summary>
+    protected virtual string ResolveEffectiveModelId(string? modelId, LlmProviderOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(modelId))
+        {
+            return modelId.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.DefaultModelId))
+        {
+            return options.DefaultModelId.Trim();
+        }
+
+        return KnownDefaultModels.DefaultBaseline;
+    }
+
     private IChatClient BuildClient(LlmProviderOptions options, string effectiveModel, OllamaRoutingTarget routingTarget, string? sessionId)
     {
-        var rawClient = OllamaChatClientFactory.CreateOllama(
-            options,
-            effectiveModel,
-            _loggerFactory.CreateLogger("OllamaApiClient"),
-            _timeProvider,
-            _retryOptions.Value,
-            routingTarget,
-            _sharedSocketsHandler,
-            httpClient => ConfigureRouting(httpClient, routingTarget, sessionId));
-
-        var telemetryClient = new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, routingTarget.ToString(), _loggerFactory.CreateLogger<TelemetryChatClient>(), options.EffectiveEndpoint);
+        var rawClient = CreateRawChatClient(options, effectiveModel, routingTarget, sessionId, _sharedSocketsHandler);
+        var targetLabel = options.ProviderType == LlmProviderType.OpenAiCompatible ? "OpenAI Compatible" : routingTarget.ToString();
+        var telemetryClient = new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, targetLabel, _loggerFactory.CreateLogger<TelemetryChatClient>(), options.EffectiveEndpoint);
         return new OperationsPauseGatingChatClient(telemetryClient, _operationsControlService);
     }
+
+    /// <summary>
+    /// Creates the provider-specific raw IChatClient instance (OllamaApiClient or OpenAIClient).
+    /// </summary>
+    protected abstract IChatClient CreateRawChatClient(
+        LlmProviderOptions options,
+        string effectiveModel,
+        OllamaRoutingTarget routingTarget,
+        string? sessionId,
+        SocketsHttpHandler socketsHandler);
 
     public void Dispose()
     {
@@ -114,8 +130,46 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
     }
 }
 
+/// <summary>
+/// Common base for Ollama-based chat client factories (standalone and router).
+/// </summary>
+public abstract class OllamaChatClientFactoryBase : LlmChatClientFactoryBase
+{
+    protected OllamaChatClientFactoryBase(
+        IOptions<LlmProviderOptions> options,
+        ILoggerFactory loggerFactory,
+        IOperationsTelemetryService telemetryService,
+        IOperationsControlService operationsControlService,
+        TimeProvider timeProvider,
+        IOptions<RetryPolicyOptions> retryOptions)
+        : base(options, loggerFactory, telemetryService, operationsControlService, timeProvider, retryOptions)
+    {
+    }
+
+    protected override IChatClient CreateRawChatClient(
+        LlmProviderOptions options,
+        string effectiveModel,
+        OllamaRoutingTarget routingTarget,
+        string? sessionId,
+        SocketsHttpHandler socketsHandler)
+    {
+        return OllamaChatClientFactory.CreateOllama(
+            options,
+            effectiveModel,
+            _loggerFactory.CreateLogger("OllamaApiClient"),
+            _timeProvider,
+            _retryOptions.Value,
+            routingTarget,
+            socketsHandler,
+            httpClient => ConfigureRouting(httpClient, routingTarget, sessionId));
+    }
+
+    /// <summary>Attaches the provider-specific routing/session headers to the client.</summary>
+    protected abstract void ConfigureRouting(HttpClient httpClient, OllamaRoutingTarget routingTarget, string? sessionId);
+}
+
 /// <summary>Chat client factory for OllamaRouter: pins targets and sets the session id for affinity/KV cache.</summary>
-public sealed class OllamaRouterChatClientFactory : LlmChatClientFactoryBase
+public sealed class OllamaRouterChatClientFactory : OllamaChatClientFactoryBase
 {
     public OllamaRouterChatClientFactory(
         IOptions<LlmProviderOptions> options,
@@ -133,7 +187,7 @@ public sealed class OllamaRouterChatClientFactory : LlmChatClientFactoryBase
 }
 
 /// <summary>Chat client factory for a standalone Ollama server: no router headers are sent.</summary>
-public sealed class StandaloneOllamaChatClientFactory : LlmChatClientFactoryBase
+public sealed class StandaloneOllamaChatClientFactory : OllamaChatClientFactoryBase
 {
     public StandaloneOllamaChatClientFactory(
         IOptions<LlmProviderOptions> options,

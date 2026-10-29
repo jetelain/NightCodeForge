@@ -196,6 +196,12 @@ public class WorkspaceWizardComponentTests : BunitContext
     {
         public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
+        public Task<AvailableModelInfo?> GetDefaultModelAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<AvailableModelInfo?>(new("Qwen3.8-27B:latest", "Qwen3.8-27B:latest", SizeBytes: 1024));
+
+        public Task<EndpointVerificationResult> VerifyEndpointAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new EndpointVerificationResult(true, true, 1));
+
         public Task<IReadOnlyList<AvailableModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
         {
             IReadOnlyList<AvailableModelInfo> list = new List<AvailableModelInfo>

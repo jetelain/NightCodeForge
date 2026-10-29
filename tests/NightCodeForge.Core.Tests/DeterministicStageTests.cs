@@ -25,7 +25,7 @@ public class DeterministicStageTests
 
     private static DeterministicBuildStage CreateBuildStage(
         IExecutionEnvironmentProvider env,
-        IOllamaModelPreloadService? preloadService = null) =>
+        ILlmModelPreloadService? preloadService = null) =>
         new(env, preloadService, TestRunner, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance);
 
     private class FakeExecutionEnvironment : IExecutionEnvironment, IExecutionEnvironmentProvider
@@ -55,7 +55,7 @@ public class DeterministicStageTests
         }
     }
 
-    private class FakePreloadService : IOllamaModelPreloadService
+    private class FakePreloadService : ILlmModelPreloadService
     {
         public List<(string ModelName, string KeepAlive)> PreloadedModels { get; } = new();
 

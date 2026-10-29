@@ -22,7 +22,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
     private static partial Regex ErrorRegex();
 
     private readonly IExecutionEnvironmentProvider _envProvider;
-    private readonly IOllamaModelPreloadService? _preloadService;
+    private readonly ILlmModelPreloadService? _preloadService;
     private readonly IBackgroundTaskRunner _backgroundTaskRunner;
     private readonly ILogger<DeterministicBuildStage> _logger;
     private readonly string _buildCommand;
@@ -36,7 +36,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
     [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public DeterministicBuildStage(
         IExecutionEnvironmentProvider envProvider,
-        IOllamaModelPreloadService? preloadService,
+        ILlmModelPreloadService? preloadService,
         IBackgroundTaskRunner backgroundTaskRunner,
         ILogger<DeterministicBuildStage> logger)
         : this(envProvider, preloadService, backgroundTaskRunner, logger, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
@@ -45,7 +45,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
 
     public DeterministicBuildStage(
         IExecutionEnvironmentProvider envProvider,
-        IOllamaModelPreloadService? preloadService,
+        ILlmModelPreloadService? preloadService,
         IBackgroundTaskRunner backgroundTaskRunner,
         ILogger<DeterministicBuildStage> logger,
         string buildCommand,

@@ -1,8 +1,9 @@
+using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 
-namespace NightCodeForge.Agents.Inference;
+namespace NightCodeForge.Core.Inference;
 
 /// <summary>
 /// Validates that requested model identifiers are permitted under the OpenAI-compatible configuration
@@ -26,10 +27,14 @@ public static class OpenAiModelAllowlistValidator
 
         var trimmedModelId = modelId.Trim();
 
-        // 1. If manual AllowedModels is configured, the model MUST exist in AllowedModels
-        if (options.OpenAiCompatible?.AllowedModels is { Count: > 0 } allowedModels)
+        // 1. If manual AllowedModels is configured with valid model IDs, the model MUST exist in AllowedModels
+        var activeAllowedModels = options.OpenAiCompatible?.AllowedModels?
+            .Where(m => m != null && !string.IsNullOrWhiteSpace(m.ModelId))
+            .ToList();
+
+        if (activeAllowedModels is { Count: > 0 })
         {
-            if (!allowedModels.Any(m => m != null && string.Equals(m.ModelId?.Trim(), trimmedModelId, StringComparison.OrdinalIgnoreCase)))
+            if (!activeAllowedModels.Any(m => string.Equals(m.ModelId.Trim(), trimmedModelId, StringComparison.OrdinalIgnoreCase)))
             {
                 throw new ModelNotAllowedException(modelId, LlmProviderType.OpenAiCompatible);
             }

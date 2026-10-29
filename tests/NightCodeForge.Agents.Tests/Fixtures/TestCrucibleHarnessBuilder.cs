@@ -48,7 +48,8 @@ public class TestCrucibleHarnessBuilder
     public ITaskRepository TaskRepository { get; set; } = new InMemoryTaskRepository();
     public ITaskCancellationManager CancellationManager { get; set; } = new NightCodeForge.Core.Concurrency.TaskCancellationManager(NullLogger<NightCodeForge.Core.Concurrency.TaskCancellationManager>.Instance);
     public IOperationsControlService OperationsControlService { get; set; } = CreateDefaultOperationsControlService();
-    public IOllamaRouterGatewayService GatewayService { get; set; } = CreateDefaultGatewayService();
+    public ILlmGatewayService GatewayService { get; set; } = CreateDefaultGatewayService();
+    public ILlmCapabilityResolver? CapabilityResolver { get; set; }
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
     public IOptions<NightCodeForge.Core.Resilience.RetryPolicyOptions> RetryOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
     public ILogger<CrucibleAgentHarness> Logger { get; set; } = NullLogger<CrucibleAgentHarness>.Instance;
@@ -84,6 +85,7 @@ public class TestCrucibleHarnessBuilder
             PathResolver,
             factory,
             GatewayService,
+            CapabilityResolver ?? new OllamaCapabilityResolver(LlmOptions),
             EnvProvider,
             McpManager,
             EditorConfigService,

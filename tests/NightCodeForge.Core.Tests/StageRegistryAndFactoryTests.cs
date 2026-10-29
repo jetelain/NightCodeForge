@@ -57,7 +57,7 @@ public class StageRegistryAndFactoryTests
         var fakeEnv = new FakeExecutionEnvironment();
         _serviceProvider.AddService<IExecutionEnvironment>(fakeEnv);
         _serviceProvider.AddService<IExecutionEnvironmentProvider>(new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(fakeEnv));
-        _serviceProvider.AddService<IOllamaModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
+        _serviceProvider.AddService<ILlmModelPreloadService>(new NightCodeForge.Core.Tests.Fixtures.FakePreloadService());
         _serviceProvider.AddService<IPromptTemplateRenderer>(new ScribanPromptTemplateRenderer());
         _serviceProvider.AddService<TimeProvider>(TimeProvider.System);
         _serviceProvider.AddService<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(new NightCodeForge.Core.Execution.BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));

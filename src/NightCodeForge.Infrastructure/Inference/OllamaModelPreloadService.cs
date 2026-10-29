@@ -6,7 +6,7 @@ using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Infrastructure.Inference;
 
-public class OllamaModelPreloadService : IOllamaModelPreloadService
+public class OllamaModelPreloadService : ILlmModelPreloadService
 {
     private readonly HttpClient _httpClient;
     private readonly IOperationsControlService _operationsControlService;

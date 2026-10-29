@@ -61,7 +61,7 @@ public class WorkflowStageRegistry : IWorkflowStageRegistry
         RegisterHandler(StageImplementationTypes.DeterministicBuild, (sp, def) =>
         {
             var env = sp.GetRequiredService<IExecutionEnvironmentProvider>();
-            var preload = sp.GetService<IOllamaModelPreloadService>();
+            var preload = sp.GetService<ILlmModelPreloadService>();
             var runner = sp.GetRequiredService<IBackgroundTaskRunner>();
             var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<DeterministicBuildStage>>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance;

@@ -1,18 +1,18 @@
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Options;
 using NightCodeForge.Agents.Compaction;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Agents.Inference;
 
 /// <summary>
-/// Resolves model-aware reasoning effort and context-window settings from <see cref="LlmProviderOptions"/>,
-/// so that agents (Ideation, Crucible) never hardcode provider- or model-specific values.
+/// Model capability utilities for in-loop Crucible context compaction sizing and model profile matching.
+/// Provider-specific reasoning formatting and chat options are resolved polymorphically via <see cref="ILlmCapabilityResolver"/>.
 /// </summary>
 public static class ModelCapabilityResolver
 {
-    private static readonly string[] EffortRank = ["minimal", "low", "medium", "high", "xhigh"];
-
     /// <summary>
     /// Builds the Pi-style in-loop context compaction strategy sized for the agent profile's model and context window.
     /// In multi-node fleet environments, the context window should reflect the largest capability of the fleet
@@ -60,68 +60,7 @@ public static class ModelCapabilityResolver
     }
 
     /// <summary>
-    /// Resolves the reasoning effort to send for a model: requested/default effort, then the model's
-    /// explicit <see cref="ModelCapabilityProfile.EffortMap"/>, then nearest supported level (ties go higher),
-    /// otherwise the generic OpenAI normalization.
-    /// </summary>
-    public static string ResolveReasoningEffort(
-        LlmProviderOptions? options,
-        string? modelId,
-        string? requestedEffort = null,
-        bool isOpenAi = false)
-    {
-        var profile = FindProfile(options, modelId);
-        var requested = !string.IsNullOrWhiteSpace(requestedEffort)
-            ? requestedEffort
-            : (!string.IsNullOrWhiteSpace(options?.ReasoningEffort) ? options!.ReasoningEffort : profile?.DefaultEffort);
-
-        var effort = OllamaChatClientFactory.NormalizeReasoningEffort(requested, isOpenAi);
-        if (profile == null) return effort;
-
-        if (profile.EffortMap.TryGetValue(effort, out var mapped) && !string.IsNullOrWhiteSpace(mapped))
-        {
-            return mapped.Trim().ToLowerInvariant();
-        }
-
-        var supported = profile.SupportedEfforts
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Select(s => s.Trim().ToLowerInvariant())
-            .ToList();
-        if (supported.Count == 0 || supported.Contains(effort)) return effort;
-
-        int target = Array.IndexOf(EffortRank, effort);
-        if (target < 0) return supported[0];
-
-        return supported
-            .Select(s => (Level: s, Rank: Array.IndexOf(EffortRank, s)))
-            .Where(x => x.Rank >= 0)
-            .OrderBy(x => Math.Abs(x.Rank - target))
-            .ThenByDescending(x => x.Rank)
-            .Select(x => x.Level)
-            .DefaultIfEmpty(supported[0])
-            .First();
-    }
-
-    /// <summary>
-    /// Builds <see cref="ChatOptions.AdditionalProperties"/> enabling thinking with a model-aware reasoning effort.
-    /// </summary>
-    public static AdditionalPropertiesDictionary BuildReasoningProperties(
-        LlmProviderOptions? options,
-        string? modelId,
-        string? requestedEffort = null,
-        bool isOpenAi = false)
-    {
-        return new AdditionalPropertiesDictionary
-        {
-            ["think"] = true,
-            ["reasoning_effort"] = ResolveReasoningEffort(options, modelId, requestedEffort, isOpenAi)
-        };
-    }
-
-    /// <summary>
     /// Builds the Pi-style in-loop context compaction strategy sized for the model's context window.
-    /// In multi-node fleet environments, the context window should reflect the largest capability of the fleet
-    /// to prevent premature compaction while capable larger nodes or cloud overflow can service the context.
     /// </summary>
     public static CompactionStrategy BuildCompactionStrategy(
         LlmProviderOptions? options,
@@ -134,6 +73,7 @@ public static class ModelCapabilityResolver
         var profile = FindProfile(options, modelId);
         string resolutionSource;
         int contextWindow;
+
         if (explicitContextWindowTokens.HasValue && explicitContextWindowTokens.Value > 0)
         {
             contextWindow = explicitContextWindowTokens.Value;
@@ -190,5 +130,31 @@ public static class ModelCapabilityResolver
         };
 
         return new PiStyleCrucibleCompactionStrategy(compactionOptions, summarizerClient);
+    }
+
+    /// <summary>
+    /// Legacy fallback method forwarding to <see cref="OllamaCapabilityResolver"/>.
+    /// New code should inject <see cref="ILlmCapabilityResolver"/> polymorphically.
+    /// </summary>
+    public static string ResolveReasoningEffort(
+        LlmProviderOptions? options,
+        string? modelId,
+        string? requestedEffort = null)
+    {
+        var resolver = new OllamaCapabilityResolver(Options.Create(options ?? new LlmProviderOptions()));
+        return resolver.ResolveReasoningEffort(modelId, requestedEffort);
+    }
+
+    /// <summary>
+    /// Legacy fallback method forwarding to <see cref="OllamaCapabilityResolver"/>.
+    /// New code should inject <see cref="ILlmCapabilityResolver"/> polymorphically.
+    /// </summary>
+    public static AdditionalPropertiesDictionary BuildReasoningProperties(
+        LlmProviderOptions? options,
+        string? modelId,
+        string? requestedEffort = null)
+    {
+        var resolver = new OllamaCapabilityResolver(Options.Create(options ?? new LlmProviderOptions()));
+        return resolver.BuildReasoningProperties(modelId, requestedEffort);
     }
 }

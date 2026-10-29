@@ -365,7 +365,7 @@ public class WorkflowSpecIntegrationTests
         services.AddSingleton<IExecutionEnvironment>(mockEnv.Object);
         services.AddSingleton<NightCodeForge.Core.Execution.IBackgroundTaskRunner>(
             new NightCodeForge.Core.Execution.BackgroundTaskRunner(NullLogger<NightCodeForge.Core.Execution.BackgroundTaskRunner>.Instance));
-        services.AddSingleton<IOllamaModelPreloadService>(new Mock<IOllamaModelPreloadService>().Object);
+        services.AddSingleton<ILlmModelPreloadService>(new Mock<ILlmModelPreloadService>().Object);
         services.AddSingleton<IAgentActivityStreamer, InMemoryAgentActivityStreamer>();
         services.AddSingleton<ITaskRepository>(taskRepo);
         services.AddSingleton<IWorkflowRepository>(new EfCoreWorkflowRepository(dbContext));

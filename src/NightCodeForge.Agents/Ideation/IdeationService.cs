@@ -42,7 +42,8 @@ public partial class IdeationService : IIdeationService
     private static partial Regex TaskJsonArrayRegex();
 
     private readonly ILlmChatClientFactory _chatClientFactory;
-    private readonly IOllamaRouterGatewayService _gatewayService;
+    private readonly ILlmGatewayService _gatewayService;
+    private readonly ILlmCapabilityResolver _capabilityResolver;
     private readonly IExecutionEnvironmentProvider _envProvider;
     private readonly IWebSearchService _webSearchService;
     private readonly IEditorConfigService _editorConfigService;
@@ -63,7 +64,8 @@ public partial class IdeationService : IIdeationService
     public IdeationService(
         IWorkspacePathResolver pathResolver,
         ILlmChatClientFactory chatClientFactory,
-        IOllamaRouterGatewayService gatewayService,
+        ILlmGatewayService gatewayService,
+        ILlmCapabilityResolver capabilityResolver,
         IExecutionEnvironmentProvider envProvider,
         IWebSearchService webSearchService,
         IEditorConfigService editorConfigService,
@@ -83,6 +85,7 @@ public partial class IdeationService : IIdeationService
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
         _gatewayService = gatewayService ?? throw new ArgumentNullException(nameof(gatewayService));
+        _capabilityResolver = capabilityResolver ?? throw new ArgumentNullException(nameof(capabilityResolver));
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _webSearchService = webSearchService ?? throw new ArgumentNullException(nameof(webSearchService));
         _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
@@ -469,13 +472,13 @@ When proposing implementation tasks to the developer, adhere to the following ru
             ? profile.ModelName
             : (client.GetService<ChatClientMetadata>()?.DefaultModelId ?? _llmOptions?.ModelId);
 
-        var chatOptions = new ChatOptions
+        var chatOptions = _capabilityResolver.CreateChatOptions(profile, effectiveModelId);
+        chatOptions.Tools = aiTools;
+        if (chatOptions.Temperature == null && profile.Temperature == null &&
+            (effectiveModelId == null || (!effectiveModelId.Contains("o1", StringComparison.OrdinalIgnoreCase) && !effectiveModelId.Contains("o3", StringComparison.OrdinalIgnoreCase))))
         {
-            ModelId = !string.IsNullOrWhiteSpace(profile.ModelName) ? profile.ModelName : null,
-            Temperature = (float?)profile.Temperature ?? 0.3f,
-            Tools = aiTools,
-            AdditionalProperties = ModelCapabilityResolver.BuildReasoningProperties(_llmOptions, effectiveModelId)
-        };
+            chatOptions.Temperature = 0.3f;
+        }
 
         int maxTurns = profile.MaxTurns.HasValue && profile.MaxTurns.Value > 0 ? profile.MaxTurns.Value : DefaultMaxTurns;
 

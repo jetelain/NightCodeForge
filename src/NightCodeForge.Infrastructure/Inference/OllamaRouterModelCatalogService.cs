@@ -34,8 +34,9 @@ public sealed class OllamaRouterModelCatalogService : LlmModelCatalogServiceBase
     public OllamaRouterModelCatalogService(
         HttpClient httpClient,
         IOptions<LlmEndpointOptions> options,
+        IDefaultModelSelector defaultModelSelector,
         ILogger<OllamaRouterModelCatalogService> logger)
-        : base(httpClient, options, logger)
+        : base(httpClient, options, defaultModelSelector, logger)
     {
     }
 

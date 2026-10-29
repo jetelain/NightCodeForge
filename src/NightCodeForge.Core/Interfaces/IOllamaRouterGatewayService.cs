@@ -110,11 +110,10 @@ public record GatewayStatusReport(
 }
 
 /// <summary>
-/// Gateway to the configured LLM inference backend: either a standalone Ollama daemon or an
-/// OllamaRouter fleet. The implementation is selected once at startup from
-/// <c>LlmProvider:ProviderType</c> (changing it requires a restart); consumers never branch on the provider.
+/// Gateway to the configured LLM inference backend (Ollama, OllamaRouter, OpenAI-Compatible).
+/// The implementation is selected once at startup; consumers never branch on the provider.
 /// </summary>
-public interface IOllamaRouterGatewayService
+public interface ILlmGatewayService
 {
     /// <summary>The provider this implementation talks to (fixed at startup).</summary>
     LlmProviderType ProviderType { get; }
@@ -130,5 +129,12 @@ public interface IOllamaRouterGatewayService
     Task<int> ResolveContextWindowAsync(string modelName, CancellationToken cancellationToken = default);
     Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default);
     Task<bool> ReclaimVramAsync(string? targetName, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Legacy interface alias forwarding to <see cref="ILlmGatewayService"/>.
+/// </summary>
+public interface IOllamaRouterGatewayService : ILlmGatewayService
+{
 }
 

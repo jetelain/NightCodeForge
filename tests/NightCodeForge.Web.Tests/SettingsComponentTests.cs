@@ -320,6 +320,12 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
         public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
+        public Task<AvailableModelInfo?> GetDefaultModelAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(Models.FirstOrDefault());
+
+        public Task<EndpointVerificationResult> VerifyEndpointAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new EndpointVerificationResult(true, true, Models.Count, Models));
+
         public Task<IReadOnlyList<AvailableModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IReadOnlyList<AvailableModelInfo>>(Models);

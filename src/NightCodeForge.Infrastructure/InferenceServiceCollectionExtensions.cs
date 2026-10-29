@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Configuration;
 using NightCodeForge.Infrastructure.Inference;
@@ -26,18 +27,30 @@ public static class InferenceServiceCollectionExtensions
         switch (providerType)
         {
             case LlmProviderType.Ollama:
-                services.AddHttpClient<IOllamaRouterGatewayService, OllamaGatewayService>().AddTransientHttpErrorRetry();
+                services.TryAddSingleton<IDefaultModelSelector, OllamaDefaultModelSelector>();
+                services.AddHttpClient<ILlmGatewayService, OllamaGatewayService>().AddTransientHttpErrorRetry();
                 services.AddHttpClient<ILlmModelCatalogService, OllamaModelCatalogService>().AddTransientHttpErrorRetry();
+                services.AddHttpClient<ILlmModelPreloadService, OllamaModelPreloadService>().AddTransientHttpErrorRetry();
                 break;
             case LlmProviderType.OllamaRouter:
-                services.AddHttpClient<IOllamaRouterGatewayService, OllamaRouterGatewayService>().AddTransientHttpErrorRetry();
+                services.TryAddSingleton<IDefaultModelSelector, OllamaDefaultModelSelector>();
+                services.AddHttpClient<ILlmGatewayService, OllamaRouterGatewayService>().AddTransientHttpErrorRetry();
                 services.AddHttpClient<ILlmModelCatalogService, OllamaRouterModelCatalogService>().AddTransientHttpErrorRetry();
+                services.AddHttpClient<ILlmModelPreloadService, OllamaModelPreloadService>().AddTransientHttpErrorRetry();
+                break;
+            case LlmProviderType.OpenAiCompatible:
+                services.TryAddSingleton<IDefaultModelSelector, OpenAiDefaultModelSelector>();
+                services.AddHttpClient<ILlmGatewayService, OpenAiCompatibleGatewayService>().AddTransientHttpErrorRetry();
+                services.AddHttpClient<ILlmModelCatalogService, OpenAiCompatibleModelCatalogService>().AddTransientHttpErrorRetry();
+                services.TryAddSingleton<ILlmModelPreloadService, NoOpModelPreloadService>();
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(providerType), providerType, "Unsupported LLM provider type.");
         }
 
-        services.AddHttpClient<IOllamaModelPreloadService, OllamaModelPreloadService>().AddTransientHttpErrorRetry();
+        // Forward legacy interfaces to primary interfaces for backward compatibility
+        services.TryAddTransient<IOllamaRouterGatewayService>(sp => (IOllamaRouterGatewayService)sp.GetRequiredService<ILlmGatewayService>());
+
         return services;
     }
 }

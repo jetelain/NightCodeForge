@@ -5,6 +5,7 @@ using NightCodeForge.Agents.Acp;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Ideation;
+using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Mcp;
 using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.PiRpc;
@@ -13,6 +14,7 @@ using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Services;
@@ -73,10 +75,17 @@ public static class ServiceCollectionExtensions
         switch (providerType)
         {
             case LlmProviderType.Ollama:
+                services.TryAddSingleton<ILlmCapabilityResolver, Inference.OllamaCapabilityResolver>();
                 services.TryAddSingleton<Inference.ILlmChatClientFactory, Inference.StandaloneOllamaChatClientFactory>();
                 break;
             case LlmProviderType.OllamaRouter:
+                services.TryAddSingleton<ILlmCapabilityResolver, Inference.OllamaCapabilityResolver>();
                 services.TryAddSingleton<Inference.ILlmChatClientFactory, Inference.OllamaRouterChatClientFactory>();
+                break;
+            case LlmProviderType.OpenAiCompatible:
+                services.TryAddSingleton<IDefaultModelSelector, OpenAiDefaultModelSelector>();
+                services.TryAddSingleton<ILlmCapabilityResolver, Inference.OpenAiCapabilityResolver>();
+                services.TryAddSingleton<Inference.ILlmChatClientFactory, Inference.OpenAiCompatibleChatClientFactory>();
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(providerType), providerType, "Unsupported LLM provider type.");

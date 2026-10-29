@@ -560,4 +560,21 @@ public class TelemetryChatClientTests
         Assert.NotNull(started);
         Assert.Equal(expectedEffort, started.ThinkingEffort);
     }
+
+    [Theory]
+    [InlineData("low")]
+    [InlineData("medium")]
+    [InlineData("high")]
+    public void ResolveThinkingEffort_WhenReasoningEffortPresentWithoutThinkFlag_ReturnsReasoningEffort(string effort)
+    {
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["reasoning_effort"] = effort
+            }
+        };
+
+        Assert.Equal(effort, TelemetryChatClient.ResolveThinkingEffort(options));
+    }
 }

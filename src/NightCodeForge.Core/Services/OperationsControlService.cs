@@ -18,7 +18,7 @@ public class OperationsControlService : IOperationsControlService
     public static readonly TimeSpan DefaultCancellationTimeout = TimeSpan.FromSeconds(5);
 
     private readonly IOperationsStateStore _stateStore;
-    private readonly IOllamaRouterGatewayService _ollamaRouterGatewayService;
+    private readonly ILlmGatewayService _ollamaRouterGatewayService;
     private readonly IWorkerStateService _workerStateService;
     private readonly ITaskCancellationManager _cancellationManager;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -32,7 +32,7 @@ public class OperationsControlService : IOperationsControlService
 
     public OperationsControlService(
         IOperationsStateStore stateStore,
-        IOllamaRouterGatewayService ollamaRouterGatewayService,
+        ILlmGatewayService ollamaRouterGatewayService,
         IWorkerStateService workerStateService,
         ITaskCancellationManager cancellationManager,
         IServiceScopeFactory scopeFactory,

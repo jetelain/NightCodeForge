@@ -42,7 +42,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
     private readonly ITaskCancellationManager _cancellationManager;
     private readonly IOperationsControlService _operationsControlService;
-    private readonly IOllamaRouterGatewayService _gatewayService;
+    private readonly ILlmGatewayService _gatewayService;
+    private readonly ILlmCapabilityResolver _capabilityResolver;
     private readonly ILogger<CrucibleAgentHarness> _logger;
     private readonly ILogger<CanonicalTools> _canonicalToolsLogger;
     private readonly LlmProviderOptions _llmOptions;
@@ -56,7 +57,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
     public CrucibleAgentHarness(
         IWorkspacePathResolver pathResolver,
         ILlmChatClientFactory chatClientFactory,
-        IOllamaRouterGatewayService gatewayService,
+        ILlmGatewayService gatewayService,
+        ILlmCapabilityResolver capabilityResolver,
         IExecutionEnvironmentProvider envProvider,
         IMcpClientManager mcpManager,
         IEditorConfigService editorConfigService,
@@ -80,6 +82,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
         _gatewayService = gatewayService ?? throw new ArgumentNullException(nameof(gatewayService));
+        _capabilityResolver = capabilityResolver ?? throw new ArgumentNullException(nameof(capabilityResolver));
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _mcpManager = mcpManager ?? throw new ArgumentNullException(nameof(mcpManager));
         _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
@@ -639,13 +642,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         var aiTools = BuildAIFunctionList(canonicalTools, permittedTools, dispatcher, harnessConfig.CustomTools, harnessConfig.ToolDirectives);
 
-        var chatOptions = new ChatOptions
-        {
-            ModelId = !string.IsNullOrWhiteSpace(effectiveModel) ? effectiveModel : null,
-            Temperature = (float?)context.Profile.Temperature,
-            Tools = aiTools,
-            AdditionalProperties = ModelCapabilityResolver.BuildReasoningProperties(_llmOptions, effectiveModel ?? _llmOptions?.ModelId)
-        };
+        var chatOptions = _capabilityResolver.CreateChatOptions(context.Profile, effectiveModel);
+        chatOptions.Tools = aiTools;
 
         if (context.OptimizationFlags.GuidedGrammarDecoding)
         {

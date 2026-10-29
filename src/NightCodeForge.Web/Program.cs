@@ -142,6 +142,39 @@ using (var scope = app.Services.CreateScope())
 
     var llmOptions = builder.Configuration.GetSection(NightCodeForge.Agents.Inference.LlmProviderOptions.SectionName)
         .Get<NightCodeForge.Agents.Inference.LlmProviderOptions>() ?? new NightCodeForge.Agents.Inference.LlmProviderOptions();
+
+    if (string.IsNullOrWhiteSpace(llmOptions.DefaultModelId))
+    {
+        var catalogService = scope.ServiceProvider.GetService<NightCodeForge.Core.Interfaces.ILlmModelCatalogService>();
+        if (catalogService != null)
+        {
+            try
+            {
+                var detectedModel = await catalogService.GetDefaultModelAsync();
+                if (detectedModel != null && !string.IsNullOrWhiteSpace(detectedModel.ModelId))
+                {
+                    llmOptions.DefaultModelId = detectedModel.ModelId;
+                }
+            }
+            catch (Exception ex)
+            {
+                var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+                logger.LogWarning(ex, "Failed to resolve default model from catalog during startup seeding; falling back to configured or baseline model.");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(llmOptions.DefaultModelId) &&
+            llmOptions.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OpenAiCompatible &&
+            llmOptions.OpenAiCompatible?.AllowedModels is { Count: > 0 } allowedModels)
+        {
+            var fallback = allowedModels.FirstOrDefault(m => !string.IsNullOrWhiteSpace(m?.ModelId));
+            if (fallback != null)
+            {
+                llmOptions.DefaultModelId = fallback.ModelId.Trim();
+            }
+        }
+    }
+
     await dbContext.EnsureDefaultGlobalAgentProfilesAsync(llmOptions);
     await dbContext.EnsureDefaultWorkflowsAsync();
 
