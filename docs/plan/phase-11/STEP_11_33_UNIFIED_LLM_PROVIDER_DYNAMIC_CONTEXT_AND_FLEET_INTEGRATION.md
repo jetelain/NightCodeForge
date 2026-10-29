@@ -99,6 +99,25 @@ public class LlmProviderOptions
 }
 ```
 
+### 2.1.1 Layered User Configuration Pattern (Factory Defaults vs. config/config.json Overlay)
+
+To avoid user manual configuration editing and ensure user settings survive binary updates:
+- **Factory Settings (`appsettings.json`):** Treated strictly as **read-only factory defaults** shipped with the application binary or container image. Users must **never** be instructed to edit `appsettings.json` directly.
+- **Persistent User Overlay (`config/config.json`):** User configuration is loaded via `builder.Configuration.AddJsonFile("config/config.json", optional: true, reloadOnChange: true)`. This file resides in the persistent user directory and overlays factory settings without being overwritten by future software updates.
+- **Provisioned by Step 12.18 OOBE Wizard:** Web UI configuration is not required for Step 11.33 because the initial provider selection, endpoint, and hardware-calibrated model selection are automatically configured by the [Step 12.18 OOBE Setup Wizard](../phase-12/STEP_12_18_CROSS_PLATFORM_DESKTOP_INSTALLER_AND_ENVIRONMENT_WIZARD.md), which populates `config/config.json` directly during installation:
+  ```json
+  // config/config.json (User Overlay)
+  {
+    "LlmProvider": {
+      "ProviderType": "Ollama",
+      "Endpoint": "http://localhost:11434",
+      "DefaultModelId": "jetelain/qwen3.6-35b-a3b:latest",
+      "DefaultThinkingEffort": "Medium",
+      "ContextWindowTokens": 131072
+    }
+  }
+  ```
+
 #### Provider Auto-Detection (Encapsulated in `ILlmGatewayService.DetectProviderAsync`)
 To adhere to the `AGENTS.md` presentation-logic separation rule, auto-detection logic lives strictly within `ILlmGatewayService` (or `IOllamaRouterGatewayService.DetectProviderAsync`), never directly inside Razor `@code` blocks:
 On startup or when clicking **"Detect Provider"** in the Web UI:

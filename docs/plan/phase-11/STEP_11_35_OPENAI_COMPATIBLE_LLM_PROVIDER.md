@@ -148,6 +148,34 @@ public class LlmProviderOptions
 }
 ```
 
+### 2.1.1 Layered User Configuration Pattern (Factory Defaults vs. config/config.json Overlay)
+
+To avoid user manual configuration editing and ensure user settings survive binary updates:
+- **Factory Settings (`appsettings.json`):** Shipped directly with the binary distribution, treated as **read-only factory defaults**. Users must **never** be asked to edit `appsettings.json` directly.
+- **Persistent User Overlay (`config/config.json`):** User configuration is loaded via `builder.Configuration.AddJsonFile("config/config.json", optional: true, reloadOnChange: true)`. This file resides in the persistent user directory and overlays factory settings without being overwritten by future software updates.
+- **Provisioned by Step 12.18 OOBE Wizard:** Web UI configuration is not required for Step 11.35 because the initial provider selection, endpoint, API key, and allowed models allowlist are automatically populated into `config/config.json` by the [Step 12.18 OOBE Setup Wizard](../phase-12/STEP_12_18_CROSS_PLATFORM_DESKTOP_INSTALLER_AND_ENVIRONMENT_WIZARD.md) during installation:
+  ```json
+  // config/config.json (User Overlay)
+  {
+    "LlmProvider": {
+      "ProviderType": "OpenAiCompatible",
+      "DefaultModelId": "deepseek-chat",
+      "OpenAiCompatible": {
+        "Endpoint": "https://api.deepseek.com/v1",
+        "ApiKey": "sk-...",
+        "AllowedModels": [
+          {
+            "ModelId": "deepseek-chat",
+            "DisplayName": "DeepSeek-V3 (64k)",
+            "ContextWindowTokens": 65536,
+            "MaxOutputTokens": 8192
+          }
+        ]
+      }
+    }
+  }
+  ```
+
 ---
 
 ### 2.2 Explicit Model Allowlist & Fail-Fast Validation

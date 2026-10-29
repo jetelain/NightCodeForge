@@ -229,13 +229,13 @@ The installer does not require `git` clone or compilation toolchains on the host
 - **Step 2: Environment Check & Plan:** Displays detected hardware (CPU, RAM, GPU), OS capabilities, and planned provisioning steps with individual toggle options.
 - **Step 3: Host & Subsystem Provisioning:** Visual stepper with real-time log terminal and progress bar for WSL/Docker/.NET installation.
 - **Step 4: AI & Micro-Benchmark Optimization:** Executes automated benchmark to find the perfect mix of `Qwen3.6 35B A3B`, `Qwen3.8 27B`, and `Qwen3.5 9B`, enforces $\ge 128\text{k}$ context, and initiates model weights streaming.
-- **Step 5: Software Download & Installation:** Downloads and extracts NightCodeForge Web and CLI binaries from GitHub Releases with live download speed and ETA.
+- **Step 5: Software Download & Configuration Layout:** Downloads and extracts NightCodeForge Web and CLI binaries from GitHub Releases with live download speed and ETA. Automatically writes the hardware-calibrated user configuration into the durable `config/config.json` user overlay (configuring LLM provider settings for [Step 11.33](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), OpenAI compatible endpoints for [Step 11.35](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-11/STEP_11_35_OPENAI_COMPATIBLE_LLM_PROVIDER.md), and optional Tailscale mesh settings for [Step 12.16](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_16_TAILSCALE_REMOTE_ACCESS.md)), keeping `appsettings.json` as read-only factory defaults.
 - **Step 6: Ready to Forge:** Summary screen with "Launch NightCodeForge Web" and "Open Documentation" buttons.
 
 #### 2. Maintenance & Updater Hub Mode (Launched Post-Install)
 When the executable is launched after initial installation, it displays the **Forge Hub**:
 - **Application Status Card:** Current installed version vs. latest release on GitHub, service running status (Running on port 5000 / Stopped).
-- **1-Click Update:** "Update to vX.Y.Z" button with automatic backup of previous binaries and rollback protection.
+- **1-Click Update:** "Update to vX.Y.Z" button with automatic binary replacement, preserving the durable `config/config.json` overlay and database so user configurations survive updates.
 - **Component Manager:** Add/reconfigure features:
   - Download additional Ollama models.
   - Reconfigure OllamaRouter fleet nodes.
