@@ -341,6 +341,11 @@ public class TelemetryChatClient : DelegatingChatClient
 
     private string ResolveTarget(ChatOptions? options)
     {
+        if (string.Equals(_defaultTarget, "OpenAI Compatible", StringComparison.OrdinalIgnoreCase))
+        {
+            return "OpenAI Compatible";
+        }
+
         if (options?.AdditionalProperties != null)
         {
             if (options.AdditionalProperties.TryGetValue("RoutingTarget", out var targetVal) && targetVal != null)

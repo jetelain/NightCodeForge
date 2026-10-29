@@ -63,21 +63,21 @@
             {
                 <span class="status-dot waiting"></span>
                 <span style="font-size: 0.92rem; color: var(--text-secondary); font-weight: 500;">
-                    Connecting to @(_providerType == LlmProviderType.OllamaRouter ? "OllamaRouter" : "Ollama") and discovering models...
+                    Connecting to @GetProviderShortName(_providerType) and discovering models...
                 </span>
             }
             else if (_isOllamaOnline)
             {
                 <span class="status-dot running"></span>
                 <span style="font-size: 0.92rem; color: var(--text-primary); font-weight: 500;">
-                    @($"{(_providerType == LlmProviderType.OllamaRouter ? "OllamaRouter Gateway" : "Standalone Ollama")} connected ({_availableModels.Count} models available)")
+                    @($"{GetProviderTitle(_providerType)} connected ({_availableModels.Count} models available)")
                 </span>
             }
             else
             {
                 <span class="status-dot blocked"></span>
                 <span style="font-size: 0.92rem; color: var(--text-primary); font-weight: 500;">
-                    @($"Inference endpoint unreachable at {(string.IsNullOrWhiteSpace(LlmOptions.Value.Endpoint) ? "configured endpoint" : LlmOptions.Value.Endpoint)} - fallback to manual model entry")
+                    @($"Inference endpoint unreachable at {(string.IsNullOrWhiteSpace(LlmOptions.Value.EffectiveEndpoint) ? "configured endpoint" : LlmOptions.Value.EffectiveEndpoint)} - fallback to manual model entry")
                 </span>
             }
         </div>
@@ -371,7 +371,7 @@
             }
             else
             {
-                ToastService.Show("Endpoint Offline", "Neither OllamaRouter nor Ollama could be contacted at the configured endpoint.", ToastLevel.Warning);
+                ToastService.Show("Endpoint Offline", $"Could not contact inference provider ({_providerType}) at the configured endpoint.", ToastLevel.Warning);
             }
         }
         catch (Exception ex)
@@ -594,8 +594,8 @@
             using var scope = ScopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            // If standalone Ollama, reset routing target to Auto
-            if (_providerType == LlmProviderType.Ollama)
+            // If not OllamaRouter, reset routing target to Auto
+            if (_providerType != LlmProviderType.OllamaRouter)
             {
                 foreach (var p in _profiles)
                 {
@@ -668,4 +668,18 @@
 
     private void CustomizeFlags(AgentProfile profile) => profile.OptimizationFlags = new LocalOptimizationFlags();
     private void RevertFlags(AgentProfile profile) => profile.OptimizationFlags = null;
+
+    private static string GetProviderShortName(LlmProviderType provider) => provider switch
+    {
+        LlmProviderType.OpenAiCompatible => "OpenAI-Compatible endpoint",
+        LlmProviderType.OllamaRouter => "OllamaRouter",
+        _ => "Ollama"
+    };
+
+    private static string GetProviderTitle(LlmProviderType provider) => provider switch
+    {
+        LlmProviderType.OpenAiCompatible => "OpenAI-Compatible Gateway",
+        LlmProviderType.OllamaRouter => "OllamaRouter Gateway",
+        _ => "Standalone Ollama"
+    };
 }

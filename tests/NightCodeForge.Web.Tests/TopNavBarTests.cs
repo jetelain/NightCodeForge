@@ -17,13 +17,16 @@ public class TopNavBarTests : BunitContext
     private readonly WorkspaceStateService _workspaceState = new();
     private readonly Mock<IOperationsTelemetryService> _telemetryMock = new();
     private readonly Mock<IOperationsControlService> _operationsControlMock = new();
+    private readonly Mock<IOllamaRouterGatewayService> _gatewayServiceMock = new();
 
     public TopNavBarTests()
     {
+        _gatewayServiceMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);
         Services.AddSingleton<IWorkspaceRepository>(_workspaceRepo);
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton(new WorkerStateService(_telemetryMock.Object));
         Services.AddSingleton(_operationsControlMock.Object);
+        Services.AddSingleton(_gatewayServiceMock.Object);
         Services.AddSingleton(TestServices.CreateToastService());
         Services.AddSingleton(NullLogger<TopNavBar>.Instance);
         _operationsControlMock.Setup(o => o.GetDeferredTaskCountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0);
@@ -94,6 +97,39 @@ public class TopNavBarTests : BunitContext
         Assert.NotNull(badge);
         Assert.Contains("GPU Reclaim Incomplete", badge.TextContent);
         Assert.Equal("Connection refused to OllamaRouter", badge.GetAttribute("title"));
+    }
+
+    [Fact]
+    public void TopNavBar_WhenProviderIsOpenAiCompatible_SuppressesGpuReclaimIncompleteBadge()
+    {
+        _gatewayServiceMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OpenAiCompatible);
+        _operationsControlMock.Setup(o => o.IsPaused).Returns(true);
+        _operationsControlMock.Setup(o => o.ReclaimStatus).Returns(OperationsReclaimStatus.Failed);
+        _operationsControlMock.Setup(o => o.LastReclaimError).Returns("VRAM reclaim failed");
+
+        var cut = Render<TopNavBar>();
+
+        Assert.Empty(cut.FindAll("span.badge.bg-danger-subtle"));
+        Assert.DoesNotContain("GPU Reclaim Incomplete", cut.Markup);
+    }
+
+    [Fact]
+    public void TopNavBar_WhenProviderIsOpenAiCompatible_UsesCloudFriendlyPauseTooltips()
+    {
+        _gatewayServiceMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OpenAiCompatible);
+        _operationsControlMock.Setup(o => o.IsPaused).Returns(false);
+
+        var cut = Render<TopNavBar>();
+
+        var pauseBtn = cut.Find("#nav-btn-pause-operations");
+        Assert.Equal("Pause background agent execution & operations", pauseBtn.GetAttribute("title"));
+
+        // Now test paused state tooltip
+        _operationsControlMock.Setup(o => o.IsPaused).Returns(true);
+        var cutPaused = Render<TopNavBar>();
+
+        var resumeBtn = cutPaused.Find("#nav-btn-resume-operations");
+        Assert.Equal("Operations paused. Click to resume operations.", resumeBtn.GetAttribute("title"));
     }
 
     [Fact]

@@ -5,6 +5,7 @@
 @using NightCodeForge.Web.Services
 @inject OperationsTelemetryUiService TelemetryUi
 @inject NightCodeForge.Core.Interfaces.IOperationsControlService OperationsControl
+@inject NightCodeForge.Core.Interfaces.IOllamaRouterGatewayService GatewayService
 @inject ToastService ToastService
 @inject Microsoft.Extensions.Logging.ILogger<ActiveOperationsHero> Logger
 
@@ -17,15 +18,22 @@
                     <span style="font-size: 1.6rem; line-height: 1;">⏸️</span>
                     <div>
                         <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
-                            <strong style="color: var(--accent-amber); font-size: 1rem; font-weight: 700;">Global Operations Paused (Gamer / Dedicated Workload Mode)</strong>
-                            <span class="forge-badge @(OperationsControl.ReclaimStatus == NightCodeForge.Core.Domain.OperationsReclaimStatus.Evicted ? "badge-emerald" : (OperationsControl.ReclaimStatus == NightCodeForge.Core.Domain.OperationsReclaimStatus.Failed ? "badge-crimson" : "badge-amber"))" style="font-size: 0.75rem;">
-                                GPU VRAM: @OperationsControl.ReclaimStatus
-                            </span>
+                            <strong style="color: var(--accent-amber); font-size: 1rem; font-weight: 700;">
+                                @(GatewayService.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OpenAiCompatible ? "Global Operations Paused" : "Global Operations Paused (Gamer / Dedicated Workload Mode)")
+                            </strong>
+                            @if (GatewayService.ProviderType != NightCodeForge.Core.Domain.LlmProviderType.OpenAiCompatible)
+                            {
+                                <span class="forge-badge @(OperationsControl.ReclaimStatus == NightCodeForge.Core.Domain.OperationsReclaimStatus.Evicted ? "badge-emerald" : (OperationsControl.ReclaimStatus == NightCodeForge.Core.Domain.OperationsReclaimStatus.Failed ? "badge-crimson" : "badge-amber"))" style="font-size: 0.75rem;">
+                                    GPU VRAM: @OperationsControl.ReclaimStatus
+                                </span>
+                            }
                         </div>
                         <p style="margin: 0; color: var(--text-secondary); font-size: 0.85rem; line-height: 1.4;">
-                            Background agent execution, inference pipelines, and Hangfire worker queues are paused. GPU VRAM has been reclaimed for games or external heavy workloads.
+                            @(GatewayService.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OpenAiCompatible
+                                ? "Background agent execution, inference pipelines, and Hangfire worker queues are paused."
+                                : "Background agent execution, inference pipelines, and Hangfire worker queues are paused. GPU VRAM has been reclaimed for games or external heavy workloads.")
                         </p>
-                        @if (!string.IsNullOrWhiteSpace(OperationsControl.LastReclaimError))
+                        @if (GatewayService.ProviderType != NightCodeForge.Core.Domain.LlmProviderType.OpenAiCompatible && !string.IsNullOrWhiteSpace(OperationsControl.LastReclaimError))
                         {
                             <div style="margin-top: 0.4rem; font-size: 0.8rem; color: var(--accent-crimson); font-weight: 500;">
                                 ⚠️ VRAM Reclaim Issue: @OperationsControl.LastReclaimError

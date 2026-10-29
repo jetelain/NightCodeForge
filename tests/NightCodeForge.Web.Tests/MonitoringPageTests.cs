@@ -733,4 +733,51 @@ public class MonitoringPageTests : BunitContext
         Assert.DoesNotContain("#0", cut.Find("#active-task-card").TextContent);
         Assert.Null(cut.FindAll("#badge-active-task-running").FirstOrDefault());
     }
+
+    [Fact]
+    public void ActiveOperationsHero_WhenProviderIsOpenAiCompatible_SuppressesGpuVramBadge()
+    {
+        _mockGatewayService.Setup(g => g.ProviderType).Returns(LlmProviderType.OpenAiCompatible);
+        _mockOperationsControlService.Setup(m => m.IsPaused).Returns(true);
+        _mockOperationsControlService.Setup(m => m.ReclaimStatus).Returns(OperationsReclaimStatus.Evicted);
+
+        var cut = Render<ActiveOperationsHero>();
+
+        Assert.DoesNotContain("GPU VRAM:", cut.Markup);
+        Assert.DoesNotContain("Gamer / Dedicated Workload Mode", cut.Markup);
+        Assert.DoesNotContain("GPU VRAM has been reclaimed", cut.Markup);
+        Assert.Contains("Global Operations Paused", cut.Markup);
+    }
+
+    [Fact]
+    public void ActiveOperationsHero_WhenPausedAndProviderIsOllamaRouter_ShowsGpuVramBadge()
+    {
+        _mockGatewayService.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);
+        _mockOperationsControlService.Setup(m => m.IsPaused).Returns(true);
+        _mockOperationsControlService.Setup(m => m.ReclaimStatus).Returns(OperationsReclaimStatus.Evicted);
+
+        var cut = Render<ActiveOperationsHero>();
+
+        Assert.Contains("GPU VRAM: Evicted", cut.Markup);
+    }
+
+    [Fact]
+    public void OllamaRouterClusterMonitor_WhenProviderIsOpenAiCompatible_SuppressesReclaimButtonAndResidentModels()
+    {
+        _mockGatewayService.Setup(g => g.ProviderType).Returns(LlmProviderType.OpenAiCompatible);
+        _mockGatewayService.Setup(g => g.GetGatewayStatusAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GatewayStatusReport(
+                IsConnected: true,
+                ProviderType: LlmProviderType.OpenAiCompatible,
+                BaseUrl: "https://api.openai.com/v1",
+                Version: "v1",
+                FleetTargets: []));
+
+        var cut = Render<OllamaRouterClusterMonitor>();
+
+        Assert.Contains("OpenAI Compatible Endpoint Monitor", cut.Markup);
+        Assert.Contains("Remote Inference Endpoint &amp; Status", cut.Markup);
+        Assert.Empty(cut.FindAll("#reclaim-vram-btn"));
+        Assert.DoesNotContain("Resident GPU Models In Memory", cut.Markup);
+    }
 }

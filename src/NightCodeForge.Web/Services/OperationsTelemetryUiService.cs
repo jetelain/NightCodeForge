@@ -318,11 +318,12 @@ public class OperationsTelemetryUiService : IDisposable
 
     public static string GetRouteBadgeClass(string? route)
     {
-        return (route?.ToLowerInvariant()) switch
+        return (route?.Trim().ToLowerInvariant()) switch
         {
             "local" => "badge-teal",
             "remote" => "badge-indigo",
             "cloud" => "badge-amber",
+            "openai compatible" or "openaicompatible" or "openai" => "badge-teal",
             _ => "badge-gray"
         };
     }

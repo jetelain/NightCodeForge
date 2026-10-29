@@ -71,6 +71,9 @@ public class NavMenuShellTests : BunitContext
         Services.AddSingleton(new WorkspaceStateService());
         Services.AddSingleton(TestServices.CreateToastService());
         Services.AddSingleton(TestServices.CreateOperationsControlService());
+        var mockGateway = new Moq.Mock<NightCodeForge.Core.Interfaces.IOllamaRouterGatewayService>();
+        mockGateway.Setup(g => g.ProviderType).Returns(NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter);
+        Services.AddSingleton<NightCodeForge.Core.Interfaces.IOllamaRouterGatewayService>(mockGateway.Object);
         Services.AddSingleton(new Moq.Mock<IWorkspaceProvisioningService>().Object);
         Services.AddSingleton(Microsoft.Extensions.Logging.Abstractions.NullLogger<TopNavBar>.Instance);
 

@@ -880,22 +880,22 @@ public interface ILlmCapabilityResolver
 - [x] Unit tests for probing, 404/501 fallback, header hygiene, polymorphic capability resolvers, default model selectors, and retry behavior.
 
 ### Phase 3: Web UI, Settings Ergonomics & Configuration Persistence
-- [ ] Ensure `AgentProfilesTab.razor` populates profile model dropdowns from `ILlmModelCatalogService.GetAvailableModelsAsync()`.
-- [ ] Update `Settings.razor`:
+- [x] Ensure `AgentProfilesTab.razor` populates profile model dropdowns from `ILlmModelCatalogService.GetAvailableModelsAsync()`.
+- [x] Update `Settings.razor`:
   - Add `OpenAI Compatible` provider selection option.
   - Render Endpoint, API Key, and Organization ID configuration fields.
   - Display automatic discovery status badge.
   - Render `AllowedModelsTable.razor` as mandatory only when `/api/v1/models` is not implemented (optional override when discovered).
   - Use `ILlmConfigurationWriter` to persist settings to `config/config.json`.
   - Conditionally hide OllamaRouter target pinning, cluster topology cards, and VRAM Reclaim controls.
-- [ ] Wire "Test Connection & Verify Models" action to `ILlmModelCatalogService.VerifyEndpointAsync` and render verification report.
-- [ ] Hide VRAM Reclaim controls in `TopNavBar.razor`, `ActiveOperationsHero.razor`, and monitoring components when provider is `OpenAiCompatible`.
-- [ ] Author bUnit / component tests for automatic discovery display, manual fallback, and provider switching.
+- [x] Wire "Test Connection & Verify Models" action to `ILlmModelCatalogService.VerifyEndpointAsync` and render verification report.
+- [x] Hide VRAM Reclaim controls in `TopNavBar.razor`, `ActiveOperationsHero.razor`, and monitoring components when provider is `OpenAiCompatible`.
+- [x] Author bUnit / component tests for automatic discovery display, manual fallback, and provider switching.
 
 ### Phase 4: Telemetry, Regression & Hardening
-- [ ] Update `TelemetryChatClient` to label provider as `OpenAI Compatible` in telemetry feeds.
-- [ ] Run full test suite without E2E tests (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`) ensuring 100% pass rate.
-- [ ] Run end-to-end tests and fix any regressions.
+- [x] Update `TelemetryChatClient` to label provider as `OpenAI Compatible` in telemetry feeds.
+- [x] Run full test suite without E2E tests (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`) ensuring 100% pass rate.
+- [x] Run end-to-end tests and fix any regressions.
 
 ---
 

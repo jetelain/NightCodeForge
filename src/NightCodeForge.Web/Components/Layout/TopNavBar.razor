@@ -3,6 +3,7 @@
 @inject WorkerStateService WorkerState
 @inject NavigationManager Navigation
 @inject NightCodeForge.Core.Interfaces.IOperationsControlService OperationsControl
+@inject NightCodeForge.Core.Interfaces.IOllamaRouterGatewayService GatewayService
 @inject ToastService ToastService
 @inject ILogger<TopNavBar> Logger
 @implements IDisposable
@@ -67,7 +68,7 @@
                     class="forge-btn forge-btn-secondary btn-sm"
                     id="nav-btn-pause-operations"
                     disabled="@_isTogglingPause"
-                    title="Pause background operations & unload GPU VRAM for gaming or dedicated workloads"
+                    title="@(GatewayService.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OpenAiCompatible ? "Pause background agent execution & operations" : "Pause background operations & unload GPU VRAM for gaming or dedicated workloads")"
                     @onclick="TogglePauseOperationsAsync">
                 <span>⏸️</span>
                 <span>@(_isTogglingPause ? "Pausing..." : "Pause Operations")</span>
@@ -79,14 +80,14 @@
                     class="forge-btn forge-btn-warning btn-sm btn-pulse-amber"
                     id="nav-btn-resume-operations"
                     disabled="@_isTogglingPause"
-                    title="Operations paused. Host GPU VRAM is free. Click to resume operations."
+                    title="@(GatewayService.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OpenAiCompatible ? "Operations paused. Click to resume operations." : "Operations paused. Host GPU VRAM is free. Click to resume operations.")"
                     @onclick="TogglePauseOperationsAsync">
                 <span>▶️</span>
                 <span>@(_isTogglingPause ? "Resuming..." : "Resume Operations")</span>
             </button>
         }
 
-        @if (OperationsControl.ReclaimStatus == NightCodeForge.Core.Domain.OperationsReclaimStatus.Failed)
+        @if (OperationsControl.ReclaimStatus == NightCodeForge.Core.Domain.OperationsReclaimStatus.Failed && GatewayService.ProviderType != NightCodeForge.Core.Domain.LlmProviderType.OpenAiCompatible)
         {
             <span class="badge bg-danger-subtle text-danger border border-danger-subtle ms-1"
                   id="nav-badge-reclaim-failed"

@@ -1,0 +1,322 @@
+@namespace NightCodeForge.Web.Components.Settings
+@using NightCodeForge.Agents.Inference
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Web.Services
+
+<div class="allowed-models-container" style="margin-top: 1.5rem; margin-bottom: 1.5rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="font-size: 1.25rem;">📋</span>
+                <strong style="font-size: 1rem; color: var(--text-primary);">
+                    Allowed Models &amp; Context Sizing @(IsMandatory ? "(Mandatory)" : "(Optional Overrides)")
+                </strong>
+                @if (IsMandatory)
+                {
+                    <span class="forge-badge badge-amber" style="font-size: 0.75rem;">Mandatory</span>
+                }
+            </div>
+            <p style="margin: 0.25rem 0 0 0; font-size: 0.82rem; color: var(--text-secondary);">
+                @(IsMandatory 
+                    ? "Remote endpoint does not support dynamic discovery (/api/v1/models). Manually define allowed models and context limits."
+                    : "Explicit allowlist and context window overrides for discovered models.")
+            </p>
+        </div>
+        <button type="button" class="forge-btn forge-btn-outline btn-sm" id="btn-add-allowed-model" @onclick="OpenAddModal" disabled="@_isEditing">
+            ➕ Add Allowed Model
+        </button>
+    </div>
+
+    @if (Models.Count == 0)
+    {
+        <div class="empty-models-alert" style="padding: 2rem; text-align: center; border: 1px dashed var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--text-muted); font-size: 0.88rem;">
+            @(IsMandatory 
+                ? "⚠️ No allowed models configured. Inference calls will fail fast with ModelNotAllowedException until at least one model is configured."
+                : "No manual model overrides configured. All models dynamically discovered via /api/v1/models are permitted.")
+        </div>
+    }
+    else
+    {
+        <div style="border-radius: var(--radius-md); border: 1px solid var(--border-subtle); overflow: hidden; background: var(--bg-surface);">
+            <table class="font-mono allowed-models-table" style="width: 100%; border-collapse: collapse; font-size: 0.88rem;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-subtle); background: var(--bg-input);">
+                        <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Model Identifier</th>
+                        <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Display Name</th>
+                        <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Context Limit</th>
+                        <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Max Output</th>
+                        <th style="padding: 0.75rem 1rem; text-align: left; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Reasoning</th>
+                        <th style="padding: 0.75rem 1rem; text-align: right; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var model in Models)
+                    {
+                        <tr style="border-bottom: 1px solid var(--border-subtle);" class="allowed-model-row">
+                            <td style="padding: 0.75rem 1rem; color: var(--text-primary); font-weight: 600;" class="model-id-cell">@model.ModelId</td>
+                            <td style="padding: 0.75rem 1rem; color: var(--text-secondary);" class="display-name-cell">@(string.IsNullOrWhiteSpace(model.DisplayName) ? model.ModelId : model.DisplayName)</td>
+                            <td style="padding: 0.75rem 1rem; color: var(--accent-teal); font-weight: 600;" class="context-limit-cell">@model.ContextWindowTokens.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) tokens</td>
+                            <td style="padding: 0.75rem 1rem; color: var(--text-muted);" class="max-output-cell">@(model.MaxOutputTokens > 0 ? model.MaxOutputTokens.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "—")</td>
+                            <td style="padding: 0.75rem 1rem;">
+                                @if (model.SupportsReasoning)
+                                {
+                                    <span class="forge-badge badge-amber" style="font-size: 0.75rem;">@model.DefaultThinkingEffort</span>
+                                }
+                                else
+                                {
+                                    <span style="color: var(--text-muted); font-size: 0.75rem;">—</span>
+                                }
+                            </td>
+                            <td style="padding: 0.75rem 1rem; text-align: right;">
+                                <div style="display: inline-flex; gap: 0.35rem;">
+                                    <button type="button" class="forge-btn forge-btn-ghost btn-sm btn-edit-model" title="Edit model" @onclick="() => EditModel(model)">
+                                        ✏️
+                                    </button>
+                                    <button type="button" class="forge-btn forge-btn-ghost btn-sm btn-delete-model" title="Remove model" @onclick="() => DeleteModel(model)">
+                                        🗑️
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    <!-- Add / Edit Modal or Card -->
+    @if (_isEditing)
+    {
+        <div class="allowed-model-editor forge-card mt-3" style="padding: 1.5rem; background: var(--bg-input); border: 1px solid var(--border-accent, #6366f1); border-radius: var(--radius-md);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <strong style="font-size: 1rem; color: var(--text-primary);">
+                    @(_isNewModel ? "➕ Add Allowed Model" : $"✏️ Edit Model: {_editingModel.ModelId}")
+                </strong>
+                <button type="button" class="forge-btn forge-btn-ghost btn-sm" @onclick="CancelEdit">✕</button>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_validationError))
+            {
+                <div class="forge-alert forge-alert-crimson mb-3" style="padding: 0.5rem 0.75rem; font-size: 0.82rem;">
+                    @_validationError
+                </div>
+            }
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                <div>
+                    <label class="forge-field-label">Model Identifier *</label>
+                    <input type="text" id="input-model-id" class="forge-input font-mono" @bind="_editingModel.ModelId" placeholder="e.g. deepseek-chat or gpt-4o" disabled="@(!_isNewModel)" />
+                </div>
+                <div>
+                    <label class="forge-field-label">Display Name</label>
+                    <input type="text" id="input-display-name" class="forge-input" @bind="_editingModel.DisplayName" placeholder="e.g. DeepSeek V3 (64k)" />
+                </div>
+            </div>
+
+            <!-- Context Limit with Quick Presets -->
+            <div style="margin-bottom: 1rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; flex-wrap: wrap; gap: 0.5rem;">
+                    <label class="forge-field-label" style="margin: 0;">Context Window Tokens *</label>
+                    <div style="display: flex; align-items: center; gap: 0.35rem;" class="preset-chips">
+                        <span style="font-size: 0.75rem; color: var(--text-muted);">Quick Presets:</span>
+                        @foreach (var preset in ContextTokenPresetCatalog.Presets)
+                        {
+                            <button type="button" class="forge-btn forge-btn-outline btn-sm preset-chip" style="padding: 0.15rem 0.45rem; font-size: 0.75rem;"
+                                    @onclick="() => SetPresetContext(preset.Tokens)">
+                                @preset.Label
+                            </button>
+                        }
+                    </div>
+                </div>
+                <input type="number" id="input-context-tokens" min="1024" max="2000000" step="1024" class="forge-input font-mono" @bind="_editingModel.ContextWindowTokens" />
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                <div>
+                    <label class="forge-field-label">Max Output Tokens</label>
+                    <input type="number" id="input-max-output" min="256" max="64000" step="256" class="forge-input font-mono" @bind="_editingModel.MaxOutputTokens" />
+                </div>
+                <div>
+                    <label class="forge-field-label">Supports Reasoning</label>
+                    <div style="padding-top: 0.5rem;">
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; color: var(--text-primary); cursor: pointer;">
+                            <input type="checkbox" id="chk-supports-reasoning" @bind="_editingModel.SupportsReasoning" />
+                            <span>Chain-of-Thought (Reasoning)</span>
+                        </label>
+                    </div>
+                </div>
+                @if (_editingModel.SupportsReasoning)
+                {
+                    <div>
+                        <label class="forge-field-label">Default Thinking Effort</label>
+                        <select class="forge-input" id="select-thinking-effort" @bind="_editingModel.DefaultThinkingEffort">
+                            <option value="@ThinkingEffort.Low">Low (~1k tokens)</option>
+                            <option value="@ThinkingEffort.Medium">Medium (~4k tokens)</option>
+                            <option value="@ThinkingEffort.High">High (~8k tokens)</option>
+                        </select>
+                    </div>
+                }
+            </div>
+
+            <!-- Optional Pricing -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.25rem;">
+                <div>
+                    <label class="forge-field-label">Prompt Cost ($ / M tokens)</label>
+                    <input type="number" step="0.01" min="0" class="forge-input font-mono" @bind="_editingModel.PromptCostPerMillion" placeholder="e.g. 0.14" />
+                </div>
+                <div>
+                    <label class="forge-field-label">Completion Cost ($ / M tokens)</label>
+                    <input type="number" step="0.01" min="0" class="forge-input font-mono" @bind="_editingModel.CompletionCostPerMillion" placeholder="e.g. 0.28" />
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+                <button type="button" class="forge-btn forge-btn-outline btn-sm" id="btn-cancel-model" @onclick="CancelEdit">Cancel</button>
+                <button type="button" class="forge-btn forge-btn-primary btn-sm" id="btn-save-model" @onclick="SaveCurrentEditAsync">
+                    @(_isNewModel ? "➕ Add Model" : "💾 Update Model")
+                </button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public List<OpenAiAllowedModel> Models { get; set; } = [];
+    [Parameter] public EventCallback<List<OpenAiAllowedModel>> ModelsChanged { get; set; }
+    [Parameter] public bool IsMandatory { get; set; } = false;
+    [Parameter] public EventCallback OnSaveRequested { get; set; }
+
+    private bool _isEditing;
+    private bool _isNewModel;
+    private OpenAiAllowedModel _editingModel = new();
+    private string? _validationError;
+
+    protected override void OnParametersSet()
+    {
+        Models ??= [];
+    }
+
+    private void OpenAddModal()
+    {
+        _isNewModel = true;
+        _editingModel = new OpenAiAllowedModel
+        {
+            ContextWindowTokens = 131072,
+            MaxOutputTokens = 8192,
+            DefaultThinkingEffort = ThinkingEffort.Medium
+        };
+        _validationError = null;
+        _isEditing = true;
+    }
+
+    private void EditModel(OpenAiAllowedModel model)
+    {
+        _isNewModel = false;
+        _editingModel = new OpenAiAllowedModel
+        {
+            ModelId = model.ModelId,
+            DisplayName = model.DisplayName,
+            ContextWindowTokens = model.ContextWindowTokens,
+            MaxOutputTokens = model.MaxOutputTokens,
+            SupportsReasoning = model.SupportsReasoning,
+            DefaultThinkingEffort = model.DefaultThinkingEffort,
+            PromptCostPerMillion = model.PromptCostPerMillion,
+            CompletionCostPerMillion = model.CompletionCostPerMillion
+        };
+        _validationError = null;
+        _isEditing = true;
+    }
+
+    private void SetPresetContext(int tokens)
+    {
+        _editingModel.ContextWindowTokens = tokens;
+    }
+
+    private void CancelEdit()
+    {
+        _isEditing = false;
+        _validationError = null;
+    }
+
+    private async Task SaveCurrentEditAsync()
+    {
+        var modelId = _editingModel.ModelId?.Trim();
+        if (string.IsNullOrWhiteSpace(modelId))
+        {
+            _validationError = "Model identifier is required.";
+            return;
+        }
+
+        if (_editingModel.ContextWindowTokens <= 0)
+        {
+            _validationError = "Context window must be greater than zero.";
+            return;
+        }
+
+        if (_editingModel.MaxOutputTokens < 0)
+        {
+            _validationError = "Max output tokens cannot be negative.";
+            return;
+        }
+
+        if (_editingModel.MaxOutputTokens > 0 && _editingModel.MaxOutputTokens >= _editingModel.ContextWindowTokens)
+        {
+            _validationError = "Max output tokens must be less than context window tokens.";
+            return;
+        }
+
+        if (_editingModel.PromptCostPerMillion < 0 || _editingModel.CompletionCostPerMillion < 0)
+        {
+            _validationError = "Token pricing cannot be negative.";
+            return;
+        }
+
+        _editingModel.ModelId = modelId;
+        _editingModel.DisplayName = string.IsNullOrWhiteSpace(_editingModel.DisplayName) ? null : _editingModel.DisplayName.Trim();
+
+        if (_isNewModel)
+        {
+            if (Models.Any(m => string.Equals(m.ModelId, _editingModel.ModelId, StringComparison.OrdinalIgnoreCase)))
+            {
+                _validationError = $"Model '{_editingModel.ModelId}' is already in the allowed list.";
+                return;
+            }
+            Models.Add(_editingModel);
+        }
+        else
+        {
+            var idx = Models.FindIndex(m => string.Equals(m.ModelId, _editingModel.ModelId, StringComparison.OrdinalIgnoreCase));
+            if (idx >= 0)
+            {
+                Models[idx] = _editingModel;
+            }
+            else
+            {
+                Models.Add(_editingModel);
+            }
+        }
+
+        _isEditing = false;
+        _validationError = null;
+        await ModelsChanged.InvokeAsync(Models);
+        if (OnSaveRequested.HasDelegate)
+        {
+            await OnSaveRequested.InvokeAsync();
+        }
+    }
+
+    private async Task DeleteModel(OpenAiAllowedModel model)
+    {
+        if (_isEditing && string.Equals(_editingModel.ModelId, model.ModelId, StringComparison.OrdinalIgnoreCase))
+        {
+            CancelEdit();
+        }
+
+        Models.RemoveAll(m => string.Equals(m.ModelId, model.ModelId, StringComparison.OrdinalIgnoreCase));
+        await ModelsChanged.InvokeAsync(Models);
+        if (OnSaveRequested.HasDelegate)
+        {
+            await OnSaveRequested.InvokeAsync();
+        }
+    }
+}
