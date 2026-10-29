@@ -3,7 +3,7 @@
 > **Phase 11 Implementation Step (Post-MVP - Queue Scheduling, Pipeline Continuity & Conflict Mitigation)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
-> *Status:* Proposed / Specified | *Target Framework:* .NET 10 (C# 13)  
+> *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)  
 > *Amends:* [11.27](STEP_11_27_STAGE_PRIORITY_SCHEDULING_AND_CONFLICT_RESOLUTION_HARDENING.md) (one job per stage becomes one job per cohort), [11.28](STEP_11_28_PIPELINE_RESTART_GIT_RESET_AND_REBASE_OPTIONS.md) (restart may re-enter at a stage inside a cohort), [11.29](STEP_11_29_GLOBAL_OPERATIONS_PAUSE_AND_GPU_VRAM_RECLAMATION.md) (pause is also checked between chained stages).
 
 ---

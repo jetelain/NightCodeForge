@@ -3,7 +3,7 @@
 > **Phase 11 Implementation Step (Post-MVP - Real-Project Hardening, Token Efficiency & Sandbox Ergonomics)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Project Target:* [`src/NightCodeForge.Core`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Agents`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents), [`src/NightCodeForge.Web`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web), [`tests/NightCodeForge.Agents.Tests`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/tests/NightCodeForge.Agents.Tests), [`tests/NightCodeForge.Core.Tests`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/tests/NightCodeForge.Core.Tests)  
-> *Status:* Proposed / Specified | *Target Framework:* .NET 10 (C# 13)  
+> *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)  
 > *Derived From:* Empirical transcript analysis of real project onboarding (`OllamaRouter/docs/transcripts`, Tasks 7, 8, 10).
 
 ---

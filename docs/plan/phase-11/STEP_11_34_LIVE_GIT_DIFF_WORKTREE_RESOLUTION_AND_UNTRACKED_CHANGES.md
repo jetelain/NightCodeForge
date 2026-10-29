@@ -3,7 +3,7 @@
 > **Phase 11 Implementation Step (Hardening, Developer Ergonomics & Git Worktree Observability)**  
 > *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Target Projects:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
-> *Status:* Proposed | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)
 
 ---
 
