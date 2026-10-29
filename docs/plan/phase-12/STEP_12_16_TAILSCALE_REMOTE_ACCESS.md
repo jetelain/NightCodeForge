@@ -13,7 +13,7 @@
 ## 1. Executive Objective
 
 1. **Zero-Configuration Private Remote Access:** Enable developers to securely manage NightCodeForge from anywhere (smartphones, tablets, laptops) via **Tailscale** private WireGuard mesh VPN without opening public firewall ports or configuring port forwarding.
-2. **Dedicated Service Identity & Automated Trusted HTTPS (`svc:ncf`):** Publish NightCodeForge as a dedicated named **Tailscale Service** (`svc:ncf`) rather than binding to the physical workstation's host name. Expose the service over HTTPS with automated Let's Encrypt certificates (`https://ncf.<tailnet-name>.ts.net`) using modern Tailscale CLI syntax (`tailscale serve --service=svc:ncf --https=443 127.0.0.1:5000` and `tailscale serve advertise svc:ncf`). This satisfies modern browser **Secure Context** requirements (`window.isSecureContext === true`) for Service Workers, Web Notifications ([Step 12.8](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_8_MOBILE_RESPONSIVE_UI_AND_PWA.md)), and Web Speech API dictation ([Step 12.12](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md)), with an intuitive and memorable URL. A fallback to device-level serve (`tailscale serve --https=443 127.0.0.1:5000`) is supported when running in tailnets without Services configured.
+2. **Dedicated Service Identity & Automated Trusted HTTPS (`svc:ncf`):** Publish NightCodeForge as a dedicated named **Tailscale Service** (`svc:ncf`) rather than binding to the physical workstation's host name. Expose the service over HTTPS with automated Let's Encrypt certificates (`https://ncf.<tailnet-name>.ts.net`) using modern Tailscale CLI syntax (`tailscale serve --service=svc:ncf --https=443 127.0.0.1:<web-port>` and `tailscale serve advertise svc:ncf`). The target port is automatically detected from the actual Web UI runtime binding (e.g. `5270`, configured by `publish.ps1` or Step 12.18 OOBE) without requiring user configuration. This satisfies modern browser **Secure Context** requirements (`window.isSecureContext === true`) for Service Workers, Web Notifications ([Step 12.8](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_8_MOBILE_RESPONSIVE_UI_AND_PWA.md)), and Web Speech API dictation ([Step 12.12](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md)), with an intuitive and memorable URL. A fallback to device-level serve (`tailscale serve --https=443 127.0.0.1:<web-port>`) is supported when running in tailnets without Services configured.
 3. **Managed Service Lifecycle & Graceful Teardown (Zero Desktop Overhead):** Avoid persistent background daemon residue and orphaned `502 Bad Gateway` endpoints. Because Tailscale Services persist in the daemon background by default, `TailscaleServeHostedService` actively manages the service lifecycle:
    - On startup, the service route is configured and advertised (`tailscale serve advertise svc:ncf`).
    - On graceful shutdown, incoming connections are gracefully drained (`tailscale serve drain svc:ncf`), the endpoint is cleared (`tailscale serve clear svc:ncf`), and stale routes are reset (`tailscale serve reset`), ensuring zero idle CPU/network overhead when NightCodeForge is stopped.
@@ -33,7 +33,7 @@
   - `navigator.serviceWorker.register` (required for PWA and Web Notifications)
   - `Notification.requestPermission` and `showNotification`
   - `navigator.mediaDevices.getUserMedia` & `SpeechRecognition` (required for voice dictation)
-- Navigating to a local development machine over plain HTTP using an IP or LAN hostname (e.g. `http://192.168.1.50:5000` or `http://100.x.y.z:5000`) marks the origin as **insecure**, silently disabling service workers, notifications, and speech recognition on mobile browsers.
+- Navigating to a local development machine over plain HTTP using an IP or LAN hostname (e.g. `http://192.168.1.50:5270` or `http://100.x.y.z:5270`) marks the origin as **insecure**, silently disabling service workers, notifications, and speech recognition on mobile browsers.
 - Generating self-signed TLS certificates introduces untrusted certificate warnings ("Your connection is not private") and requires laborious manual root CA installation on mobile devices.
 
 ### 2.3 Host-Coupled Node Addressing vs. Tailscale Services (`svc:ncf`)
@@ -67,10 +67,10 @@
        │  e.g. https://ncf.tailnet-xyz.ts.net (or https://node.tailnet-xyz.ts.net)
        ▼
 [Tailscale Service (Virtual IP) / Tailscale Serve Reverse Proxy]
-       │  • Configured: `tailscale serve --service=svc:ncf --https=443 127.0.0.1:5000`
+       │  • Configured: `tailscale serve --service=svc:ncf --https=443 127.0.0.1:<web-port>`
        │  • Advertised: `tailscale serve advertise svc:ncf`
        │  • Graceful Drain & Teardown on shutdown
-       │  HTTP / WebSocket Loopback (127.0.0.1:5000)
+       │  HTTP / WebSocket Loopback (127.0.0.1:<web-port>, e.g. 5270)
        ▼
 [Kestrel Web Host (NightCodeForge.Web)]
        ├── Blazor Interactive Server Circuits (/_blazor)
@@ -93,7 +93,6 @@ To ensure an effortless out-of-the-box experience, NightCodeForge adopts a **zer
 {
   "Tailscale": {
     "AutoServe": false,
-    "TargetPort": 5000,
     "ListenPort": 443,
     "Protocol": "https",
     "ServiceName": "svc:ncf",
@@ -104,11 +103,15 @@ To ensure an effortless out-of-the-box experience, NightCodeForge adopts a **zer
 
 *Configuration Parameters:*
 - `AutoServe` (`bool`): Enables or disables automatic Tailscale Serve management on application startup (factory default: `false`).
-- `TargetPort` (`int`): Local Kestrel port to proxy to (default: `5000`).
 - `ListenPort` (`int`): Tailscale external port (default: `443` for HTTPS).
 - `Protocol` (`string`): Transport protocol (`"https"` or `"http"`, default: `"https"`).
 - `ServiceName` (`string`): The Tailscale Service name (default: `"svc:ncf"`). If set to empty or `null`, the service falls back to device-level node serve (`https://<node>.<tailnet>.ts.net`).
 - `Advertise` (`bool`): Whether to automatically execute `tailscale serve advertise <service>` after configuring the service route (default: `true`).
+
+*Dynamic Target Port Resolution (No User Configuration Needed):*
+- The local proxy target port is **not configured by the user**.
+- `TailscaleServeHostedService` automatically queries the active Kestrel listening addresses at runtime (via ASP.NET Core `IServerAddressesFeature` or `IConfiguration["Urls"]` / `ASPNETCORE_URLS`).
+- By default, setup scripts ([`publish.ps1`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/publish.ps1)) and the Step 12.18 OOBE setup wizard configure `"Urls": "http://localhost:5270"`, so Tailscale automatically routes to `127.0.0.1:5270` without manual user intervention or port guessing.
 
 *(Opt-in via Web UI Settings, durable `config/config.json` overlay, or CLI flags `--tailscale` / `--serve-tailscale`, with optional `--tailscale-service <name>` and `--tailscale-port <port>` when starting `ncf-web`.)*
 
@@ -122,7 +125,7 @@ A dedicated **Remote & Tailscale** card/tab is available under `/settings` (Glob
      - 🌟 **Dedicated Tailscale Service (`svc:ncf`)** *(Recommended)* — Publishes NightCodeForge under a virtual IP and MagicDNS name (`https://ncf.<tailnet-name>.ts.net`), completely decoupled from the machine's hardware identity.
      - 💻 **Device Node Mode** — Publishes directly to the machine's MagicDNS name (`https://<node-name>.<tailnet-name>.ts.net`).
    - **Service Name:** Custom text input (default: `svc:ncf`).
-   - **Port Configuration:** Tailscale listen port (default: `443`) and local target port (default: `5000`).
+   - **Port Configuration:** Tailscale listen port (default: `443`). The target Kestrel loopback port is automatically detected from the active Web UI binding and displayed as read-only diagnostic info (e.g. `127.0.0.1:5270`).
    - **Auto-Advertise Toggle:** Automatically advertise service route across the tailnet on start.
    - **"Save & Apply" Action:**
      - Atomically persists the updated configuration to `config/config.json` (and `SystemSettings`).
@@ -132,7 +135,7 @@ A dedicated **Remote & Tailscale** card/tab is available under `/settings` (Glob
    - **Real-Time Status Indicator:** Visual pill displaying current state (`🟢 Active`, `🟡 Draining / Applying`, `⚪ Inactive`, `🔴 Tailscale Daemon Offline / Unauthenticated`).
    - **One-Click MagicDNS Link:** Displays the resolved HTTPS URL (`https://ncf.<tailnet-name>.ts.net`) with a "Copy Link" button.
    - **Instant Dynamic QR Code:** Renders an inline SVG QR code pointing directly to the MagicDNS URL. Developers can point their smartphone or tablet camera at the screen to immediately launch the mobile PWA on their tailnet without typing long URLs.
-   - **Daemon Telemetry:** Displays detected Tailscale CLI version, tailnet domain name, node WireGuard IP, and active serve endpoints derived from `tailscale serve status --json`.
+   - **Daemon Telemetry:** Displays detected Tailscale CLI version, tailnet domain name, node WireGuard IP, detected loopback target (`127.0.0.1:<web-port>`), and active serve endpoints derived from `tailscale serve status --json`.
 
 #### C. Lifecycle Phases (`TailscaleServeHostedService`)
 
@@ -141,11 +144,13 @@ A dedicated **Remote & Tailscale** card/tab is available under `/settings` (Glob
    - If enabled:
      1. Probes for `tailscale` CLI availability in system `PATH` (e.g. `tailscale version`). If missing, logs an informative warning and skips activation without crashing the application.
      2. Verifies the host is logged into a tailnet via `tailscale status --json`.
-     3. Runs a defensive pre-flight cleanup (`tailscale serve reset` or inspecting `tailscale serve get-config --all`) to clear any stale or orphaned routes from prior abnormal terminations.
-     4. Configures the serve proxy using modern Tailscale CLI v1.52+ syntax:
+     3. Queries the active Kestrel listening port (e.g. `5270`) via `IServerAddressesFeature` or `IConfiguration["Urls"]`.
+     4. Runs a defensive pre-flight cleanup (`tailscale serve reset` or inspecting `tailscale serve get-config --all`) to clear any stale or orphaned routes from prior abnormal terminations.
+     5. Configures the serve proxy using modern Tailscale CLI v1.52+ syntax targeting the auto-detected Web UI port:
         - **Service Mode (`ServiceName` configured, e.g. `"svc:ncf"`):**
           ```bash
-          tailscale serve --service=svc:ncf --https=443 127.0.0.1:5000
+          # Port 5270 auto-detected from active Web UI Kestrel binding
+          tailscale serve --service=svc:ncf --https=443 127.0.0.1:5270
           ```
           If `Advertise` is true:
           ```bash
@@ -153,9 +158,9 @@ A dedicated **Remote & Tailscale** card/tab is available under `/settings` (Glob
           ```
         - **Device Mode (`ServiceName` omitted or null):**
           ```bash
-          tailscale serve --https=443 127.0.0.1:5000
+          tailscale serve --https=443 127.0.0.1:5270
           ```
-     5. Extracts the MagicDNS FQDN from `tailscale serve status --json` or `tailscale status --json` and prints a prominent console banner:
+     6. Extracts the MagicDNS FQDN from `tailscale serve status --json` or `tailscale status --json` and prints a prominent console banner:
         - **For Service Mode:**
           ```text
           ========================================================================
@@ -228,12 +233,12 @@ For developers preferring external script execution over in-app hosted services,
 
 1. **`tools/tailscale-serve.ps1` (PowerShell):**
    - Validates Tailscale CLI and active tailnet login.
-   - Configures the service and advertises it:
+   - Configures the service and advertises it, defaulting target to the standard NightCodeForge port (`127.0.0.1:5270`):
      ```powershell
      param(
          [string]$Service = "svc:ncf",
          [int]$Port = 443,
-         [string]$Target = "127.0.0.1:5000"
+         [string]$Target = "127.0.0.1:5270"
      )
      try {
          if ($Service) {
@@ -254,7 +259,7 @@ For developers preferring external script execution over in-app hosted services,
      }
      ```
 2. **`tools/tailscale-serve.sh` (Bash / Linux / macOS):**
-   - Traps `SIGINT`, `SIGTERM`, and `EXIT` to execute `tailscale serve drain <service>`, `tailscale serve clear <service>`, and `tailscale serve reset`.
+   - Traps `SIGINT`, `SIGTERM`, and `EXIT` to execute `tailscale serve drain <service>`, `tailscale serve clear <service>`, and `tailscale serve reset`. Defaults target to `127.0.0.1:5270`.
 
 ---
 
@@ -262,7 +267,8 @@ For developers preferring external script execution over in-app hosted services,
 
 - [ ] **Attached Process & Lifecycle Integration:**
   - [ ] Implement `TailscaleServeHostedService` inheriting from `IHostedService` with `IHostApplicationLifetime` registration.
-  - [ ] Add factory defaults `Tailscale` configuration section to `appsettings.json` with `AutoServe: false`, `TargetPort: 5000`, `ListenPort: 443`, `Protocol: "https"`, `ServiceName: "svc:ncf"`, and `Advertise: true`.
+  - [ ] Add factory defaults `Tailscale` configuration section to `appsettings.json` with `AutoServe: false`, `ListenPort: 443`, `Protocol: "https"`, `ServiceName: "svc:ncf"`, and `Advertise: true`.
+  - [ ] Implement runtime Web UI target port auto-detection via `IServerAddressesFeature` / `Urls` (default `5270` from `publish.ps1` / OOBE), completely eliminating manual target port configuration friction.
   - [ ] Implement layered user configuration overlay support (`config/config.json` and `SystemSettings` table persistence) to preserve user configuration across software updates.
   - [ ] Add CLI flags (`--tailscale`, `--tailscale-service`, `--tailscale-port`) to startup parser in `Program.cs`.
   - [ ] Implement modern Tailscale CLI v1.52+ command execution (`tailscale serve [flags] <target>`).
@@ -272,7 +278,8 @@ For developers preferring external script execution over in-app hosted services,
   - [ ] Output formatted MagicDNS HTTPS service/node URL banner in startup logs.
 - [ ] **First-Class Web UI Settings & Dynamic Hot-Apply:**
   - [ ] Implement `TailscaleSettingsCard.razor` under `/settings` (Global Scope -> Remote & Tailscale tab).
-  - [ ] Add interactive toggles for Remote Access (`AutoServe`), Mode Selection (`svc:ncf` vs. Device Node), Service Name, Ports, and Auto-Advertise.
+  - [ ] Add interactive toggles for Remote Access (`AutoServe`), Mode Selection (`svc:ncf` vs. Device Node), Service Name, Listen Port (443), and Auto-Advertise.
+  - [ ] Display auto-detected target port (`127.0.0.1:5270`) as read-only diagnostic info without exposing editable target port inputs.
   - [ ] Implement "Save & Apply" action triggering atomic persistence to `config/config.json` and hot start/restart/stop of `TailscaleServeHostedService`.
   - [ ] Build real-time connection status card (active state, MagicDNS URL, copy button, daemon version).
   - [ ] Implement dynamic inline SVG QR Code generation for instant mobile onboarding.
@@ -284,11 +291,11 @@ For developers preferring external script execution over in-app hosted services,
   - [ ] Verify `ReconnectModal.razor` displays non-blocking mobile-friendly reconnect banners.
   - [ ] Wire `visibilitychange` state sync to refresh dashboard data on mobile window focus.
 - [ ] **Operational Tooling & Documentation:**
-  - [ ] Create `tools/tailscale-serve.ps1` with modern CLI flags, service advertisement, and drain/reset exit traps.
+  - [ ] Create `tools/tailscale-serve.ps1` with modern CLI flags, default target `127.0.0.1:5270`, service advertisement, and drain/reset exit traps.
   - [ ] Create `tools/tailscale-serve.sh` for Linux and WSL2 hosts with trap cleanup.
   - [ ] Document Tailscale Serve setup, Tailscale Service (`svc:ncf`) prerequisites (tags/approvals), Web UI management, and remote mobile workflows in `docs/` and project README.
 - [ ] **Testing & Quality Assurance:**
-  - [ ] Unit tests for `TailscaleServeHostedService` asserting process invocation, service vs node mode selection, hot-apply updates, and graceful drain/cleanup on shutdown.
+  - [ ] Unit tests for `TailscaleServeHostedService` asserting process invocation with dynamically resolved Kestrel port, service vs node mode selection, hot-apply updates, and graceful drain/cleanup on shutdown.
   - [ ] Integration test asserting Kestrel respects `X-Forwarded-Proto: https` headers.
   - [ ] Verification over Tailscale HTTPS with valid SSL lock in mobile Chrome and iOS Safari.
   - [ ] Verification that stopping NightCodeForge cleanly drains and clears the serve route without lingering 502 endpoints.

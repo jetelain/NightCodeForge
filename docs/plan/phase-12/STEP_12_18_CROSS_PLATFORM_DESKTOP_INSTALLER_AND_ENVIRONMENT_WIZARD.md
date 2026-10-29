@@ -234,14 +234,14 @@ The installer does not require `git` clone or compilation toolchains on the host
 
 #### 2. Maintenance & Updater Hub Mode (Launched Post-Install)
 When the executable is launched after initial installation, it displays the **Forge Hub**:
-- **Application Status Card:** Current installed version vs. latest release on GitHub, service running status (Running on port 5000 / Stopped).
+- **Application Status Card:** Current installed version vs. latest release on GitHub, service running status (Running on port 5270 / Stopped).
 - **1-Click Update:** "Update to vX.Y.Z" button with automatic binary replacement, preserving the durable `config/config.json` overlay and database so user configurations survive updates.
 - **Component Manager:** Add/reconfigure features:
   - Download additional Ollama models.
   - Reconfigure OllamaRouter fleet nodes.
   - Reconfigure WSL distribution or Docker settings.
   - Enable/disable Tailscale remote mesh access ([Step 12.16](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_16_TAILSCALE_REMOTE_ACCESS.md)).
-- **Forge Doctor (System Diagnostics):** 1-click self-test verifying WSL responsiveness, Docker daemon access, Ollama heartbeat, port 5000 availability, and database connectivity.
+- **Forge Doctor (System Diagnostics):** 1-click self-test verifying WSL responsiveness, Docker daemon access, Ollama heartbeat, port 5270 availability (or configured `Urls`), and database connectivity.
 - **Quick Actions:** "Start Server", "Stop Server", "Open Web UI in Browser", "Open CLI Terminal".
 
 ---
