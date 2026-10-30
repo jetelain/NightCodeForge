@@ -1,10 +1,12 @@
 using Hangfire;
 using NightCodeForge.Agents;
+using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Infrastructure;
 using NightCodeForge.Infrastructure.BackgroundJobs;
 using NightCodeForge.Infrastructure.Configuration;
 using NightCodeForge.Web.Components;
+using NightCodeForge.Web.Middleware;
 using NightCodeForge.Web.Services;
 using Serilog;
 using Serilog.Events;
@@ -100,6 +102,8 @@ EnsureSqliteDirectoryExists(hangfireConnection);
 var llmProviderSection = builder.Configuration.GetSection(NightCodeForge.Agents.Inference.LlmProviderOptions.SectionName);
 var llmProviderType = (llmProviderSection.Get<NightCodeForge.Agents.Inference.LlmProviderOptions>()
     ?? new NightCodeForge.Agents.Inference.LlmProviderOptions()).ProviderType;
+var securitySection = builder.Configuration.GetSection(SecurityOptions.SectionName);
+builder.Services.Configure<SecurityOptions>(securitySection);
 builder.Services.AddNightCodeForgeCoreAndInfrastructure(dbConnection);
 builder.Services.Configure<NightCodeForge.Agents.Inference.LlmProviderOptions>(llmProviderSection);
 builder.Services.Configure<NightCodeForge.Infrastructure.Inference.LlmEndpointOptions>(llmProviderSection);
@@ -222,6 +226,8 @@ if (!app.Environment.IsDevelopment())
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
+
+app.UseContentSecurityPolicy();
 
 app.UseAntiforgery();
 

@@ -45,9 +45,9 @@
     --status-success: #10b981;
     --status-error: #ef4444;
 
-    /* Typography */
-    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    --font-mono: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+    /* Typography: Local Primary Fonts with Premium Native Fallbacks */
+    --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
 
     /* Shadows & Glassmorphism */
     --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);

@@ -4,7 +4,7 @@
 > *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
 > *Related Steps:* [Step 12.8: Mobile-Responsive UI & PWA](STEP_12_8_MOBILE_RESPONSIVE_UI_AND_PWA.md) | [Step 12.18: Cross-Platform Desktop Installer](STEP_12_18_CROSS_PLATFORM_DESKTOP_INSTALLER_AND_ENVIRONMENT_WIZARD.md) | [Step 12.20: Air-Gapped Search Deactivation & mdfetch Whitelisting](STEP_12_20_AIR_GAPPED_SEARCH_DEACTIVATION_AND_MDFETCH_WHITELISTING.md) | [Step 12.21: Container Sandbox Egress Filtering & Envoy Proxy](STEP_12_21_CONTAINER_SANDBOX_EGRESS_FILTERING_AND_ENVOY_PROXY.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
-> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -19,12 +19,15 @@
    - Strict firewall/DMZ enclaves that drop or block all unauthorized outbound HTTP/HTTPS requests.
 2. **Complete Elimination of External Fonts & CDNs:** Remove third-party font calls (`https://fonts.googleapis.com`, `https://fonts.gstatic.com`) and audit the entire web dashboard to ensure zero external CDN dependencies exist anywhere in stylesheets, scripts, templates, or HTML shells.
 3. **Self-Hosted Bundled Typography & Robust System Fallbacks:**
-   - Package modern, highly compressed WOFF2 font files locally under `wwwroot/fonts/` for **Inter** (sans-serif) and **JetBrains Mono** (monospace).
+   - Package modern, highly compressed WOFF2 font files locally under `wwwroot/fonts/` for **Inter** (sans-serif, SIL OFL 1.1) and **JetBrains Mono** (monospace, Apache 2.0 / SIL OFL 1.1).
+   - Bundled fonts and zero-CDN removal from `App.razor` are **unconditional and permanent**—the application always uses local typography with zero external runtime downloads regardless of environment.
    - Declare local `@font-face` definitions using `font-display: swap;` to eliminate render-blocking network stalls, Flash of Invisible Text (FOIT), and layout shifts (Cumulative Layout Shift / CLS).
    - Configure a comprehensive, high-quality native system font stack as fallback (`system-ui`, `-apple-system`, `BlinkMacSystemFont`, `Segoe UI`, `Roboto`, `ui-monospace`, `Cascadia Code`, `Consolas`), ensuring flawless rendering even on lightweight or headless platforms.
-4. **Content Security Policy (CSP) & Air-Gap Guardrails:** Configure an ASP.NET Core Content Security Policy header (configurable via `appsettings.json`) that strictly restricts script, style, font, image, and connection sources to `'self'`, local WebSockets (`ws:`, `wss:`), and data URIs, actively prohibiting browser subresources from pinging external servers.
+4. **Content Security Policy (CSP) & Air-Gap Guardrails:** Configure an ASP.NET Core Content Security Policy header (configurable via `Security` options in `appsettings.json` and `NCF_AIR_GAPPED` environment variable) that strictly restricts script, style, font, image, worker, and connection sources to `'self'`, local WebSockets (`ws:`, `wss:`), and data URIs, actively prohibiting browser subresources from pinging external servers.
 5. **Zero Telemetry & Absolute Privacy Guarantee:** Enforce that no client-side analytics, error beacons, font trackers, or background telemetry pings are transmitted to external servers, aligning the presentation layer with the privacy invariants of local LLM inference engines.
-6. **Automated Air-Gapped Static Analysis Gate:** Provide an automated test in `tests/NightCodeForge.Web.Tests` that scans all client-facing assets (`.razor`, `.html`, `.css`, `.js`) to ensure no external URL schemes (`http://`, `https://`) exist in `<link>`, `<script>`, `<style>`, or `@import` declarations.
+6. **Automated Air-Gapped Static Analysis Gate:** Provide automated tests in `tests/NightCodeForge.Web.Tests` that:
+   - Scans all client-facing assets (`.razor`, `.html`, `.css`, `.js`) to ensure no active external URL schemes (`http://`, `https://`) exist in `<link>`, `<script>`, `<img>`, `<style>`, or `@import` subresource declarations.
+   - Verifies the CSP middleware correctly injects security headers into HTTP responses.
 
 ---
 
@@ -85,10 +88,15 @@ src/NightCodeForge.Web/wwwroot/
 └── favicon.png                            # Local PNG fallback favicon
 ```
 
+#### Font Sourcing, Licensing & Packaging:
+- **Inter Variable:** Sourced from official releases (Rasmus Andersson / rsms). Licensed under the **SIL Open Font License 1.1 (OFL)**. Full rights to bundle, redistribute, and self-host.
+- **JetBrains Mono Variable:** Sourced from official releases (JetBrains s.r.o.). Licensed under the **SIL Open Font License 1.1 / Apache 2.0**. Full rights to bundle, redistribute, and self-host.
+- Both WOFF2 binaries are committed directly to `src/NightCodeForge.Web/wwwroot/fonts/` in source control, ensuring that any developer cloning the repository or building in an air-gapped environment has 100% of required visual assets available offline without post-clone network fetching.
+
 #### Size & Performance Budget:
-- Variable WOFF2 fonts consolidate multiple weights (Regular, Medium, SemiBold, Bold) into a single optimized binary file.
+- Variable WOFF2 fonts consolidate multiple weights (Light, Regular, Medium, SemiBold, Bold) into a single optimized binary file.
 - The total size of both variable font files is $< 150\text{ KB}$ uncompressed, and $< 120\text{ KB}$ served with HTTP compression.
-- Font files are immutable and configured with long-term caching (`Cache-Control: public, max-age=31536000, immutable`).
+- Font files are immutable and served by ASP.NET Core `app.MapStaticAssets()` with MIME type `font/woff2` and long-term caching (`Cache-Control: public, max-age=31536000, immutable`).
 
 ---
 
@@ -101,7 +109,7 @@ Create `src/NightCodeForge.Web/wwwroot/css/fonts.css` containing explicit local 
 @font-face {
     font-family: 'Inter';
     font-style: normal;
-    font-weight: 300 700;
+    font-weight: 100 900;
     font-display: swap;
     src: url('../fonts/inter-latin-variable.woff2') format('woff2');
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
@@ -111,12 +119,14 @@ Create `src/NightCodeForge.Web/wwwroot/css/fonts.css` containing explicit local 
 @font-face {
     font-family: 'JetBrains Mono';
     font-style: normal;
-    font-weight: 400 600;
+    font-weight: 100 800;
     font-display: swap;
     src: url('../fonts/jetbrains-mono-latin-variable.woff2') format('woff2');
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 ```
+
+*Note on Glyphs & Fallbacks:* Any characters or symbols outside the Latin subset unicode range seamlessly fall back to the premium native system font stacks declared in `theme.css`.
 
 ---
 
@@ -170,33 +180,40 @@ Refactor `<head>` in `src/NightCodeForge.Web/Components/App.razor`:
 
 ### 3.5 Content Security Policy (CSP) & Air-Gapped Middleware
 
-To provide defense-in-depth and guarantee no browser subresource connects to unauthorized third-party hosts, add a security headers configuration to `NightCodeForge.Web`:
+To provide defense-in-depth and guarantee no browser subresource connects to unauthorized third-party hosts, add a security headers configuration and middleware to `NightCodeForge.Web`:
 
 #### A. Configuration Schema (`appsettings.json`)
 ```json
 {
   "Security": {
-    "AirGappedMode": true,
+    "AirGappedMode": false,
     "EnableContentSecurityPolicy": true
   }
 }
 ```
 
+- **`Security:AirGappedMode` (Default: `false`):** Establishes the centralized platform configuration option for air-gapped operations (also configurable via `NCF_AIR_GAPPED=true` environment variable).
+  - *Note on Invariants:* Font bundling and zero-CDN removal in `App.razor` are **unconditional and permanent**—the application always uses local typography with zero external runtime downloads regardless of this flag.
+  - Setting `AirGappedMode: true` activates global air-gapped policies across downstream systems, including search deactivation in [Step 12.20](STEP_12_20_AIR_GAPPED_SEARCH_DEACTIVATION_AND_MDFETCH_WHITELISTING.md) and container sandbox egress proxying in [Step 12.21](STEP_12_21_CONTAINER_SANDBOX_EGRESS_FILTERING_AND_ENVOY_PROXY.md).
+- **`Security:EnableContentSecurityPolicy` (Default: `true`):** Controls whether the application emits strict Content Security Policy headers on HTTP responses. Enabled by default for defense-in-depth web hardening.
+
 #### B. Content Security Policy Directives
-When enabled, the application emits the following CSP header on all responses:
+When enabled, the application registers an ASP.NET Core middleware (`ContentSecurityPolicyMiddleware` in `Program.cs`) that emits the following CSP header on all HTTP responses:
 
 ```http
-Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self';
+Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' ws: wss:; worker-src 'self' blob:; form-action 'self'; frame-ancestors 'none'; base-uri 'self';
 ```
 
 | Directive | Permitted Sources | Purpose |
 | :--- | :--- | :--- |
 | `default-src` | `'self'` | Disallow all fallback requests to external domains |
-| `script-src` | `'self' 'unsafe-inline' 'unsafe-eval'` | Allow local `blazor.web.js`, `app.js`, and Blazor server DOM interop |
-| `style-src` | `'self' 'unsafe-inline'` | Allow local stylesheets and component style attributes |
+| `script-src` | `'self' 'unsafe-inline' 'unsafe-eval'` | Allow local `blazor.web.js`, `app.js`, Blazor server DOM interop, and Hangfire Dashboard scripts |
+| `style-src` | `'self' 'unsafe-inline'` | Allow local stylesheets, component style attributes, and Hangfire Dashboard styles |
 | `font-src` | `'self' data:` | Allow bundled local fonts under `wwwroot/fonts/` and inline SVG fonts |
 | `img-src` | `'self' data: blob:` | Allow local icons, uploaded attachments, and generated diff previews |
-| `connect-src` | `'self' ws: wss:` | Allow Blazor Interactive Server circuits (`/_blazor`) and SignalR telemetry |
+| `connect-src` | `'self' ws: wss:` | Allow Blazor Interactive Server circuits (`/_blazor`) and SignalR telemetry (`/hubs/*`) |
+| `worker-src` | `'self' blob:` | Allow local background web workers for client-side diffing, syntax highlighting, and PWA operations |
+| `form-action` | `'self'` | Prohibit form submissions to external endpoints |
 | `frame-ancestors` | `'none'` | Prevent clickjacking by disallowing embedding in iframes |
 | `base-uri` | `'self'` | Enforce local `<base href="/" />` integrity |
 
@@ -210,48 +227,71 @@ Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' '
      - `/fonts/inter-latin-variable.woff2`
      - `/fonts/jetbrains-mono-latin-variable.woff2`
    - This ensures the Progressive Web App launches with full custom typography even when completely offline.
+   - *(Note: Step 12.8 is a subsequent planned step; adding font assets to `service-worker.js` will occur as part of Step 12.8 execution).*
 2. **Step 12.18 (Avalonia UI Desktop Installer):**
    - The self-contained desktop distribution packages the entire `wwwroot/` folder including local fonts into the embedded web host bundle, guaranteeing zero external dependencies during runtime.
 
 ---
 
-### 3.7 Automated Air-Gapped Subresource Test Suite
+### 3.7 Automated Air-Gapped Subresource Test Suite & CSP Tests
 
-Add an automated static regression test class in `tests/NightCodeForge.Web.Tests` (`AirGappedSubresourcesTests.cs`):
+Add automated tests in `tests/NightCodeForge.Web.Tests`:
+
+#### 3.7.1 Static Subresource Regression Test (`AirGappedSubresourcesTests.cs`)
+Scans all client-facing assets (`.razor`, `.html`, `.css`, `.js`) in `src/NightCodeForge.Web` to verify zero external subresources exist:
 
 ```csharp
 [Fact]
 public void WebApp_ShouldNotReferenceExternalHttpResources_InTemplatesOrStylesheets()
 {
-    // Scan all .razor, .html, .css, .js files in src/NightCodeForge.Web
-    // Assert that no active subresource references (link href, script src, @import, url())
-    // point to http:// or https:// (ignoring documentation comments and XML namespaces).
+    // Scans .razor, .html, .css, .js files in src/NightCodeForge.Web (excluding bin/ and obj/)
+    // Asserts that no active subresource references point to http:// or https://:
+    //  - HTML: <link ... href="http...">, <script ... src="http...">, <img ... src="http...">, <audio>, <video>, <embed>, <object>
+    //  - CSS: @import url("http..."), url("http...")
 }
 ```
 
-This test ensures that any future PR or component change that accidentally introduces a CDN dependency (e.g. `cdnjs`, `unpkg`, `jsdelivr`, `googleapis`) immediately fails CI before merging.
+**Targeted Subresource Matching Rules (Preventing False Positives):**
+The static scanner must specifically target active subresource declarations and intentionally avoid flagging:
+1. **C# Code Blocks:** String variables and defaults in Razor `@code { ... }` blocks (e.g. `private string _ollamaEndpoint = "http://localhost:11434"`).
+2. **Input Hints:** HTML placeholder attributes (e.g. `placeholder="https://api.openai.com/v1"`).
+3. **Outbound Hyperlinks:** Standard user navigation anchor tags (`<a href="https://...">`).
+4. **Metadata & Namespaces:** XML namespaces (`xmlns="http://www.w3.org/2000/svg"`), SVG definitions, and documentation comments.
+5. **Vendor License Comments:** License and source map URLs in third-party vendor assets under `wwwroot/lib/bootstrap/`.
+
+This automated gate guarantees that any future PR or component change that accidentally introduces a CDN dependency (e.g. `cdnjs`, `unpkg`, `jsdelivr`, `googleapis`) immediately breaks CI.
+
+#### 3.7.2 CSP Middleware Unit Tests (`ContentSecurityPolicyMiddlewareTests.cs`)
+Verifies header behavior on HTTP requests:
+1. When `EnableContentSecurityPolicy == true`:
+   - Validates that `Content-Security-Policy` response header is present.
+   - Asserts inclusion of required directives: `default-src 'self'`, `font-src 'self' data:`, `connect-src 'self' ws: wss:`, `worker-src 'self' blob:`, and `form-action 'self'`.
+2. When `EnableContentSecurityPolicy == false`:
+   - Validates that the header is omitted.
 
 ---
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] **Typography & Static Asset Bundling:**
-  - [ ] Obtain and place optimized, Latin-subset WOFF2 font files for **Inter** and **JetBrains Mono** in `src/NightCodeForge.Web/wwwroot/fonts/`.
-  - [ ] Create `src/NightCodeForge.Web/wwwroot/css/fonts.css` with local `@font-face` definitions using `font-display: swap;`.
-  - [ ] Verify `--font-sans` and `--font-mono` in `src/NightCodeForge.Web/wwwroot/css/theme.css` use local font names with native system fallback stacks.
-- [ ] **HTML Shell & Razor Component Cleanup:**
-  - [ ] Remove `https://fonts.googleapis.com` and `https://fonts.gstatic.com` preconnect and stylesheet tags from `src/NightCodeForge.Web/Components/App.razor`.
-  - [ ] Add `<link rel="stylesheet" href="css/fonts.css" />` to `App.razor`.
-  - [ ] Verify that no other Razor, HTML, or CSS file references external HTTP/HTTPS assets.
-- [ ] **Content Security Policy (CSP):**
-  - [ ] Implement CSP middleware or configuration emitting `Content-Security-Policy` restricting subresources to `'self'`, local WebSockets, and data URIs.
-  - [ ] Add `Security:AirGappedMode` configuration option to `appsettings.json`.
-- [ ] **Automated Testing & CI Guard:**
-  - [ ] Author `AirGappedSubresourcesTests` in `NightCodeForge.Web.Tests` asserting zero external subresource URLs in Web project files.
-  - [ ] Validate that all tests pass without errors under `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
-- [ ] **Documentation & Plan Updates:**
-  - [ ] Register Step 12.19 in `docs/plan/12_EXTEND_FEATURES.md` (roadmap table, tier summary, and DoD checklist).
-  - [ ] Register Step 12.19 in `docs/PLAN.md`.
+- [x] **Typography & Static Asset Bundling:**
+  - [x] Place optimized, Latin-subset WOFF2 font files for **Inter** and **JetBrains Mono** in `src/NightCodeForge.Web/wwwroot/fonts/`.
+  - [x] Create `src/NightCodeForge.Web/wwwroot/css/fonts.css` with local `@font-face` definitions using `font-display: swap;`.
+  - [x] Verify `--font-sans` and `--font-mono` in `src/NightCodeForge.Web/wwwroot/css/theme.css` use local font names with native system fallback stacks.
+- [x] **HTML Shell & Razor Component Cleanup:**
+  - [x] Remove `https://fonts.googleapis.com` and `https://fonts.gstatic.com` preconnect and stylesheet tags from `src/NightCodeForge.Web/Components/App.razor`.
+  - [x] Add `<link rel="stylesheet" href="css/fonts.css" />` to `App.razor`.
+  - [x] Verify that no other Razor, HTML, or CSS file references external HTTP/HTTPS subresources.
+- [x] **Content Security Policy (CSP):**
+  - [x] Implement `ContentSecurityPolicyMiddleware` emitting `Content-Security-Policy` restricting subresources to `'self'`, local WebSockets, worker blobs, and data URIs.
+  - [x] Register CSP middleware in `Program.cs`.
+  - [x] Add `Security:AirGappedMode` (default: `false`) and `Security:EnableContentSecurityPolicy` (default: `true`) configuration options to `appsettings.json`.
+- [x] **Automated Testing & CI Guard:**
+  - [x] Author `AirGappedSubresourcesTests` in `NightCodeForge.Web.Tests` asserting zero external subresource URLs in Web project templates and stylesheets.
+  - [x] Author `ContentSecurityPolicyMiddlewareTests` in `NightCodeForge.Web.Tests` asserting correct CSP header presence and configuration toggling.
+  - [x] Validate that all tests pass without errors under `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] **Documentation & Plan Updates:**
+  - [x] Mark Step 12.19 as completed in `docs/plan/12_EXTEND_FEATURES.md` (roadmap table and DoD checklist) upon implementation.
+  - [x] Mark Step 12.19 as completed in `docs/PLAN.md`.
 
 ---
 
@@ -264,3 +304,4 @@ This test ensures that any future PR or component change that accidentally intro
 | **TC-12.19-03** | Browser Network Tab Inspection | Open Chrome/Edge DevTools $\rightarrow$ Network tab, filter by "Domain" | 100% of network requests target `localhost:5000` (or `127.0.0.1`); zero requests dispatched to `fonts.googleapis.com` or `fonts.gstatic.com`. |
 | **TC-12.19-04** | Content Security Policy Enforcement | Inspect HTTP Response Headers on `GET /` | `Content-Security-Policy` header is present with `default-src 'self'`. Attempting to inject `<img src="https://example.com/test.png">` in DevTools is blocked by CSP. |
 | **TC-12.19-05** | Fallback Font Degradation | Delete or rename `wwwroot/fonts/` temporarily in test environment | UI falls back gracefully to `system-ui` and `ui-monospace` without missing characters, unreadable text, or layout distortion. |
+| **TC-12.19-06** | CSP Middleware Unit Tests | Run `ContentSecurityPolicyMiddlewareTests` via `dotnet test` | Header emission, directive presence (`ws:`, `wss:`, `worker-src`, `form-action`), and `EnableContentSecurityPolicy: false` behavior pass all assertions. |
