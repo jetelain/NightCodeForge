@@ -69,6 +69,12 @@
             🔍 Host SDK Inspector
         </button>
         <button type="button" 
+                class="forge-btn @(_activeGlobalTab == "skills" ? "forge-btn-primary" : "forge-btn-outline")" 
+                style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 500;"
+                @onclick='() => _activeGlobalTab = "skills"'>
+            🧰 Global Skills Store
+        </button>
+        <button type="button" 
                 class="forge-btn @(_activeGlobalTab == "ollamarouter" ? "forge-btn-primary" : "forge-btn-outline")" 
                 style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 500;"
                 @onclick='() => _activeGlobalTab = "ollamarouter"'>
@@ -96,6 +102,9 @@
                 break;
             case "sdks":
                 <HostSdkInspectorTab />
+                break;
+            case "skills":
+                <GlobalSkillsManagementTab />
                 break;
             case "ollamarouter":
                 <OllamaRouterGatewayCard />

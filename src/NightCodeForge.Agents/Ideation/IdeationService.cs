@@ -57,7 +57,7 @@ public partial class IdeationService : IIdeationService
     private readonly ILogger<IdeationService> _logger;
     private readonly ILogger<CanonicalTools> _canonicalToolsLogger;
     private readonly LlmProviderOptions _llmOptions;
-    private readonly SkillsService _skillsService;
+    private readonly IWorkspaceSkillsServiceFactory _skillsServiceFactory;
     private readonly IWorkspaceRepository _workspaceRepository;
     private readonly TimeProvider _timeProvider;
 
@@ -74,7 +74,7 @@ public partial class IdeationService : IIdeationService
         IAgentActivityStreamer activityStreamer,
         SessionTranscriptService transcriptService,
         IGlobalOptimizationSettingsService globalOptimizationSettings,
-        SkillsService skillsService,
+        IWorkspaceSkillsServiceFactory skillsServiceFactory,
         IWorkspaceRepository workspaceRepository,
         ITaskMarkdownSyncService markdownSyncService,
         Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
@@ -94,7 +94,7 @@ public partial class IdeationService : IIdeationService
         _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
         _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
         _globalOptimizationSettings = globalOptimizationSettings ?? throw new ArgumentNullException(nameof(globalOptimizationSettings));
-        _skillsService = skillsService ?? throw new ArgumentNullException(nameof(skillsService));
+        _skillsServiceFactory = skillsServiceFactory ?? throw new ArgumentNullException(nameof(skillsServiceFactory));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         ArgumentNullException.ThrowIfNull(llmOptions);
@@ -353,13 +353,15 @@ When proposing implementation tasks to the developer, adhere to the following ru
 </task_planning_guidelines>";
 
         // Skills catalog (lean ~25 tokens/skill) is only injected when the agent can call load_skill.
+        var skillsService = _skillsServiceFactory.Create(workspace, repoPath, taskId: null);
         IReadOnlyList<SkillDescriptor> discoveredSkills = Array.Empty<SkillDescriptor>();
+        string skillsCatalog = string.Empty;
         if (permittedTools.Contains(CanonicalToolNames.LoadSkill, StringComparer.OrdinalIgnoreCase))
         {
-            discoveredSkills = await _skillsService.DiscoverSkillsAsync(repoPath, cancellationToken: cancellationToken);
+            discoveredSkills = await skillsService.GetActiveSkillsAsync(cancellationToken);
+            skillsCatalog = await skillsService.GetSkillsCatalogPromptAsync(cancellationToken);
         }
         var activeSkills = discoveredSkills.Select(s => s.Name).ToList();
-        var skillsCatalog = _skillsService.FormatSkillsCatalogPrompt(discoveredSkills);
         var skillsSection = string.IsNullOrEmpty(skillsCatalog) ? string.Empty : "\n\n" + skillsCatalog;
 
         var systemPrompt = $@"{basePersona}
@@ -417,6 +419,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
             _editorConfigService,
             _editorConfigFileApplier,
             _webSearchService,
+            skillsService,
             _canonicalToolsLogger,
             buildTimeoutSeconds: null,
             testTimeoutSeconds: null,

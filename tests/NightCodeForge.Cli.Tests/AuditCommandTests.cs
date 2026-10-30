@@ -352,4 +352,41 @@ public class SampleTests {
             Directory.Delete(tempDir, true);
         }
     }
+
+    [Fact]
+    public async Task AuditCommand_ReportsSkillsConfigAndCompanionTools_InPillar5()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-audit-skills-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        SetupHealthyWorkspace(tempDir);
+
+        // Configure skills in config.json
+        var configJson = @"
+{
+  ""codeStack"": ""dotnet"",
+  ""skills"": {
+    ""enabled"": true,
+    ""disabledSkills"": [""codecondenser""]
+  }
+}";
+        await File.WriteAllTextAsync(Path.Combine(tempDir, ".nightcodeforge", "config.json"), configJson);
+
+        var runner = CreateCleanProcessRunner();
+        var cmd = new AuditCommand(runner.Object);
+        var options = new AuditOptions { TargetPath = tempDir };
+
+        try
+        {
+            var exitCode = await cmd.ExecuteAsync(options);
+            var reportPath = Path.Combine(tempDir, ".nightcodeforge", "audit-report.md");
+            var report = File.ReadAllText(reportPath);
+
+            Assert.Contains("NCF Configuration", report);
+            Assert.Contains("Skills excluded in config.json: codecondenser", report);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
 }

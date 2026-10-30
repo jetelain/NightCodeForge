@@ -251,8 +251,15 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
                 // Periodic page reload to ensure fresh circuit and clear any dropped connections
                 if (pipelineSw.Elapsed > TimeSpan.FromSeconds(30) && (int)pipelineSw.Elapsed.TotalSeconds % 30 < 15)
                 {
-                    await _page.ReloadAsync(new PageReloadOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
-                    await _page.WaitForTimeoutAsync(1500);
+                    try
+                    {
+                        await _page.ReloadAsync(new PageReloadOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
+                        await _page.WaitForTimeoutAsync(1500);
+                    }
+                    catch
+                    {
+                        // Ignore transient connection reset if Blazor circuit is re-establishing
+                    }
                 }
 
                 string cardStatus = "Pending";

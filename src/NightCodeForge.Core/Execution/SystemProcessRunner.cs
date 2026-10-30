@@ -15,6 +15,7 @@ namespace NightCodeForge.Core.Execution;
 /// </summary>
 public class SystemProcessRunner : IProcessRunner
 {
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private readonly ILogger _logger;
 
     public SystemProcessRunner()
@@ -222,9 +223,9 @@ public class SystemProcessRunner : IProcessRunner
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            StandardInputEncoding = Encoding.UTF8,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
+            StandardInputEncoding = Utf8NoBom,
+            StandardOutputEncoding = Utf8NoBom,
+            StandardErrorEncoding = Utf8NoBom,
             UseShellExecute = false,
             CreateNoWindow = true
         };
@@ -291,7 +292,8 @@ public class SystemProcessRunner : IProcessRunner
     {
         private readonly Process _process;
         private readonly int _timeoutSeconds;
-        private readonly ILogger _logger;
+        private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+    private readonly ILogger _logger;
         private readonly Channel<ProcessStreamChunk> _channel;
         private readonly CancellationTokenSource _cts = new();
         private Task? _stdoutTask;

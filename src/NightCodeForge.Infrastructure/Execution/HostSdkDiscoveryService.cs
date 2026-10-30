@@ -17,7 +17,17 @@ namespace NightCodeForge.Infrastructure.Execution;
 public class HostSdkDiscoveryService : IHostSdkDiscoveryService
 {
     internal const string ProbeScript =
-@"echo ""---ENV---""
+@"[ -f /etc/profile ] && . /etc/profile 2>/dev/null
+[ -f ""$HOME/.profile"" ] && . ""$HOME/.profile"" 2>/dev/null
+[ -f ""$HOME/.bash_profile"" ] && . ""$HOME/.bash_profile"" 2>/dev/null
+if [ -f ""$HOME/.bashrc"" ]; then
+  . <(sed 's/return/true/g' ""$HOME/.bashrc"" 2>/dev/null) 2>/dev/null || . ""$HOME/.bashrc"" 2>/dev/null
+fi
+for dir in ""$HOME/.dotnet/tools"" ""$HOME/.cargo/bin"" ""$HOME/.local/bin"" ""$HOME/bin"" ""$HOME/.nvm""; do
+  [ -d ""$dir"" ] && PATH=""$dir:$PATH""
+done
+export PATH
+echo ""---ENV---""
 echo ""ANDROID_HOME=$ANDROID_HOME""
 echo ""ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT""
 echo ""JAVA_HOME=$JAVA_HOME""
@@ -28,16 +38,25 @@ echo ""RUSTUP_HOME=$RUSTUP_HOME""
 echo ""NVM_DIR=$NVM_DIR""
 echo ""NODE_PATH=$NODE_PATH""
 echo ""---CMD---""
-for c in dotnet node npm java javac go rustc cargo python3 python uv mvn gradle adb sdkmanager; do
+for c in dotnet node npm java javac go rustc cargo python3 python uv mvn gradle adb sdkmanager csnav mdfetch codecondenser; do
   p=$(which ""$c"" 2>/dev/null || command -v ""$c"" 2>/dev/null)
+  if [ -z ""$p"" ] && [ -x ""$HOME/.dotnet/tools/$c"" ]; then
+    p=""$HOME/.dotnet/tools/$c""
+  fi
   if [ -n ""$p"" ]; then
     real=$(readlink -f ""$p"" 2>/dev/null || realpath ""$p"" 2>/dev/null || echo ""$p"")
     echo ""$c=$p=$real""
   fi
 done
 echo ""---DIR---""
-for d in /usr/share/dotnet /usr/lib/dotnet /usr/lib/jvm /opt/android-sdk /etc/ssl/certs /usr/lib/x86_64-linux-gnu /usr/local/go ""$HOME/Android/Sdk"" ""$HOME/.dotnet"" ""$HOME/.cargo"" ""$HOME/.nvm""; do
-  [ -d ""$d"" ] && echo ""$d""
+for d in /usr/share/dotnet /usr/lib/dotnet /usr/lib/jvm /opt/android-sdk /etc/ssl/certs /usr/lib/x86_64-linux-gnu /usr/local/go ""$HOME/Android/Sdk"" ""$HOME/android-sdk"" ""$HOME/.dotnet"" ""$HOME/.cargo"" ""$HOME/.nvm""; do
+  if [ -d ""$d"" ]; then
+    if [ ""$d"" = ""/usr/share/dotnet"" ] || [ ""$d"" = ""/usr/lib/dotnet"" ]; then
+      ([ -f ""$d/dotnet"" ] || [ -d ""$d/shared"" ]) && echo ""$d""
+    else
+      echo ""$d""
+    fi
+  fi
 done";
 
     public static readonly HashSet<string> ExcludedDirectories = new(StringComparer.OrdinalIgnoreCase)
@@ -116,11 +135,11 @@ done";
             return cached;
         }
 
-        var (fileName, args) = BuildProcessArguments(distribution);
+        var spec = BuildProcessSpec(distribution, timeoutSeconds: 10);
 
         try
         {
-            var result = _processRunner.Run(fileName, args, timeoutSeconds: 10);
+            var result = _processRunner.Run(spec);
             if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput))
             {
                 var parsed = ParseDiscoveryOutput(result.StandardOutput);
@@ -159,11 +178,11 @@ done";
             return cached;
         }
 
-        var (fileName, args) = BuildProcessArguments(distribution);
+        var spec = BuildProcessSpec(distribution, timeoutSeconds: 10);
 
         try
         {
-            var result = await _processRunner.RunAsync(fileName, args, timeoutSeconds: 10, cancellationToken: cancellationToken);
+            var result = await _processRunner.RunAsync(spec, cancellationToken);
             if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput))
             {
                 var parsed = ParseDiscoveryOutput(result.StandardOutput);
@@ -204,6 +223,22 @@ done";
         return "bare_host";
     }
 
+    internal static readonly string NormalizedProbeScript = ProbeScript
+        .TrimStart('\uFEFF', '\r', '\n')
+        .Replace("\r\n", "\n") + "\n";
+
+    private ProcessStartSpec BuildProcessSpec(string? distribution, int timeoutSeconds = 10)
+    {
+        var (fileName, args) = BuildProcessArguments(distribution);
+        return new ProcessStartSpec
+        {
+            FileName = fileName,
+            ArgumentList = args,
+            StandardInput = NormalizedProbeScript,
+            TimeoutSeconds = timeoutSeconds
+        };
+    }
+
     private (string FileName, IEnumerable<string> Arguments) BuildProcessArguments(string? distribution)
     {
         if (IsWindows)
@@ -219,15 +254,14 @@ done";
             }
             args.Add("--");
             args.Add("bash");
-            args.Add("-c");
-            args.Add(ProbeScript);
+            args.Add("-s");
 
             return (fileName, args);
         }
         else
         {
             var fileName = "bash";
-            var args = new[] { "-c", ProbeScript };
+            var args = new[] { "-s" };
             return (fileName, args);
         }
     }

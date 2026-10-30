@@ -41,7 +41,7 @@ public class TestIdeationServiceBuilder
     public IAgentActivityStreamer ActivityStreamer { get; set; } = new InMemoryAgentActivityStreamer();
     public SessionTranscriptService TranscriptService { get; set; } = new();
     public IGlobalOptimizationSettingsService GlobalOptimizationSettings { get; set; } = new Mock<IGlobalOptimizationSettingsService>().Object;
-    public SkillsService SkillsService { get; set; } = new();
+    public IWorkspaceSkillsServiceFactory SkillsServiceFactory { get; set; } = new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance);
     public IWorkspaceRepository WorkspaceRepository { get; set; } = new InMemoryWorkspaceRepository();
     public ITaskMarkdownSyncService MarkdownSyncService { get; set; } = new Mock<ITaskMarkdownSyncService>().Object;
     public ILlmGatewayService GatewayService { get; set; } = CreateDefaultGatewayService();
@@ -81,7 +81,7 @@ public class TestIdeationServiceBuilder
             ActivityStreamer,
             TranscriptService,
             GlobalOptimizationSettings,
-            SkillsService,
+            SkillsServiceFactory,
             WorkspaceRepository,
             MarkdownSyncService,
             LlmOptions,

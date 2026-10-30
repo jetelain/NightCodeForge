@@ -20,6 +20,7 @@ public class TestExecutionEnvironmentProviderBuilder
     public IGitWorkspaceManager GitWorkspaceManager { get; set; } = new Mock<IGitWorkspaceManager>().Object;
     public IHostUserIdentityResolver UserIdentityResolver { get; set; } = new Mock<IHostUserIdentityResolver>().Object;
     public IOperationsTelemetryService TelemetryService { get; set; } = new Mock<IOperationsTelemetryService>().Object;
+    public ICompanionToolInstaller CompanionToolInstaller { get; set; } = new Mock<ICompanionToolInstaller>().Object;
     public ILogger<NightCodeForgeContainerExecutor> Logger { get; set; } = NullLogger<NightCodeForgeContainerExecutor>.Instance;
 
     public ExecutionEnvironmentProvider Build()
@@ -34,6 +35,7 @@ public class TestExecutionEnvironmentProviderBuilder
             GitWorkspaceManager,
             Logger,
             UserIdentityResolver,
-            TelemetryService);
+            TelemetryService,
+            CompanionToolInstaller);
     }
 }

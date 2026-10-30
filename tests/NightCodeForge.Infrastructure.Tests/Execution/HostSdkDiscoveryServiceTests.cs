@@ -5,11 +5,18 @@ using Moq;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace NightCodeForge.Infrastructure.Tests.Execution;
 
 public class HostSdkDiscoveryServiceTests
 {
+    private readonly ITestOutputHelper? _output;
+
+    public HostSdkDiscoveryServiceTests(ITestOutputHelper? output = null)
+    {
+        _output = output;
+    }
     private static HostSdkDiscoveryService CreateService(
         IProcessRunner runner,
         IWslMetadataService? wslMetadataService = null,
@@ -335,6 +342,75 @@ ANDROID_HOME=/opt/android-sdk
         finally
         {
             Environment.SetEnvironmentVariable("NCF_SDK_MOUNT_PATHS", prev);
+        }
+    }
+
+    [Fact]
+    public void ProbeScript_SourcesBashrcAndPrependsUserToolDirectories()
+    {
+        var script = HostSdkDiscoveryService.ProbeScript;
+
+        Assert.Contains(".bashrc", script);
+        Assert.Contains(".profile", script);
+        Assert.Contains(".dotnet/tools", script);
+        Assert.Contains(".cargo/bin", script);
+        Assert.Contains("csnav", script);
+        Assert.Contains("codecondenser", script);
+        Assert.Contains("mdfetch", script);
+    }
+
+    [Fact]
+    public void ParseDiscoveryOutput_ParsesCompanionToolsAndCustomToolPaths()
+    {
+        var output = @"
+---CMD---
+dotnet=/usr/bin/dotnet=/usr/lib/dotnet/dotnet
+csnav=/home/user/.dotnet/tools/csnav=/home/user/.dotnet/tools/csnav
+codecondenser=/home/user/.dotnet/tools/codecondenser=/home/user/.dotnet/tools/codecondenser
+mdfetch=/home/user/.dotnet/tools/mdfetch=/home/user/.dotnet/tools/mdfetch
+---DIR---
+/usr/lib/dotnet
+/home/user/.dotnet
+";
+        var details = HostSdkDiscoveryService.ParseDiscoveryOutput(output);
+
+        Assert.Equal("/home/user/.dotnet/tools/csnav", details.CommandPaths["csnav"]);
+        Assert.Equal("/home/user/.dotnet/tools/codecondenser", details.CommandPaths["codecondenser"]);
+        Assert.Equal("/home/user/.dotnet/tools/mdfetch", details.CommandPaths["mdfetch"]);
+        Assert.Contains("/home/user/.dotnet", details.MountPaths);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public void DiscoverSdkDetails_LiveRealExecution_OutputsRealProbeResult()
+    {
+        if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+            return;
+
+        var runner = new NightCodeForge.Core.Execution.SystemProcessRunner();
+        var wslMeta = new WslMetadataService(runner, Options.Create(new ExecutionEnvironmentProviderOptions()), NullLogger<WslMetadataService>.Instance);
+        var service = new HostSdkDiscoveryService(runner, wslMeta, Options.Create(new ExecutionEnvironmentProviderOptions()), NullLogger<HostSdkDiscoveryService>.Instance);
+
+        var details = service.DiscoverSdkDetails();
+        Assert.NotNull(details);
+        if (details.MountPaths.Count == 0 && details.CommandPaths.Count == 0)
+        {
+            // WSL not installed or not running in this test environment
+            return;
+        }
+
+        Assert.NotEmpty(details.MountPaths);
+
+        _output?.WriteLine($"MountPaths count: {details.MountPaths.Count}");
+        foreach (var m in details.MountPaths)
+        {
+            _output?.WriteLine($"  Mount: {m}");
+        }
+
+        _output?.WriteLine($"CommandPaths count: {details.CommandPaths.Count}");
+        foreach (var (k, v) in details.CommandPaths)
+        {
+            _output?.WriteLine($"  Cmd: {k} => {v}");
         }
     }
 }

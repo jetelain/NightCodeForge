@@ -40,7 +40,7 @@ public class TestCrucibleHarnessBuilder
     }
     public IWebSearchService WebSearchService { get; set; } = new Mock<IWebSearchService>().Object;
     public IWorkspaceSymbolService SymbolService { get; set; } = new Mock<IWorkspaceSymbolService>().Object;
-    public SkillsService SkillsService { get; set; } = new();
+    public IWorkspaceSkillsServiceFactory SkillsServiceFactory { get; set; } = new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance);
     public AgentsMdService AgentsMdService { get; set; } = new();
     public IAgentActivityStreamer ActivityStreamer { get; set; } = new InMemoryAgentActivityStreamer();
     public SessionTranscriptService TranscriptService { get; set; } = new();
@@ -92,7 +92,7 @@ public class TestCrucibleHarnessBuilder
             EditorConfigFileApplier,
             WebSearchService,
             SymbolService,
-            SkillsService,
+            SkillsServiceFactory,
             AgentsMdService,
             ActivityStreamer,
             TranscriptService,

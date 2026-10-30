@@ -14,7 +14,11 @@ public record CodeStackPreset(
     string? FormatCommand = null,
     string? SastCommand = null,
     string? CoverageCommand = null,
-    string? DisplayName = null);
+    string? DisplayName = null,
+    IReadOnlyList<string>? DefaultSkills = null)
+{
+    public IReadOnlyList<string> DefaultSkills { get; init; } = DefaultSkills ?? Array.Empty<string>();
+}
 
 /// <summary>
 /// Project-level configuration discovered from .nightcodeforge/config.json or nightcodeforge.json.
@@ -33,76 +37,133 @@ public class WorkspaceProjectConfig
     public string? NcfVersion { get; set; }
     public string? BaseBranch { get; set; }
     public string? ParseWarning { get; set; }
+    public WorkspaceSkillsConfig? Skills { get; set; }
+}
+
+public class WorkspaceSkillsConfig
+{
+    /// <summary>Master switch for global skills injection. Default: true when omitted.</summary>
+    public bool? Enabled { get; set; }
+
+    /// <summary>List of skill identifiers explicitly disabled for this repository.</summary>
+    public List<string>? DisabledSkills { get; set; }
+}
+
+/// <summary>
+/// Constants and normalization helper for supported technology stacks.
+/// </summary>
+public static class CodeStack
+{
+    public const string DotNet = "dotnet";
+    public const string Node = "node";
+    public const string Python = "python";
+    public const string Rust = "rust";
+    public const string Go = "go";
+    public const string Universal = "universal";
+
+    public static readonly IReadOnlyList<string> All = new[]
+    {
+        DotNet,
+        Node,
+        Python,
+        Rust,
+        Go,
+        Universal
+    };
+
+    /// <summary>
+    /// Normalizes a tech stack identifier or common alias (e.g. "csharp", "ts", "py")
+    /// to standard stack constants. Defaults to Universal if null or unrecognized.
+    /// </summary>
+    public static string NormalizeStack(string? stack)
+    {
+        if (string.IsNullOrWhiteSpace(stack)) return Universal;
+        return stack.Trim().ToLowerInvariant() switch
+        {
+            "dotnet" or "csharp" or "cs" or "fsharp" or "fs" or ".net" => DotNet,
+            "node" or "npm" or "typescript" or "javascript" or "ts" or "js" => Node,
+            "python" or "py" => Python,
+            "rust" or "cargo" or "rs" => Rust,
+            "go" or "golang" => Go,
+            "universal" => Universal,
+            var other => other
+        };
+    }
 }
 
 public static class CodeStackPresets
 {
     public static readonly CodeStackPreset DotNet = new(
-        Name: "dotnet",
+        Name: CodeStack.DotNet,
         BuildCommand: "dotnet build",
         TestCommand: "dotnet test --no-build",
         FormatCommand: "dotnet format",
         SastCommand: null,
         CoverageCommand: WorkflowDefaults.DefaultCoverageTestCommand,
-        DisplayName: ".NET / C#");
+        DisplayName: ".NET / C#",
+        DefaultSkills: new[] { "csharp-nav", "codecondenser", "mdfetch" });
 
     public static readonly CodeStackPreset Node = new(
-        Name: "node",
+        Name: CodeStack.Node,
         BuildCommand: "npm run build",
         TestCommand: "npm test",
         FormatCommand: null,
         SastCommand: null,
         CoverageCommand: "npm test -- --coverage",
-        DisplayName: "Node.js / TypeScript");
+        DisplayName: "Node.js / TypeScript",
+        DefaultSkills: new[] { "mdfetch" });
 
     public static readonly CodeStackPreset Python = new(
-        Name: "python",
+        Name: CodeStack.Python,
         BuildCommand: "python -m py_compile",
         TestCommand: "pytest",
         FormatCommand: "ruff format .",
         SastCommand: null,
         CoverageCommand: "pytest --cov",
-        DisplayName: "Python");
+        DisplayName: "Python",
+        DefaultSkills: new[] { "mdfetch" });
 
     public static readonly CodeStackPreset Rust = new(
-        Name: "rust",
+        Name: CodeStack.Rust,
         BuildCommand: "cargo build",
         TestCommand: "cargo test",
         FormatCommand: "cargo fmt",
         SastCommand: null,
         CoverageCommand: "cargo tarpaulin",
-        DisplayName: "Rust");
+        DisplayName: "Rust",
+        DefaultSkills: new[] { "mdfetch" });
 
     public static readonly CodeStackPreset Go = new(
-        Name: "go",
+        Name: CodeStack.Go,
         BuildCommand: "go build ./...",
         TestCommand: "go test ./...",
         FormatCommand: "gofmt -w .",
         SastCommand: null,
         CoverageCommand: "go test -coverprofile=coverage.out ./...",
-        DisplayName: "Go");
+        DisplayName: "Go",
+        DefaultSkills: new[] { "mdfetch" });
 
     /// <summary>
     /// Attempts to resolve a CodeStackPreset by name or alias without silent fallback.
     /// </summary>
     public static bool TryResolve(string? stackName, out CodeStackPreset? preset)
     {
-        var normalized = stackName?.Trim().ToLowerInvariant();
+        var normalized = CodeStack.NormalizeStack(stackName);
         switch (normalized)
         {
-            case "dotnet" or "csharp" or "cs" or "fsharp" or "fs" or ".net":
+            case CodeStack.DotNet:
                 preset = DotNet;
                 return true;
-            case "node" or "npm" or "javascript" or "typescript" or "ts" or "js":
+            case CodeStack.Node:
                 preset = Node;
                 return true;
-            case "python" or "py":
+            case CodeStack.Python:
                 preset = Python;
                 return true;
-            case "rust" or "cargo" or "rs":
+            case CodeStack.Rust:
                 preset = Rust;
                 return true;
-            case "go" or "golang":
+            case CodeStack.Go:
                 preset = Go;
                 return true;
             default:

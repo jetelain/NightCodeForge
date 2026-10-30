@@ -55,6 +55,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
     private readonly IGitWorkspaceManager _gitWorkspaceManager;
     private readonly IHostUserIdentityResolver _userIdentityResolver;
     private readonly IOperationsTelemetryService _telemetryService;
+    private readonly ICompanionToolInstaller _companionToolInstaller;
     private readonly ConcurrentDictionary<(int WorkspaceId, SandboxSecurityTier SecurityTier, int? TaskId), IExecutionEnvironment> _cachedEnvironments = new();
 
     [ActivatorUtilitiesConstructor]
@@ -67,7 +68,8 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         IGitWorkspaceManager gitWorkspaceManager,
         ILogger<NightCodeForgeContainerExecutor> containerLogger,
         IHostUserIdentityResolver userIdentityResolver,
-        IOperationsTelemetryService telemetryService)
+        IOperationsTelemetryService telemetryService,
+        ICompanionToolInstaller companionToolInstaller)
     {
         _bareHost = bareHost ?? throw new ArgumentNullException(nameof(bareHost));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
@@ -78,6 +80,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         _containerLogger = containerLogger ?? throw new ArgumentNullException(nameof(containerLogger));
         _userIdentityResolver = userIdentityResolver ?? throw new ArgumentNullException(nameof(userIdentityResolver));
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+        _companionToolInstaller = companionToolInstaller ?? throw new ArgumentNullException(nameof(companionToolInstaller));
     }
 
     public IExecutionEnvironment GetEnvironment(
@@ -203,6 +206,46 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                 var targetDistro = workspace.WslDistribution ?? _options.DefaultWslDistribution;
                 var sdkMountPaths = _sdkDiscoveryService.DiscoverSdkMountPaths(useWsl ? targetDistro : null);
 
+                var detectedStack = !string.IsNullOrWhiteSpace(rawPath) ? CodeStackPresets.Detect(rawPath)?.Name ?? CodeStack.DotNet : CodeStack.DotNet;
+                try
+                {
+                    _companionToolInstaller.EnsureToolsInstalledAsync(detectedStack, useWsl, targetDistro).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    _containerLogger.LogWarning(ex, "Failed to auto-install companion tools for stack {Stack}", detectedStack);
+                }
+
+                var hostSkillsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nightcodeforge", "skills");
+                if (!Directory.Exists(hostSkillsDir))
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(hostSkillsDir);
+                    }
+                    catch (Exception ex)
+                    {
+                        _containerLogger.LogWarning(ex, "Failed to create host skills directory at {HostSkillsDir}", hostSkillsDir);
+                    }
+                }
+
+                var additionalMounts = new List<ContainerVolumeMount>
+                {
+                    new(
+                        hostPath: hostSkillsDir,
+                        containerPath: "/workspace/skills",
+                        isReadOnly: true)
+                };
+
+                var hostToolsSource = useWsl ? "~/.dotnet/tools" : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet", "tools");
+                if (useWsl || Directory.Exists(hostToolsSource))
+                {
+                    additionalMounts.Add(new(
+                        hostPath: hostToolsSource,
+                        containerPath: "/tmp/ncf-home/.dotnet/tools",
+                        isReadOnly: true));
+                }
+
                 var options = new ContainerExecutorOptions
                 {
                     ContainerNameOrId = containerName,
@@ -216,6 +259,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                     MountPackageCaches = true,
                     MountHostSdks = true,
                     SdkMountPaths = sdkMountPaths?.ToList() ?? new List<string>(),
+                    AdditionalVolumeMounts = additionalMounts,
                     AutoStartContainer = true,
                     IsRestrictedReadOnly = securityTier == SandboxSecurityTier.RestrictedReadOnly,
                     UseWsl = useWsl,

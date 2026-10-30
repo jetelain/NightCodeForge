@@ -408,7 +408,8 @@ public class StartupRecoveryIntegrationTests : IDisposable
                 gitManager,
                 NullLogger<NightCodeForgeContainerExecutor>.Instance,
                 new Mock<IHostUserIdentityResolver>().Object,
-                new Mock<IOperationsTelemetryService>().Object);
+                new Mock<IOperationsTelemetryService>().Object,
+                new Mock<ICompanionToolInstaller>().Object);
 
             var env = envProvider.GetEnvironment(workspace, taskId: task.Id);
             Assert.NotNull(env);

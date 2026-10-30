@@ -57,6 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     locales \
     libicu-dev \
+    libunwind8 \
     && locale-gen en_US.UTF-8 fr_FR.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -1269,7 +1270,12 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             }
 
             var subPath = path.Length > 1 ? path[1..].TrimStart('/', '\\') : string.Empty;
-            return string.IsNullOrEmpty(subPath) ? homeDir : $"{homeDir}/{subPath}";
+            var resolved = string.IsNullOrEmpty(subPath) ? homeDir : $"{homeDir}/{subPath}";
+            if (options.UseWsl && (resolved.Contains(":\\") || resolved.Contains(":/")))
+            {
+                return Git.WslPathConverter.ToWslPath(resolved);
+            }
+            return resolved;
         }
 
         return path;
@@ -1485,6 +1491,13 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         args.AddRange(["-e", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0"]);
         args.AddRange(["-e", "LANG=en_US.UTF-8"]);
         args.AddRange(["-e", "LC_ALL=en_US.UTF-8"]);
+
+        var dotnetSdkPath = options.SdkMountPaths?
+            .FirstOrDefault(p => p.Equals("/usr/lib/dotnet", StringComparison.OrdinalIgnoreCase))
+            ?? options.SdkMountPaths?
+                .FirstOrDefault(p => p.EndsWith("/dotnet", StringComparison.OrdinalIgnoreCase) || p == "/usr/share/dotnet")
+            ?? "/usr/share/dotnet";
+        args.AddRange(["-e", $"DOTNET_ROOT={dotnetSdkPath}"]);
 
         if (options.MountPackageCaches)
         {

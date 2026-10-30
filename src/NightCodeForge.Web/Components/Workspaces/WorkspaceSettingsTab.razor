@@ -1,4 +1,5 @@
 @namespace NightCodeForge.Web.Components.Workspaces
+@using Microsoft.Extensions.Logging
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Core.Repositories
@@ -7,6 +8,8 @@
 @inject IWorkspaceRepository WorkspaceRepo
 @inject IWslMetadataService WslService
 @inject IGitMirrorSyncService MirrorSyncService
+@inject IWorkspaceSkillsServiceFactory SkillsServiceFactory
+@inject ILogger<WorkspaceSettingsTab> Logger
 @inject ToastService ToastService
 
 <div class="forge-card mt-3" style="padding: 2rem;">
@@ -93,6 +96,63 @@
             </div>
         </div>
 
+        <!-- Global Skills Injection & Stack Tooling -->
+        <div class="forge-subcard" style="padding: 2rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); margin-bottom: 2rem; box-shadow: var(--shadow-sm);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <span style="font-size: 1.5rem;">🧰</span>
+                    <div>
+                        <strong style="font-size: 1.15rem; color: var(--text-primary); font-weight: 700;">Global Skills Injection &amp; Stack Tooling</strong>
+                        <span style="display: block; font-size: 0.85rem; color: var(--text-muted); margin-top: 0.15rem;">Zero-pollution modular skill injection and toolchain provisioning</span>
+                    </div>
+                </div>
+                <span class="forge-badge @_skillsStatus.BadgeClass" style="font-size: 0.85rem; padding: 0.35rem 0.8rem;">
+                    @_skillsStatus.BadgeText
+                </span>
+            </div>
+
+            <div style="margin-bottom: 1.5rem;">
+                <label class="forge-field-label" for="global-skills-injection-mode">Injection Mode Override (Stored in Local Database - Zero Git Diffs)</label>
+                <select id="global-skills-injection-mode" class="forge-input" style="width: 100%; max-width: 480px;" value="@ws.GlobalSkillsInjectionMode" @onchange="OnInjectionModeChanged">
+                    <option value="@GlobalSkillsInjectionMode.Inherit">Inherit (Follow .nightcodeforge/config.json; default enabled)</option>
+                    <option value="@GlobalSkillsInjectionMode.ForceEnabled">ForceEnabled (Always inject skills regardless of repository config)</option>
+                    <option value="@GlobalSkillsInjectionMode.ForceDisabled">ForceDisabled (Suppress all skills injection for this repository)</option>
+                </select>
+            </div>
+
+            <div>
+                <label class="forge-field-label" style="margin-bottom: 0.5rem; display: block;">Candidate Stack Skills &amp; Local Exclusions</label>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+                    @foreach (var skill in _skillsStatus.CandidateSkills)
+                    {
+                        var isChecked = !skill.IsLocallyDisabled;
+                        var toggleId = $"skill-toggle-{skill.Name}";
+                        <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem; display: flex; align-items: flex-start; gap: 0.75rem;">
+                            <input type="checkbox" id="@toggleId" checked="@isChecked" @onchange="(e) => OnSkillToggled(skill.Name, (bool)(e.Value ?? false))" style="margin-top: 0.25rem;" />
+                            <div>
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <label for="@toggleId" style="cursor: pointer; margin: 0;">
+                                        <strong style="font-size: 0.9rem; font-family: monospace; color: var(--text-primary);">@skill.Name</strong>
+                                    </label>
+                                    @if (skill.IsActive)
+                                    {
+                                        <span class="forge-badge badge-teal" style="font-size: 0.7rem;">Active</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="forge-badge badge-amber" style="font-size: 0.7rem;">Excluded</span>
+                                    }
+                                </div>
+                                <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0.25rem 0 0 0; line-height: 1.3;">
+                                    @skill.Description
+                                </p>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
         <!-- WSL2 & Container Environment Status -->
         <div class="forge-subcard" style="padding: 2rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); margin-bottom: 2rem; box-shadow: var(--shadow-sm);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
@@ -167,10 +227,53 @@
     private bool _isSyncing;
     private string? _wslDistro;
     private string? _wslUser;
+    private WorkspaceSkillsResolutionStatus _skillsStatus = new(true, "Probing...", "badge-teal", Array.Empty<WorkspaceSkillItem>());
 
     protected override void OnInitialized()
     {
         ProbeWsl();
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshSkillsStatusAsync();
+    }
+
+    private async Task RefreshSkillsStatusAsync()
+    {
+        var ws = WorkspaceState.ActiveWorkspace;
+        if (ws == null || string.IsNullOrWhiteSpace(ws.RepositoryPath)) return;
+
+        try
+        {
+            var skillsService = SkillsServiceFactory.Create(ws, ws.RepositoryPath);
+            var candidates = await skillsService.GetCandidateSkillsAsync();
+            var projectConfig = CodeStackPresets.ResolveConfig(ws.RepositoryPath);
+            _skillsStatus = WorkspaceSkillsUiHelper.GetStatus(ws, projectConfig, candidates);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Failed to refresh workspace skills status for {WorkspaceId} at {RepoPath}", ws.Id, ws.RepositoryPath);
+        }
+    }
+
+    private async Task OnInjectionModeChanged(ChangeEventArgs e)
+    {
+        var ws = WorkspaceState.ActiveWorkspace;
+        if (ws == null) return;
+        if (Enum.TryParse<GlobalSkillsInjectionMode>(e.Value?.ToString(), out var mode))
+        {
+            ws.GlobalSkillsInjectionMode = mode;
+            await RefreshSkillsStatusAsync();
+        }
+    }
+
+    private async Task OnSkillToggled(string skillName, bool isChecked)
+    {
+        var ws = WorkspaceState.ActiveWorkspace;
+        if (ws == null) return;
+        ws.DisabledGlobalSkillsJson = WorkspaceSkillsUiHelper.ToggleSkillExclusion(ws.DisabledGlobalSkillsJson, skillName, isExcluded: !isChecked);
+        await RefreshSkillsStatusAsync();
     }
 
     private void ProbeWsl()

@@ -1,6 +1,16 @@
 namespace NightCodeForge.Core.Domain;
 
 /// <summary>
+/// Controls how global skills are injected into the workspace.
+/// </summary>
+public enum GlobalSkillsInjectionMode
+{
+    Inherit = 0,      // Follows repository config; defaults to enabled if omitted
+    ForceEnabled = 1, // Injects skills regardless of repository config
+    ForceDisabled = 2 // Suppresses injection regardless of repository config
+}
+
+/// <summary>
 /// Represents a managed repository workspace.
 /// </summary>
 public class Workspace
@@ -18,6 +28,8 @@ public class Workspace
     public int? BuildTimeoutSeconds { get; set; }
     public int? TestTimeoutSeconds { get; set; }
     public int? DefaultWorkflowId { get; set; }
+    public GlobalSkillsInjectionMode GlobalSkillsInjectionMode { get; set; } = GlobalSkillsInjectionMode.Inherit;
+    public string? DisabledGlobalSkillsJson { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public ICollection<ForgeTask> Tasks { get; set; } = new List<ForgeTask>();

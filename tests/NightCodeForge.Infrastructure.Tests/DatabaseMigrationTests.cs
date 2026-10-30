@@ -83,12 +83,13 @@ public class DatabaseMigrationTests : IDisposable
             historyRows.Add((reader.GetString(0), reader.GetString(1)));
         }
 
-        Assert.Equal(5, historyRows.Count);
+        Assert.Equal(6, historyRows.Count);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.InitialCreateMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddAgentProfileContextWindowTokensMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddStageQueueTierMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddIsDeferredByPauseToForgeTaskMigrationId);
+        Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddWorkspaceGlobalSkillsSettingsMigrationId);
     }
 
     [Fact]
@@ -250,12 +251,13 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Null(ex);
 
         var appliedMigrations = (await context.Database.GetAppliedMigrationsAsync()).ToList();
-        Assert.Equal(5, appliedMigrations.Count);
+        Assert.Equal(6, appliedMigrations.Count);
         Assert.Contains(AppDbContext.InitialCreateMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddAgentProfileContextWindowTokensMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddStageQueueTierMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddIsDeferredByPauseToForgeTaskMigrationId, appliedMigrations);
+        Assert.Contains(AppDbContext.AddWorkspaceGlobalSkillsSettingsMigrationId, appliedMigrations);
     }
 
     [Fact]

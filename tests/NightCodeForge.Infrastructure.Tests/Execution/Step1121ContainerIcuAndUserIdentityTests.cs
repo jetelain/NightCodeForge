@@ -15,6 +15,7 @@ public class Step1121ContainerIcuAndUserIdentityTests
         var dockerfile = ContainerExecutorOptions.DefaultAgentBaseDockerfile;
 
         Assert.Contains("libicu-dev", dockerfile);
+        Assert.Contains("libunwind8", dockerfile);
         Assert.Contains("locales", dockerfile);
         Assert.Contains("locale-gen en_US.UTF-8 fr_FR.UTF-8", dockerfile);
         Assert.Contains("ENV LANG=en_US.UTF-8", dockerfile);

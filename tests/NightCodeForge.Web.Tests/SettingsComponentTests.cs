@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Agents.Inference;
+using NightCodeForge.Agents.Skills;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
@@ -15,6 +16,7 @@ using NightCodeForge.Web.Components.Pages;
 using NightCodeForge.Web.Components.Settings;
 using NightCodeForge.Web.Components.Workspaces;
 using NightCodeForge.Web.Services;
+using Moq;
 using Xunit;
 
 namespace NightCodeForge.Web.Tests;
@@ -82,6 +84,14 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Services.AddSingleton<ILlmContextWindowCache, NightCodeForge.Infrastructure.Inference.LlmContextWindowCache>();
         Services.AddSingleton<ILlmConfigurationWriter>(_configWriter);
         Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(_llmOptions));
+        Services.AddSingleton<ICompanionToolInstaller>(new Mock<ICompanionToolInstaller>().Object);
+        Services.AddSingleton<IWorkspaceSkillsServiceFactory>(new WorkspaceSkillsServiceFactory(
+            new SkillsService(),
+            new BundledSkillsProvider(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<WorkspaceSkillsService>.Instance));
+        Services.AddSingleton<IGlobalSkillsManagerService>(new GlobalSkillsManagerService(
+            new BundledSkillsProvider(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<GlobalSkillsManagerService>.Instance));
     }
 
     public new void Dispose()
@@ -150,18 +160,19 @@ public class SettingsComponentTests : BunitContext, IDisposable
     }
 
     [Fact]
-    public void SettingsPage_GlobalScope_RendersSixGlobalTabs_ExcludesABTesting()
+    public void SettingsPage_GlobalScope_RendersSevenGlobalTabs_ExcludesABTesting()
     {
         var cut = Render<Settings>();
 
         var globalTabs = cut.FindAll(".settings-tabs button");
-        Assert.Equal(6, globalTabs.Count);
+        Assert.Equal(7, globalTabs.Count);
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Local LLM Optimizations"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Agent Profiles"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Workflows & Stages"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Host SDK Inspector"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("OllamaRouter Gateway"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Cloud & Web Search"));
+        Assert.Contains(globalTabs, b => b.TextContent.Contains("Global Skills Store"));
         Assert.DoesNotContain(globalTabs, b => b.TextContent.Contains("A/B Testing"));
     }
 

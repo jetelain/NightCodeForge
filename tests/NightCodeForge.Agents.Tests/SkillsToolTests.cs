@@ -1,8 +1,10 @@
 using Microsoft.Agents.AI;
+using Moq;
 using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Tools;
+using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Agents.Tests;
 
@@ -208,5 +210,30 @@ Check logs first.
             Assert.DoesNotContain(Core.Domain.CanonicalToolNames.ReadSkillResource, set);
             Assert.DoesNotContain(Core.Domain.CanonicalToolNames.RunSkillScript, set);
         }
+    }
+
+    [Fact]
+    public async Task CanonicalTools_LoadSkillAsync_DelegatesToWorkspaceSkillsService()
+    {
+        var mockSkillsService = new Moq.Mock<IWorkspaceSkillsService>();
+        mockSkillsService.Setup(s => s.LoadSkillAsync("test-skill", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Mock skill instructions");
+
+        var tools = new TestCanonicalToolsBuilder
+        {
+            SkillsService = mockSkillsService.Object
+        }.Build();
+
+        var result = await tools.LoadSkillAsync("test-skill");
+        Assert.Equal("Mock skill instructions", result);
+        mockSkillsService.Verify(s => s.LoadSkillAsync("test-skill", It.IsAny<CancellationToken>()), Moq.Times.Once);
+    }
+
+    [Fact]
+    public async Task CanonicalTools_LoadSkillAsync_EmptySkillName_ReturnsRequiredError()
+    {
+        var tools = new TestCanonicalToolsBuilder().Build();
+        var result = await tools.LoadSkillAsync("");
+        Assert.Equal("Error: skill_name parameter is required.", result);
     }
 }

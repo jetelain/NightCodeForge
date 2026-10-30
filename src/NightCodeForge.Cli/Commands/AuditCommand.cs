@@ -544,6 +544,49 @@ public class AuditCommand
             return new PillarResult("NCF Configuration", PillarStatus.Blocker, "Missing packaged skills", details);
         }
 
+        // Check companion tool readiness and skills config
+        var stack = config.CodeStack ?? CodeStackPresets.Detect(targetDir)?.Name ?? CodeStack.DotNet;
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var toolsDir = Path.Combine(userProfile, ".dotnet", "tools");
+        var isDotNet = CodeStack.NormalizeStack(stack) == CodeStack.DotNet;
+
+        var toolNames = isDotNet ? new[] { "csnav", "mdfetch", "codecondenser" } : new[] { "mdfetch" };
+        var installedTools = new List<string>();
+        var missingTools = new List<string>();
+
+        foreach (var cmd in toolNames)
+        {
+            if (File.Exists(Path.Combine(toolsDir, cmd)) || File.Exists(Path.Combine(toolsDir, $"{cmd}.exe")))
+            {
+                installedTools.Add(cmd);
+            }
+            else
+            {
+                missingTools.Add(cmd);
+            }
+        }
+
+        if (missingTools.Count > 0)
+        {
+            details.Add($"Companion tools missing on host: {string.Join(", ", missingTools)} (auto-installed in container mode or via Host SDK Inspector).");
+        }
+        else
+        {
+            details.Add($"All companion tools installed on host ({string.Join(", ", installedTools)}).");
+        }
+
+        if (config.Skills != null)
+        {
+            if (config.Skills.Enabled == false)
+            {
+                details.Add("Global skills injection is explicitly disabled in .nightcodeforge/config.json.");
+            }
+            if (config.Skills.DisabledSkills != null && config.Skills.DisabledSkills.Count > 0)
+            {
+                details.Add($"Skills excluded in config.json: {string.Join(", ", config.Skills.DisabledSkills)}");
+            }
+        }
+
         if (hasWarnings)
         {
             return new PillarResult("NCF Configuration", PillarStatus.Warning, "Configuration or version drift detected", details);

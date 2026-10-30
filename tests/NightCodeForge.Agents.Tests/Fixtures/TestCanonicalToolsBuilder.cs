@@ -3,6 +3,7 @@ namespace NightCodeForge.Agents.Tests.Fixtures;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Domain;
@@ -16,6 +17,7 @@ public class TestCanonicalToolsBuilder
     public IEditorConfigService EditorConfigService { get; set; } = new EditorConfigService();
     public IEditorConfigFileApplier EditorConfigFileApplier { get; set; } = new EditorConfigFileApplier();
     public IWebSearchService WebSearchService { get; set; } = new Mock<IWebSearchService>().Object;
+    public IWorkspaceSkillsService? SkillsService { get; set; }
     public ILogger<CanonicalTools> Logger { get; set; } = NullLogger<CanonicalTools>.Instance;
     public int? BuildTimeoutSeconds { get; set; }
     public int? TestTimeoutSeconds { get; set; }
@@ -28,6 +30,7 @@ public class TestCanonicalToolsBuilder
         IExecutionEnvironment? executionEnv = null,
         IWorkspacePathResolver? pathResolver = null,
         IWebSearchService? webSearchService = null,
+        IWorkspaceSkillsService? skillsService = null,
         bool isReadOnly = false,
         int? workspaceId = null,
         int? taskId = null) =>
@@ -37,22 +40,35 @@ public class TestCanonicalToolsBuilder
             ExecutionEnv = executionEnv ?? new Mock<IExecutionEnvironment>().Object,
             PathResolver = pathResolver ?? new Mock<IWorkspacePathResolver>().Object,
             WebSearchService = webSearchService ?? new Mock<IWebSearchService>().Object,
+            SkillsService = skillsService,
             IsReadOnly = isReadOnly,
             WorkspaceId = workspaceId,
             TaskId = taskId
         }.Build();
 
-    public CanonicalTools Build() => new(
-        WorkspaceRoot,
-        PathResolver,
-        ExecutionEnv,
-        EditorConfigService,
-        EditorConfigFileApplier,
-        WebSearchService,
-        Logger,
-        BuildTimeoutSeconds,
-        TestTimeoutSeconds,
-        WorkspaceId,
-        TaskId,
-        IsReadOnly);
+    public CanonicalTools Build()
+    {
+        var skills = SkillsService ?? new WorkspaceSkillsService(
+            new Workspace { Id = WorkspaceId ?? 1, Name = "TestWorkspace" },
+            WorkspaceRoot,
+            TaskId,
+            new SkillsService(),
+            new BundledSkillsProvider(),
+            NullLogger<WorkspaceSkillsService>.Instance);
+
+        return new(
+            WorkspaceRoot,
+            PathResolver,
+            ExecutionEnv,
+            EditorConfigService,
+            EditorConfigFileApplier,
+            WebSearchService,
+            skills,
+            Logger,
+            BuildTimeoutSeconds,
+            TestTimeoutSeconds,
+            WorkspaceId,
+            TaskId,
+            IsReadOnly);
+    }
 }

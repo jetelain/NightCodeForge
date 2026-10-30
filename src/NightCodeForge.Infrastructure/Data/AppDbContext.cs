@@ -52,6 +52,11 @@ public class AppDbContext : DbContext
             b.Property(w => w.BuildTimeoutSeconds);
             b.Property(w => w.TestTimeoutSeconds);
             b.Property(w => w.DefaultWorkflowId);
+            b.Property(w => w.GlobalSkillsInjectionMode)
+                .HasConversion<int>()
+                .HasDefaultValue(GlobalSkillsInjectionMode.Inherit);
+            b.Property(w => w.DisabledGlobalSkillsJson)
+                .HasMaxLength(4096);
 
             b.HasMany(w => w.Tasks)
                 .WithOne(i => i.Workspace)
@@ -416,6 +421,11 @@ public class AppDbContext : DbContext
     public const string AddIsDeferredByPauseToForgeTaskMigrationId = "20261024100331_AddIsDeferredByPauseToForgeTask";
 
     /// <summary>
+    /// Migration identifier for workspace global skills settings.
+    /// </summary>
+    public const string AddWorkspaceGlobalSkillsSettingsMigrationId = "20261030103014_AddWorkspaceGlobalSkillsSettings";
+
+    /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
     /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
@@ -531,6 +541,17 @@ VALUES ('" + AddStageQueueTierMigrationId + @"', '10.0.12');";
                 {
                     cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + AddIsDeferredByPauseToForgeTaskMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Workspaces') WHERE name = 'DisabledGlobalSkillsJson';";
+                var hasDisabledGlobalSkillsJsonColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasDisabledGlobalSkillsJsonColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddWorkspaceGlobalSkillsSettingsMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }

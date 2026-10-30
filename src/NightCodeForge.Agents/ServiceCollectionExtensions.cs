@@ -42,7 +42,10 @@ public static class ServiceCollectionExtensions
             .AddTransientHttpErrorRetry();
         services.TryAddScoped<IWebSearchService>(sp => sp.GetRequiredService<OllamaWebSearchService>());
         services.TryAddSingleton<IWorkspaceSymbolService, RoslynSymbolIndexProvider>();
+        services.TryAddSingleton<ISkillsService, SkillsService>();
         services.TryAddSingleton<SkillsService>();
+        services.TryAddSingleton<IBundledSkillsProvider, BundledSkillsProvider>();
+        services.TryAddSingleton<IWorkspaceSkillsServiceFactory, WorkspaceSkillsServiceFactory>();
         services.TryAddSingleton<AgentsMdService>();
         services.TryAddSingleton<IMcpClientManager, McpClientManager>();
 

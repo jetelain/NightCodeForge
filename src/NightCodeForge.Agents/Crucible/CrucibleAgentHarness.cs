@@ -33,7 +33,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly IWebSearchService _webSearchService;
     private readonly IWorkspaceSymbolService _symbolService;
-    private readonly SkillsService _skillsService;
+    private readonly IWorkspaceSkillsServiceFactory _skillsServiceFactory;
     private readonly AgentsMdService _agentsMdService;
     private readonly IAgentActivityStreamer _activityStreamer;
     private readonly SessionTranscriptService _transcriptService;
@@ -65,7 +65,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         IEditorConfigFileApplier editorConfigFileApplier,
         IWebSearchService webSearchService,
         IWorkspaceSymbolService symbolService,
-        SkillsService skillsService,
+        IWorkspaceSkillsServiceFactory skillsServiceFactory,
         AgentsMdService agentsMdService,
         IAgentActivityStreamer activityStreamer,
         SessionTranscriptService transcriptService,
@@ -89,7 +89,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         _editorConfigFileApplier = editorConfigFileApplier ?? throw new ArgumentNullException(nameof(editorConfigFileApplier));
         _webSearchService = webSearchService ?? throw new ArgumentNullException(nameof(webSearchService));
         _symbolService = symbolService ?? throw new ArgumentNullException(nameof(symbolService));
-        _skillsService = skillsService ?? throw new ArgumentNullException(nameof(skillsService));
+        _skillsServiceFactory = skillsServiceFactory ?? throw new ArgumentNullException(nameof(skillsServiceFactory));
         _agentsMdService = agentsMdService ?? throw new ArgumentNullException(nameof(agentsMdService));
         _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
         _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
@@ -183,6 +183,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var buildTimeout = workspace.BuildTimeoutSeconds ?? projectConfig.BuildTimeoutSeconds;
         var testTimeout = workspace.TestTimeoutSeconds ?? projectConfig.TestTimeoutSeconds;
 
+        var skillsService = _skillsServiceFactory.Create(workspace, workspacePath, context.ForgeTask.Id > 0 ? context.ForgeTask.Id : (int?)null);
+
         // 2. Initialize Tools & Lenient Dispatcher
         var canonicalTools = new CanonicalTools(
             workspacePath,
@@ -191,6 +193,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             _editorConfigService,
             _editorConfigFileApplier,
             _webSearchService,
+            skillsService,
             _canonicalToolsLogger,
             buildTimeoutSeconds: buildTimeout,
             testTimeoutSeconds: testTimeout,
@@ -281,11 +284,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
         // The catalog is only useful (and only injected) when the agent can call load_skill;
         // skill resources/scripts are reached through the canonical read and bash tools.
         IReadOnlyList<SkillDescriptor> skills = Array.Empty<SkillDescriptor>();
+        string skillsCatalog = string.Empty;
         if (permittedTools.Contains(CanonicalToolNames.LoadSkill, StringComparer.OrdinalIgnoreCase))
         {
-            skills = await _skillsService.DiscoverSkillsAsync(workspacePath, cancellationToken: cancellationToken);
+            skills = await skillsService.GetActiveSkillsAsync(cancellationToken);
+            skillsCatalog = await skillsService.GetSkillsCatalogPromptAsync(cancellationToken);
         }
-        var skillsCatalog = _skillsService.FormatSkillsCatalogPrompt(skills);
         var activeSkills = skills.Select(s => s.Name).ToList();
 
         // 5. Tool schemas are provided natively via typed AIFunctions (see BuildAIFunctionList);

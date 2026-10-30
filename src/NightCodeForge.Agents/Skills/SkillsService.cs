@@ -2,21 +2,16 @@ using System.Text;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Agents.Skills;
-
-public record SkillDescriptor(
-    string Name,
-    string Description,
-    string DirectoryPath,
-    string SkillFilePath);
 
 /// <summary>
 /// Service integrating into Microsoft Agent Framework's modular skills system (Microsoft.Agents.AI.Skills).
 /// Implements progressive disclosure: discovers skills via AgentFileSkillsSource and loads their content on demand. The lean skills catalog prompt and the single
 /// load_skill tool replace MAF's AgentSkillsProvider (auxiliary resources and scripts go through read and bash).
 /// </summary>
-public partial class SkillsService
+public partial class SkillsService : ISkillsService
 {
     private sealed class DummyChatClient : IChatClient
     {

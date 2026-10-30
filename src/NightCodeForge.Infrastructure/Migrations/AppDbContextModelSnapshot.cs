@@ -765,12 +765,21 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<int?>("DefaultWorkflowId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("DisabledGlobalSkillsJson")
+                        .HasMaxLength(4096)
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("ExecutionMode")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Ext4MirrorPath")
                         .HasMaxLength(1024)
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("GlobalSkillsInjectionMode")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(0);
 
                     b.Property<string>("Name")
                         .IsRequired()

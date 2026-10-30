@@ -39,6 +39,7 @@ public partial class CanonicalTools
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly IWebSearchService _webSearchService;
     private readonly IWorkspacePathResolver _pathResolver;
+    private readonly IWorkspaceSkillsService _skillsService;
     private readonly int? _workspaceId;
     private readonly int? _taskId;
 
@@ -54,8 +55,9 @@ public partial class CanonicalTools
         IEditorConfigService editorConfigService,
         IEditorConfigFileApplier editorConfigFileApplier,
         IWebSearchService webSearchService,
+        IWorkspaceSkillsService skillsService,
         ILogger<CanonicalTools> logger)
-        : this(workspaceRoot, pathResolver, executionEnv, editorConfigService, editorConfigFileApplier, webSearchService, logger, null, null, null, null, false)
+        : this(workspaceRoot, pathResolver, executionEnv, editorConfigService, editorConfigFileApplier, webSearchService, skillsService, logger, null, null, null, null, false)
     {
     }
 
@@ -66,6 +68,7 @@ public partial class CanonicalTools
         IEditorConfigService editorConfigService,
         IEditorConfigFileApplier editorConfigFileApplier,
         IWebSearchService webSearchService,
+        IWorkspaceSkillsService skillsService,
         ILogger<CanonicalTools> logger,
         int? buildTimeoutSeconds,
         int? testTimeoutSeconds,
@@ -79,6 +82,7 @@ public partial class CanonicalTools
         _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
         _editorConfigFileApplier = editorConfigFileApplier ?? throw new ArgumentNullException(nameof(editorConfigFileApplier));
         _webSearchService = webSearchService ?? throw new ArgumentNullException(nameof(webSearchService));
+        _skillsService = skillsService ?? throw new ArgumentNullException(nameof(skillsService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         _workspaceRoot = (workspaceRoot.StartsWith('/') || workspaceRoot.StartsWith('~') || workspaceRoot.StartsWith(@"\\") || workspaceRoot.StartsWith("//"))
@@ -93,6 +97,7 @@ public partial class CanonicalTools
 
     public IWebSearchService WebSearchService => _webSearchService;
     public bool IsWebSearchConfigured => _webSearchService.IsConfigured;
+    public IWorkspaceSkillsService SkillsService => _skillsService;
 
     public string ResolveFullPath(string path)
     {
@@ -888,8 +893,8 @@ public partial class CanonicalTools
             return "Error: skill_name parameter is required.";
         }
 
-        var skillsService = new Skills.SkillsService();
-        return await skillsService.LoadSkillAsync(_workspaceRoot, skillName, cancellationToken);
+
+        return await _skillsService.LoadSkillAsync(skillName, cancellationToken);
     }
 }
 

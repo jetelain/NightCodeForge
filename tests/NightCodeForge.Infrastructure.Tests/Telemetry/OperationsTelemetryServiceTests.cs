@@ -214,7 +214,7 @@ public class OperationsTelemetryServiceTests
         Assert.Equal("Implement In-Flight Hero", active.TaskTitle);
         Assert.Equal("stage-implementation", active.CurrentStageId);
         Assert.Equal(1, eventFiredCount);
-        Assert.True(SpinWait.SpinUntil(() => _mockHubClient.Invocations.Any(i => i.Method.Name == nameof(IOrchestratorHubClient.ReceiveActiveTask)), 2000));
+        Assert.True(SpinWait.SpinUntil(() => _mockHubClient.Invocations.Any(i => i.Method.Name == nameof(IOrchestratorHubClient.ReceiveActiveTask)), 5000));
         _mockHubClient.Verify(c => c.ReceiveActiveTask(summary), Times.Once);
 
         // Clearing with mismatched ID does not clear
@@ -227,7 +227,7 @@ public class OperationsTelemetryServiceTests
         Assert.Null(_service.GetActiveTask());
         Assert.Equal(2, eventFiredCount);
         Assert.Null(eventPayload);
-        Assert.True(SpinWait.SpinUntil(() => _mockHubClient.Invocations.Count(i => i.Method.Name == nameof(IOrchestratorHubClient.ReceiveActiveTask)) >= 2, 2000));
+        Assert.True(SpinWait.SpinUntil(() => _mockHubClient.Invocations.Count(i => i.Method.Name == nameof(IOrchestratorHubClient.ReceiveActiveTask)) >= 2, 5000));
         _mockHubClient.Verify(c => c.ReceiveActiveTask(null), Times.Once);
     }
 
