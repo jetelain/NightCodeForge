@@ -14,7 +14,7 @@ namespace NightCodeForge.Core.Tests;
 public class OperationsControlServiceTests
 {
     private readonly Mock<IOperationsStateStore> _stateStoreMock = new();
-    private readonly Mock<IOllamaRouterGatewayService> _gatewayMock = new();
+    private readonly Mock<ILlmGatewayService> _gatewayMock = new();
     private readonly Mock<IWorkerStateService> _workerStateMock = new();
     private readonly Mock<ITaskCancellationManager> _cancellationManagerMock = new();
     private readonly Mock<ITaskJobQueue> _jobQueueMock = new();

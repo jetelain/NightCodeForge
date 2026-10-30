@@ -19,7 +19,7 @@ public class MonitoringPageTests : BunitContext
     private readonly InMemoryTaskRepository _taskRepository;
     private readonly OrchestratorHubClientConnection _hubConnection;
     private readonly Mock<IOperationsTelemetryService> _mockTelemetryService;
-    private readonly Mock<IOllamaRouterGatewayService> _mockGatewayService;
+    private readonly Mock<ILlmGatewayService> _mockGatewayService;
     private readonly Mock<IOperationsControlService> _mockOperationsControlService = new();
     private readonly OperationsTelemetryUiService _uiService;
 
@@ -28,7 +28,7 @@ public class MonitoringPageTests : BunitContext
         JSInterop.Mode = JSRuntimeMode.Loose;
 
         _mockTelemetryService = new Mock<IOperationsTelemetryService>();
-        _mockGatewayService = new Mock<IOllamaRouterGatewayService>();
+        _mockGatewayService = new Mock<ILlmGatewayService>();
         _workerState = new WorkerStateService(_mockTelemetryService.Object);
         _workspaceState = new WorkspaceStateService();
         _taskRepository = new InMemoryTaskRepository();
@@ -71,7 +71,7 @@ public class MonitoringPageTests : BunitContext
 
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton<IOperationsTelemetryService>(_mockTelemetryService.Object);
-        Services.AddSingleton<IOllamaRouterGatewayService>(_mockGatewayService.Object);
+        Services.AddSingleton<ILlmGatewayService>(_mockGatewayService.Object);
         Services.AddSingleton(_uiService);
         Services.AddSingleton(TestServices.CreateToastService());
         Services.AddSingleton<IOperationsControlService>(_mockOperationsControlService.Object);

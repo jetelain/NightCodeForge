@@ -48,9 +48,6 @@ public static class InferenceServiceCollectionExtensions
                 throw new ArgumentOutOfRangeException(nameof(providerType), providerType, "Unsupported LLM provider type.");
         }
 
-        // Forward legacy interfaces to primary interfaces for backward compatibility
-        services.TryAddTransient<IOllamaRouterGatewayService>(sp => (IOllamaRouterGatewayService)sp.GetRequiredService<ILlmGatewayService>());
-
         return services;
     }
 }

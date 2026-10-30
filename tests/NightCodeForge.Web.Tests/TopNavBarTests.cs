@@ -17,7 +17,7 @@ public class TopNavBarTests : BunitContext
     private readonly WorkspaceStateService _workspaceState = new();
     private readonly Mock<IOperationsTelemetryService> _telemetryMock = new();
     private readonly Mock<IOperationsControlService> _operationsControlMock = new();
-    private readonly Mock<IOllamaRouterGatewayService> _gatewayServiceMock = new();
+    private readonly Mock<ILlmGatewayService> _gatewayServiceMock = new();
 
     public TopNavBarTests()
     {

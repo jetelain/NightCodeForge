@@ -953,7 +953,7 @@ Let me know what you think!";
     [Fact]
     public async Task ConverseAsync_WhenContextWindowNotSetOnProfile_ResolvesDynamicContextWindowFromGateway()
     {
-        var mockGateway = new Mock<IOllamaRouterGatewayService>();
+        var mockGateway = new Mock<ILlmGatewayService>();
         mockGateway.Setup(g => g.ResolveContextWindowAsync("custom-arch:latest", It.IsAny<CancellationToken>()))
             .ReturnsAsync(262144);
 
@@ -978,7 +978,7 @@ Let me know what you think!";
     [Fact]
     public async Task ConverseAsync_WhenContextWindowSetOnProfile_SkipsDynamicResolution()
     {
-        var mockGateway = new Mock<IOllamaRouterGatewayService>();
+        var mockGateway = new Mock<ILlmGatewayService>();
         mockGateway.Setup(g => g.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(262144);
 

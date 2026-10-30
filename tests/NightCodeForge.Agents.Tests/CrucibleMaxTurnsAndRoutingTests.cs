@@ -108,7 +108,7 @@ public class CrucibleMaxTurnsAndRoutingTests
     [Fact]
     public async Task CrucibleAgentHarness_RunStageAsync_WhenContextWindowNotSetOnProfile_ResolvesDynamicContextWindowFromGateway()
     {
-        var mockGateway = new Moq.Mock<NightCodeForge.Core.Interfaces.IOllamaRouterGatewayService>();
+        var mockGateway = new Moq.Mock<NightCodeForge.Core.Interfaces.ILlmGatewayService>();
         mockGateway.Setup(g => g.ResolveContextWindowAsync("qwen3.8:27b", It.IsAny<CancellationToken>()))
             .ReturnsAsync(262144);
 
@@ -141,7 +141,7 @@ public class CrucibleMaxTurnsAndRoutingTests
     [Fact]
     public async Task CrucibleAgentHarness_RunStageAsync_WhenContextWindowSetOnProfile_SkipsDynamicResolution()
     {
-        var mockGateway = new Moq.Mock<NightCodeForge.Core.Interfaces.IOllamaRouterGatewayService>();
+        var mockGateway = new Moq.Mock<NightCodeForge.Core.Interfaces.ILlmGatewayService>();
         mockGateway.Setup(g => g.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(262144);
 

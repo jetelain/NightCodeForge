@@ -130,11 +130,3 @@ public interface ILlmGatewayService
     Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default);
     Task<bool> ReclaimVramAsync(string? targetName, CancellationToken cancellationToken = default);
 }
-
-/// <summary>
-/// Legacy interface alias forwarding to <see cref="ILlmGatewayService"/>.
-/// </summary>
-public interface IOllamaRouterGatewayService : ILlmGatewayService
-{
-}
-

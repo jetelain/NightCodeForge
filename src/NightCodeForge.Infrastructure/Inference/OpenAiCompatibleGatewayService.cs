@@ -12,7 +12,7 @@ namespace NightCodeForge.Infrastructure.Inference;
 /// GPU VRAM reclamation is a no-op since remote/cloud gateways do not support client-initiated VRAM eviction.
 /// Context windows are resolved deterministically from manual models, discovered cache, or default context tokens.
 /// </summary>
-public sealed class OpenAiCompatibleGatewayService : ILlmGatewayService, IOllamaRouterGatewayService
+public sealed class OpenAiCompatibleGatewayService : ILlmGatewayService
 {
     private readonly HttpClient _httpClient;
     private readonly IOptions<LlmProviderOptions> _options;

@@ -15,7 +15,7 @@ namespace NightCodeForge.Infrastructure.Inference;
 /// Provider-specific behaviour (status, reclaim, router context metadata) lives in the subclasses;
 /// the implementation is chosen once at startup, so nothing here branches on the provider type.
 /// </summary>
-public abstract class OllamaGatewayServiceBase : ILlmGatewayService, IOllamaRouterGatewayService
+public abstract class OllamaGatewayServiceBase : ILlmGatewayService
 {
     /// <summary>Context window Ollama applies when a model declares none (its documented default <c>num_ctx</c>).</summary>
     public const int OllamaDefaultContextTokens = 4096;

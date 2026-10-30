@@ -7,19 +7,19 @@
 
 ## 1. Core Responsibility
 
-`NightCodeForge.Infrastructure.Inference` provides communication channels to Ollama router instances. It implements `IOllamaRouterGatewayService` to query available local LLM models, inspect context window limits, initiate model warm-up (VRAM preloading via `/api/generate`), and configure routing endpoints.
+`NightCodeForge.Infrastructure.Inference` provides communication channels to Ollama router instances. It implements `ILlmGatewayService` to query available local LLM models, inspect context window limits, initiate model warm-up (VRAM preloading via `/api/generate`), and configure routing endpoints.
 
 ## 2. Key Types & Contracts
 
 | Type | Kind | Description |
 | :--- | :--- | :--- |
-| `OllamaRouterGatewayService` | Class | Implementation of `IOllamaRouterGatewayService` executing HTTP REST calls against Ollama router endpoints. |
+| `OllamaRouterGatewayService` | Class | Implementation of `ILlmGatewayService` executing HTTP REST calls against Ollama router endpoints. |
 | `OllamaRouterServices` | Static Class | Dependency injection extensions configuring HTTP client policies, retries, and endpoint settings. |
 
 ## 3. Dependencies & Interaction Graph
 
 - **Inbound (Who uses this):** `NightCodeForge.Agents.Inference`, Web Settings controllers.
-- **Outbound (What this relies on):** `System.Net.Http`, `NightCodeForge.Core.Interfaces.IOllamaRouterGatewayService`.
+- **Outbound (What this relies on):** `System.Net.Http`, `NightCodeForge.Core.Interfaces.ILlmGatewayService`.
 
 ## 4. Invariants & Architectural Rules
 

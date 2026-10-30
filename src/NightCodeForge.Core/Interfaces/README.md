@@ -20,7 +20,7 @@
 | `IProcessRunner` | Interface | Low-level abstraction for launching operating system processes with stdout/stderr capture. |
 | `IWorkspaceLockProvider` | Interface | Concurrency contract granting mutual exclusion locks across workspaces and tasks. |
 | `ITaskCancellationManager` | Interface | Coordinates real-time task cancellation tokens and graceful execution interruption. |
-| `IOllamaRouterGatewayService` | Interface | Gateway interface communicating with the Ollama router endpoint. |
+| `ILlmGatewayService` | Interface | Gateway interface communicating with the Ollama router endpoint. |
 
 ## 3. Dependencies & Interaction Graph
 

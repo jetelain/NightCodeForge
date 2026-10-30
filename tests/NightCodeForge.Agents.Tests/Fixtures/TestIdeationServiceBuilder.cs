@@ -51,9 +51,9 @@ public class TestIdeationServiceBuilder
     public ILogger<CanonicalTools> CanonicalToolsLogger { get; set; } = NullLogger<CanonicalTools>.Instance;
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
-    private static IOllamaRouterGatewayService CreateDefaultGatewayService()
+    private static ILlmGatewayService CreateDefaultGatewayService()
     {
-        var mock = new Mock<IOllamaRouterGatewayService>();
+        var mock = new Mock<ILlmGatewayService>();
         mock.Setup(m => m.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(131072);
         return mock.Object;

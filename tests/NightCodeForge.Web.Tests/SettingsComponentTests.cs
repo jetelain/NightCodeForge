@@ -75,7 +75,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Services.AddSingleton<NightCodeForge.Agents.Tools.IWebSearchService>(_webSearchService);
         Services.AddSingleton<ILlmModelCatalogService>(_catalogService);
         Services.AddSingleton<IHostSdkDiscoveryService>(_sdkService);
-        Services.AddSingleton<IOllamaRouterGatewayService>(_gatewayService);
+        Services.AddSingleton<ILlmGatewayService>(_gatewayService);
         Services.AddSingleton<IWslMetadataService>(_wslService);
         Services.AddSingleton<IGitMirrorSyncService>(_mirrorService);
         Services.AddMemoryCache();
@@ -897,7 +897,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         public void ClearCache() { }
     }
 
-    private class MockOllamaRouterGatewayService : IOllamaRouterGatewayService
+    private class MockOllamaRouterGatewayService : ILlmGatewayService
     {
         public bool ReclaimCalled { get; private set; }
 
