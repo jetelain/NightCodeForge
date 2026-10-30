@@ -18,6 +18,7 @@ public class WorkspaceProvisioningServiceTests : IDisposable
     private readonly TestWslMetadataService _wslMetadataService;
     private readonly TestGitCliRunner _gitCliRunner;
     private readonly TestMarkdownSyncService _markdownSyncService;
+    private readonly MockTaskDiskSyncCoordinator _diskSyncCoordinator;
     private readonly IConfiguration _configuration;
     private readonly WorkspaceProvisioningService _service;
 
@@ -32,6 +33,7 @@ public class WorkspaceProvisioningServiceTests : IDisposable
         _wslMetadataService = new TestWslMetadataService();
         _gitCliRunner = new TestGitCliRunner();
         _markdownSyncService = new TestMarkdownSyncService();
+        _diskSyncCoordinator = new MockTaskDiskSyncCoordinator();
 
         var configValues = new Dictionary<string, string?>
         {
@@ -46,6 +48,7 @@ public class WorkspaceProvisioningServiceTests : IDisposable
             _wslMetadataService,
             _gitCliRunner,
             _markdownSyncService,
+            _diskSyncCoordinator,
             _configuration,
             NullLogger<WorkspaceProvisioningService>.Instance);
     }
@@ -295,14 +298,47 @@ public class WorkspaceProvisioningServiceTests : IDisposable
         var tasksDir = Path.Combine(repoDir, "docs", "tasks");
         Assert.True(Directory.Exists(tasksDir));
 
-        // 4. Verify markdown watcher registered
+        // 4. Verify docs/tasks sync was coordinated
+        Assert.Equal(1, _diskSyncCoordinator.SyncCount);
+        Assert.Equal(workspace.Id, _diskSyncCoordinator.LastSyncedWorkspace?.Id);
+
+        // 5. Verify markdown watcher registered
         Assert.Contains(workspace.Id, _markdownSyncService.WatchedWorkspaceIds);
 
-        // 5. Verify progress messages reported
+        // 6. Verify progress messages reported
         Assert.NotEmpty(progressMessages);
         Assert.Contains(progressMessages, m => m.Contains("database", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(progressMessages, m => m.Contains("mirror", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(progressMessages, m => m.Contains("tasks", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(progressMessages, m => m.Contains("watcher", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ProvisionWorkspaceAsync_WhenDocsTasksIngested_ReportsImportCount()
+    {
+        var repoDir = Path.Combine(_tempDir, "ingest-repo");
+        Directory.CreateDirectory(repoDir);
+
+        _diskSyncCoordinator.ResultToReturn = new TaskDiskSyncResult(
+            TasksIngestedOrUpdatedFromDisk: 5,
+            TasksWrittenToDisk: 5,
+            RefreshedTasks: Array.Empty<ForgeTask>(),
+            WrittenPaths: new Dictionary<int, string>());
+
+        var progressMessages = new List<string>();
+        var progress = new SynchronousProgress<string>(msg => progressMessages.Add(msg));
+
+        var model = new WorkspaceCreationModel
+        {
+            Name = "Ingest Workspace",
+            RepositoryPath = repoDir,
+            DefaultBaseBranch = "main",
+            ExecutionMode = ExecutionMode.BareHost
+        };
+
+        await _service.ProvisionWorkspaceAsync(model, progress);
+
+        Assert.Contains(progressMessages, m => m.Contains("Imported 5 task(s)", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

@@ -102,6 +102,37 @@ public class GitWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task EnsureWorktreeAsync_WithInvalidBaseBranch_FallsBackToWorkspaceDefaultBaseBranch()
+    {
+        // Arrange: Workspace default base branch is "main", but task specifies "nonexistent-branch" (e.g. "master" when repo uses "main" or vice versa)
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 991, "nonexistent-branch");
+
+        // Assert: Worktree was successfully created by falling back to DefaultBaseBranch ("main")
+        Assert.True(Directory.Exists(wtPath));
+        var wtBranch = await _runner.ExecuteAsync(wtPath, ["branch", "--show-current"]);
+        Assert.Equal("feature/task-991", wtBranch.StandardOutput.Trim());
+
+        var resolvedBase = await _manager.ResolveEffectiveBaseBranchAsync(_workspace, 991, "nonexistent-branch");
+        Assert.Equal("main", resolvedBase);
+
+        // Verify downstream diff, sync, and reset operations also resolve the effective base branch cleanly
+        _repo.CreateFile("fallback_test.txt", "Fallback content", wtPath);
+        await _manager.CreateWipCheckpointAsync(_workspace, 991, "Stage1", "WIP on fallback branch");
+
+        var diff = await _manager.GenerateDiffAsync(_workspace, 991, "nonexistent-branch");
+        Assert.Contains("fallback_test.txt", diff);
+
+        var liveDiff = await _manager.GenerateLiveDiffAsync(_workspace, 991, "nonexistent-branch");
+        Assert.Contains("fallback_test.txt", liveDiff);
+
+        var syncResult = await _manager.SyncFromBaseBranchAsync(_workspace, 991, "nonexistent-branch");
+        Assert.True(syncResult.Success);
+
+        await _manager.ResetTaskBranchToBaseAsync(_workspace, 991, "nonexistent-branch");
+        Assert.False(File.Exists(Path.Combine(wtPath, "fallback_test.txt")));
+    }
+
+    [Fact]
     public async Task CheckoutTaskBranchAsync_WhenBranchAlreadyExists_DoesNotResetCommits()
     {
         // Arrange: Create branch worktree and commit a file in the worktree

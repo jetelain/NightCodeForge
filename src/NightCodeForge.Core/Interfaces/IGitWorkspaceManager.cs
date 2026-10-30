@@ -63,6 +63,13 @@ public interface IGitWorkspaceManager
     Task<string> EnsureWorktreeAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Resolves the effective base branch for a task in the workspace repository.
+    /// If the specified <paramref name="baseBranch"/> does not exist in the repository
+    /// and <see cref="Workspace.DefaultBaseBranch"/> exists, falls back to the workspace default base branch.
+    /// </summary>
+    Task<string> ResolveEffectiveBaseBranchAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Verifies and enforces that both the worktree .git pointer and the canonical clone worktree gitdir
     /// use bidirectional relative paths, ensuring portability across host, WSL, and Docker containers.
     /// </summary>

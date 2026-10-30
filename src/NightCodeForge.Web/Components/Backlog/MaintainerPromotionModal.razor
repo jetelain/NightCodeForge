@@ -46,6 +46,16 @@
                         Automatic mode is recommended for deterministic fixes and test additions. Manual review halts at Stage 6 for maintainer diff inspection.
                     </small>
                 </div>
+
+                <div class="form-group">
+                    <label for="base-branch-input" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                        Base Branch (Target)
+                    </label>
+                    <input id="base-branch-input" type="text" class="form-control-dark font-mono" @bind="_selectedBaseBranch" disabled="@_isSubmitting" placeholder="e.g. main or master" />
+                    <small style="display: block; margin-top: 0.35rem; color: var(--text-muted); font-size: 0.8rem;">
+                        Target branch to base work on and merge back into upon completion.
+                    </small>
+                </div>
             </div>
 
             <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-top: 0.5rem;">
@@ -73,6 +83,7 @@
 
     private int _selectedPriority = TaskPriority.Normal;
     private MergeMode _selectedMergeMode = MergeMode.Automatic;
+    private string _selectedBaseBranch = string.Empty;
     private bool _isSubmitting;
 
     protected override void OnParametersSet()
@@ -81,12 +92,20 @@
         {
             _selectedPriority = TargetTask.Priority > 0 ? TargetTask.Priority : TaskPriority.Normal;
             _selectedMergeMode = TargetTask.MergeMode;
+            _selectedBaseBranch = TargetTask.BaseBranch ?? string.Empty;
         }
     }
 
     private async Task PromoteAsync()
     {
         if (TargetTask == null || _isSubmitting) return;
+
+        var baseBranch = _selectedBaseBranch?.Trim();
+        if (string.IsNullOrWhiteSpace(baseBranch))
+        {
+            ToastService.Show("Invalid Base Branch", "Base branch cannot be empty.", ToastLevel.Warning);
+            return;
+        }
 
         _isSubmitting = true;
         try
@@ -95,7 +114,8 @@
                 TargetTask.Id,
                 TaskOverallStatus.Open,
                 _selectedPriority,
-                _selectedMergeMode);
+                _selectedMergeMode,
+                baseBranch);
 
             ToastService.Show("ForgeTask Promoted", $"ForgeTask #{TargetTask.Id} is now Open with Priority {_selectedPriority}.", ToastLevel.Success);
             await OnPromoted.InvokeAsync();

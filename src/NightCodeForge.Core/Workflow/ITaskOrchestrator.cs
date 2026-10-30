@@ -32,9 +32,9 @@ public interface ITaskOrchestrator
     Task RequestChangesAsync(int taskId, string revisionNotes, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Promotes a suggested task to Open (with priority and merge mode, enqueuing if dependencies closed) or Rejected.
+    /// Promotes a suggested task to Open (with priority, merge mode, and optional base branch, enqueuing if dependencies closed) or Rejected.
     /// </summary>
-    Task PromoteSuggestedTaskAsync(int taskId, Domain.TaskOverallStatus targetStatus, int priority, Domain.MergeMode mergeMode, CancellationToken cancellationToken = default);
+    Task PromoteSuggestedTaskAsync(int taskId, Domain.TaskOverallStatus targetStatus, int priority, Domain.MergeMode mergeMode, string? baseBranch = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Completes a task by squash-merging its branch into base branch and cascades unblocking to dependent DAG tasks.

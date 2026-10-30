@@ -143,7 +143,8 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         }
         else
         {
-            await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "add", "-b", branchName, worktreePath, baseBranch], cancellationToken: cancellationToken);
+            var effectiveBaseBranch = await ResolveEffectiveBaseBranchCoreAsync(canonicalPath, workspace, taskId, baseBranch, cancellationToken);
+            await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "add", "-b", branchName, worktreePath, effectiveBaseBranch], cancellationToken: cancellationToken);
         }
 
         // Ensure relativeworktrees extension is unset so Microsoft.Build.Tasks.Git in MSBuild does not fail
@@ -162,6 +163,18 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         _logger.LogInformation("Successfully created worktree for ForgeTask #{TaskId} at '{WorktreePath}'", taskId, worktreePath);
         return worktreePath;
+    }
+
+    /// <inheritdoc />
+    public async Task<string> ResolveEffectiveBaseBranchAsync(
+        Workspace workspace,
+        int taskId,
+        string baseBranch,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        var canonicalPath = GetCanonicalWorkingPath(workspace);
+        return await ResolveEffectiveBaseBranchCoreAsync(canonicalPath, workspace, taskId, baseBranch, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -450,12 +463,13 @@ public class GitWorkspaceManager : IGitWorkspaceManager
     {
         var workingPath = GetWorkingPath(workspace, taskId);
         var branchName = $"feature/task-{taskId}";
+        var effectiveBaseBranch = await ResolveEffectiveBaseBranchCoreAsync(workingPath, workspace, taskId, baseBranch, cancellationToken);
 
         _logger.LogInformation("Generating noise-filtered diff for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorkingPath}'",
-            taskId, baseBranch, workingPath);
+            taskId, effectiveBaseBranch, workingPath);
 
         // -U2 context window reduction and noisy artifact exclusions
-        string[] diffArgs = BuildDiffArgs($"{baseBranch}...{branchName}", isStat: false);
+        string[] diffArgs = BuildDiffArgs($"{effectiveBaseBranch}...{branchName}", isStat: false);
 
         string rawDiff = string.Empty;
         bool diffSucceeded = false;
@@ -535,10 +549,12 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             throw new WorktreeNotFoundException(taskId, worktreePath);
         }
 
-        _logger.LogInformation("Generating live diff for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorktreePath}'",
-            taskId, baseBranch, worktreePath);
+        var effectiveBaseBranch = await ResolveEffectiveBaseBranchCoreAsync(worktreePath, workspace, taskId, baseBranch, cancellationToken);
 
-        var diffTarget = await ResolveMergeBaseAsync(worktreePath, baseBranch, cancellationToken);
+        _logger.LogInformation("Generating live diff for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorktreePath}'",
+            taskId, effectiveBaseBranch, worktreePath);
+
+        var diffTarget = await ResolveMergeBaseAsync(worktreePath, effectiveBaseBranch, cancellationToken);
         string[] diffArgs = BuildDiffArgs(diffTarget, isStat: false);
 
         var result = await ExecuteWithIsolatedIndexAsync(worktreePath, taskId, diffArgs, cancellationToken);
@@ -669,10 +685,12 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             throw new WorktreeNotFoundException(taskId, worktreePath);
         }
 
-        _logger.LogInformation("Generating live diff stat for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorktreePath}'",
-            taskId, baseBranch, worktreePath);
+        var effectiveBaseBranch = await ResolveEffectiveBaseBranchCoreAsync(worktreePath, workspace, taskId, baseBranch, cancellationToken);
 
-        var statTarget = await ResolveMergeBaseAsync(worktreePath, baseBranch, cancellationToken);
+        _logger.LogInformation("Generating live diff stat for ForgeTask #{TaskId} against '{BaseBranch}' in '{WorktreePath}'",
+            taskId, effectiveBaseBranch, worktreePath);
+
+        var statTarget = await ResolveMergeBaseAsync(worktreePath, effectiveBaseBranch, cancellationToken);
         string[] statArgs = BuildDiffArgs(statTarget, isStat: true);
 
         var result = await ExecuteWithIsolatedIndexAsync(worktreePath, taskId, statArgs, cancellationToken);
@@ -942,10 +960,11 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         }
 
         // 3. Pull latest base branch in canonical clone / ext4 mirror under workspace lock
+        var effectiveBaseBranch = await ResolveEffectiveBaseBranchCoreAsync(worktreePath, workspace, taskId, baseBranch, cancellationToken);
         if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
             using var wsLock = await _workspaceLockProvider.AcquireLockAsync(workspace.Id, cancellationToken);
-            await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, baseBranch, cancellationToken);
+            await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, effectiveBaseBranch, cancellationToken);
         }
 
         // 4. Merge baseBranch into worktree with diff3 conflict style
@@ -953,13 +972,13 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         {
             var mergeResult = await _gitCliRunner.ExecuteAsync(
                 worktreePath,
-                ["-c", "merge.conflictStyle=diff3", "merge", "--no-edit", baseBranch],
+                ["-c", "merge.conflictStyle=diff3", "merge", "--no-edit", effectiveBaseBranch],
                 cancellationToken: cancellationToken);
 
             var revParse = await _gitCliRunner.ExecuteAsync(worktreePath, ["rev-parse", "HEAD"], cancellationToken: cancellationToken);
             var currentSha = revParse.StandardOutput.Trim();
 
-            _logger.LogInformation("Cleanly synchronized feature branch for task #{TaskId} with '{BaseBranch}' (SHA: {Sha})", taskId, baseBranch, currentSha);
+            _logger.LogInformation("Cleanly synchronized feature branch for task #{TaskId} with '{BaseBranch}' (SHA: {Sha})", taskId, effectiveBaseBranch, currentSha);
 
             return new MergeSyncResult(
                 Success: true,
@@ -1142,14 +1161,15 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         var canonicalPath = GetCanonicalWorkingPath(workspace);
         var worktreePath = GetWorktreePath(workspace, taskId);
         var branchName = $"feature/task-{taskId}";
+        var effectiveBaseBranch = await ResolveEffectiveBaseBranchCoreAsync(canonicalPath, workspace, taskId, baseBranch, cancellationToken);
 
         _logger.LogInformation("Hard-resetting branch '{BranchName}' to base branch '{BaseBranch}' for task #{TaskId}",
-            branchName, baseBranch, taskId);
+            branchName, effectiveBaseBranch, taskId);
 
         // 1. Upstream Base Branch Synchronization
         if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
-            await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, baseBranch, cancellationToken);
+            await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, effectiveBaseBranch, cancellationToken);
         }
 
         var remotesResult = await _gitCliRunner.ExecuteAsync(canonicalPath, ["remote"], cancellationToken: cancellationToken);
@@ -1158,12 +1178,12 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         var primaryRemote = remotes.FirstOrDefault(r => string.Equals(r, "host-origin", StringComparison.OrdinalIgnoreCase))
             ?? remotes.FirstOrDefault(r => string.Equals(r, "origin", StringComparison.OrdinalIgnoreCase));
 
-        string targetResetRef = baseBranch;
+        string targetResetRef = effectiveBaseBranch;
         if (primaryRemote != null)
         {
             // Upstream remote configured: fetch latest commits from remote base branch and reset to remote ref
-            await _gitCliRunner.ExecuteAsync(canonicalPath, ["fetch", primaryRemote, baseBranch], cancellationToken: cancellationToken);
-            targetResetRef = $"{primaryRemote}/{baseBranch}";
+            await _gitCliRunner.ExecuteAsync(canonicalPath, ["fetch", primaryRemote, effectiveBaseBranch], cancellationToken: cancellationToken);
+            targetResetRef = $"{primaryRemote}/{effectiveBaseBranch}";
         }
 
         // 2. Worktree Clean and Reset
@@ -1212,7 +1232,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             }
 
             await _gitCliRunner.ExecuteAsync(canonicalPath, ["branch", "-f", branchName, targetResetRef], cancellationToken: cancellationToken);
-            await EnsureWorktreeAsync(workspace, taskId, baseBranch, cancellationToken);
+            await EnsureWorktreeAsync(workspace, taskId, effectiveBaseBranch, cancellationToken);
         }
 
         // 3. Remote Branch Reconciliation
@@ -1446,6 +1466,56 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         }
 
         return baseBranch;
+    }
+
+    private async Task<string> ResolveEffectiveBaseBranchCoreAsync(
+        string workingDir,
+        Workspace workspace,
+        int taskId,
+        string baseBranch,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(workingDir) ||
+            string.IsNullOrWhiteSpace(workspace.DefaultBaseBranch) ||
+            string.Equals(baseBranch, workspace.DefaultBaseBranch, StringComparison.OrdinalIgnoreCase))
+        {
+            return baseBranch;
+        }
+
+        var effectiveBaseBranch = baseBranch;
+        var baseExists = await CheckRefExistsAsync(workingDir, effectiveBaseBranch, cancellationToken);
+        if (!baseExists)
+        {
+            var defaultExists = await CheckRefExistsAsync(workingDir, workspace.DefaultBaseBranch, cancellationToken);
+            if (defaultExists)
+            {
+                _logger.LogWarning(
+                    "ForgeTask #{TaskId} specifies base branch '{BaseBranch}', which does not exist in '{WorkingDir}'. Falling back to workspace default base branch '{DefaultBaseBranch}'.",
+                    taskId, baseBranch, workingDir, workspace.DefaultBaseBranch);
+                effectiveBaseBranch = workspace.DefaultBaseBranch;
+            }
+        }
+
+        return effectiveBaseBranch;
+    }
+
+    private async Task<bool> CheckRefExistsAsync(string workingDir, string refName, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(workingDir) || string.IsNullOrWhiteSpace(refName))
+        {
+            return false;
+        }
+
+        try
+        {
+            var result = await _gitCliRunner.ExecuteAsync(workingDir, ["rev-parse", "-q", "--verify", refName], cancellationToken: cancellationToken);
+            return result != null && result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to verify ref '{RefName}' in '{WorkingDir}'", refName, workingDir);
+            return false;
+        }
     }
 
     private async Task<GitCommandResult> ExecuteWithIsolatedIndexAsync(

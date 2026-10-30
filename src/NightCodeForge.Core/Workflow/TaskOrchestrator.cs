@@ -250,6 +250,21 @@ public class TaskOrchestrator : ITaskOrchestrator
                         try
                         {
                             await _gitMirrorSyncService.ConfigureHostRepositoryAsync(workspace.RepositoryPath, cancellationToken);
+                            var resolvedForMirror = await _gitWorkspaceManager.ResolveEffectiveBaseBranchAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+                            if (!string.IsNullOrWhiteSpace(resolvedForMirror) &&
+                                !string.Equals(task.BaseBranch, resolvedForMirror, StringComparison.Ordinal))
+                            {
+                                var previousBaseBranch = task.BaseBranch;
+                                task.BaseBranch = resolvedForMirror;
+                                task.UpdatedAt = DateTime.UtcNow;
+                                await _taskRepository.UpdateWithHistoryAsync(
+                                    task,
+                                    dependsOn: null,
+                                    changedBy: AuditActors.TaskOrchestrator,
+                                    reason: $"Resolved BaseBranch from \"{previousBaseBranch}\" to workspace default \"{resolvedForMirror}\"",
+                                    cancellationToken: cancellationToken);
+                            }
+
                             await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, task.BaseBranch, cancellationToken);
                         }
                         catch (Exception mex)
@@ -257,6 +272,21 @@ public class TaskOrchestrator : ITaskOrchestrator
                             _logger.LogWarning(mex, "Ext4 mirror fetch synchronization failed for task #{TaskId}", taskId);
                         }
                     }
+                }
+
+                var resolvedBaseBranch = await _gitWorkspaceManager.ResolveEffectiveBaseBranchAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(resolvedBaseBranch) &&
+                    !string.Equals(task.BaseBranch, resolvedBaseBranch, StringComparison.Ordinal))
+                {
+                    var previousBaseBranch = task.BaseBranch;
+                    task.BaseBranch = resolvedBaseBranch;
+                    task.UpdatedAt = DateTime.UtcNow;
+                    await _taskRepository.UpdateWithHistoryAsync(
+                        task,
+                        dependsOn: null,
+                        changedBy: AuditActors.TaskOrchestrator,
+                        reason: $"Resolved BaseBranch from \"{previousBaseBranch}\" to workspace default \"{resolvedBaseBranch}\"",
+                        cancellationToken: cancellationToken);
                 }
 
                 await _gitWorkspaceManager.CheckoutTaskBranchAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
@@ -2585,6 +2615,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         TaskOverallStatus targetStatus,
         int priority,
         MergeMode mergeMode,
+        string? baseBranch = null,
         CancellationToken cancellationToken = default)
     {
         var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
@@ -2598,13 +2629,17 @@ public class TaskOrchestrator : ITaskOrchestrator
             task.Status = TaskOverallStatus.Open;
             task.Priority = priority;
             task.MergeMode = mergeMode;
+            if (!string.IsNullOrWhiteSpace(baseBranch))
+            {
+                task.BaseBranch = baseBranch.Trim();
+            }
             task.UpdatedAt = DateTime.UtcNow;
 
             await _taskRepository.UpdateWithHistoryAsync(
                 task,
                 dependsOn: null,
                 changedBy: AuditActors.User,
-                reason: $"Promoted task from Suggested to Open with Priority P{priority} and {mergeMode}.",
+                reason: $"Promoted task from Suggested to Open with Priority P{priority}, {mergeMode}, and BaseBranch '{task.BaseBranch}'.",
                 cancellationToken: cancellationToken);
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
 
@@ -2639,7 +2674,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             TaskId = task.Id,
             Level = LogLevel.Information,
-            Message = $"ForgeTask #{task.Id} promoted to status {targetStatus} (Priority: {priority}, MergeMode: {mergeMode}).",
+            Message = $"ForgeTask #{task.Id} promoted to status {targetStatus} (Priority: {priority}, MergeMode: {mergeMode}, BaseBranch: {task.BaseBranch}).",
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
     }

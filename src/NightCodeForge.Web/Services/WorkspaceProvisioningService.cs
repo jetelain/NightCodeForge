@@ -23,6 +23,7 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
     private readonly IWslMetadataService _wslMetadataService;
     private readonly IGitCliRunner _gitCliRunner;
     private readonly ITaskMarkdownSyncService _markdownSyncService;
+    private readonly ITaskDiskSyncCoordinator _diskSyncCoordinator;
     private readonly IConfiguration _configuration;
     private readonly ILogger<WorkspaceProvisioningService> _logger;
 
@@ -33,6 +34,7 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         IWslMetadataService wslMetadataService,
         IGitCliRunner gitCliRunner,
         ITaskMarkdownSyncService markdownSyncService,
+        ITaskDiskSyncCoordinator diskSyncCoordinator,
         IConfiguration configuration,
         ILogger<WorkspaceProvisioningService> logger)
     {
@@ -42,6 +44,7 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         _wslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
+        _diskSyncCoordinator = diskSyncCoordinator ?? throw new ArgumentNullException(nameof(diskSyncCoordinator));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -280,7 +283,7 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
             _logger.LogWarning(ex, "Ext4 mirror setup encountered an issue for workspace {WorkspaceId}. Continuing provisioning.", workspace.Id);
         }
 
-        // 3. Directory Scaffolding & GitIgnore
+        // 3. Directory Scaffolding, GitIgnore & Tasks Bidirectional Sync
         progress?.Report("Scaffolding docs/tasks/ and ensuring .gitignore entries...");
         try
         {
@@ -298,33 +301,17 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
 
             await EnsureGitIgnoreEntriesAsync(workspace.RepositoryPath, cancellationToken);
 
-            // Scaffold docs/tasks/ in clone mirror and sync tasks to clone/docs/tasks
-            var mirrorPath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
-                ? workspace.Ext4MirrorPath
-                : _pathResolver.GetAgentWorkingClonePath(workspace.Id);
-
-            if (!string.IsNullOrWhiteSpace(mirrorPath))
+            // Ingest any pre-existing tasks from host docs/tasks/ and mirror to host & agent clone
+            progress?.Report("Synchronizing tasks from docs/tasks/...");
+            var syncResult = await _diskSyncCoordinator.SyncWorkspaceDocsTasksAsync(workspace, cancellationToken);
+            if (syncResult.TasksIngestedOrUpdatedFromDisk > 0)
             {
-                var hostMirror = _pathResolver.ToHostPath(mirrorPath);
-                if (!string.IsNullOrWhiteSpace(hostMirror) && Directory.Exists(hostMirror))
-                {
-                    var cloneDocsTasks = Path.Combine(hostMirror, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
-                    if (!Directory.Exists(cloneDocsTasks))
-                    {
-                        Directory.CreateDirectory(cloneDocsTasks);
-                    }
-                    await _markdownSyncService.SyncAllTasksToDiskAsync(
-                        workspace,
-                        workspace.RepositoryPath,
-                        workspace.RepositoryPath,
-                        cloneDirectory: hostMirror,
-                        cancellationToken: cancellationToken);
-                }
+                progress?.Report($"Imported {syncResult.TasksIngestedOrUpdatedFromDisk} task(s) from docs/tasks/.");
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to create docs/tasks directory or update .gitignore in {RepositoryPath}", workspace.RepositoryPath);
+            _logger.LogWarning(ex, "Failed to synchronize docs/tasks or update .gitignore in {RepositoryPath}", workspace.RepositoryPath);
         }
 
         // 4. Markdown Sync Watcher Registration

@@ -93,9 +93,45 @@ public class MaintainerPromotionModalTests : BunitContext
         Assert.Equal(TaskOverallStatus.Open, _orchestrator.LastPromotedCall.Value.TargetStatus);
         Assert.Equal(4, _orchestrator.LastPromotedCall.Value.Priority);
         Assert.Equal(MergeMode.ManualReviewRequired, _orchestrator.LastPromotedCall.Value.MergeMode);
+        Assert.Equal("main", _orchestrator.LastPromotedCall.Value.BaseBranch);
 
         Assert.True(promotedInvoked);
         Assert.True(closedInvoked);
+    }
+
+    [Fact]
+    public void Promote_WithEditedBaseBranch_PassesEditedBaseBranchToOrchestrator()
+    {
+        var task = new ForgeTask
+        {
+            Id = 16,
+            Title = "Task with main base branch",
+            Description = "Needs to be on master branch.",
+            BaseBranch = "main",
+            Priority = 2,
+            MergeMode = MergeMode.Automatic
+        };
+
+        bool promotedInvoked = false;
+        var cut = Render<MaintainerPromotionModal>(p => p
+            .Add(m => m.IsOpen, true)
+            .Add(m => m.TargetTask, task)
+            .Add(m => m.OnPromoted, () => { promotedInvoked = true; }));
+
+        // Change base branch to master
+        var baseBranchInput = cut.Find("#base-branch-input");
+        Assert.Equal("main", baseBranchInput.GetAttribute("value"));
+        baseBranchInput.Change("master");
+
+        // Click promote button
+        var promoteBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Promote to Open"));
+        promoteBtn.Click();
+
+        Assert.NotNull(_orchestrator.LastPromotedCall);
+        Assert.Equal(16, _orchestrator.LastPromotedCall.Value.TaskId);
+        Assert.Equal(TaskOverallStatus.Open, _orchestrator.LastPromotedCall.Value.TargetStatus);
+        Assert.Equal("master", _orchestrator.LastPromotedCall.Value.BaseBranch);
+        Assert.True(promotedInvoked);
     }
 
     [Fact]

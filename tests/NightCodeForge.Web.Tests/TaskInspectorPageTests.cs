@@ -35,8 +35,16 @@ public class TaskInspectorPageTests : BunitContext
         _devQueueService = new FakeDevQueueService();
         _taskReviewService = new FakeTaskReviewService();
 
+        var mockOrchestrator = new MockTaskOrchestrator();
         Services.AddSingleton<ITaskRepository>(_taskRepository);
-        Services.AddSingleton<ITaskOrchestrator>(new MockTaskOrchestrator());
+        Services.AddSingleton<ITaskOrchestrator>(mockOrchestrator);
+        Services.AddSingleton(TestServices.CreateToastService());
+        Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
+            _taskRepository,
+            new InMemoryWorkspaceRepository(),
+            new MockTaskMarkdownSyncService(),
+            mockOrchestrator,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
         Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
         Services.AddSingleton(_workerState);
         Services.AddSingleton(_workspaceState);

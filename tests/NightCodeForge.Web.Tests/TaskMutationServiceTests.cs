@@ -246,4 +246,93 @@ public class TaskMutationServiceTests
         Assert.False(task.IsWaitingForHuman);
         Assert.True(task.UpdatedAt > DateTime.UtcNow.AddMinutes(-5));
     }
+
+    [Fact]
+    public async Task UpdateBaseBranchAsync_ThrowsArgumentNullException_WhenTaskIsNull()
+    {
+        await Assert.ThrowsAsync<ArgumentNullException>(() => _service.UpdateBaseBranchAsync((ForgeTask)null!, "master"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public async Task UpdateBaseBranchAsync_ThrowsArgumentException_WhenBaseBranchIsEmptyOrWhitespace(string? invalidBranch)
+    {
+        var task = new ForgeTask { Id = 20, WorkspaceId = 1, BaseBranch = "main" };
+        await _taskRepository.CreateWithBaselineAsync(task, null, AuditActors.User, "baseline");
+
+        await Assert.ThrowsAsync<ArgumentException>(() => _service.UpdateBaseBranchAsync(task, invalidBranch!));
+    }
+
+    [Fact]
+    public async Task UpdateBaseBranchAsync_NoOps_WhenBaseBranchIsUnchanged()
+    {
+        var task = new ForgeTask { Id = 21, WorkspaceId = 1, BaseBranch = "main" };
+        await _taskRepository.CreateWithBaselineAsync(task, null, AuditActors.User, "baseline");
+
+        await _service.UpdateBaseBranchAsync(task, "main");
+
+        var history = await _taskRepository.GetHistoryAsync(21);
+        Assert.Single(history);
+        Assert.Equal(1, task.Version);
+    }
+
+    [Fact]
+    public async Task UpdateBaseBranchAsync_UpdatesTaskAndRecordsHistoryWithUserAttribution()
+    {
+        var task = new ForgeTask { Id = 22, WorkspaceId = 1, BaseBranch = "main" };
+        await _taskRepository.CreateWithBaselineAsync(task, null, AuditActors.User, "baseline");
+
+        await _service.UpdateBaseBranchAsync(task, "master");
+
+        Assert.Equal("master", task.BaseBranch);
+        var history = await _taskRepository.GetHistoryAsync(22);
+        Assert.Equal(2, history.Count);
+
+        var v2 = history[1];
+        Assert.Equal(2, v2.Version);
+        Assert.Equal("master", v2.BaseBranch);
+        Assert.Equal(AuditActors.User, v2.ChangedBy);
+        Assert.Equal("Updated BaseBranch from \"main\" to \"master\"", v2.ChangeReason);
+    }
+
+    [Fact]
+    public async Task UpdateBaseBranchAsync_SyncsMarkdownToDisk()
+    {
+        var task = new ForgeTask { Id = 23, WorkspaceId = 1, BaseBranch = "main" };
+        await _taskRepository.CreateWithBaselineAsync(task, new[] { 10 }, AuditActors.User, "baseline");
+
+        await _service.UpdateBaseBranchAsync(task, "release/1.0");
+
+        var syncCalls = _markdownSync.SyncTaskCalls;
+        Assert.NotEmpty(syncCalls);
+        var lastSync = syncCalls.Last();
+        Assert.Equal(23, lastSync.Task.Id);
+        Assert.Equal("release/1.0", lastSync.Task.BaseBranch);
+        Assert.Contains(10, lastSync.Dependencies!);
+    }
+
+    [Fact]
+    public async Task UpdateBaseBranchAsync_WithTaskId_UpdatesTaskAndRecordsHistory()
+    {
+        var task = new ForgeTask { Id = 24, WorkspaceId = 1, BaseBranch = "dev" };
+        await _taskRepository.CreateWithBaselineAsync(task, null, AuditActors.User, "baseline");
+
+        await _service.UpdateBaseBranchAsync(24, "master");
+
+        var updated = await _taskRepository.GetByIdAsync(24);
+        Assert.NotNull(updated);
+        Assert.Equal("master", updated.BaseBranch);
+
+        var history = await _taskRepository.GetHistoryAsync(24);
+        Assert.Equal(2, history.Count);
+        Assert.Equal("Updated BaseBranch from \"dev\" to \"master\"", history[1].ChangeReason);
+    }
+
+    [Fact]
+    public async Task UpdateBaseBranchAsync_WithTaskId_ThrowsKeyNotFoundException_WhenTaskDoesNotExist()
+    {
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => _service.UpdateBaseBranchAsync(99999, "master"));
+    }
 }

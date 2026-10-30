@@ -158,8 +158,30 @@
                         <span class="meta-val font-mono">@(string.IsNullOrWhiteSpace(Task.CurrentStageId) ? "None" : Task.CurrentStageId)</span>
                     </div>
                     <div class="meta-item">
-                        <span class="meta-label">Base Branch</span>
-                        <span class="meta-val font-mono">@Task.BaseBranch</span>
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <span class="meta-label">Base Branch</span>
+                            @if (Task.Status != TaskOverallStatus.Closed && !_isEditingBaseBranch)
+                            {
+                                <button type="button" class="forge-btn forge-btn-secondary btn-xs edit-basebranch-btn" style="padding: 0.1rem 0.35rem; font-size: 0.7rem;" @onclick="StartEditingBaseBranch" title="Edit base branch">
+                                    ✏️
+                                </button>
+                            }
+                        </div>
+                        @if (_isEditingBaseBranch)
+                        {
+                            <div class="edit-basebranch-box" style="display: flex; gap: 0.35rem; align-items: center; margin-top: 0.3rem;">
+                                <input class="form-control-dark font-mono form-control-sm" style="font-size: 0.82rem; padding: 0.2rem 0.45rem; flex: 1;"
+                                       @bind="_editedBaseBranch" placeholder="e.g. main or master" />
+                                <button type="button" class="forge-btn forge-btn-secondary btn-xs" style="padding: 0.15rem 0.4rem; font-size: 0.72rem;" @onclick="CancelEditingBaseBranch" disabled="@_isSavingBaseBranch">Cancel</button>
+                                <button type="button" class="forge-btn forge-btn-primary btn-xs" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;" @onclick="SaveBaseBranchAsync" disabled="@_isSavingBaseBranch">
+                                    @(_isSavingBaseBranch ? "..." : "Save")
+                                </button>
+                            </div>
+                        }
+                        else
+                        {
+                            <span class="meta-val font-mono">@Task.BaseBranch</span>
+                        }
                     </div>
                     <div class="meta-item">
                         <span class="meta-label">Feature Branch</span>
@@ -493,8 +515,61 @@
         IsOpen = false;
         _isEditingTitle = false;
         _isEditingDescription = false;
+        _isEditingBaseBranch = false;
         _activeDrawerTab = "details";
         await OnClose.InvokeAsync();
+    }
+
+    private bool _isEditingBaseBranch;
+    private bool _isSavingBaseBranch;
+    private string _editedBaseBranch = string.Empty;
+
+    private void StartEditingBaseBranch()
+    {
+        _editedBaseBranch = Task?.BaseBranch ?? string.Empty;
+        _isEditingBaseBranch = true;
+    }
+
+    private void CancelEditingBaseBranch()
+    {
+        _isEditingBaseBranch = false;
+        _editedBaseBranch = string.Empty;
+    }
+
+    private async Task SaveBaseBranchAsync()
+    {
+        if (Task == null || _isSavingBaseBranch) return;
+
+        var newBaseBranch = _editedBaseBranch.Trim();
+        if (string.IsNullOrWhiteSpace(newBaseBranch))
+        {
+            ToastService.Show("Invalid Base Branch", "Base branch cannot be empty.", ToastLevel.Warning);
+            return;
+        }
+
+        if (string.Equals(Task.BaseBranch, newBaseBranch, StringComparison.Ordinal))
+        {
+            _isEditingBaseBranch = false;
+            return;
+        }
+
+        _isSavingBaseBranch = true;
+        try
+        {
+            await TaskMutationService.UpdateBaseBranchAsync(Task, newBaseBranch, PrerequisiteIds);
+            ToastService.Show("Base Branch Updated", $"Task #{Task.Id} base branch set to '{newBaseBranch}'.", ToastLevel.Success);
+            _isEditingBaseBranch = false;
+            await OnTaskUpdated.InvokeAsync(Task);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update base branch for Task #{TaskId}", Task.Id);
+            ToastService.Show("Base Branch Update Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSavingBaseBranch = false;
+        }
     }
 
     private bool _isEditingTitle;

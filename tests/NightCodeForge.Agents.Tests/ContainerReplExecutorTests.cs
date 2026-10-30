@@ -110,6 +110,32 @@ public class ContainerReplExecutorTests
     }
 
     [Fact]
+    public async Task ContainerExecutor_ExecuteAsync_RedirectsStderrToStdoutWith2And1()
+    {
+        var inputs = new List<string>();
+        var mockRunner = new MockProcessRunner(onInput: text => inputs.Add(text));
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "mock-sandbox",
+            DefaultWorkingDirectory = "/workspace/task-35",
+            DefaultTimeoutSeconds = 5
+        };
+
+        using var executor = new NightCodeForgeContainerExecutor(
+            options,
+            mockRunner,
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            new Mock<IHostUserIdentityResolver>().Object,
+            new Mock<IOperationsTelemetryService>().Object);
+
+        await executor.ExecuteAsync("dotnet build");
+
+        var executionCommand = inputs.FirstOrDefault(i => i.Contains("dotnet build"));
+        Assert.NotNull(executionCommand);
+        Assert.Contains("< /dev/null 2>&1", executionCommand);
+    }
+
+    [Fact]
     public async Task ContainerExecutor_ExecuteAsync_RecordsShellCommandTelemetry()
     {
         var mockRunner = new MockProcessRunner();
@@ -280,10 +306,12 @@ public class ContainerReplExecutorTests
     private class MockProcessRunner : NightCodeForge.Core.Interfaces.IProcessRunner
     {
         private readonly Func<string, string>? _outputGenerator;
+        private readonly Action<string>? _onInput;
 
-        public MockProcessRunner(Func<string, string>? outputGenerator = null)
+        public MockProcessRunner(Func<string, string>? outputGenerator = null, Action<string>? onInput = null)
         {
             _outputGenerator = outputGenerator;
+            _onInput = onInput;
         }
 
         public NightCodeForge.Core.Interfaces.ProcessStartSpec? LastSpec { get; private set; }
@@ -291,7 +319,7 @@ public class ContainerReplExecutorTests
         public NightCodeForge.Core.Interfaces.IProcessStreamSession StartSession(NightCodeForge.Core.Interfaces.ProcessStartSpec spec)
         {
             LastSpec = spec;
-            return new MockChannelStreamSession(_outputGenerator);
+            return new MockChannelStreamSession(_outputGenerator, _onInput);
         }
 
         public NightCodeForge.Core.Interfaces.ProcessExecutionResult Run(NightCodeForge.Core.Interfaces.ProcessStartSpec spec) => throw new NotImplementedException();
@@ -313,11 +341,12 @@ public class ContainerReplExecutorTests
         public StreamReader StandardOutput => _stdout;
         public StreamReader StandardError => _stderr;
 
-        public MockChannelStreamSession(Func<string, string>? outputGenerator = null)
+        public MockChannelStreamSession(Func<string, string>? outputGenerator = null, Action<string>? onInput = null)
         {
             var inStream = new DelegatingWriteStream(bytes =>
             {
                 var text = System.Text.Encoding.UTF8.GetString(bytes);
+                onInput?.Invoke(text);
                 var match = System.Text.RegularExpressions.Regex.Match(text, @"(__NCF_SENTINEL_[a-zA-Z0-9_]+__)");
                 if (match.Success)
                 {

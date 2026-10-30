@@ -16,6 +16,8 @@ public interface ITaskMutationService
     Task UpdatePriorityAsync(ForgeTask task, int newPriority, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
     Task UpdateMergeModeAsync(ForgeTask task, MergeMode newMergeMode, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
     Task UpdateMergeModeAsync(int taskId, MergeMode newMergeMode, CancellationToken cancellationToken = default);
+    Task UpdateBaseBranchAsync(ForgeTask task, string newBaseBranch, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
+    Task UpdateBaseBranchAsync(int taskId, string newBaseBranch, CancellationToken cancellationToken = default);
     Task UpdateDependenciesAsync(ForgeTask task, IEnumerable<int> prerequisiteIds, CancellationToken cancellationToken = default);
     Task RejectTaskAsync(ForgeTask task, string? reason = null, CancellationToken cancellationToken = default);
 }
@@ -189,6 +191,51 @@ public class TaskMutationService : ITaskMutationService
             throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
         }
         await UpdateMergeModeAsync(task, newMergeMode, null, cancellationToken);
+    }
+
+    public async Task UpdateBaseBranchAsync(
+        ForgeTask task,
+        string newBaseBranch,
+        IEnumerable<int>? prerequisiteIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        var trimmed = newBaseBranch?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            throw new ArgumentException("Base branch cannot be empty.", nameof(newBaseBranch));
+        }
+
+        if (string.Equals(task.BaseBranch, trimmed, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var oldBranch = task.BaseBranch;
+        task.BaseBranch = trimmed;
+        task.UpdatedAt = DateTime.UtcNow;
+
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            prerequisiteIds,
+            AuditActors.User,
+            $"Updated BaseBranch from \"{oldBranch}\" to \"{trimmed}\"",
+            cancellationToken);
+
+        await SyncMarkdownToDiskAsync(task, prerequisiteIds, cancellationToken);
+    }
+
+    public async Task UpdateBaseBranchAsync(
+        int taskId,
+        string newBaseBranch,
+        CancellationToken cancellationToken = default)
+    {
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
+        if (task == null)
+        {
+            throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+        }
+        await UpdateBaseBranchAsync(task, newBaseBranch, null, cancellationToken);
     }
 
     public async Task UpdateDependenciesAsync(

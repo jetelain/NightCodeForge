@@ -2,7 +2,7 @@
 title: "Implement Ollama model health check endpoint"
 priority: 3
 merge_mode: "manual_review_required"
-base_branch: "main"
+base_branch: "main" # Replace with repository default branch (e.g. master or main) or omit to inherit workspace default
 depends_on: []
 ---
 

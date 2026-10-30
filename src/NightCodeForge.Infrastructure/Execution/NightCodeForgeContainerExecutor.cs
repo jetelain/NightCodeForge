@@ -353,7 +353,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
             try
             {
-                await _stdin!.WriteLineAsync($"cd \"{workDir}\"; ( {cleanCommand}\n) < /dev/null");
+                await _stdin!.WriteLineAsync($"cd \"{workDir}\"; ( {cleanCommand}\n) < /dev/null 2>&1");
                 await _stdin.WriteLineAsync($"echo \"{sentinel} $?\"");
                 await _stdin.FlushAsync();
 

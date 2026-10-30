@@ -1,6 +1,6 @@
 ---
 name: ncf-backlog-migrator
-version: 1
+version: 2
 description: Migrates external project backlogs, roadmaps, and TODOs into cohesive, PR-sized NightCodeForge tasks in docs/tasks with YAML frontmatter and database sync.
 ---
 
@@ -63,7 +63,7 @@ depends_on: []
 - `merge_mode` *(string, optional, default: "manual_review_required")*:
   - `"manual_review_required"`: Requires human maintainer approval before merging to base branch.
   - `"automatic"`: Automatically merges to base branch once all pipeline stages, tests, and SAST gates pass.
-- `base_branch` *(string, optional, default: workspace default, typically "main")*: Target Git branch for the feature branch to branch from and merge into.
+- `base_branch` *(string, optional, default: workspace default, typically "main" or "master")*: Target Git branch for the feature branch to branch from and merge into. **CRITICAL:** Always inspect the repository's active default branch (e.g. `git branch` or `git status`). If the repository uses `master`, set `base_branch: "master"` or omit `base_branch` entirely so NightCodeForge automatically applies the workspace's default base branch. Do NOT blindly write `base_branch: "main"` if the repository uses `master`.
 - `depends_on` *(list of integers or strings, optional, default: `[]`)*: Prerequisite tasks that must complete before this task can start. Supports numeric IDs (`[ 101 ]`), markdown filenames (`[ "2026-10-20-task-alpha.md" ]`, `[ "task-alpha.md" ]`), or task slugs/titles (`[ "task-alpha" ]`, `[ "Task Alpha" ]`). Upon synchronization, NightCodeForge resolves string references to database IDs and normalizes the markdown file in-place to canonical integer IDs.
 - `id` *(integer, omit for new tasks)*: NightCodeForge database ID. Leave this field out when creating new tasks; NightCodeForge assigns it automatically upon sync.
 - `status` *(string, omit for new tasks)*: Workflow status (`Suggested`, `Open`, `InProgress`, `Review`, `Closed`, `Failed`). New tasks automatically enter `Suggested` status. Status transitions must occur through workflow gates, not manual editing.
@@ -148,9 +148,9 @@ When converting raw backlog items into tasks:
 
 ## 7. Migration Step-by-Step Workflow
 
-1. **Scan Source Backlog:** Read existing roadmap files (`ROADMAP.md`, `TODO.md`, `issues/`) or review developer-provided backlog notes.
+1. **Scan Source Backlog & Repo:** Read existing roadmap files (`ROADMAP.md`, `TODO.md`, `issues/`) or review developer-provided backlog notes. Check the repository's default branch using `git branch` or `git status`.
 2. **Inspect Existing Tasks:** List `docs/tasks/*.md` to avoid duplicating tasks already tracked in the repository.
 3. **Decompose & Group:** Cluster micro-items into feature tasks; split oversized epics into PR-sized milestones.
 4. **Determine Dependencies:** Map out the sequence of prerequisites and assign priorities (P1–P5).
-5. **Write Markdown Files:** Create files directly under `docs/tasks/` conforming to the YAML frontmatter and body specification.
+5. **Write Markdown Files:** Create files directly under `docs/tasks/` conforming to the YAML frontmatter and body specification. Set `base_branch` to match the repository's default branch (or omit `base_branch` so NightCodeForge defaults to the workspace base branch).
 6. **Verify Sync:** Check that NightCodeForge has picked up the files and stamped them with their assigned `id:`.

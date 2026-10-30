@@ -29,8 +29,16 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         _devQueueService = new FakeDevQueueService();
         _taskReviewService = new FakeTaskReviewService();
 
+        var mockOrchestrator = new MockTaskOrchestrator();
         Services.AddSingleton<ITaskRepository>(_taskRepository);
-        Services.AddSingleton<ITaskOrchestrator>(new MockTaskOrchestrator());
+        Services.AddSingleton<ITaskOrchestrator>(mockOrchestrator);
+        Services.AddSingleton(TestServices.CreateToastService());
+        Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
+            _taskRepository,
+            new InMemoryWorkspaceRepository(),
+            new MockTaskMarkdownSyncService(),
+            mockOrchestrator,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
         Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
         Services.AddSingleton(_hubConnection);
         Services.AddSingleton<IDevQueueService>(_devQueueService);
@@ -218,6 +226,45 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         Assert.Contains("Full architectural overhaul of JWT validation.", cut.Markup);
         Assert.Contains("Should we enforce refresh tokens?", cut.Markup);
         Assert.Contains("Yes, with 7-day sliding expiration.", cut.Markup);
+    }
+
+    [Fact]
+    public async Task TaskExecutionInspector_EditingBaseBranch_UpdatesBaseBranchAndPersists()
+    {
+        var task = new ForgeTask
+        {
+            Id = 56,
+            WorkspaceId = 1,
+            Title = "Task with wrong branch",
+            BaseBranch = "main",
+            Status = TaskOverallStatus.Failed
+        };
+        await _taskRepository.CreateWithBaselineAsync(task, null, AuditActors.User, "baseline");
+
+        var cut = Render<TaskExecutionInspector>(p => p.Add(x => x.TaskId, 56));
+
+        // Switch to Overview tab
+        var overviewBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Task Overview"));
+        overviewBtn.Click();
+
+        // Click edit base branch button
+        var editBtn = cut.Find(".edit-inspector-basebranch-btn");
+        editBtn.Click();
+
+        // Find input and update value to master
+        var input = cut.Find(".edit-inspector-basebranch-box input");
+        input.Change("master");
+
+        // Click save button
+        var saveBtn = cut.FindAll(".edit-inspector-basebranch-box button").First(b => b.TextContent.Contains("Save"));
+        saveBtn.Click();
+
+        Assert.Equal("master", task.BaseBranch);
+
+        var history = await _taskRepository.GetHistoryAsync(56);
+        Assert.NotEmpty(history);
+        var last = history.Last();
+        Assert.Contains("Updated BaseBranch from \"main\" to \"master\"", last.ChangeReason);
     }
 
     [Fact]

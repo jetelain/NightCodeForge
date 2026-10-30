@@ -126,6 +126,11 @@ public class FakeGitWorkspaceManager : IGitWorkspaceManager
         return Task.FromResult(GetWorktreePath(workspace, taskId));
     }
 
+    public Task<string> ResolveEffectiveBaseBranchAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(baseBranch);
+    }
+
     public List<int> NormalizedTaskIds { get; } = new();
     public Exception? NormalizeFailure { get; set; }
 

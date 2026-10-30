@@ -208,12 +208,21 @@ using (var scope = app.Services.CreateScope())
 
     var workspaceRepo = scope.ServiceProvider.GetRequiredService<NightCodeForge.Core.Repositories.IWorkspaceRepository>();
     var markdownSync = scope.ServiceProvider.GetRequiredService<ITaskMarkdownSyncService>();
+    var diskSyncCoordinator = scope.ServiceProvider.GetRequiredService<ITaskDiskSyncCoordinator>();
     var workspaces = await workspaceRepo.GetAllAsync();
     foreach (var ws in workspaces)
     {
         if (!string.IsNullOrWhiteSpace(ws.RepositoryPath) && Directory.Exists(ws.RepositoryPath))
         {
             markdownSync.StartWatching(ws.Id, ws.RepositoryPath);
+            try
+            {
+                await diskSyncCoordinator.SyncWorkspaceDocsTasksAsync(ws);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to synchronize docs/tasks for workspace #{WorkspaceId} ({WorkspaceName}) during startup.", ws.Id, ws.Name);
+            }
         }
     }
 }

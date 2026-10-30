@@ -149,4 +149,47 @@ public class TaskDetailDrawerPriorityAndMergeModeTests : BunitContext
         var last = history.Last();
         Assert.Contains("Updated MergeMode from ManualReviewRequired to Automatic", last.ChangeReason);
     }
+
+    [Fact]
+    public async Task TaskDetailDrawer_EditingBaseBranch_UpdatesBaseBranchAndHistory()
+    {
+        var task = new ForgeTask
+        {
+            Id = 105,
+            WorkspaceId = 1,
+            Title = "Task with wrong base branch",
+            BaseBranch = "main",
+            Priority = TaskPriority.Normal,
+            MergeMode = MergeMode.Automatic,
+            Status = TaskOverallStatus.Open
+        };
+        await _taskRepository.CreateAsync(task);
+
+        bool updatedCallbackFired = false;
+        var cut = Render<TaskDetailDrawer>(p => p
+            .Add(d => d.IsOpen, true)
+            .Add(d => d.Task, task)
+            .Add(d => d.OnTaskUpdated, (t) => { updatedCallbackFired = true; }));
+
+        // Click edit base branch button
+        var editBtn = cut.Find(".edit-basebranch-btn");
+        editBtn.Click();
+
+        // Find input and update value
+        var input = cut.Find(".edit-basebranch-box input");
+        input.Change("master");
+
+        // Click save button
+        var saveBtn = cut.FindAll(".edit-basebranch-box button").First(b => b.TextContent.Contains("Save"));
+        saveBtn.Click();
+
+        Assert.Equal("master", task.BaseBranch);
+        Assert.True(updatedCallbackFired);
+
+        var history = await _taskRepository.GetHistoryAsync(105);
+        Assert.NotEmpty(history);
+        var last = history.Last();
+        Assert.Contains("Updated BaseBranch from \"main\" to \"master\"", last.ChangeReason);
+        Assert.Equal("User", last.ChangedBy);
+    }
 }

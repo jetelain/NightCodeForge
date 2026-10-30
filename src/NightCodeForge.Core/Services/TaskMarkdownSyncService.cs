@@ -1749,6 +1749,20 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 ? Domain.MergeMode.Automatic
                 : Domain.MergeMode.ManualReviewRequired;
 
+            string defaultBaseBranch = WorkflowDefaults.DefaultBaseBranch;
+            if (string.IsNullOrWhiteSpace(frontmatter.BaseBranch))
+            {
+                var workspaceRepo = scope.ServiceProvider.GetService<IWorkspaceRepository>();
+                if (workspaceRepo != null)
+                {
+                    var ws = await workspaceRepo.GetByIdAsync(workspaceId, cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(ws?.DefaultBaseBranch))
+                    {
+                        defaultBaseBranch = ws.DefaultBaseBranch;
+                    }
+                }
+            }
+
             var newTask = new ForgeTask
             {
                 WorkspaceId = workspaceId,
@@ -1757,7 +1771,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 Priority = frontmatter.Priority > 0 ? frontmatter.Priority : TaskSyncConstants.DefaultPriority,
                 MergeMode = mergeMode,
                 IsWaitingForHuman = frontmatter.WaitingForHuman,
-                BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? WorkflowDefaults.DefaultBaseBranch : frontmatter.BaseBranch,
+                BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? defaultBaseBranch : frontmatter.BaseBranch.Trim(),
                 Status = TaskOverallStatus.Suggested,
                 Origin = ParseOrigin(frontmatter.Origin),
                 CurrentStageId = string.Empty,

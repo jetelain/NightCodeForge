@@ -13,6 +13,8 @@
 @inject OrchestratorHubClientConnection HubClient
 @inject IJSRuntime JSRuntime
 @inject ITaskDiffService TaskDiffService
+@inject ITaskMutationService TaskMutationService
+@inject ToastService ToastService
 
 <div class="task-execution-inspector card-surface" id="task-execution-inspector" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.5rem; margin-top: 1.5rem;">
     @if (_isLoading)
@@ -207,8 +209,30 @@
                 <!-- Target Branch & Isolation Details -->
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem;">
                     <div class="card-surface" style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem;">
-                        <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 0.35rem;">Base Branch (Target)</span>
-                        <code style="color: var(--text-primary); font-size: 0.9rem;">@_task.BaseBranch</code>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                            <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Base Branch (Target)</span>
+                            @if (_task.Status != TaskOverallStatus.Closed && !_isEditingBaseBranch)
+                            {
+                                <button type="button" class="forge-btn forge-btn-secondary btn-xs edit-inspector-basebranch-btn" style="padding: 0.1rem 0.4rem; font-size: 0.72rem;" @onclick="StartEditingBaseBranch" title="Edit base branch">
+                                    ✏️ Edit
+                                </button>
+                            }
+                        </div>
+                        @if (_isEditingBaseBranch)
+                        {
+                            <div class="edit-inspector-basebranch-box" style="display: flex; gap: 0.35rem; align-items: center; margin-top: 0.35rem;">
+                                <input class="form-control-dark font-mono form-control-sm" style="font-size: 0.85rem; padding: 0.25rem 0.5rem; flex: 1;"
+                                       @bind="_editedBaseBranch" placeholder="e.g. main or master" />
+                                <button type="button" class="forge-btn forge-btn-secondary btn-xs" style="padding: 0.2rem 0.45rem; font-size: 0.75rem;" @onclick="CancelEditingBaseBranch" disabled="@_isSavingBaseBranch">Cancel</button>
+                                <button type="button" class="forge-btn forge-btn-primary btn-xs" style="padding: 0.2rem 0.55rem; font-size: 0.75rem;" @onclick="SaveBaseBranchAsync" disabled="@_isSavingBaseBranch">
+                                    @(_isSavingBaseBranch ? "..." : "Save")
+                                </button>
+                            </div>
+                        }
+                        else
+                        {
+                            <code style="color: var(--text-primary); font-size: 0.9rem;">@_task.BaseBranch</code>
+                        }
                     </div>
                     <div class="card-surface" style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 1rem;">
                         <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 0.35rem;">Feature Branch</span>
@@ -490,6 +514,8 @@
     private async Task LoadTaskDataAsync()
     {
         _isLoading = true;
+        _isEditingBaseBranch = false;
+        _editedBaseBranch = string.Empty;
         _diffResult = null;
         _diffFiles.Clear();
         _selectedDiffFile = null;
@@ -710,6 +736,57 @@
         finally
         {
             _isActionInProgress = false;
+        }
+    }
+
+    private bool _isEditingBaseBranch;
+    private bool _isSavingBaseBranch;
+    private string _editedBaseBranch = string.Empty;
+
+    private void StartEditingBaseBranch()
+    {
+        _editedBaseBranch = _task?.BaseBranch ?? string.Empty;
+        _isEditingBaseBranch = true;
+    }
+
+    private void CancelEditingBaseBranch()
+    {
+        _isEditingBaseBranch = false;
+        _editedBaseBranch = string.Empty;
+    }
+
+    private async Task SaveBaseBranchAsync()
+    {
+        if (_task == null || _isSavingBaseBranch) return;
+
+        var newBaseBranch = _editedBaseBranch.Trim();
+        if (string.IsNullOrWhiteSpace(newBaseBranch))
+        {
+            ToastService.Show("Invalid Base Branch", "Base branch cannot be empty.", ToastLevel.Warning);
+            return;
+        }
+
+        if (string.Equals(_task.BaseBranch, newBaseBranch, StringComparison.Ordinal))
+        {
+            _isEditingBaseBranch = false;
+            return;
+        }
+
+        _isSavingBaseBranch = true;
+        try
+        {
+            await TaskMutationService.UpdateBaseBranchAsync(_task, newBaseBranch);
+            ToastService.Show("Base Branch Updated", $"Task #{_task.Id} base branch set to '{newBaseBranch}'.", ToastLevel.Success);
+            _isEditingBaseBranch = false;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Base Branch Update Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSavingBaseBranch = false;
         }
     }
 

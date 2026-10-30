@@ -968,6 +968,7 @@ new file mode 100644
         public Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, CancellationToken cancellationToken = default) => Task.FromResult("squash-commit-sha");
         public Task<string> SquashAndMergeAsync(Workspace workspace, int taskId, string baseBranch, string commitMessage, bool allowCreateBaseBranch, CancellationToken cancellationToken = default) => Task.FromResult("squash-commit-sha");
         public Task<string> EnsureWorktreeAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.FromResult($"/wks/task-{taskId}");
+        public Task<string> ResolveEffectiveBaseBranchAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.FromResult(baseBranch);
         public Task EnsureWorktreeRelativePathsAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task RemoveWorktreeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public string GetWorktreePath(Workspace workspace, int taskId) => $"/wks/task-{taskId}";
