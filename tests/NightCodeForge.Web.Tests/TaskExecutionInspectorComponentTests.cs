@@ -1,5 +1,6 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.JSInterop;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
@@ -1047,6 +1048,93 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         Assert.Contains("Running", cut.Markup);
         Assert.Contains("deterministic-pre-impl-test", cut.Markup);
         Assert.Contains("Test run started: 4 tests executed so far...", cut.Markup);
+    }
+
+    [Fact]
+    public void StageConversationViewer_RendersFollowTrailButton_WithCanonicalIdAndAttributes()
+    {
+        var cut = Render<StageConversationViewer>();
+
+        var rootContainer = cut.Find($"#{ChatPresentationHelper.StageConversationContainerId}");
+        Assert.NotNull(rootContainer);
+        Assert.Contains("stage-conversation-viewer", rootContainer.ClassName);
+
+        var btn = cut.Find($"#{ChatPresentationHelper.StageConversationScrollBtnId}");
+        Assert.NotNull(btn);
+        Assert.Contains("chat-scroll-bottom-btn", btn.ClassName);
+        Assert.Contains("stage-scroll-bottom-btn", btn.ClassName);
+        Assert.Equal(ChatPresentationHelper.FollowTrailTooltip, btn.GetAttribute("title"));
+        Assert.Equal(ChatPresentationHelper.FollowTrailAriaLabel, btn.GetAttribute("aria-label"));
+        Assert.Equal("button", btn.GetAttribute("role"));
+        Assert.Contains(ChatPresentationHelper.FollowTrailButtonText, btn.TextContent);
+    }
+
+    [Fact]
+    public void StageConversationViewer_OnInitialRender_InvokesInitAutoScroll_WithContainerAndButtonOptions()
+    {
+        var cut = Render<StageConversationViewer>();
+
+        var invocations = JSInterop.Invocations.Where(i => i.Identifier == "NightCodeForge.initAutoScroll").ToList();
+        Assert.NotEmpty(invocations);
+        var invocation = invocations.First();
+        Assert.Equal(ChatPresentationHelper.StageConversationContainerId, invocation.Arguments[0]);
+        Assert.Equal(ChatPresentationHelper.StageConversationScrollBtnId, invocation.Arguments[1]);
+
+        var optionsJson = System.Text.Json.JsonSerializer.Serialize(invocation.Arguments[2]);
+        Assert.Contains(ChatPresentationHelper.MainContentScrollSelector, optionsJson);
+        Assert.Contains("\"autoScrollOnByDefault\":false", optionsJson);
+    }
+
+    [Fact]
+    public void StageConversationViewer_WhenConversationChanges_ResetsAutoScrollToOffByDefault()
+    {
+        var conv1 = new Conversation { Id = 101, StageId = "dev-impl", Status = StageExecutionStatus.Completed };
+        var conv2 = new Conversation { Id = 102, StageId = "dev-impl", Status = StageExecutionStatus.Running };
+
+        var cut = Render<StageConversationViewer>(p => p.Add(x => x.Conversation, conv1));
+
+        cut.Render(p => p.Add(x => x.Conversation, conv2));
+
+        var resetInvocations = JSInterop.Invocations.Where(i => i.Identifier == "NightCodeForge.resetAutoScroll").ToList();
+        Assert.NotEmpty(resetInvocations);
+
+        var lastResetInvocation = resetInvocations.Last();
+        Assert.Equal(ChatPresentationHelper.StageConversationContainerId, lastResetInvocation.Arguments[0]);
+        Assert.Equal(false, lastResetInvocation.Arguments[1]);
+
+        // Auto-scroll should not force scroll to bottom on conversation change
+        var scrollInvocations = JSInterop.Invocations.Where(i => i.Identifier == "NightCodeForge.scrollToBottom").ToList();
+        Assert.Empty(scrollInvocations);
+    }
+
+    [Fact]
+    public async Task StageConversationViewer_OnDisposal_InvokesDisposeAutoScroll()
+    {
+        var cut = Render<StageConversationViewer>();
+
+        await cut.Instance.DisposeAsync();
+
+        var invocations = JSInterop.Invocations.Where(i => i.Identifier == "NightCodeForge.disposeAutoScroll").ToList();
+        Assert.NotEmpty(invocations);
+        var disposeInvocation = invocations.First();
+        Assert.Equal(ChatPresentationHelper.StageConversationContainerId, disposeInvocation.Arguments[0]);
+    }
+
+    [Fact]
+    public async Task StageConversationViewer_HeadlessResilience_HandlesDisconnectedJSRuntimeWithoutCrashing()
+    {
+        var mockJs = new Moq.Mock<IJSRuntime>();
+        mockJs.Setup(js => js.InvokeAsync<Microsoft.JSInterop.Infrastructure.IJSVoidResult>(Moq.It.IsAny<string>(), Moq.It.IsAny<object[]>()))
+              .Returns(ValueTask.FromException<Microsoft.JSInterop.Infrastructure.IJSVoidResult>(new JSDisconnectedException("Circuit lost")));
+
+        using var ctx = new BunitContext();
+        ctx.Services.AddSingleton<IJSRuntime>(mockJs.Object);
+        ctx.Services.AddSingleton<ITaskRepository>(new InMemoryTaskRepository());
+        ctx.Services.AddSingleton<ITaskOrchestrator>(new MockTaskOrchestrator());
+
+        var cut = ctx.Render<StageConversationViewer>();
+        var exception = await Record.ExceptionAsync(async () => await cut.Instance.DisposeAsync());
+        Assert.Null(exception);
     }
 
     #region Fakes

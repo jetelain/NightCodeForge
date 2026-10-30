@@ -8,6 +8,20 @@ namespace NightCodeForge.Web.Services;
 /// </summary>
 public static class ChatPresentationHelper
 {
+    // Canonical element IDs
+    public const string ChatMessagesContainerId = "chatMessagesContainer";
+    public const string ChatScrollToBottomBtnId = "chatScrollToBottomBtn";
+    public const string StageConversationContainerId = "stageConversationContainer";
+    public const string StageConversationScrollBtnId = "stageConversationScrollBottomBtn";
+
+    // Viewport selectors
+    public const string MainContentScrollSelector = ".forge-main-content";
+
+    // Follow-trail accessibility & tooltip text
+    public const string FollowTrailTooltip = "Scroll to latest turns and reasoning";
+    public const string FollowTrailAriaLabel = "Scroll to latest messages";
+    public const string FollowTrailButtonText = "↓";
+
     public static string GetToolIcon(string? toolName)
     {
         if (string.IsNullOrWhiteSpace(toolName)) return "⚙️";

@@ -23,6 +23,7 @@ public class IdeationSessionPersistenceTests : BunitContext
 
     public IdeationSessionPersistenceTests()
     {
+        JSInterop.Mode = JSRuntimeMode.Loose;
         _workspaceState = new WorkspaceStateService();
         _taskRepository = new InMemoryTaskRepository();
         _workflowRepository = new InMemoryWorkflowRepository();

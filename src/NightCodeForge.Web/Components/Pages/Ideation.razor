@@ -183,7 +183,7 @@
 
             <!-- Scrollable Message Transcript -->
             <div class="chat-messages-wrapper">
-                <div id="chatMessagesContainer" class="chat-messages-container">
+                <div id="@ChatPresentationHelper.ChatMessagesContainerId" class="chat-messages-container">
                 @if (Session.Messages.Count == 0 && !Session.IsGenerating)
                 {
                     <div class="chat-empty-state">
@@ -377,7 +377,7 @@
             </div>
 
             <!-- Scroll to bottom floating button -->
-            <button id="chatScrollToBottomBtn" 
+            <button id="@ChatPresentationHelper.ChatScrollToBottomBtnId" 
                     type="button" 
                     class="chat-scroll-bottom-btn" 
                     title="Scroll to latest messages" 
@@ -508,9 +508,13 @@
         {
             try
             {
-                await JS.InvokeVoidAsync("NightCodeForge.initAutoScroll", "chatMessagesContainer", "chatScrollToBottomBtn");
+                await JS.InvokeVoidAsync(
+                    "NightCodeForge.initAutoScroll",
+                    ChatPresentationHelper.ChatMessagesContainerId,
+                    ChatPresentationHelper.ChatScrollToBottomBtnId,
+                    new { autoScrollOnByDefault = true });
             }
-            catch
+            catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
             {
                 // In non-interactive or test rendering
             }
@@ -1395,9 +1399,9 @@
     {
         try
         {
-            await JS.InvokeVoidAsync("NightCodeForge.scrollToBottom", "chatMessagesContainer", force);
+            await JS.InvokeVoidAsync("NightCodeForge.scrollToBottom", ChatPresentationHelper.ChatMessagesContainerId, force);
         }
-        catch
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
         {
             // Suppress JS error if in non-interactive or testing environment
         }
@@ -1413,9 +1417,9 @@
         Session.OnChange -= HandleSessionChanged;
         try
         {
-            _ = JS.InvokeVoidAsync("NightCodeForge.disposeAutoScroll", "chatMessagesContainer");
+            _ = JS.InvokeVoidAsync("NightCodeForge.disposeAutoScroll", ChatPresentationHelper.ChatMessagesContainerId);
         }
-        catch
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
         {
             // Circuit may already be disconnected
         }

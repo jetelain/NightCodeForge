@@ -1086,6 +1086,20 @@ code, kbd, samp, pre {
     transform: translateY(-2px);
     box-shadow: 0 6px 18px rgba(99, 102, 241, 0.35);
 }
+
+.chat-scroll-bottom-btn:focus-visible {
+    outline: 2px solid var(--accent-indigo);
+    outline-offset: 2px;
+}
+
+.stage-scroll-bottom-btn {
+    position: sticky;
+    bottom: 1.5rem;
+    float: right;
+    margin-top: -46px;
+    margin-right: 0.5rem;
+    z-index: 25;
+}
 .chat-messages-container {
     flex: 1;
     overflow-y: auto;

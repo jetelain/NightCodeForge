@@ -9,8 +9,9 @@
 @inject IJSRuntime JSRuntime
 @inject ITaskRepository TaskRepository
 @inject ITaskOrchestrator TaskOrchestrator
+@implements IAsyncDisposable
 
-<div class="stage-conversation-viewer card-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; min-width: 0;">
+<div id="@ChatPresentationHelper.StageConversationContainerId" class="stage-conversation-viewer card-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; min-width: 0; position: relative;">
     @if (Conversation == null && string.IsNullOrEmpty(LiveStreamingThinking) && string.IsNullOrEmpty(LiveStreamingMessage))
     {
         <div style="text-align: center; color: var(--text-muted); padding: 2rem 0;">
@@ -343,6 +344,16 @@
             }
         </div>
     }
+
+    <!-- Follow-Trail Floating Action Button -->
+    <button id="@ChatPresentationHelper.StageConversationScrollBtnId"
+            type="button"
+            class="chat-scroll-bottom-btn stage-scroll-bottom-btn"
+            title="@ChatPresentationHelper.FollowTrailTooltip"
+            aria-label="@ChatPresentationHelper.FollowTrailAriaLabel"
+            role="button">
+        <span>@ChatPresentationHelper.FollowTrailButtonText</span>
+    </button>
 </div>
 
 @code {
@@ -357,7 +368,75 @@
     [Parameter] public IReadOnlyList<StageDefinition>? WorkflowStages { get; set; }
     [Parameter] public EventCallback OnConversationUpdated { get; set; }
 
+    private int? _previousConversationId;
+    private bool _shouldResetAutoScrollAfterRender;
+
     private bool IsStageWaitingForAnswer => StageConversationParser.IsStageWaitingForAnswer(Conversation, Task);
+
+    protected override void OnParametersSet()
+    {
+        if (_previousConversationId != null && Conversation?.Id != _previousConversationId)
+        {
+            _previousConversationId = Conversation?.Id;
+            _shouldResetAutoScrollAfterRender = true;
+        }
+        else if (_previousConversationId == null && Conversation?.Id != null)
+        {
+            _previousConversationId = Conversation.Id;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                await JSRuntime.InvokeVoidAsync(
+                    "NightCodeForge.initAutoScroll",
+                    ChatPresentationHelper.StageConversationContainerId,
+                    ChatPresentationHelper.StageConversationScrollBtnId,
+                    new {
+                        scrollContainerSelector = ChatPresentationHelper.MainContentScrollSelector,
+                        autoScrollOnByDefault = false
+                    });
+            }
+            catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+            {
+                // Non-interactive or test rendering resilience per AGENTS.md
+            }
+        }
+
+        if (_shouldResetAutoScrollAfterRender)
+        {
+            _shouldResetAutoScrollAfterRender = false;
+            try
+            {
+                await JSRuntime.InvokeVoidAsync(
+                    "NightCodeForge.resetAutoScroll",
+                    ChatPresentationHelper.StageConversationContainerId,
+                    false);
+            }
+            catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+            {
+                // Non-interactive or test rendering resilience per AGENTS.md
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync(
+                "NightCodeForge.disposeAutoScroll",
+                ChatPresentationHelper.StageConversationContainerId);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+            // Circuit may already be disconnected
+        }
+    }
 
     private async Task HandleBatchAnswersSubmittedAsync(IReadOnlyDictionary<int, string> answersByIndex)
     {
