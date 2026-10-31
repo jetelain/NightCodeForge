@@ -63,17 +63,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && locale-gen en_US.UTF-8 fr_FR.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /cache/nuget /cache/npm /cache/pnpm /cache/uv /cache/m2 /ncf-home/.dotnet /ncf-home/.local/bin /opt/ncf-dotnet-tools \
+RUN mkdir -p /cache/nuget /cache/npm /cache/pnpm /cache/uv /cache/m2 /cache/ms-playwright /ncf-home/.dotnet /ncf-home/.local/bin /opt/ncf-dotnet-tools \
     && chmod -R 777 /cache /ncf-home
 
 ENV HOME=/ncf-home
+ENV DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
 ENV NUGET_PACKAGES=/cache/nuget
 ENV npm_config_cache=/cache/npm
 ENV UV_CACHE_DIR=/cache/uv
+ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
 """;
+
+    public const string DefaultSharedMemorySize = "2g";
 
     public string ContainerNameOrId { get; set; } = "ncf-sandbox";
     public string? ContainerImage { get; set; } = DefaultAgentBaseImage;
@@ -82,6 +86,7 @@ ENV UV_CACHE_DIR=/cache/uv
     public int DefaultTimeoutSeconds { get; set; } = 300;
     public int MaxBufferBytes { get; set; } = HeadTailBuffer.DefaultMaxBytes;
     public bool IsRestrictedReadOnly { get; set; } = false;
+    public string? SharedMemorySize { get; set; } = DefaultSharedMemorySize;
     public Func<Process>? CustomProcessFactory { get; set; }
 
     /// <summary>
@@ -142,6 +147,7 @@ ENV UV_CACHE_DIR=/cache/uv
         new("npm_config_store_dir", "/cache/pnpm"),
         new("UV_CACHE_DIR", "/cache/uv"),
         new("MAVEN_OPTS", "-Dmaven.repo.local=/cache/m2"),
+        new("PLAYWRIGHT_BROWSERS_PATH", "/cache/ms-playwright"),
     ];
 
     /// <summary>
@@ -168,6 +174,11 @@ ENV UV_CACHE_DIR=/cache/uv
     /// Host path to Maven / Gradle repository cache (defaults to "~/.m2/repository").
     /// </summary>
     public string? MavenCachePath { get; set; } = "~/.m2/repository";
+
+    /// <summary>
+    /// Host path to Playwright browser binaries cache (defaults to "~/.cache/ms-playwright").
+    /// </summary>
+    public string? PlaywrightCachePath { get; set; } = "~/.cache/ms-playwright";
 
     /// <summary>
     /// If true, host toolchain SDK directories are mounted read-only into the container.
@@ -1199,20 +1210,68 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                     "/cache/m2",
                     isReadOnly: false));
             }
+
+            if (!string.IsNullOrWhiteSpace(options.PlaywrightCachePath))
+            {
+                mounts.Add(new ContainerVolumeMount(
+                    ResolveHostPath(options.PlaywrightCachePath, options),
+                    "/cache/ms-playwright",
+                    isReadOnly: false));
+            }
         }
 
-        // 3. Heavy SDK mounts (Strategy A: Read-Only Toolchain Mounts)
+        // 3. Heavy SDK mounts (Strategy A: Read-Only Toolchain Mounts, with non-root user ~/.dotnet mapped to ContainerHomePath/.dotnet)
         if (options.MountHostSdks && options.SdkMountPaths != null)
         {
+            var containerHomeDotnet = $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet";
+            var hasMappedHomeDotnet = false;
+            var userDotnetRoots = options.SdkMountPaths
+                .Where(p => !string.IsNullOrWhiteSpace(p) && IsNonRootUserDotnetRoot(p.TrimEnd('/')))
+                .Select(p => p.TrimEnd('/'))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
             foreach (var sdkPath in options.SdkMountPaths)
             {
-                if (!string.IsNullOrWhiteSpace(sdkPath))
+                if (string.IsNullOrWhiteSpace(sdkPath))
                 {
-                    mounts.Add(new ContainerVolumeMount(
-                        ResolveHostPath(sdkPath, options),
-                        sdkPath,
-                        isReadOnly: true));
+                    continue;
                 }
+
+                var trimmedSdk = sdkPath.TrimEnd('/');
+                if (trimmedSdk.EndsWith("/.dotnet/tools", StringComparison.OrdinalIgnoreCase))
+                {
+                    var parentDotnet = trimmedSdk[..^"/tools".Length];
+                    if (userDotnetRoots.Contains(parentDotnet))
+                    {
+                        continue;
+                    }
+                }
+
+                var resolvedHostSdk = ResolveHostPath(sdkPath, options);
+                var isUserDotnetRoot = userDotnetRoots.Contains(trimmedSdk);
+
+                if (isUserDotnetRoot)
+                {
+                    // Intentional tradeoff: mount the non-root host user's ~/.dotnet directory read-write directly
+                    // to /ncf-home/.dotnet ($HOME/.dotnet) so user-local .NET workloads (sdk-manifests, packs) are
+                    // visible while allowing the .NET CLI to write sentinel/lock files under $HOME/.dotnet.
+                    // Alternative approaches (read-only mounts or selective symlinks) break either dotnet build
+                    // sentinel creation or workload resolution, and the isolation loss is minimal.
+                    if (!options.IsRestrictedReadOnly && !hasMappedHomeDotnet)
+                    {
+                        mounts.Add(new ContainerVolumeMount(
+                            resolvedHostSdk,
+                            containerHomeDotnet,
+                            isReadOnly: false));
+                        hasMappedHomeDotnet = true;
+                    }
+                    continue;
+                }
+
+                mounts.Add(new ContainerVolumeMount(
+                    resolvedHostSdk,
+                    sdkPath,
+                    isReadOnly: true));
             }
         }
 
@@ -1229,6 +1288,18 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         }
 
         return mounts;
+    }
+
+    private static bool IsNonRootUserDotnetRoot(string trimmedPath)
+    {
+        if (trimmedPath.Equals("~/.dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return trimmedPath.StartsWith("/home/", StringComparison.OrdinalIgnoreCase) &&
+               trimmedPath.EndsWith("/.dotnet", StringComparison.OrdinalIgnoreCase) &&
+               !trimmedPath.Equals($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -1405,6 +1476,12 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         // 2. Mounted SDK toolchain bin directories
         if (options.MountHostSdks && options.SdkMountPaths != null)
         {
+            var containerHomeDotnet = $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet";
+            var userDotnetRoots = options.SdkMountPaths
+                .Where(p => !string.IsNullOrWhiteSpace(p) && IsNonRootUserDotnetRoot(p.Trim().TrimEnd('/')))
+                .Select(p => p.Trim().TrimEnd('/'))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
             foreach (var sdk in options.SdkMountPaths)
             {
                 if (string.IsNullOrWhiteSpace(sdk)) continue;
@@ -1422,10 +1499,34 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                     continue;
                 }
 
+                if (trimmedSdk.EndsWith("/.dotnet/tools", StringComparison.OrdinalIgnoreCase))
+                {
+                    var parentDotnet = trimmedSdk[..^"/tools".Length];
+                    if (userDotnetRoots.Contains(parentDotnet))
+                    {
+                        if (!options.IsRestrictedReadOnly)
+                        {
+                            pathEntries.Add($"{containerHomeDotnet}/tools");
+                        }
+                        continue;
+                    }
+                }
+
                 if (trimmedSdk.EndsWith("/.dotnet", StringComparison.OrdinalIgnoreCase))
                 {
-                    pathEntries.Add($"{trimmedSdk}/tools");
-                    pathEntries.Add(trimmedSdk);
+                    if (userDotnetRoots.Contains(trimmedSdk))
+                    {
+                        if (!options.IsRestrictedReadOnly)
+                        {
+                            pathEntries.Add($"{containerHomeDotnet}/tools");
+                            pathEntries.Add(containerHomeDotnet);
+                        }
+                    }
+                    else
+                    {
+                        pathEntries.Add($"{trimmedSdk}/tools");
+                        pathEntries.Add(trimmedSdk);
+                    }
                 }
                 else if (trimmedSdk.EndsWith("/dotnet", StringComparison.OrdinalIgnoreCase) || trimmedSdk == "/usr/share/dotnet")
                 {
@@ -1530,6 +1631,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         args.AddRange(["-e", $"PATH={computedPath}"]);
         args.AddRange(["-e", $"HOME={ContainerExecutorOptions.ContainerHomePath}"]);
         args.AddRange(["-e", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0"]);
+        args.AddRange(["-e", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1"]);
         args.AddRange(["-e", "LANG=en_US.UTF-8"]);
         args.AddRange(["-e", "LC_ALL=en_US.UTF-8"]);
 
@@ -1537,6 +1639,9 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             .FirstOrDefault(p => p.Equals("/usr/lib/dotnet", StringComparison.OrdinalIgnoreCase))
             ?? options.SdkMountPaths?
                 .FirstOrDefault(p => p.EndsWith("/dotnet", StringComparison.OrdinalIgnoreCase) || p == "/usr/share/dotnet")
+            ?? (options.SdkMountPaths != null && !options.IsRestrictedReadOnly && options.SdkMountPaths.Any(p => !string.IsNullOrWhiteSpace(p) && IsNonRootUserDotnetRoot(p.Trim().TrimEnd('/')))
+                ? $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet"
+                : null)
             ?? "/usr/share/dotnet";
         args.AddRange(["-e", $"DOTNET_ROOT={dotnetSdkPath}"]);
 
@@ -1570,6 +1675,11 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         if (!string.IsNullOrWhiteSpace(effectiveUser))
         {
             args.AddRange(["--user", effectiveUser]);
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.SharedMemorySize))
+        {
+            args.AddRange(["--shm-size", options.SharedMemorySize]);
         }
 
         if (options.IsRestrictedReadOnly)

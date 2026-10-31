@@ -378,4 +378,55 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
         Assert.Equal(1, staleInMemoryTask.Priority);
         Assert.Equal(2, staleInMemoryTask.Version);
     }
+
+    [Fact]
+    public async Task UpdateWithHistoryAsync_PersistsCheckpointMutations_WhenLoadedAsNoTracking()
+    {
+        using var context = new AppDbContext(_options);
+        var repo = new EfCoreTaskRepository(context);
+
+        var workspace = new Workspace
+        {
+            Name = "CheckpointSyncRepo",
+            RepositoryPath = "/test/repo-checkpoints",
+            DefaultBaseBranch = "main"
+        };
+        context.Workspaces.Add(workspace);
+        await context.SaveChangesAsync();
+
+        var created = await repo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Task with Checkpoint",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "Implementation"
+        }, null, AuditActors.User, "Created", CancellationToken.None);
+
+        await repo.AddCheckpointAsync(new StageCheckpoint
+        {
+            TaskId = created.Id,
+            StageId = "Implementation",
+            SerializedMemory = "[{\"Role\":\"user\",\"Text\":\"stale checkpoint memory\"}]",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        var loaded = await repo.GetByIdAsync(created.Id, CancellationToken.None);
+        Assert.NotNull(loaded);
+        Assert.Single(loaded.Checkpoints);
+        Assert.NotEmpty(loaded.Checkpoints.First().SerializedMemory);
+
+        foreach (var checkpoint in loaded.Checkpoints)
+        {
+            checkpoint.SerializedMemory = string.Empty;
+        }
+
+        await repo.UpdateWithHistoryAsync(loaded, null, AuditActors.User, "Stage retried", CancellationToken.None);
+
+        using var verifyContext = new AppDbContext(_options);
+        var verifyRepo = new EfCoreTaskRepository(verifyContext);
+        var reloaded = await verifyRepo.GetByIdAsync(created.Id, CancellationToken.None);
+        Assert.NotNull(reloaded);
+        Assert.Single(reloaded.Checkpoints);
+        Assert.Equal(string.Empty, reloaded.Checkpoints.First().SerializedMemory);
+    }
 }

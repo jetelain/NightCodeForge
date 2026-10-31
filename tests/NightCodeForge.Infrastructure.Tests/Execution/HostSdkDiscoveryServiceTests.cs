@@ -86,6 +86,7 @@ adb=/usr/bin/adb=/home/user/Android/Sdk/platform-tools/adb
 /usr/lib/dotnet
 /usr/share/dotnet
 /etc/ssl/certs
+/etc/java-17-openjdk
 /usr/lib/x86_64-linux-gnu
 ";
 
@@ -109,6 +110,7 @@ adb=/usr/bin/adb=/home/user/Android/Sdk/platform-tools/adb
         Assert.Contains("/usr/local/go", details.MountPaths);
         Assert.Contains("/home/user/.cargo", details.MountPaths);
         Assert.Contains("/etc/ssl/certs", details.MountPaths);
+        Assert.Contains("/etc/java-17-openjdk", details.MountPaths);
         Assert.Contains("/usr/lib/x86_64-linux-gnu", details.MountPaths);
 
         // Crucial safety check: system roots must NEVER be included
@@ -357,6 +359,7 @@ ANDROID_HOME=/opt/android-sdk
         Assert.Contains("csnav", script);
         Assert.Contains("codecondenser", script);
         Assert.Contains("mdfetch", script);
+        Assert.Contains("/etc/java-*", script);
     }
 
     [Fact]

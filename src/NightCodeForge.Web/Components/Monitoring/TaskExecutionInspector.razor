@@ -538,18 +538,15 @@
 
                 _workflowStages = _task.Workflow?.Stages?.OrderBy(s => s.SequenceOrder).ToList();
                 _conversations = _task.Conversations?.OrderBy(c => c.StartedAt).ThenBy(c => c.AttemptIndex).ThenBy(c => c.Id).ToList() ?? new List<Conversation>();
-                if (_conversations.Any())
+                var previousSelectedId = _selectedConversation?.Id;
+                _selectedConversation = TaskConversationSelector.SelectActiveConversation(_conversations, previousSelectedId);
+                if (_selectedConversation?.Id != previousSelectedId)
                 {
-                    var previousId = _selectedConversation?.Id;
-                    var target = (previousId.HasValue ? _conversations.FirstOrDefault(c => c.Id == previousId.Value) : null)
-                                 ?? _conversations.LastOrDefault(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.Interrupted)
-                                 ?? _conversations.LastOrDefault();
-                    _selectedConversation = target;
-                    await ReloadSelectedTurnsAsync();
+                    ResetLiveStreamingState();
                 }
-                else
+                if (_selectedConversation != null)
                 {
-                    _selectedConversation = null;
+                    await ReloadSelectedTurnsAsync();
                 }
 
                 HydrateTerminalLogs();
@@ -611,9 +608,8 @@
         }
     }
 
-    private async Task HandleConversationSelected(Conversation conv)
+    private void ResetLiveStreamingState()
     {
-        _selectedConversation = conv;
         _selectedTurnCount = 0;
         _liveStreamingThinking = null;
         _liveStreamingMessage = null;
@@ -625,6 +621,12 @@
         {
             _activeTaskCommandIds.Clear();
         }
+    }
+
+    private async Task HandleConversationSelected(Conversation conv)
+    {
+        _selectedConversation = conv;
+        ResetLiveStreamingState();
         await ReloadSelectedTurnsAsync();
     }
 
@@ -731,6 +733,11 @@
         {
             var ok = await DevQueueService.RetryCurrentStageAsync(_task.Id);
             _actionMessage = ok ? "Stage queued for execution!" : "Failed to reschedule stage.";
+            if (ok)
+            {
+                ResetLiveStreamingState();
+                _selectedConversation = null;
+            }
             await RefreshTaskAsync();
         }
         finally
@@ -807,6 +814,11 @@
             var ok = await DevQueueService.RestartPipelineAsync(_task.Id, gitMode);
             _actionMessage = ok ? "Pipeline restarted and queued!" : "Failed to restart pipeline.";
             _showRestartModal = false;
+            if (ok)
+            {
+                ResetLiveStreamingState();
+                _selectedConversation = null;
+            }
             await RefreshTaskAsync();
         }
         catch (Exception ex)
@@ -881,7 +893,7 @@
                 }
             }
 
-            if (_selectedConversation == null)
+            if (_selectedConversation == null || _selectedConversation.Status == StageExecutionStatus.Superseded)
             {
                 await LoadTaskDataAsync();
             }
@@ -977,26 +989,28 @@
         InvokeAsync(async () =>
         {
             if (_disposed) return;
-            _liveStreamingThinking = null;
-            _liveStreamingMessage = null;
-            _liveRunningToolName = null;
-            _liveRunningToolArguments = null;
-            _liveRunningToolOutput = null;
-            _liveRunningToolStartedAt = null;
-            lock (_activeTaskCommandIds)
-            {
-                _activeTaskCommandIds.Clear();
-            }
-            _selectedTurnCount = 0;
             _stepperRef?.ApplyStageTransition(stageId, status);
+            var isFollowingTransitioningStage = _selectedConversation == null ||
+                _selectedConversation.Status == StageExecutionStatus.Running ||
+                _selectedConversation.Status == StageExecutionStatus.Superseded ||
+                string.Equals(_selectedConversation.StageId, stageId, StringComparison.OrdinalIgnoreCase);
+
+            if (isFollowingTransitioningStage)
+            {
+                ResetLiveStreamingState();
+            }
+
             if (status.Equals("Running", StringComparison.OrdinalIgnoreCase))
             {
-                // A stage run just started: update current stage id and follow the live conversation.
+                // A stage run just started: update current stage id and follow the live conversation unless pinned to historical run.
                 if (_task != null)
                 {
                     _task.CurrentStageId = stageId;
                 }
-                _selectedConversation = null;
+                if (isFollowingTransitioningStage)
+                {
+                    _selectedConversation = null;
+                }
             }
             await RefreshTaskAsync();
         });

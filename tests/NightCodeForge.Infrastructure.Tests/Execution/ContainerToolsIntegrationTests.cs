@@ -192,7 +192,7 @@ public class ContainerToolsIntegrationTests : IDisposable
         }
 
         var workspaceId = new Random().Next(10000, 99999);
-        var containerName = $"ncf-workspace-{workspaceId}";
+        var containerName = $"ncf-sandbox-{workspaceId}";
         _containersToCleanup.Add(containerName);
 
         var workspace = new Workspace
@@ -245,6 +245,25 @@ public class ContainerToolsIntegrationTests : IDisposable
         var homeWritableResult = await env.ExecuteAsync("test -w \"$HOME\" && test -w \"$HOME/.dotnet\" && touch \"$HOME/.dotnet/sentinel.test\" && rm -f \"$HOME/.dotnet/sentinel.test\" && echo home-dotnet-writable");
         Assert.Equal(0, homeWritableResult.ExitCode);
         Assert.Contains("home-dotnet-writable", homeWritableResult.StandardOutput);
+
+        // 2b-playwright-shm. Verify PLAYWRIGHT_BROWSERS_PATH is mounted at /cache/ms-playwright and /dev/shm is >= 1G
+        var playwrightShmCheck = await env.ExecuteAsync(
+            "test \"$PLAYWRIGHT_BROWSERS_PATH\" = \"/cache/ms-playwright\" && test -d /cache/ms-playwright && test $(df -k /dev/shm | awk 'NR==2 {print $2}') -ge 1048576 && echo playwright-and-shm-ok");
+        Assert.Equal(0, playwrightShmCheck.ExitCode);
+        Assert.Contains("playwright-and-shm-ok", playwrightShmCheck.StandardOutput);
+
+        // 2b-workloads. Verify host non-root user .dotnet directory (when discovered on host) is mounted into $HOME/.dotnet
+        var discoveredSdkMounts = sdkDiscovery.DiscoverSdkMountPaths(_useWsl ? wslMetadataService.GetDefaultDistributionName() : null);
+        var hasHostUserDotnet = discoveredSdkMounts.Any(p =>
+            p.TrimEnd('/').StartsWith("/home/", StringComparison.OrdinalIgnoreCase) &&
+            p.TrimEnd('/').EndsWith("/.dotnet", StringComparison.OrdinalIgnoreCase));
+        if (hasHostUserDotnet)
+        {
+            var workloadMountCheck = await env.ExecuteAsync(
+                $"grep -q \" {ContainerExecutorOptions.ContainerHomePath}/.dotnet \" /proc/mounts && echo dotnet-workloads-mounted");
+            Assert.Equal(0, workloadMountCheck.ExitCode);
+            Assert.Contains("dotnet-workloads-mounted", workloadMountCheck.StandardOutput);
+        }
 
         // 2c. Verify /tmp is bind-mounted from {hostWorkspacePath}/tmp and shared between host and container
         var hostTmpFile = pathResolver.ResolveCruciblePath(_testRoot, "/tmp/shared_tmp_check.py");

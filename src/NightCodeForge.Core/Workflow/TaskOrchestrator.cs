@@ -526,7 +526,15 @@ public class TaskOrchestrator : ITaskOrchestrator
         {
             try
             {
-                int attemptIndex = (pipelineContext.StageRetries.GetValueOrDefault(stage.StageId, 0)) + 1;
+                var existingStageConvs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+                var maxExistingAttempt = (existingStageConvs ?? Array.Empty<Conversation>())
+                    .Where(c => string.Equals(c.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase))
+                    .Select(c => c.AttemptIndex)
+                    .DefaultIfEmpty(0)
+                    .Max();
+                int attemptIndex = Math.Max(
+                    (pipelineContext.StageRetries.GetValueOrDefault(stage.StageId, 0)) + 1,
+                    maxExistingAttempt + 1);
                 deterministicConv = await _taskRepository.StartConversationAsync(
                     task.Id,
                     stage.StageId,
@@ -848,9 +856,14 @@ public class TaskOrchestrator : ITaskOrchestrator
                     else
                     {
                         var resumeMemory = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.RecoveredSerializedMemory);
-                        if (string.IsNullOrEmpty(resumeMemory) && lastCheckpoint != null && string.Equals(lastCheckpoint.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase))
+                        if (string.IsNullOrEmpty(resumeMemory))
                         {
-                            resumeMemory = lastCheckpoint.SerializedMemory;
+                            IEnumerable<Conversation>? latestStageConvs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+                            latestStageConvs ??= task.Conversations;
+                            if (CanRestoreCheckpointMemory(latestStageConvs, lastCheckpoint, stage.StageId))
+                            {
+                                resumeMemory = lastCheckpoint!.SerializedMemory;
+                            }
                         }
 
                         var reviewDiffStat = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ReviewDiffStat);
@@ -1114,7 +1127,15 @@ public class TaskOrchestrator : ITaskOrchestrator
 
                 if (deterministicConv == null)
                 {
-                    int attemptIndex = (pipelineContext.StageRetries.GetValueOrDefault(stage.StageId, 0)) + 1;
+                    var existingStageConvs = await _taskRepository.GetConversationsAsync(task.Id, finishToken);
+                    var maxExistingAttempt = (existingStageConvs ?? Array.Empty<Conversation>())
+                        .Where(c => string.Equals(c.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase))
+                        .Select(c => c.AttemptIndex)
+                        .DefaultIfEmpty(0)
+                        .Max();
+                    int attemptIndex = Math.Max(
+                        (pipelineContext.StageRetries.GetValueOrDefault(stage.StageId, 0)) + 1,
+                        maxExistingAttempt + 1);
                     deterministicConv = await _taskRepository.StartConversationAsync(
                         task.Id,
                         stage.StageId,
@@ -1618,6 +1639,11 @@ public class TaskOrchestrator : ITaskOrchestrator
                 CreatedAt = DateTime.UtcNow
             };
             await _taskRepository.AddCheckpointAsync(checkpoint, cancellationToken);
+            task.Checkpoints ??= new List<StageCheckpoint>();
+            if (!task.Checkpoints.Contains(checkpoint))
+            {
+                task.Checkpoints.Add(checkpoint);
+            }
 
             // Universal Interruption: human interruption NEVER mutates task.Status!
             task.IsWaitingForHuman = true;
@@ -1896,6 +1922,11 @@ public class TaskOrchestrator : ITaskOrchestrator
                 CreatedAt = DateTime.UtcNow
             };
             await _taskRepository.AddCheckpointAsync(checkpoint, cancellationToken);
+            task.Checkpoints ??= new List<StageCheckpoint>();
+            if (!task.Checkpoints.Contains(checkpoint))
+            {
+                task.Checkpoints.Add(checkpoint);
+            }
             pipelineContext.DataBag.Remove(PipelineDataBagKeys.SerializedMemory);
             if (string.IsNullOrWhiteSpace(activeInterruptedStageId))
             {
@@ -2458,9 +2489,12 @@ public class TaskOrchestrator : ITaskOrchestrator
         if (string.IsNullOrEmpty(currentMemory))
         {
             var lastCheckpoint = task.Checkpoints.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
-            if (lastCheckpoint != null && !string.IsNullOrEmpty(lastCheckpoint.SerializedMemory))
+            var targetStageId = batchQuestions.FirstOrDefault()?.StageId ?? task.CurrentStageId;
+            IEnumerable<Conversation>? latestConvs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+            latestConvs ??= task.Conversations;
+            if (CanRestoreCheckpointMemory(latestConvs, lastCheckpoint, targetStageId))
             {
-                currentMemory = lastCheckpoint.SerializedMemory;
+                currentMemory = lastCheckpoint!.SerializedMemory;
             }
         }
 
@@ -3391,10 +3425,12 @@ public class TaskOrchestrator : ITaskOrchestrator
             throw new InvalidOperationException("Cannot restart a task that has already been merged.");
         }
 
-        // 5. Delete lingering Hangfire job if present
+        // 5. Delete lingering Hangfire job if present and clear LastHangfireJobId before saving
+        // so a fast worker picking up the newly enqueued job does not read the old ID and self-abort.
         if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
         {
             _jobQueue.Delete(task.LastHangfireJobId);
+            task.LastHangfireJobId = null;
         }
 
         var workspace = task.Workspace ?? await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken);
@@ -3437,6 +3473,27 @@ public class TaskOrchestrator : ITaskOrchestrator
             task.HasExecutionRun = false;
             task.MaxExecutedStageOrder = 0;
         }
+        else if (!string.IsNullOrWhiteSpace(task.PipelineDataJson) && task.PipelineDataJson != "{}")
+        {
+            var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
+            bool modified = false;
+            modified |= bag.Remove(PipelineDataBagKeys.RecoveredSerializedMemory);
+            modified |= bag.Remove(PipelineDataBagKeys.SerializedMemory);
+            modified |= bag.Remove(PipelineDataBagKeys.LastHumanAnswer);
+            modified |= bag.Remove(PipelineDataBagKeys.LastHumanAnswerJson);
+            modified |= bag.Remove(PipelineDataBagKeys.PendingSyntheticPriming);
+            modified |= bag.Remove(PipelineDataBagKeys.RetryCount);
+            modified |= bag.Remove(PipelineDataBagKeys.StageRetries);
+            modified |= bag.Remove(PipelineDataBagKeys.CompilerErrors);
+            modified |= bag.Remove(PipelineDataBagKeys.FailedTests);
+            modified |= bag.Remove(PipelineDataBagKeys.ReviewerFeedback);
+            modified |= bag.Remove(PipelineDataBagKeys.ReviewDiff);
+            modified |= bag.Remove(PipelineDataBagKeys.ReviewDiffStat);
+            if (modified)
+            {
+                task.PipelineDataJson = bag.ToJson();
+            }
+        }
 
         // 7. Reset Task State
         task.Status = TaskOverallStatus.Open;
@@ -3446,8 +3503,24 @@ public class TaskOrchestrator : ITaskOrchestrator
         task.InterruptedAgentProfileId = null;
         task.UpdatedAt = DateTime.UtcNow;
 
+        if (task.Questions != null)
+        {
+            foreach (var question in task.Questions.Where(q => q.Status == QuestionStatus.Pending))
+            {
+                question.Status = QuestionStatus.Skipped;
+            }
+        }
+
+        if (task.Checkpoints != null)
+        {
+            foreach (var checkpoint in task.Checkpoints.Where(c => !string.IsNullOrEmpty(c.SerializedMemory)))
+            {
+                checkpoint.SerializedMemory = string.Empty;
+            }
+        }
+
         // 8. Stage Conversations - mark active, interrupted, or pending as Superseded
-        var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+        var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken) ?? Array.Empty<Conversation>();
         foreach (var c in convs.Where(c =>
             c.Status == StageExecutionStatus.Running ||
             c.Status == StageExecutionStatus.WaitingForHuman ||
@@ -3475,6 +3548,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             cancellationToken: cancellationToken);
 
         await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
+        await _dependencyStore.SetWaitingForHumanAsync(task.Id, false, cancellationToken);
 
         // 9. Execution Log
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
@@ -3676,6 +3750,58 @@ public class TaskOrchestrator : ITaskOrchestrator
                 IsSuccess: false,
                 DurationMs: duration));
         }
+    }
+
+    private static bool CanRestoreCheckpointMemory(IEnumerable<Conversation>? conversations, StageCheckpoint? checkpoint, string? stageId)
+    {
+        if (checkpoint == null || string.IsNullOrEmpty(checkpoint.SerializedMemory))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(stageId) &&
+            !string.Equals(checkpoint.StageId, stageId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var targetStageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : checkpoint.StageId;
+        var stageConvs = conversations?
+            .Where(c => string.Equals(c.StageId, targetStageId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (stageConvs == null || stageConvs.Count == 0)
+        {
+            return true;
+        }
+
+        var latestStageConv = stageConvs
+            .OrderByDescending(c => c.AttemptIndex)
+            .ThenByDescending(c => c.StartedAt)
+            .ThenByDescending(c => c.Id)
+            .First();
+
+        bool isLatestResumable = latestStageConv.Status == StageExecutionStatus.WaitingForHuman ||
+                                 latestStageConv.Status == StageExecutionStatus.Interrupted ||
+                                 latestStageConv.Status == StageExecutionStatus.Running;
+        if (!isLatestResumable)
+        {
+            return false;
+        }
+
+        var lastSupersededConv = stageConvs
+            .Where(c => c.Status == StageExecutionStatus.Superseded)
+            .OrderByDescending(c => c.CompletedAt ?? c.StartedAt)
+            .ThenByDescending(c => c.Id)
+            .FirstOrDefault();
+
+        if (lastSupersededConv != null &&
+            checkpoint.CreatedAt <= (lastSupersededConv.CompletedAt ?? lastSupersededConv.StartedAt))
+        {
+            return false;
+        }
+
+        return true;
     }
 }
 

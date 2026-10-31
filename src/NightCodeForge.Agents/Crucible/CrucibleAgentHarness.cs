@@ -170,6 +170,17 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         if (conversation == null)
         {
+            var existingConvs = await _taskRepository.GetConversationsAsync(context.ForgeTask.Id, cancellationToken);
+            if (existingConvs != null)
+            {
+                var maxExistingAttempt = existingConvs
+                    .Where(c => string.Equals(c.StageId, context.StageId, StringComparison.OrdinalIgnoreCase))
+                    .Select(c => c.AttemptIndex)
+                    .DefaultIfEmpty(0)
+                    .Max();
+                attemptIndex = Math.Max(attemptIndex, maxExistingAttempt + 1);
+            }
+
             conversation = await _taskRepository.StartConversationAsync(
                 context.ForgeTask.Id,
                 context.StageId,

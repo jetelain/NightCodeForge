@@ -383,6 +383,16 @@ public class DevQueueService : IDevQueueService
     {
         using var scope = _scopeFactory.CreateScope();
         var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+        var initialTask = await taskRepo.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Task #{taskId} not found.");
+
+        if (_cancellationManager.IsRegistered(taskId))
+        {
+            _cancellationManager.Cancel(taskId);
+        }
+
+        using var lockReleaser = await _lockProvider.AcquireTaskLockAsync(initialTask.WorkspaceId, taskId, cancellationToken);
+
         var task = await taskRepo.GetByIdAsync(taskId, cancellationToken)
             ?? throw new KeyNotFoundException($"Task #{taskId} not found.");
 
@@ -398,11 +408,58 @@ public class DevQueueService : IDevQueueService
         task.IsWaitingForHuman = false;
         task.InterruptedAgentProfileId = null;
         task.InterruptedStageId = null;
+        task.IsDeferredByPause = false;
         task.UpdatedAt = DateTime.UtcNow;
+
+        if (task.Questions != null)
+        {
+            foreach (var question in task.Questions.Where(q => q.Status == QuestionStatus.Pending))
+            {
+                question.Status = QuestionStatus.Skipped;
+            }
+        }
+
+        if (task.Checkpoints != null)
+        {
+            foreach (var checkpoint in task.Checkpoints.Where(c => !string.IsNullOrEmpty(c.SerializedMemory)))
+            {
+                checkpoint.SerializedMemory = string.Empty;
+            }
+        }
 
         var pipelineContext = new PipelineContext(task, workspace);
         pipelineContext.ResetRetries();
+        pipelineContext.DataBag.Remove(PipelineDataBagKeys.RecoveredSerializedMemory);
+        pipelineContext.DataBag.Remove(PipelineDataBagKeys.SerializedMemory);
+        pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswer);
+        pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswerJson);
+        pipelineContext.DataBag.Remove(PipelineDataBagKeys.PendingSyntheticPriming);
+        pipelineContext.DataBag.Remove(PipelineDataBagKeys.CompilerErrors);
+        pipelineContext.DataBag.Remove(PipelineDataBagKeys.FailedTests);
         pipelineContext.SyncDataBagToTask();
+
+        var convs = await taskRepo.GetConversationsAsync(task.Id, cancellationToken) ?? Array.Empty<Conversation>();
+        foreach (var c in convs.Where(c =>
+            c.Status == StageExecutionStatus.Running ||
+            c.Status == StageExecutionStatus.WaitingForHuman ||
+            c.Status == StageExecutionStatus.Interrupted ||
+            c.Status == StageExecutionStatus.Pending))
+        {
+            await taskRepo.CompleteConversationAsync(
+                c.Id,
+                StageExecutionStatus.Superseded,
+                summary: "Stage restarted; previous conversation superseded.",
+                cancellationToken: cancellationToken);
+        }
+
+        // Delete dangling/previous Hangfire job and clear LastHangfireJobId before saving so that
+        // if a Hangfire worker picks up the newly enqueued job before UpdateAsync completes,
+        // it does not read the old LastHangfireJobId and self-abort as superseded.
+        if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
+        {
+            _taskJobQueue.Delete(task.LastHangfireJobId);
+            task.LastHangfireJobId = null;
+        }
 
         var rescheduleReason = $"Rescheduled task execution via DevQueue (Status: {task.Status})";
 
@@ -415,6 +472,7 @@ public class DevQueueService : IDevQueueService
 
         var dependencyStore = scope.ServiceProvider.GetRequiredService<ITaskDependencyStore>();
         await dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
+        await dependencyStore.SetWaitingForHumanAsync(task.Id, false, cancellationToken);
 
         var pipelineProvider = scope.ServiceProvider.GetRequiredService<IWorkflowPipelineProvider>();
         var pipeline = await pipelineProvider.GetPipelineAsync(task, cancellationToken);
@@ -422,13 +480,6 @@ public class DevQueueService : IDevQueueService
             ?? pipeline.InitialStage
             ?? throw new InvalidOperationException($"Task #{task.Id} has no initial or active stage.");
 
-        // Delete dangling/previous Hangfire job before enqueuing to prevent double execution
-        if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
-        {
-            _taskJobQueue.Delete(task.LastHangfireJobId);
-        }
-
-        task.IsDeferredByPause = false;
         var jobId = _taskJobQueue.EnqueueStage(taskId, stage.QueueTier, task.Priority);
         task.LastHangfireJobId = jobId;
         await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);

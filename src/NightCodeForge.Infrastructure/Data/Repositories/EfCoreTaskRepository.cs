@@ -251,6 +251,7 @@ public class EfCoreTaskRepository : ITaskRepository
         }
 
         await SyncQuestionsAsync(task, existing ?? task, cancellationToken);
+        await SyncCheckpointsAsync(task, existing ?? task, cancellationToken);
 
         await _context.SaveChangesAsync(cancellationToken);
     }
@@ -365,7 +366,60 @@ public class EfCoreTaskRepository : ITaskRepository
             existing.History?.Add(history);
         }
         await SyncQuestionsAsync(task, existing ?? task, cancellationToken);
+        await SyncCheckpointsAsync(task, existing ?? task, cancellationToken);
         await _context.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task SyncCheckpointsAsync(ForgeTask task, ForgeTask trackedTask, CancellationToken cancellationToken = default)
+    {
+        if (task.Checkpoints == null || task.Checkpoints.Count == 0) return;
+
+        var existingIds = task.Checkpoints.Where(c => c.Id > 0).Select(c => c.Id).Distinct().ToList();
+        if (existingIds.Count > 0)
+        {
+            var missingIds = existingIds.Where(id => _context.StageCheckpoints.Local.All(x => x.Id != id)).ToList();
+            if (missingIds.Count > 0)
+            {
+                await _context.StageCheckpoints
+                    .Where(c => missingIds.Contains(c.Id))
+                    .ToListAsync(cancellationToken);
+            }
+        }
+
+        foreach (var c in task.Checkpoints.ToList())
+        {
+            if (c.Id <= 0)
+            {
+                if (c.TaskId <= 0)
+                {
+                    c.TaskId = task.Id;
+                }
+                c.ForgeTask = trackedTask;
+                var tracked = _context.StageCheckpoints.Local.FirstOrDefault(x => ReferenceEquals(x, c));
+                if (tracked == null)
+                {
+                    _context.StageCheckpoints.Add(c);
+                }
+            }
+            else
+            {
+                var existingC = _context.StageCheckpoints.Local.FirstOrDefault(x => x.Id == c.Id);
+                if (existingC != null)
+                {
+                    if (!ReferenceEquals(existingC, c))
+                    {
+                        _context.Entry(existingC).CurrentValues.SetValues(c);
+                    }
+                    existingC.ForgeTask = trackedTask;
+                }
+                else
+                {
+                    c.ForgeTask = trackedTask;
+                    _context.StageCheckpoints.Attach(c);
+                    _context.Entry(c).State = EntityState.Modified;
+                }
+            }
+        }
     }
 
     private async Task SyncQuestionsAsync(ForgeTask task, ForgeTask trackedTask, CancellationToken cancellationToken = default)

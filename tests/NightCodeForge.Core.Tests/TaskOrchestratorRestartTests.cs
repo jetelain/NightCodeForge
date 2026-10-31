@@ -408,4 +408,313 @@ public class TaskOrchestratorRestartTests
         // Verify stage execution was not run and cancellation source was never registered
         _cancellationManagerMock.Verify(c => c.Register(task.Id, It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenPreviousConversationWasSuperseded_DoesNotRestoreCheckpointMemory()
+    {
+        var workspace = await _workspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 20,
+            Name = "Restart Stage Fresh Memory Test",
+            RepositoryPath = "C:/test/repo",
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>
+            {
+                new()
+                {
+                    Id = StandardStageIds.Implementation,
+                    Name = "Implementation Agent",
+                    HarnessId = "crucible",
+                    ModelName = "test-model",
+                    Mode = AgentMode.Full
+                }
+            }
+        });
+
+        var task = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Restarted Stage Task",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "init");
+        _depStore.AddTask(task.Id, workspace.Id, TaskOverallStatus.Open);
+
+        await _taskRepo.AddCheckpointAsync(new StageCheckpoint
+        {
+            TaskId = task.Id,
+            StageId = StandardStageIds.Implementation,
+            SerializedMemory = "{\"messages\": [\"Stale progress from superseded run\"]}",
+            CreatedAt = DateTime.UtcNow.AddMinutes(-2)
+        });
+
+        var conv1 = await _taskRepo.StartConversationAsync(task.Id, StandardStageIds.Implementation, WorkflowStageKind.Agentic, 1);
+        await _taskRepo.CompleteConversationAsync(conv1.Id, StageExecutionStatus.Superseded, "Stage restarted");
+
+        var executedSessions = new List<AgentSessionContext>();
+        var harnessMock = new Mock<IAgentHarness>();
+        harnessMock.Setup(h => h.HarnessId).Returns("crucible");
+        harnessMock.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<AgentSessionContext, CancellationToken>((ctx, _) => executedSessions.Add(ctx))
+            .ReturnsAsync(AgentRunResult.Completed(new AgentRunMetrics(50, 100, 50, 150), summary: "Done"));
+
+        IAgentHarness? outHarness = harnessMock.Object;
+        var harnessRegistryMock = new Mock<IHarnessRegistry>();
+        harnessRegistryMock.Setup(r => r.TryGetHarness("crucible", out outHarness)).Returns(true);
+
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            HarnessRegistry = harnessRegistryMock.Object
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var session = Assert.Single(executedSessions);
+        Assert.Equal(StandardStageIds.Implementation, session.StageId);
+        Assert.Null(session.SerializedStateJson);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenNewAttemptInterruptedAfterSupersededRun_DoesNotRestoreSupersededCheckpointMemory()
+    {
+        var workspace = await _workspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 21,
+            Name = "Interrupted Second Attempt Test",
+            RepositoryPath = "C:/test/repo",
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>
+            {
+                new()
+                {
+                    Id = StandardStageIds.Implementation,
+                    Name = "Implementation Agent",
+                    HarnessId = "crucible",
+                    ModelName = "test-model",
+                    Mode = AgentMode.Full
+                }
+            }
+        });
+
+        var task = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Task Interrupted on Attempt 2",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "init");
+        _depStore.AddTask(task.Id, workspace.Id, TaskOverallStatus.Open);
+
+        var staleCheckpointTime = DateTime.UtcNow.AddMinutes(-5);
+        await _taskRepo.AddCheckpointAsync(new StageCheckpoint
+        {
+            TaskId = task.Id,
+            StageId = StandardStageIds.Implementation,
+            SerializedMemory = "{\"messages\": [\"Stale checkpoint from attempt 1\"]}",
+            CreatedAt = staleCheckpointTime
+        });
+
+        // Attempt 1 was superseded after the checkpoint was created
+        var conv1 = await _taskRepo.StartConversationAsync(task.Id, StandardStageIds.Implementation, WorkflowStageKind.Agentic, 1);
+        await _taskRepo.CompleteConversationAsync(conv1.Id, StageExecutionStatus.Superseded, "Stage restarted");
+
+        // Attempt 2 started later and was interrupted before writing a new StageCheckpoint
+        var conv2 = await _taskRepo.StartConversationAsync(task.Id, StandardStageIds.Implementation, WorkflowStageKind.Agentic, 2);
+        await _taskRepo.CompleteConversationAsync(conv2.Id, StageExecutionStatus.Interrupted, "Paused during attempt 2");
+
+        var executedSessions = new List<AgentSessionContext>();
+        var harnessMock = new Mock<IAgentHarness>();
+        harnessMock.Setup(h => h.HarnessId).Returns("crucible");
+        harnessMock.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<AgentSessionContext, CancellationToken>((ctx, _) => executedSessions.Add(ctx))
+            .ReturnsAsync(AgentRunResult.Completed(new AgentRunMetrics(50, 100, 50, 150), summary: "Done"));
+
+        IAgentHarness? outHarness = harnessMock.Object;
+        var harnessRegistryMock = new Mock<IHarnessRegistry>();
+        harnessRegistryMock.Setup(r => r.TryGetHarness("crucible", out outHarness)).Returns(true);
+
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            HarnessRegistry = harnessRegistryMock.Object
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var session = Assert.Single(executedSessions);
+        Assert.Equal(StandardStageIds.Implementation, session.StageId);
+        Assert.Null(session.SerializedStateJson);
+    }
+
+    [Fact]
+    public async Task RestartTaskPipelineAsync_SoftRestart_ClearsStaleDiagnosticsAndReviewerFeedback_WhileKeepingCustomData()
+    {
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.ApprovedPlan, "keep-this-plan");
+        bag.Set(PipelineDataBagKeys.CompilerErrors, new List<string> { "error CS0103" });
+        bag.Set(PipelineDataBagKeys.FailedTests, new List<string> { "FailedUnitTest" });
+        bag.Set(PipelineDataBagKeys.ReviewerFeedback, "Stale reviewer rejection");
+        bag.Set(PipelineDataBagKeys.ReviewDiff, "diff --git a/foo b/foo");
+        bag.Set(PipelineDataBagKeys.ReviewDiffStat, "1 file changed");
+
+        var task = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = _workspace.Id,
+            Title = "Soft Restart Diagnostics Cleanup Task",
+            Status = TaskOverallStatus.Failed,
+            CurrentStageId = StandardStageIds.CodeReviewAndFix,
+            HasExecutionRun = true,
+            MaxExecutedStageOrder = 3,
+            PipelineDataJson = bag.ToJson(),
+            BaseBranch = "main"
+        }, null, AuditActors.User, "init");
+
+        var orchestrator = CreateOrchestrator();
+
+        var result = await orchestrator.RestartTaskPipelineAsync(task.Id, TaskRestartGitMode.PreserveWork);
+
+        Assert.True(result);
+        var reloaded = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(reloaded);
+        var reloadedBag = PipelineDataBag.FromJson(reloaded.PipelineDataJson);
+        Assert.Equal("keep-this-plan", reloadedBag.Get<string>(PipelineDataBagKeys.ApprovedPlan));
+        Assert.False(reloadedBag.ContainsKey(PipelineDataBagKeys.CompilerErrors));
+        Assert.False(reloadedBag.ContainsKey(PipelineDataBagKeys.FailedTests));
+        Assert.False(reloadedBag.ContainsKey(PipelineDataBagKeys.ReviewerFeedback));
+        Assert.False(reloadedBag.ContainsKey(PipelineDataBagKeys.ReviewDiff));
+        Assert.False(reloadedBag.ContainsKey(PipelineDataBagKeys.ReviewDiffStat));
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenResumedStageCompletesAndLoopsBackInProcess_DoesNotRestoreOldCheckpointMemoryOnLoopback()
+    {
+        var workspace = await _workspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 22,
+            Name = "In-Process Loopback Checkpoint Test",
+            RepositoryPath = "C:/test/repo",
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>
+            {
+                new()
+                {
+                    Id = StandardStageIds.Implementation,
+                    Name = "Implementation Agent",
+                    HarnessId = "crucible",
+                    ModelName = "test-model",
+                    Mode = AgentMode.Full
+                }
+            }
+        });
+
+        var task = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Task Resumed Then Looped Back In-Process",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            InterruptedStageId = StandardStageIds.Implementation,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "init");
+        _depStore.AddTask(task.Id, workspace.Id, TaskOverallStatus.Open);
+
+        const string pausedCheckpointJson = "{\"messages\": [\"Mid-stage progress before pause\"]}";
+        await _taskRepo.AddCheckpointAsync(new StageCheckpoint
+        {
+            TaskId = task.Id,
+            StageId = StandardStageIds.Implementation,
+            SerializedMemory = pausedCheckpointJson,
+            CreatedAt = DateTime.UtcNow.AddMinutes(-2)
+        });
+
+        var pausedConv = await _taskRepo.StartConversationAsync(task.Id, StandardStageIds.Implementation, WorkflowStageKind.Agentic, 1);
+        await _taskRepo.CompleteConversationAsync(pausedConv.Id, StageExecutionStatus.Interrupted, "Paused during implementation");
+
+        var observedStates = new List<string?>();
+        var harnessMock = new Mock<IAgentHarness>();
+        harnessMock.Setup(h => h.HarnessId).Returns("crucible");
+        harnessMock.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<AgentSessionContext, CancellationToken>((ctx, _) =>
+            {
+                observedStates.Add(ctx.SerializedStateJson);
+                if (observedStates.Count == 1)
+                {
+                    // Simulate harness completing the resumed conversation
+                    _taskRepo.CompleteConversationAsync(pausedConv.Id, StageExecutionStatus.Completed, "Completed attempt 1").GetAwaiter().GetResult();
+                }
+                else
+                {
+                    var conv2 = _taskRepo.StartConversationAsync(task.Id, StandardStageIds.Implementation, WorkflowStageKind.Agentic, 2).GetAwaiter().GetResult();
+                    _taskRepo.CompleteConversationAsync(conv2.Id, StageExecutionStatus.Completed, "Completed attempt 2").GetAwaiter().GetResult();
+                }
+            })
+            .ReturnsAsync(AgentRunResult.Completed(new AgentRunMetrics(50, 100, 50, 150), summary: "Done"));
+
+        IAgentHarness? outHarness = harnessMock.Object;
+        var harnessRegistryMock = new Mock<IHarnessRegistry>();
+        harnessRegistryMock.Setup(r => r.TryGetHarness("crucible", out outHarness)).Returns(true);
+
+        int gateRuns = 0;
+        var implStage = TestWorkflowPipelines.CreateImplementationStage();
+        var gateStageMock = new Mock<IWorkflowStage>();
+        gateStageMock.Setup(s => s.StageId).Returns(StandardStageIds.PostImplementationGates);
+        gateStageMock.Setup(s => s.DisplayName).Returns("Post-Implementation Gates");
+        gateStageMock.Setup(s => s.Kind).Returns(WorkflowStageKind.Deterministic);
+        gateStageMock.Setup(s => s.QueueTier).Returns(StageQueueTier.Implementation);
+        gateStageMock.Setup(s => s.LoopBackStageId).Returns(StandardStageIds.Implementation);
+        gateStageMock.Setup(s => s.ExecuteAsync(It.IsAny<PipelineContext>(), It.IsAny<CancellationToken>()))
+            .Returns((PipelineContext _, CancellationToken _) =>
+            {
+                gateRuns++;
+                return Task.FromResult(gateRuns == 1
+                    ? StageExecutionResult.Failure("Build failed on attempt 1", loopBackStageId: StandardStageIds.Implementation)
+                    : StageExecutionResult.Success());
+            });
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { implStage, gateStageMock.Object });
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            HarnessRegistry = harnessRegistryMock.Object
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        Assert.Equal(2, observedStates.Count);
+        // 1st run (resuming the interrupted conversation) restores the checkpoint memory
+        Assert.Equal(pausedCheckpointJson, observedStates[0]);
+        // 2nd run (after stage completed and PostImplementationGates looped back in-process) must start fresh!
+        Assert.Null(observedStates[1]);
+    }
 }

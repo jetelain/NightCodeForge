@@ -74,6 +74,7 @@ public class ExecutionEnvironmentTests
         Assert.Contains(mounts, m => m.ContainerPath == "/cache/pnpm" && !m.IsReadOnly);
         Assert.Contains(mounts, m => m.ContainerPath == "/cache/uv" && !m.IsReadOnly);
         Assert.Contains(mounts, m => m.ContainerPath == "/cache/m2" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.ContainerPath == "/cache/ms-playwright" && !m.IsReadOnly);
     }
 
     [Fact]
@@ -98,6 +99,59 @@ public class ExecutionEnvironmentTests
     }
 
     [Fact]
+    public void ContainerExecutor_MountsUserDotnetToContainerHomeDotnet_ReadWrite()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/home/gruearbre/.nightcodeforge/wks/1",
+            MountHostSdks = true,
+            SdkMountPaths = new List<string>
+            {
+                "/usr/lib/dotnet",
+                "/root/.dotnet",
+                "/home/gruearbre/.dotnet/tools",
+                "/home/gruearbre/.dotnet"
+            }
+        };
+
+        var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options);
+
+        var sysDotnetMount = Assert.Single(mounts, m => m.ContainerPath == "/usr/lib/dotnet");
+        Assert.True(sysDotnetMount.IsReadOnly);
+
+        var rootDotnetMount = Assert.Single(mounts, m => m.ContainerPath == "/root/.dotnet");
+        Assert.True(rootDotnetMount.IsReadOnly);
+
+        var containerHomeDotnetMount = Assert.Single(mounts, m => m.ContainerPath == $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet");
+        Assert.Equal("/home/gruearbre/.dotnet", containerHomeDotnetMount.HostPath);
+        Assert.False(containerHomeDotnetMount.IsReadOnly);
+
+        Assert.DoesNotContain(mounts, m => m.ContainerPath == "/home/gruearbre/.dotnet");
+        Assert.DoesNotContain(mounts, m => m.ContainerPath == "/home/gruearbre/.dotnet/tools");
+    }
+
+    [Fact]
+    public void ContainerExecutor_RestrictedReadOnly_DoesNotMountUserDotnetReadWrite()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/home/gruearbre/.nightcodeforge/wks/1",
+            MountHostSdks = true,
+            IsRestrictedReadOnly = true,
+            SdkMountPaths = new List<string>
+            {
+                "/usr/lib/dotnet",
+                "/home/gruearbre/.dotnet"
+            }
+        };
+
+        var mounts = NightCodeForgeContainerExecutor.BuildVolumeMounts(options);
+
+        Assert.DoesNotContain(mounts, m => m.ContainerPath == $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet");
+        Assert.DoesNotContain(mounts, m => m.ContainerPath == "/home/gruearbre/.dotnet");
+    }
+
+    [Fact]
     public void ContainerExecutor_BuildDockerRunArgs_IncludesAllMountsAndWorkdir()
     {
         var options = new ContainerExecutorOptions
@@ -115,7 +169,11 @@ public class ExecutionEnvironmentTests
         Assert.Equal("-d", args[1]);
         Assert.Contains("/home/wsluser/.nightcodeforge/wks/7:/workspace", args);
         Assert.Contains("~/.nuget/packages:/cache/nuget", args);
+        Assert.Contains("~/.cache/ms-playwright:/cache/ms-playwright", args);
+        Assert.Contains("PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright", args);
         Assert.Contains("/usr/share/dotnet:/usr/share/dotnet:ro", args);
+        Assert.Contains("--shm-size", args);
+        Assert.Contains("2g", args);
         Assert.Contains("-w", args);
         Assert.Contains("/workspace", args);
     }
@@ -273,8 +331,35 @@ public class ExecutionEnvironmentTests
         Assert.DoesNotContain("/home/user/android-sdk/cmdline-tools/latest/cmdline-tools/latest/bin", entries);
         Assert.Contains("/home/user/android-sdk/platform-tools", entries);
         Assert.Contains("/home/user/android-sdk/cmdline-tools/latest/bin", entries);
-        Assert.Contains("/home/user/.dotnet/tools", entries);
+        Assert.DoesNotContain("/home/user/.dotnet/tools", entries);
+        Assert.DoesNotContain("/home/user/.dotnet", entries);
+        Assert.Contains($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools", entries);
+        Assert.Contains($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet", entries);
         Assert.Contains(ContainerExecutorOptions.HostDotnetToolsContainerPath, entries);
+    }
+
+    [Fact]
+    public void ContainerExecutor_WhenUserDotnetIsOnlySdk_SetsDotnetRootToContainerHomeDotnet()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            MountHostSdks = true,
+            SdkMountPaths = new List<string>
+            {
+                "/home/user/.dotnet",
+                "/home/user/.dotnet/tools"
+            }
+        };
+
+        var args = NightCodeForgeContainerExecutor.BuildDockerRunArgs(options);
+
+        Assert.Contains($"DOTNET_ROOT={ContainerExecutorOptions.ContainerHomePath}/.dotnet", args);
+        var pathArg = Assert.Single(args, a => a.StartsWith("PATH="));
+        var entries = pathArg["PATH=".Length..].Split(':');
+        Assert.Contains($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet", entries);
+        Assert.Contains($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools", entries);
+        Assert.DoesNotContain("/home/user/.dotnet", entries);
+        Assert.DoesNotContain("/home/user/.dotnet/tools", entries);
     }
 
     [Fact]

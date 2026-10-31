@@ -1112,6 +1112,180 @@ public class DevQueueServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task RetryCurrentStageAsync_SupersedesActiveAndInterruptedConversations_AndClearsResumptionMemory()
+    {
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.RecoveredSerializedMemory, "[{\"Role\":\"user\",\"Text\":\"stale memory\"}]");
+        bag.Set(PipelineDataBagKeys.SerializedMemory, "[{\"Role\":\"user\",\"Text\":\"stale serialized\"}]");
+        bag.Set(PipelineDataBagKeys.LastHumanAnswer, "stale answer");
+        bag.Set(PipelineDataBagKeys.LastHumanAnswerJson, "[{\"AnswerText\":\"stale\"}]");
+        bag.Set(PipelineDataBagKeys.CompilerErrors, new List<string> { "error CS1002: ; expected" });
+        bag.Set(PipelineDataBagKeys.FailedTests, new List<string> { "MyTest.ShouldPass" });
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 458,
+            WorkspaceId = 1,
+            Title = "Task with Interrupted Conversation",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            InterruptedStageId = StandardStageIds.Implementation,
+            IsWaitingForHuman = true,
+            Priority = TaskPriority.Normal,
+            PipelineDataJson = bag.ToJson(),
+            Questions = new List<Question>
+            {
+                new() { Id = 1, TaskId = 458, StageId = StandardStageIds.Implementation, Prompt = "Question?", Status = QuestionStatus.Pending }
+            },
+            Checkpoints = new List<StageCheckpoint>
+            {
+                new() { Id = 1, TaskId = 458, StageId = StandardStageIds.Implementation, SerializedMemory = "[{\"Role\":\"user\",\"Text\":\"checkpoint memory\"}]" }
+            }
+        });
+        _dependencyStore.AddTask(task.Id, 1, TaskOverallStatus.Open, isWaitingForHuman: true);
+
+        var interruptedConv = await _taskRepo.StartConversationAsync(task.Id, StandardStageIds.Implementation, WorkflowStageKind.Agentic, 1);
+        await _taskRepo.CompleteConversationAsync(interruptedConv.Id, StageExecutionStatus.Interrupted, "Paused");
+
+        var waitingConv = await _taskRepo.StartConversationAsync(task.Id, StandardStageIds.Implementation, WorkflowStageKind.Agentic, 2);
+        await _taskRepo.CompleteConversationAsync(waitingConv.Id, StageExecutionStatus.WaitingForHuman, "Waiting");
+
+        _cancellationManager.Setup(c => c.IsRegistered(task.Id)).Returns(true);
+        var service = CreateService();
+
+        var result = await service.RetryCurrentStageAsync(task.Id);
+
+        Assert.True(result);
+        _cancellationManager.Verify(c => c.Cancel(task.Id), Times.Once);
+
+        var updated = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updated);
+        Assert.False(updated.IsWaitingForHuman);
+        Assert.Null(updated.InterruptedStageId);
+        Assert.False(await _dependencyStore.IsTaskWaitingForHumanAsync(task.Id));
+        Assert.All(updated.Questions, q => Assert.Equal(QuestionStatus.Skipped, q.Status));
+        Assert.All(updated.Checkpoints, c => Assert.Equal(string.Empty, c.SerializedMemory));
+
+        var updatedBag = PipelineDataBag.FromJson(updated.PipelineDataJson);
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.RecoveredSerializedMemory));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.SerializedMemory));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.LastHumanAnswer));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.LastHumanAnswerJson));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.CompilerErrors));
+        Assert.False(updatedBag.ContainsKey(PipelineDataBagKeys.FailedTests));
+
+        var convs = await _taskRepo.GetConversationsAsync(task.Id);
+        Assert.All(convs, c => Assert.Equal(StageExecutionStatus.Superseded, c.Status));
+        Assert.Null(await _taskRepo.GetResumableConversationAsync(task.Id, StandardStageIds.Implementation));
+    }
+
+    [Fact]
+    public async Task RetryCurrentStageAsync_ClearsOldHangfireJobIdBeforeEnqueue_AvoidingFastWorkerSupersededRace()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 459,
+            WorkspaceId = 1,
+            Title = "Task with Previous JobId",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            Priority = TaskPriority.Normal,
+            LastHangfireJobId = "job-old-stale"
+        });
+        _dependencyStore.AddTask(task.Id, 1, TaskOverallStatus.Open);
+
+        string? jobIdObservedDuringEnqueue = "not-checked";
+        var mockQueue = new Mock<ITaskJobQueue>();
+        mockQueue.Setup(q => q.Delete("job-old-stale")).Returns(true);
+        mockQueue.Setup(q => q.EnqueueStage(task.Id, It.IsAny<StageQueueTier>(), It.IsAny<int>()))
+            .Callback(() =>
+            {
+                var persistedDuringEnqueue = _taskRepo.GetByIdAsync(task.Id).GetAwaiter().GetResult();
+                jobIdObservedDuringEnqueue = persistedDuringEnqueue?.LastHangfireJobId;
+            })
+            .Returns("job-new-fresh");
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            mockQueue.Object,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            _jobStorage,
+            _cancellationManager.Object,
+            _pathResolver.Object,
+            _skippedJobRegistry,
+            _taskOrchestrator.Object,
+            NullLogger<DevQueueService>.Instance);
+
+        var result = await service.RetryCurrentStageAsync(task.Id);
+
+        Assert.True(result);
+        Assert.Null(jobIdObservedDuringEnqueue);
+        var updated = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.Equal("job-new-fresh", updated?.LastHangfireJobId);
+    }
+
+    [Fact]
+    public void TaskConversationSelector_SelectActiveConversation_DoesNotKeepSupersededConversationPinnedWhenNewRunAppears()
+    {
+        var supersededConv = new Conversation
+        {
+            Id = 10,
+            TaskId = 1,
+            StageId = StandardStageIds.Implementation,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Superseded,
+            StartedAt = DateTime.UtcNow.AddMinutes(-5)
+        };
+        var runningConv = new Conversation
+        {
+            Id = 11,
+            TaskId = 1,
+            StageId = StandardStageIds.Implementation,
+            AttemptIndex = 2,
+            Status = StageExecutionStatus.Running,
+            StartedAt = DateTime.UtcNow
+        };
+
+        var selected = TaskConversationSelector.SelectActiveConversation(
+            new[] { supersededConv, runningConv },
+            previousSelectedConversationId: supersededConv.Id);
+
+        Assert.NotNull(selected);
+        Assert.Equal(runningConv.Id, selected.Id);
+    }
+
+    [Fact]
+    public void TaskConversationSelector_SelectActiveConversation_PrefersNonSupersededOverTrailingSuperseded()
+    {
+        var completedStage1 = new Conversation
+        {
+            Id = 1,
+            TaskId = 1,
+            StageId = "Stage1",
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-10)
+        };
+        var supersededStage2 = new Conversation
+        {
+            Id = 2,
+            TaskId = 1,
+            StageId = StandardStageIds.Implementation,
+            AttemptIndex = 1,
+            Status = StageExecutionStatus.Superseded,
+            StartedAt = DateTime.UtcNow.AddMinutes(-2)
+        };
+
+        var selected = TaskConversationSelector.SelectActiveConversation(
+            new[] { completedStage1, supersededStage2 },
+            previousSelectedConversationId: null);
+
+        Assert.NotNull(selected);
+        Assert.Equal(completedStage1.Id, selected.Id);
+    }
+
+    [Fact]
     public async Task GetSnapshotAsync_WhenJobStorageDisposed_ReturnsEmptySnapshotWithoutThrowing()
     {
         var mockStorage = new Mock<JobStorage>();
