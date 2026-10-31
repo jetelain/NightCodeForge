@@ -21,7 +21,7 @@ public interface ITaskMarkdownSyncService : IDisposable
         => SyncAllTasksToDiskAsync(workspace, targetDirectory, hostRepositoryPath, cancellationToken);
     string? ResolveCloneTasksDirectory(int workspaceId, Workspace? workspace = null, string? workspacePath = null) => null;
     Task<string?> ResolveCloneTasksDirectoryAsync(int workspaceId, Workspace? workspace = null, string? workspacePath = null, CancellationToken cancellationToken = default) => Task.FromResult<string?>(null);
-    Task<IReadOnlyList<ForgeTask>> SyncAllTasksFromDiskAsync(Workspace workspace, string targetDirectory, string? hostRepositoryPath, IReadOnlyDictionary<int, TaskBaselineEntry>? baselineSnapshot, string changeActor, string? changeReason, CancellationToken cancellationToken = default)
+    Task<IReadOnlyList<ForgeTask>> SyncAllTasksFromDiskAsync(Workspace workspace, string targetDirectory, string? hostRepositoryPath, IReadOnlyDictionary<int, TaskBaselineEntry>? baselineSnapshot, string changeActor, string? changeReason, int? currentTaskId = null, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<ForgeTask>>(Array.Empty<ForgeTask>());
     Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default);
     Task ProcessFileContentAsync(string filePath, string content, int workspaceId, int? expectedTaskId, CancellationToken cancellationToken = default)

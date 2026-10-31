@@ -45,8 +45,7 @@ public class ModelCapabilityResolverTests
     public void BuildReasoningProperties_EnablesThinkingWithResolvedEffort()
     {
         var props = ModelCapabilityResolver.BuildReasoningProperties(new LlmProviderOptions { ReasoningEffort = "high" }, "qwen3.8:35b");
-        Assert.Equal(true, props["think"]);
-        Assert.Equal("xhigh", props["reasoning_effort"]);
+        Assert.Equal("xhigh", props["think"]);
     }
 
     [Fact]

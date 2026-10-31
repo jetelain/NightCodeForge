@@ -118,6 +118,7 @@ public class TaskDiskSyncCoordinatorTests : IDisposable
                 null,
                 AuditActors.User,
                 TaskSyncConstants.DiskModificationsSync,
+                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(refreshedTasks)
             .Callback(() => callOrder.Add("FromDisk"));
@@ -162,6 +163,7 @@ public class TaskDiskSyncCoordinatorTests : IDisposable
                 null,
                 AuditActors.User,
                 TaskSyncConstants.DiskModificationsSync,
+                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new TaskMarkdownSyncException("Syntax error in task-10.md", "task-10.md"));
 
@@ -207,6 +209,7 @@ public class TaskDiskSyncCoordinatorTests : IDisposable
                 null,
                 AuditActors.User,
                 TaskSyncConstants.DiskModificationsSync,
+                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(refreshedTasks);
 
@@ -229,6 +232,7 @@ public class TaskDiskSyncCoordinatorTests : IDisposable
             null,
             AuditActors.User,
             TaskSyncConstants.DiskModificationsSync,
+            It.IsAny<int?>(),
             It.IsAny<CancellationToken>()), Times.Once);
 
         _mockMarkdownSync.Verify(s => s.SyncAllTasksFromDiskAsync(
@@ -238,6 +242,7 @@ public class TaskDiskSyncCoordinatorTests : IDisposable
             It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
             It.IsAny<string>(),
             It.IsAny<string?>(),
+            It.IsAny<int?>(),
             It.IsAny<CancellationToken>()), Times.Never);
 
         // Verify SyncAllTasksToDiskAsync was called with cloneDir

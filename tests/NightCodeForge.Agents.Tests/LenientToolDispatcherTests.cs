@@ -525,6 +525,56 @@ public class LenientToolDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_AskWithTask31Task41Pattern_MissingClosingBracket_AutoFixesAndInvokesAskHandler()
+    {
+        var tools = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
+        IReadOnlyList<QuestionItem>? captured = null;
+        tools.AskHandler = (questions, ct) =>
+        {
+            captured = questions;
+            return Task.FromResult("Clarified");
+        };
+
+        var dispatcher = new LenientToolDispatcher(tools);
+        // Note: inner array is missing outer ']' before the closing quote:
+        var json = """
+        {
+            "questions": "[{\"prompt\": \"Q1\", \"options\": [\"A\", \"B\"]}, {\"prompt\": \"Q2\", \"options\": [\"C\", \"D\"]}"
+        }
+        """;
+        var result = await dispatcher.DispatchAsync("ask", json);
+
+        Assert.Equal("Clarified", result);
+        Assert.NotNull(captured);
+        Assert.Equal(2, captured!.Count);
+        Assert.Equal("Q1", captured[0].Prompt);
+        Assert.Equal("Q2", captured[1].Prompt);
+        Assert.Equal(2, captured[1].Options?.Count);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_AskWithTruncatedRawArgumentsJson_AutoFixesAndInvokesAskHandler()
+    {
+        var tools = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
+        IReadOnlyList<QuestionItem>? captured = null;
+        tools.AskHandler = (questions, ct) =>
+        {
+            captured = questions;
+            return Task.FromResult("Clarified");
+        };
+
+        var dispatcher = new LenientToolDispatcher(tools);
+        // Missing closing ']}'
+        var json = """{"questions": [{"prompt": "Proceed?"}""";
+        var result = await dispatcher.DispatchAsync("ask", json);
+
+        Assert.Equal("Clarified", result);
+        Assert.NotNull(captured);
+        Assert.Single(captured!);
+        Assert.Equal("Proceed?", captured[0].Prompt);
+    }
+
+    [Fact]
     public async Task DispatchAsync_RequestChangesWithCritiqueAndComment_ThrowsDomainException()
     {
         var tools = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());

@@ -579,20 +579,18 @@ public class TelemetryChatClient : DelegatingChatClient
         {
             return "unknown";
         }
-        if (options.AdditionalProperties.TryGetValue("think", out var thinkVal) && thinkVal is bool enabled)
+        
+        // For Ollama from "think" directly (boolean or string for effort)
+        if (options.AdditionalProperties.TryGetValue("think", out var thinkVal))
         {
-            if (!enabled)
+            if (thinkVal is bool enabled)
             {
-                return "none";
+                return enabled ? "default" : "none";
             }
-            if (options.AdditionalProperties.TryGetValue("reasoning_effort", out var re) && re != null && !string.IsNullOrWhiteSpace(re.ToString()))
-            {
-                return re.ToString()!;
-            }
-            return "default";
+            return thinkVal?.ToString() ?? "default";
         }
 
-        // For OpenAI-compatible endpoints where "think" flag is omitted, resolve from "reasoning_effort" directly
+        // For OpenAI-compatible endpoints resolve from "reasoning_effort"
         if (options.AdditionalProperties.TryGetValue("reasoning_effort", out var openAiRe) && openAiRe != null && !string.IsNullOrWhiteSpace(openAiRe.ToString()))
         {
             return openAiRe.ToString()!;

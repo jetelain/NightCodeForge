@@ -25,6 +25,12 @@ public class TaskFrontmatter
     [YamlMember(Alias = "waiting_for_human")]
     public bool WaitingForHuman { get; set; } = false;
 
+    [YamlMember(Alias = "version")]
+    public int? Version { get; set; }
+
+    [YamlMember(Alias = "content_hash")]
+    public string? ContentHash { get; set; }
+
     public int Priority { get; set; } = TaskPriority.Normal;
     
     [YamlMember(Alias = "base_branch")]

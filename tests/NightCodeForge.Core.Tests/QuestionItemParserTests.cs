@@ -248,4 +248,34 @@ public class QuestionItemParserTests
         Assert.NotNull(fromElement);
         Assert.Equal(2, fromElement.Count);
     }
+
+    [Fact]
+    public void Parse_WithStringifiedQuestionsArrayMissingClosingBracket_AutoFixesAndParsesAllQuestions()
+    {
+        // Repro Task 31 / Task 41
+        var json = """
+        {
+            "questions": "[{\"prompt\": \"Q1\", \"options\": [\"A\", \"B\"]}, {\"prompt\": \"Q2\", \"options\": [\"C\", \"D\"]}"
+        }
+        """;
+
+        var questions = QuestionItemParser.Parse(json);
+
+        Assert.Equal(2, questions.Count);
+        Assert.Equal("Q1", questions[0].Prompt);
+        Assert.Equal("Q2", questions[1].Prompt);
+        Assert.Equal(2, questions[1].Options?.Count);
+    }
+
+    [Fact]
+    public void ParseFromObject_WithStringMissingClosingSquareBracket_AutoFixesAndParses()
+    {
+        var rawStr = "[{\"prompt\": \"Q1\"}, {\"prompt\": \"Q2\"}";
+        var questions = QuestionItemParser.ParseFromObject(rawStr);
+
+        Assert.NotNull(questions);
+        Assert.Equal(2, questions!.Count);
+        Assert.Equal("Q1", questions[0].Prompt);
+        Assert.Equal("Q2", questions[1].Prompt);
+    }
 }

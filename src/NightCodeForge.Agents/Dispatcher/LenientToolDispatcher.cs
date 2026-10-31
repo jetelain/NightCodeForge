@@ -203,7 +203,7 @@ public partial class LenientToolDispatcher
             clean = clean.Trim();
         }
 
-        // Try direct parse. If fails, attempt repairing unescaped newlines inside strings
+        // Try direct parse. If fails, attempt auto-repairing malformed JSON
         try
         {
             using var doc = JsonDocument.Parse(clean);
@@ -211,7 +211,16 @@ public partial class LenientToolDispatcher
         }
         catch (JsonException)
         {
-            return RepairJsonStringNewlines(clean);
+            var repaired = JsonRepairHelper.Repair(clean);
+            try
+            {
+                using var doc = JsonDocument.Parse(repaired);
+                return repaired;
+            }
+            catch (JsonException)
+            {
+                return RepairJsonStringNewlines(clean);
+            }
         }
     }
 

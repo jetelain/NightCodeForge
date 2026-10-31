@@ -91,6 +91,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             Priority = task.Priority,
             MergeMode = task.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required",
             WaitingForHuman = task.IsWaitingForHuman,
+            Version = task.Version > 0 ? task.Version : 1,
             BaseBranch = task.BaseBranch,
             FeatureBranch = string.IsNullOrWhiteSpace(task.FeatureBranch) ? null : task.FeatureBranch,
             DependsOn = depList,
@@ -98,6 +99,27 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             CreatedAt = task.CreatedAt,
             UpdatedAt = task.UpdatedAt
         };
+
+        var bodySb = new StringBuilder();
+        bodySb.Append($"# {task.Title}\n\n");
+        bodySb.Append("## 📋 Requirements & Description\n");
+        bodySb.Append(task.Description).Append('\n');
+
+        if (task.Questions != null && task.Questions.Count > 0)
+        {
+            bodySb.Append("\n## ❓ Human Clarifications (Q&A)\n");
+            int qIndex = 1;
+            foreach (var q in task.Questions)
+            {
+                bodySb.Append($"### Question {qIndex++} (Asked during Stage: {q.StageId} on {q.AskedAt:yyyy-MM-dd HH:mm:ss})\n");
+                bodySb.Append($"**Prompt:** {q.Prompt}\n");
+                bodySb.Append($"**Answer:** {q.Answer ?? "_Awaiting response_"}\n\n");
+            }
+        }
+
+        var bodyText = bodySb.ToString().Replace("\r\n", "\n");
+        var extractedDescription = ExtractDescriptionFromBody(bodyText);
+        frontmatter.ContentHash = ComputeTaskContentHash(frontmatter, extractedDescription);
 
         var yaml = _yamlSerializer.Serialize(frontmatter).Replace("\r\n", "\n");
         var sb = new StringBuilder();
@@ -108,23 +130,31 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             sb.Append('\n');
         }
         sb.Append("---\n\n");
-        sb.Append($"# {task.Title}\n\n");
-        sb.Append("## 📋 Requirements & Description\n");
-        sb.Append(task.Description).Append('\n');
-
-        if (task.Questions != null && task.Questions.Count > 0)
-        {
-            sb.Append("\n## ❓ Human Clarifications (Q&A)\n");
-            int qIndex = 1;
-            foreach (var q in task.Questions)
-            {
-                sb.Append($"### Question {qIndex++} (Asked during Stage: {q.StageId} on {q.AskedAt:yyyy-MM-dd HH:mm:ss})\n");
-                sb.Append($"**Prompt:** {q.Prompt}\n");
-                sb.Append($"**Answer:** {q.Answer ?? "_Awaiting response_"}\n\n");
-            }
-        }
+        sb.Append(bodyText);
 
         return sb.ToString().Replace("\r\n", "\n");
+    }
+
+    public static string ComputeTaskContentHash(TaskFrontmatter frontmatter, string? description)
+    {
+        ArgumentNullException.ThrowIfNull(frontmatter);
+        var deps = frontmatter.DependsOn != null && frontmatter.DependsOn.Count > 0
+            ? string.Join(",", frontmatter.DependsOn.Select(d => d?.ToString()?.Trim() ?? string.Empty))
+            : string.Empty;
+        var normDesc = (NormalizeLineEndings(description) ?? string.Empty).Trim();
+        var payload = string.Join("\n",
+            $"id:{frontmatter.Id}",
+            $"title:{(frontmatter.Title ?? string.Empty).Trim()}",
+            $"status:{(frontmatter.Status ?? string.Empty).Trim()}",
+            $"origin:{(frontmatter.Origin ?? string.Empty).Trim()}",
+            $"priority:{frontmatter.Priority}",
+            $"merge_mode:{(frontmatter.MergeMode ?? string.Empty).Trim()}",
+            $"base_branch:{(frontmatter.BaseBranch ?? string.Empty).Trim()}",
+            $"feature_branch:{(frontmatter.FeatureBranch ?? string.Empty).Trim()}",
+            $"agent_profile:{(frontmatter.AgentProfile ?? string.Empty).Trim()}",
+            $"depends_on:{deps}",
+            $"description:{normDesc}");
+        return ComputeSha256Hash(payload);
     }
 
     public (TaskFrontmatter Frontmatter, string Body) ParseMarkdown(string markdownContent) => ParseMarkdown(markdownContent, null);
@@ -167,7 +197,9 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         return (new TaskFrontmatter(), markdownContent);
     }
 
-    public string ComputeContentHash(string content)
+    public string ComputeContentHash(string content) => ComputeSha256Hash(content);
+
+    private static string ComputeSha256Hash(string content)
     {
         var normalized = content.Replace("\r\n", "\n");
         var bytes = Encoding.UTF8.GetBytes(normalized);
@@ -684,6 +716,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         IReadOnlyDictionary<int, TaskBaselineEntry>? baselineSnapshot,
         string changeActor,
         string? changeReason,
+        int? currentTaskId = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workspace);
@@ -715,7 +748,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 Directory.CreateDirectory(hostTasksDir);
             }
 
-            var parsedFiles = new List<(string FilePath, string Content, string Hash, TaskFrontmatter Frontmatter, string Body, string Description)>();
+            var parsedFiles = new List<(string FilePath, string TaskContentHash, string Content, string Hash, TaskFrontmatter Frontmatter, string Body, string Description)>();
 
             foreach (var file in files)
             {
@@ -732,8 +765,9 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 var (frontmatter, body) = ParseMarkdown(content, file);
                 var hash = ComputeContentHash(content);
                 var description = ExtractDescriptionFromBody(body);
+                var taskContentHash = ComputeTaskContentHash(frontmatter, description);
 
-                parsedFiles.Add((file, content, hash, frontmatter, body, description));
+                parsedFiles.Add((file, taskContentHash, content, hash, frontmatter, body, description));
             }
 
             // 1. Validate Existing and New Tasks
@@ -749,6 +783,8 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     duplicateId.Key);
             }
 
+            var untouchedOrStaleTaskIds = new HashSet<int>();
+
             foreach (var item in parsedFiles)
             {
                 if (item.Frontmatter.Id.HasValue && item.Frontmatter.Id.Value > 0)
@@ -762,11 +798,33 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                             taskId);
                     }
 
-                    // Concurrency check
+                    bool contentHashMatches = !string.IsNullOrWhiteSpace(item.Frontmatter.ContentHash) &&
+                        string.Equals(item.Frontmatter.ContentHash.Trim(), item.TaskContentHash, StringComparison.OrdinalIgnoreCase);
+
+                    // 1. Untouched file detection against baseline snapshot or embedded content_hash:
+                    // If the disk content has not changed since the file was generated, skip all validation checks and updates.
                     if (baselineSnapshot != null && baselineSnapshot.TryGetValue(taskId, out var baseline))
                     {
-                        bool diskDiffersFromBaseline = !string.Equals(item.Hash, baseline.ContentHash, StringComparison.Ordinal);
-                        if (dbTask.Version != baseline.Version && diskDiffersFromBaseline)
+                        bool diskDiffersFromBaseline = !string.Equals(item.Hash, baseline.ContentHash, StringComparison.Ordinal) && !contentHashMatches;
+                        if (!diskDiffersFromBaseline)
+                        {
+                            untouchedOrStaleTaskIds.Add(taskId);
+                            continue;
+                        }
+
+                        // Sibling stale file detection when currentTaskId is known
+                        if (currentTaskId.HasValue && taskId != currentTaskId.Value &&
+                            item.Frontmatter.Version.HasValue && dbTask.Version > item.Frontmatter.Version.Value)
+                        {
+                            _logger.LogInformation(
+                                "Task #{TaskId} database version ({DbVersion}) is more recent than disk version ({DiskVersion}). Retaining authoritative database state.",
+                                taskId, dbTask.Version, item.Frontmatter.Version.Value);
+                            untouchedOrStaleTaskIds.Add(taskId);
+                            continue;
+                        }
+
+                        // Concurrency check for modified files:
+                        if (dbTask.Version != baseline.Version)
                         {
                             // 3-way check: A true conflict exists only if both DB and disk concurrently modified
                             // the same core specification fields (Title or Description) to conflicting values.
@@ -778,6 +836,36 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                             if (titleConflict || descConflict)
                             {
                                 throw new TaskConcurrencyException(taskId, baseline.Version, dbTask.Version);
+                            }
+                        }
+                    }
+                    else if (baselineSnapshot == null)
+                    {
+                        if (contentHashMatches)
+                        {
+                            untouchedOrStaleTaskIds.Add(taskId);
+                            continue;
+                        }
+
+                        // Stale file detection: When syncing without baseline (e.g. host sync or stage resume),
+                        // if DB version is strictly newer than the markdown file's version, the file is stale
+                        // (e.g. another task completed/closed concurrently while this task was paused).
+                        // For sibling tasks, the database is authoritative: ignore the stale file without throwing status tamper errors.
+                        if (item.Frontmatter.Version.HasValue && dbTask.Version > item.Frontmatter.Version.Value)
+                        {
+                            if (currentTaskId.HasValue && taskId == currentTaskId.Value)
+                            {
+                                // Current task exception: User/maintainer updated task in DB (e.g. changed merge mode),
+                                // but agent worked on disk refining the specification.
+                                // Do not skip: preserve agent spec refinements.
+                            }
+                            else
+                            {
+                                _logger.LogInformation(
+                                    "Task #{TaskId} database version ({DbVersion}) is more recent than disk version ({DiskVersion}). Retaining authoritative database state.",
+                                    taskId, dbTask.Version, item.Frontmatter.Version.Value);
+                                untouchedOrStaleTaskIds.Add(taskId);
+                                continue;
                             }
                         }
                     }
@@ -794,10 +882,21 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                             var referenceStatus = dbTask.Status.ToString();
                             if (!string.Equals(item.Frontmatter.Status.Trim(), referenceStatus, StringComparison.OrdinalIgnoreCase))
                             {
-                                throw new TaskMarkdownSyncException(
-                                    $"Modifying task status via markdown is forbidden. Task #{taskId} status is '{referenceStatus}', but markdown specifies '{item.Frontmatter.Status}'. Status transitions must go through workflow gates.",
-                                    item.FilePath,
-                                    taskId);
+                                if (currentTaskId.HasValue && taskId == currentTaskId.Value)
+                                {
+                                    _logger.LogInformation(
+                                        "Task #{TaskId} markdown frontmatter specifies status '{MarkdownStatus}', which differs from authoritative status '{DbStatus}'. Retaining database status as workflow gates govern lifecycle.",
+                                        taskId,
+                                        item.Frontmatter.Status.Trim(),
+                                        referenceStatus);
+                                }
+                                else
+                                {
+                                    throw new TaskMarkdownSyncException(
+                                        $"Modifying task status via markdown is forbidden. Task #{taskId} status is '{referenceStatus}', but markdown specifies '{item.Frontmatter.Status}'. Status transitions must go through workflow gates.",
+                                        item.FilePath,
+                                        taskId);
+                                }
                             }
                         }
                         else
@@ -947,6 +1046,11 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             foreach (var item in existingFiles)
             {
                 var taskId = item.Frontmatter.Id!.Value;
+                if (untouchedOrStaleTaskIds.Contains(taskId))
+                {
+                    continue;
+                }
+
                 if (item.Frontmatter.DependsOn != null)
                 {
                     var existingDepIds = new List<int>();
@@ -1178,10 +1282,8 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 var taskId = item.Frontmatter.Id!.Value;
                 var task = dbTasks[taskId];
 
-                // If syncing against a baseline snapshot (e.g. from an agent worktree) and the file has not changed on disk,
-                // do not clobber any database changes that happened concurrently during the stage execution.
-                if (baselineSnapshot != null && baselineSnapshot.TryGetValue(taskId, out var baseline) &&
-                    string.Equals(item.Hash, baseline.ContentHash, StringComparison.Ordinal))
+                // If the file has not changed on disk or is a stale sibling file, retain authoritative database state.
+                if (untouchedOrStaleTaskIds.Contains(taskId))
                 {
                     refreshedTasks.Add(task);
                     continue;
@@ -1204,7 +1306,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     finalDepIds = finalDepIds.Distinct().ToList();
                 }
 
-                if (baselineSnapshot != null && baselineSnapshot.TryGetValue(taskId, out baseline) && baseline != null)
+                if (baselineSnapshot != null && baselineSnapshot.TryGetValue(taskId, out var baseline) && baseline != null)
                 {
                     // 3-way merge between Baseline, DB (authoritative maintainer fields), and Disk (agent modifications):
                     // 1. Title: disk modification takes effect only if disk altered it relative to baseline
@@ -1255,11 +1357,32 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 }
                 else
                 {
-                    newTitle = !string.IsNullOrWhiteSpace(item.Frontmatter.Title) ? item.Frontmatter.Title.Trim() : (task.Title ?? string.Empty);
-                    newDesc = !string.IsNullOrWhiteSpace(item.Description) ? item.Description : task.Description;
-                    newPriority = item.Frontmatter.Priority > 0 ? item.Frontmatter.Priority : task.Priority;
-                    newMergeMode = ParseMergeMode(item.Frontmatter.MergeMode) ?? task.MergeMode;
-                    newBaseBranch = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) ? item.Frontmatter.BaseBranch.Trim() : task.BaseBranch;
+                    if (currentTaskId.HasValue && taskId == currentTaskId.Value &&
+                        item.Frontmatter.Version.HasValue && task.Version > item.Frontmatter.Version.Value)
+                    {
+                        // Maintainer updated DB while agent refined task on disk:
+                        // Keep authoritative DB values for maintainer fields (MergeMode, Priority, BaseBranch),
+                        // but take the agent's refined description and title from disk!
+                        bool diskDescChanged = !string.IsNullOrWhiteSpace(item.Description) &&
+                            !string.Equals(NormalizeLineEndings(item.Description)?.Trim(), NormalizeLineEndings(task.Description)?.Trim(), StringComparison.Ordinal);
+                        newDesc = diskDescChanged ? item.Description : task.Description;
+
+                        bool diskTitleChanged = !string.IsNullOrWhiteSpace(item.Frontmatter.Title) &&
+                            !string.Equals(item.Frontmatter.Title.Trim(), task.Title?.Trim(), StringComparison.Ordinal);
+                        newTitle = diskTitleChanged ? item.Frontmatter.Title!.Trim() : (task.Title ?? string.Empty);
+
+                        newPriority = task.Priority;
+                        newMergeMode = task.MergeMode;
+                        newBaseBranch = task.BaseBranch ?? workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch;
+                    }
+                    else
+                    {
+                        newTitle = !string.IsNullOrWhiteSpace(item.Frontmatter.Title) ? item.Frontmatter.Title.Trim() : (task.Title ?? string.Empty);
+                        newDesc = !string.IsNullOrWhiteSpace(item.Description) ? item.Description : task.Description;
+                        newPriority = item.Frontmatter.Priority > 0 ? item.Frontmatter.Priority : task.Priority;
+                        newMergeMode = ParseMergeMode(item.Frontmatter.MergeMode) ?? task.MergeMode;
+                        newBaseBranch = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) ? item.Frontmatter.BaseBranch.Trim() : task.BaseBranch;
+                    }
                 }
 
                 var newOrigin = ParseOrigin(item.Frontmatter.Origin);
@@ -1274,7 +1397,8 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 var currentDeps = task.Dependencies?.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList() ?? new List<int>();
                 bool depsChanged = finalDepIds != null && !finalDepIds.OrderBy(x => x).SequenceEqual(currentDeps);
 
-                if (titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged)
+                bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged;
+                if (anyFieldChanged)
                 {
                     task.Title = newTitle;
                     task.Description = newDesc;
@@ -1308,9 +1432,9 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     }
                 }
 
-                // In-place normalization for existing files if depends_on changed, agent tampered with status, or maintainer fields were reconciled
-                bool statusTampered = baselineSnapshot != null &&
-                                      !string.IsNullOrWhiteSpace(item.Frontmatter.Status) &&
+                // In-place normalization for existing files if fields changed (to update version and content_hash),
+                // depends_on changed, agent tampered with status, or maintainer fields were reconciled
+                bool statusTampered = !string.IsNullOrWhiteSpace(item.Frontmatter.Status) &&
                                       !string.Equals(item.Frontmatter.Status.Trim(), task.Status.ToString(), StringComparison.OrdinalIgnoreCase);
 
                 var effectiveDiskMergeMode = ParseMergeMode(item.Frontmatter.MergeMode) ?? Domain.MergeMode.ManualReviewRequired;
@@ -1323,14 +1447,14 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     : new List<int>())).OrderBy(x => x).ToList();
                 bool depsDifferFromDisk = !currentDiskDepIds.SequenceEqual(currentDbDepIds);
 
-                bool maintainerFieldsSynced = baselineSnapshot != null &&
+                bool maintainerFieldsSynced = (baselineSnapshot != null || (currentTaskId.HasValue && taskId == currentTaskId.Value)) &&
                                               (task.MergeMode != effectiveDiskMergeMode ||
                                                task.Priority != effectiveDiskPriority ||
                                                !string.Equals(task.BaseBranch, effectiveDiskBaseBranch, StringComparison.Ordinal) ||
                                                !string.Equals(task.Title?.Trim(), item.Frontmatter.Title?.Trim(), StringComparison.Ordinal) ||
                                                depsDifferFromDisk);
 
-                if (finalDepIds != null || statusTampered || maintainerFieldsSynced)
+                if (anyFieldChanged || finalDepIds != null || statusTampered || maintainerFieldsSynced)
                 {
                     var effectiveDeps = finalDepIds ?? task.Dependencies?.Select(d => d.DependsOnTaskId).ToList() ?? new List<int>();
                     var normalizedMarkdown = GenerateMarkdown(task, effectiveDeps, item.Frontmatter.AgentProfile);
@@ -1594,6 +1718,12 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         var (frontmatter, body) = ParseMarkdown(content, filePath);
         var description = ExtractDescriptionFromBody(body);
 
+        if (!string.IsNullOrWhiteSpace(frontmatter.ContentHash) &&
+            string.Equals(frontmatter.ContentHash.Trim(), ComputeTaskContentHash(frontmatter, description), StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         var targetTaskId = frontmatter.Id.HasValue && frontmatter.Id.Value > 0
             ? frontmatter.Id.Value
             : (expectedTaskId.HasValue && expectedTaskId.Value > 0 ? expectedTaskId.Value : (int?)null);
@@ -1612,6 +1742,14 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                             $"Task #{task.Id} belongs to workspace #{task.WorkspaceId}, not #{workspaceId}.",
                             filePath,
                             task.Id);
+                    }
+
+                    if (frontmatter.Version.HasValue && task.Version > frontmatter.Version.Value)
+                    {
+                        _logger.LogInformation(
+                            "Task #{TaskId} database version ({DbVersion}) is more recent than disk version ({DiskVersion}). Retaining authoritative database state.",
+                            task.Id, task.Version, frontmatter.Version.Value);
+                        return;
                     }
 
                     // Enforce protected status
@@ -1685,7 +1823,8 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     bool baseBranchChanged = !string.Equals(newBaseBranch, task.BaseBranch, StringComparison.Ordinal);
                     bool originChanged = newOrigin != task.Origin;
 
-                    if (titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged)
+                    bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged;
+                    if (anyFieldChanged)
                     {
                         task.Title = newTitle;
                         task.Description = newDesc;
@@ -1708,13 +1847,23 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                             AuditActors.User,
                             TaskSyncConstants.DiskModificationsSync,
                             cancellationToken);
+
+                        if (resolvedDeps != null)
+                        {
+                            task.Dependencies = resolvedDeps.Select(depId => new TaskDependency
+                            {
+                                TaskId = task.Id,
+                                DependsOnTaskId = depId
+                            }).ToList();
+                        }
                     }
 
-                    // In-place normalization for existing files if depends_on changed or had string references
-                    if (resolvedDeps != null && File.Exists(filePath))
+                    // In-place normalization for existing files if fields changed (to update version and content_hash) or depends_on had references
+                    if ((anyFieldChanged || resolvedDeps != null) && File.Exists(filePath))
                     {
-                        frontmatter.DependsOn = new TaskDependencyReferenceList(resolvedDeps);
-                        var normalizedMarkdown = GenerateMarkdown(task, resolvedDeps, frontmatter.AgentProfile);
+                        var effectiveDeps = resolvedDeps ?? task.Dependencies?.Select(d => d.DependsOnTaskId).ToList() ?? new List<int>();
+                        frontmatter.DependsOn = new TaskDependencyReferenceList(effectiveDeps);
+                        var normalizedMarkdown = GenerateMarkdown(task, effectiveDeps, frontmatter.AgentProfile);
                         var normHash = ComputeContentHash(normalizedMarkdown);
                         _suppressedHashes[normHash] = 1;
                         await File.WriteAllTextAsync(filePath, normalizedMarkdown.Replace("\r\n", "\n"), Encoding.UTF8, cancellationToken);

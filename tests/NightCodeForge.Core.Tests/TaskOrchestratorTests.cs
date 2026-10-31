@@ -719,6 +719,7 @@ public class TaskOrchestratorTests
                 It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
                 It.IsAny<string>(),
                 It.IsAny<string?>(),
+                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new TaskConcurrencyException(97, 1, 2));
 
@@ -812,6 +813,7 @@ public class TaskOrchestratorTests
                 It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
                 It.IsAny<string>(),
                 It.IsAny<string?>(),
+                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new TaskMarkdownSyncException("Circular dependency detected", taskId: 98));
 
@@ -903,9 +905,10 @@ public class TaskOrchestratorTests
                 It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
                 It.IsAny<string>(),
                 It.IsAny<string?>(),
+                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
-                .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, CancellationToken>(
-                    (ws, target, host, baseline, actor, reason, ct) =>
+                .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, int?, CancellationToken>(
+                    (ws, target, host, baseline, actor, reason, tid, ct) =>
                     {
                         callCount++;
                         if (callCount == 1)
@@ -1031,6 +1034,7 @@ public class TaskOrchestratorTests
                 It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
                 It.IsAny<string>(),
                 It.IsAny<string?>(),
+                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new List<ForgeTask> { updatedExecuting });
 
@@ -1133,9 +1137,10 @@ public class TaskOrchestratorTests
                 It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
                 It.IsAny<string>(),
                 It.IsAny<string?>(),
+                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
-                .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, CancellationToken>(
-                    (ws, target, host, baseline, actor, reason, ct) =>
+                .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, int?, CancellationToken>(
+                    (ws, target, host, baseline, actor, reason, tid, ct) =>
                     {
                         callCount++;
                         if (callCount == 1)
@@ -1254,9 +1259,10 @@ public class TaskOrchestratorTests
                 It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
                 It.IsAny<string>(),
                 It.IsAny<string?>(),
+                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
-                .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, CancellationToken>(
-                    (ws, target, host, baseline, actor, reason, ct) =>
+                .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, int?, CancellationToken>(
+                    (ws, target, host, baseline, actor, reason, tid, ct) =>
                     {
                         callCount++;
                         if (callCount == 1)

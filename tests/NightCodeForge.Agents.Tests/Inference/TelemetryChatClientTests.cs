@@ -417,8 +417,7 @@ public class TelemetryChatClientTests
         {
             AdditionalProperties = new AdditionalPropertiesDictionary
             {
-                ["think"] = true,
-                ["reasoning_effort"] = "high"
+                ["think"] = "high"
             }
         };
 
@@ -466,8 +465,7 @@ public class TelemetryChatClientTests
         {
             AdditionalProperties = new AdditionalPropertiesDictionary
             {
-                ["think"] = false,
-                ["reasoning_effort"] = "high"
+                ["think"] = false
             }
         };
         Assert.Equal("none", TelemetryChatClient.ResolveThinkingEffort(options));
@@ -502,19 +500,6 @@ public class TelemetryChatClientTests
         Assert.Equal("unknown", TelemetryChatClient.ResolveThinkingEffort(options));
     }
 
-    [Fact]
-    public void ResolveThinkingEffort_WhenThinkNotBoolean_ReturnsUnknown()
-    {
-        var options = new ChatOptions
-        {
-            AdditionalProperties = new AdditionalPropertiesDictionary
-            {
-                ["think"] = "yes"
-            }
-        };
-        Assert.Equal("unknown", TelemetryChatClient.ResolveThinkingEffort(options));
-    }
-
     [Theory]
     [InlineData("low")]
     [InlineData("medium")]
@@ -526,8 +511,7 @@ public class TelemetryChatClientTests
         {
             AdditionalProperties = new AdditionalPropertiesDictionary
             {
-                ["think"] = true,
-                ["reasoning_effort"] = effort
+                ["think"] = effort
             }
         };
         Assert.Equal(effort, TelemetryChatClient.ResolveThinkingEffort(options));
@@ -541,8 +525,16 @@ public class TelemetryChatClientTests
     {
         var client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "model", "Auto");
         var props = new AdditionalPropertiesDictionary();
-        if (think.HasValue) props["think"] = think.Value;
-        if (effort != null) props["reasoning_effort"] = effort;
+
+        if (think == true)
+        {
+            props["think"] = (object?)effort ?? think;
+        }
+        else if (think == false)
+        {
+            props["think"] = false;
+        }
+
         if (!think.HasValue && effort == null) props["other"] = 123;
 
         var options = new ChatOptions { AdditionalProperties = props };

@@ -84,6 +84,7 @@ public class TestOrchestratorBuilder
             It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
             It.IsAny<string>(),
             It.IsAny<string?>(),
+            It.IsAny<int?>(),
             It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<ForgeTask>());
         return mock.Object;

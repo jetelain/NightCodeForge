@@ -65,10 +65,22 @@ public sealed class OllamaCapabilityResolver : ILlmCapabilityResolver
 
     public AdditionalPropertiesDictionary BuildReasoningProperties(string? modelId, string? requestedEffort = null)
     {
+        // https://docs.ollama.com/capabilities/thinking
+        // think = false, true (default effort), or the effort
+
+        var actualEffort = requestedEffort ?? _options.Value.ReasoningEffort;
+
+        if (string.IsNullOrEmpty(actualEffort))
+        {
+            return new AdditionalPropertiesDictionary
+            {
+                ["think"] = true
+            };
+        }
+
         return new AdditionalPropertiesDictionary
         {
-            ["think"] = true,
-            ["reasoning_effort"] = ResolveReasoningEffort(modelId, requestedEffort)
+            ["think"] = ResolveReasoningEffort(modelId, actualEffort)
         };
     }
 

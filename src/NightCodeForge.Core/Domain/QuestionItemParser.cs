@@ -51,18 +51,10 @@ public static class QuestionItemParser
             return new[] { new QuestionItem(fallbackContent ?? "Clarification requested") };
         }
 
-        try
+        var parsed = TryParseQuestionsFromJsonString(rawJson, requireJsonPrefix: false);
+        if (parsed is { Count: > 0 })
         {
-            using var doc = JsonDocument.Parse(rawJson);
-            var items = ParseFromJsonElement(doc.RootElement);
-            if (items.Count > 0)
-            {
-                return items;
-            }
-        }
-        catch (JsonException)
-        {
-            // Non-JSON string; fall back to raw content or fallback prompt
+            return parsed;
         }
 
         return new[] { new QuestionItem(fallbackContent ?? rawJson ?? "Clarification requested") };
@@ -95,18 +87,10 @@ public static class QuestionItemParser
 
         if (qObj is string str && !string.IsNullOrWhiteSpace(str))
         {
-            var trimmed = str.TrimStart();
-            if (trimmed.StartsWith("[") || trimmed.StartsWith("{"))
+            var parsed = TryParseQuestionsFromJsonString(str, requireJsonPrefix: true);
+            if (parsed != null)
             {
-                try
-                {
-                    using var doc = JsonDocument.Parse(str);
-                    return ParseFromJsonElement(doc.RootElement);
-                }
-                catch (JsonException)
-                {
-                    // Fallback: string was not valid JSON
-                }
+                return parsed;
             }
             return new List<QuestionItem> { new(str) };
         }
@@ -205,18 +189,10 @@ public static class QuestionItemParser
                         var str = prop.GetString();
                         if (!string.IsNullOrWhiteSpace(str))
                         {
-                            var trimmed = str.TrimStart();
-                            if (trimmed.StartsWith("[") || trimmed.StartsWith("{"))
+                            var parsed = TryParseQuestionsFromJsonString(str, requireJsonPrefix: true);
+                            if (parsed != null)
                             {
-                                try
-                                {
-                                    using var innerDoc = JsonDocument.Parse(str);
-                                    return ParseFromJsonElement(innerDoc.RootElement);
-                                }
-                                catch (JsonException)
-                                {
-                                    // Fallback: value was not a valid inner JSON string
-                                }
+                                return parsed;
                             }
                             return new List<QuestionItem> { new(str) };
                         }
@@ -243,24 +219,52 @@ public static class QuestionItemParser
             var str = el.GetString();
             if (!string.IsNullOrWhiteSpace(str))
             {
-                var trimmed = str.TrimStart();
-                if (trimmed.StartsWith("[") || trimmed.StartsWith("{"))
+                var parsed = TryParseQuestionsFromJsonString(str, requireJsonPrefix: true);
+                if (parsed != null)
                 {
-                    try
-                    {
-                        using var doc = JsonDocument.Parse(str);
-                        return ParseFromJsonElement(doc.RootElement);
-                    }
-                    catch (JsonException)
-                    {
-                        // Fallback: string was not valid JSON
-                    }
+                    return parsed;
                 }
                 list.Add(new QuestionItem(str));
             }
         }
 
         return list;
+    }
+
+    private static List<QuestionItem>? TryParseQuestionsFromJsonString(string str, bool requireJsonPrefix)
+    {
+        var trimmed = str.TrimStart();
+        if (requireJsonPrefix &&
+            !trimmed.StartsWith('[') &&
+            !trimmed.StartsWith('{') &&
+            !trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(str);
+            return ParseFromJsonElement(doc.RootElement);
+        }
+        catch (JsonException)
+        {
+            var repaired = JsonRepairHelper.Repair(str);
+            if (!string.Equals(repaired, str, StringComparison.Ordinal))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(repaired);
+                    return ParseFromJsonElement(doc.RootElement);
+                }
+                catch (JsonException)
+                {
+                    // Fallback: string was not valid JSON even after repair
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

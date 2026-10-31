@@ -602,7 +602,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                         baselineSnapshot: null,
                         preserveActor,
                         TaskSyncConstants.PreserveEditsBeforeResumeReason,
-                        cancellationToken);
+                        currentTaskId: task.Id,
+                        cancellationToken: cancellationToken);
                     isResumedRun = false;
                 }
 
@@ -1329,7 +1330,9 @@ public class TaskOrchestrator : ITaskOrchestrator
         if (!isStageCancelledOrPaused && !string.IsNullOrWhiteSpace(targetSyncPath) && Directory.Exists(targetSyncPath))
         {
             var stageActor = AuditActors.GetActorForStage(stage.StageId);
-            var stageReason = $"Stage '{stage.StageId}' completed disk synchronization";
+            var stageReason = result.NeedsClarification
+                ? $"Stage '{stage.StageId}' pausing for human clarification"
+                : $"Stage '{stage.StageId}' completed disk synchronization";
 
             IReadOnlyList<ForgeTask>? refreshedTasks = null;
             const int maxConflictRetries = 5;
@@ -1346,7 +1349,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                         baselineSnapshot,
                         stageActor,
                         stageReason,
-                        cancellationToken);
+                        currentTaskId: task.Id,
+                        cancellationToken: cancellationToken);
                     break;
                 }
                 catch (OperationCanceledException)
@@ -1436,6 +1440,11 @@ public class TaskOrchestrator : ITaskOrchestrator
                             break;
                         }
                     }
+                }
+                catch (Exception syncEx) when (result.NeedsClarification && syncEx is not OperationCanceledException)
+                {
+                    _logger.LogWarning(syncEx, "Failed syncing disk tasks to database upon interruption for task #{TaskId}", task.Id);
+                    break;
                 }
                 catch (TaskMarkdownSyncException)
                 {

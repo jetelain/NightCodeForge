@@ -91,8 +91,7 @@ public class OllamaCapabilityResolverTests
         var props = resolver.BuildReasoningProperties("Qwen3.8-27b", "high");
 
         Assert.True(props.ContainsKey("think"));
-        Assert.Equal(true, props["think"]);
-        Assert.Equal("xhigh", props["reasoning_effort"]);
+        Assert.Equal("xhigh", props["think"]);
     }
 
     [Fact]
@@ -113,9 +112,7 @@ public class OllamaCapabilityResolverTests
         Assert.Equal("Qwen3.8-27b", chatOptions.ModelId);
         Assert.Equal(0.6f, chatOptions.Temperature);
         Assert.NotNull(chatOptions.AdditionalProperties);
-        Assert.Equal(true, chatOptions.AdditionalProperties["think"]);
-        // ThinkingEffort.High maps to "high", which Qwen 3.8 maps to "xhigh"
-        Assert.Equal("xhigh", chatOptions.AdditionalProperties["reasoning_effort"]);
+        Assert.Equal("xhigh", chatOptions.AdditionalProperties["think"]);
     }
 
     [Fact]
@@ -137,7 +134,6 @@ public class OllamaCapabilityResolverTests
         Assert.Equal(0.2f, chatOptions.Temperature);
         Assert.NotNull(chatOptions.AdditionalProperties);
         Assert.Equal(false, chatOptions.AdditionalProperties["think"]);
-        Assert.False(chatOptions.AdditionalProperties.ContainsKey("reasoning_effort"));
     }
 
     [Theory]
@@ -157,8 +153,7 @@ public class OllamaCapabilityResolverTests
 
         var chatOptions = resolver.CreateChatOptions(profile);
 
-        Assert.Equal(true, chatOptions.AdditionalProperties?["think"]);
-        Assert.Equal(expectedReasoningEffort, chatOptions.AdditionalProperties?["reasoning_effort"]);
+        Assert.Equal(expectedReasoningEffort, chatOptions.AdditionalProperties?["think"]);
     }
 
     [Fact]
@@ -175,8 +170,7 @@ public class OllamaCapabilityResolverTests
 
         Assert.Equal("Qwen3.8-27b", chatOptions.ModelId);
         Assert.Null(chatOptions.Temperature);
-        Assert.Equal(true, chatOptions.AdditionalProperties?["think"]);
-        Assert.Equal("low", chatOptions.AdditionalProperties?["reasoning_effort"]);
+        Assert.Equal("low", chatOptions.AdditionalProperties?["think"]);
     }
 }
 

@@ -44,7 +44,7 @@ public class ModelCallTracingTests
         ModelId = "test-model",
         Temperature = 0.2f,
         Tools = new List<AITool> { SampleTool() },
-        AdditionalProperties = new AdditionalPropertiesDictionary { ["think"] = true, ["reasoning_effort"] = "high" }
+        AdditionalProperties = new AdditionalPropertiesDictionary { ["think"] = "high" }
     };
 
     [Fact]
@@ -75,7 +75,6 @@ public class ModelCallTracingTests
         Assert.Equal("Returns the path.", tool.Description);
         Assert.Contains("path", tool.JsonSchema);
         Assert.Contains("model: test-model", first.OptionsSummary);
-        Assert.Contains("reasoning_effort", first.OptionsSummary);
 
         var second = calls[1];
         Assert.Equal(3, second.TotalMessages);

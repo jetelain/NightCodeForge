@@ -400,9 +400,10 @@ public class WorkflowSpecIntegrationTests
                 It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
                 It.IsAny<string>(),
                 It.IsAny<string?>(),
+                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
-            .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, CancellationToken>(
-                (w, sp, hp, b, a, r, ct) => Task.FromResult<IReadOnlyList<ForgeTask>>(dbContext.Tasks.AsNoTracking().Where(t => t.WorkspaceId == w.Id).ToList()));
+            .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, int?, CancellationToken>(
+                (w, sp, hp, b, a, r, tid, ct) => Task.FromResult<IReadOnlyList<ForgeTask>>(dbContext.Tasks.AsNoTracking().Where(t => t.WorkspaceId == w.Id).ToList()));
 
         var opsService = opsControlOverride;
         if (opsService == null)
