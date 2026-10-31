@@ -33,7 +33,7 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
     public async Task CreateWithBaselineAsync_CreatesTaskAndBaselineHistoryVersionOne()
     {
         using var context = new AppDbContext(_options);
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         var workspace = new Workspace
         {
@@ -104,7 +104,7 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
     public async Task UpdateWithHistoryAsync_IncrementsVersion_AndAppendsHistorySnapshot()
     {
         using var context = new AppDbContext(_options);
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         var workspace = new Workspace
         {
@@ -169,7 +169,7 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
     public async Task GetWorkspaceDependenciesAsync_ReturnsAllWorkspaceDependencies()
     {
         using var context = new AppDbContext(_options);
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         var workspace = new Workspace
         {
@@ -207,7 +207,7 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
     public async Task CreateWithBaselineAsync_PopulatesTaskDependenciesOnEntity()
     {
         using var context = new AppDbContext(_options);
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         var workspace = new Workspace
         {
@@ -240,7 +240,7 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
     public async Task UpdateWithHistoryAsync_WhenDependsOnNull_PreservesExistingDependenciesAndSetsOnEntity()
     {
         using var context = new AppDbContext(_options);
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         var workspace = new Workspace
         {
@@ -280,7 +280,7 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
     public async Task UpdateWithHistoryAsync_WhenDependsOnProvided_UpdatesDependenciesAndSetsOnEntity()
     {
         using var context = new AppDbContext(_options);
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         var workspace = new Workspace
         {
@@ -320,7 +320,7 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
     public async Task UpdateAsync_WhenTaskUpdatedConcurrentlyWithHistory_PreservesMaintainerFieldsAndUpdatesInMemoryTask()
     {
         using var context = new AppDbContext(_options);
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         var workspace = new Workspace
         {
@@ -383,7 +383,7 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
     public async Task UpdateWithHistoryAsync_PersistsCheckpointMutations_WhenLoadedAsNoTracking()
     {
         using var context = new AppDbContext(_options);
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         var workspace = new Workspace
         {
@@ -423,7 +423,7 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
         await repo.UpdateWithHistoryAsync(loaded, null, AuditActors.User, "Stage retried", CancellationToken.None);
 
         using var verifyContext = new AppDbContext(_options);
-        var verifyRepo = new EfCoreTaskRepository(verifyContext);
+        var verifyRepo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
         var reloaded = await verifyRepo.GetByIdAsync(created.Id, CancellationToken.None);
         Assert.NotNull(reloaded);
         Assert.Single(reloaded.Checkpoints);

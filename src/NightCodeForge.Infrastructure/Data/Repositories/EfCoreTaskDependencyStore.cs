@@ -5,20 +5,22 @@ using NightCodeForge.Core.Domain;
 namespace NightCodeForge.Infrastructure.Data.Repositories;
 
 /// <summary>
-/// EF Core SQLite implementation of ITaskDependencyStore for DAG dependency resolution.
+/// EF Core SQLite implementation of ITaskDependencyStore for DAG dependency resolution,
+/// creating short-lived AppDbContext instances on demand.
 /// </summary>
 public class EfCoreTaskDependencyStore : ITaskDependencyStore
 {
-    private readonly AppDbContext _context;
+    private readonly IDbContextFactory<AppDbContext> _contextFactory;
 
-    public EfCoreTaskDependencyStore(AppDbContext context)
+    public EfCoreTaskDependencyStore(IDbContextFactory<AppDbContext> contextFactory)
     {
-        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
     }
 
     public async Task<IReadOnlyList<(int TaskId, int DependsOnTaskId)>> GetDependenciesForWorkspaceAsync(int workspaceId, CancellationToken cancellationToken = default)
     {
-        var items = await _context.TaskDependencies
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        var items = await context.TaskDependencies
             .AsNoTracking()
             .Where(d => d.ForgeTask != null && d.ForgeTask.WorkspaceId == workspaceId)
             .Select(d => new { d.TaskId, d.DependsOnTaskId })
@@ -29,7 +31,8 @@ public class EfCoreTaskDependencyStore : ITaskDependencyStore
 
     public async Task<IReadOnlyList<int>> GetPrerequisiteTaskIdsAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        return await _context.TaskDependencies
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.TaskDependencies
             .AsNoTracking()
             .Where(d => d.TaskId == taskId)
             .Select(d => d.DependsOnTaskId)
@@ -38,7 +41,8 @@ public class EfCoreTaskDependencyStore : ITaskDependencyStore
 
     public async Task<IReadOnlyList<int>> GetDependentTaskIdsAsync(int prerequisiteTaskId, CancellationToken cancellationToken = default)
     {
-        return await _context.TaskDependencies
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.TaskDependencies
             .AsNoTracking()
             .Where(d => d.DependsOnTaskId == prerequisiteTaskId)
             .Select(d => d.TaskId)
@@ -47,7 +51,8 @@ public class EfCoreTaskDependencyStore : ITaskDependencyStore
 
     public async Task<TaskOverallStatus?> GetTaskStatusAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        var task = await _context.Tasks
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        var task = await context.Tasks
             .AsNoTracking()
             .Where(i => i.Id == taskId)
             .Select(i => new { i.Status })
@@ -58,26 +63,21 @@ public class EfCoreTaskDependencyStore : ITaskDependencyStore
 
     public async Task UpdateTaskStatusAsync(int taskId, TaskOverallStatus newStatus, CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
         var now = DateTime.UtcNow;
-        await _context.Tasks
+        await context.Tasks
             .Where(t => t.Id == taskId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.Status, newStatus)
                 .SetProperty(t => t.UpdatedAt, now),
                 cancellationToken);
-
-        var local = _context.Tasks.Local.FirstOrDefault(t => t.Id == taskId);
-        if (local != null)
-        {
-            var entry = _context.Entry(local);
-            SyncCleanValue(entry.Property(t => t.Status), newStatus);
-            SyncCleanValue(entry.Property(t => t.UpdatedAt), now);
-        }
     }
 
     public async Task<bool> IsTaskWaitingForHumanAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        var task = await _context.Tasks
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        var task = await context.Tasks
             .AsNoTracking()
             .Where(i => i.Id == taskId)
             .Select(i => new { i.IsWaitingForHuman })
@@ -88,31 +88,14 @@ public class EfCoreTaskDependencyStore : ITaskDependencyStore
 
     public async Task SetWaitingForHumanAsync(int taskId, bool isWaiting, CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
         var now = DateTime.UtcNow;
-        await _context.Tasks
+        await context.Tasks
             .Where(t => t.Id == taskId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.IsWaitingForHuman, isWaiting)
                 .SetProperty(t => t.UpdatedAt, now),
                 cancellationToken);
-
-        var local = _context.Tasks.Local.FirstOrDefault(t => t.Id == taskId);
-        if (local != null)
-        {
-            var entry = _context.Entry(local);
-            SyncCleanValue(entry.Property(t => t.IsWaitingForHuman), isWaiting);
-            SyncCleanValue(entry.Property(t => t.UpdatedAt), now);
-        }
-    }
-
-    /// <summary>
-    /// Aligns a tracked property with a value already written to the database by ExecuteUpdate,
-    /// without leaving the property flagged as modified (avoids a redundant second write).
-    /// </summary>
-    private static void SyncCleanValue<TProp>(Microsoft.EntityFrameworkCore.ChangeTracking.PropertyEntry<ForgeTask, TProp> property, TProp value)
-    {
-        property.CurrentValue = value;
-        property.OriginalValue = value;
-        property.IsModified = false;
     }
 }

@@ -6,20 +6,21 @@ using NightCodeForge.Core.Repositories;
 namespace NightCodeForge.Infrastructure.Data.Repositories;
 
 /// <summary>
-/// EF Core SQLite implementation of ITaskRepository.
+/// EF Core SQLite implementation of ITaskRepository creating short-lived AppDbContext instances on demand.
 /// </summary>
 public class EfCoreTaskRepository : ITaskRepository
 {
-    private readonly AppDbContext _context;
+    private readonly IDbContextFactory<AppDbContext> _contextFactory;
 
-    public EfCoreTaskRepository(AppDbContext context)
+    public EfCoreTaskRepository(IDbContextFactory<AppDbContext> contextFactory)
     {
-        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
     }
 
     public async Task<TaskOverallStatus?> GetStatusAsync(int id, CancellationToken cancellationToken = default)
     {
-        return await _context.Tasks
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Tasks
             .AsNoTracking()
             .Where(t => t.Id == id)
             .Select(t => (TaskOverallStatus?)t.Status)
@@ -28,7 +29,8 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task<ForgeTask?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
-        return await _context.Tasks
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Tasks
             .AsNoTracking()
             .AsSplitQuery()
             .Include(i => i.Workspace)
@@ -49,7 +51,8 @@ public class EfCoreTaskRepository : ITaskRepository
         var idList = ids.Distinct().ToList();
         if (idList.Count == 0) return Array.Empty<ForgeTask>();
 
-        return await _context.Tasks
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Tasks
             .AsNoTracking()
             .AsSplitQuery()
             .Include(i => i.Workflow)
@@ -64,7 +67,8 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task<IReadOnlyList<ForgeTask>> GetByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default)
     {
-        return await _context.Tasks
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Tasks
             .AsNoTracking()
             .AsSplitQuery()
             .Include(i => i.Workflow)
@@ -81,7 +85,8 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task<IReadOnlyList<ForgeTask>> GetExecutedTasksByWorkspaceIdAsync(int workspaceId, CancellationToken cancellationToken = default)
     {
-        return await _context.Tasks
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Tasks
             .AsNoTracking()
             .AsSplitQuery()
             .Include(i => i.Workflow)
@@ -107,11 +112,13 @@ public class EfCoreTaskRepository : ITaskRepository
             task.Version = 1;
         }
 
-        // Task, dependencies and Version 1 baseline must be one atomic unit.
-        await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
 
-        _context.Tasks.Add(task);
-        await _context.SaveChangesAsync(cancellationToken);
+        // Task, dependencies and Version 1 baseline must be one atomic unit.
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+
+        context.Tasks.Add(task);
+        await context.SaveChangesAsync(cancellationToken);
 
         if (string.IsNullOrWhiteSpace(task.FeatureBranch))
         {
@@ -126,13 +133,13 @@ public class EfCoreTaskRepository : ITaskRepository
         {
             foreach (var depId in depList)
             {
-                _context.TaskDependencies.Add(new TaskDependency
+                context.TaskDependencies.Add(new TaskDependency
                 {
                     TaskId = task.Id,
                     DependsOnTaskId = depId
                 });
             }
-            await _context.SaveChangesAsync(cancellationToken);
+            await context.SaveChangesAsync(cancellationToken);
         }
 
         task.Dependencies = depList.Select(d => new TaskDependency { TaskId = task.Id, DependsOnTaskId = d }).ToList();
@@ -155,9 +162,9 @@ public class EfCoreTaskRepository : ITaskRepository
             ChangeReason = reason
         };
 
-        _context.TaskHistories.Add(baselineHistory);
+        context.TaskHistories.Add(baselineHistory);
         task.History?.Add(baselineHistory);
-        await _context.SaveChangesAsync(cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         return task;
@@ -165,72 +172,59 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task UpdateAsync(ForgeTask task, IEnumerable<int>? dependsOn = null, CancellationToken cancellationToken = default)
     {
-        var existing = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == task.Id);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var existing = await context.Tasks.FindAsync(new object[] { task.Id }, cancellationToken);
         if (existing != null)
         {
-            if (!ReferenceEquals(existing, task))
+            // The version token and maintainer-controlled fields are owned by UpdateWithHistoryAsync:
+            // a background execution state update must never regress them.
+            var authoritativeVersion = existing.Version;
+            var authoritativeMergeMode = existing.MergeMode;
+            var authoritativePriority = existing.Priority;
+            var authoritativeTitle = existing.Title;
+            var authoritativeDescription = existing.Description;
+
+            context.Entry(existing).CurrentValues.SetValues(task);
+
+            // If the database has a newer version than the incoming in-memory task,
+            // maintainer properties owned by UpdateWithHistoryAsync were modified concurrently.
+            // A background execution state update must not regress them.
+            if (authoritativeVersion > task.Version)
             {
-                await _context.Entry(existing).ReloadAsync(cancellationToken);
+                existing.Version = authoritativeVersion;
+                existing.MergeMode = authoritativeMergeMode;
+                existing.Priority = authoritativePriority;
+                existing.Title = authoritativeTitle;
+                existing.Description = authoritativeDescription;
+
+                // Sync latest maintainer values back to caller's in-memory instance
+                task.Version = authoritativeVersion;
+                task.MergeMode = authoritativeMergeMode;
+                task.Priority = authoritativePriority;
+                task.Title = authoritativeTitle;
+                task.Description = authoritativeDescription;
             }
+            else
+            {
+                // Version token is strictly owned by UpdateWithHistoryAsync
+                existing.Version = authoritativeVersion;
+            }
+
+            context.Entry(existing).State = EntityState.Modified;
         }
         else
         {
-            existing = await _context.Tasks.FindAsync(new object[] { task.Id }, cancellationToken);
-        }
-
-        if (existing != null)
-        {
-            if (!ReferenceEquals(existing, task))
-            {
-                // The version token and maintainer-controlled fields are owned by UpdateWithHistoryAsync:
-                // a background execution state update must never regress them.
-                var authoritativeVersion = existing.Version;
-                var authoritativeMergeMode = existing.MergeMode;
-                var authoritativePriority = existing.Priority;
-                var authoritativeTitle = existing.Title;
-                var authoritativeDescription = existing.Description;
-
-                _context.Entry(existing).CurrentValues.SetValues(task);
-
-                // If the database has a newer version than the incoming in-memory task,
-                // maintainer properties owned by UpdateWithHistoryAsync were modified concurrently.
-                // A background execution state update must not regress them.
-                if (authoritativeVersion > task.Version)
-                {
-                    existing.Version = authoritativeVersion;
-                    existing.MergeMode = authoritativeMergeMode;
-                    existing.Priority = authoritativePriority;
-                    existing.Title = authoritativeTitle;
-                    existing.Description = authoritativeDescription;
-
-                    // Sync latest maintainer values back to caller's in-memory instance
-                    task.Version = authoritativeVersion;
-                    task.MergeMode = authoritativeMergeMode;
-                    task.Priority = authoritativePriority;
-                    task.Title = authoritativeTitle;
-                    task.Description = authoritativeDescription;
-                }
-                else
-                {
-                    // Version token is strictly owned by UpdateWithHistoryAsync
-                    existing.Version = authoritativeVersion;
-                }
-
-                _context.Entry(existing).State = EntityState.Modified;
-            }
-        }
-        else
-        {
-            _context.Tasks.Update(task);
+            context.Tasks.Update(task);
         }
 
         if (dependsOn != null)
         {
-            var existingDeps = await _context.TaskDependencies
+            var existingDeps = await context.TaskDependencies
                 .Where(d => d.TaskId == task.Id)
                 .ToListAsync(cancellationToken);
 
-            _context.TaskDependencies.RemoveRange(existingDeps);
+            context.TaskDependencies.RemoveRange(existingDeps);
 
             var newDeps = dependsOn.Distinct().Select(depId => new TaskDependency
             {
@@ -240,81 +234,64 @@ public class EfCoreTaskRepository : ITaskRepository
 
             foreach (var dep in newDeps)
             {
-                _context.TaskDependencies.Add(dep);
+                context.TaskDependencies.Add(dep);
             }
 
             task.Dependencies = newDeps;
-            if (existing != null && !ReferenceEquals(existing, task))
-            {
-                existing.Dependencies = task.Dependencies;
-            }
         }
 
-        await SyncQuestionsAsync(task, existing ?? task, cancellationToken);
-        await SyncCheckpointsAsync(task, existing ?? task, cancellationToken);
+        await SyncQuestionsAsync(context, task, existing ?? task, cancellationToken);
+        await SyncCheckpointsAsync(context, task, existing ?? task, cancellationToken);
 
-        await _context.SaveChangesAsync(cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task UpdateLastHangfireJobIdAsync(int taskId, string? jobId, CancellationToken cancellationToken = default)
     {
-        var existing = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == taskId)
-                       ?? await _context.Tasks.FindAsync(new object[] { taskId }, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
 
+        var existing = await context.Tasks.FindAsync(new object[] { taskId }, cancellationToken);
         if (existing == null)
         {
             throw new TaskNotFoundException(taskId, $"ForgeTask #{taskId} was not found when updating Hangfire job ID.");
         }
 
         existing.LastHangfireJobId = jobId;
-        _context.Entry(existing).Property(t => t.LastHangfireJobId).IsModified = true;
-        await _context.SaveChangesAsync(cancellationToken);
+        context.Entry(existing).Property(t => t.LastHangfireJobId).IsModified = true;
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task UpdateWithHistoryAsync(ForgeTask task, IEnumerable<int>? dependsOn, string changedBy, string? reason, CancellationToken cancellationToken = default)
     {
-        var currentMaxVersion = await _context.TaskHistories
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var currentMaxVersion = await context.TaskHistories
             .Where(h => h.TaskId == task.Id)
             .Select(h => (int?)h.Version)
             .MaxAsync(cancellationToken) ?? 0;
 
         task.Version = Math.Max(task.Version + 1, currentMaxVersion + 1);
 
-        var existing = _context.Tasks.Local.FirstOrDefault(entry => entry.Id == task.Id);
+        var existing = await context.Tasks.FindAsync(new object[] { task.Id }, cancellationToken);
         if (existing != null)
         {
-            if (!ReferenceEquals(existing, task))
-            {
-                await _context.Entry(existing).ReloadAsync(cancellationToken);
-            }
+            context.Entry(existing).CurrentValues.SetValues(task);
+            context.Entry(existing).State = EntityState.Modified;
         }
         else
         {
-            existing = await _context.Tasks.FindAsync(new object[] { task.Id }, cancellationToken);
-        }
-
-        if (existing != null)
-        {
-            if (!ReferenceEquals(existing, task))
-            {
-                _context.Entry(existing).CurrentValues.SetValues(task);
-                _context.Entry(existing).State = EntityState.Modified;
-            }
-        }
-        else
-        {
-            _context.Tasks.Update(task);
+            context.Tasks.Update(task);
         }
 
         List<int> depList;
         if (dependsOn != null)
         {
             depList = dependsOn.Distinct().ToList();
-            var existingDeps = await _context.TaskDependencies
+            var existingDeps = await context.TaskDependencies
                 .Where(d => d.TaskId == task.Id)
                 .ToListAsync(cancellationToken);
 
-            _context.TaskDependencies.RemoveRange(existingDeps);
+            context.TaskDependencies.RemoveRange(existingDeps);
 
             var newDeps = depList.Select(depId => new TaskDependency
             {
@@ -324,18 +301,14 @@ public class EfCoreTaskRepository : ITaskRepository
 
             foreach (var dep in newDeps)
             {
-                _context.TaskDependencies.Add(dep);
+                context.TaskDependencies.Add(dep);
             }
 
             task.Dependencies = newDeps;
-            if (existing != null && !ReferenceEquals(existing, task))
-            {
-                existing.Dependencies = task.Dependencies;
-            }
         }
         else
         {
-            depList = await _context.TaskDependencies
+            depList = await context.TaskDependencies
                 .Where(d => d.TaskId == task.Id)
                 .Select(d => d.DependsOnTaskId)
                 .ToListAsync(cancellationToken);
@@ -359,28 +332,24 @@ public class EfCoreTaskRepository : ITaskRepository
             ChangeReason = reason
         };
 
-        _context.TaskHistories.Add(history);
+        context.TaskHistories.Add(history);
         task.History?.Add(history);
-        if (existing != null && !ReferenceEquals(existing, task))
-        {
-            existing.History?.Add(history);
-        }
-        await SyncQuestionsAsync(task, existing ?? task, cancellationToken);
-        await SyncCheckpointsAsync(task, existing ?? task, cancellationToken);
-        await _context.SaveChangesAsync(cancellationToken);
+        await SyncQuestionsAsync(context, task, existing ?? task, cancellationToken);
+        await SyncCheckpointsAsync(context, task, existing ?? task, cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
-    private async Task SyncCheckpointsAsync(ForgeTask task, ForgeTask trackedTask, CancellationToken cancellationToken = default)
+    private static async Task SyncCheckpointsAsync(AppDbContext context, ForgeTask task, ForgeTask trackedTask, CancellationToken cancellationToken = default)
     {
         if (task.Checkpoints == null || task.Checkpoints.Count == 0) return;
 
         var existingIds = task.Checkpoints.Where(c => c.Id > 0).Select(c => c.Id).Distinct().ToList();
         if (existingIds.Count > 0)
         {
-            var missingIds = existingIds.Where(id => _context.StageCheckpoints.Local.All(x => x.Id != id)).ToList();
+            var missingIds = existingIds.Where(id => context.StageCheckpoints.Local.All(x => x.Id != id)).ToList();
             if (missingIds.Count > 0)
             {
-                await _context.StageCheckpoints
+                await context.StageCheckpoints
                     .Where(c => missingIds.Contains(c.Id))
                     .ToListAsync(cancellationToken);
             }
@@ -395,44 +364,44 @@ public class EfCoreTaskRepository : ITaskRepository
                     c.TaskId = task.Id;
                 }
                 c.ForgeTask = trackedTask;
-                var tracked = _context.StageCheckpoints.Local.FirstOrDefault(x => ReferenceEquals(x, c));
+                var tracked = context.StageCheckpoints.Local.FirstOrDefault(x => ReferenceEquals(x, c));
                 if (tracked == null)
                 {
-                    _context.StageCheckpoints.Add(c);
+                    context.StageCheckpoints.Add(c);
                 }
             }
             else
             {
-                var existingC = _context.StageCheckpoints.Local.FirstOrDefault(x => x.Id == c.Id);
+                var existingC = context.StageCheckpoints.Local.FirstOrDefault(x => x.Id == c.Id);
                 if (existingC != null)
                 {
                     if (!ReferenceEquals(existingC, c))
                     {
-                        _context.Entry(existingC).CurrentValues.SetValues(c);
+                        context.Entry(existingC).CurrentValues.SetValues(c);
                     }
                     existingC.ForgeTask = trackedTask;
                 }
                 else
                 {
                     c.ForgeTask = trackedTask;
-                    _context.StageCheckpoints.Attach(c);
-                    _context.Entry(c).State = EntityState.Modified;
+                    context.StageCheckpoints.Attach(c);
+                    context.Entry(c).State = EntityState.Modified;
                 }
             }
         }
     }
 
-    private async Task SyncQuestionsAsync(ForgeTask task, ForgeTask trackedTask, CancellationToken cancellationToken = default)
+    private static async Task SyncQuestionsAsync(AppDbContext context, ForgeTask task, ForgeTask trackedTask, CancellationToken cancellationToken = default)
     {
         if (task.Questions == null || task.Questions.Count == 0) return;
 
         var existingIds = task.Questions.Where(q => q.Id > 0).Select(q => q.Id).Distinct().ToList();
         if (existingIds.Count > 0)
         {
-            var missingIds = existingIds.Where(id => _context.Questions.Local.All(x => x.Id != id)).ToList();
+            var missingIds = existingIds.Where(id => context.Questions.Local.All(x => x.Id != id)).ToList();
             if (missingIds.Count > 0)
             {
-                await _context.Questions
+                await context.Questions
                     .Where(q => missingIds.Contains(q.Id))
                     .ToListAsync(cancellationToken);
             }
@@ -447,28 +416,28 @@ public class EfCoreTaskRepository : ITaskRepository
                     q.TaskId = task.Id;
                 }
                 q.ForgeTask = trackedTask;
-                var tracked = _context.Questions.Local.FirstOrDefault(x => ReferenceEquals(x, q));
+                var tracked = context.Questions.Local.FirstOrDefault(x => ReferenceEquals(x, q));
                 if (tracked == null)
                 {
-                    _context.Questions.Add(q);
+                    context.Questions.Add(q);
                 }
             }
             else
             {
-                var existingQ = _context.Questions.Local.FirstOrDefault(x => x.Id == q.Id);
+                var existingQ = context.Questions.Local.FirstOrDefault(x => x.Id == q.Id);
                 if (existingQ != null)
                 {
                     if (!ReferenceEquals(existingQ, q))
                     {
-                        _context.Entry(existingQ).CurrentValues.SetValues(q);
+                        context.Entry(existingQ).CurrentValues.SetValues(q);
                     }
                     existingQ.ForgeTask = trackedTask;
                 }
                 else
                 {
                     q.ForgeTask = trackedTask;
-                    _context.Questions.Attach(q);
-                    _context.Entry(q).State = EntityState.Modified;
+                    context.Questions.Attach(q);
+                    context.Entry(q).State = EntityState.Modified;
                 }
             }
         }
@@ -476,7 +445,8 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task<IReadOnlyList<ForgeTaskHistory>> GetHistoryAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        return await _context.TaskHistories
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.TaskHistories
             .AsNoTracking()
             .Where(h => h.TaskId == taskId)
             .OrderBy(h => h.Version)
@@ -490,7 +460,8 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task<int> GetMaxHistoryVersionAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        return await _context.TaskHistories
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.TaskHistories
             .Where(h => h.TaskId == taskId)
             .Select(h => (int?)h.Version)
             .MaxAsync(cancellationToken) ?? 0;
@@ -498,13 +469,15 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task<IReadOnlyDictionary<int, IReadOnlyList<int>>> GetWorkspaceDependenciesAsync(int workspaceId, CancellationToken cancellationToken = default)
     {
-        var taskIds = await _context.Tasks
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var taskIds = await context.Tasks
             .AsNoTracking()
             .Where(t => t.WorkspaceId == workspaceId)
             .Select(t => t.Id)
             .ToListAsync(cancellationToken);
 
-        var deps = await _context.TaskDependencies
+        var deps = await context.TaskDependencies
             .AsNoTracking()
             .Where(d => taskIds.Contains(d.TaskId))
             .Select(d => new { d.TaskId, d.DependsOnTaskId })
@@ -523,7 +496,8 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task<IReadOnlyList<int>> GetDependenciesAsync(int taskId, CancellationToken cancellationToken = default)
     {
-        return await _context.TaskDependencies
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.TaskDependencies
             .AsNoTracking()
             .Where(d => d.TaskId == taskId)
             .Select(d => d.DependsOnTaskId)
@@ -532,24 +506,30 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task DeleteAsync(int id, CancellationToken cancellationToken = default)
     {
-        var task = await _context.Tasks.FindAsync(new object[] { id }, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var task = await context.Tasks.FindAsync(new object[] { id }, cancellationToken);
         if (task != null)
         {
-            _context.Tasks.Remove(task);
-            await _context.SaveChangesAsync(cancellationToken);
+            context.Tasks.Remove(task);
+            await context.SaveChangesAsync(cancellationToken);
         }
     }
 
     public async Task<Question?> GetQuestionByIdAsync(int questionId, CancellationToken cancellationToken = default)
     {
-        return await _context.Questions
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Questions
+            .AsNoTracking()
             .Include(q => q.ForgeTask)
             .FirstOrDefaultAsync(q => q.Id == questionId, cancellationToken);
     }
 
     public async Task<IReadOnlyList<Question>> GetQuestionsByStatusAsync(QuestionStatus status, int? workspaceId = null, CancellationToken cancellationToken = default)
     {
-        var query = _context.Questions
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        var query = context.Questions
+            .AsNoTracking()
             .Include(q => q.ForgeTask)
             .Where(q => q.Status == status);
 
@@ -565,7 +545,8 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task<IReadOnlyList<ForgeTask>> GetByStatusAsync(TaskOverallStatus status, CancellationToken cancellationToken = default)
     {
-        return await _context.Tasks
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Tasks
             .AsNoTracking()
             .AsSplitQuery()
             .Include(i => i.Workspace)
@@ -577,20 +558,23 @@ public class EfCoreTaskRepository : ITaskRepository
 
     public async Task AddExecutionRecordAsync(StageExecutionRecord record, CancellationToken cancellationToken = default)
     {
-        _context.StageExecutionRecords.Add(record);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        context.StageExecutionRecords.Add(record);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task AddCheckpointAsync(StageCheckpoint checkpoint, CancellationToken cancellationToken = default)
     {
-        _context.StageCheckpoints.Add(checkpoint);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        context.StageCheckpoints.Add(checkpoint);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task AddExecutionLogAsync(ExecutionLog log, CancellationToken cancellationToken = default)
     {
-        _context.ExecutionLogs.Add(log);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        context.ExecutionLogs.Add(log);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<Conversation> StartConversationAsync(
@@ -606,6 +590,8 @@ public class EfCoreTaskRepository : ITaskRepository
         string? title = null,
         CancellationToken cancellationToken = default)
     {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
         var conversation = new Conversation
         {
             TaskId = taskId,
@@ -622,8 +608,8 @@ public class EfCoreTaskRepository : ITaskRepository
             Status = StageExecutionStatus.Running
         };
 
-        _context.Conversations.Add(conversation);
-        await _context.SaveChangesAsync(cancellationToken);
+        context.Conversations.Add(conversation);
+        await context.SaveChangesAsync(cancellationToken);
         return conversation;
     }
 
@@ -634,7 +620,9 @@ public class EfCoreTaskRepository : ITaskRepository
         string? transcriptFileName = null,
         CancellationToken cancellationToken = default)
     {
-        var conversation = await _context.Conversations.FindAsync(new object[] { conversationId }, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var conversation = await context.Conversations.FindAsync(new object[] { conversationId }, cancellationToken);
         if (conversation != null)
         {
             conversation.Status = status;
@@ -643,7 +631,7 @@ public class EfCoreTaskRepository : ITaskRepository
                 : DateTime.UtcNow;
             if (summary != null) conversation.Summary = summary;
             if (transcriptFileName != null) conversation.TranscriptFileName = transcriptFileName;
-            await _context.SaveChangesAsync(cancellationToken);
+            await context.SaveChangesAsync(cancellationToken);
         }
     }
 
@@ -660,7 +648,9 @@ public class EfCoreTaskRepository : ITaskRepository
         string? metadataJson = null,
         CancellationToken cancellationToken = default)
     {
-        var maxIndex = await _context.ConversationTurns
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var maxIndex = await context.ConversationTurns
             .Where(t => t.ConversationId == conversationId)
             .MaxAsync(t => (int?)t.TurnIndex, cancellationToken);
         var nextIndex = (maxIndex ?? -1) + 1;
@@ -681,8 +671,8 @@ public class EfCoreTaskRepository : ITaskRepository
             Timestamp = DateTime.UtcNow
         };
 
-        _context.ConversationTurns.Add(turn);
-        await _context.SaveChangesAsync(cancellationToken);
+        context.ConversationTurns.Add(turn);
+        await context.SaveChangesAsync(cancellationToken);
         return turn;
     }
 
@@ -690,7 +680,8 @@ public class EfCoreTaskRepository : ITaskRepository
         int taskId,
         CancellationToken cancellationToken = default)
     {
-        return await _context.Conversations
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Conversations
             .AsNoTracking()
             .Where(c => c.TaskId == taskId)
             .OrderBy(c => c.StartedAt)
@@ -702,7 +693,8 @@ public class EfCoreTaskRepository : ITaskRepository
         int conversationId,
         CancellationToken cancellationToken = default)
     {
-        return await _context.Conversations
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Conversations
             .AsNoTracking()
             .Include(c => c.Turns.OrderBy(t => t.TurnIndex))
             .FirstOrDefaultAsync(c => c.Id == conversationId, cancellationToken);
@@ -713,7 +705,9 @@ public class EfCoreTaskRepository : ITaskRepository
         string stageId,
         CancellationToken cancellationToken = default)
     {
-        return await _context.Conversations
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Conversations
+            .AsNoTracking()
             .Include(c => c.Turns.OrderBy(t => t.TurnIndex))
             .Where(c => c.TaskId == taskId && c.StageId == stageId && c.Status == StageExecutionStatus.WaitingForHuman)
             .OrderByDescending(c => c.StartedAt)
@@ -726,7 +720,9 @@ public class EfCoreTaskRepository : ITaskRepository
         string stageId,
         CancellationToken cancellationToken = default)
     {
-        return await _context.Conversations
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Conversations
+            .AsNoTracking()
             .Include(c => c.Turns.OrderBy(t => t.TurnIndex))
             .Where(c => c.TaskId == taskId
                      && c.StageId == stageId
@@ -741,20 +737,24 @@ public class EfCoreTaskRepository : ITaskRepository
         int conversationId,
         CancellationToken cancellationToken = default)
     {
-        var conversation = await _context.Conversations.FindAsync(new object[] { conversationId }, cancellationToken)
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var conversation = await context.Conversations.FindAsync(new object[] { conversationId }, cancellationToken)
             ?? throw new KeyNotFoundException($"Conversation #{conversationId} not found.");
 
         conversation.Status = StageExecutionStatus.Running;
         conversation.CompletedAt = null;
         conversation.Summary = null;
-        await _context.SaveChangesAsync(cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task SanitizeTrailingInterruptedTurnsAsync(
         int conversationId,
         CancellationToken cancellationToken = default)
     {
-        var turns = await _context.ConversationTurns
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var turns = await context.ConversationTurns
             .Where(t => t.ConversationId == conversationId)
             .OrderBy(t => t.TurnIndex)
             .ToListAsync(cancellationToken);
@@ -762,8 +762,8 @@ public class EfCoreTaskRepository : ITaskRepository
         var toRemove = NightCodeForge.Core.Workflow.ConversationHistorySerializer.GetTrailingInterruptedTurns(turns);
         if (toRemove.Count > 0)
         {
-            _context.ConversationTurns.RemoveRange(toRemove);
-            await _context.SaveChangesAsync(cancellationToken);
+            context.ConversationTurns.RemoveRange(toRemove);
+            await context.SaveChangesAsync(cancellationToken);
         }
     }
 
@@ -792,7 +792,8 @@ public class EfCoreTaskRepository : ITaskRepository
         int workspaceId,
         CancellationToken cancellationToken = default)
     {
-        return await _context.Conversations
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Conversations
             .AsNoTracking()
             .Where(c => c.WorkspaceId == workspaceId && c.ConversationType == ConversationType.Ideation)
             .OrderByDescending(c => c.StartedAt)
@@ -804,7 +805,8 @@ public class EfCoreTaskRepository : ITaskRepository
         int workspaceId,
         CancellationToken cancellationToken = default)
     {
-        return await _context.Conversations
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Conversations
             .AsNoTracking()
             .Include(c => c.Turns.OrderBy(t => t.TurnIndex))
             .Where(c => c.WorkspaceId == workspaceId

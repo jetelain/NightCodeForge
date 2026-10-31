@@ -282,17 +282,26 @@
 
 @code {
     [Parameter] public int? WorkspaceId { get; set; }
+    [Parameter] public TimeSpan StateChangeDebounceInterval { get; set; } = HomeDashboardBuilder.DefaultStateChangeDebounceInterval;
 
     private HomeDashboardSnapshot _snapshot = new(
         Array.Empty<RecentWorkspaceSummary>(),
         Array.Empty<HomeScheduledTaskItem>(),
         0,
         0);
+    private HomeStateChangeDebouncer? _stateChangeDebouncer;
     private bool _isLoading;
+    private bool _refreshRequestedWhileLoading;
+    private bool _isUpdatingPendingQuestions;
     private bool _disposed;
 
     protected override async Task OnInitializedAsync()
     {
+        _stateChangeDebouncer = new HomeStateChangeDebouncer(
+            StateChangeDebounceInterval,
+            ExecuteDebouncedRefreshAsync,
+            Logger);
+
         if (WorkspaceId.HasValue)
         {
             WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
@@ -314,33 +323,74 @@
 
     private async Task RefreshDashboardAsync()
     {
-        if (_isLoading || _disposed) return;
+        if (_disposed) return;
+        if (_isLoading)
+        {
+            _refreshRequestedWhileLoading = true;
+            return;
+        }
+
+        _refreshRequestedWhileLoading = false;
+        _stateChangeDebouncer?.CancelPending();
         _isLoading = true;
 
         try
         {
+            var cancellationToken = _stateChangeDebouncer?.DisposalToken ?? CancellationToken.None;
             _snapshot = await HomeDashboardBuilder.BuildSnapshotAsync(
                 WorkspaceRepository,
                 TaskRepository,
                 DevQueueService,
-                Logger);
-            WorkerState.UpdatePendingQuestions(_snapshot.PendingQuestionCount);
+                Logger,
+                cancellationToken);
+
+            _isUpdatingPendingQuestions = true;
+            try
+            {
+                WorkerState.UpdatePendingQuestions(_snapshot.PendingQuestionCount);
+            }
+            finally
+            {
+                _isUpdatingPendingQuestions = false;
+            }
+        }
+        catch (OperationCanceledException) when (_disposed)
+        {
+            Logger.LogDebug("Homepage dashboard refresh canceled due to component disposal.");
         }
         finally
         {
             _isLoading = false;
+            if (_refreshRequestedWhileLoading && !_disposed)
+            {
+                _refreshRequestedWhileLoading = false;
+                _stateChangeDebouncer?.NotifyStateChanged();
+            }
         }
+    }
+
+    private Task ExecuteDebouncedRefreshAsync(CancellationToken cancellationToken)
+    {
+        if (_disposed || cancellationToken.IsCancellationRequested)
+        {
+            return Task.CompletedTask;
+        }
+
+        return InvokeAsync(async () =>
+        {
+            if (_disposed || cancellationToken.IsCancellationRequested) return;
+            await RefreshDashboardAsync();
+            if (!_disposed)
+            {
+                StateHasChanged();
+            }
+        });
     }
 
     private void HandleStateChanged()
     {
-        if (_disposed) return;
-        _ = InvokeAsync(async () =>
-        {
-            if (_disposed) return;
-            await RefreshDashboardAsync();
-            StateHasChanged();
-        });
+        if (_disposed || _isUpdatingPendingQuestions) return;
+        _stateChangeDebouncer?.NotifyStateChanged();
     }
 
     public void Dispose()
@@ -348,5 +398,6 @@
         _disposed = true;
         WorkspaceState.OnWorkspaceChanged -= HandleStateChanged;
         WorkerState.OnWorkerStateChanged -= HandleStateChanged;
+        _stateChangeDebouncer?.Dispose();
     }
 }

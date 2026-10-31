@@ -46,7 +46,7 @@ public class EfCoreConversationResumptionTests : IDisposable
         context.Tasks.Add(task);
         await context.SaveChangesAsync();
 
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         // Run 1: Completed
         var conv1 = await repo.StartConversationAsync(task.Id, "task-review", WorkflowStageKind.Agentic, 1);
@@ -84,7 +84,7 @@ public class EfCoreConversationResumptionTests : IDisposable
         context.Tasks.Add(task);
         await context.SaveChangesAsync();
 
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
         var conv = await repo.StartConversationAsync(task.Id, "task-review", WorkflowStageKind.Agentic, 1);
         await repo.CompleteConversationAsync(conv.Id, StageExecutionStatus.WaitingForHuman, summary: "Waiting");
 
@@ -103,7 +103,7 @@ public class EfCoreConversationResumptionTests : IDisposable
     public async Task ResumeConversationAsync_WhenNotFound_ThrowsKeyNotFoundException()
     {
         using var context = await CreateContextAsync();
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         await Assert.ThrowsAsync<KeyNotFoundException>(() => repo.ResumeConversationAsync(99999));
     }
@@ -120,7 +120,7 @@ public class EfCoreConversationResumptionTests : IDisposable
         context.Tasks.Add(task);
         await context.SaveChangesAsync();
 
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         // Case 1: Complete with WaitingForHuman -> CompletedAt is null
         var conv1 = await repo.StartConversationAsync(task.Id, "task-review", WorkflowStageKind.Agentic, 1);
@@ -185,7 +185,7 @@ public class EfCoreConversationResumptionTests : IDisposable
         context.Tasks.Add(task);
         await context.SaveChangesAsync();
 
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
         var conv = await repo.StartConversationAsync(task.Id, "implementation", WorkflowStageKind.Agentic, 1);
         await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Implement feature");
         await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.Tool, toolName: "read", toolArguments: "{\"path\":\"a.cs\"}", metadataJson: "{\"CallId\":\"call_1\"}");

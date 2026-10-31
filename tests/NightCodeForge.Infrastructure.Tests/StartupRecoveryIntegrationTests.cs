@@ -24,6 +24,8 @@ public class StartupRecoveryIntegrationTests : IDisposable
     private readonly SystemProcessRunner _processRunner;
     private readonly GitCliRunner _runner;
     private readonly SqliteConnection _connection;
+    private readonly DbContextOptions<AppDbContext> _dbOptions;
+    private readonly IDbContextFactory<AppDbContext> _contextFactory;
     private readonly AppDbContext _context;
 
     private StartupRecoveryService CreateRecoveryService(
@@ -69,10 +71,11 @@ public class StartupRecoveryIntegrationTests : IDisposable
         _connection = new SqliteConnection("DataSource=:memory:");
         _connection.Open();
 
-        var dbOptions = new DbContextOptionsBuilder<AppDbContext>()
+        _dbOptions = new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlite(_connection)
             .Options;
-        _context = new AppDbContext(dbOptions);
+        _contextFactory = new AppDbContextFactory(_dbOptions);
+        _context = new AppDbContext(_dbOptions);
         _context.Database.EnsureCreated();
     }
 
@@ -115,8 +118,8 @@ public class StartupRecoveryIntegrationTests : IDisposable
         _context.Tasks.Add(task);
         await _context.SaveChangesAsync();
 
-        var workspaceRepo = new EfCoreWorkspaceRepository(_context);
-        var taskRepo = new EfCoreTaskRepository(_context);
+        var workspaceRepo = new EfCoreWorkspaceRepository(_contextFactory);
+        var taskRepo = new EfCoreTaskRepository(_contextFactory);
         var jobQueue = new FakeTestJobQueue();
 
         var recoveryService = CreateRecoveryService(workspaceRepo, taskRepo, jobQueue);
@@ -177,8 +180,8 @@ public class StartupRecoveryIntegrationTests : IDisposable
         // Simulate host restart: clear ChangeTracker so nothing is locally tracked
         _context.ChangeTracker.Clear();
 
-        var workspaceRepo = new EfCoreWorkspaceRepository(_context);
-        var taskRepo = new EfCoreTaskRepository(_context);
+        var workspaceRepo = new EfCoreWorkspaceRepository(_contextFactory);
+        var taskRepo = new EfCoreTaskRepository(_contextFactory);
         var jobQueue = new FakeTestJobQueue();
 
         var recoveryService = CreateRecoveryService(workspaceRepo, taskRepo, jobQueue);
@@ -217,7 +220,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
         _context.Tasks.Add(task);
         await _context.SaveChangesAsync();
 
-        var taskRepoInitial = new EfCoreTaskRepository(_context);
+        var taskRepoInitial = new EfCoreTaskRepository(_contextFactory);
         var conv = await taskRepoInitial.StartConversationAsync(
             task.Id,
             "task-review",
@@ -231,8 +234,8 @@ public class StartupRecoveryIntegrationTests : IDisposable
         // Simulate reboot: clear EF Core change tracker
         _context.ChangeTracker.Clear();
 
-        var workspaceRepo = new EfCoreWorkspaceRepository(_context);
-        var taskRepo = new EfCoreTaskRepository(_context);
+        var workspaceRepo = new EfCoreWorkspaceRepository(_contextFactory);
+        var taskRepo = new EfCoreTaskRepository(_contextFactory);
         var jobQueue = new FakeTestJobQueue();
         var recoveryService = CreateRecoveryService(workspaceRepo, taskRepo, jobQueue);
 
@@ -368,8 +371,8 @@ public class StartupRecoveryIntegrationTests : IDisposable
             _context.ChangeTracker.Clear();
 
             // 7. Run StartupRecoveryService.ReconcileWorkspacesAsync
-            var workspaceRepo = new EfCoreWorkspaceRepository(_context);
-            var taskRepo = new EfCoreTaskRepository(_context);
+            var workspaceRepo = new EfCoreWorkspaceRepository(_contextFactory);
+            var taskRepo = new EfCoreTaskRepository(_contextFactory);
             var jobQueue = new FakeTestJobQueue();
             var recoveryService = CreateRecoveryService(workspaceRepo, taskRepo, jobQueue);
 
@@ -446,8 +449,8 @@ public class StartupRecoveryIntegrationTests : IDisposable
         // Clear EF Core local tracking to simulate host restart
         _context.ChangeTracker.Clear();
 
-        var workspaceRepo = new EfCoreWorkspaceRepository(_context);
-        var taskRepo = new EfCoreTaskRepository(_context);
+        var workspaceRepo = new EfCoreWorkspaceRepository(_contextFactory);
+        var taskRepo = new EfCoreTaskRepository(_contextFactory);
         var jobQueue = new FakeTestJobQueue();
         var recoveryService = CreateRecoveryService(workspaceRepo, taskRepo, jobQueue);
 

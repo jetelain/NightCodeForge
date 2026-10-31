@@ -1,5 +1,6 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Core.Domain;
@@ -487,5 +488,178 @@ public class HomeDashboardTests : BunitContext
         Assert.NotNull(cut.Find("#home-no-scheduled-tasks"));
         Assert.Equal("0", cut.Find("#home-inbox-count-badge").TextContent.Trim());
         Assert.Empty(cut.FindAll("#home-pending-questions-banner"));
+    }
+
+    [Fact]
+    public void WorkerStateService_UpdatePendingQuestions_OnlyFiresEventWhenCountChanges()
+    {
+        var telemetryServiceMock = new Mock<IOperationsTelemetryService>();
+        var workerState = new WorkerStateService(telemetryServiceMock.Object);
+
+        int eventCount = 0;
+        workerState.OnWorkerStateChanged += () => eventCount++;
+
+        workerState.UpdatePendingQuestions(0);
+        Assert.Equal(0, eventCount);
+
+        workerState.UpdatePendingQuestions(3);
+        Assert.Equal(1, eventCount);
+        Assert.Equal(3, workerState.Current.PendingQuestionCount);
+
+        workerState.UpdatePendingQuestions(3);
+        Assert.Equal(1, eventCount);
+    }
+
+    [Fact]
+    public async Task HomeStateChangeDebouncer_CoalescesBurstNotifications_AndCancelsOnDispose()
+    {
+        int refreshCount = 0;
+        var refreshTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var debouncer = new HomeStateChangeDebouncer(
+            TimeSpan.FromMilliseconds(80),
+            ct =>
+            {
+                Interlocked.Increment(ref refreshCount);
+                refreshTcs.TrySetResult();
+                return Task.CompletedTask;
+            },
+            NullLogger.Instance);
+
+        for (int i = 0; i < 10; i++)
+        {
+            debouncer.NotifyStateChanged();
+        }
+
+        Assert.Equal(0, Volatile.Read(ref refreshCount));
+
+        await refreshTcs.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(1, Volatile.Read(ref refreshCount));
+
+        debouncer.NotifyStateChanged();
+        debouncer.Dispose();
+
+        var tokenAfterDispose = Record.Exception(() => debouncer.DisposalToken);
+        Assert.Null(tokenAfterDispose);
+        Assert.True(debouncer.DisposalToken.IsCancellationRequested);
+
+        await Task.Delay(120);
+        Assert.Equal(1, Volatile.Read(ref refreshCount));
+    }
+
+    [Fact]
+    public async Task HomeStateChangeDebouncer_RapidNotifyAndCancelPending_NeverLogsErrorOrThrowsObjectDisposed()
+    {
+        var loggerMock = new Mock<ILogger>();
+        var debouncer = new HomeStateChangeDebouncer(
+            TimeSpan.FromMilliseconds(5),
+            _ => Task.CompletedTask,
+            loggerMock.Object);
+
+        for (int i = 0; i < 50; i++)
+        {
+            debouncer.NotifyStateChanged();
+            debouncer.CancelPending();
+        }
+
+        debouncer.NotifyStateChanged();
+        debouncer.Dispose();
+
+        await Task.Delay(50);
+
+        Assert.True(debouncer.DisposalToken.IsCancellationRequested);
+        loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Error,
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task HomePage_WhenStateChangeExpiresDuringInFlightRefresh_ReQueuesFollowUpRefreshAfterLoadCompletes()
+    {
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var taskRepo = new InMemoryTaskRepository();
+        var firstLoadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondLoadCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int snapshotCallCount = 0;
+
+        var emptyQueueSnapshot = new DevQueueSnapshot(
+            Array.Empty<QueuedJobItem>(),
+            Array.Empty<QueuedJobItem>(),
+            Array.Empty<QueuedJobItem>(),
+            Array.Empty<QueuedJobItem>(),
+            Array.Empty<QueuedJobItem>(),
+            Array.Empty<QueuedJobItem>(),
+            Array.Empty<QueuedJobItem>(),
+            Array.Empty<QueuedJobItem>(),
+            Array.Empty<ActiveLockSnapshot>(),
+            Array.Empty<SkippedJobItem>());
+
+        var devQueueMock = new Mock<IDevQueueService>();
+        devQueueMock
+            .Setup(s => s.GetSnapshotAsync(It.IsAny<CancellationToken>()))
+            .Returns(async (CancellationToken ct) =>
+            {
+                var call = Interlocked.Increment(ref snapshotCallCount);
+                if (call == 1)
+                {
+                    await firstLoadGate.Task.WaitAsync(ct);
+                }
+                else if (call >= 2)
+                {
+                    secondLoadCompleted.TrySetResult();
+                }
+
+                return emptyQueueSnapshot;
+            });
+
+        var workspaceState = new WorkspaceStateService();
+        var telemetryServiceMock = new Mock<IOperationsTelemetryService>();
+        telemetryServiceMock.Setup(t => t.GetRecentLlmCalls(It.IsAny<int>())).Returns(new List<LlmCallRecord>());
+        telemetryServiceMock.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(new List<ShellCommandRecord>());
+
+        var workerState = new WorkerStateService(telemetryServiceMock.Object);
+        var hubConnection = TestHubConnectionHelper.Create(workerStateService: workerState);
+        var gatewayMock = new Mock<ILlmGatewayService>();
+        gatewayMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);
+
+        Services.AddSingleton<IWorkspaceRepository>(workspaceRepo);
+        Services.AddSingleton<ITaskRepository>(taskRepo);
+        Services.AddSingleton(devQueueMock.Object);
+        Services.AddSingleton(workspaceState);
+        Services.AddSingleton(workerState);
+        Services.AddSingleton(new OperationsTelemetryUiService(hubConnection, telemetryServiceMock.Object));
+        Services.AddSingleton(TestServices.CreateOperationsControlService());
+        Services.AddSingleton(gatewayMock.Object);
+        Services.AddSingleton(TestServices.CreateToastService());
+        Services.AddSingleton(NullLogger<Home>.Instance);
+        Services.AddSingleton(NullLogger<ActiveOperationsHero>.Instance);
+
+        var cut = Render<Home>(parameters => parameters
+            .Add(p => p.StateChangeDebounceInterval, TimeSpan.FromMilliseconds(20)));
+
+        // While initial RefreshDashboardAsync is still in-flight (_isLoading == true),
+        // fire a state change and wait long enough for its debounce timer to expire during _isLoading.
+        await workspaceRepo.CreateAsync(new Workspace
+        {
+            Name = "Added During In-Flight Load",
+            RepositoryPath = "/repo/inflight",
+            DefaultBaseBranch = "main"
+        });
+        workerState.HandleWorkerStatus(WorkerStatusConstants.Running, 42, StandardStageIds.Implementation, "Local GPU", "In-Flight Task");
+        await Task.Delay(60);
+
+        // Now allow the first load to complete; the follow-up refresh must be re-queued and executed.
+        firstLoadGate.TrySetResult();
+        await secondLoadCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Added During In-Flight Load", cut.Markup);
+        });
     }
 }

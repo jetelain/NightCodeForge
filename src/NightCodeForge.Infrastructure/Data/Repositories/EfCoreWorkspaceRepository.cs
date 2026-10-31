@@ -5,20 +5,21 @@ using NightCodeForge.Core.Repositories;
 namespace NightCodeForge.Infrastructure.Data.Repositories;
 
 /// <summary>
-/// EF Core SQLite implementation of IWorkspaceRepository.
+/// EF Core SQLite implementation of IWorkspaceRepository creating short-lived AppDbContext instances on demand.
 /// </summary>
 public class EfCoreWorkspaceRepository : IWorkspaceRepository
 {
-    private readonly AppDbContext _context;
+    private readonly IDbContextFactory<AppDbContext> _contextFactory;
 
-    public EfCoreWorkspaceRepository(AppDbContext context)
+    public EfCoreWorkspaceRepository(IDbContextFactory<AppDbContext> contextFactory)
     {
-        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
     }
 
     public async Task<Workspace?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
-        return await _context.Workspaces
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Workspaces
             .AsNoTracking()
             .AsSplitQuery()
             .Include(w => w.AgentProfiles)
@@ -28,7 +29,8 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
 
     public async Task<IReadOnlyList<Workspace>> GetAllAsync(CancellationToken cancellationToken = default)
     {
-        return await _context.Workspaces
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.Workspaces
             .AsNoTracking()
             .Include(w => w.AgentProfiles)
             .ToListAsync(cancellationToken);
@@ -36,38 +38,98 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
 
     public async Task<Workspace> CreateAsync(Workspace workspace, CancellationToken cancellationToken = default)
     {
-        _context.Workspaces.Add(workspace);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        context.Workspaces.Add(workspace);
+        await context.SaveChangesAsync(cancellationToken);
         return workspace;
     }
 
     public async Task UpdateAsync(Workspace workspace, CancellationToken cancellationToken = default)
     {
-        var existing = _context.Workspaces.Local.FirstOrDefault(entry => entry.Id == workspace.Id)
-                       ?? await _context.Workspaces.FindAsync(new object[] { workspace.Id }, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
 
+        var existing = await context.Workspaces.FindAsync(new object[] { workspace.Id }, cancellationToken);
         if (existing != null)
         {
-            if (!ReferenceEquals(existing, workspace))
-            {
-                _context.Entry(existing).CurrentValues.SetValues(workspace);
-            }
+            context.Entry(existing).CurrentValues.SetValues(workspace);
+            await SyncAgentProfilesAsync(context, workspace, existing, cancellationToken);
         }
         else
         {
-            _context.Workspaces.Update(workspace);
+            context.Workspaces.Update(workspace);
         }
 
-        await _context.SaveChangesAsync(cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
+    }
+
+    private static async Task SyncAgentProfilesAsync(
+        AppDbContext context,
+        Workspace workspace,
+        Workspace trackedWorkspace,
+        CancellationToken cancellationToken)
+    {
+        if (workspace.AgentProfiles == null || workspace.AgentProfiles.Count == 0)
+        {
+            return;
+        }
+
+        var profileIds = workspace.AgentProfiles
+            .Where(p => !string.IsNullOrWhiteSpace(p.Id))
+            .Select(p => p.Id)
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (profileIds.Count > 0)
+        {
+            var existingProfiles = await context.AgentProfiles
+                .Where(p => p.WorkspaceId == workspace.Id || profileIds.Contains(p.Id))
+                .ToListAsync(cancellationToken);
+
+            var profilesToRemove = existingProfiles
+                .Where(p => p.WorkspaceId == workspace.Id && !profileIds.Contains(p.Id))
+                .ToList();
+
+            if (profilesToRemove.Count > 0)
+            {
+                context.AgentProfiles.RemoveRange(profilesToRemove);
+            }
+        }
+
+        foreach (var profile in workspace.AgentProfiles.ToList())
+        {
+            if (string.IsNullOrWhiteSpace(profile.Id))
+            {
+                continue;
+            }
+
+            profile.WorkspaceId ??= workspace.Id;
+            var existingProfile = context.AgentProfiles.Local.FirstOrDefault(p =>
+                string.Equals(p.Id, profile.Id, StringComparison.Ordinal));
+
+            if (existingProfile != null)
+            {
+                if (!ReferenceEquals(existingProfile, profile))
+                {
+                    context.Entry(existingProfile).CurrentValues.SetValues(profile);
+                }
+                existingProfile.Workspace = trackedWorkspace;
+            }
+            else
+            {
+                profile.Workspace = trackedWorkspace;
+                context.AgentProfiles.Add(profile);
+            }
+        }
     }
 
     public async Task DeleteAsync(int id, CancellationToken cancellationToken = default)
     {
-        var workspace = await _context.Workspaces.FindAsync(new object[] { id }, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var workspace = await context.Workspaces.FindAsync(new object[] { id }, cancellationToken);
         if (workspace != null)
         {
-            _context.Workspaces.Remove(workspace);
-            await _context.SaveChangesAsync(cancellationToken);
+            context.Workspaces.Remove(workspace);
+            await context.SaveChangesAsync(cancellationToken);
         }
     }
 
@@ -75,9 +137,11 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(stageId);
 
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
         if (workspaceId.HasValue)
         {
-            var dedicatedList = await _context.AgentProfiles
+            var dedicatedList = await context.AgentProfiles
                 .AsNoTracking()
                 .Where(p => p.WorkspaceId == workspaceId.Value)
                 .ToListAsync(cancellationToken);
@@ -93,7 +157,7 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
             }
         }
 
-        var globalList = await _context.AgentProfiles
+        var globalList = await context.AgentProfiles
             .AsNoTracking()
             .Where(p => p.WorkspaceId == null)
             .ToListAsync(cancellationToken);
@@ -105,7 +169,8 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
 
     public async Task<IReadOnlyList<AgentProfile>> GetGlobalAgentProfilesAsync(CancellationToken cancellationToken = default)
     {
-        return await _context.AgentProfiles
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.AgentProfiles
             .AsNoTracking()
             .Where(p => p.WorkspaceId == null)
             .ToListAsync(cancellationToken);

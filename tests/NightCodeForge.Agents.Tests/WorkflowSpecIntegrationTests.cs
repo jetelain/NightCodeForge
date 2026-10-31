@@ -283,9 +283,11 @@ public class WorkflowSpecIntegrationTests
 
         Assert.Equal(seededId, workspace.Id);
 
-        var taskRepo = new EfCoreTaskRepository(dbContext);
-        var workspaceRepo = new EfCoreWorkspaceRepository(dbContext);
-        var depStore = new EfCoreTaskDependencyStore(dbContext);
+        var dbFactory = new AppDbContextFactory(
+            new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var taskRepo = new EfCoreTaskRepository(dbFactory);
+        var workspaceRepo = new EfCoreWorkspaceRepository(dbFactory);
+        var depStore = new EfCoreTaskDependencyStore(dbFactory);
         var depEngine = new DependencyResolutionEngine(depStore);
         var lockProvider = new WorkspaceLockProvider();
 
@@ -368,7 +370,7 @@ public class WorkflowSpecIntegrationTests
         services.AddSingleton<ILlmModelPreloadService>(new Mock<ILlmModelPreloadService>().Object);
         services.AddSingleton<IAgentActivityStreamer, InMemoryAgentActivityStreamer>();
         services.AddSingleton<ITaskRepository>(taskRepo);
-        services.AddSingleton<IWorkflowRepository>(new EfCoreWorkflowRepository(dbContext));
+        services.AddSingleton<IWorkflowRepository>(new EfCoreWorkflowRepository(dbFactory));
         services.AddSingleton<IWorkflowStageRegistry, WorkflowStageRegistry>();
         services.AddSingleton<IWorkflowStageFactory, WorkflowStageFactory>();
         services.AddSingleton<IWorkflowPipelineProvider, DatabaseWorkflowPipelineProvider>();
@@ -385,7 +387,7 @@ public class WorkflowSpecIntegrationTests
         mockMdSync.Setup(m => m.SyncAllTasksToDiskAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Returns<Workspace, string, string?, CancellationToken>((w, p, b, ct) =>
             {
-                var tasks = dbContext.Tasks.Where(t => t.WorkspaceId == w.Id).ToList();
+                var tasks = dbContext.Tasks.AsNoTracking().Where(t => t.WorkspaceId == w.Id).ToList();
                 var baselines = tasks.ToDictionary(
                     t => t.Id,
                     t => new TaskBaselineEntry(t.Id, t.Version, t.UpdatedAt, "hash", $"docs/tasks/task-{t.Id}.md", new TaskFrontmatter { Title = t.Title }, t.Description ?? ""));
@@ -400,7 +402,7 @@ public class WorkflowSpecIntegrationTests
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, CancellationToken>(
-                (w, sp, hp, b, a, r, ct) => Task.FromResult<IReadOnlyList<ForgeTask>>(dbContext.Tasks.Where(t => t.WorkspaceId == w.Id).ToList()));
+                (w, sp, hp, b, a, r, ct) => Task.FromResult<IReadOnlyList<ForgeTask>>(dbContext.Tasks.AsNoTracking().Where(t => t.WorkspaceId == w.Id).ToList()));
 
         var opsService = opsControlOverride;
         if (opsService == null)
@@ -605,7 +607,7 @@ The validation for empty array input is missing and no unit tests cover this edg
             // Verify task was routed back to Implementation cohort in Hangfire queue
             Assert.Contains(task.Id, jobQueue.ImplementationQueue);
 
-            var updatedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var updatedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(updatedTask);
             Assert.Equal(StandardStageIds.Implementation, updatedTask.CurrentStageId);
 
@@ -662,7 +664,7 @@ The validation for empty array input is missing and no unit tests cover this edg
 
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var updatedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var updatedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(updatedTask);
             Assert.Equal(TaskOverallStatus.Failed, updatedTask.Status);
 
@@ -716,7 +718,7 @@ The validation for empty array input is missing and no unit tests cover this edg
             await orchestrator.ProcessTaskAsync(task.Id);
 
             // Task must be safely paused in intake waiting for human
-            var pausedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var pausedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(pausedTask);
             Assert.True(pausedTask.IsWaitingForHuman);
             Assert.Equal(StandardStageIds.TaskReview, pausedTask.InterruptedStageId);
@@ -728,7 +730,7 @@ The validation for empty array input is missing and no unit tests cover this edg
             // Submit human answer and resume
             await orchestrator.SubmitHumanAnswerAsync(task.Id, "Support only JSON format.");
 
-            var resumedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var resumedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(resumedTask);
             Assert.False(resumedTask.IsWaitingForHuman);
 
@@ -914,7 +916,7 @@ No regressions detected.
             // =============================================================
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var finalTask = await dbContext.Tasks.FindAsync(task.Id);
+            var finalTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(finalTask);
             Assert.Equal(TaskOverallStatus.Closed, finalTask.Status);
 
@@ -1218,7 +1220,7 @@ Build FAILED.
             // Verify task was routed back to Implementation queue
             Assert.Contains(task.Id, jobQueue.ImplementationQueue);
 
-            var conflictedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var conflictedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(conflictedTask);
             Assert.Equal(StandardStageIds.Implementation, conflictedTask.CurrentStageId);
             Assert.Equal(TaskOverallStatus.Open, conflictedTask.Status);
@@ -1254,7 +1256,7 @@ Build FAILED.
 
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var finalTask = await dbContext.Tasks.FindAsync(task.Id);
+            var finalTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(finalTask);
             Assert.Equal(TaskOverallStatus.Closed, finalTask.Status);
         }
@@ -1309,7 +1311,7 @@ Build FAILED.
             // Cross-cohort loopback must enqueue task in ImplementationQueue
             Assert.Contains(task.Id, jobQueue.ImplementationQueue);
 
-            var updatedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var updatedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(updatedTask);
             Assert.Equal(StandardStageIds.Implementation, updatedTask.CurrentStageId);
 
@@ -1337,7 +1339,7 @@ Build FAILED.
 
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var closedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var closedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(closedTask);
             Assert.Equal(TaskOverallStatus.Closed, closedTask.Status);
         }
@@ -1369,7 +1371,7 @@ Build FAILED.
 
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var updatedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var updatedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(updatedTask);
             Assert.Equal(TaskOverallStatus.Ready, updatedTask.Status);
             Assert.Null(updatedTask.SquashCommitSha);
@@ -1408,7 +1410,7 @@ Build FAILED.
 
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var updatedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var updatedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(updatedTask);
             Assert.Equal(TaskOverallStatus.Failed, updatedTask.Status);
             Assert.Empty(jobQueue.ImplementationQueue);
@@ -1475,7 +1477,7 @@ Build FAILED.
 
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var updatedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var updatedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(updatedTask);
             Assert.Equal(StandardStageIds.Implementation, updatedTask.CurrentStageId);
             Assert.Contains(task.Id, jobQueue.ImplementationQueue);
@@ -1526,7 +1528,7 @@ Build FAILED.
             await orchestrator.ProcessTaskAsync(task.Id);
 
             // Verify task paused safely
-            var pausedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var pausedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(pausedTask);
             Assert.True(pausedTask.IsWaitingForHuman);
             Assert.Equal(StandardStageIds.Implementation, pausedTask.CurrentStageId);
@@ -1556,7 +1558,7 @@ Build FAILED.
             Assert.True(hasAnswer);
 
             // Implementation finished and enqueued to CodeReviewQueue
-            var resumedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var resumedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(resumedTask);
             Assert.False(resumedTask.IsWaitingForHuman);
             Assert.Contains(task.Id, jobQueue.CodeReviewQueue);
@@ -1589,7 +1591,7 @@ Build FAILED.
             await orchestrator.ProcessTaskAsync(task.Id);
 
             // Task must have completed Stage 2 (baseline), and yielded before Stage 3 (Implementation)
-            var yieldedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var yieldedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(yieldedTask);
             Assert.Equal(StandardStageIds.Implementation, yieldedTask.CurrentStageId);
 
@@ -1649,7 +1651,7 @@ Build FAILED.
 
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var pausedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var pausedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(pausedTask);
             Assert.True(pausedTask.IsDeferredByPause);
             Assert.Equal(StandardStageIds.Implementation, pausedTask.CurrentStageId);
@@ -1690,7 +1692,7 @@ Build FAILED.
 
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var cancelledTask = await dbContext.Tasks.FindAsync(task.Id);
+            var cancelledTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(cancelledTask);
             Assert.Equal(TaskOverallStatus.Cancelled, cancelledTask.Status);
             Assert.False(cancelledTask.IsWaitingForHuman);
@@ -1740,7 +1742,7 @@ Build FAILED.
 
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var escalatedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var escalatedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(escalatedTask);
             Assert.True(escalatedTask.IsWaitingForHuman);
             Assert.Equal(StandardStageIds.Implementation, escalatedTask.InterruptedStageId);
@@ -1799,7 +1801,7 @@ Build FAILED.
             // Attempt 1: Review approves, PostReviewVerification fails -> loops back cross-cohort (retry 1/1)
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var retryTask = await dbContext.Tasks.FindAsync(task.Id);
+            var retryTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(retryTask);
             Assert.Equal(StandardStageIds.Implementation, retryTask.CurrentStageId);
             Assert.Contains(task.Id, jobQueue.ImplementationQueue);
@@ -1820,7 +1822,7 @@ Build FAILED.
             };
             await orchestrator.ProcessTaskAsync(task.Id);
 
-            var failedTask = await dbContext.Tasks.FindAsync(task.Id);
+            var failedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
             Assert.NotNull(failedTask);
             Assert.Equal(TaskOverallStatus.Failed, failedTask.Status);
         }
@@ -1857,7 +1859,7 @@ Build FAILED.
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
-        var retryTask = await dbContext.Tasks.FindAsync(task.Id);
+        var retryTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(retryTask);
         Assert.Equal(StandardStageIds.Implementation, retryTask.CurrentStageId);
         Assert.Contains(task.Id, jobQueue.ImplementationQueue);
@@ -1878,7 +1880,7 @@ Build FAILED.
         };
         await orchestrator.ProcessTaskAsync(task.Id);
 
-        var failedTask = await dbContext.Tasks.FindAsync(task.Id);
+        var failedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(failedTask);
         Assert.Equal(TaskOverallStatus.Failed, failedTask.Status);
     }
@@ -1910,7 +1912,7 @@ Build FAILED.
         // Execute pipeline - advances to Ready
         await orchestrator.ProcessTaskAsync(task.Id);
 
-        var readyTask = await dbContext.Tasks.FindAsync(task.Id);
+        var readyTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(readyTask);
         Assert.Equal(TaskOverallStatus.Ready, readyTask.Status);
 
@@ -1919,7 +1921,7 @@ Build FAILED.
 
         Assert.Equal(CompleteTaskStatus.Completed, mergeResult.Status);
 
-        var closedTask = await dbContext.Tasks.FindAsync(task.Id);
+        var closedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(closedTask);
         Assert.Equal(TaskOverallStatus.Closed, closedTask.Status);
     }
@@ -1988,7 +1990,7 @@ Build FAILED.
         // Attempt 1: Review approves -> Gate 2 reverify fails -> loops back cross-cohort to Implementation (retry 1/1)
         await orchestrator.ProcessTaskAsync(task.Id);
 
-        var retryTask = await dbContext.Tasks.FindAsync(task.Id);
+        var retryTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(retryTask);
         Assert.Equal(StandardStageIds.Implementation, retryTask.CurrentStageId);
         Assert.Contains(task.Id, jobQueue.ImplementationQueue);
@@ -2009,7 +2011,7 @@ Build FAILED.
         };
         await orchestrator.ProcessTaskAsync(task.Id);
 
-        var failedTask = await dbContext.Tasks.FindAsync(task.Id);
+        var failedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(failedTask);
         Assert.Equal(TaskOverallStatus.Failed, failedTask.Status);
     }
@@ -2058,7 +2060,7 @@ Build FAILED.
         await orchestrator.ProcessTaskAsync(taskB.Id);
 
         Assert.False(llmCalled);
-        var taskBAfter = await dbContext.Tasks.FindAsync(taskB.Id);
+        var taskBAfter = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == taskB.Id);
         Assert.NotNull(taskBAfter);
         Assert.Equal(TaskOverallStatus.Open, taskBAfter.Status);
         Assert.Equal(StandardStageIds.Implementation, taskBAfter.CurrentStageId);
@@ -2092,7 +2094,7 @@ Build FAILED.
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
-        var failedTask = await dbContext.Tasks.FindAsync(task.Id);
+        var failedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(failedTask);
         Assert.Equal(TaskOverallStatus.Failed, failedTask.Status);
     }
@@ -2138,7 +2140,7 @@ Build FAILED.
 
         await orchestrator.ProcessTaskAsync(task.Id);
 
-        var failedTask = await dbContext.Tasks.FindAsync(task.Id);
+        var failedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(failedTask);
         Assert.Equal(TaskOverallStatus.Failed, failedTask.Status);
     }
@@ -2169,7 +2171,7 @@ Build FAILED.
 
         await Assert.ThrowsAsync<WorkflowExecutionException>(() => orchestrator.ProcessTaskAsync(task.Id));
 
-        var failedTask = await dbContext.Tasks.FindAsync(task.Id);
+        var failedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(failedTask);
         Assert.Equal(TaskOverallStatus.Failed, failedTask.Status);
     }

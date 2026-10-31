@@ -38,7 +38,7 @@ public class WorkflowRepositoryTests : IDisposable
     public async Task SqliteWalPersistence_WorkflowAndStages_PersistsAndLoadsCorrectly()
     {
         using var context = await CreateContextAsync();
-        var repo = new EfCoreWorkflowRepository(context);
+        var repo = new EfCoreWorkflowRepository(new AppDbContextFactory(_options));
 
         var workflow = new WorkflowDefinition
         {
@@ -93,7 +93,7 @@ public class WorkflowRepositoryTests : IDisposable
     public async Task CascadeDelete_WhenWorkflowDeleted_RemovesAssociatedStages()
     {
         using var context = await CreateContextAsync();
-        var repo = new EfCoreWorkflowRepository(context);
+        var repo = new EfCoreWorkflowRepository(new AppDbContextFactory(_options));
 
         var workflow = new WorkflowDefinition
         {

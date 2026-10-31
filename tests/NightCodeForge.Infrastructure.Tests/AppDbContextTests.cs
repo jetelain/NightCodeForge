@@ -103,8 +103,8 @@ public class AppDbContextTests : IDisposable
         context.Workspaces.Add(ws);
         await context.SaveChangesAsync();
 
-        var repo = new EfCoreTaskRepository(context);
-        var depStore = new EfCoreTaskDependencyStore(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
+        var depStore = new EfCoreTaskDependencyStore(new AppDbContextFactory(_options));
 
         var task1 = new ForgeTask
         {
@@ -262,7 +262,7 @@ public class AppDbContextTests : IDisposable
 
         await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
 
-        var repo = new EfCoreWorkspaceRepository(context);
+        var repo = new EfCoreWorkspaceRepository(new AppDbContextFactory(_options));
         var ws = await repo.CreateAsync(new Workspace { Name = "RepoTest", RepositoryPath = "/repo", DefaultBaseBranch = "main" });
 
         // 1. When no dedicated profile exists, falls back to global profile
@@ -319,8 +319,8 @@ public class AppDbContextTests : IDisposable
         // Clear change tracker to simulate detached state across requests / scopes
         context.ChangeTracker.Clear();
 
-        var workspaceRepo = new EfCoreWorkspaceRepository(context);
-        var taskRepo = new EfCoreTaskRepository(context);
+        var workspaceRepo = new EfCoreWorkspaceRepository(new AppDbContextFactory(_options));
+        var taskRepo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         // 1. Track the workspace in the context
         var trackedWorkspaces = await workspaceRepo.GetAllAsync();
@@ -369,7 +369,7 @@ public class AppDbContextTests : IDisposable
 
         context.ChangeTracker.Clear();
 
-        var taskRepo = new EfCoreTaskRepository(context);
+        var taskRepo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
         var loaded = await taskRepo.GetByIdAsync(task.Id);
 
         Assert.NotNull(loaded);
@@ -386,7 +386,7 @@ public class AppDbContextTests : IDisposable
         context.Workspaces.Add(ws);
         await context.SaveChangesAsync();
 
-        var workspaceRepo = new EfCoreWorkspaceRepository(context);
+        var workspaceRepo = new EfCoreWorkspaceRepository(new AppDbContextFactory(_options));
 
         // Track original workspace
         var tracked = await workspaceRepo.GetByIdAsync(ws.Id);
@@ -671,7 +671,7 @@ public class AppDbContextTests : IDisposable
         context.Workspaces.Add(ws);
         await context.SaveChangesAsync();
 
-        var taskRepo = new EfCoreTaskRepository(context);
+        var taskRepo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         // 1. Initially no ideation conversation
         var initialActive = await taskRepo.GetActiveIdeationConversationAsync(ws.Id);
@@ -847,7 +847,7 @@ public class AppDbContextTests : IDisposable
         await context.SaveChangesAsync();
 
         // 4. Query using EfCoreTaskRepository
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
         var loaded = await repo.GetByIdAsync(task.Id);
 
         // 5. Verify entire graph is fully and correctly hydrated
@@ -890,7 +890,7 @@ public class AppDbContextTests : IDisposable
             context.Workspaces.Add(ws);
             await context.SaveChangesAsync();
 
-            var repo = new EfCoreTaskRepository(context);
+            var repo = new EfCoreTaskRepository(new AppDbContextFactory(options));
             var task = await repo.CreateAsync(new ForgeTask
             {
                 WorkspaceId = ws.Id,
@@ -921,9 +921,10 @@ public class AppDbContextTests : IDisposable
             Assert.Equal("batch-123", pending[0].BatchId);
 
             // Now answer question and update
-            pending[0].Status = QuestionStatus.Answered;
-            pending[0].Answer = "PostgreSQL";
-            pending[0].AnsweredAt = DateTime.UtcNow;
+            var questionToAnswer = task.Questions.First();
+            questionToAnswer.Status = QuestionStatus.Answered;
+            questionToAnswer.Answer = "PostgreSQL";
+            questionToAnswer.AnsweredAt = DateTime.UtcNow;
 
             await repo.UpdateAsync(task);
 
@@ -955,7 +956,7 @@ public class AppDbContextTests : IDisposable
             context.Workspaces.Add(ws);
             await context.SaveChangesAsync();
 
-            var repo = new EfCoreTaskRepository(context);
+            var repo = new EfCoreTaskRepository(new AppDbContextFactory(options));
             var task = await repo.CreateAsync(new ForgeTask
             {
                 WorkspaceId = ws.Id,
@@ -983,7 +984,7 @@ public class AppDbContextTests : IDisposable
         // Load disconnected task with AsNoTracking (GetByIdAsync), then update in a fresh DbContext.
         await using (var workerContext = new AppDbContext(options))
         {
-            var workerRepo = new EfCoreTaskRepository(workerContext);
+            var workerRepo = new EfCoreTaskRepository(new AppDbContextFactory(options));
             var loadedTask = await workerRepo.GetByIdAsync(taskId);
             Assert.NotNull(loadedTask);
             Assert.Single(loadedTask.Questions);
@@ -1004,7 +1005,7 @@ public class AppDbContextTests : IDisposable
         // Simulate inbox answering the question in a fresh scope:
         await using (var answerContext = new AppDbContext(options))
         {
-            var answerRepo = new EfCoreTaskRepository(answerContext);
+            var answerRepo = new EfCoreTaskRepository(new AppDbContextFactory(options));
             var loadedTask = await answerRepo.GetByIdAsync(taskId);
             Assert.NotNull(loadedTask);
             var q = loadedTask.Questions.First();
@@ -1024,7 +1025,7 @@ public class AppDbContextTests : IDisposable
         // Simulate agent adding a new question and calling UpdateWithHistoryAsync on a disconnected task:
         await using (var historyContext = new AppDbContext(options))
         {
-            var historyRepo = new EfCoreTaskRepository(historyContext);
+            var historyRepo = new EfCoreTaskRepository(new AppDbContextFactory(options));
             var loadedTask = await historyRepo.GetByIdAsync(taskId);
             Assert.NotNull(loadedTask);
 
@@ -1206,7 +1207,7 @@ public class AppDbContextTests : IDisposable
         context.Workspaces.AddRange(ws1, ws2);
         await context.SaveChangesAsync();
 
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(options));
 
         // 1. Fresh unstarted Open task (HasExecutionRun = false)
         await repo.CreateAsync(new ForgeTask
@@ -1304,7 +1305,7 @@ public class AppDbContextTests : IDisposable
         }
 
         // In the original context, Local still has IsWaitingForHuman = false
-        var depStore = new EfCoreTaskDependencyStore(context);
+        var depStore = new EfCoreTaskDependencyStore(new AppDbContextFactory(_options));
         await depStore.SetWaitingForHumanAsync(task.Id, false);
 
         // Verify in fresh context from database that IsWaitingForHuman was set to false
@@ -1351,7 +1352,7 @@ public class AppDbContextTests : IDisposable
             Status = TaskOverallStatus.Open
         };
 
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
         await repo.UpdateAsync(incomingTask);
 
         // Verify database received the updated IsWaitingForHuman = false
@@ -1384,7 +1385,7 @@ public class AppDbContextTests : IDisposable
         // Simulate stage advance where dependsOn: null is passed
         using (var updateContext = new AppDbContext(_options))
         {
-            var repo = new EfCoreTaskRepository(updateContext);
+            var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
             var taskToAdvance = await updateContext.Tasks.AsNoTracking().FirstAsync(t => t.Id == t2.Id);
             taskToAdvance.CurrentStageId = "code-review";
 
@@ -1399,6 +1400,98 @@ public class AppDbContextTests : IDisposable
             Assert.Single(reloaded.Dependencies);
             Assert.Equal(t1.Id, reloaded.Dependencies.First().DependsOnTaskId);
         }
+    }
+
+    [Fact]
+    public async Task EfCoreWorkspaceRepository_UpdateAsync_PersistsDedicatedAgentProfiles_AndUpdatesExistingProfiles()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var repo = new EfCoreWorkspaceRepository(new AppDbContextFactory(_options));
+        var ws = await repo.CreateAsync(new Workspace
+        {
+            Name = "ProvisionedWorkspace",
+            RepositoryPath = "/repo/provisioned",
+            DefaultBaseBranch = "main"
+        });
+
+        ws.AgentProfiles = new List<AgentProfile>
+        {
+            new()
+            {
+                Id = $"ws-{ws.Id}:implementation",
+                WorkspaceId = ws.Id,
+                Name = "Dedicated Implementation",
+                HarnessId = "crucible",
+                ModelName = "deepseek-coder:33b",
+                StageDirectives = new Dictionary<string, string> { ["implementation"] = "Dedicated override" }
+            },
+            new()
+            {
+                Id = $"ws-{ws.Id}:code-review",
+                WorkspaceId = ws.Id,
+                Name = "Dedicated Review",
+                HarnessId = "crucible",
+                ModelName = "qwen2.5-coder:32b",
+                StageDirectives = new Dictionary<string, string> { ["code-review"] = "Dedicated review override" }
+            }
+        };
+
+        await repo.UpdateAsync(ws);
+
+        var loaded = await repo.GetByIdAsync(ws.Id);
+        Assert.NotNull(loaded);
+        Assert.Equal(2, loaded.AgentProfiles.Count);
+
+        var effectiveImpl = await repo.GetEffectiveAgentProfileAsync(ws.Id, "implementation");
+        Assert.NotNull(effectiveImpl);
+        Assert.Equal("deepseek-coder:33b", effectiveImpl.ModelName);
+
+        // Update existing profile and add a third profile on the detached loaded workspace
+        var implProfile = loaded.AgentProfiles.First(p => p.Id == $"ws-{ws.Id}:implementation");
+        implProfile.ModelName = "qwen3:32b";
+        loaded.AgentProfiles.Add(new AgentProfile
+        {
+            Id = $"ws-{ws.Id}:task-review",
+            WorkspaceId = ws.Id,
+            Name = "Dedicated Task Review",
+            HarnessId = "crucible",
+            ModelName = "qwen3:32b",
+            StageDirectives = new Dictionary<string, string> { ["task-review"] = "Dedicated task review" }
+        });
+
+        await repo.UpdateAsync(loaded);
+
+        var reloaded = await repo.GetByIdAsync(ws.Id);
+        Assert.NotNull(reloaded);
+        Assert.Equal(3, reloaded.AgentProfiles.Count);
+        Assert.Equal("qwen3:32b", reloaded.AgentProfiles.First(p => p.Id == $"ws-{ws.Id}:implementation").ModelName);
+
+        // Remove one profile from the populated collection and verify it is removed in DB
+        var toRemove = reloaded.AgentProfiles.First(p => p.Id == $"ws-{ws.Id}:code-review");
+        reloaded.AgentProfiles.Remove(toRemove);
+        await repo.UpdateAsync(reloaded);
+
+        var afterRemove = await repo.GetByIdAsync(ws.Id);
+        Assert.NotNull(afterRemove);
+        Assert.Equal(2, afterRemove.AgentProfiles.Count);
+        Assert.DoesNotContain(afterRemove.AgentProfiles, p => p.Id == $"ws-{ws.Id}:code-review");
+
+        // Updating scalar workspace fields with an unhydrated (empty) AgentProfiles list must preserve existing profiles
+        var unhydrated = new Workspace
+        {
+            Id = ws.Id,
+            Name = "ProvisionedWorkspaceRenamed",
+            RepositoryPath = "/repo/provisioned",
+            DefaultBaseBranch = "main"
+        };
+        await repo.UpdateAsync(unhydrated);
+
+        var afterUnhydratedUpdate = await repo.GetByIdAsync(ws.Id);
+        Assert.NotNull(afterUnhydratedUpdate);
+        Assert.Equal("ProvisionedWorkspaceRenamed", afterUnhydratedUpdate.Name);
+        Assert.Equal(2, afterUnhydratedUpdate.AgentProfiles.Count);
     }
 }
 

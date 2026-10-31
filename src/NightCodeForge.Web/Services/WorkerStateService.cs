@@ -181,7 +181,15 @@ public class WorkerStateService : IWorkerStateService, IDisposable
 
     public void UpdatePendingQuestions(int count)
     {
-        _current = _current with { PendingQuestionCount = count };
+        lock (_lock)
+        {
+            if (_current.PendingQuestionCount == count)
+            {
+                return;
+            }
+
+            _current = _current with { PendingQuestionCount = count };
+        }
         OnWorkerStateChanged?.Invoke();
     }
 

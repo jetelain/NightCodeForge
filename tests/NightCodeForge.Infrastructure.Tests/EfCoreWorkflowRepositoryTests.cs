@@ -44,7 +44,7 @@ public class EfCoreWorkflowRepositoryTests : IDisposable
     public async Task GetDefaultWorkflowWithStagesAsync_ReturnsSeededStandardPipeline()
     {
         using var context = await CreateContextAsync();
-        var repo = new EfCoreWorkflowRepository(context);
+        var repo = new EfCoreWorkflowRepository(new AppDbContextFactory(_options));
 
         var defaultWf = await repo.GetDefaultWorkflowWithStagesAsync();
 
@@ -60,7 +60,7 @@ public class EfCoreWorkflowRepositoryTests : IDisposable
     public async Task CreateWorkflowAsync_And_GetByIdWithStagesAsync_WorksAsExpected()
     {
         using var context = await CreateContextAsync();
-        var repo = new EfCoreWorkflowRepository(context);
+        var repo = new EfCoreWorkflowRepository(new AppDbContextFactory(_options));
 
         var customWf = new WorkflowDefinition
         {
@@ -103,7 +103,7 @@ public class EfCoreWorkflowRepositoryTests : IDisposable
     public async Task GetWorkflowsAsync_FiltersByWorkspaceAndIncludesGlobal()
     {
         using var context = await CreateContextAsync();
-        var repo = new EfCoreWorkflowRepository(context);
+        var repo = new EfCoreWorkflowRepository(new AppDbContextFactory(_options));
 
         // Standard workflow seeded is global (WorkspaceId == null)
         var customWs2 = new WorkflowDefinition
@@ -134,7 +134,7 @@ public class EfCoreWorkflowRepositoryTests : IDisposable
     public async Task UpdateWorkflowAsync_And_DeleteWorkflowAsync_WorkCorrectly()
     {
         using var context = await CreateContextAsync();
-        var repo = new EfCoreWorkflowRepository(context);
+        var repo = new EfCoreWorkflowRepository(new AppDbContextFactory(_options));
 
         var wf = new WorkflowDefinition
         {
@@ -156,5 +156,55 @@ public class EfCoreWorkflowRepositoryTests : IDisposable
         await repo.DeleteWorkflowAsync(wf.Id);
         var deleted = await repo.GetByIdWithStagesAsync(wf.Id);
         Assert.Null(deleted);
+    }
+
+    [Fact]
+    public async Task UpdateWorkflowAsync_WithStageIdMatchZeroId_AndAddedOrRemovedStages_SyncsStagesCorrectly()
+    {
+        using var context = await CreateContextAsync();
+        var repo = new EfCoreWorkflowRepository(new AppDbContextFactory(_options));
+
+        var wf = new WorkflowDefinition
+        {
+            Name = "Sync Stages Workflow",
+            Code = "sync-stages-wf",
+            Stages = new List<StageDefinition>
+            {
+                new() { StageId = "step1", DisplayName = "Step 1", SequenceOrder = 1, CsharpImplementationType = "agentic" },
+                new() { StageId = "step2", DisplayName = "Step 2", SequenceOrder = 2, CsharpImplementationType = "agentic" }
+            }
+        };
+        var created = await repo.CreateWorkflowAsync(wf);
+        var originalStep1Id = created.Stages.First(s => s.StageId == "step1").Id;
+        Assert.True(originalStep1Id > 0);
+
+        // Construct a detached update where step1 has Id = 0 (matched by StageId), step2 is removed, and step3 is added
+        var detachedUpdate = new WorkflowDefinition
+        {
+            Id = created.Id,
+            Name = "Sync Stages Workflow Updated",
+            Code = created.Code,
+            Stages = new List<StageDefinition>
+            {
+                new() { Id = 0, StageId = "step1", DisplayName = "Step 1 Updated", SequenceOrder = 1, CsharpImplementationType = "agentic" },
+                new() { Id = 0, StageId = "step3", DisplayName = "Step 3 Added", SequenceOrder = 2, CsharpImplementationType = "deterministic" }
+            }
+        };
+
+        await repo.UpdateWorkflowAsync(detachedUpdate);
+
+        var reloaded = await repo.GetByIdWithStagesAsync(created.Id);
+        Assert.NotNull(reloaded);
+        Assert.Equal("Sync Stages Workflow Updated", reloaded.Name);
+        Assert.Equal(2, reloaded.Stages.Count);
+
+        var step1 = reloaded.Stages.First(s => s.StageId == "step1");
+        Assert.Equal(originalStep1Id, step1.Id);
+        Assert.Equal("Step 1 Updated", step1.DisplayName);
+
+        var step3 = reloaded.Stages.First(s => s.StageId == "step3");
+        Assert.True(step3.Id > 0);
+        Assert.Equal("Step 3 Added", step3.DisplayName);
+        Assert.DoesNotContain(reloaded.Stages, s => s.StageId == "step2");
     }
 }

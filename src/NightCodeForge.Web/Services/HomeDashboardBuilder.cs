@@ -43,6 +43,8 @@ public record HomeDashboardSnapshot(
 public static class HomeDashboardBuilder
 {
     public const int MaxScheduledTasks = 5;
+    public const int DefaultStateChangeDebounceSeconds = 10;
+    public static readonly TimeSpan DefaultStateChangeDebounceInterval = TimeSpan.FromSeconds(DefaultStateChangeDebounceSeconds);
     private const string UnknownWorkspaceName = "Unknown Workspace";
     private const string RunningQueueLabel = "Running";
     private const string DefaultStageLabel = "Pending";
@@ -378,5 +380,120 @@ public static class HomeDashboardBuilder
         }
 
         return true;
+    }
+}
+
+/// <summary>
+/// Debounces rapid workspace and worker state change notifications on the homepage,
+/// coalescing bursts so automatic dashboard refreshes run at most once per configured interval.
+/// </summary>
+public sealed class HomeStateChangeDebouncer : IDisposable
+{
+    private readonly TimeSpan _interval;
+    private readonly Func<CancellationToken, Task> _onRefreshAsync;
+    private readonly ILogger _logger;
+    private readonly object _lock = new();
+    private readonly CancellationTokenSource _disposeCts = new();
+    private readonly CancellationToken _disposalToken;
+    private CancellationTokenSource? _pendingCts;
+    private bool _disposed;
+
+    public HomeStateChangeDebouncer(
+        TimeSpan interval,
+        Func<CancellationToken, Task> onRefreshAsync,
+        ILogger logger)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(interval, TimeSpan.Zero);
+        ArgumentNullException.ThrowIfNull(onRefreshAsync);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        _interval = interval;
+        _onRefreshAsync = onRefreshAsync;
+        _logger = logger;
+        _disposalToken = _disposeCts.Token;
+    }
+
+    public CancellationToken DisposalToken => _disposalToken;
+
+    public void NotifyStateChanged()
+    {
+        CancellationTokenSource scheduledCts;
+        lock (_lock)
+        {
+            if (_disposed || _pendingCts != null)
+            {
+                return;
+            }
+
+            scheduledCts = new CancellationTokenSource();
+            _pendingCts = scheduledCts;
+        }
+
+        _ = RunDebouncedRefreshAsync(scheduledCts);
+    }
+
+    public void CancelPending()
+    {
+        lock (_lock)
+        {
+            if (_pendingCts != null)
+            {
+                _pendingCts.Cancel();
+                _pendingCts = null;
+            }
+        }
+    }
+
+    private async Task RunDebouncedRefreshAsync(CancellationTokenSource scheduledCts)
+    {
+        try
+        {
+            await Task.Delay(_interval, scheduledCts.Token);
+
+            lock (_lock)
+            {
+                if (_disposed || !ReferenceEquals(_pendingCts, scheduledCts))
+                {
+                    return;
+                }
+
+                _pendingCts = null;
+            }
+
+            await _onRefreshAsync(_disposalToken);
+        }
+        catch (OperationCanceledException) when (scheduledCts.IsCancellationRequested || _disposalToken.IsCancellationRequested)
+        {
+            _logger.LogDebug("Debounced homepage dashboard refresh was canceled.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to execute debounced homepage dashboard refresh.");
+        }
+        finally
+        {
+            scheduledCts.Dispose();
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            if (_pendingCts != null)
+            {
+                _pendingCts.Cancel();
+                _pendingCts = null;
+            }
+        }
+
+        _disposeCts.Cancel();
+        _disposeCts.Dispose();
     }
 }

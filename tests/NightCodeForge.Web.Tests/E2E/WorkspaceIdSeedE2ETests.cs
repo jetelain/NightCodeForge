@@ -30,7 +30,7 @@ public class WorkspaceIdSeedE2ETests
             await using var context = new AppDbContext(options);
             await context.EnsureDatabaseCreatedAndWalAsync();
 
-            var repo = new EfCoreWorkspaceRepository(context);
+            var repo = new EfCoreWorkspaceRepository(new AppDbContextFactory(options));
             var ws = new Workspace
             {
                 Name = "E2E Provisioned Workspace",

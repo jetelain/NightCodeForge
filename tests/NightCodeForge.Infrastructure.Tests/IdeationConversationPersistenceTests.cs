@@ -42,7 +42,7 @@ public class IdeationConversationPersistenceTests : IDisposable
         context.Workspaces.Add(ws);
         await context.SaveChangesAsync();
 
-        var repo = new EfCoreTaskRepository(context);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
 
         // 1. Create Conversation with ConversationType = Ideation and TaskId = null
         var conv = await repo.StartIdeationConversationAsync(

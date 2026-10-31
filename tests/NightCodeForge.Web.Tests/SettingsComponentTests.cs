@@ -67,7 +67,8 @@ public class SettingsComponentTests : BunitContext, IDisposable
         _configWriter = new MockLlmConfigurationWriter();
         _llmOptions = new LlmProviderOptions();
 
-        Services.AddDbContext<AppDbContext>(opts => opts.UseSqlite(_connection));
+        Services.AddDbContextFactory<AppDbContext>(opts => opts.UseSqlite(_connection));
+        Services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext());
         Services.AddScoped<IWorkspaceRepository, EfCoreWorkspaceRepository>();
         Services.AddScoped<IWorkflowRepository, EfCoreWorkflowRepository>();
         Services.AddSingleton(_workspaceState);

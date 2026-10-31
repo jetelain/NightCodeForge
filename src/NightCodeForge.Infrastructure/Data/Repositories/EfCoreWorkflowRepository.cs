@@ -5,40 +5,41 @@ using NightCodeForge.Core.Repositories;
 namespace NightCodeForge.Infrastructure.Data.Repositories;
 
 /// <summary>
-/// EF Core SQLite implementation of IWorkflowRepository.
+/// EF Core SQLite implementation of IWorkflowRepository creating short-lived AppDbContext instances on demand.
 /// </summary>
 public class EfCoreWorkflowRepository : IWorkflowRepository
 {
-    private readonly AppDbContext _context;
+    private readonly IDbContextFactory<AppDbContext> _contextFactory;
 
-    public EfCoreWorkflowRepository(AppDbContext context)
+    public EfCoreWorkflowRepository(IDbContextFactory<AppDbContext> contextFactory)
     {
-        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
     }
 
     public async Task<WorkflowDefinition?> GetByIdWithStagesAsync(int workflowId, CancellationToken cancellationToken = default)
     {
-        return await _context.WorkflowDefinitions
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.WorkflowDefinitions
+            .AsNoTracking()
             .Include(w => w.Stages.OrderBy(s => s.SequenceOrder))
             .FirstOrDefaultAsync(w => w.Id == workflowId, cancellationToken);
     }
 
     public async Task<WorkflowDefinition?> GetDefaultWorkflowWithStagesAsync(CancellationToken cancellationToken = default)
     {
-        var def = await _context.WorkflowDefinitions
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var def = await context.WorkflowDefinitions
+            .AsNoTracking()
             .Include(w => w.Stages.OrderBy(s => s.SequenceOrder))
             .FirstOrDefaultAsync(w => w.IsDefault, cancellationToken);
 
         if (def == null)
         {
-            def = await _context.WorkflowDefinitions
+            def = await context.WorkflowDefinitions
+                .AsNoTracking()
                 .Include(w => w.Stages.OrderBy(s => s.SequenceOrder))
                 .FirstOrDefaultAsync(w => w.Code == StandardWorkflowDefinitions.Standard3AgentCode, cancellationToken);
-        }
-
-        if (def == null)
-        {
-            return null;
         }
 
         return def;
@@ -46,7 +47,8 @@ public class EfCoreWorkflowRepository : IWorkflowRepository
 
     public async Task<IReadOnlyList<WorkflowDefinition>> GetWorkflowsAsync(int? workspaceId = null, CancellationToken cancellationToken = default)
     {
-        IQueryable<WorkflowDefinition> query = _context.WorkflowDefinitions
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        IQueryable<WorkflowDefinition> query = context.WorkflowDefinitions
             .AsNoTracking()
             .Include(w => w.Stages.OrderBy(s => s.SequenceOrder));
 
@@ -62,8 +64,9 @@ public class EfCoreWorkflowRepository : IWorkflowRepository
     {
         if (workflow == null) throw new ArgumentNullException(nameof(workflow));
 
-        _context.WorkflowDefinitions.Add(workflow);
-        await _context.SaveChangesAsync(cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+        context.WorkflowDefinitions.Add(workflow);
+        await context.SaveChangesAsync(cancellationToken);
         return workflow;
     }
 
@@ -71,36 +74,72 @@ public class EfCoreWorkflowRepository : IWorkflowRepository
     {
         if (workflow == null) throw new ArgumentNullException(nameof(workflow));
 
-        var existing = _context.WorkflowDefinitions.Local.FirstOrDefault(entry => entry.Id == workflow.Id)
-            ?? await _context.WorkflowDefinitions
-                .Include(w => w.Stages)
-                .FirstOrDefaultAsync(w => w.Id == workflow.Id, cancellationToken);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var existing = await context.WorkflowDefinitions
+            .Include(w => w.Stages)
+            .FirstOrDefaultAsync(w => w.Id == workflow.Id, cancellationToken);
 
         if (existing != null)
         {
-            if (!ReferenceEquals(existing, workflow))
+            context.Entry(existing).CurrentValues.SetValues(workflow);
+            if (workflow.Stages != null)
             {
-                _context.Entry(existing).CurrentValues.SetValues(workflow);
+                var incomingStages = workflow.Stages.ToList();
+                var matchedExistingIds = new HashSet<int>();
+
+                foreach (var stage in incomingStages)
+                {
+                    var existingStage = existing.Stages.FirstOrDefault(s =>
+                        (stage.Id > 0 && s.Id == stage.Id) ||
+                        string.Equals(s.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase));
+                    if (existingStage != null)
+                    {
+                        matchedExistingIds.Add(existingStage.Id);
+                        stage.Id = existingStage.Id;
+                        stage.WorkflowId = existing.Id;
+                        context.Entry(existingStage).CurrentValues.SetValues(stage);
+                    }
+                    else
+                    {
+                        stage.WorkflowId = existing.Id;
+                        stage.Workflow = existing;
+                        context.StageDefinitions.Add(stage);
+                    }
+                }
+
+                if (incomingStages.Count > 0)
+                {
+                    var stagesToRemove = existing.Stages
+                        .Where(s => s.Id > 0 && !matchedExistingIds.Contains(s.Id))
+                        .ToList();
+                    if (stagesToRemove.Count > 0)
+                    {
+                        context.StageDefinitions.RemoveRange(stagesToRemove);
+                    }
+                }
             }
         }
         else
         {
-            _context.WorkflowDefinitions.Update(workflow);
+            context.WorkflowDefinitions.Update(workflow);
         }
 
-        await _context.SaveChangesAsync(cancellationToken);
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task DeleteWorkflowAsync(int workflowId, CancellationToken cancellationToken = default)
     {
-        var workflow = await _context.WorkflowDefinitions
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var workflow = await context.WorkflowDefinitions
             .Include(w => w.Stages)
             .FirstOrDefaultAsync(w => w.Id == workflowId, cancellationToken);
 
         if (workflow != null)
         {
-            _context.WorkflowDefinitions.Remove(workflow);
-            await _context.SaveChangesAsync(cancellationToken);
+            context.WorkflowDefinitions.Remove(workflow);
+            await context.SaveChangesAsync(cancellationToken);
         }
     }
 }
