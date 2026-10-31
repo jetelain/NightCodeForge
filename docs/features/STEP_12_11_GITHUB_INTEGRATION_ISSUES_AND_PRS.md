@@ -1,7 +1,7 @@
 # 🐙 Step 12.11: GitHub Integration (Untrusted Intake Triage, PR Delivery & Task Mirroring)
 
 > **Phase 12 Implementation Step (Extend Features - Deep Integrations & Remote Experience)** *(formerly Step 11.10)*  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Project Target:* `src/NightCodeForge.Infrastructure/GitHub`, `src/NightCodeForge.Agents/Triage`, `src/NightCodeForge.Core/Workflow`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests` | *Status:* Planned
 
 ---

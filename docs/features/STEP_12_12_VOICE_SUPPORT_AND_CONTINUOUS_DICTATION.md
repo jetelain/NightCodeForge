@@ -1,9 +1,9 @@
 # 🎙️ Step 12.12: Voice Support, Continuous Dictation & Hands-Free Operations
 
 > **Phase 12 Implementation Step (Extend Features - Deep Integrations & Remote Experience)** *(formerly Step 11.11)*  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Related Steps:* [Step 12.4: Ideation Quick Notes](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md) | [Step 12.8: Mobile-Responsive UI & PWA](STEP_12_8_MOBILE_RESPONSIVE_UI_AND_PWA.md) | [Step 12.16: Remote Tailscale Access](STEP_12_16_TAILSCALE_REMOTE_ACCESS.md)  
-> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -19,19 +19,19 @@ Enable a fluid, hands-free voice interaction experience on mobile devices and de
    - Support continuous stream listening, interim transcript feedback, and automatic silence detection (1500ms debounce) to auto-dispatch spoken prompts directly to the AI agent or capture quick notes without manual tapping.
 2. **First-Class Voice Integration across Core Workflows:**
    - **Ideation Chat ([Ideation.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Ideation.razor)):** Voice-dictate architectural ideas, questions, and feature requests directly into the LLM conversation loop.
-   - **Quick Notes & Backlog Intake ([Step 12.4](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)):** Instant one-tap voice memo capture saving spoken thoughts as `Suggested` tasks in the backlog.
+   - **Quick Notes & Backlog Intake ([Step 12.4](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)):** Instant one-tap voice memo capture saving spoken thoughts as `Suggested` tasks in the backlog.
    - **Human Question Inbox ([Inbox.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Inbox.razor)):** Answer pending agent clarification questions on the go without typing on mobile keyboards.
 3. **Ergonomic Visual Feedback:**
    - Provide a pulsing audio ring and waveform indicator component ([VoiceInputButton.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Common/VoiceInputButton.razor)) displaying live interim text badges as the developer speaks.
 
-*(Note: Progressive Web App installation for persistent microphone permissions is specified in [Step 12.8: Mobile-Responsive UI & PWA](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_8_MOBILE_RESPONSIVE_UI_AND_PWA.md). Secure HTTPS exposition required for browser microphone access is specified in [Step 12.16: Remote Tailscale Access](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_16_TAILSCALE_REMOTE_ACCESS.md).)*
+*(Note: Progressive Web App installation for persistent microphone permissions is specified in [Step 12.8: Mobile-Responsive UI & PWA](STEP_12_8_MOBILE_RESPONSIVE_UI_AND_PWA.md). Secure HTTPS exposition required for browser microphone access is specified in [Step 12.16: Remote Tailscale Access](STEP_12_16_TAILSCALE_REMOTE_ACCESS.md).)*
 
 ---
 
 ## 2. Problem Statement & Motivation
 
 ### 2.1 The Friction of Mobile Keyboard Input
-- Software developers often formulate ideas, review running tasks, or respond to agent questions while commuting, walking, or away from their workstation desk ([Step 12.8](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_8_MOBILE_RESPONSIVE_UI_AND_PWA.md)).
+- Software developers often formulate ideas, review running tasks, or respond to agent questions while commuting, walking, or away from their workstation desk ([Step 12.8](STEP_12_8_MOBILE_RESPONSIVE_UI_AND_PWA.md)).
 - Typing long technical requirements or explanatory answers on a smartphone soft keyboard is error-prone, slow, and frustrating.
 - Natural speech dictation is 3–4x faster than thumb typing and matches the conversational paradigm of the Ideation agent and human clarification triage.
 
@@ -278,7 +278,7 @@ Provide a reusable Blazor button component rendering an interactive microphone i
 1. **Ideation Chat ([Ideation.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Ideation.razor)):**
    - Embed `<VoiceInputButton>` directly beside the text prompt input.
    - When speech concludes (silence detected), the captured text auto-populates the input box and optionally dispatches immediately to `IIdeationService.SendPromptAsync`.
-2. **Quick Notes Backlog Intake ([Step 12.4](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)):**
+2. **Quick Notes Backlog Intake ([Step 12.4](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)):**
    - In the top bar "+ Note" drawer, embed `<VoiceInputButton>`. Spoken memos are automatically transcribed and saved as `Suggested` backlog tasks.
 3. **Clarifying Questions ([Inbox.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Inbox.razor)):**
    - In [QuestionCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Inbox/QuestionCard.razor), allow free-text question responses to be dictated by voice.
@@ -328,7 +328,7 @@ sequenceDiagram
   - [ ] Create `VoiceInputButton.razor` with `OnSentenceCaptured`, `OnInterimChanged`, and `IAsyncDisposable` lifecycle.
   - [ ] Add CSS keyframe pulse animation and visual transcription badge to `app.css` / `theme.css`.
   - [ ] Integrate `VoiceInputButton` into [Ideation.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Ideation.razor) input bar with auto-submit capability.
-  - [ ] Integrate voice button into Quick Note capture bar / modal ([Step 12.4](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)).
+  - [ ] Integrate voice button into Quick Note capture bar / modal ([Step 12.4](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)).
   - [ ] Integrate voice button into [QuestionCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Inbox/QuestionCard.razor) in [Inbox.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Inbox.razor).
 - [ ] **Testing & Quality Assurance:**
   - [ ] bUnit tests for `VoiceInputButton.razor` checking state toggles, parameter callbacks, and disposal semantics.

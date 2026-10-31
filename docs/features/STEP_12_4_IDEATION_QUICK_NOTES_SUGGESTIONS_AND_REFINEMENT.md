@@ -1,7 +1,7 @@
 # 💡 Step 12.4: Ideation Quick Notes, Suggestions & Conversational Refinement
 
 > **Phase 12 Implementation Step (Extend Features - Backlog Management & Dependencies)** *(formerly Step 11.5)*  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Project Target:* `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Tools`, `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Web/Components/Ideation`, `src/NightCodeForge.Web/Components/Pages`, `tests/NightCodeForge.Agents.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.

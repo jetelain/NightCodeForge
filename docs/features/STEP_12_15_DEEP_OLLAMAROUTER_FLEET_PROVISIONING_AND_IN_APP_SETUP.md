@@ -1,10 +1,10 @@
 # 🌐 Step 12.15: Deep OllamaRouter Fleet Provisioning & In-App Setup
 
 > **Phase 12 Implementation Step (Extend Features - Deep Integrations & Remote Experience)**  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Project Target:* [`src/NightCodeForge.Core`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Web`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web), [`tests/NightCodeForge.Web.Tests`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/tests/NightCodeForge.Web.Tests)  
 > *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
-> *Dependencies / OllamaRouter Backend Tasks:* [Step 11.33: Unified LLM Provider & Dynamic Fleet Integration](../phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 12.5: Dual Model Role Configuration](STEP_12_5_DUAL_MODEL_ROLE_CONFIGURATION_AND_DIFFICULTY_ESCALATION.md), [OllamaRouter Task #20: Layered User Configuration](file:///C:/Users/Julien/source/repos/jetelain/OllamaRouter/docs/tasks/2026-10-26-introduce-layered-user-configuration-read-only-factory-appsettings-json-reloadable-config-config-json-user-layer.md), [OllamaRouter Task #19: Dynamic Fleet Configuration & Setup API](file:///C:/Users/Julien/source/repos/jetelain/OllamaRouter/docs/tasks/2026-10-26-dynamic-fleet-configuration-setup-api-in-app-provisioning.md)
+> *Dependencies / OllamaRouter Backend Tasks:* [Step 11.33: Unified LLM Provider & Dynamic Fleet Integration](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 12.5: Dual Model Role Configuration](STEP_12_5_DUAL_MODEL_ROLE_CONFIGURATION_AND_DIFFICULTY_ESCALATION.md), [OllamaRouter Task #20: Layered User Configuration](file:///C:/Users/Julien/source/repos/jetelain/OllamaRouter/docs/tasks/2026-10-26-introduce-layered-user-configuration-read-only-factory-appsettings-json-reloadable-config-config-json-user-layer.md), [OllamaRouter Task #19: Dynamic Fleet Configuration & Setup API](file:///C:/Users/Julien/source/repos/jetelain/OllamaRouter/docs/tasks/2026-10-26-dynamic-fleet-configuration-setup-api-in-app-provisioning.md)
 
 ---
 

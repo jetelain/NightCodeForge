@@ -1,9 +1,9 @@
 # 🖥️ Step 12.22: Interactive Container & Execution Environment Diagnostic Bash Console
 
 > **Phase 12 Implementation Step (Extend Features - Diagnostics, Sandboxing & Developer Ergonomics)**  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
-> *Related Steps:* [Step 11.18: Live Operations Telemetry](../phase-11/STEP_11_18_LIVE_OPERATIONS_TELEMETRY_LLM_SHELL_AND_ROUTER.md) | [Step 11.21: Container ICU & Dynamic Timeouts](../phase-11/STEP_11_21_CONTAINER_ICU_DYNAMIC_TIMEOUTS_AND_REVIEW_TESTS.md) | [Step 11.22: Container Git Worktree Relative Paths](../phase-11/STEP_11_22_CONTAINER_GIT_WORKTREE_RELATIVE_PATHS.md) | [Step 11.26: Container Reuse Validation & Cleanup](../phase-11/STEP_11_26_CONTAINER_REUSE_VALIDATION_AND_TASK_CLEANUP.md) | [Step 12.14: Global Skills Injection & Stack Tooling](STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md) | [Step 12.21: Container Sandbox Egress Filtering](STEP_12_21_CONTAINER_SANDBOX_EGRESS_FILTERING_AND_ENVOY_PROXY.md)  
-> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Related Steps:* [Step 11.18: Live Operations Telemetry](../archive/phase-11/STEP_11_18_LIVE_OPERATIONS_TELEMETRY_LLM_SHELL_AND_ROUTER.md) | [Step 11.21: Container ICU & Dynamic Timeouts](../archive/phase-11/STEP_11_21_CONTAINER_ICU_DYNAMIC_TIMEOUTS_AND_REVIEW_TESTS.md) | [Step 11.22: Container Git Worktree Relative Paths](../archive/phase-11/STEP_11_22_CONTAINER_GIT_WORKTREE_RELATIVE_PATHS.md) | [Step 11.26: Container Reuse Validation & Cleanup](../archive/phase-11/STEP_11_26_CONTAINER_REUSE_VALIDATION_AND_TASK_CLEANUP.md) | [Step 12.14: Global Skills Injection & Stack Tooling](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md) | [Step 12.21: Container Sandbox Egress Filtering](STEP_12_21_CONTAINER_SANDBOX_EGRESS_FILTERING_AND_ENVOY_PROXY.md)  
+> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.

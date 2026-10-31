@@ -1,8 +1,8 @@
 # 🛡️ Step 12.7: Free & Open-Source SAST Quality Gate via Microsoft DevSkim CLI
 
 > **Phase 12 Implementation Step (Extend Features - Intelligence & Quality Gates)** *(formerly Step 11.4)*  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
-> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`  
 > *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 

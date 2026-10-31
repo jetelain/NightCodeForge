@@ -1,9 +1,9 @@
 # 🛡️ Step 12.21: Container Sandbox Egress Filtering & Envoy Proxy (Istio-Style Transparent Redirection & Domain Whitelisting)
 
 > **Phase 12 Implementation Step (Extend Features - Deep Integrations & Remote Experience - Container Security)**  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
-> *Related Steps:* [Step 12.10: MCP HTTP & Container Sandbox Integration](STEP_12_10_MCP_HTTP_AND_CONTAINER_SANDBOX_INTEGRATION.md) | [Step 12.19: Air-Gapped Offline Web App Hardening](STEP_12_19_AIR_GAPPED_OFFLINE_WEB_APP_HARDENING.md) | [Step 12.20: Air-Gapped Search Deactivation & mdfetch Whitelisting](STEP_12_20_AIR_GAPPED_SEARCH_DEACTIVATION_AND_MDFETCH_WHITELISTING.md)  
-> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Related Steps:* [Step 12.10: MCP HTTP & Container Sandbox Integration](STEP_12_10_MCP_HTTP_AND_CONTAINER_SANDBOX_INTEGRATION.md) | [Step 12.19: Air-Gapped Offline Web App Hardening](../archive/phase-12/STEP_12_19_AIR_GAPPED_OFFLINE_WEB_APP_HARDENING.md) | [Step 12.20: Air-Gapped Search Deactivation & mdfetch Whitelisting](STEP_12_20_AIR_GAPPED_SEARCH_DEACTIVATION_AND_MDFETCH_WHITELISTING.md)  
+> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -30,9 +30,9 @@
      - **Enterprise Intranet Only:** Company-internal mirrors and artifact registries (`*.corp.internal`, `artifactory.lan`).
      - **Custom Rules:** User-defined list of fully qualified domain names (FQDN) and wildcard subdomains.
 6. **Real-Time Egress Audit & Security Telemetry:**
-   - Stream Envoy access logs directly into NightCodeForge's live operations telemetry ([Step 11.18](../phase-11/STEP_11_18_LIVE_OPERATIONS_TELEMETRY.md)) and `/monitoring` dashboard.
+   - Stream Envoy access logs directly into NightCodeForge's live operations telemetry ([Step 11.18](../archive/phase-11/STEP_11_18_LIVE_OPERATIONS_TELEMETRY.md)) and `/monitoring` dashboard.
    - Provide immediate visual alerts when a container sandbox attempts an unauthorized outbound connection, surfacing the blocked domain, destination IP, timestamp, and triggering task ID.
-7. **Strict Architectural Separation:** Comply with [AGENTS.md](../../../AGENTS.md) clean presentation rules: Razor components handle only layout and user interaction; proxy lifecycle, docker command generation, YAML generation, and log parsing reside in dedicated services in `NightCodeForge.Core`.
+7. **Strict Architectural Separation:** Comply with [AGENTS.md](../../AGENTS.md) clean presentation rules: Razor components handle only layout and user interaction; proxy lifecycle, docker command generation, YAML generation, and log parsing reside in dedicated services in `NightCodeForge.Core`.
 
 ---
 
@@ -274,7 +274,7 @@ Build `src/NightCodeForge.Web/Components/Settings/ContainerEgressSettingsTab.raz
 - **Audit Stream:**
   - Live table of recent outbound connections parsed by `IEnvoyEgressAuditService`, highlighting blocked connections in red.
 
-#### 3.4.2 Integration with Live Telemetry ([Step 11.18](../phase-11/STEP_11_18_LIVE_OPERATIONS_TELEMETRY.md))
+#### 3.4.2 Integration with Live Telemetry ([Step 11.18](../archive/phase-11/STEP_11_18_LIVE_OPERATIONS_TELEMETRY.md))
 - Envoy stdout JSON logs are captured by `IEnvoyEgressAuditService`.
 - If an outbound attempt is `BLOCKED`, a high-priority telemetry alert event is dispatched over SignalR to `/monitoring` and the active task execution view, notifying the user:
   `"⚠️ Blocked outbound connection from sandbox: Attempted to reach 'malicious-domain.com:443' (not in allowed whitelist)."`

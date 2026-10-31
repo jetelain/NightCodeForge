@@ -1,9 +1,9 @@
 # 📋 Step 12.13: Conversational Backlog Management, Task Refinement & Scoped Mutation Tools in Ideation
 
 > **Phase 12 Implementation Step (Extend Features - Backlog Management & Dependencies)**  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Target Components:* `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Tools`, `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Core/Interfaces`, `src/NightCodeForge.Core/Services`, `src/NightCodeForge.Web/Components/Ideation`, `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Web/Components/Backlog`, `skills/ncf-backlog`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
-> *Related Steps:* [Step 11.7 (Task State History & Audit Trail)](../phase-11/STEP_11_7_TASK_STATE_HISTORY_AND_AUDIT_TRAIL.md), [Step 12.1 (Intelligent Task Dependency Detection)](STEP_12_1_INTELLIGENT_TASK_DEPENDENCY_DETECTION.md), [Step 12.4 (Ideation Quick Notes & Suggestions)](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)
+> *Related Steps:* [Step 11.7 (Task State History & Audit Trail)](../archive/phase-11/STEP_11_7_TASK_STATE_HISTORY_AND_AUDIT_TRAIL.md), [Step 12.1 (Intelligent Task Dependency Detection)](STEP_12_1_INTELLIGENT_TASK_DEPENDENCY_DETECTION.md), [Step 12.4 (Ideation Quick Notes & Suggestions)](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 

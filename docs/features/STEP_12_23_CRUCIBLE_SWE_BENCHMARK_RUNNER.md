@@ -1,9 +1,9 @@
 # 🏁 Step 12.23: Crucible Benchmark Runner for SWE-Sharp-Bench & Multi-Model Evaluation
 
 > **Phase 12 Implementation Step (Extend Features - Intelligence, Benchmarking & Model Selection)**  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
-> *Related Steps:* [Step 11.33: Unified LLM Provider Architecture](../phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md) | [Step 11.35: OpenAI-Compatible LLM Provider](../phase-11/STEP_11_35_OPENAI_COMPATIBLE_LLM_PROVIDER.md) | [Step 12.5: Dual Model Role Configuration & Difficulty Escalation](STEP_12_5_DUAL_MODEL_ROLE_CONFIGURATION_AND_DIFFICULTY_ESCALATION.md) | [Step 12.14: Global Skills Injection & Stack Tooling](STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md) | [Step 12.22: Container Diagnostic Bash Console](STEP_12_22_CONTAINER_DIAGNOSTIC_BASH_CONSOLE.md)  
-> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Related Steps:* [Step 11.33: Unified LLM Provider Architecture](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md) | [Step 11.35: OpenAI-Compatible LLM Provider](../archive/phase-11/STEP_11_35_OPENAI_COMPATIBLE_LLM_PROVIDER.md) | [Step 12.5: Dual Model Role Configuration & Difficulty Escalation](STEP_12_5_DUAL_MODEL_ROLE_CONFIGURATION_AND_DIFFICULTY_ESCALATION.md) | [Step 12.14: Global Skills Injection & Stack Tooling](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md) | [Step 12.22: Container Diagnostic Bash Console](STEP_12_22_CONTAINER_DIAGNOSTIC_BASH_CONSOLE.md)  
+> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Cli`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -226,7 +226,7 @@ For each `(BenchmarkInstance, BenchmarkModelCandidate)` pair:
      - When `EnableStackSkills == false`: `load_skill` is omitted from `permittedTools`, `<skills>` is omitted from Layer 1, and `~/.dotnet/tools` is **not** mounted into the container (ensuring a true A/B comparison without `csnav`).
 3. **Patch Extraction (`model_patch`):**
    - If the agent created any local commits during its session, compares against `BaseCommit` (`git diff <BaseCommit>`).
-   - Stages untracked newly created source files with `git add -N` ([Step 11.34](../phase-11/STEP_11_34_LIVE_GIT_DIFF_WORKTREE_AND_UNTRACKED_FILES.md)), excludes temporary build/test artifacts (`bin/`, `obj/`, `TestResults/`, `*.trx`, `/tmp`), and extracts the clean unified diff:
+   - Stages untracked newly created source files with `git add -N` ([Step 11.34](../archive/phase-11/STEP_11_34_LIVE_GIT_DIFF_WORKTREE_AND_UNTRACKED_FILES.md)), excludes temporary build/test artifacts (`bin/`, `obj/`, `TestResults/`, `*.trx`, `/tmp`), and extracts the clean unified diff:
      ```bash
      git diff <BaseCommit>
      ```

@@ -1,9 +1,9 @@
 # 🧠 Step 12.5: Task Difficulty Classification & Difficulty-Aware Model Escalation
 
 > **Phase 12 Implementation Step (Extend Features - Intelligence & Quality Gates)** *(formerly Step 11.1)*  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
-> *Dependencies:* [Step 11.33: Unified LLM Provider & Dynamic Fleet Integration](../phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 11.35: OpenAI-Compatible LLM Provider](../phase-11/STEP_11_35_OPENAI_COMPATIBLE_LLM_PROVIDER.md)  
-> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Dependencies:* [Step 11.33: Unified LLM Provider & Dynamic Fleet Integration](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 11.35: OpenAI-Compatible LLM Provider](../archive/phase-11/STEP_11_35_OPENAI_COMPATIBLE_LLM_PROVIDER.md)  
+> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Web.Tests`  
 > *Status:* Partially Implemented (Foundations completed in 11.33 & 11.35; Difficulty Escalation Planned) | *Target Framework:* .NET 10 (C# 13)
 
@@ -14,7 +14,7 @@
 ## 1. Executive Summary & Architectural Alignment with Steps 11.33 & 11.35
 
 ### 1.1 Foundations Already Delivered in Steps 11.33 & 11.35
-As a result of the unified provider and dynamic fleet architecture implemented in [Step 11.33](../phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md) and [Step 11.35](../phase-11/STEP_11_35_OPENAI_COMPATIBLE_LLM_PROVIDER.md), the foundational dual-model infrastructure is already in place:
+As a result of the unified provider and dynamic fleet architecture implemented in [Step 11.33](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md) and [Step 11.35](../archive/phase-11/STEP_11_35_OPENAI_COMPATIBLE_LLM_PROVIDER.md), the foundational dual-model infrastructure is already in place:
 
 1. **Role-Specialized Baseline Profile Generation (`Completed`):**
    - [`LlmProviderOptions`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Inference/LlmProviderOptions.cs) and [`ILlmProviderOptions`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Interfaces/ILlmProviderOptions.cs) support differentiated `ArchitectModelId` / `ArchitectThinkingEffort` and `CoderModelId` / `CoderThinkingEffort`.

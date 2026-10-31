@@ -1,9 +1,9 @@
 # 🛡️ Step 12.20: Air-Gapped Search Deactivation & MarkdownFetch Documentation Governance
 
 > **Phase 12 Implementation Step (Extend Features - Deep Integrations & Remote Experience - Security & Governance)**  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
-> *Related Steps:* [Step 12.14: Global Skills Injection & Stack Tooling](STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md) | [Step 12.19: Air-Gapped Offline Web App Hardening](STEP_12_19_AIR_GAPPED_OFFLINE_WEB_APP_HARDENING.md) | [Step 12.21: Container Sandbox Egress Filtering & Envoy Proxy](STEP_12_21_CONTAINER_SANDBOX_EGRESS_FILTERING_AND_ENVOY_PROXY.md)  
-> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Related Steps:* [Step 12.14: Global Skills Injection & Stack Tooling](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md) | [Step 12.19: Air-Gapped Offline Web App Hardening](../archive/phase-12/STEP_12_19_AIR_GAPPED_OFFLINE_WEB_APP_HARDENING.md) | [Step 12.21: Container Sandbox Egress Filtering & Envoy Proxy](STEP_12_21_CONTAINER_SANDBOX_EGRESS_FILTERING_AND_ENVOY_PROXY.md)  
+> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -19,8 +19,8 @@
 5. **Documentation Fetcher (`mdfetch`) Governance:** Provide a convenient in-app UI (`/settings` -> Documentation Fetcher / Network Security tab) and backend configuration pipeline for `Pmad.MarkdownFetch` (`mdfetch`), enabling teams to:
    - Configure allowed URL whitelist patterns for internal wikis, documentation servers, and API specs (e.g. `https://docs.corp.internal/*`, `http://wiki.lan/*`).
    - Guard against Server-Side Request Forgery (SSRF) and metadata theft by blocking private/loopback/cloud metadata ranges (`169.254.169.254`, `127.0.0.1`, `10.0.0.0/8`) unless explicitly permitted.
-   - Generate and maintain a validated `~/.nightcodeforge/mdfetch-safety.json` configuration file, automatically consumed during skill and agent executions ([Step 12.14](STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)).
-6. **Strict Architectural Separation:** Comply strictly with [AGENTS.md](../../../AGENTS.md) UI and presentation rules: Razor components remain strictly presentational; all pattern validation, JSON generation, file persistence, and network checks reside in dedicated services in `NightCodeForge.Core` or `NightCodeForge.Web/Services`.
+   - Generate and maintain a validated `~/.nightcodeforge/mdfetch-safety.json` configuration file, automatically consumed during skill and agent executions ([Step 12.14](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)).
+6. **Strict Architectural Separation:** Comply strictly with [AGENTS.md](../../AGENTS.md) UI and presentation rules: Razor components remain strictly presentational; all pattern validation, JSON generation, file persistence, and network checks reside in dedicated services in `NightCodeForge.Core` or `NightCodeForge.Web/Services`.
 
 ---
 
@@ -36,7 +36,7 @@ In an enterprise air-gapped deployment, secure enclave, or offline laptop:
 - Furthermore, sending queries to an external cloud search endpoint violates confidentiality rules of air-gapped environments.
 
 ### 2.2 Unrestricted Web Scraping and SSRF Vulnerabilities (`mdfetch`)
-Under [Step 12.14](STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md), developers and agents utilize `mdfetch` (`Pmad.MarkdownFetch`) to fetch documentation directly into clean markdown format for context injection.
+Under [Step 12.14](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md), developers and agents utilize `mdfetch` (`Pmad.MarkdownFetch`) to fetch documentation directly into clean markdown format for context injection.
 
 In enterprise and air-gapped environments, developers frequently want to fetch from **internal** documentation servers (e.g., Confluence, internal Developer Portals, GitLab/GitHub Enterprise, local microservice Swagger endpoints). However, without strict whitelisting:
 1. **SSRF Risks:** Untrusted code or prompt injection could instruct an agent to query cloud instance metadata endpoints (`http://169.254.169.254/latest/meta-data/`) or internal database administration ports (`http://localhost:6379`, `http://10.0.0.5:9200`).
@@ -160,7 +160,7 @@ public interface IMarkdownFetchSafetyService
   - File schemes (`file://`, `gopher://`, `ftp://`) are rejected; only `http://` and `https://` are processed.
 
 #### 3.3.3 Integration with CLI Invocations and Global Skills
-When executing `mdfetch` (either through the agent's bash/tool runner or via the global skills pipeline in [Step 12.14](STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)):
+When executing `mdfetch` (either through the agent's bash/tool runner or via the global skills pipeline in [Step 12.14](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)):
 1. `IMarkdownFetchSafetyService` ensures `~/.nightcodeforge/mdfetch-safety.json` is synced to disk.
 2. The command line builder appends:
    ```bash

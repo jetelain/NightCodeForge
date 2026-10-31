@@ -1,9 +1,9 @@
 # 📱 Step 12.8: Mobile-Responsive Web UI, PWA & Web Worker Notifications
 
 > **Phase 12 Implementation Step (Extend Features - Deep Integrations & Remote Experience)** *(formerly Step 11.6)*  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Related Steps:* [Step 12.4: Ideation Quick Notes](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md) | [Step 12.12: Voice Support](STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md) | [Step 12.16: Remote Tailscale Access](STEP_12_16_TAILSCALE_REMOTE_ACCESS.md)  
-> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -16,13 +16,13 @@
 2. **On-the-Go Workflow Operations:** Enable software engineers to effortlessly perform critical triage and oversight tasks from a smartphone:
    - Monitor real-time pipeline execution, stage transitions, and GPU/CPU gauges.
    - Answer pending human clarifying questions in [Inbox.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Inbox.razor) with touch-friendly selection chips.
-   - Jot down spontaneous ideas into the Ideation Backlog via a one-tap quick-note capture bar ([Step 12.4](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)).
+   - Jot down spontaneous ideas into the Ideation Backlog via a one-tap quick-note capture bar ([Step 12.4](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)).
    - Review quality gate metrics and approve/discard ideation proposal cards.
 3. **Adaptive Navigation & Touch Ergonomics:** Replace desktop-oriented layouts with mobile slide-out navigation drawers, bottom-sheet drawers, 44px+ touch targets, and fixed-bottom chat input bars that remain pinned above mobile on-screen keyboards.
 4. **Installable Progressive Web App (PWA):** Configure a Web App Manifest (`manifest.webmanifest`) and Service Worker (`service-worker.js`) to support "Add to Home Screen" with standalone fullscreen display mode and persistent permissions.
 5. **Web Worker Notifications & Subject Preferences:** Deliver native browser Web Notifications dispatched via the Web Worker / Service Worker on mobile devices (and desktop browsers) when tasks require human intervention (question inbox clarification, review room sign-off) or when tasks merge to the base branch, paired with granular user preferences to toggle notifications per subject.
 
-*(Note: Dedicated remote network infrastructure, MagicDNS TLS termination, and reverse proxy configuration are specified in [Step 12.16: Remote Tailscale Access](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_16_TAILSCALE_REMOTE_ACCESS.md).)*
+*(Note: Dedicated remote network infrastructure, MagicDNS TLS termination, and reverse proxy configuration are specified in [Step 12.16: Remote Tailscale Access](STEP_12_16_TAILSCALE_REMOTE_ACCESS.md).)*
 
 ---
 
@@ -52,7 +52,7 @@ Engineers on mobile rarely write code; they primarily:
 
 ### 2.4 Browser Chrome & Permission Ephemerality
 - Running NightCodeForge inside standard mobile browser tabs wastes vertical screen space on address bars and navigation controls, and `100vh` layouts get clipped by dynamic mobile browser toolbars unless dynamic viewport units (`100dvh`) and safe-area insets (`env(safe-area-inset-*)`) are used.
-- Mobile browsers frequently discard permissions (such as microphone access for [Step 12.12](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md) voice dictation) when run as transient browser tabs.
+- Mobile browsers frequently discard permissions (such as microphone access for [Step 12.12](STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md) voice dictation) when run as transient browser tabs.
 - Transforming the web app into an installable **Progressive Web App (PWA)** provides a distraction-free, app-like standalone window while permanently maintaining granted permissions.
 
 ---
@@ -80,7 +80,7 @@ Engineers on mobile rarely write code; they primarily:
 
 3. **Top Bar Quick Status Strip (`TopNavBar.razor`):**
    - On `< 768px`, hide secondary desktop breadcrumb text and compact the workspace selector and action buttons so they fit without horizontal overflow.
-   - Display a compact active worker pill (e.g. `⚡ #42`) and a fast "+ Note" shortcut button ([Step 12.4](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)) directly in the mobile top bar.
+   - Display a compact active worker pill (e.g. `⚡ #42`) and a fast "+ Note" shortcut button ([Step 12.4](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_REFINEMENT.md)) directly in the mobile top bar.
 
 ### 3.2 Touch Target Ergonomics & CSS Polish
 
@@ -92,7 +92,7 @@ Engineers on mobile rarely write code; they primarily:
 
 #### A. Ideation Chat ([Ideation.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Pages/Ideation.razor))
 - **Mobile Pane Switcher (`< 768px`):** On desktop, `.ideation-grid` displays `.chat-pane` (~60%) and `.proposals-pane` (~40%) side-by-side. On mobile viewports (`< 768px`), collapse `.ideation-grid` into a single-column view with a sticky top segmented switcher bar (`💬 Chat` | `📋 Proposals (@Session.Proposals.Count)` | `💡 Suggestions` from Step 12.4) so the proposals pane does not get pushed off-screen or collide with the chat input bar.
-- **Fixed Bottom Input Bar:** When viewing the Chat tab on mobile, the user prompt input box, voice dictation button ([Step 12.12](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md)), and "Send" button are pinned to the bottom of the viewport (`position: sticky; bottom: 0; padding-bottom: env(safe-area-inset-bottom);`), remaining visible when the virtual keyboard appears.
+- **Fixed Bottom Input Bar:** When viewing the Chat tab on mobile, the user prompt input box, voice dictation button ([Step 12.12](STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md)), and "Send" button are pinned to the bottom of the viewport (`position: sticky; bottom: 0; padding-bottom: env(safe-area-inset-bottom);`), remaining visible when the virtual keyboard appears.
 - **Scrollable Turn History:** Messages container occupies `flex: 1; overflow-y: auto;` with auto-scrolling to the latest assistant message via `NightCodeForge.initAutoScroll`.
 - **Card Stacking:** Proposal cards ([IdeationProposalCard.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Ideation/IdeationProposalCard.razor)) display actions (`Approve`, `Keep as Suggestion`, `Discard`) as full-width stacked buttons on mobile rather than a tight horizontal row.
 

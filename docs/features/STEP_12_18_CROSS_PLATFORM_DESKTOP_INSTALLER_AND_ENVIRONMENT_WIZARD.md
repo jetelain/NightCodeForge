@@ -1,9 +1,9 @@
 # 🖥️ Step 12.18: Cross-Platform Desktop Installer, Updater & Setup Wizard
 
 > **Phase 12 Implementation Step (Extend Features - Distribution & Desktop Experience)**  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
-> *Related Steps:* [Step 12.14: Global Skills & Stack Tooling](STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md) | [Step 12.15: Deep OllamaRouter Fleet Provisioning](STEP_12_15_DEEP_OLLAMAROUTER_FLEET_PROVISIONING_AND_IN_APP_SETUP.md) | [Step 12.16: Remote Tailscale Mesh Access](STEP_12_16_TAILSCALE_REMOTE_ACCESS.md)  
-> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Related Steps:* [Step 12.14: Global Skills & Stack Tooling](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md) | [Step 12.15: Deep OllamaRouter Fleet Provisioning](STEP_12_15_DEEP_OLLAMAROUTER_FLEET_PROVISIONING_AND_IN_APP_SETUP.md) | [Step 12.16: Remote Tailscale Mesh Access](STEP_12_16_TAILSCALE_REMOTE_ACCESS.md)  
+> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Installer`, `tests/NightCodeForge.Installer.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13, Avalonia UI 11+)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -229,7 +229,7 @@ The installer does not require `git` clone or compilation toolchains on the host
 - **Step 2: Environment Check & Plan:** Displays detected hardware (CPU, RAM, GPU), OS capabilities, and planned provisioning steps with individual toggle options.
 - **Step 3: Host & Subsystem Provisioning:** Visual stepper with real-time log terminal and progress bar for WSL/Docker/.NET installation.
 - **Step 4: AI & Micro-Benchmark Optimization:** Executes automated benchmark to find the perfect mix of `Qwen3.6 35B A3B`, `Qwen3.8 27B`, and `Qwen3.5 9B`, enforces $\ge 128\text{k}$ context, and initiates model weights streaming.
-- **Step 5: Software Download & Configuration Layout:** Downloads and extracts NightCodeForge Web and CLI binaries from GitHub Releases with live download speed and ETA. Automatically writes the hardware-calibrated user configuration into the durable `config/config.json` user overlay (configuring LLM provider settings for [Step 11.33](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), OpenAI compatible endpoints for [Step 11.35](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-11/STEP_11_35_OPENAI_COMPATIBLE_LLM_PROVIDER.md), and optional Tailscale mesh settings for [Step 12.16](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_16_TAILSCALE_REMOTE_ACCESS.md)), keeping `appsettings.json` as read-only factory defaults.
+- **Step 5: Software Download & Configuration Layout:** Downloads and extracts NightCodeForge Web and CLI binaries from GitHub Releases with live download speed and ETA. Automatically writes the hardware-calibrated user configuration into the durable `config/config.json` user overlay (configuring LLM provider settings for [Step 11.33](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), OpenAI compatible endpoints for [Step 11.35](../archive/phase-11/STEP_11_35_OPENAI_COMPATIBLE_LLM_PROVIDER.md), and optional Tailscale mesh settings for [Step 12.16](STEP_12_16_TAILSCALE_REMOTE_ACCESS.md)), keeping `appsettings.json` as read-only factory defaults.
 - **Step 6: Ready to Forge:** Summary screen with "Launch NightCodeForge Web" and "Open Documentation" buttons.
 
 #### 2. Maintenance & Updater Hub Mode (Launched Post-Install)
@@ -240,7 +240,7 @@ When the executable is launched after initial installation, it displays the **Fo
   - Download additional Ollama models.
   - Reconfigure OllamaRouter fleet nodes.
   - Reconfigure WSL distribution or Docker settings.
-  - Enable/disable Tailscale remote mesh access ([Step 12.16](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/docs/plan/phase-12/STEP_12_16_TAILSCALE_REMOTE_ACCESS.md)).
+  - Enable/disable Tailscale remote mesh access ([Step 12.16](STEP_12_16_TAILSCALE_REMOTE_ACCESS.md)).
 - **Forge Doctor (System Diagnostics):** 1-click self-test verifying WSL responsiveness, Docker daemon access, Ollama heartbeat, port 5270 availability (or configured `Urls`), and database connectivity.
 - **Quick Actions:** "Start Server", "Stop Server", "Open Web UI in Browser", "Open CLI Terminal".
 
@@ -353,7 +353,7 @@ public interface IOllamaManager
 2. **No Data Loss on Updates:** The update routine only updates binary directories (`bin/`). User configuration, SQLite database (`data.db`), workspace worktrees, and attachments stored in `~/.nightcodeforge/` remain completely untouched across updates.
 3. **Atomic Binary Swaps & Rollback:** Before unpacking an update, the current version is renamed to `.backup`. If unpacking fails or checksum validation errors occur, the backup is restored automatically.
 4. **Resumable Downloads:** Large downloads (Ollama models, SDK archives, release zips) use HTTP range requests or temporary `.part` files so network interruptions do not require downloading from zero.
-5. **No Silent Failures:** In accordance with [AGENTS.md](../../../AGENTS.md), all failed shell commands and API calls must fail fast, log detailed standard error, and provide actionable resolution guidance to the user.
+5. **No Silent Failures:** In accordance with [AGENTS.md](../../AGENTS.md), all failed shell commands and API calls must fail fast, log detailed standard error, and provide actionable resolution guidance to the user.
 
 ---
 

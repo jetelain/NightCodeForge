@@ -1,7 +1,7 @@
 # ⚡ Step 12.10: Model Context Protocol (MCP) Integration: HTTP Servers & ContainerSandbox Stdio
 
 > **Phase 12 Implementation Step (Extend Features - Deep Integrations & Remote Experience)** *(formerly Step 11.9)*  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Project Target:* `src/NightCodeForge.Agents/Mcp`, `src/NightCodeForge.Agents/Crucible`, `tests/NightCodeForge.Agents.Tests` | *Status:* Planned
 
 ---
