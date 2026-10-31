@@ -7,6 +7,7 @@
 @inject NavigationManager Navigation
 
 <div class="kanban-card task-card card-glass @(Task.IsWaitingForHuman ? "card-waiting-human" : "") @(CheckIsRunning() ? "card-running" : "")"
+     id="kanban-card-@Task.Id"
      @onclick="HandleClick"
      role="button"
      tabindex="0"

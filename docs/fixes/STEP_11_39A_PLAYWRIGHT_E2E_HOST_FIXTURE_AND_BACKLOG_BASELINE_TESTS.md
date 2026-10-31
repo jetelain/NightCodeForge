@@ -69,7 +69,7 @@ All tests in this class are decorated with `[Trait("Category", "E2E")]` and exec
 
 ## 3. Verification & Acceptance Criteria
 
-- [ ] `PlaywrightWebHostFixture` starts `NightCodeForge.Web` cleanly, provides `SeedDatabaseAsync` / `QueryDatabaseAsync`, and tears down the Kestrel process and temp SQLite files in `DisposeAsync`.
-- [ ] All 4 baseline E2E tests in `CoreBacklogAndNavigationE2ETests` pass reliably in headless Chromium via `dotnet test --filter "Category=E2E&Category!=Acceptance"` with **zero LLM calls** and complete in under 30 seconds total.
-- [ ] Standard unit test command `dotnet test --filter "Category!=Acceptance&Category!=E2E"` remains unaffected.
+- [x] `PlaywrightWebHostFixture` starts `NightCodeForge.Web` cleanly, provides `SeedDatabaseAsync` / `QueryDatabaseAsync`, and tears down the Kestrel process and temp SQLite files in `DisposeAsync`.
+- [x] All 4 baseline E2E tests in `CoreBacklogAndNavigationE2ETests` pass reliably in headless Chromium via `dotnet test --filter "Category=E2E&Category!=Acceptance"` with **zero LLM calls** and complete in under 30 seconds total.
+- [x] Standard unit test command `dotnet test --filter "Category!=Acceptance&Category!=E2E"` remains unaffected.
 
