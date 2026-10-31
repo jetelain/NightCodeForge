@@ -80,29 +80,47 @@ public static class HomeDashboardBuilder
         }
 
         var runningTaskIds = new HashSet<int>();
-        if (queueSnapshot != null)
-        {
-            foreach (var p in queueSnapshot.ProcessingJobs.Where(j => j.TaskId > 0))
-            {
-                runningTaskIds.Add(p.TaskId);
-            }
-            foreach (var l in queueSnapshot.ActiveLocks.Where(l => l.TaskId.HasValue && l.TaskId.Value > 0))
-            {
-                runningTaskIds.Add(l.TaskId!.Value);
-            }
-        }
-
         var workspaceSummaries = new List<RecentWorkspaceSummary>(workspaces.Count);
+        var tasksByWorkspaceId = new Dictionary<int, IReadOnlyList<ForgeTask>>(workspaces.Count);
 
         foreach (var ws in workspaces)
         {
             var tasks = await taskRepository.GetByWorkspaceIdAsync(ws.Id, cancellationToken);
-            var wsTaskIds = new HashSet<int>(tasks.Count);
+            tasksByWorkspaceId[ws.Id] = tasks;
             foreach (var task in tasks)
             {
                 allTasksById[task.Id] = task;
-                wsTaskIds.Add(task.Id);
             }
+        }
+
+        if (queueSnapshot != null)
+        {
+            foreach (var p in queueSnapshot.ProcessingJobs.Where(j => j.TaskId > 0))
+            {
+                if (allTasksById.TryGetValue(p.TaskId, out var procTask) &&
+                    !IsValidProcessingTaskForJob(procTask, p.JobId))
+                {
+                    continue;
+                }
+
+                runningTaskIds.Add(p.TaskId);
+            }
+            foreach (var l in queueSnapshot.ActiveLocks.Where(l => l.TaskId.HasValue && l.TaskId.Value > 0))
+            {
+                var lockTaskId = l.TaskId!.Value;
+                if (allTasksById.TryGetValue(lockTaskId, out var lockTask) && !lockTask.IsRunnable())
+                {
+                    continue;
+                }
+
+                runningTaskIds.Add(lockTaskId);
+            }
+        }
+
+        foreach (var ws in workspaces)
+        {
+            var tasks = tasksByWorkspaceId[ws.Id];
+            var wsTaskIds = tasks.Select(t => t.Id).ToHashSet();
 
             var lastTaskActivity = tasks.Count > 0
                 ? tasks.Max(t => t.UpdatedAt > t.CreatedAt ? t.UpdatedAt : t.CreatedAt)
@@ -168,7 +186,18 @@ public static class HomeDashboardBuilder
         {
             foreach (var job in queueSnapshot.ProcessingJobs)
             {
-                if (job.TaskId <= 0 || !seenTaskIds.Add(job.TaskId))
+                if (job.TaskId <= 0)
+                {
+                    continue;
+                }
+
+                if (tasksById.TryGetValue(job.TaskId, out var procTask) &&
+                    !IsValidProcessingTaskForJob(procTask, job.JobId))
+                {
+                    continue;
+                }
+
+                if (!seenTaskIds.Add(job.TaskId))
                 {
                     continue;
                 }
@@ -191,7 +220,12 @@ public static class HomeDashboardBuilder
                     }
 
                     var lockTaskId = activeLock.TaskId.Value;
-                    if (!seenTaskIds.Add(lockTaskId) || !tasksById.TryGetValue(lockTaskId, out var lockedTask))
+                    if (!tasksById.TryGetValue(lockTaskId, out var lockedTask) || !lockedTask.IsRunnable())
+                    {
+                        continue;
+                    }
+
+                    if (!seenTaskIds.Add(lockTaskId))
                     {
                         continue;
                     }
@@ -239,12 +273,7 @@ public static class HomeDashboardBuilder
         if (results.Count < MaxScheduledTasks)
         {
             var openTasks = tasksById.Values
-                .Where(t =>
-                    (t.Status == TaskOverallStatus.Open ||
-                     t.Status == TaskOverallStatus.Reviewed ||
-                     t.Status == TaskOverallStatus.Implemented) &&
-                    !t.IsWaitingForHuman &&
-                    !seenTaskIds.Contains(t.Id))
+                .Where(t => t.IsRunnable() && !seenTaskIds.Contains(t.Id))
                 .OrderBy(t => t.Priority)
                 .ThenBy(t => t.CreatedAt);
 
@@ -332,5 +361,22 @@ public static class HomeDashboardBuilder
             IsRunning: isRunning,
             InspectorUrl: WorkspaceUrlHelper.BuildPath(task.WorkspaceId > 0 ? task.WorkspaceId : null, $"inspector/{task.Id}"),
             TaskDetailUrl: WorkspaceUrlHelper.BuildPath(task.WorkspaceId > 0 ? task.WorkspaceId : null, $"tasks/{task.Id}"));
+    }
+
+    private static bool IsValidProcessingTaskForJob(ForgeTask task, string? jobId)
+    {
+        if (!task.IsRunnable())
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId) &&
+            !string.IsNullOrWhiteSpace(jobId) &&
+            !string.Equals(task.LastHangfireJobId, jobId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
     }
 }

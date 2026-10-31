@@ -393,6 +393,12 @@ public class StartupRecoveryService : IStartupRecoveryService
 
             task.PipelineDataJson = bag.ToJson();
 
+            if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
+            {
+                _jobQueue.Delete(task.LastHangfireJobId);
+                task.LastHangfireJobId = null;
+            }
+
             if (_operationsControlService.IsPaused)
             {
                 task.InterruptedStageId = stage.StageId;

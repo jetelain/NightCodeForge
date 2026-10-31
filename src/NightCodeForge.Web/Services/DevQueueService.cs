@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Hangfire;
 using Hangfire.Common;
 using Hangfire.States;
+using Hangfire.Storage;
 using Hangfire.Storage.Monitoring;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,6 +24,15 @@ namespace NightCodeForge.Web.Services;
 /// </summary>
 public class DevQueueService : IDevQueueService
 {
+    private const int EnqueuedJobsSnapshotLimit = 100;
+    private const int ProcessingJobsSnapshotLimit = 50;
+    private const int FailedJobsSnapshotLimit = 50;
+    private const int StaleProcessingPurgeLimit = 100;
+    private const int ReorderEnqueuedScanLimit = 1000;
+    private const string ProcessingQueueName = "processing";
+    private const string ProcessingFallbackStage = "Processing";
+    private const string RunningJobStatus = "Running";
+
     private readonly IWorkspaceLockProvider _lockProvider;
     private readonly IBackgroundJobClient _backgroundJobClient;
     private readonly ITaskJobQueue _taskJobQueue;
@@ -75,14 +85,15 @@ public class DevQueueService : IDevQueueService
         {
             var monitoring = _jobStorage.GetMonitoringApi();
 
-            var rawUrgent = monitoring.EnqueuedJobs(HangfireQueues.LlmUrgent, 0, 100);
-            var rawCodeReview = monitoring.EnqueuedJobs(HangfireQueues.LlmCodeReview, 0, 100);
-            var rawImplementation = monitoring.EnqueuedJobs(HangfireQueues.LlmImplementation, 0, 100);
-            var rawTaskReview = monitoring.EnqueuedJobs(HangfireQueues.LlmTaskReview, 0, 100);
-            var rawInference = monitoring.EnqueuedJobs(HangfireQueues.LlmInference, 0, 100);
-            var rawDefault = monitoring.EnqueuedJobs(HangfireQueues.Default, 0, 100);
-            var rawProcessing = monitoring.ProcessingJobs(0, 50);
-            var rawFailed = monitoring.FailedJobs(0, 50);
+            var rawUrgent = monitoring.EnqueuedJobs(HangfireQueues.LlmUrgent, 0, EnqueuedJobsSnapshotLimit);
+            var rawCodeReview = monitoring.EnqueuedJobs(HangfireQueues.LlmCodeReview, 0, EnqueuedJobsSnapshotLimit);
+            var rawImplementation = monitoring.EnqueuedJobs(HangfireQueues.LlmImplementation, 0, EnqueuedJobsSnapshotLimit);
+            var rawTaskReview = monitoring.EnqueuedJobs(HangfireQueues.LlmTaskReview, 0, EnqueuedJobsSnapshotLimit);
+            var rawInference = monitoring.EnqueuedJobs(HangfireQueues.LlmInference, 0, EnqueuedJobsSnapshotLimit);
+            var rawDefault = monitoring.EnqueuedJobs(HangfireQueues.Default, 0, EnqueuedJobsSnapshotLimit);
+            var rawProcessing = monitoring.ProcessingJobs(0, ProcessingJobsSnapshotLimit);
+            var rawFailed = monitoring.FailedJobs(0, FailedJobsSnapshotLimit);
+            var activeServerIds = GetActiveServerIds(monitoring);
 
             var taskIds = new HashSet<int>();
             ExtractTaskIds(rawUrgent, taskIds);
@@ -102,7 +113,7 @@ public class DevQueueService : IDevQueueService
             taskReviewJobs.AddRange(MapEnqueued(rawTaskReview, HangfireQueues.LlmTaskReview, "Task Review", taskLookup));
             inferenceJobs.AddRange(MapEnqueued(rawInference, HangfireQueues.LlmInference, "Queued", taskLookup));
             utilityJobs.AddRange(MapEnqueued(rawDefault, HangfireQueues.Default, "Queued", taskLookup));
-            processingJobs.AddRange(MapProcessing(rawProcessing, taskLookup));
+            processingJobs.AddRange(MapProcessing(rawProcessing, taskLookup, activeServerIds));
             failedJobs.AddRange(MapFailed(rawFailed, taskLookup));
 
             // Clean up any skipped jobs that are no longer present in Hangfire queues
@@ -502,6 +513,8 @@ public class DevQueueService : IDevQueueService
         try
         {
             var monitoring = _jobStorage.GetMonitoringApi();
+            await PurgeStaleProcessingJobsAsync(monitoring, cancellationToken);
+
             var targetQueues = new[]
             {
                 HangfireQueues.LlmCodeReview,
@@ -515,7 +528,7 @@ public class DevQueueService : IDevQueueService
 
             foreach (var q in targetQueues)
             {
-                var enqueued = monitoring.EnqueuedJobs(q, 0, 1000);
+                var enqueued = monitoring.EnqueuedJobs(q, 0, ReorderEnqueuedScanLimit);
                 foreach (var (key, dto) in enqueued)
                 {
                     if (string.Equals(dto.State, "Deleted", StringComparison.OrdinalIgnoreCase))
@@ -815,33 +828,147 @@ public class DevQueueService : IDevQueueService
         }
     }
 
-    private static IEnumerable<QueuedJobItem> MapProcessing(
-        JobList<ProcessingJobDto> jobs,
-        IReadOnlyDictionary<int, ForgeTask> tasks)
+    private static HashSet<string> GetActiveServerIds(IMonitoringApi monitoring)
     {
+        var rawServers = monitoring.Servers();
+        if (rawServers == null || rawServers.Count == 0)
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return new HashSet<string>(
+            rawServers
+                .Where(s => s != null && !string.IsNullOrWhiteSpace(s.Name))
+                .Select(s => s.Name),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task PurgeStaleProcessingJobsAsync(IMonitoringApi monitoring, CancellationToken cancellationToken)
+    {
+        var rawProcessing = monitoring.ProcessingJobs(0, StaleProcessingPurgeLimit);
+        if (rawProcessing == null || rawProcessing.Count == 0)
+        {
+            return;
+        }
+
+        var procTaskIds = new HashSet<int>();
+        ExtractTaskIdsFromProcessing(rawProcessing, procTaskIds);
+        var procTasks = await LoadTasksAsync(procTaskIds, cancellationToken);
+        var activeServerIds = GetActiveServerIds(monitoring);
+        _ = MapProcessing(rawProcessing, procTasks, activeServerIds).ToList();
+    }
+
+    private IEnumerable<QueuedJobItem> MapProcessing(
+        JobList<ProcessingJobDto> jobs,
+        IReadOnlyDictionary<int, ForgeTask> tasks,
+        IReadOnlySet<string> activeServerIds)
+    {
+        var seenTaskIds = new HashSet<int>();
         foreach (var (key, dto) in jobs)
         {
+            if (dto == null || !dto.InProcessingState)
+            {
+                continue;
+            }
+
             var (taskId, fallbackTitle, fallbackStage) = ParseJobInfo(dto.Job);
+            var isServerDead = activeServerIds.Count > 0
+                && !string.IsNullOrWhiteSpace(dto.ServerId)
+                && !activeServerIds.Contains(dto.ServerId);
+
+            if (isServerDead)
+            {
+                TryDeleteStaleProcessingJob(key, taskId, $"Dead Hangfire server '{dto.ServerId}'");
+                continue;
+            }
+
+            var isFromActiveServer = activeServerIds.Count > 0
+                && !string.IsNullOrWhiteSpace(dto.ServerId)
+                && activeServerIds.Contains(dto.ServerId);
+
             var title = fallbackTitle;
             var stage = fallbackStage;
             var priority = TaskPriority.Normal;
 
-            if (taskId > 0 && tasks.TryGetValue(taskId, out var task))
+            if (taskId > 0)
             {
+                if (!tasks.TryGetValue(taskId, out var task) || task == null)
+                {
+                    if (!isFromActiveServer)
+                    {
+                        TryDeleteStaleProcessingJob(key, taskId, "Task not found in repository");
+                    }
+                    continue;
+                }
+
+                if (!task.IsRunnable())
+                {
+                    if (!isFromActiveServer)
+                    {
+                        TryDeleteStaleProcessingJob(
+                            key,
+                            taskId,
+                            $"Task status '{task.Status}' (WaitingForHuman={task.IsWaitingForHuman}, DeferredByPause={task.IsDeferredByPause}) is not runnable");
+                    }
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId)
+                    && !string.IsNullOrWhiteSpace(key)
+                    && !string.Equals(task.LastHangfireJobId, key, StringComparison.Ordinal))
+                {
+                    if (!isFromActiveServer)
+                    {
+                        TryDeleteStaleProcessingJob(
+                            key,
+                            taskId,
+                            $"Superseded by newer Hangfire job '{task.LastHangfireJobId}'");
+                    }
+                    continue;
+                }
+
+                if (!seenTaskIds.Add(taskId))
+                {
+                    continue;
+                }
+
                 title = task.Title;
-                stage = !string.IsNullOrWhiteSpace(task.CurrentStageId) ? task.CurrentStageId : "Processing";
+                stage = !string.IsNullOrWhiteSpace(task.CurrentStageId) ? task.CurrentStageId : ProcessingFallbackStage;
                 priority = task.Priority;
             }
 
             yield return new QueuedJobItem(
                 key,
-                "processing",
+                ProcessingQueueName,
                 taskId,
                 title,
                 stage,
                 dto.StartedAt ?? DateTime.UtcNow,
-                "Running",
+                RunningJobStatus,
                 priority);
+        }
+    }
+
+    private void TryDeleteStaleProcessingJob(string jobId, int taskId, string reason)
+    {
+        if (string.IsNullOrWhiteSpace(jobId))
+        {
+            return;
+        }
+
+        try
+        {
+            _logger.LogWarning(
+                "Purging stale Hangfire Processing job {JobId} for Task #{TaskId}: {Reason}.",
+                jobId,
+                taskId,
+                reason);
+            _backgroundJobClient.Delete(jobId);
+            _skippedJobRegistry.RemoveSkippedJob(jobId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Best-effort cleanup of stale Hangfire Processing job {JobId} failed.", jobId);
         }
     }
 

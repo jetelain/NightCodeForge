@@ -428,4 +428,35 @@ public class StartupRecoveryTests : IDisposable
         var enqueuedIds = _jobQueue.EnqueuedStages.Select(e => e.TaskId).ToList();
         Assert.Equal(new[] { 12, 10, 8, 1 }, enqueuedIds);
     }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_DeletesPreviousHangfireJobBeforeReEnqueuing()
+    {
+        await _workspaceRepo.CreateAsync(new Workspace { Id = 16, Name = "Stale Job Workspace", RepositoryPath = _tempDir });
+
+        var implStageMock = new Moq.Mock<IWorkflowStage>();
+        implStageMock.SetupGet(s => s.StageId).Returns(StandardStageIds.Implementation);
+        implStageMock.SetupProperty(s => s.QueueTier, StageQueueTier.Implementation);
+
+        var pipeline = new WorkflowPipeline(new[] { implStageMock.Object });
+
+        await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 30,
+            WorkspaceId = 16,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            Priority = TaskPriority.Normal,
+            LastHangfireJobId = "stale-processing-job-299"
+        });
+
+        var recovery = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline));
+        await recovery.ReconcileWorkspacesAsync();
+
+        Assert.Contains("stale-processing-job-299", _jobQueue.DeletedJobs);
+        var updated = await _taskRepo.GetByIdAsync(30);
+        Assert.NotNull(updated);
+        Assert.NotNull(updated.LastHangfireJobId);
+        Assert.NotEqual("stale-processing-job-299", updated.LastHangfireJobId);
+    }
 }

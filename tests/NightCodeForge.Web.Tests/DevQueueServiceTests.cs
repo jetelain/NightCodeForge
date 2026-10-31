@@ -1333,6 +1333,109 @@ public class DevQueueServiceTests : IDisposable
         Assert.Equal(0, reordered);
     }
 
+    [Fact]
+    public async Task GetSnapshotAsync_FiltersAndDeletesStaleProcessingJobsFromDeadServersAndClosedOrSupersededTasks()
+    {
+        await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 38,
+            WorkspaceId = 1,
+            Title = "Closed Task With Zombie Processing Job",
+            Status = TaskOverallStatus.Closed,
+            CurrentStageId = string.Empty,
+            Priority = TaskPriority.High,
+            LastHangfireJobId = "298"
+        });
+
+        await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 30,
+            WorkspaceId = 1,
+            Title = "Active Running Task",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            Priority = TaskPriority.High,
+            LastHangfireJobId = "302"
+        });
+
+        var emptyEnqueued = new Hangfire.Storage.Monitoring.JobList<Hangfire.Storage.Monitoring.EnqueuedJobDto>(
+            Array.Empty<KeyValuePair<string, Hangfire.Storage.Monitoring.EnqueuedJobDto>>());
+        var emptyFailed = new Hangfire.Storage.Monitoring.JobList<Hangfire.Storage.Monitoring.FailedJobDto>(
+            Array.Empty<KeyValuePair<string, Hangfire.Storage.Monitoring.FailedJobDto>>());
+
+        var job38 = Job.FromExpression<ITaskOrchestrator>(o => o.ProcessTaskAsync(38, default));
+        var job30 = Job.FromExpression<ITaskOrchestrator>(o => o.ProcessTaskAsync(30, default));
+
+        var processingList = new Hangfire.Storage.Monitoring.JobList<Hangfire.Storage.Monitoring.ProcessingJobDto>(new[]
+        {
+            new KeyValuePair<string, Hangfire.Storage.Monitoring.ProcessingJobDto>(
+                "295",
+                new Hangfire.Storage.Monitoring.ProcessingJobDto
+                {
+                    InProcessingState = true,
+                    ServerId = "ncf-llm-inference-worker:dead-server-1",
+                    Job = job38,
+                    StartedAt = DateTime.UtcNow.AddHours(-1)
+                }),
+            new KeyValuePair<string, Hangfire.Storage.Monitoring.ProcessingJobDto>(
+                "299",
+                new Hangfire.Storage.Monitoring.ProcessingJobDto
+                {
+                    InProcessingState = true,
+                    ServerId = "ncf-llm-inference-worker:dead-server-2",
+                    Job = job30,
+                    StartedAt = DateTime.UtcNow.AddMinutes(-30)
+                }),
+            new KeyValuePair<string, Hangfire.Storage.Monitoring.ProcessingJobDto>(
+                "302",
+                new Hangfire.Storage.Monitoring.ProcessingJobDto
+                {
+                    InProcessingState = true,
+                    ServerId = "ncf-llm-inference-worker:active-server",
+                    Job = job30,
+                    StartedAt = DateTime.UtcNow.AddMinutes(-2)
+                })
+        });
+
+        var mockMonitoring = new Mock<Hangfire.Storage.IMonitoringApi>();
+        mockMonitoring.Setup(m => m.EnqueuedJobs(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>()))
+            .Returns(emptyEnqueued);
+        mockMonitoring.Setup(m => m.FailedJobs(It.IsAny<int>(), It.IsAny<int>()))
+            .Returns(emptyFailed);
+        mockMonitoring.Setup(m => m.ProcessingJobs(It.IsAny<int>(), It.IsAny<int>()))
+            .Returns(processingList);
+        mockMonitoring.Setup(m => m.Servers())
+            .Returns(new List<Hangfire.Storage.Monitoring.ServerDto>
+            {
+                new() { Name = "ncf-llm-inference-worker:active-server" }
+            });
+
+        var mockStorage = new Mock<JobStorage>();
+        mockStorage.Setup(s => s.GetMonitoringApi()).Returns(mockMonitoring.Object);
+
+        var service = new DevQueueService(
+            _lockProvider,
+            _jobClient,
+            _jobQueue,
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            mockStorage.Object,
+            _cancellationManager.Object,
+            _pathResolver.Object,
+            _skippedJobRegistry,
+            _taskOrchestrator.Object,
+            NullLogger<DevQueueService>.Instance);
+
+        var snapshot = await service.GetSnapshotAsync();
+
+        var runningJob = Assert.Single(snapshot.ProcessingJobs);
+        Assert.Equal("302", runningJob.JobId);
+        Assert.Equal(30, runningJob.TaskId);
+
+        Assert.Contains("295", _jobClient.DeletedJobIds);
+        Assert.Contains("299", _jobClient.DeletedJobIds);
+        Assert.DoesNotContain("302", _jobClient.DeletedJobIds);
+    }
+
     #region Mock Implementations
 
     private class MockLockProvider : IWorkspaceLockProvider
