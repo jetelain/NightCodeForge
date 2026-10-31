@@ -1,0 +1,77 @@
+# Step 11.38B — Shared Base Class for `AcpAgentHarness` & `PiRpcAgentHarness` (`ExternalProcessAgentHarnessBase`)
+
+**Status:** Pending (Fix / Code Factorization & Constructor Diet)
+**Prerequisite:** Step 11.38A
+
+---
+
+## 1. Problem Statement
+
+[`AcpAgentHarness`](../../src/NightCodeForge.Agents/Acp/AcpAgentHarness.cs) (816 lines, **11 constructor parameters**) and [`PiRpcAgentHarness`](../../src/NightCodeForge.Agents/PiRpc/PiRpcAgentHarness.cs) (538 lines, **8 constructor parameters**) share ~180 lines of nearly line-for-line identical code:
+
+1. **Identical Process & Session Lifecycle (`RunStageAsync` / `RunSessionAsync`):**
+   - `Stopwatch` initialization, `sessionId` generation, and `AgentActivityKind.StageStarted` broadcast.
+   - `CustomProcessFactory` execution branch (`process.Start()`, UTF-8 `StreamWriter` / `StreamReader`, `finally { process.Kill(entireProcessTree: true); process.Dispose(); }`).
+   - `context.Profile.HarnessConfigurationJson` parsing for `executablePath` / `executable` / `command` and `arguments` / `args` (both string and JSON array forms).
+   - Cross-platform working directory resolution on Windows when `context.WorkspacePath` starts with `/` or `~` via `IWorkspacePathResolver.ResolveCruciblePath`.
+   - Starting `IProcessStreamSession` via `IProcessRunner.StartSession(ProcessSessionSpec)`.
+2. **Identical Prompt Enrichment & History Formatting:**
+   - Resolving `CodeStackPresets.ResolveConfig` and `AgentsMdService.FormatExecutionGuidelines`.
+   - Formatting `[Stage Directive]`, `[Resumed Conversation History]` via `ConversationHistorySerializer.FormatForPrompt`, `<environment>` PWD instructions, and `[Human Answer]` prefixing.
+3. **Identical Activity Broadcasting & Markdown Transcript Persistence:**
+   - `BroadcastAsync` via `IAgentActivityStreamer` and `SaveTranscriptAsync` via `SessionTranscriptService`.
+4. **Excessive Responsibilities in `AcpAgentHarness` (11 Constructor Parameters):**
+   - In addition to ACP JSON-RPC session management, `AcpAgentHarness` directly handles host-side file reading/writing (`fs/read_text_file`, `fs/write_text_file` with `IEditorConfigService` and `IEditorConfigFileApplier`) and host/sandbox terminal management (`terminal/create`, `terminal/run`, `terminal/output`, `terminal/wait_for_exit`, `terminal/release`, `terminal/kill` with `IExecutionEnvironmentProvider` and `IProcessRunner`), pushing its constructor to 11 parameters.
+
+---
+
+## 2. Architectural Goals
+
+1. **Extract `ExternalProcessAgentHarnessBase`:** Centralize external process lifecycle management, `HarnessConfigurationJson` parsing, workspace path resolution, prompt assembly, activity broadcasting, and transcript persistence into a single abstract base class shared by `AcpAgentHarness` and `PiRpcAgentHarness`.
+2. **Extract `IAcpHostRpcHandler` (`AcpHostRpcHandler`):** Move ACP host-side filesystem (`fs/*`) and terminal (`terminal/*`) JSON-RPC method execution into a dedicated collaborator with its own focused dependencies and unit tests.
+3. **Bring `AcpAgentHarness` Constructor to `<= 8` Parameters:** Remove pass-through dependencies (`IEditorConfigService`, `IEditorConfigFileApplier`, `IExecutionEnvironmentProvider`) from `AcpAgentHarness` and remove `AcpAgentHarness` from the `ConstructorParameterCeilingTests` allowlist.
+
+---
+
+## 3. Required Specification & Behavioral Contracts
+
+### 3.1 `ExternalProcessAgentHarnessBase`
+
+Create an abstract base class `ExternalProcessAgentHarnessBase` in `NightCodeForge.Agents` implementing `IAgentHarness`:
+
+1. **Core Responsibilities:**
+   - Implements `RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken)` and `RunSessionAsync(AgentSessionContext context, CancellationToken cancellationToken)`.
+   - Provides `CustomProcessFactory` support for testing.
+   - Parses `HarnessConfigurationJson` into a strongly-typed `(string ExecutablePath, IReadOnlyList<string> Arguments)` tuple, delegating fallback executable/arguments to abstract/virtual members (`GetDefaultExecutablePath()`, `GetDefaultArguments(AgentSessionContext context, string workingDir)`).
+   - Resolves `(string WorkspacePath, string LocalWorkspaceRoot)` across Windows, WSL, and container paths using `IWorkspacePathResolver`.
+   - Provides a shared `BuildEnrichedPrompt(AgentSessionContext context, string localWorkspaceRoot, bool includeReconstructedHistory)` helper encapsulating `CodeStackPresets`, `AgentsMdService.FormatExecutionGuidelines`, `ConversationHistorySerializer.FormatForPrompt`, `<environment>` block, and `[Human Answer]` prefixing.
+   - Provides protected `BroadcastAsync(...)` and `SaveTranscriptAsync(...)` helpers.
+   - Delegates the protocol-specific stdio loop to `RunSessionStreamAsync(StreamWriter stdin, StreamReader stdout, AgentSessionContext context, string sessionId, Stopwatch sw, CancellationToken cancellationToken)`.
+2. **Constructor Dependencies Policy:**
+   - Per `AGENTS.md`, all constructor dependencies on `ExternalProcessAgentHarnessBase`, `AcpAgentHarness`, `PiRpcAgentHarness`, and `AcpHostRpcHandler` must be required (no optional parameters or `= null` defaults in production constructors; test builders in `tests/` supply fakes/mocks).
+
+### 3.2 `IAcpHostRpcHandler` (`AcpHostRpcHandler`)
+
+Extract ACP's host-side JSON-RPC tool callbacks (`terminal/*` and `fs/*`) from `AcpAgentHarness` into `IAcpHostRpcHandler`:
+
+- Handles `terminal/create`, `terminal/run`, `terminal/output`, `terminal/wait_for_exit`, `terminal/release`, and `terminal/kill` using `IExecutionEnvironmentProvider` and `IProcessRunner`.
+- Handles `fs/read_text_file` (including 1-based `offset` and `limit`) and `fs/write_text_file` (applying `.editorconfig` rules via `IEditorConfigService` and `IEditorConfigFileApplier`) using `IWorkspacePathResolver`.
+- Registered in DI in `NightCodeForge.Agents` service registration (`AddNightCodeForgeAgents` / `Program.cs`).
+- Constructor parameter count must be `<= 6`.
+
+### 3.3 Refactored `AcpAgentHarness` & `PiRpcAgentHarness`
+
+- Both inherit from `ExternalProcessAgentHarnessBase`.
+- `AcpAgentHarness` constructor parameter count is reduced from **11 to `<= 8`**.
+- `PiRpcAgentHarness` constructor parameter count remains **`<= 8`**.
+- Remove `AcpAgentHarness` from `LegacyConstructorDebtAllowlist` in `ConstructorParameterCeilingTests`.
+
+---
+
+## 4. Verification Criteria
+
+- All characterization tests from Step 11.38A and all existing `AcpAgentHarnessTests`, `AcpProtocolNegotiationTests`, and `PiRpcAgentHarnessTests` pass without behavioral regression.
+- Dedicated unit tests for `AcpHostRpcHandler` and `ExternalProcessAgentHarnessBase` pass.
+- `AcpAgentHarness` is removed from `LegacyConstructorDebtAllowlist` in `ConstructorParameterCeilingTests`.
+- Full test suite passes.
+

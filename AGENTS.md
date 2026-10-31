@@ -1,6 +1,6 @@
 Unless requested, run tests without end-to-end tests with `dotnet test --filter "Category!=Acceptance&Category!=E2E"`. When you finished to implement a stage or a substential modification, run all tests and ensure they are all passing (including end-to-end tests). In case of failure, fix them.
 
-In service constructors, avoid using optional parameters. You should require all services you need in order to work properly. Avoid trying to have a fallback strategy if a service is not available. If a service is not available, it's better to let the application fail fast rather than silently using a default value that might not be appropriate for the use case. For tests use mocks (with Moq), fakes or stubs when needed.
+In service constructors, avoid using optional parameters and never exceed 10 constructor parameters (extract cohesive collaborator services or factories when a class needs more dependencies). You should require all services you need in order to work properly. Avoid trying to have a fallback strategy if a service is not available. If a service is not available, it's better to let the application fail fast rather than silently using a default value that might not be appropriate for the use case. For tests use mocks (with Moq), fakes or stubs when needed.
 
 No silent failures: bare `catch { }` blocks without logging or justification are forbidden. Real failures must fail fast with dedicated domain exceptions.
 
