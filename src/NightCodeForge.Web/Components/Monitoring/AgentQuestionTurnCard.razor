@@ -8,7 +8,7 @@
     var isMulti = items.Count > 1;
 }
 
-<div class="agent-question-turn-card question-card @(isMulti ? "batch-card" : "") @(IsWaitingForAnswer ? "waiting" : "answered")" id="@CardDomId">
+<div class="agent-question-turn-card question-card @(isMulti ? "batch-card" : "") @(IsWaitingForAnswer ? "waiting" : "answered")" id="@CardDomId" data-testid="@($"question-card-{TaskId}")">
     <!-- Optional External Task Context Header -->
     @if (HasExternalTaskContext)
     {
@@ -104,6 +104,7 @@
                             var isAnsweredSelected = !IsWaitingForAnswer && IsOptionSelected(index, optionIndex, optionText);
 
                             <button type="button"
+                                    id="btn-option-@curQId-@optionIndex"
                                     class="agent-option-chip option-btn @(isSelected ? "selected active" : "") @(isAnsweredSelected ? "answered-selected" : "")"
                                     disabled="@(!IsWaitingForAnswer)"
                                     @onclick="() => SelectOption(index, optionText)">
@@ -127,6 +128,7 @@
                         </button>
                     </div>
                     <textarea id="clarification-input-@curQId"
+                              data-testid="input-answer-@curQId"
                               class="agent-question-input form-control-dark question-textarea"
                               placeholder="@(isMulti ? $"Type your answer for question #{index + 1}..." : "Type your response or select an option above...")"
                               value="@_answerTexts.GetValueOrDefault(index, string.Empty)"
@@ -173,6 +175,7 @@
             <button type="button"
                     class="forge-btn forge-btn-primary submit-answer-btn @(isMulti ? "submit-all-btn" : "")"
                     id="@submitBtnId"
+                    data-testid="@($"btn-submit-batch-{TaskId}")"
                     disabled="@(!CanSubmit || _isSubmitting)"
                     @onclick="SubmitClarificationAsync">
                 @if (_isSubmitting)

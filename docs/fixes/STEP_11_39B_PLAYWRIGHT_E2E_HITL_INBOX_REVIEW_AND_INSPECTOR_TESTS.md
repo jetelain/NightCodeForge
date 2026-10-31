@@ -3,7 +3,7 @@
 > **Fix & Resiliency Specification (Part 2 of 2 — Human-in-the-Loop & Observability Browser E2E Suite)**  
 > *Parent Plan:* [Fixes & Resiliency Roadmap](README.md)  
 > *Prerequisite Step:* [Step 11.39A: Reusable LLM-Free Playwright E2E Host Fixture & Core Backlog Baseline Tests](STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)  
-> *Target Components:* `tests/NightCodeForge.Web.Tests/E2E` | *Status:* **Ready for Implementation** | *Target Framework:* .NET 10 (C# 13)  
+> *Target Components:* `tests/NightCodeForge.Web.Tests/E2E` | *Status:* **Completed** | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -58,6 +58,6 @@ All tests in `HitlAndObservabilityE2ETests.cs` share `[Collection("PlaywrightUiE
 
 ## 3. Verification & Acceptance Criteria
 
-- [ ] All 4 E2E tests in `HitlAndObservabilityE2ETests` pass in headless Chromium via `dotnet test --filter "Category=E2E&Category!=Acceptance"` with **zero LLM calls**.
-- [ ] Full test suite (including `Category=E2E`) passes cleanly.
+- [x] All 4 E2E tests in `HitlAndObservabilityE2ETests` pass in headless Chromium via `dotnet test --filter "Category=E2E&Category!=Acceptance"` with **zero LLM calls**.
+- [x] Full test suite (including `Category=E2E`) passes cleanly.
 
