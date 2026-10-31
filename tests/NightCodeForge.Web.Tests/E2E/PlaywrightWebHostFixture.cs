@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Playwright;
 using NightCodeForge.Infrastructure.Data;
@@ -16,7 +18,7 @@ public class PlaywrightUiE2ECollection : ICollectionFixture<PlaywrightWebHostFix
 /// <summary>
 /// Reusable, LLM-free Playwright Web Host Fixture.
 /// Boots NightCodeForge.Web against an isolated temporary SQLite database and synthetic environment,
-/// exposes fast direct database seeding helpers, and manages isolated browser contexts.
+/// exposes fast direct database seeding helpers, and manages isolated browser contexts and temp directories.
 /// </summary>
 public class PlaywrightWebHostFixture : IAsyncLifetime
 {
@@ -27,9 +29,10 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
 
     private readonly string _tempDbPath = Path.Combine(Path.GetTempPath(), $"nightcodeforge_uie2e_{Guid.NewGuid():N}.db");
     private readonly string _tempHangfireDbPath = Path.Combine(Path.GetTempPath(), $"nightcodeforge_uie2e_hangfire_{Guid.NewGuid():N}.db");
+    private readonly ConcurrentBag<string> _tempDirectories = new();
 
     private Process? _webServerProcess;
-    private StreamWriter? _serverLogWriter;
+    private TextWriter? _serverLogWriter;
     private IPlaywright _playwright = default!;
     private IBrowser _browser = default!;
 
@@ -40,8 +43,8 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
     {
         BaseUrl = DetermineBaseUrl();
 
-        // 1. Ensure NightCodeForge.Web process is running on BaseUrl
-        await EnsureWebServerRunningAsync();
+        // 1. Start isolated NightCodeForge.Web process on BaseUrl
+        await StartWebServerAsync();
 
         // 2. Initialize Playwright and Chromium
         _playwright = await Playwright.CreateAsync();
@@ -52,6 +55,14 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
             Headless = !isHeaded,
             SlowMo = isHeaded ? 100 : null
         });
+    }
+
+    public string CreateTempWorkspaceDirectory(string prefix = "synthetic_ws")
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        _tempDirectories.Add(path);
+        return path;
     }
 
     public async Task<IBrowserContext> CreateContextAsync(ViewportSize? viewport = null)
@@ -71,7 +82,7 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
         ArgumentNullException.ThrowIfNull(seedAction);
 
         var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlite($"Data Source={_tempDbPath};")
+            .UseSqlite($"Data Source={_tempDbPath};Pooling=False;Default Timeout=30;")
             .Options;
 
         await using var context = new AppDbContext(options);
@@ -84,30 +95,86 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
         ArgumentNullException.ThrowIfNull(queryAction);
 
         var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlite($"Data Source={_tempDbPath};")
+            .UseSqlite($"Data Source={_tempDbPath};Pooling=False;Default Timeout=30;")
             .Options;
 
         await using var context = new AppDbContext(options);
         return await queryAction(context);
     }
 
+    public static async Task ClickUntilVisibleAsync(ILocator button, ILocator target, TimeSpan timeout)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.Elapsed < timeout)
+        {
+            if (await target.CountAsync() > 0 && await target.First.IsVisibleAsync())
+            {
+                return;
+            }
+
+            try
+            {
+                if (await button.CountAsync() > 0 && await button.First.IsVisibleAsync())
+                {
+                    await button.First.ClickAsync();
+                }
+            }
+            catch (PlaywrightException)
+            {
+                // Transient Blazor circuit re-render while clicking
+            }
+
+            await Task.Delay(500);
+        }
+
+        await target.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 5000 });
+    }
+
+    public static async Task<T?> WaitForConditionAsync<T>(Func<Task<T?>> condition, TimeSpan timeout) where T : class
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.Elapsed < timeout)
+        {
+            var result = await condition();
+            if (result != null)
+            {
+                return result;
+            }
+            await Task.Delay(300);
+        }
+        return await condition();
+    }
+
     public async Task DisposeAsync()
     {
         if (_browser != null)
         {
-            try { await _browser.CloseAsync(); } catch { }
+            try
+            {
+                await _browser.CloseAsync();
+            }
+            catch (Exception)
+            {
+                // Best-effort browser shutdown during fixture disposal
+            }
         }
 
         _playwright?.Dispose();
 
-        if (_webServerProcess != null && !_webServerProcess.HasExited)
+        if (_webServerProcess != null)
         {
             try
             {
-                _webServerProcess.Kill(entireProcessTree: true);
-                await _webServerProcess.WaitForExitAsync();
+                if (!_webServerProcess.HasExited)
+                {
+                    _webServerProcess.Kill(entireProcessTree: true);
+                    await _webServerProcess.WaitForExitAsync();
+                }
             }
-            catch { }
+            catch (Exception)
+            {
+                // Best-effort process termination during fixture disposal
+            }
             finally
             {
                 _webServerProcess.Dispose();
@@ -121,7 +188,10 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
                 await _serverLogWriter.FlushAsync();
                 await _serverLogWriter.DisposeAsync();
             }
-            catch { }
+            catch (Exception)
+            {
+                // Best-effort log stream flush on teardown
+            }
         }
 
         TryCleanupTempFiles();
@@ -129,57 +199,87 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
 
     private void TryCleanupTempFiles()
     {
+        SqliteConnection.ClearAllPools();
+
         try
         {
             var prefix = Path.GetFileNameWithoutExtension(_tempDbPath);
             foreach (var f in Directory.GetFiles(Path.GetTempPath(), $"{prefix}*"))
             {
-                try { File.Delete(f); } catch { }
+                TryDeleteFileWithRetry(f);
             }
 
             var hgPrefix = Path.GetFileNameWithoutExtension(_tempHangfireDbPath);
             foreach (var f in Directory.GetFiles(Path.GetTempPath(), $"{hgPrefix}*"))
             {
-                try { File.Delete(f); } catch { }
+                TryDeleteFileWithRetry(f);
+            }
+
+            foreach (var dir in _tempDirectories)
+            {
+                if (Directory.Exists(dir))
+                {
+                    try
+                    {
+                        Directory.Delete(dir, recursive: true);
+                    }
+                    catch (Exception)
+                    {
+                        // Best-effort temporary workspace directory cleanup
+                    }
+                }
             }
         }
-        catch
+        catch (Exception)
         {
-            // Best effort temp db file cleanup
+            // Best-effort temp file enumeration cleanup
         }
     }
 
-    private async Task EnsureWebServerRunningAsync()
+    private static void TryDeleteFileWithRetry(string filePath)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-        try
+        for (int attempt = 0; attempt < 5; attempt++)
         {
-            var res = await http.GetAsync(BaseUrl);
-            if (res.IsSuccessStatusCode)
+            try
             {
+                if (File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                }
+                return;
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                Thread.Sleep(100);
+            }
+            catch (Exception)
+            {
+                // Ignore if locked by OS handle release delay
                 return;
             }
         }
-        catch
-        {
-            // Web server not yet running; spawn new process
-        }
+    }
 
+    private async Task StartWebServerAsync()
+    {
         var repoRoot = FindRepoRoot();
-        var webProj = Path.Combine(repoRoot, "src", "NightCodeForge.Web", "NightCodeForge.Web.csproj");
-        if (!File.Exists(webProj))
+        var webProjDir = Path.Combine(repoRoot, "src", "NightCodeForge.Web");
+        var webDllPath = typeof(NightCodeForge.Web.Components.App).Assembly.Location;
+        if (!File.Exists(webDllPath))
         {
-            throw new FileNotFoundException($"Could not locate NightCodeForge.Web.csproj at {webProj}");
+            throw new FileNotFoundException($"Could not locate compiled NightCodeForge.Web.dll at {webDllPath}");
         }
 
-        var psi = new ProcessStartInfo("dotnet", $"run --project \"{webProj}\" --no-build --urls {BaseUrl}")
+        var psi = new ProcessStartInfo("dotnet", $"\"{webDllPath}\" --urls {BaseUrl} --contentRoot \"{webProjDir}\"")
         {
+            WorkingDirectory = webProjDir,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true
         };
 
+        psi.Environment["ASPNETCORE_ENVIRONMENT"] = "Development";
         psi.Environment[AppDbContext.WorkspaceIdSeedEnvironmentVariable] = DefaultWorkspaceSeed;
         psi.Environment["ConnectionStrings__DefaultConnection"] = $"Data Source={_tempDbPath};";
         psi.Environment["ConnectionStrings__HangfireConnection"] = $"Data Source={_tempHangfireDbPath};";
@@ -187,11 +287,24 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
         var logDir = Path.Combine(repoRoot, "artifacts");
         Directory.CreateDirectory(logDir);
         var logPath = Path.Combine(logDir, "uie2e_webserver.log");
-        _serverLogWriter = new StreamWriter(new FileStream(logPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite)) { AutoFlush = true };
+        var rawWriter = new StreamWriter(new FileStream(logPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite)) { AutoFlush = true };
+        _serverLogWriter = TextWriter.Synchronized(rawWriter);
 
         _webServerProcess = new Process { StartInfo = psi };
-        _webServerProcess.OutputDataReceived += (s, e) => { if (e.Data != null) _serverLogWriter.WriteLine($"[STDOUT] {e.Data}"); };
-        _webServerProcess.ErrorDataReceived += (s, e) => { if (e.Data != null) _serverLogWriter.WriteLine($"[STDERR] {e.Data}"); };
+        _webServerProcess.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+            {
+                try { _serverLogWriter?.WriteLine($"[STDOUT] {e.Data}"); } catch (ObjectDisposedException) { }
+            }
+        };
+        _webServerProcess.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+            {
+                try { _serverLogWriter?.WriteLine($"[STDERR] {e.Data}"); } catch (ObjectDisposedException) { }
+            }
+        };
 
         if (!_webServerProcess.Start())
         {
@@ -201,10 +314,11 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
         _webServerProcess.BeginOutputReadLine();
         _webServerProcess.BeginErrorReadLine();
 
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         var sw = Stopwatch.StartNew();
         while (sw.Elapsed < TimeSpan.FromSeconds(ServerStartupTimeoutSeconds))
         {
-            await Task.Delay(500);
+            await Task.Delay(300);
             try
             {
                 var check = await http.GetAsync(BaseUrl);
@@ -213,7 +327,7 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
                     return;
                 }
             }
-            catch
+            catch (Exception)
             {
                 if (_webServerProcess.HasExited)
                 {
@@ -248,7 +362,7 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
                 listener.Stop();
                 return port;
             }
-            catch
+            catch (SocketException)
             {
                 // Port occupied, try next
             }

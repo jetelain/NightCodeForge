@@ -197,4 +197,42 @@ public class QuestionCardTests : BunitContext
         Assert.Equal("a1", _orchestrator.LastSubmitAnswersCall.Value.Answers[101]);
         Assert.Equal("a2", _orchestrator.LastSubmitAnswersCall.Value.Answers[102]);
     }
+
+    [Fact]
+    public void AgentQuestionTurnCard_WhenTaskIdProvided_RendersTaskScopedDataTestIds()
+    {
+        var cut = Render<NightCodeForge.Web.Components.Monitoring.AgentQuestionTurnCard>(p => p
+            .Add(c => c.TaskId, 77)
+            .Add(c => c.QuestionIds, new[] { 301, 302 })
+            .Add(c => c.BatchIdentifier, "batch-77")
+            .Add(c => c.IsWaitingForAnswer, true)
+            .Add(c => c.Questions, new[]
+            {
+                new QuestionItem("First question?", "Rationale 1", new[] { "Opt A" }),
+                new QuestionItem("Second question?", "Rationale 2")
+            }));
+
+        Assert.NotNull(cut.Find("[data-testid='question-card-77']"));
+        Assert.NotNull(cut.Find("[data-testid='input-answer-301']"));
+        Assert.NotNull(cut.Find("[data-testid='input-answer-302']"));
+        Assert.NotNull(cut.Find("[data-testid='btn-submit-batch-77']"));
+    }
+
+    [Fact]
+    public void AgentQuestionTurnCard_WhenTaskIdNull_FallsBackToCleanDomIdsWithoutTrailingHyphens()
+    {
+        var cut = Render<NightCodeForge.Web.Components.Monitoring.AgentQuestionTurnCard>(p => p
+            .Add(c => c.TaskId, null)
+            .Add(c => c.IsWaitingForAnswer, true)
+            .Add(c => c.Questions, new[]
+            {
+                new QuestionItem("Inline turn question?")
+            }));
+
+        var card = cut.Find(".agent-question-turn-card");
+        Assert.Equal("agent-question-card", card.GetAttribute("data-testid"));
+
+        var submitBtn = cut.Find("button.submit-answer-btn");
+        Assert.Equal("submit-answer-btn-0", submitBtn.GetAttribute("data-testid"));
+    }
 }

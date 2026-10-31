@@ -41,27 +41,9 @@ public class ConstructorParameterCeilingTests
     ];
 
     [Fact]
-    public void AllPublicConstructors_DoNotExceedParameterCeiling_OrAllowlistUpperBound()
+    public void AllInstanceConstructors_DoNotExceedParameterCeiling_OrAllowlistUpperBound()
     {
-        var violations = new List<string>();
-
-        foreach (var type in GetCandidateProductionTypes())
-        {
-            var publicConstructors = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-            foreach (var ctor in publicConstructors)
-            {
-                var paramCount = ctor.GetParameters().Length;
-                var allowedMax = LegacyConstructorDebtAllowlist.TryGetValue(type.Name, out var legacyMax)
-                    ? legacyMax
-                    : MaxConstructorParameters;
-
-                if (paramCount > allowedMax)
-                {
-                    violations.Add(
-                        $"{type.FullName} has a constructor with {paramCount} parameters (max allowed: {allowedMax}).");
-                }
-            }
-        }
+        var violations = FindViolations(GetCandidateProductionTypes(), LegacyConstructorDebtAllowlist);
 
         Assert.True(
             violations.Count == 0,
@@ -69,7 +51,7 @@ public class ConstructorParameterCeilingTests
     }
 
     [Fact]
-    public void LegacyConstructorDebtAllowlist_ContainsNoStaleEntriesAlreadyAtOrBelowCeiling()
+    public void LegacyConstructorDebtAllowlist_ContainsNoStaleOrAmbiguousEntries()
     {
         var candidateTypesByName = GetCandidateProductionTypes()
             .GroupBy(t => t.Name, StringComparer.Ordinal)
@@ -85,8 +67,15 @@ public class ConstructorParameterCeilingTests
                 continue;
             }
 
-            var actualMaxParams = matchingTypes
-                .SelectMany(t => t.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+            if (matchingTypes.Count > 1)
+            {
+                var fullNames = string.Join(", ", matchingTypes.Select(t => t.FullName));
+                staleEntries.Add($"'{typeName}' matches multiple production types ({fullNames}); disambiguate or rename.");
+                continue;
+            }
+
+            var actualMaxParams = matchingTypes[0]
+                .GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
                 .Select(c => c.GetParameters().Length)
                 .DefaultIfEmpty(0)
                 .Max();
@@ -106,6 +95,51 @@ public class ConstructorParameterCeilingTests
         Assert.True(
             staleEntries.Count == 0,
             "LegacyConstructorDebtAllowlist has stale entries:\n" + string.Join("\n", staleEntries));
+    }
+
+    [Fact]
+    public void FindViolations_DetectsPublicAndInternalConstructorsExceedingCeiling()
+    {
+        var emptyAllowlist = new Dictionary<string, int>(StringComparer.Ordinal);
+        var sampleTypes = new[]
+        {
+            typeof(CompliantTenParamService),
+            typeof(ViolatingElevenParamPublicService),
+            typeof(ViolatingElevenParamInternalService)
+        };
+
+        var violations = FindViolations(sampleTypes, emptyAllowlist);
+
+        Assert.Equal(2, violations.Count);
+        Assert.Contains(violations, v => v.Contains(nameof(ViolatingElevenParamPublicService), StringComparison.Ordinal));
+        Assert.Contains(violations, v => v.Contains(nameof(ViolatingElevenParamInternalService), StringComparison.Ordinal));
+    }
+
+    private static List<string> FindViolations(
+        IEnumerable<Type> candidateTypes,
+        IReadOnlyDictionary<string, int> allowlist)
+    {
+        var violations = new List<string>();
+
+        foreach (var type in candidateTypes)
+        {
+            var instanceConstructors = type.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            foreach (var ctor in instanceConstructors)
+            {
+                var paramCount = ctor.GetParameters().Length;
+                var allowedMax = allowlist.TryGetValue(type.Name, out var legacyMax)
+                    ? legacyMax
+                    : MaxConstructorParameters;
+
+                if (paramCount > allowedMax)
+                {
+                    violations.Add(
+                        $"{type.FullName} has a constructor with {paramCount} parameters (max allowed: {allowedMax}).");
+                }
+            }
+        }
+
+        return violations;
     }
 
     private static IEnumerable<Type> GetCandidateProductionTypes()
@@ -150,4 +184,28 @@ public class ConstructorParameterCeilingTests
 
     private static bool IsPositionalRecord(Type type) =>
         type.GetMethod("<Clone>$", BindingFlags.Public | BindingFlags.Instance) != null;
+
+    private sealed class CompliantTenParamService
+    {
+        public CompliantTenParamService(int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, int p10)
+        {
+            _ = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10;
+        }
+    }
+
+    private sealed class ViolatingElevenParamPublicService
+    {
+        public ViolatingElevenParamPublicService(int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, int p10, int p11)
+        {
+            _ = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11;
+        }
+    }
+
+    private sealed class ViolatingElevenParamInternalService
+    {
+        internal ViolatingElevenParamInternalService(int p1, int p2, int p3, int p4, int p5, int p6, int p7, int p8, int p9, int p10, int p11)
+        {
+            _ = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11;
+        }
+    }
 }

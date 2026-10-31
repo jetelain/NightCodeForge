@@ -279,10 +279,7 @@ public class PiRpcAgentHarnessTests
             await Assert.ThrowsAsync<IOException>(() => harness.RunStageAsync(context));
 
             Assert.NotNull(capturedSpec);
-            if (OperatingSystem.IsWindows())
-            {
-                Assert.Equal(tempDir, capturedSpec.WorkingDirectory);
-            }
+            Assert.Equal(OperatingSystem.IsWindows() ? tempDir : unixWorkspacePath, capturedSpec.WorkingDirectory);
             Assert.True(session.IsDisposed);
         }
         finally

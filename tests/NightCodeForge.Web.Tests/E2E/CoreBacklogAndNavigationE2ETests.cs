@@ -39,12 +39,26 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
     {
         if (_page != null)
         {
-            try { await _page.CloseAsync(); } catch { }
+            try
+            {
+                await _page.CloseAsync();
+            }
+            catch (Exception)
+            {
+                // Best-effort page close during test teardown
+            }
         }
 
         if (_context != null)
         {
-            try { await _context.CloseAsync(); } catch { }
+            try
+            {
+                await _context.CloseAsync();
+            }
+            catch (Exception)
+            {
+                // Best-effort browser context close during test teardown
+            }
         }
     }
 
@@ -55,16 +69,16 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
         var wsA = new Workspace
         {
             Name = "Alpha Repository",
-            RepositoryPath = Path.Combine(Path.GetTempPath(), $"synthetic_alpha_{Guid.NewGuid():N}"),
+            RepositoryPath = _fixture.CreateTempWorkspaceDirectory("synthetic_alpha"),
             DefaultBaseBranch = "main",
             ExecutionMode = ExecutionMode.BareHost,
             CreatedAt = DateTime.UtcNow
         };
-        Directory.CreateDirectory(wsA.RepositoryPath);
 
-        await _fixture.SeedDatabaseAsync(async db =>
+        await _fixture.SeedDatabaseAsync(db =>
         {
             db.Workspaces.Add(wsA);
+            return Task.CompletedTask;
         });
 
         // 2. Initialize synthetic repository fixture for Workspace B
@@ -81,7 +95,7 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
         // 4. Open the Workspace Creation Wizard from TopNavBar
         var openWizardBtn = _page.Locator("button.forge-btn-icon-addon[title*='Create'], #home-setup-workspace-btn");
         var wizardModal = _page.Locator(".forge-modal-card.wizard-card");
-        await ClickUntilVisibleAsync(openWizardBtn.First, wizardModal, TimeSpan.FromSeconds(20));
+        await PlaywrightWebHostFixture.ClickUntilVisibleAsync(openWizardBtn.First, wizardModal, TimeSpan.FromSeconds(20));
 
         // Step 1: Probe synthetic directory
         await _page.FillAsync("#repo-path-input", repoB.RepositoryPath);
@@ -135,16 +149,15 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
     [Fact]
     public async Task HomeDashboard_RendersSeededKpis_ActiveTasks_And_GlobalPauseToggle()
     {
-        // 1. Seed a workspace with tasks in Open, Suggested, and InProgress states, plus a pending Question
+        // 1. Seed a workspace with tasks in Open, Suggested, and Reviewed states, plus a pending Question
         var ws = new Workspace
         {
             Name = "KPI Command Center Workspace",
-            RepositoryPath = Path.Combine(Path.GetTempPath(), $"synthetic_kpi_{Guid.NewGuid():N}"),
+            RepositoryPath = _fixture.CreateTempWorkspaceDirectory("synthetic_kpi"),
             DefaultBaseBranch = "main",
             ExecutionMode = ExecutionMode.BareHost,
             CreatedAt = DateTime.UtcNow
         };
-        Directory.CreateDirectory(ws.RepositoryPath);
 
         var openTask = new ForgeTask
         {
@@ -177,6 +190,8 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
             UpdatedAt = DateTime.UtcNow.AddMinutes(-5)
         };
 
+        Question? seededQuestion = null;
+
         await _fixture.SeedDatabaseAsync(async db =>
         {
             db.Workspaces.Add(ws);
@@ -189,7 +204,7 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
             db.Tasks.AddRange(openTask, suggestedTask, inProgressTask);
             await db.SaveChangesAsync();
 
-            var question = new Question
+            seededQuestion = new Question
             {
                 TaskId = openTask.Id,
                 StageId = "Plan",
@@ -197,54 +212,84 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
                 Prompt = "Do we need multi-region replication for the distributed cache cluster?",
                 AskedAt = DateTime.UtcNow
             };
-            db.Questions.Add(question);
+            db.Questions.Add(seededQuestion);
         });
 
-        // 2. Navigate to /w/{workspaceId}
-        await _page.GotoAsync($"{_fixture.BaseUrl}/w/{ws.Id}", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
-        await _page.WaitForSelectorAsync(".home-dashboard");
+        try
+        {
+            // 2. Navigate to /w/{workspaceId}
+            await _page.GotoAsync($"{_fixture.BaseUrl}/w/{ws.Id}", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
+            await _page.WaitForSelectorAsync(".home-dashboard");
 
-        // 3. Verify pending questions alert banner and inbox badge
-        var questionBanner = _page.Locator("#home-pending-questions-banner");
-        await questionBanner.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
+            // 3. Verify pending questions alert banner and inbox badge
+            var questionBanner = _page.Locator("#home-pending-questions-banner");
+            await questionBanner.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
 
-        var inboxBadge = _page.Locator("#home-inbox-count-badge");
-        await inboxBadge.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
-        var badgeText = await inboxBadge.InnerTextAsync();
-        Assert.Contains("1", badgeText);
+            var inboxBadge = _page.Locator("#home-inbox-count-badge");
+            await inboxBadge.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
+            var badgeText = await inboxBadge.InnerTextAsync();
+            Assert.Contains("1", badgeText);
 
-        // 4. Verify workspace summary card with Open, Suggested, and Question counts
-        var wsCard = _page.Locator($"#home-workspace-card-{ws.Id}");
-        await wsCard.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
-        var cardText = await wsCard.InnerTextAsync();
-        Assert.Contains("Open: 2", cardText); // openTask (Open) + inProgressTask (Reviewed)
-        Assert.Contains("Suggested: 1", cardText);
+            // 4. Verify workspace summary card with Open, Suggested, and Question counts
+            var wsCard = _page.Locator($"#home-workspace-card-{ws.Id}");
+            await wsCard.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
+            var cardText = await wsCard.InnerTextAsync();
+            Assert.Contains("Open: 2", cardText); // openTask (Open) + inProgressTask (Reviewed)
+            Assert.Contains("Suggested: 1", cardText);
 
-        var wsInboxPill = _page.Locator($"#home-ws-inbox-{ws.Id}");
-        await wsInboxPill.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
-        Assert.Contains("Questions: 1", await wsInboxPill.InnerTextAsync());
+            var wsInboxPill = _page.Locator($"#home-ws-inbox-{ws.Id}");
+            await wsInboxPill.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
+            Assert.Contains("Questions: 1", await wsInboxPill.InnerTextAsync());
 
-        // 5. Verify Running & Next Scheduled Tasks section
-        var scheduledSection = _page.Locator("#home-scheduled-tasks-section");
-        await scheduledSection.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
+            // 5. Verify Running & Next Scheduled Tasks section
+            var scheduledSection = _page.Locator("#home-scheduled-tasks-section");
+            await scheduledSection.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
 
-        var scheduledTaskRow = _page.Locator($"#home-scheduled-task-{inProgressTask.Id}");
-        await scheduledTaskRow.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
-        Assert.Contains("Background Agent Execution Engine", await scheduledTaskRow.InnerTextAsync());
+            var scheduledTaskRow = _page.Locator($"#home-scheduled-task-{inProgressTask.Id}");
+            await scheduledTaskRow.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
+            Assert.Contains("Background Agent Execution Engine", await scheduledTaskRow.InnerTextAsync());
 
-        // 6. Verify Live System Telemetry section
-        var telemetrySection = _page.Locator("#home-telemetry-section");
-        await telemetrySection.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
+            // 6. Verify Live System Telemetry section
+            var telemetrySection = _page.Locator("#home-telemetry-section");
+            await telemetrySection.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
 
-        // 7. Click #nav-btn-pause-operations ("Pause Operations") in TopNavBar
-        var pauseBtn = _page.Locator("#nav-btn-pause-operations");
-        var resumeBtn = _page.Locator("#nav-btn-resume-operations");
-        await ClickUntilVisibleAsync(pauseBtn, resumeBtn, TimeSpan.FromSeconds(15));
-        await _page.WaitForSelectorAsync("#nav-btn-resume-operations:has-text('Resume Operations')", new PageWaitForSelectorOptions { Timeout = 10000 });
+            // 7. Click #nav-btn-pause-operations ("Pause Operations") in TopNavBar
+            var pauseBtn = _page.Locator("#nav-btn-pause-operations");
+            var resumeBtn = _page.Locator("#nav-btn-resume-operations");
+            if (await resumeBtn.CountAsync() > 0 && await resumeBtn.First.IsVisibleAsync())
+            {
+                await PlaywrightWebHostFixture.ClickUntilVisibleAsync(resumeBtn, pauseBtn, TimeSpan.FromSeconds(15));
+            }
 
-        // Click again to resume operations
-        await ClickUntilVisibleAsync(resumeBtn, pauseBtn, TimeSpan.FromSeconds(15));
-        await _page.WaitForSelectorAsync("#nav-btn-pause-operations:has-text('Pause Operations')", new PageWaitForSelectorOptions { Timeout = 10000 });
+            await PlaywrightWebHostFixture.ClickUntilVisibleAsync(pauseBtn, resumeBtn, TimeSpan.FromSeconds(15));
+            await _page.WaitForSelectorAsync("#nav-btn-resume-operations:has-text('Resume Operations')", new PageWaitForSelectorOptions { Timeout = 10000 });
+
+            // Click again to resume operations
+            await PlaywrightWebHostFixture.ClickUntilVisibleAsync(resumeBtn, pauseBtn, TimeSpan.FromSeconds(15));
+            await _page.WaitForSelectorAsync("#nav-btn-pause-operations:has-text('Pause Operations')", new PageWaitForSelectorOptions { Timeout = 10000 });
+        }
+        finally
+        {
+            // Clean up seeded pending question and runnable tasks so global counts do not pollute other E2E tests in the collection
+            await _fixture.SeedDatabaseAsync(async db =>
+            {
+                if (seededQuestion != null)
+                {
+                    var q = await db.Questions.FindAsync(seededQuestion.Id);
+                    if (q != null)
+                    {
+                        q.Status = QuestionStatus.Answered;
+                        q.Answer = "Cleaned up after HomeDashboard E2E test";
+                    }
+                }
+
+                var t1 = await db.Tasks.FindAsync(openTask.Id);
+                if (t1 != null) t1.Status = TaskOverallStatus.Closed;
+
+                var t2 = await db.Tasks.FindAsync(inProgressTask.Id);
+                if (t2 != null) t2.Status = TaskOverallStatus.Closed;
+            });
+        }
     }
 
     [Fact]
@@ -254,16 +299,16 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
         var ws = new Workspace
         {
             Name = "Manual Task Flow Workspace",
-            RepositoryPath = Path.Combine(Path.GetTempPath(), $"synthetic_manual_{Guid.NewGuid():N}"),
+            RepositoryPath = _fixture.CreateTempWorkspaceDirectory("synthetic_manual"),
             DefaultBaseBranch = "main",
             ExecutionMode = ExecutionMode.BareHost,
             CreatedAt = DateTime.UtcNow
         };
-        Directory.CreateDirectory(ws.RepositoryPath);
 
-        await _fixture.SeedDatabaseAsync(async db =>
+        await _fixture.SeedDatabaseAsync(db =>
         {
             db.Workspaces.Add(ws);
+            return Task.CompletedTask;
         });
 
         // 2. Navigate to /w/{ws.Id}
@@ -276,7 +321,7 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
         // 3. Navigate to /w/{ws.Id}/tasks/new via TopNavBar "+ New Task" button
         var newTaskNavBtn = _page.Locator("#nav-btn-new-task");
         var titleInput = _page.Locator("#task-title-input, #task-title");
-        await ClickUntilVisibleAsync(newTaskNavBtn, titleInput, TimeSpan.FromSeconds(15));
+        await PlaywrightWebHostFixture.ClickUntilVisibleAsync(newTaskNavBtn, titleInput, TimeSpan.FromSeconds(15));
 
         // 4. Fill out title, description, priority High, merge mode ManualReviewRequired
         var taskTitle = "Implement OAuth2 token refresh and rotation endpoint";
@@ -299,7 +344,7 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
         // 5. Click #btn-save-as-open ("Save as Open (Backlog Queue)")
         var saveOpenBtn = _page.Locator("#btn-save-as-open");
         var backlogSurface = _page.Locator(".backlog-page-container");
-        await ClickUntilVisibleAsync(saveOpenBtn, backlogSurface, TimeSpan.FromSeconds(20));
+        await PlaywrightWebHostFixture.ClickUntilVisibleAsync(saveOpenBtn, backlogSurface, TimeSpan.FromSeconds(20));
 
         // 6. Verify navigation to backlog URL
         await _page.WaitForURLAsync(new Regex(@"backlog"), new PageWaitForURLOptions { Timeout = 10000 });
@@ -326,7 +371,7 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
 
         // 9. Click the task card to navigate to TaskDetailPage
         var taskDetailPage = _page.Locator(".task-detail-page");
-        await ClickUntilVisibleAsync(kanbanCard, taskDetailPage, TimeSpan.FromSeconds(15));
+        await PlaywrightWebHostFixture.ClickUntilVisibleAsync(kanbanCard, taskDetailPage, TimeSpan.FromSeconds(15));
         await _page.WaitForURLAsync(new Regex($@"tasks/{createdTask.Id}"), new PageWaitForURLOptions { Timeout = 10000 });
 
         // 10. Verify task title, markdown description, status badge, priority, and history timeline
@@ -348,7 +393,7 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
         // Switch to history tab and assert timeline renders
         var historyTabBtn = _page.Locator("#tab-btn-history");
         var historyTimeline = _page.Locator(".task-history-timeline-container, [id^='task-history-timeline-']");
-        await ClickUntilVisibleAsync(historyTabBtn, historyTimeline.First, TimeSpan.FromSeconds(15));
+        await PlaywrightWebHostFixture.ClickUntilVisibleAsync(historyTabBtn, historyTimeline.First, TimeSpan.FromSeconds(15));
     }
 
     [Fact]
@@ -358,12 +403,11 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
         var ws = new Workspace
         {
             Name = "DAG & Filtering Workspace",
-            RepositoryPath = Path.Combine(Path.GetTempPath(), $"synthetic_dag_{Guid.NewGuid():N}"),
+            RepositoryPath = _fixture.CreateTempWorkspaceDirectory("synthetic_dag"),
             DefaultBaseBranch = "main",
             ExecutionMode = ExecutionMode.BareHost,
             CreatedAt = DateTime.UtcNow
         };
-        Directory.CreateDirectory(ws.RepositoryPath);
 
         var task1 = new ForgeTask
         {
@@ -453,38 +497,10 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
 
         // Click the prerequisite link to navigate to Task #1
         var task1Title = _page.Locator("h1:has-text('Database Migration Engine')");
-        await ClickUntilVisibleAsync(prereqLink, task1Title, TimeSpan.FromSeconds(15));
+        await PlaywrightWebHostFixture.ClickUntilVisibleAsync(prereqLink, task1Title, TimeSpan.FromSeconds(15));
         await _page.WaitForURLAsync(new Regex($@"tasks/{task1.Id}"), new PageWaitForURLOptions { Timeout = 10000 });
 
         // Verify on Task #1 detail page
         Assert.Contains("Database Migration Engine", await task1Title.InnerTextAsync());
-    }
-
-    private static async Task ClickUntilVisibleAsync(ILocator button, ILocator target, TimeSpan timeout)
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.Elapsed < timeout)
-        {
-            if (await target.CountAsync() > 0 && await target.First.IsVisibleAsync())
-            {
-                return;
-            }
-
-            try
-            {
-                if (await button.CountAsync() > 0 && await button.First.IsVisibleAsync())
-                {
-                    await button.First.ClickAsync();
-                }
-            }
-            catch
-            {
-                // Transient Blazor circuit re-render
-            }
-
-            await Task.Delay(1000);
-        }
-
-        await target.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 5000 });
     }
 }

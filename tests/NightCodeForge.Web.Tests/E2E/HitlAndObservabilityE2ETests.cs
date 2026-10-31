@@ -38,12 +38,26 @@ public class HitlAndObservabilityE2ETests : IAsyncLifetime
     {
         if (_page != null)
         {
-            try { await _page.CloseAsync(); } catch { }
+            try
+            {
+                await _page.CloseAsync();
+            }
+            catch (Exception)
+            {
+                // Best-effort page close during test teardown
+            }
         }
 
         if (_context != null)
         {
-            try { await _context.CloseAsync(); } catch { }
+            try
+            {
+                await _context.CloseAsync();
+            }
+            catch (Exception)
+            {
+                // Best-effort browser context close during test teardown
+            }
         }
     }
 
@@ -59,7 +73,7 @@ public class HitlAndObservabilityE2ETests : IAsyncLifetime
         var resumeBtn = _page.Locator("#nav-btn-resume-operations");
         if (await pauseBtn.CountAsync() > 0 && await pauseBtn.First.IsVisibleAsync())
         {
-            await ClickUntilVisibleAsync(pauseBtn.First, resumeBtn, TimeSpan.FromSeconds(15));
+            await PlaywrightWebHostFixture.ClickUntilVisibleAsync(pauseBtn.First, resumeBtn, TimeSpan.FromSeconds(15));
             await _page.WaitForSelectorAsync("#nav-btn-resume-operations", new PageWaitForSelectorOptions { Timeout = 10000 });
         }
 
@@ -67,12 +81,11 @@ public class HitlAndObservabilityE2ETests : IAsyncLifetime
         var ws = new Workspace
         {
             Name = "Question Inbox E2E Workspace",
-            RepositoryPath = Path.Combine(Path.GetTempPath(), $"synthetic_inbox_{Guid.NewGuid():N}"),
+            RepositoryPath = _fixture.CreateTempWorkspaceDirectory("synthetic_inbox"),
             DefaultBaseBranch = "main",
             ExecutionMode = ExecutionMode.BareHost,
             CreatedAt = DateTime.UtcNow
         };
-        Directory.CreateDirectory(ws.RepositoryPath);
 
         var task = new ForgeTask
         {
@@ -123,57 +136,78 @@ public class HitlAndObservabilityE2ETests : IAsyncLifetime
             db.Questions.AddRange(q1, q2);
         });
 
-        // 3. Navigate to /w/{workspaceId}/inbox
-        await _page.GotoAsync($"{_fixture.BaseUrl}/w/{ws.Id}/inbox", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
-        await _page.WaitForSelectorAsync(".inbox-container");
-
-        // Wait for question card
-        var card = _page.Locator($"#question-card-{task.Id}, #question-card-batch-{batchId}, [data-testid='question-card-{task.Id}'], .question-card");
-        await card.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 15000 });
-
-        // Verify both questions are rendered
-        var cardText = await card.First.InnerTextAsync();
-        Assert.Contains("Which cache provider topology do you prefer?", cardText);
-        Assert.Contains("What is the cache entry expiration timeout in seconds?", cardText);
-
-        // 4. Click option chip on Question 1 (e.g. Option 0: Redis Cluster)
-        var optionChip = _page.Locator($"#btn-option-{q1.Id}-0, button.agent-option-chip:has-text('Redis Cluster')");
-        await optionChip.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
-        await optionChip.First.ClickAsync();
-
-        // 5. Fill custom answer in Question 2
-        var answer2Input = _page.Locator($"#input-answer-{q2.Id}, #clarification-input-{q2.Id}, [data-testid='input-answer-{q2.Id}']");
-        await answer2Input.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
-        await answer2Input.First.FillAsync("300");
-
-        // 6. Submit batch
-        var submitBtn = _page.Locator($"#btn-submit-batch-{task.Id}, #submit-all-btn-{batchId}, [data-testid='btn-submit-batch-{task.Id}'], button.submit-all-btn");
-        await submitBtn.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
-        await submitBtn.First.ClickAsync();
-
-        // 7. Verify empty inbox state is displayed
-        await _page.WaitForSelectorAsync("#inbox-empty-state, .empty-inbox", new PageWaitForSelectorOptions { Timeout = 15000 });
-
-        // 8. Assert database updates: Questions are Answered and ForgeTask.IsWaitingForHuman is false
-        var (savedQ1, savedQ2, savedTask) = await _fixture.QueryDatabaseAsync(async db =>
+        try
         {
-            var sq1 = await db.Questions.FindAsync(q1.Id);
-            var sq2 = await db.Questions.FindAsync(q2.Id);
-            var st = await db.Tasks.FindAsync(task.Id);
-            return (sq1, sq2, st);
-        });
+            // 3. Navigate to /w/{workspaceId}/inbox
+            await _page.GotoAsync($"{_fixture.BaseUrl}/w/{ws.Id}/inbox", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
+            await _page.WaitForSelectorAsync(".inbox-container");
 
-        Assert.NotNull(savedQ1);
-        Assert.NotNull(savedQ2);
-        Assert.NotNull(savedTask);
+            // Wait for the specific task/batch question card
+            var card = _page.Locator($"#question-card-batch-{batchId}, [data-testid='question-card-{task.Id}']");
+            await card.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 15000 });
 
-        Assert.Equal(QuestionStatus.Answered, savedQ1.Status);
-        Assert.Contains("Redis Cluster", savedQ1.Answer);
+            // Verify both questions are rendered
+            var cardText = await card.First.InnerTextAsync();
+            Assert.Contains("Which cache provider topology do you prefer?", cardText);
+            Assert.Contains("What is the cache entry expiration timeout in seconds?", cardText);
 
-        Assert.Equal(QuestionStatus.Answered, savedQ2.Status);
-        Assert.Equal("300", savedQ2.Answer);
+            // 4. Click option chip on Question 1 (Option 0: Redis Cluster)
+            var optionChip = _page.Locator($"#btn-option-{q1.Id}-0");
+            await optionChip.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
+            await optionChip.ClickAsync();
 
-        Assert.False(savedTask.IsWaitingForHuman);
+            // 5. Fill custom answer in Question 2
+            var answer2Input = _page.Locator($"#clarification-input-{q2.Id}, [data-testid='input-answer-{q2.Id}']");
+            await answer2Input.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
+            await answer2Input.First.FillAsync("300");
+
+            // 6. Submit batch
+            var submitBtn = _page.Locator($"#submit-all-btn-{batchId}, [data-testid='btn-submit-batch-{task.Id}']");
+            await submitBtn.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
+            await submitBtn.First.ClickAsync();
+
+            // 7. Verify empty inbox state is displayed
+            await _page.WaitForSelectorAsync("#inbox-empty-state, .empty-inbox", new PageWaitForSelectorOptions { Timeout = 15000 });
+
+            // 8. Assert database updates: Questions are Answered and ForgeTask.IsWaitingForHuman is false
+            var (savedQ1, savedQ2, savedTask) = await _fixture.QueryDatabaseAsync(async db =>
+            {
+                var sq1 = await db.Questions.FindAsync(q1.Id);
+                var sq2 = await db.Questions.FindAsync(q2.Id);
+                var st = await db.Tasks.FindAsync(task.Id);
+                return (sq1, sq2, st);
+            });
+
+            Assert.NotNull(savedQ1);
+            Assert.NotNull(savedQ2);
+            Assert.NotNull(savedTask);
+
+            Assert.Equal(QuestionStatus.Answered, savedQ1.Status);
+            Assert.Contains("Redis Cluster", savedQ1.Answer);
+
+            Assert.Equal(QuestionStatus.Answered, savedQ2.Status);
+            Assert.Equal("300", savedQ2.Answer);
+
+            Assert.False(savedTask.IsWaitingForHuman);
+        }
+        finally
+        {
+            // Close the seeded task before resuming operations so Hangfire never executes an LLM stage for it
+            await _fixture.SeedDatabaseAsync(async db =>
+            {
+                var st = await db.Tasks.FindAsync(task.Id);
+                if (st != null)
+                {
+                    st.Status = TaskOverallStatus.Closed;
+                    st.IsWaitingForHuman = false;
+                }
+            });
+
+            if (await resumeBtn.CountAsync() > 0 && await resumeBtn.First.IsVisibleAsync())
+            {
+                await PlaywrightWebHostFixture.ClickUntilVisibleAsync(resumeBtn.First, pauseBtn, TimeSpan.FromSeconds(15));
+            }
+        }
     }
 
     [Fact]
@@ -266,19 +300,19 @@ public class HitlAndObservabilityE2ETests : IAsyncLifetime
         // 8. Reject the task via #btn-reject-task and TaskRejectionModal
         var rejectBtn = _page.Locator("#btn-reject-task");
         var rejectModal = _page.Locator(".task-rejection-modal");
-        await ClickUntilVisibleAsync(rejectBtn, rejectModal, TimeSpan.FromSeconds(15));
+        await PlaywrightWebHostFixture.ClickUntilVisibleAsync(rejectBtn, rejectModal, TimeSpan.FromSeconds(15));
 
         // Fill rejection reason
-        var reasonInput = _page.Locator("#rejection-reason-input");
-        await reasonInput.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
-        await reasonInput.FillAsync("Business logic requires floating point calculations.");
+        var reasonInput = _page.Locator("#rejection-reason-input, [data-testid='reject-reason-input']");
+        await reasonInput.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
+        await reasonInput.First.FillAsync("Business logic requires floating point calculations.");
 
         // Confirm rejection
         var confirmRejectBtn = _page.Locator("#btn-confirm-reject");
         await confirmRejectBtn.ClickAsync();
 
         // 9. Assert task status transitions to Rejected in SQLite
-        var updatedTask = await WaitForConditionAsync(async () =>
+        var updatedTask = await PlaywrightWebHostFixture.WaitForConditionAsync(async () =>
         {
             var t = await _fixture.QueryDatabaseAsync(async db => await db.Tasks.FindAsync(taskId));
             return t != null && t.Status == TaskOverallStatus.Rejected ? t : null;
@@ -460,7 +494,7 @@ Added Multiply method to Calculator.cs successfully.
         var turnBubble = _page.Locator(".conversation-turns-list .chat-bubble");
         await turnBubble.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 15000 });
 
-        var turnsText = await WaitForConditionAsync(async () =>
+        var turnsText = await PlaywrightWebHostFixture.WaitForConditionAsync(async () =>
         {
             var text = await _page.Locator(".conversation-turns-list").InnerTextAsync();
             return text.Contains("Please implement the Calculator multiplication feature") ? text : null;
@@ -505,7 +539,7 @@ Added Multiply method to Calculator.cs successfully.
         var ws = new Workspace
         {
             Name = "Settings E2E Workspace",
-            RepositoryPath = Path.Combine(Path.GetTempPath(), $"synthetic_settings_{Guid.NewGuid():N}"),
+            RepositoryPath = _fixture.CreateTempWorkspaceDirectory("synthetic_settings"),
             DefaultBaseBranch = "main",
             ExecutionMode = ExecutionMode.BareHost,
             BuildTimeoutSeconds = 45,
@@ -513,11 +547,11 @@ Added Multiply method to Calculator.cs successfully.
             GlobalSkillsInjectionMode = GlobalSkillsInjectionMode.Inherit,
             CreatedAt = DateTime.UtcNow
         };
-        Directory.CreateDirectory(ws.RepositoryPath);
 
-        await _fixture.SeedDatabaseAsync(async db =>
+        await _fixture.SeedDatabaseAsync(db =>
         {
             db.Workspaces.Add(ws);
+            return Task.CompletedTask;
         });
 
         // 2. Navigate to /w/{workspaceId}/settings
@@ -528,22 +562,22 @@ Added Multiply method to Calculator.cs successfully.
         // 3. Test Global Scope navigation tabs
         var workflowsTabBtn = _page.Locator(".settings-tabs button:has-text('Workflows & Stages')");
         var workflowsHeader = _page.Locator("h3:has-text('Workflows & Execution Stages')");
-        await ClickUntilVisibleAsync(workflowsTabBtn, workflowsHeader, TimeSpan.FromSeconds(15));
+        await PlaywrightWebHostFixture.ClickUntilVisibleAsync(workflowsTabBtn, workflowsHeader, TimeSpan.FromSeconds(15));
         var workflowsText = await _page.Locator(".settings-tab-content").InnerTextAsync();
         Assert.Contains("Workflows", workflowsText);
 
         var profilesTabBtn = _page.Locator(".settings-tabs button:has-text('Global Agent Profiles')");
         var profilesHeader = _page.Locator("h3:has-text('Global Agent Reasoning Profiles')");
-        await ClickUntilVisibleAsync(profilesTabBtn, profilesHeader, TimeSpan.FromSeconds(15));
+        await PlaywrightWebHostFixture.ClickUntilVisibleAsync(profilesTabBtn, profilesHeader, TimeSpan.FromSeconds(15));
         var profilesText = await _page.Locator(".settings-tab-content").InnerTextAsync();
         Assert.Contains("Agent Reasoning Profiles", profilesText);
 
         // 4. Switch to Workspace Settings scope
         var workspaceScopeBtn = _page.Locator(".scope-switcher button:has-text('Workspace Settings')");
         var confinementHeader = _page.Locator("h3:has-text('Repository & Execution Confinement')");
-        await ClickUntilVisibleAsync(workspaceScopeBtn, confinementHeader, TimeSpan.FromSeconds(15));
+        await PlaywrightWebHostFixture.ClickUntilVisibleAsync(workspaceScopeBtn, confinementHeader, TimeSpan.FromSeconds(15));
 
-        // 6. Update workspace settings: Build Timeout to 180 and Global Skills Injection Mode to ForceEnabled
+        // 5. Update workspace settings: Build Timeout to 180 and Global Skills Injection Mode to ForceEnabled
         var buildTimeoutInput = _page.Locator("label:has-text('Build Timeout') ~ input");
         await buildTimeoutInput.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
         await buildTimeoutInput.FillAsync("180");
@@ -552,12 +586,12 @@ Added Multiply method to Calculator.cs successfully.
         await injectionModeSelect.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
         await injectionModeSelect.SelectOptionAsync(GlobalSkillsInjectionMode.ForceEnabled.ToString());
 
-        // 7. Click Save Workspace Settings
+        // 6. Click Save Workspace Settings
         var saveBtn = _page.Locator("button:has-text('Save Workspace Settings')");
         await saveBtn.ClickAsync();
 
-        // 8. Verify persistence in SQLite
-        var updatedWs = await WaitForConditionAsync(async () =>
+        // 7. Verify persistence in SQLite
+        var updatedWs = await PlaywrightWebHostFixture.WaitForConditionAsync(async () =>
         {
             var result = await _fixture.QueryDatabaseAsync(async db => await db.Workspaces.FindAsync(ws.Id));
             return result != null && result.BuildTimeoutSeconds == 180 && result.GlobalSkillsInjectionMode == GlobalSkillsInjectionMode.ForceEnabled
@@ -569,7 +603,7 @@ Added Multiply method to Calculator.cs successfully.
         Assert.Equal(180, updatedWs.BuildTimeoutSeconds);
         Assert.Equal(GlobalSkillsInjectionMode.ForceEnabled, updatedWs.GlobalSkillsInjectionMode);
 
-        // 9. Switch across Workspace tabs: Workspace Agent Profiles and Workflows & Stages
+        // 8. Switch across Workspace tabs: Workspace Agent Profiles and Workflows & Stages
         var wsProfilesTab = _page.Locator(".settings-tabs button:has-text('Workspace Agent Profiles')");
         await wsProfilesTab.ClickAsync();
         await _page.WaitForSelectorAsync(".settings-tab-content", new PageWaitForSelectorOptions { Timeout = 10000 });
@@ -577,48 +611,5 @@ Added Multiply method to Calculator.cs successfully.
         var wsWorkflowsTab = _page.Locator(".settings-tabs button:has-text('Workflows & Stages')");
         await wsWorkflowsTab.ClickAsync();
         await _page.WaitForSelectorAsync(".settings-tab-content", new PageWaitForSelectorOptions { Timeout = 10000 });
-    }
-
-    private static async Task ClickUntilVisibleAsync(ILocator button, ILocator target, TimeSpan timeout)
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.Elapsed < timeout)
-        {
-            if (await target.CountAsync() > 0 && await target.First.IsVisibleAsync())
-            {
-                return;
-            }
-
-            try
-            {
-                if (await button.CountAsync() > 0 && await button.First.IsVisibleAsync())
-                {
-                    await button.First.ClickAsync();
-                }
-            }
-            catch
-            {
-                // Transient Blazor circuit re-render
-            }
-
-            await Task.Delay(1000);
-        }
-
-        await target.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 5000 });
-    }
-
-    private static async Task<T?> WaitForConditionAsync<T>(Func<Task<T?>> condition, TimeSpan timeout) where T : class
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (sw.Elapsed < timeout)
-        {
-            var result = await condition();
-            if (result != null)
-            {
-                return result;
-            }
-            await Task.Delay(500);
-        }
-        return await condition();
     }
 }

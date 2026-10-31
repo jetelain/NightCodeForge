@@ -8,7 +8,7 @@
     var isMulti = items.Count > 1;
 }
 
-<div class="agent-question-turn-card question-card @(isMulti ? "batch-card" : "") @(IsWaitingForAnswer ? "waiting" : "answered")" id="@CardDomId" data-testid="@($"question-card-{TaskId}")">
+<div class="agent-question-turn-card question-card @(isMulti ? "batch-card" : "") @(IsWaitingForAnswer ? "waiting" : "answered")" id="@CardDomId" data-testid="@(TaskId.HasValue ? $"question-card-{TaskId.Value}" : CardDomId)">
     <!-- Optional External Task Context Header -->
     @if (HasExternalTaskContext)
     {
@@ -175,7 +175,7 @@
             <button type="button"
                     class="forge-btn forge-btn-primary submit-answer-btn @(isMulti ? "submit-all-btn" : "")"
                     id="@submitBtnId"
-                    data-testid="@($"btn-submit-batch-{TaskId}")"
+                    data-testid="@(TaskId.HasValue ? $"btn-submit-batch-{TaskId.Value}" : submitBtnId)"
                     disabled="@(!CanSubmit || _isSubmitting)"
                     @onclick="SubmitClarificationAsync">
                 @if (_isSubmitting)

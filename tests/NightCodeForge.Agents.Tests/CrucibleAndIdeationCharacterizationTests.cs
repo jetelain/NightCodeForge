@@ -31,7 +31,14 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
     {
         if (Directory.Exists(_tempDir))
         {
-            try { Directory.Delete(_tempDir, true); } catch { }
+            try
+            {
+                Directory.Delete(_tempDir, true);
+            }
+            catch (Exception)
+            {
+                // Best-effort temporary test directory cleanup on Windows
+            }
         }
     }
 
