@@ -19,7 +19,7 @@ Several core classes in NightCodeForge have grown into large, multi-responsibili
 
 Factorizing shared logic across `AcpAgentHarness` / `PiRpcAgentHarness` and `CrucibleAgentHarness` / `IdeationService`, as well as decomposing `TaskOrchestrator` and `StartupRecoveryService`, carries regression risk unless the exact observable behaviors of the existing implementations are locked down by characterization tests first:
 
-1. **`AcpAgentHarness` & `PiRpcAgentHarness` `RunSessionAsync` Gap:** Existing unit tests (`AcpAgentHarnessTests` and `PiRpcAgentHarnessTests`) invoke `RunSessionStreamAsync(writer, reader, ...)` directly with in-memory streams, leaving `RunSessionAsync`—including `IProcessRunner.StartSession(ProcessSessionSpec)` invocation, `HarnessConfigurationJson` parsing (`executablePath`/`executable`/`command`, `arguments`/`args` string vs JSON array), Windows/Unix path resolution, `OperationCanceledException` graceful protocol shutdown (`session/cancel` / `abort`), and transcript persistence—untested.
+1. **`AcpAgentHarness` & `PiRpcAgentHarness` `RunStageAsync` Gap:** Existing unit tests (`AcpAgentHarnessTests` and `PiRpcAgentHarnessTests`) invoke `RunSessionStreamAsync(writer, reader, ...)` directly with in-memory streams, leaving `RunStageAsync`—including `IProcessRunner.StartSession(ProcessStartSpec)` invocation, `HarnessConfigurationJson` parsing (`executablePath`/`executable`/`command`, string `arguments`/`args`, and fallback on malformed/non-string JSON), Windows/Unix path resolution, `OperationCanceledException` graceful protocol shutdown (`session/cancel` / `abort`), and transcript persistence—untested.
 2. **ACP Host RPC Method Edge Cases:** `terminal/output`, `terminal/wait_for_exit`, `terminal/release`, `terminal/kill`, line-sliced `fs/read_text_file` (`offset` / `limit`), and `fs/write_text_file` formatting application need explicit regression tests before extracting host RPC handling out of `AcpAgentHarness`.
 3. **Shared `CrucibleAgentHarness` & `IdeationService` Context/Toolset Wiring:** Conditional injection of the skills catalog (`load_skill` in `permittedTools`), dynamic context window discovery via `ILlmGatewayService.ResolveContextWindowAsync`, and `CanonicalTools` read-only vs read-write scoping across both services need characterization tests that assert identical behavior before and after extracting shared factories.
 4. **No Automated Guard Against Constructor Bloat:** Without an automated architecture test, new dependencies can silently push constructors past 10 parameters again.
@@ -39,9 +39,9 @@ Factorizing shared logic across `AcpAgentHarness` / `PiRpcAgentHarness` and `Cru
 
 Add unit tests in `tests/NightCodeForge.Agents.Tests/` verifying:
 
-1. **`RunSessionAsync` via `IProcessRunner.StartSession`:**
-   - Parses `context.Profile.HarnessConfigurationJson` for `executablePath` (or `executable` / `command`) and `arguments` (or `args`, both as a space-delimited string and as a JSON string array).
-   - Falls back to harness defaults (`acp` with `--acp`, and `pi` with `--mode rpc --session-dir ...`) when `HarnessConfigurationJson` is empty or malformed JSON.
+1. **`RunStageAsync` via `IProcessRunner.StartSession(ProcessStartSpec)`:**
+   - Parses `context.Profile.HarnessConfigurationJson` for `executablePath` (or `executable` / `command`) and string `arguments` (or `args`).
+   - Falls back to configured harness defaults (`AcpHarnessOptions`: `gemini` with `--experimental-acp`; `PiRpcHarnessOptions`: `node` with `./packages/coding-agent/dist/rpc-entry.js --mode rpc`) when `HarnessConfigurationJson` is empty, malformed JSON, or contains a non-string `arguments`/`args` value.
    - Resolves Unix-style working directories (`/...` or `~...`) on Windows via `IWorkspacePathResolver.ResolveCruciblePath` when `Workspace.Id` is present.
    - Broadcasts `AgentActivityKind.StageStarted` before starting the process and disposes the `IProcessStreamSession` when the stream completes or throws.
 2. **Cancellation & Error Handling in `RunSessionStreamAsync`:**
@@ -65,9 +65,9 @@ Add unit tests in `tests/NightCodeForge.Agents.Tests/` verifying:
 
 ### 3.3 Constructor Parameter Ceiling Architecture Test
 
-Add `ConstructorParameterCeilingTests` in `tests/NightCodeForge.Core.Tests/` (or a solution-wide architecture test fixture referencing the 4 assemblies):
+Add `ConstructorParameterCeilingTests` in `tests/NightCodeForge.Web.Tests/Architecture/ConstructorParameterCeilingTests.cs` (since `NightCodeForge.Web.Tests` references `Core`, `Infrastructure`, `Agents`, and `Web`):
 
-- Reflect over all non-abstract, non-compiler-generated types in `NightCodeForge.Core`, `NightCodeForge.Infrastructure`, `NightCodeForge.Agents`, and `NightCodeForge.Web` (excluding EF Core migrations, database records/DTOs with primary constructors if applicable, or targeting classes in `Services`, `Workflow`, `Harnesses`, `Crucible`, `Acp`, `PiRpc`, `Ideation`, `Triage`, `Tools`, `Execution`).
+- Reflect over all non-abstract, non-compiler-generated types in `NightCodeForge.Core`, `NightCodeForge.Infrastructure`, `NightCodeForge.Agents`, and `NightCodeForge.Web` (excluding EF Core migrations/snapshots and C# positional `record` data types identifiable via `<Clone>$`).
 - Assert that every public constructor has **at most 10 parameters** (`const int MaxConstructorParameters = 10`).
 - Maintain a `LegacyConstructorDebtAllowlist` containing only the 6 existing classes above with their current parameter counts as upper bounds (`CrucibleAgentHarness`: 23, `IdeationService`: 19, `TaskOrchestrator`: 19, `CanonicalTools`: 13, `AcpAgentHarness`: 11, `StartupRecoveryService`: 11).
 - Also assert that **no class in the allowlist has already been reduced to `<= 10` parameters without being removed from the allowlist**, ensuring the allowlist strictly shrinks as Steps 11.38B–11.38D are implemented.

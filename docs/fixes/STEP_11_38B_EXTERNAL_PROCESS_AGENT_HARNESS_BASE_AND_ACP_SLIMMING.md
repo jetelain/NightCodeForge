@@ -9,12 +9,12 @@
 
 [`AcpAgentHarness`](../../src/NightCodeForge.Agents/Acp/AcpAgentHarness.cs) (816 lines, **11 constructor parameters**) and [`PiRpcAgentHarness`](../../src/NightCodeForge.Agents/PiRpc/PiRpcAgentHarness.cs) (538 lines, **8 constructor parameters**) share ~180 lines of nearly line-for-line identical code:
 
-1. **Identical Process & Session Lifecycle (`RunStageAsync` / `RunSessionAsync`):**
+1. **Identical Process & Session Lifecycle (`RunStageAsync`):**
    - `Stopwatch` initialization, `sessionId` generation, and `AgentActivityKind.StageStarted` broadcast.
    - `CustomProcessFactory` execution branch (`process.Start()`, UTF-8 `StreamWriter` / `StreamReader`, `finally { process.Kill(entireProcessTree: true); process.Dispose(); }`).
-   - `context.Profile.HarnessConfigurationJson` parsing for `executablePath` / `executable` / `command` and `arguments` / `args` (both string and JSON array forms).
+   - `context.Profile.HarnessConfigurationJson` parsing for `executablePath` / `executable` / `command` and `arguments` / `args`.
    - Cross-platform working directory resolution on Windows when `context.WorkspacePath` starts with `/` or `~` via `IWorkspacePathResolver.ResolveCruciblePath`.
-   - Starting `IProcessStreamSession` via `IProcessRunner.StartSession(ProcessSessionSpec)`.
+   - Starting `IProcessStreamSession` via `IProcessRunner.StartSession(ProcessStartSpec)`.
 2. **Identical Prompt Enrichment & History Formatting:**
    - Resolving `CodeStackPresets.ResolveConfig` and `AgentsMdService.FormatExecutionGuidelines`.
    - Formatting `[Stage Directive]`, `[Resumed Conversation History]` via `ConversationHistorySerializer.FormatForPrompt`, `<environment>` PWD instructions, and `[Human Answer]` prefixing.
@@ -40,9 +40,9 @@
 Create an abstract base class `ExternalProcessAgentHarnessBase` in `NightCodeForge.Agents` implementing `IAgentHarness`:
 
 1. **Core Responsibilities:**
-   - Implements `RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken)` and `RunSessionAsync(AgentSessionContext context, CancellationToken cancellationToken)`.
+   - Implements `RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken)`.
    - Provides `CustomProcessFactory` support for testing.
-   - Parses `HarnessConfigurationJson` into a strongly-typed `(string ExecutablePath, IReadOnlyList<string> Arguments)` tuple, delegating fallback executable/arguments to abstract/virtual members (`GetDefaultExecutablePath()`, `GetDefaultArguments(AgentSessionContext context, string workingDir)`).
+   - Parses `HarnessConfigurationJson` into `(string ExecutablePath, string Arguments)` (supporting string and JSON array `arguments`/`args` in the extracted helper), delegating fallback executable/arguments to abstract/virtual members (`GetDefaultExecutablePath()`, `GetDefaultArguments()`).
    - Resolves `(string WorkspacePath, string LocalWorkspaceRoot)` across Windows, WSL, and container paths using `IWorkspacePathResolver`.
    - Provides a shared `BuildEnrichedPrompt(AgentSessionContext context, string localWorkspaceRoot, bool includeReconstructedHistory)` helper encapsulating `CodeStackPresets`, `AgentsMdService.FormatExecutionGuidelines`, `ConversationHistorySerializer.FormatForPrompt`, `<environment>` block, and `[Human Answer]` prefixing.
    - Provides protected `BroadcastAsync(...)` and `SaveTranscriptAsync(...)` helpers.

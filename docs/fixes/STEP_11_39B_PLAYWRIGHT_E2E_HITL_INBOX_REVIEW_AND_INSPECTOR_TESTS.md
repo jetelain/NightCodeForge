@@ -24,28 +24,30 @@ All tests in `HitlAndObservabilityE2ETests.cs` share `[Collection("PlaywrightUiE
 
 ### 2.1 Human Question Inbox E2E (`QuestionInbox_SelectOptionsAndSubmitBatch_UpdatesDatabaseAndClearsTaskWait`)
 - **Seeded State:**
-  - Seeds a workspace and a `ForgeTask` with `IsWaitingForHuman = true`, `Status = TaskOverallStatus.Open`, `CurrentStageId = StandardStageIds.TaskReview`, and a batch of 2 `Question` records (`QuestionStatus.Pending`, one single-choice with options JSON and one free-text question).
+  - Ensures background operations are paused (via `#nav-btn-pause-operations` or `IOperationsControlService`) so Hangfire does not immediately execute the resumed stage upon submission.
+  - Seeds a workspace and a `ForgeTask` with `IsWaitingForHuman = true`, `Status = TaskOverallStatus.InProgress` (or `Open`), `CurrentStageId = StandardStageIds.TaskReview`, and a batch of 2 `Question` records sharing a non-empty `BatchId` (`QuestionStatus.Pending`, one single-choice with `OptionsJson` and one free-text question).
 - **Browser Interaction & Assertions:**
   - Navigates to `/w/{workspaceId}/inbox`.
-  - Verifies the question card renders both questions in the batch along with option chips.
-  - Clicks an option chip on Question 1, types a custom answer into Question 2, and clicks the Submit button (Note: in paused/test mode, verify the answer submission persists `Question.Answer` and `QuestionStatus.Answered` in SQLite).
+  - Verifies the grouped `QuestionCard` (`#question-card-{taskId}`) renders both questions in the batch along with option chips (`#btn-option-{question1Id}-0`, etc.).
+  - Clicks an option chip on Question 1, types a custom answer into `#input-answer-{question2Id}` on Question 2, and clicks `#btn-submit-batch-{taskId}` ("Submit Batch (2)").
+  - Verifies via `QueryDatabaseAsync` that both `Question` rows have `Status == QuestionStatus.Answered` and `Answer` populated, and that `ForgeTask.IsWaitingForHuman` is cleared (`false`).
 
 ### 2.2 Review Room Diff & Human Actions E2E (`ReviewRoom_RendersGitBranchDiff_And_HandlesRejectTaskAction`)
 - **Seeded State:**
   - Uses `SyntheticRepoFixture` to create a real feature branch `feature/task-50` with a committed modification to `src/SyntheticLib/Calculator.cs`.
   - Seeds `ForgeTask` (`Id = 50`, `Status = TaskOverallStatus.Ready`, `MergeMode = MergeMode.ManualReviewRequired`, `BaseBranch = "main"`, `FeatureBranch = "feature/task-50"`, `HasExecutionRun = true`).
 - **Browser Interaction & Assertions:**
-  - Navigates to `/w/{workspaceId}/review?taskId=50`.
-  - Verifies `Review.razor` selects Task #50, renders `Calculator.cs` in the changed files list, and displays the added lines inside `DiffWorkspace.razor`.
-  - Triggers the **Reject Task** action in the UI and verifies the task transitions to `TaskOverallStatus.Rejected` in SQLite and disappears from the pending review queue.
+  - Navigates to `/w/{workspaceId}/review/50`.
+  - Verifies `Review.razor` loads Task #50, renders `Calculator.cs` in the changed files list, and displays the added lines inside `DiffWorkspace.razor`.
+  - Navigates to the task details via `#btn-header-task-details` (`/w/{workspaceId}/tasks/50`), triggers `#btn-reject-task` to open `TaskRejectionModal`, fills `#reject-reason-input`, confirms via `#btn-confirm-reject`, and verifies the task transitions to `TaskOverallStatus.Rejected` in SQLite (or triggers `#btn-request-changes` directly in `Review.razor` to verify `ChangeRequestModal`).
 
 ### 2.3 Task Execution Inspector & Transcripts E2E (`TaskInspector_And_Transcripts_RenderSeededStagesAndConversationTurns`)
 - **Seeded State:**
-  - Seeds a `ForgeTask` with 2 `StageExecutionRecord` rows (`task-review` Completed, `implementation` Running), a `Conversation` with `ConversationTurn` records (User prompt, Assistant thinking + tool call, Tool result, Assistant final summary), and `ExecutionLog` entries.
+  - Seeds a `ForgeTask` (`HasExecutionRun = true`, `CurrentStageId = StandardStageIds.Implementation`) with 2 `Conversation` rows (`task-review` with `StageExecutionStatus.Completed`, and `implementation` with `StageExecutionStatus.Running`), `ConversationTurn` records (User prompt, Assistant thinking + tool call, Tool result, Assistant final summary), `ExecutionLog` entries, and a markdown transcript file in `{workspace.RepositoryPath}/docs/transcripts/`.
 - **Browser Interaction & Assertions:**
   - Navigates to `/w/{workspaceId}/inspector/{taskId}`.
-  - Verifies `PipelineStepper` displays the stages, clicking a stage loads its `ConversationTurn` cards in `StageConversationViewer`, and switching to the Terminal Console tab displays the seeded `ExecutionLog` lines.
-  - Navigates to `/w/{workspaceId}/transcripts` and verifies the seeded conversation appears in the transcript browser and renders its turns when selected.
+  - Verifies `PipelineStepper` displays the stages, clicking a stage loads its `ConversationTurn` cards in `StageConversationViewer`, and switching to the `🖥 Terminal & Logs` tab displays the seeded `ExecutionLog` lines.
+  - Navigates to `/w/{workspaceId}/transcripts` and verifies `TranscriptBrowserService` lists the seeded markdown transcript file in the sidebar and renders its content when selected.
 
 ### 2.4 Settings & Agent Profile Configuration E2E (`SettingsPage_TabNavigation_And_WorkspaceUpdate_PersistsToDatabase`)
 - **Browser Interaction & Assertions:**
