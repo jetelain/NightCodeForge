@@ -195,8 +195,8 @@ public class TaskOrchestratorConversationResumptionTests
 
         var convs = await taskRepo.GetConversationsAsync(task.Id);
         var updatedConv = Assert.Single(convs);
-        Assert.Equal(StageExecutionStatus.Failed, updatedConv.Status);
-        Assert.Contains("Process terminated unexpectedly mid-execution", updatedConv.Summary);
+        Assert.Equal(StageExecutionStatus.Interrupted, updatedConv.Status);
+        Assert.Contains("Interrupted by host restart; session will resume in this conversation", updatedConv.Summary);
     }
 
     [Fact]

@@ -49,10 +49,15 @@ public class ResilientCrashRecoveryTests
     private readonly FakeGitCliRunner _gitCliRunner = new();
     private readonly FakeTaskJobQueue _jobQueue = new();
 
-    private StartupRecoveryService CreateRecoveryService(IWorkflowPipelineProvider pipelineProvider)
+    private StartupRecoveryService CreateRecoveryService(IWorkflowPipelineProvider pipelineProvider, IOperationsControlService? operationsControlService = null)
     {
-        var mockOps = new Mock<IOperationsControlService>();
-        mockOps.Setup(m => m.IsPaused).Returns(false);
+        var ops = operationsControlService;
+        if (ops == null)
+        {
+            var mockOps = new Mock<IOperationsControlService>();
+            mockOps.Setup(m => m.IsPaused).Returns(false);
+            ops = mockOps.Object;
+        }
 
         return new StartupRecoveryService(
             _workspaceRepo,
@@ -64,7 +69,7 @@ public class ResilientCrashRecoveryTests
             new Mock<IWorkspacePathResolver>().Object,
             new Mock<IProcessRunner>().Object,
             new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
-            mockOps.Object,
+            ops,
             NullLogger<StartupRecoveryService>.Instance);
     }
 
@@ -152,8 +157,9 @@ public class ResilientCrashRecoveryTests
         Assert.Equal("tool", restoredItems[3].Role);      // tool result
         Assert.Equal("user", restoredItems[4].Role);      // notice (never a mid-history system message)
 
-        // 7. Assert: interrupted conversation is closed (the harness resumes in a new one)
-        Assert.Equal(StageExecutionStatus.Failed, fullConv.Status);
+        // 7. Assert: interrupted conversation is transitioned to Interrupted (the harness resumes it in-place)
+        Assert.Equal(StageExecutionStatus.Interrupted, fullConv.Status);
+        Assert.Equal("task-review", updatedTask.InterruptedStageId);
 
         // 8. Assert: Enqueued to stage queue
         Assert.Contains(task.Id, _jobQueue.TaskReviewQueue);
@@ -425,11 +431,11 @@ public class ResilientCrashRecoveryTests
         Assert.DoesNotContain(convs, c => c.Status == StageExecutionStatus.Running);
 
         var rehydratedOlder = convs.First(c => c.Id == olderConv.Id);
-        Assert.Equal(StageExecutionStatus.Failed, rehydratedOlder.Status);
+        Assert.Equal(StageExecutionStatus.Superseded, rehydratedOlder.Status);
         Assert.Contains("Superseded by startup recovery", rehydratedOlder.Summary);
 
         var rehydratedLatest = convs.First(c => c.Id == latestConv.Id);
-        Assert.Equal(StageExecutionStatus.Failed, rehydratedLatest.Status);
+        Assert.Equal(StageExecutionStatus.Interrupted, rehydratedLatest.Status);
 
         // Memory should be rehydrated from the latest conversation (attempt 2)
         var updated = await _taskRepo.GetByIdAsync(task.Id);
@@ -438,5 +444,59 @@ public class ResilientCrashRecoveryTests
         Assert.NotNull(history);
         Assert.Contains("Retry with more details", history);
         Assert.DoesNotContain("Initial try", history);
+    }
+
+    [Fact]
+    public async Task AgenticStage_ChainedCrashAndPauseAcrossRestarts_PreservesAllTurnsInSingleConversation()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 428,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation
+        });
+
+        var conv = await _taskRepo.StartConversationAsync(
+            task.Id,
+            StandardStageIds.Implementation,
+            WorkflowStageKind.Agentic,
+            attemptIndex: 1,
+            title: "Task 28 Implementation");
+
+        await _taskRepo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Turn 0: Bootstrap");
+        await _taskRepo.AddConversationTurnAsync(conv.Id, StageTurnRole.Assistant, content: "Turn 1: Initial progress");
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { TestWorkflowPipelines.CreateImplementationStage() });
+        var recoveryService1 = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline));
+
+        // 1. First crash recovery transitions conv from Running -> Interrupted and appends system notice
+        await recoveryService1.ReconcileWorkspacesAsync();
+
+        var afterCrash1 = await _taskRepo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(afterCrash1);
+        Assert.Equal(StageExecutionStatus.Interrupted, afterCrash1.Status);
+        Assert.Equal(3, afterCrash1.Turns.Count);
+
+        // 2. Simulate second restart while still Interrupted (e.g. paused before next turn)
+        var pausedOps = new Mock<IOperationsControlService>();
+        pausedOps.Setup(m => m.IsPaused).Returns(true);
+        var recoveryService2 = CreateRecoveryService(new DefaultWorkflowPipelineProvider(pipeline), pausedOps.Object);
+
+        await recoveryService2.ReconcileWorkspacesAsync();
+
+        var afterRestart2 = await _taskRepo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(afterRestart2);
+        Assert.Equal(StageExecutionStatus.Interrupted, afterRestart2.Status);
+        // Must still have all 3 turns and must NOT duplicate the system recovery notice
+        Assert.Equal(3, afterRestart2.Turns.Count);
+        Assert.Equal(1, afterRestart2.Turns.Count(t => t.Role == StageTurnRole.System));
+
+        var updatedTask = await _taskRepo.GetByIdAsync(task.Id);
+        var bag = PipelineDataBag.FromJson(updatedTask!.PipelineDataJson);
+        var memory = bag.Get<string>(PipelineDataBagKeys.RecoveredSerializedMemory);
+        Assert.NotNull(memory);
+        Assert.Contains("Turn 0: Bootstrap", memory);
+        Assert.Contains("Turn 1: Initial progress", memory);
     }
 }

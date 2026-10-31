@@ -28,7 +28,7 @@ public class StartupRecoveryService : IStartupRecoveryService
     private readonly ILogger<StartupRecoveryService> _logger;
 
     private const string RecoveryNoticeContent = "[System Notice: Host restarted unexpectedly; workspace restored; resuming from previous conversation turn]";
-    private const string InterruptedAgenticConversationSummary = "Process terminated unexpectedly mid-execution. Session resumed in a new conversation.";
+    private const string InterruptedAgenticConversationSummary = "Interrupted by host restart; session will resume in this conversation.";
     private const string InterruptedDeterministicConversationSummary = "Process terminated unexpectedly mid-execution. Stage reset for clean re-run.";
     private const string SupersededRunningConversationSummary = "Process terminated unexpectedly mid-execution. Superseded by startup recovery.";
 
@@ -231,17 +231,25 @@ public class StartupRecoveryService : IStartupRecoveryService
                 // Agentic Stage: Rehydrate memory from active database conversation turns
                 var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
                 var activeConv = convs
-                    .Where(c => c.StageId == stage.StageId && (c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman))
+                    .Where(c => string.Equals(c.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase) &&
+                                (c.Status == StageExecutionStatus.Running ||
+                                 c.Status == StageExecutionStatus.WaitingForHuman ||
+                                 c.Status == StageExecutionStatus.Interrupted))
                     .OrderByDescending(c => c.AttemptIndex)
                     .ThenByDescending(c => c.StartedAt)
+                    .ThenByDescending(c => c.Id)
                     .FirstOrDefault();
 
-                // Supersede any older running/waiting conversations left dangling by previous crashes
-                foreach (var other in convs.Where(c => (c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman) && (activeConv == null || c.Id != activeConv.Id)))
+                // Supersede any older running/waiting/interrupted conversations left dangling by previous crashes
+                foreach (var other in convs.Where(c =>
+                    (c.Status == StageExecutionStatus.Running ||
+                     c.Status == StageExecutionStatus.WaitingForHuman ||
+                     c.Status == StageExecutionStatus.Interrupted) &&
+                    (activeConv == null || c.Id != activeConv.Id)))
                 {
                     await _taskRepository.CompleteConversationAsync(
                         other.Id,
-                        StageExecutionStatus.Failed,
+                        StageExecutionStatus.Superseded,
                         summary: SupersededRunningConversationSummary,
                         cancellationToken: cancellationToken);
                 }
@@ -251,36 +259,71 @@ public class StartupRecoveryService : IStartupRecoveryService
                     var convWithTurns = await _taskRepository.GetConversationWithTurnsAsync(activeConv.Id, cancellationToken)
                         ?? throw new InvalidOperationException($"Conversation #{activeConv.Id} of task #{task.Id} disappeared during startup recovery.");
 
+                    var wasAlreadyInterrupted = activeConv.Status == StageExecutionStatus.Interrupted;
+                    var pendingHumanAnswer = bag.Get<string>(PipelineDataBagKeys.LastHumanAnswer);
+                    var isWaitingWithAnswer = activeConv.Status == StageExecutionStatus.WaitingForHuman && !string.IsNullOrWhiteSpace(pendingHumanAnswer);
+
                     if (convWithTurns.Turns.Count > 0)
                     {
-                        var noticeTurn = await _taskRepository.AddConversationTurnAsync(
-                            activeConv.Id,
-                            StageTurnRole.System,
-                            content: RecoveryNoticeContent,
-                            cancellationToken: cancellationToken);
+                        var orderedExisting = convWithTurns.Turns.OrderBy(t => t.TurnIndex).ToList();
+                        IReadOnlyList<ConversationTurn> allTurns;
 
-                        var allTurns = convWithTurns.Turns
-                            .Where(t => t.Id != noticeTurn.Id)
-                            .Append(noticeTurn)
-                            .OrderBy(t => t.TurnIndex)
-                            .ToList();
+                        if (isWaitingWithAnswer)
+                        {
+                            allTurns = orderedExisting;
+                        }
+                        else if (!wasAlreadyInterrupted)
+                        {
+                            var lastTurn = orderedExisting.LastOrDefault();
+                            if (lastTurn == null || lastTurn.Role != StageTurnRole.System || !string.Equals(lastTurn.Content, RecoveryNoticeContent, StringComparison.Ordinal))
+                            {
+                                var noticeTurn = await _taskRepository.AddConversationTurnAsync(
+                                    activeConv.Id,
+                                    StageTurnRole.System,
+                                    content: RecoveryNoticeContent,
+                                    cancellationToken: cancellationToken);
+
+                                allTurns = orderedExisting
+                                    .Where(t => t.Id != noticeTurn.Id)
+                                    .Append(noticeTurn)
+                                    .OrderBy(t => t.TurnIndex)
+                                    .ToList();
+                            }
+                            else
+                            {
+                                allTurns = orderedExisting;
+                            }
+
+                            // Transition the crashed conversation to Interrupted so CrucibleAgentHarness resumes it in-place.
+                            await _taskRepository.CompleteConversationAsync(
+                                activeConv.Id,
+                                StageExecutionStatus.Interrupted,
+                                summary: InterruptedAgenticConversationSummary,
+                                cancellationToken: cancellationToken);
+                        }
+                        else
+                        {
+                            allTurns = orderedExisting;
+                        }
 
                         var reconstructedHistory = ConversationHistorySerializer.Serialize(allTurns);
+                        if (isWaitingWithAnswer)
+                        {
+                            reconstructedHistory = ConversationHistorySerializer.CompletePendingAskToolCall(reconstructedHistory, pendingHumanAnswer!);
+                        }
                         bag.Set(PipelineDataBagKeys.RecoveredSerializedMemory, reconstructedHistory);
-
-                        // The harness resumes in a brand new conversation: close the interrupted one so it is
-                        // not left "Running" forever nor picked up again by the next recovery.
-                        await _taskRepository.CompleteConversationAsync(
-                            activeConv.Id,
-                            StageExecutionStatus.Failed,
-                            summary: InterruptedAgenticConversationSummary,
-                            cancellationToken: cancellationToken);
+                        task.InterruptedStageId = stage.StageId;
 
                         _logger.LogWarning("Rehydrated agentic session memory from {Count} turns for orphaned task #{TaskId}.", allTurns.Count, task.Id);
                     }
+                    else if (wasAlreadyInterrupted || isWaitingWithAnswer)
+                    {
+                        bag.Remove(PipelineDataBagKeys.RecoveredSerializedMemory);
+                        task.InterruptedStageId = stage.StageId;
+                    }
                     else
                     {
-                        // Interrupted before first turn was recorded; close conversation and resume cleanly from scratch/checkpoint
+                        // Interrupted by crash before first turn was recorded; close conversation and resume cleanly from scratch/checkpoint
                         await _taskRepository.CompleteConversationAsync(
                             activeConv.Id,
                             StageExecutionStatus.Failed,

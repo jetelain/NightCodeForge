@@ -116,23 +116,55 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         int attemptIndex = (context.PipelineContext?.StageRetries.GetValueOrDefault(context.StageId, 0) ?? 0) + 1;
         Conversation? conversation = null;
-        var waitingConversation = await _taskRepository.GetWaitingConversationAsync(context.ForgeTask.Id, context.StageId, cancellationToken);
-        if (waitingConversation != null)
+        Conversation? waitingConversation = null;
+        bool hadPersistedTurnsBeforeResume = false;
+
+        var resumableConversation = await _taskRepository.GetResumableConversationAsync(context.ForgeTask.Id, context.StageId, cancellationToken);
+        if (resumableConversation != null)
         {
-            if (!string.IsNullOrWhiteSpace(context.PendingHumanAnswer))
+            if (resumableConversation.Status == StageExecutionStatus.WaitingForHuman)
             {
-                conversation = waitingConversation;
+                waitingConversation = resumableConversation;
+                if (!string.IsNullOrWhiteSpace(context.PendingHumanAnswer))
+                {
+                    conversation = resumableConversation;
+                    hadPersistedTurnsBeforeResume = conversation.Turns is { Count: > 0 };
+                    await _taskRepository.ResumeConversationAsync(conversation.Id, cancellationToken);
+                    conversation.Status = StageExecutionStatus.Running;
+                    conversation.CompletedAt = null;
+                    conversation.Summary = null;
+                }
+                else
+                {
+                    await _taskRepository.CompleteConversationAsync(
+                        resumableConversation.Id,
+                        StageExecutionStatus.Cancelled,
+                        summary: "Cancelled superseded paused conversation",
+                        cancellationToken: cancellationToken);
+                }
+            }
+            else if (resumableConversation.Status == StageExecutionStatus.Interrupted)
+            {
+                conversation = resumableConversation;
+                hadPersistedTurnsBeforeResume = conversation.Turns is { Count: > 0 };
                 await _taskRepository.ResumeConversationAsync(conversation.Id, cancellationToken);
                 conversation.Status = StageExecutionStatus.Running;
                 conversation.CompletedAt = null;
-            }
-            else
-            {
-                await _taskRepository.CompleteConversationAsync(
-                    waitingConversation.Id,
-                    StageExecutionStatus.Cancelled,
-                    summary: "Cancelled superseded paused conversation",
-                    cancellationToken: cancellationToken);
+                conversation.Summary = null;
+
+                if (!hadPersistedTurnsBeforeResume && !string.IsNullOrWhiteSpace(context.BootstrapPrompt))
+                {
+                    var turn0 = await _taskRepository.AddConversationTurnAsync(
+                        conversation.Id,
+                        StageTurnRole.User,
+                        content: context.BootstrapPrompt,
+                        cancellationToken: cancellationToken);
+                    conversation.Turns ??= new List<ConversationTurn>();
+                    if (!conversation.Turns.Contains(turn0))
+                    {
+                        conversation.Turns.Add(turn0);
+                    }
+                }
             }
         }
 
@@ -331,10 +363,29 @@ public partial class CrucibleAgentHarness : IAgentHarness
         // 7. Restore or Initialize Conversation History.
         // The system prompt is NOT part of the history: it is supplied to HarnessAgent as HarnessInstructions
         // (ChatOptions.Instructions), so adding it as a System message too would send it to the model twice.
-        List<ChatMessage> chatHistory;
-        if (!string.IsNullOrEmpty(context.SerializedStateJson))
+        string? effectiveSerializedStateJson = context.SerializedStateJson;
+        if (hadPersistedTurnsBeforeResume && conversation?.Turns is { Count: > 0 })
         {
-            chatHistory = DeserializeSession(context.SerializedStateJson, _logger);
+            var turnsStateJson = ConversationHistorySerializer.Serialize(conversation.Turns);
+            if (string.IsNullOrWhiteSpace(effectiveSerializedStateJson))
+            {
+                effectiveSerializedStateJson = turnsStateJson;
+            }
+            else
+            {
+                var turnsHistory = DeserializeSession(turnsStateJson, _logger);
+                var stateHistory = DeserializeSession(effectiveSerializedStateJson, _logger);
+                if (turnsHistory.Count >= stateHistory.Count)
+                {
+                    effectiveSerializedStateJson = turnsStateJson;
+                }
+            }
+        }
+
+        List<ChatMessage> chatHistory;
+        if (!string.IsNullOrEmpty(effectiveSerializedStateJson))
+        {
+            chatHistory = DeserializeSession(effectiveSerializedStateJson, _logger);
             // Legacy checkpoints stored the system prompt as the first message; strip it while preserving system notices
             chatHistory.RemoveAll(m => m.Role == ChatRole.System && (m.Text == null || !m.Text.Contains("[System Notice", StringComparison.OrdinalIgnoreCase)));
         }
@@ -381,7 +432,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
 
         // 8. Synthetic Conversation Priming: Pre-seed ChatHistory and database Conversation
-        if (string.IsNullOrEmpty(context.SerializedStateJson) && context.SyntheticPriming != null)
+        if (string.IsNullOrEmpty(effectiveSerializedStateJson) && !hadPersistedTurnsBeforeResume && context.SyntheticPriming != null)
         {
             var priming = context.SyntheticPriming;
             var primeCallId = $"prime_{Guid.NewGuid():N}";
@@ -422,7 +473,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         toolArguments: toolArgsJson,
                         metadataJson: primingMeta,
                         durationMs: (int?)priming.DurationMs,
-                        cancellationToken: cancellationToken),
+                        cancellationToken: CancellationToken.None),
                     $"Failed to record primed Tool turn for conversation #{convId}");
 
                 turnWriter.Enqueue(
@@ -435,7 +486,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         isError: !priming.IsSuccess,
                         metadataJson: primingMeta,
                         durationMs: (int?)priming.DurationMs,
-                        cancellationToken: cancellationToken),
+                        cancellationToken: CancellationToken.None),
                     $"Failed to record primed ToolResult turn for conversation #{convId}");
             }
 
@@ -453,7 +504,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                             convId,
                             StageTurnRole.User,
                             content: fixDirective,
-                            cancellationToken: cancellationToken),
+                            cancellationToken: CancellationToken.None),
                         $"Failed to record fix directive User turn for conversation #{convId}");
                 }
             }
@@ -462,18 +513,52 @@ public partial class CrucibleAgentHarness : IAgentHarness
         // 9. Preemptive Resumption: Complete pending 'ask' tool call with human answers as tool result
         if (!string.IsNullOrWhiteSpace(context.PendingHumanAnswer))
         {
-            var pendingCallIds = new HashSet<string>();
+            var askCallIds = new List<string>();
+            var pendingCallIds = new HashSet<string>(StringComparer.Ordinal);
+            var interruptedAskCallIds = new HashSet<string>(StringComparer.Ordinal);
+            var answeredAskCallIds = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var msg in chatHistory)
             {
                 foreach (var content in msg.Contents)
                 {
                     if (content is FunctionCallContent fcc && !string.IsNullOrEmpty(fcc.CallId) && string.Equals(fcc.Name, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
                     {
+                        if (!askCallIds.Contains(fcc.CallId, StringComparer.Ordinal))
+                        {
+                            askCallIds.Add(fcc.CallId);
+                        }
                         pendingCallIds.Add(fcc.CallId);
                     }
-                    else if (content is FunctionResultContent frc && !string.IsNullOrEmpty(frc.CallId))
+                    else if (content is FunctionResultContent frc && !string.IsNullOrEmpty(frc.CallId) && askCallIds.Contains(frc.CallId, StringComparer.Ordinal))
                     {
                         pendingCallIds.Remove(frc.CallId);
+                        var resStr = frc.Result?.ToString();
+                        if (string.Equals(resStr, ConversationHistorySerializer.InterruptedToolResult, StringComparison.Ordinal))
+                        {
+                            interruptedAskCallIds.Add(frc.CallId);
+                        }
+                        else
+                        {
+                            interruptedAskCallIds.Remove(frc.CallId);
+                            answeredAskCallIds.Add(frc.CallId);
+                        }
+                    }
+                }
+            }
+
+            if (interruptedAskCallIds.Count > 0)
+            {
+                foreach (var msg in chatHistory)
+                {
+                    for (int i = 0; i < msg.Contents.Count; i++)
+                    {
+                        if (msg.Contents[i] is FunctionResultContent frc &&
+                            !string.IsNullOrEmpty(frc.CallId) &&
+                            interruptedAskCallIds.Contains(frc.CallId))
+                        {
+                            msg.Contents[i] = new FunctionResultContent(frc.CallId, context.PendingHumanAnswer);
+                        }
                     }
                 }
             }
@@ -489,7 +574,20 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         new FunctionResultContent(pendingId, context.PendingHumanAnswer)
                     }));
                 }
-                chatHistory.Add(new ChatMessage(ChatRole.User, followUpPrompt));
+            }
+
+            bool endsWithAnsweredAskToolResult = answeredAskCallIds.Count > 0 &&
+                chatHistory.LastOrDefault() is { } lastToolMsg &&
+                lastToolMsg.Role == ChatRole.Tool &&
+                lastToolMsg.Contents.OfType<FunctionResultContent>().Any(frc => !string.IsNullOrEmpty(frc.CallId) && answeredAskCallIds.Contains(frc.CallId));
+
+            if (pendingCallIds.Count > 0 || interruptedAskCallIds.Count > 0 || endsWithAnsweredAskToolResult)
+            {
+                var lastMsg = chatHistory.LastOrDefault();
+                if (lastMsg == null || lastMsg.Role != ChatRole.User || !string.Equals(lastMsg.Text, followUpPrompt, StringComparison.Ordinal))
+                {
+                    chatHistory.Add(new ChatMessage(ChatRole.User, followUpPrompt));
+                }
             }
             else if (conversation != null && waitingConversation != null && conversation == waitingConversation &&
                      !chatHistory.Any(m => (m.Text != null && m.Text.Contains(context.PendingHumanAnswer, StringComparison.Ordinal))
@@ -502,7 +600,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
             // Persist ToolResult and follow-up turns in the resumed database conversation
             if (conversation != null && _taskRepository != null)
             {
-                var targetCallIds = pendingCallIds.ToList();
+                var targetCallIds = pendingCallIds.Concat(interruptedAskCallIds).ToList();
+                if (targetCallIds.Count == 0 && askCallIds.Count > 0)
+                {
+                    targetCallIds.Add(askCallIds[^1]);
+                }
                 if (targetCallIds.Count == 0 && waitingConversation != null && conversation == waitingConversation)
                 {
                     var askTurn = conversation.Turns?.LastOrDefault(t => t.Role == StageTurnRole.Tool && string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase));
@@ -537,7 +639,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                                     toolName: CanonicalToolNames.Ask,
                                     toolResult: context.PendingHumanAnswer,
                                     metadataJson: meta,
-                                    cancellationToken: cancellationToken),
+                                    cancellationToken: CancellationToken.None),
                                 $"Failed to record ToolResult turn for conversation #{convId}");
                         }
                     }
@@ -556,12 +658,14 @@ public partial class CrucibleAgentHarness : IAgentHarness
                                 convId,
                                 StageTurnRole.User,
                                 content: followUpPrompt,
-                                cancellationToken: cancellationToken),
+                                cancellationToken: CancellationToken.None),
                             $"Failed to record follow-up turn for conversation #{convId}");
                     }
                 }
             }
         }
+
+        await turnWriter.DrainAsync();
 
         // 9. Resolve effective ChatClient for the profile and assemble middlewares
         var baseClient = _chatClientFactory.CreateClient(context.Profile, LlmSessionIds.ForStage(context.ForgeTask.Id, context.StageId));
@@ -614,7 +718,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                                 toolResult: entry.ToolResult,
                                 isError: string.Equals(entry.Role, "TOOL_ERROR", StringComparison.OrdinalIgnoreCase),
                                 metadataJson: metadataJson,
-                                cancellationToken: cancellationToken),
+                                cancellationToken: CancellationToken.None),
                             $"Failed to record turn for conversation #{conversationId}");
                     }
                     catch (Exception ex)
@@ -802,7 +906,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         toolName: CanonicalToolNames.Ask,
                         toolArguments: askArgsJson,
                         metadataJson: metadataJson,
-                        cancellationToken: cancellationToken),
+                        cancellationToken: CancellationToken.None),
                     $"Failed to record ask tool turn for conversation #{conversationId}");
             }
 
@@ -853,6 +957,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
             SanitizeInFlightTurns(chatHistory);
             latestSerializedState = SerializeSession(chatHistory);
             using var timeoutCts = new CancellationTokenSource(PauseAbortTimeout);
+            await turnWriter.DrainAsync();
+            if (conversation != null && _taskRepository != null)
+            {
+                await _taskRepository.SanitizeTrailingInterruptedTurnsAsync(conversation.Id, timeoutCts.Token);
+            }
             await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, "Operations paused (GPU VRAM reclaimed)", timeoutCts.Token);
             await SaveAsync(AgentRunStatus.Interrupted, "Operations paused (GPU VRAM reclaimed)", timeoutCts.Token);
 
@@ -955,7 +1064,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                                     toolResult: resultStr,
                                     isError: resultIsError,
                                     metadataJson: metadataJson,
-                                    cancellationToken: cancellationToken),
+                                    cancellationToken: CancellationToken.None),
                                 $"Failed to record tool result turn for conversation #{conversationId}");
                         }
 

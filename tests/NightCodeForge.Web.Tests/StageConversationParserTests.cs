@@ -144,7 +144,10 @@ public class StageConversationParserTests
     [InlineData(StageExecutionStatus.Completed, "badge-emerald")]
     [InlineData(StageExecutionStatus.Running, "badge-amber")]
     [InlineData(StageExecutionStatus.WaitingForHuman, "badge-amber")]
+    [InlineData(StageExecutionStatus.Interrupted, "badge-amber")]
     [InlineData(StageExecutionStatus.Failed, "badge-crimson")]
+    [InlineData(StageExecutionStatus.Cancelled, "badge-zinc")]
+    [InlineData(StageExecutionStatus.Superseded, "badge-zinc")]
     [InlineData(StageExecutionStatus.Skipped, "badge-zinc")]
     [InlineData(StageExecutionStatus.Pending, "badge-zinc")]
     public void GetStatusClass_ReturnsExpectedBadge(StageExecutionStatus status, string expectedClass)
@@ -1082,6 +1085,35 @@ public class StageConversationParserTests
     {
         var summary = ChatPresentationHelper.GetToolSummary(input);
         Assert.Equal(expected, summary);
+    }
+
+    [Theory]
+    [InlineData(StageExecutionStatus.Completed, "✅", "badge-emerald")]
+    [InlineData(StageExecutionStatus.Running, "⏳", "badge-amber")]
+    [InlineData(StageExecutionStatus.WaitingForHuman, "❓", "badge-amber")]
+    [InlineData(StageExecutionStatus.Interrupted, "⏸️", "badge-amber")]
+    [InlineData(StageExecutionStatus.Failed, "❌", "badge-crimson")]
+    [InlineData(StageExecutionStatus.Cancelled, "🚫", "badge-zinc")]
+    [InlineData(StageExecutionStatus.Superseded, "🔄", "badge-zinc")]
+    [InlineData(StageExecutionStatus.Skipped, "⏭", "badge-zinc")]
+    [InlineData(StageExecutionStatus.Pending, "⚪", "badge-zinc")]
+    public void GetStatusBadge_ReturnsExpectedIconAndCssClass(StageExecutionStatus status, string expectedIcon, string expectedCss)
+    {
+        var conv = new Conversation { Id = 1, TaskId = 10, StageId = StandardStageIds.Implementation, Status = status };
+        var (icon, css) = StageConversationParser.GetStatusBadge(conv);
+        Assert.Equal(expectedIcon, icon);
+        Assert.Equal(expectedCss, css);
+    }
+
+    [Fact]
+    public void GetStatusBadge_WhenWaitingForHumanButTaskAlreadyAnswered_ReturnsTealCheckBadge()
+    {
+        var conv = new Conversation { Id = 1, TaskId = 10, StageId = StandardStageIds.TaskReview, Status = StageExecutionStatus.WaitingForHuman };
+        var task = new ForgeTask { Id = 10, CurrentStageId = StandardStageIds.TaskReview, IsWaitingForHuman = false };
+
+        var (icon, css) = StageConversationParser.GetStatusBadge(conv, task);
+        Assert.Equal("✓", icon);
+        Assert.Equal("badge-teal", css);
     }
 
     #endregion

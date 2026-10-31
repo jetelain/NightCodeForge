@@ -353,17 +353,24 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
                     {
                         AddEntry(new TranscriptEntry(DateTime.UtcNow, "THINKING", reasoning.Text));
                     }
-                    else if (content is FunctionCallContent fc)
-                    {
-                        var args = fc.Arguments != null ? JsonSerializer.Serialize(fc.Arguments) : "{}";
-                        AddEntry(new TranscriptEntry(DateTime.UtcNow, "TOOL", string.Empty, fc.Name, args, CallId: fc.CallId));
-                    }
                 }
             }
 
             if (!string.IsNullOrEmpty(msg.Text))
             {
                 AddEntry(new TranscriptEntry(DateTime.UtcNow, "ASSISTANT", msg.Text));
+            }
+
+            if (msg.Contents != null)
+            {
+                foreach (var content in msg.Contents)
+                {
+                    if (content is FunctionCallContent fc)
+                    {
+                        var args = fc.Arguments != null ? JsonSerializer.Serialize(fc.Arguments) : "{}";
+                        AddEntry(new TranscriptEntry(DateTime.UtcNow, "TOOL", string.Empty, fc.Name, args, CallId: fc.CallId));
+                    }
+                }
             }
         }
     }
@@ -375,6 +382,11 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
             AddEntry(new TranscriptEntry(DateTime.UtcNow, "THINKING", reasoningBuilder.ToString()));
         }
 
+        if (textBuilder.Length > 0)
+        {
+            AddEntry(new TranscriptEntry(DateTime.UtcNow, "ASSISTANT", textBuilder.ToString()));
+        }
+
         if (functionCalls.Count > 0)
         {
             foreach (var fc in functionCalls)
@@ -382,11 +394,6 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
                 var args = fc.Arguments != null ? JsonSerializer.Serialize(fc.Arguments) : "{}";
                 AddEntry(new TranscriptEntry(DateTime.UtcNow, "TOOL", string.Empty, fc.Name, args, CallId: fc.CallId));
             }
-        }
-
-        if (textBuilder.Length > 0)
-        {
-            AddEntry(new TranscriptEntry(DateTime.UtcNow, "ASSISTANT", textBuilder.ToString()));
         }
     }
 

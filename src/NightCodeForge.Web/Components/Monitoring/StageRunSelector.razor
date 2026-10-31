@@ -1,5 +1,6 @@
 @namespace NightCodeForge.Web.Components.Monitoring
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Web.Services
 
 <div class="stage-run-selector card-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 0;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.85rem; flex-wrap: wrap; gap: 0.5rem;">
@@ -123,24 +124,6 @@
 
     private (string Icon, string CssClass) GetStatusBadge(Conversation conv)
     {
-        if (conv.Status == StageExecutionStatus.WaitingForHuman)
-        {
-            if (Task != null && !Task.IsWaitingForHuman && Task.Id == conv.TaskId &&
-                (string.IsNullOrEmpty(conv.StageId) || string.Equals(conv.StageId, Task.CurrentStageId, StringComparison.OrdinalIgnoreCase)))
-            {
-                return ("✓", "badge-teal");
-            }
-        }
-
-        return conv.Status switch
-        {
-            StageExecutionStatus.Completed => ("✅", "badge-emerald"),
-            StageExecutionStatus.Running => ("⏳", "badge-amber"),
-            StageExecutionStatus.WaitingForHuman => ("❓", "badge-amber"),
-            StageExecutionStatus.Failed => ("❌", "badge-crimson"),
-            StageExecutionStatus.Skipped => ("⏭", "badge-zinc"),
-            StageExecutionStatus.Pending => ("⚪", "badge-zinc"),
-            _ => ("⚪", "badge-zinc")
-        };
+        return StageConversationParser.GetStatusBadge(conv, Task);
     }
 }

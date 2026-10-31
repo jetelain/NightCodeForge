@@ -122,4 +122,203 @@ public class StartupRecoveryServicePauseTests : IDisposable
         var logs = _taskRepo.GetAllLogs();
         Assert.Contains(logs, l => l.Message.Contains("Operations are paused"));
     }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_WhenTaskHasInterruptedConversationFromPriorPause_PreservesInterruptedConversationAndRehydratesMemoryWithoutDuplicateCrashNotice()
+    {
+        var workspace = await _workspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 2,
+            Name = "Task 35 Reproduction Workspace",
+            RepositoryPath = _tempDir
+        });
+
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 35,
+            WorkspaceId = workspace.Id,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = stage.StageId,
+            InterruptedStageId = stage.StageId,
+            IsDeferredByPause = true,
+            Priority = TaskPriority.Normal
+        });
+
+        // Simulate Conv #264: paused before host restart with status Interrupted (8) and existing turns
+        var conv = await _taskRepo.StartConversationAsync(task.Id, stage.StageId, WorkflowStageKind.Agentic, 1);
+        await _taskRepo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Implement Step 11.36");
+        await _taskRepo.AddConversationTurnAsync(conv.Id, StageTurnRole.Tool, toolName: "read", toolArguments: "{\"path\":\"Spec.md\"}", metadataJson: "{\"CallId\":\"call_1\"}");
+        await _taskRepo.AddConversationTurnAsync(conv.Id, StageTurnRole.ToolResult, toolName: "read", toolResult: "# Spec", metadataJson: "{\"CallId\":\"call_1\"}");
+        await _taskRepo.CompleteConversationAsync(conv.Id, StageExecutionStatus.Interrupted, summary: "Operations paused (GPU VRAM reclaimed)");
+
+        var opsMock = new Mock<IOperationsControlService>();
+        opsMock.Setup(m => m.IsPaused).Returns(true);
+
+        var recovery = CreateRecoveryService(opsMock.Object, new DefaultWorkflowPipelineProvider(pipeline));
+        await recovery.ReconcileWorkspacesAsync();
+
+        var updatedTask = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(stage.StageId, updatedTask.InterruptedStageId);
+        Assert.True(updatedTask.IsDeferredByPause);
+
+        //RecoveredSerializedMemory must be populated from the Interrupted conversation's turns
+        var bag = PipelineDataBag.FromJson(updatedTask.PipelineDataJson);
+        var memoryJson = bag.Get<string>(PipelineDataBagKeys.RecoveredSerializedMemory);
+        Assert.False(string.IsNullOrWhiteSpace(memoryJson));
+        Assert.Contains("Implement Step 11.36", memoryJson);
+        // Must NOT inject a crash recovery notice into a cleanly paused conversation
+        Assert.DoesNotContain("Host restarted unexpectedly", memoryJson);
+
+        var convWithTurns = await _taskRepo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(convWithTurns);
+        Assert.Equal(StageExecutionStatus.Interrupted, convWithTurns.Status);
+        Assert.Equal(3, convWithTurns.Turns.Count);
+    }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_WhenInterruptedConversationHasZeroTurns_PreservesInterruptedStageIdAndDropsRecoveredMemory()
+    {
+        var workspace = await _workspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 3,
+            Name = "Zero Turn Interrupted Workspace",
+            RepositoryPath = _tempDir
+        });
+
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
+
+        var staleBag = new PipelineDataBag();
+        staleBag.Set(PipelineDataBagKeys.RecoveredSerializedMemory, "[{\"Role\":\"user\",\"Text\":\"stale\"}]");
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 36,
+            WorkspaceId = workspace.Id,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = stage.StageId,
+            PipelineDataJson = staleBag.ToJson()
+        });
+
+        var conv = await _taskRepo.StartConversationAsync(task.Id, stage.StageId, WorkflowStageKind.Agentic, 1);
+        await _taskRepo.CompleteConversationAsync(conv.Id, StageExecutionStatus.Interrupted, summary: "Paused with 0 turns");
+
+        var opsMock = new Mock<IOperationsControlService>();
+        opsMock.Setup(m => m.IsPaused).Returns(false);
+
+        var recovery = CreateRecoveryService(opsMock.Object, new DefaultWorkflowPipelineProvider(pipeline));
+        await recovery.ReconcileWorkspacesAsync();
+
+        var updatedTask = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(stage.StageId, updatedTask.InterruptedStageId);
+
+        var bag = PipelineDataBag.FromJson(updatedTask.PipelineDataJson);
+        Assert.False(bag.ContainsKey(PipelineDataBagKeys.RecoveredSerializedMemory));
+
+        var reloadedConv = await _taskRepo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(reloadedConv);
+        Assert.Equal(StageExecutionStatus.Interrupted, reloadedConv.Status);
+    }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_WhenRunningConversationAlreadyEndsWithRecoveryNotice_DoesNotAppendDuplicateNotice()
+    {
+        var workspace = await _workspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 4,
+            Name = "Duplicate Notice Guard Workspace",
+            RepositoryPath = _tempDir
+        });
+
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 37,
+            WorkspaceId = workspace.Id,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = stage.StageId
+        });
+
+        var conv = await _taskRepo.StartConversationAsync(task.Id, stage.StageId, WorkflowStageKind.Agentic, 1);
+        await _taskRepo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Turn 0");
+        await _taskRepo.AddConversationTurnAsync(
+            conv.Id,
+            StageTurnRole.System,
+            content: "[System Notice: Host restarted unexpectedly; workspace restored; resuming from previous conversation turn]");
+
+        var opsMock = new Mock<IOperationsControlService>();
+        opsMock.Setup(m => m.IsPaused).Returns(false);
+
+        var recovery = CreateRecoveryService(opsMock.Object, new DefaultWorkflowPipelineProvider(pipeline));
+        await recovery.ReconcileWorkspacesAsync();
+
+        var reloadedConv = await _taskRepo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(reloadedConv);
+        Assert.Equal(StageExecutionStatus.Interrupted, reloadedConv.Status);
+        Assert.Equal(2, reloadedConv.Turns.Count);
+    }
+
+    [Fact]
+    public async Task ReconcileWorkspacesAsync_WhenWaitingForHumanHasLastHumanAnswerInDataBag_PreservesWaitingForHumanWithoutCrashNotice()
+    {
+        var workspace = await _workspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 5,
+            Name = "Waiting With Answer Workspace",
+            RepositoryPath = _tempDir
+        });
+
+        var stage = TestWorkflowPipelines.CreateImplementationStage();
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { stage });
+
+        var dataBag = new PipelineDataBag();
+        dataBag.Set(PipelineDataBagKeys.LastHumanAnswer, "Use Redis");
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 38,
+            WorkspaceId = workspace.Id,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = stage.StageId,
+            InterruptedStageId = stage.StageId,
+            IsWaitingForHuman = false,
+            PipelineDataJson = dataBag.ToJson()
+        });
+
+        var conv = await _taskRepo.StartConversationAsync(task.Id, stage.StageId, WorkflowStageKind.Agentic, 1);
+        await _taskRepo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Implement caching");
+        await _taskRepo.AddConversationTurnAsync(
+            conv.Id,
+            StageTurnRole.Tool,
+            toolName: CanonicalToolNames.Ask,
+            toolArguments: "{\"questions\":[{\"prompt\":\"Cache backend?\"}]}",
+            metadataJson: "{\"CallId\":\"ask_redis\"}");
+        await _taskRepo.CompleteConversationAsync(conv.Id, StageExecutionStatus.WaitingForHuman, summary: "Waiting for human");
+
+        var opsMock = new Mock<IOperationsControlService>();
+        opsMock.Setup(m => m.IsPaused).Returns(false);
+
+        var recovery = CreateRecoveryService(opsMock.Object, new DefaultWorkflowPipelineProvider(pipeline));
+        await recovery.ReconcileWorkspacesAsync();
+
+        var reloadedConv = await _taskRepo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(reloadedConv);
+        // Must remain WaitingForHuman and NOT have a crash recovery System turn injected
+        Assert.Equal(StageExecutionStatus.WaitingForHuman, reloadedConv.Status);
+        Assert.DoesNotContain(reloadedConv.Turns, t => t.Role == StageTurnRole.System);
+
+        var updatedTask = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        var updatedBag = PipelineDataBag.FromJson(updatedTask.PipelineDataJson);
+        var recoveredMemory = updatedBag.Get<string>(PipelineDataBagKeys.RecoveredSerializedMemory);
+        Assert.NotNull(recoveredMemory);
+        Assert.Contains("Use Redis", recoveredMemory);
+    }
 }

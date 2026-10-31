@@ -254,11 +254,11 @@ public class StartupRecoveryIntegrationTests : IDisposable
         Assert.Equal("user", items[2].Role);
         Assert.Contains("Host restarted unexpectedly", items[2].Text);
 
-        // Verify interrupted conversation was marked Failed in SQLite
+        // Verify interrupted conversation was marked Interrupted in SQLite for in-place resumption
         var convs = await taskRepo.GetConversationsAsync(task.Id);
         var recoveredConv = convs.FirstOrDefault(c => c.Id == conv.Id);
         Assert.NotNull(recoveredConv);
-        Assert.Equal(StageExecutionStatus.Failed, recoveredConv.Status);
+        Assert.Equal(StageExecutionStatus.Interrupted, recoveredConv.Status);
 
         Assert.Contains(task.Id, jobQueue.TaskReviewQueue);
         var recoveredTask = await taskRepo.GetByIdAsync(task.Id);

@@ -584,7 +584,9 @@ public class EfCoreTaskRepository : ITaskRepository
         if (conversation != null)
         {
             conversation.Status = status;
-            conversation.CompletedAt = status == StageExecutionStatus.WaitingForHuman ? null : DateTime.UtcNow;
+            conversation.CompletedAt = status is StageExecutionStatus.WaitingForHuman or StageExecutionStatus.Interrupted
+                ? null
+                : DateTime.UtcNow;
             if (summary != null) conversation.Summary = summary;
             if (transcriptFileName != null) conversation.TranscriptFileName = transcriptFileName;
             await _context.SaveChangesAsync(cancellationToken);
@@ -604,9 +606,10 @@ public class EfCoreTaskRepository : ITaskRepository
         string? metadataJson = null,
         CancellationToken cancellationToken = default)
     {
-        var nextIndex = await _context.ConversationTurns
+        var maxIndex = await _context.ConversationTurns
             .Where(t => t.ConversationId == conversationId)
-            .CountAsync(cancellationToken);
+            .MaxAsync(t => (int?)t.TurnIndex, cancellationToken);
+        var nextIndex = (maxIndex ?? -1) + 1;
 
         var turn = new ConversationTurn
         {
@@ -664,6 +667,22 @@ public class EfCoreTaskRepository : ITaskRepository
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    public async Task<Conversation?> GetResumableConversationAsync(
+        int taskId,
+        string stageId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.Conversations
+            .Include(c => c.Turns.OrderBy(t => t.TurnIndex))
+            .Where(c => c.TaskId == taskId
+                     && c.StageId == stageId
+                     && (c.Status == StageExecutionStatus.WaitingForHuman || c.Status == StageExecutionStatus.Interrupted))
+            .OrderByDescending(c => c.AttemptIndex)
+            .ThenByDescending(c => c.StartedAt)
+            .ThenByDescending(c => c.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     public async Task ResumeConversationAsync(
         int conversationId,
         CancellationToken cancellationToken = default)
@@ -673,7 +692,25 @@ public class EfCoreTaskRepository : ITaskRepository
 
         conversation.Status = StageExecutionStatus.Running;
         conversation.CompletedAt = null;
+        conversation.Summary = null;
         await _context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task SanitizeTrailingInterruptedTurnsAsync(
+        int conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        var turns = await _context.ConversationTurns
+            .Where(t => t.ConversationId == conversationId)
+            .OrderBy(t => t.TurnIndex)
+            .ToListAsync(cancellationToken);
+
+        var toRemove = NightCodeForge.Core.Workflow.ConversationHistorySerializer.GetTrailingInterruptedTurns(turns);
+        if (toRemove.Count > 0)
+        {
+            _context.ConversationTurns.RemoveRange(toRemove);
+            await _context.SaveChangesAsync(cancellationToken);
+        }
     }
 
     public Task<Conversation> StartIdeationConversationAsync(

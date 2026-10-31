@@ -275,7 +275,10 @@ public class DevQueueService : IDevQueueService
                     _logger.LogInformation("Marked Task #{TaskId} status as Cancelled after job cancellation", taskId.Value);
 
                     var convs = await taskRepo.GetConversationsAsync(task.Id, cancellationToken);
-                    foreach (var c in convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman))
+                    foreach (var c in convs.Where(c =>
+                        c.Status == StageExecutionStatus.Running ||
+                        c.Status == StageExecutionStatus.WaitingForHuman ||
+                        c.Status == StageExecutionStatus.Interrupted))
                     {
                         await taskRepo.CompleteConversationAsync(c.Id, StageExecutionStatus.Cancelled, summary: "Execution was cancelled.", cancellationToken: cancellationToken);
                     }

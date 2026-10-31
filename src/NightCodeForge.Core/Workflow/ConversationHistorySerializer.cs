@@ -428,4 +428,107 @@ public static class ConversationHistorySerializer
     }
 
     public static string? ExtractCallId(ConversationTurn? turn) => ExtractCallId(turn?.MetadataJson);
+
+    /// <summary>
+    /// Identifies any trailing unanswered non-ask tool turns (and any immediately preceding thinking or
+    /// tool-call-accompanying assistant turns belonging to that aborted tool call step) that should be
+    /// removed when a conversation is cleanly paused.
+    /// </summary>
+    public static IReadOnlyList<ConversationTurn> GetTrailingInterruptedTurns(IEnumerable<ConversationTurn> turns)
+    {
+        ArgumentNullException.ThrowIfNull(turns);
+
+        var ordered = turns.OrderBy(t => t.TurnIndex).ToList();
+        if (ordered.Count == 0)
+        {
+            return Array.Empty<ConversationTurn>();
+        }
+
+        var answeredCallIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var turn in ordered)
+        {
+            if (turn.Role == StageTurnRole.ToolResult)
+            {
+                var resultCallId = ExtractCallId(turn);
+                if (!string.IsNullOrEmpty(resultCallId))
+                {
+                    answeredCallIds.Add(resultCallId);
+                }
+            }
+        }
+
+        var toRemove = new List<ConversationTurn>();
+        int idx = ordered.Count - 1;
+
+        var trailingAssistantTurns = new List<ConversationTurn>();
+        while (idx >= 0 && ordered[idx].Role == StageTurnRole.Assistant)
+        {
+            trailingAssistantTurns.Add(ordered[idx]);
+            idx--;
+        }
+
+        // In multi-tool steps, ThinkingAndActivityTracingChatClient writes all StageTurnRole.Tool rows
+        // before any tool runs, and completed tools write StageTurnRole.ToolResult rows after them.
+        // Skip trailing ToolResult/Optimization rows only when they belong to a trailing Tool block.
+        int scanIdx = idx;
+        while (scanIdx >= 0 && ordered[scanIdx].Role is StageTurnRole.ToolResult or StageTurnRole.Optimization)
+        {
+            scanIdx--;
+        }
+
+        int unansweredToolCount = 0;
+        int answeredToolCount = 0;
+        if (scanIdx >= 0 && ordered[scanIdx].Role == StageTurnRole.Tool)
+        {
+            idx = scanIdx;
+            while (idx >= 0 && ordered[idx].Role == StageTurnRole.Tool)
+            {
+                var turn = ordered[idx];
+                if (string.Equals(turn.ToolName, "ask", StringComparison.OrdinalIgnoreCase))
+                {
+                    answeredToolCount++;
+                }
+                else
+                {
+                    var callId = ExtractCallId(turn);
+                    var isAnswered = (!string.IsNullOrEmpty(callId) && answeredCallIds.Contains(callId)) ||
+                                     (string.IsNullOrEmpty(callId) && turn.ToolResult != null);
+                    if (!isAnswered)
+                    {
+                        toRemove.Add(turn);
+                        unansweredToolCount++;
+                    }
+                    else
+                    {
+                        answeredToolCount++;
+                    }
+                }
+                idx--;
+            }
+        }
+
+        if (unansweredToolCount > 0 && answeredToolCount == 0)
+        {
+            if (trailingAssistantTurns.Count > 0)
+            {
+                toRemove.AddRange(trailingAssistantTurns);
+            }
+
+            while (idx >= 0 && (ordered[idx].Role == StageTurnRole.Thinking || ordered[idx].Role == StageTurnRole.Assistant))
+            {
+                toRemove.Add(ordered[idx]);
+                idx--;
+            }
+        }
+        else if (unansweredToolCount == 0 && answeredToolCount == 0 && trailingAssistantTurns.Count == 0)
+        {
+            while (idx >= 0 && ordered[idx].Role == StageTurnRole.Thinking)
+            {
+                toRemove.Add(ordered[idx]);
+                idx--;
+            }
+        }
+
+        return toRemove;
+    }
 }

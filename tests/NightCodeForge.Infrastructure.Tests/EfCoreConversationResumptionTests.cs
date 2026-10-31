@@ -151,5 +151,65 @@ public class EfCoreConversationResumptionTests : IDisposable
         Assert.NotNull(reloaded3);
         Assert.Equal(StageExecutionStatus.Cancelled, reloaded3.Status);
         Assert.NotNull(reloaded3.CompletedAt);
+
+        // Case 4: Complete with Interrupted -> CompletedAt is null
+        var conv4 = await repo.StartConversationAsync(task.Id, "task-review", WorkflowStageKind.Agentic, 4);
+        await repo.CompleteConversationAsync(conv4.Id, StageExecutionStatus.Interrupted, summary: "Operations paused");
+
+        using var verifyContext4 = new AppDbContext(_options);
+        var reloaded4 = await verifyContext4.Conversations.FindAsync(conv4.Id);
+        Assert.NotNull(reloaded4);
+        Assert.Equal(StageExecutionStatus.Interrupted, reloaded4.Status);
+        Assert.Null(reloaded4.CompletedAt);
+        Assert.Equal("Operations paused", reloaded4.Summary);
+
+        // Resuming conv4 clears Summary and CompletedAt
+        await repo.ResumeConversationAsync(conv4.Id);
+        using var verifyContext5 = new AppDbContext(_options);
+        var reloaded5 = await verifyContext5.Conversations.FindAsync(conv4.Id);
+        Assert.NotNull(reloaded5);
+        Assert.Equal(StageExecutionStatus.Running, reloaded5.Status);
+        Assert.Null(reloaded5.CompletedAt);
+        Assert.Null(reloaded5.Summary);
+    }
+
+    [Fact]
+    public async Task GetResumableConversationAsync_ReturnsInterruptedConversation_AndSanitizesTrailingInterruptedTurns()
+    {
+        using var context = await CreateContextAsync();
+        var ws = new Workspace { Name = "Test WS", RepositoryPath = "/repos/test" };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        var task = new ForgeTask { WorkspaceId = ws.Id, Title = "Test Task", Status = TaskOverallStatus.Open };
+        context.Tasks.Add(task);
+        await context.SaveChangesAsync();
+
+        var repo = new EfCoreTaskRepository(context);
+        var conv = await repo.StartConversationAsync(task.Id, "implementation", WorkflowStageKind.Agentic, 1);
+        await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Implement feature");
+        await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.Tool, toolName: "read", toolArguments: "{\"path\":\"a.cs\"}", metadataJson: "{\"CallId\":\"call_1\"}");
+        await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.ToolResult, toolName: "read", toolResult: "class A {}", metadataJson: "{\"CallId\":\"call_1\"}");
+        // Trailing aborted step: thinking + unanswered tool call
+        await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.Thinking, content: "Running bash", thinkingTrace: "Running bash");
+        await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.Tool, toolName: "bash", toolArguments: "{\"command\":\"dotnet test\"}", metadataJson: "{\"CallId\":\"call_2\"}");
+
+        await repo.SanitizeTrailingInterruptedTurnsAsync(conv.Id);
+        await repo.CompleteConversationAsync(conv.Id, StageExecutionStatus.Interrupted, summary: "Operations paused");
+
+        var resumable = await repo.GetResumableConversationAsync(task.Id, "implementation");
+        Assert.NotNull(resumable);
+        Assert.Equal(conv.Id, resumable.Id);
+        Assert.Equal(StageExecutionStatus.Interrupted, resumable.Status);
+
+        var turns = resumable.Turns.OrderBy(t => t.TurnIndex).ToList();
+        Assert.Equal(3, turns.Count);
+        Assert.Equal(StageTurnRole.User, turns[0].Role);
+        Assert.Equal(StageTurnRole.Tool, turns[1].Role);
+        Assert.Equal(StageTurnRole.ToolResult, turns[2].Role);
+
+        // Next turn added after sanitization gets TurnIndex == 3
+        var nextTurn = await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.Assistant, content: "Resumed and completed");
+        Assert.Equal(3, nextTurn.TurnIndex);
     }
 }

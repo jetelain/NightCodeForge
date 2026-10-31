@@ -88,7 +88,16 @@ public interface ITaskRepository
         string stageId,
         CancellationToken cancellationToken = default);
 
+    Task<Conversation?> GetResumableConversationAsync(
+        int taskId,
+        string stageId,
+        CancellationToken cancellationToken = default);
+
     Task ResumeConversationAsync(
+        int conversationId,
+        CancellationToken cancellationToken = default);
+
+    Task SanitizeTrailingInterruptedTurnsAsync(
         int conversationId,
         CancellationToken cancellationToken = default);
 
@@ -626,7 +635,9 @@ public class InMemoryTaskRepository : ITaskRepository
             if (_conversations.TryGetValue(conversationId, out var conversation))
             {
                 conversation.Status = status;
-                conversation.CompletedAt = status == StageExecutionStatus.WaitingForHuman ? null : DateTime.UtcNow;
+                conversation.CompletedAt = status is StageExecutionStatus.WaitingForHuman or StageExecutionStatus.Interrupted
+                    ? null
+                    : DateTime.UtcNow;
                 if (summary != null) conversation.Summary = summary;
                 if (transcriptFileName != null) conversation.TranscriptFileName = transcriptFileName;
             }
@@ -667,7 +678,9 @@ public class InMemoryTaskRepository : ITaskRepository
 
             if (_conversations.TryGetValue(conversationId, out var conversation))
             {
-                turn.TurnIndex = conversation.Turns.Count;
+                turn.TurnIndex = conversation.Turns.Count > 0
+                    ? conversation.Turns.Max(t => t.TurnIndex) + 1
+                    : 0;
                 turn.Conversation = conversation;
                 conversation.Turns.Add(turn);
             }
@@ -730,6 +743,32 @@ public class InMemoryTaskRepository : ITaskRepository
         }
     }
 
+    public Task<Conversation?> GetResumableConversationAsync(
+        int taskId,
+        string stageId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var conv = _conversations.Values
+                .Where(c => c.TaskId == taskId
+                         && string.Equals(c.StageId, stageId, StringComparison.OrdinalIgnoreCase)
+                         && (c.Status == StageExecutionStatus.WaitingForHuman || c.Status == StageExecutionStatus.Interrupted))
+                .OrderByDescending(c => c.AttemptIndex)
+                .ThenByDescending(c => c.StartedAt)
+                .ThenByDescending(c => c.Id)
+                .FirstOrDefault();
+
+            if (conv != null)
+            {
+                conv.Turns = conv.Turns.OrderBy(t => t.TurnIndex).ToList();
+                return Task.FromResult<Conversation?>(conv);
+            }
+
+            return Task.FromResult<Conversation?>(null);
+        }
+    }
+
     public Task ResumeConversationAsync(
         int conversationId,
         CancellationToken cancellationToken = default)
@@ -743,6 +782,26 @@ public class InMemoryTaskRepository : ITaskRepository
 
             conversation.Status = StageExecutionStatus.Running;
             conversation.CompletedAt = null;
+            conversation.Summary = null;
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task SanitizeTrailingInterruptedTurnsAsync(
+        int conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            if (_conversations.TryGetValue(conversationId, out var conversation) && conversation.Turns.Count > 0)
+            {
+                var toRemove = NightCodeForge.Core.Workflow.ConversationHistorySerializer.GetTrailingInterruptedTurns(conversation.Turns);
+                foreach (var turn in toRemove)
+                {
+                    conversation.Turns.Remove(turn);
+                    _turns.Remove(turn);
+                }
+            }
             return Task.CompletedTask;
         }
     }

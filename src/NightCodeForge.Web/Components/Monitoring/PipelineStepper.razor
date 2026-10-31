@@ -53,6 +53,11 @@
                         <span class="stage-icon-text">@stage.Icon</span>
                         <span class="status-overlay status-overlay-waiting">✋</span>
                     }
+                    else if (stage.Status == StageExecutionStatus.Interrupted)
+                    {
+                        <span class="stage-icon-text">@stage.Icon</span>
+                        <span class="status-overlay status-overlay-waiting">⏸️</span>
+                    }
                     else
                     {
                         <span class="stage-icon-text">@stage.Icon</span>
@@ -193,7 +198,7 @@
                 if (st != null)
                 {
                     if (conv.Status is StageExecutionStatus.Completed or StageExecutionStatus.Failed
-                        or StageExecutionStatus.Running or StageExecutionStatus.WaitingForHuman)
+                        or StageExecutionStatus.Running or StageExecutionStatus.WaitingForHuman or StageExecutionStatus.Interrupted)
                     {
                         st.Status = conv.Status;
                         st.StatusText = GetDefaultStatusText(conv.Status);
@@ -343,6 +348,7 @@
     {
         StageExecutionStatus.Running => "In Progress",
         StageExecutionStatus.WaitingForHuman => "Waiting for Human",
+        StageExecutionStatus.Interrupted => "Paused",
         _ => status.ToString()
     };
 
@@ -387,7 +393,7 @@
             StageExecutionStatus.Running => "step-active",
             StageExecutionStatus.Completed => "step-completed",
             StageExecutionStatus.Failed => "step-failed",
-            StageExecutionStatus.WaitingForHuman => "step-waiting",
+            StageExecutionStatus.WaitingForHuman or StageExecutionStatus.Interrupted => "step-waiting",
             _ => "step-pending"
         };
     }

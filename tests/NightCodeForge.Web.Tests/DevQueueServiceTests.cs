@@ -265,6 +265,35 @@ public class DevQueueServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task CancelJobAsync_TransitionsRunningAndInterruptedConversationsToCancelled()
+    {
+        var task = new ForgeTask
+        {
+            Id = 67,
+            WorkspaceId = 1,
+            Title = "Task with Interrupted and Running Conversations",
+            Status = TaskOverallStatus.Open
+        };
+        await _taskRepo.CreateAsync(task);
+
+        var interruptedConv = await _taskRepo.StartConversationAsync(67, "intake", WorkflowStageKind.Agentic, 1, "dev");
+        await _taskRepo.CompleteConversationAsync(interruptedConv.Id, StageExecutionStatus.Interrupted, "Paused");
+
+        var runningConv = await _taskRepo.StartConversationAsync(67, "coding", WorkflowStageKind.Agentic, 1, "dev");
+
+        var service = CreateService();
+
+        var result = await service.CancelJobAsync("job-67", 67);
+
+        Assert.True(result);
+
+        var updatedTask = await _taskRepo.GetByIdAsync(67);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Cancelled, updatedTask.Status);
+        Assert.All(updatedTask.Conversations, c => Assert.Equal(StageExecutionStatus.Cancelled, c.Status));
+    }
+
+    [Fact]
     public async Task EmergencyReleaseLockAsync_PurgesLocksInWorktreeLinkedGitDir()
     {
         var worktreeDir = Path.Combine(_tempDir, "worktree-1");

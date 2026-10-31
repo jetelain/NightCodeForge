@@ -438,4 +438,195 @@ public class TaskOrchestratorPauseTests
         Assert.NotNull(reloaded);
         Assert.Equal(TaskOverallStatus.Closed, reloaded.Status);
     }
+
+    [Fact]
+    public async Task RejectTaskAsync_And_RestartTaskPipelineAsync_TransitionInterruptedConversationsToCancelledOrSuperseded()
+    {
+        var ws = new Workspace
+        {
+            Id = 1,
+            Name = "Test Ws",
+            RepositoryPath = "C:/test",
+            DefaultBaseBranch = "main"
+        };
+        await _workspaceRepository.CreateAsync(ws);
+
+        // 1. RejectTaskAsync cancels an Interrupted conversation
+        var taskToReject = new ForgeTask
+        {
+            Id = 81,
+            WorkspaceId = 1,
+            Title = "Paused Task to Reject",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            InterruptedStageId = StandardStageIds.Implementation,
+            IsDeferredByPause = true
+        };
+        await _taskRepository.CreateAsync(taskToReject);
+        _dependencyStore.AddTask(taskToReject.Id, 1, TaskOverallStatus.Open);
+
+        var convToCancel = await _taskRepository.StartConversationAsync(taskToReject.Id, StandardStageIds.Implementation, WorkflowStageKind.Agentic, 1);
+        await _taskRepository.CompleteConversationAsync(convToCancel.Id, StageExecutionStatus.Interrupted, summary: "Paused");
+
+        // 2. RestartTaskPipelineAsync supersedes an Interrupted conversation
+        var taskToRestart = new ForgeTask
+        {
+            Id = 82,
+            WorkspaceId = 1,
+            Title = "Paused Task to Restart",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            InterruptedStageId = StandardStageIds.Implementation,
+            IsDeferredByPause = true
+        };
+        await _taskRepository.CreateAsync(taskToRestart);
+        _dependencyStore.AddTask(taskToRestart.Id, 1, TaskOverallStatus.Open);
+
+        var convToSupersede = await _taskRepository.StartConversationAsync(taskToRestart.Id, StandardStageIds.Implementation, WorkflowStageKind.Agentic, 1);
+        await _taskRepository.CompleteConversationAsync(convToSupersede.Id, StageExecutionStatus.Interrupted, summary: "Paused");
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepository,
+            WorkspaceRepository = _workspaceRepository,
+            DependencyStore = _dependencyStore,
+            CancellationManager = _cancellationManager,
+            OperationsControlService = _operationsControlMock.Object
+        }.Build();
+
+        await orchestrator.RejectTaskAsync(taskToReject.Id, "No longer needed");
+        var rejectedConv = await _taskRepository.GetConversationWithTurnsAsync(convToCancel.Id);
+        Assert.NotNull(rejectedConv);
+        Assert.Equal(StageExecutionStatus.Cancelled, rejectedConv.Status);
+
+        await orchestrator.RestartTaskPipelineAsync(taskToRestart.Id, TaskRestartGitMode.PreserveWork);
+        var supersededConv = await _taskRepository.GetConversationWithTurnsAsync(convToSupersede.Id);
+        Assert.NotNull(supersededConv);
+        Assert.Equal(StageExecutionStatus.Superseded, supersededConv.Status);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenPausedDuringHarnessExecution_PreservesLastHumanAnswerAndPrimingInDataBagForNextResume()
+    {
+        var ws = new Workspace
+        {
+            Id = 1,
+            Name = "Test Ws",
+            RepositoryPath = "C:/test",
+            DefaultBaseBranch = "main",
+            AgentProfiles = new List<AgentProfile>
+            {
+                new()
+                {
+                    Id = StandardStageIds.Implementation,
+                    Name = "Impl Profile",
+                    HarnessId = "crucible",
+                    ModelName = "qwen3",
+                    Mode = AgentMode.Full,
+                    OptimizationFlags = new LocalOptimizationFlags { SyntheticConversationPriming = true }
+                }
+            }
+        };
+        await _workspaceRepository.CreateAsync(ws);
+
+        var initialBag = new PipelineDataBag();
+        initialBag.Set(PipelineDataBagKeys.LastHumanAnswer, "Confirmed architecture");
+        initialBag.Set(PipelineDataBagKeys.PendingSyntheticPriming, new SyntheticPrimingExecution(
+            SourceStageId: StandardStageIds.PreImplementationBaseline,
+            Command: "dotnet build",
+            Output: "Build succeeded",
+            IsSuccess: true,
+            DurationMs: 50));
+
+        var task = new ForgeTask
+        {
+            Id = 90,
+            WorkspaceId = 1,
+            Title = "Task Paused Before Harness Completion",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.Implementation,
+            InterruptedStageId = StandardStageIds.Implementation,
+            PipelineDataJson = initialBag.ToJson()
+        };
+        await _taskRepository.CreateAsync(task);
+        _dependencyStore.AddTask(task.Id, 1, TaskOverallStatus.Open);
+
+        var waitingConv = await _taskRepository.StartConversationAsync(task.Id, StandardStageIds.Implementation, WorkflowStageKind.Agentic, 1);
+        await _taskRepository.CompleteConversationAsync(waitingConv.Id, StageExecutionStatus.WaitingForHuman, summary: "Waiting for answer");
+
+        var harnessMock = new Mock<IAgentHarness>();
+        harnessMock.SetupGet(h => h.HarnessId).Returns("crucible");
+        int runCount = 0;
+        AgentSessionContext? secondRunContext = null;
+
+        harnessMock
+            .Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>(async (ctx, ct) =>
+            {
+                runCount++;
+                await Task.Yield();
+                if (runCount == 1)
+                {
+                    _cancellationManager.RequestPause(task.Id);
+                    throw new OperationCanceledException(ct);
+                }
+
+                secondRunContext = ctx;
+                await _taskRepository.CompleteConversationAsync(waitingConv.Id, StageExecutionStatus.Completed, summary: "Done");
+                return AgentRunResult.Completed(new AgentRunMetrics(10, 5, 5, 10), summary: "Completed on resume");
+            });
+
+        var registryMock = new Mock<IHarnessRegistry>();
+        IAgentHarness? outHarness = harnessMock.Object;
+        registryMock.Setup(r => r.TryGetHarness("crucible", out outHarness)).Returns(true);
+
+        var implStage = new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.Implementation,
+            RequiredMode = AgentMode.Full
+        };
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { implStage });
+        var pipelineProvider = new DefaultWorkflowPipelineProvider(pipeline);
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepository,
+            WorkspaceRepository = _workspaceRepository,
+            DependencyStore = _dependencyStore,
+            CancellationManager = _cancellationManager,
+            OperationsControlService = _operationsControlMock.Object,
+            HarnessRegistry = registryMock.Object,
+            PipelineProvider = pipelineProvider
+        }.Build();
+
+        // 1. First execution is paused inside RunStageAsync
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var pausedTask = await _taskRepository.GetByIdAsync(task.Id);
+        Assert.NotNull(pausedTask);
+        Assert.True(pausedTask.IsDeferredByPause);
+        Assert.Equal(StandardStageIds.Implementation, pausedTask.InterruptedStageId);
+
+        var pausedBag = PipelineDataBag.FromJson(pausedTask.PipelineDataJson);
+        Assert.Equal("Confirmed architecture", pausedBag.Get<string>(PipelineDataBagKeys.LastHumanAnswer));
+        Assert.NotNull(pausedBag.Get<SyntheticPrimingExecution>(PipelineDataBagKeys.PendingSyntheticPriming));
+
+        // WaitingForHuman conversation must NOT have been overwritten to Interrupted before harness resumed it
+        var convAfterPause = await _taskRepository.GetConversationWithTurnsAsync(waitingConv.Id);
+        Assert.Equal(StageExecutionStatus.WaitingForHuman, convAfterPause!.Status);
+
+        // 2. Clear pause and resume: second run must still receive PendingHumanAnswer and SyntheticPriming, then consume them
+        _cancellationManager.ClearPause(task.Id);
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        Assert.NotNull(secondRunContext);
+        Assert.Equal("Confirmed architecture", secondRunContext!.PendingHumanAnswer);
+        Assert.NotNull(secondRunContext.SyntheticPriming);
+
+        var completedTask = await _taskRepository.GetByIdAsync(task.Id);
+        var finalBag = PipelineDataBag.FromJson(completedTask!.PipelineDataJson);
+        Assert.Null(finalBag.Get<string>(PipelineDataBagKeys.LastHumanAnswer));
+        Assert.Null(finalBag.Get<SyntheticPrimingExecution>(PipelineDataBagKeys.PendingSyntheticPriming));
+    }
 }

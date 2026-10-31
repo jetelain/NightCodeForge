@@ -542,7 +542,7 @@
                 {
                     var previousId = _selectedConversation?.Id;
                     var target = (previousId.HasValue ? _conversations.FirstOrDefault(c => c.Id == previousId.Value) : null)
-                                 ?? _conversations.LastOrDefault(c => c.Status == StageExecutionStatus.Running)
+                                 ?? _conversations.LastOrDefault(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.Interrupted)
                                  ?? _conversations.LastOrDefault();
                     _selectedConversation = target;
                     await ReloadSelectedTurnsAsync();

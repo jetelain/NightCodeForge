@@ -155,11 +155,42 @@ public static class StageConversationParser
             StageExecutionStatus.Completed => "badge-emerald",
             StageExecutionStatus.Running => "badge-amber",
             StageExecutionStatus.WaitingForHuman => "badge-amber",
+            StageExecutionStatus.Interrupted => "badge-amber",
             StageExecutionStatus.Failed => "badge-crimson",
+            StageExecutionStatus.Cancelled => "badge-zinc",
             StageExecutionStatus.Skipped => "badge-zinc",
             StageExecutionStatus.Pending => "badge-zinc",
             StageExecutionStatus.Superseded => "badge-zinc",
             _ => "badge-zinc"
+        };
+    }
+
+    /// <summary>
+    /// Maps a conversation and optional parent task to its status badge icon and CSS class.
+    /// </summary>
+    public static (string Icon, string CssClass) GetStatusBadge(Conversation conv, ForgeTask? task = null)
+    {
+        if (conv.Status == StageExecutionStatus.WaitingForHuman)
+        {
+            if (task != null && !task.IsWaitingForHuman && task.Id == conv.TaskId &&
+                (string.IsNullOrEmpty(conv.StageId) || string.Equals(conv.StageId, task.CurrentStageId, StringComparison.OrdinalIgnoreCase)))
+            {
+                return ("✓", "badge-teal");
+            }
+        }
+
+        return conv.Status switch
+        {
+            StageExecutionStatus.Completed => ("✅", "badge-emerald"),
+            StageExecutionStatus.Running => ("⏳", "badge-amber"),
+            StageExecutionStatus.WaitingForHuman => ("❓", "badge-amber"),
+            StageExecutionStatus.Interrupted => ("⏸️", "badge-amber"),
+            StageExecutionStatus.Failed => ("❌", "badge-crimson"),
+            StageExecutionStatus.Cancelled => ("🚫", "badge-zinc"),
+            StageExecutionStatus.Superseded => ("🔄", "badge-zinc"),
+            StageExecutionStatus.Skipped => ("⏭", "badge-zinc"),
+            StageExecutionStatus.Pending => ("⚪", "badge-zinc"),
+            _ => ("⚪", "badge-zinc")
         };
     }
 

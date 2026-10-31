@@ -114,6 +114,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         CancellationTokenSource? taskCts = null;
         IWorkflowStage? currentExecutingStage = null;
         AgentProfile? currentExecutingProfile = null;
+        PipelineContext? pipelineContext = null;
         var cohortSw = System.Diagnostics.Stopwatch.StartNew();
         CohortExitReason cohortExitReason = CohortExitReason.Aborted;
 
@@ -376,7 +377,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         var taskWorkingPath = _gitWorkspaceManager.GetWorktreePath(workspace, task.Id);
-        var pipelineContext = new PipelineContext(task, workspace)
+        pipelineContext = new PipelineContext(task, workspace)
         {
             WorkingDirectory = taskWorkingPath,
             Pipeline = pipeline
@@ -821,10 +822,6 @@ public class TaskOrchestrator : ITaskOrchestrator
                     {
                         pendingHumanAnswer = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswer);
                         pendingHumanAnswerJson = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.LastHumanAnswerJson);
-                        // Single-consumption: remove immediately upon consumption
-                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswer);
-                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswerJson);
-                        activeInterruptedStageId = null;
                     }
                     else if (string.IsNullOrWhiteSpace(activeInterruptedStageId))
                     {
@@ -851,12 +848,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     else
                     {
                         var resumeMemory = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.RecoveredSerializedMemory);
-                        if (!string.IsNullOrEmpty(resumeMemory))
-                        {
-                            // Consume once: a failed/cancelled run must not replay stale recovered history later.
-                            pipelineContext.DataBag.Remove(PipelineDataBagKeys.RecoveredSerializedMemory);
-                        }
-                        else if (lastCheckpoint != null && string.Equals(lastCheckpoint.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase))
+                        if (string.IsNullOrEmpty(resumeMemory) && lastCheckpoint != null && string.Equals(lastCheckpoint.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase))
                         {
                             resumeMemory = lastCheckpoint.SerializedMemory;
                         }
@@ -876,13 +868,9 @@ public class TaskOrchestrator : ITaskOrchestrator
                         var effectiveOptimizationFlags = pipelineContext.DataBag.Get<LocalOptimizationFlags>(PipelineDataBagKeys.OptimizationFlags)
                             ?? profile.OptimizationFlags ?? new LocalOptimizationFlags();
 
-                        if (pendingPriming != null)
+                        if (pendingPriming != null && effectiveOptimizationFlags.SyntheticConversationPriming)
                         {
-                            pipelineContext.DataBag.Remove(PipelineDataBagKeys.PendingSyntheticPriming);
-                            if (effectiveOptimizationFlags.SyntheticConversationPriming)
-                            {
-                                syntheticPriming = pendingPriming;
-                            }
+                            syntheticPriming = pendingPriming;
                         }
 
                         var agentContext = new AgentSessionContext
@@ -911,6 +899,16 @@ public class TaskOrchestrator : ITaskOrchestrator
                         };
 
                         var runResult = await harness.RunStageAsync(agentContext, cancellationToken);
+
+                        // Consume once after non-cancelled execution: a failed/completed run must not replay stale recovered history, answers, or priming later.
+                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.RecoveredSerializedMemory);
+                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.PendingSyntheticPriming);
+                        if (isInterruptedStage)
+                        {
+                            pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswer);
+                            pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswerJson);
+                            activeInterruptedStageId = null;
+                        }
 
                         if (!string.IsNullOrEmpty(runResult.UpdatedState))
                         {
@@ -1272,8 +1270,12 @@ public class TaskOrchestrator : ITaskOrchestrator
             }
         }
 
+        var isStageCancelledOrPaused = result.IsCancelled || (cancellationToken.IsCancellationRequested && !result.IsSuccess);
+
         // Auto-persist any backlog proposals emitted by triage or discovery agents (propose_tasks)
-        var pendingProposals = pipelineContext.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals);
+        var pendingProposals = !isStageCancelledOrPaused
+            ? pipelineContext.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals)
+            : null;
         if (pendingProposals != null && pendingProposals.Count > 0)
         {
             foreach (var p in pendingProposals)
@@ -1303,7 +1305,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         }
 
         // Read back all disk modifications to tasks using single authority (TaskMarkdownSyncService)
-        if (!string.IsNullOrWhiteSpace(targetSyncPath) && Directory.Exists(targetSyncPath))
+        if (!isStageCancelledOrPaused && !string.IsNullOrWhiteSpace(targetSyncPath) && Directory.Exists(targetSyncPath))
         {
             var stageActor = AuditActors.GetActorForStage(stage.StageId);
             var stageReason = $"Stage '{stage.StageId}' completed disk synchronization";
@@ -1491,6 +1493,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     currentTask.IsDeferredByPause = true;
 
                     pipelineContext.SyncDataBagToTask();
+                    currentTask.PipelineDataJson = task.PipelineDataJson;
                     await _taskRepository.UpdateWithHistoryAsync(
                         currentTask,
                         dependsOn: null,
@@ -1515,7 +1518,10 @@ public class TaskOrchestrator : ITaskOrchestrator
             try
             {
                 var convs = await _taskRepository.GetConversationsAsync(task.Id, ct);
-                var activeConvs = convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman).ToList();
+                var activeConvs = convs.Where(c =>
+                    c.Status == StageExecutionStatus.Running ||
+                    c.Status == StageExecutionStatus.WaitingForHuman ||
+                    c.Status == StageExecutionStatus.Interrupted).ToList();
                 foreach (var activeConv in activeConvs)
                 {
                     await _taskRepository.CompleteConversationAsync(
@@ -2161,6 +2167,11 @@ public class TaskOrchestrator : ITaskOrchestrator
                     var currentTask = await _taskRepository.GetByIdAsync(taskId, ct);
                     if (currentTask != null && currentTask.Status != TaskOverallStatus.Closed && currentTask.Status != TaskOverallStatus.Rejected)
                     {
+                        if (pipelineContext != null)
+                        {
+                            pipelineContext.SyncDataBagToTask();
+                            currentTask.PipelineDataJson = task.PipelineDataJson;
+                        }
                         currentTask.Status = TaskOverallStatus.Open;
                         currentTask.InterruptedStageId = currentExecutingStage?.StageId ?? currentTask.InterruptedStageId ?? currentTask.CurrentStageId;
                         currentTask.InterruptedAgentProfileId = currentExecutingProfile?.Id ?? currentTask.InterruptedAgentProfileId;
@@ -2239,7 +2250,9 @@ public class TaskOrchestrator : ITaskOrchestrator
     private async Task CloseActiveConversationsAsync(int taskId, StageExecutionStatus status, string summary, CancellationToken cancellationToken)
     {
         var convs = await _taskRepository.GetConversationsAsync(taskId, cancellationToken);
-        var activeConvs = convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman).ToList();
+        var activeConvs = convs.Where(c =>
+            c.Status == StageExecutionStatus.Running ||
+            (status != StageExecutionStatus.Interrupted && (c.Status == StageExecutionStatus.WaitingForHuman || c.Status == StageExecutionStatus.Interrupted))).ToList();
         foreach (var activeConv in activeConvs)
         {
             await _taskRepository.CompleteConversationAsync(
@@ -2728,6 +2741,19 @@ public class TaskOrchestrator : ITaskOrchestrator
         var rejectionReason = string.IsNullOrWhiteSpace(reason)
             ? "Task manually rejected by maintainer."
             : reason;
+
+        var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+        foreach (var c in convs.Where(c =>
+            c.Status == StageExecutionStatus.Running ||
+            c.Status == StageExecutionStatus.WaitingForHuman ||
+            c.Status == StageExecutionStatus.Interrupted))
+        {
+            await _taskRepository.CompleteConversationAsync(
+                c.Id,
+                StageExecutionStatus.Cancelled,
+                summary: rejectionReason,
+                cancellationToken: cancellationToken);
+        }
 
         await _taskRepository.UpdateWithHistoryAsync(
             task,
@@ -3420,9 +3446,13 @@ public class TaskOrchestrator : ITaskOrchestrator
         task.InterruptedAgentProfileId = null;
         task.UpdatedAt = DateTime.UtcNow;
 
-        // 8. Stage Conversations - mark active or pending as Superseded
+        // 8. Stage Conversations - mark active, interrupted, or pending as Superseded
         var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
-        foreach (var c in convs.Where(c => c.Status == StageExecutionStatus.Running || c.Status == StageExecutionStatus.WaitingForHuman || c.Status == StageExecutionStatus.Pending))
+        foreach (var c in convs.Where(c =>
+            c.Status == StageExecutionStatus.Running ||
+            c.Status == StageExecutionStatus.WaitingForHuman ||
+            c.Status == StageExecutionStatus.Interrupted ||
+            c.Status == StageExecutionStatus.Pending))
         {
             await _taskRepository.CompleteConversationAsync(c.Id, StageExecutionStatus.Superseded, summary: "Pipeline restarted; previous conversation superseded.", cancellationToken: cancellationToken);
         }
