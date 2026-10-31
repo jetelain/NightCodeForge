@@ -1,4 +1,8 @@
 @inherits LayoutComponentBase
+@inject IWorkspaceRepository WorkspaceRepo
+@inject WorkspaceStateService WorkspaceState
+@inject NavigationManager Navigation
+@implements IDisposable
 
 <div class="forge-layout @(_isSidebarCollapsed ? "sidebar-collapsed" : "")">
     <NavMenu IsCollapsed="_isSidebarCollapsed" OnToggleSidebar="ToggleSidebar" />
@@ -8,7 +12,10 @@
     <main class="forge-main-content">
         <ErrorBoundary @ref="_errorBoundary">
             <ChildContent>
-                @Body
+                @if (_isWorkspaceReady)
+                {
+                    @Body
+                }
             </ChildContent>
             <ErrorContent Context="ex">
                 <div class="forge-card" style="margin: 2rem; border-color: var(--forge-border-danger, #ef4444); background: rgba(239, 68, 68, 0.08);">
@@ -37,10 +44,123 @@
 
 @code {
     private bool _isSidebarCollapsed = false;
+    private bool _isWorkspaceReady = false;
+    private bool _disposed = false;
     private ErrorBoundary? _errorBoundary;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Navigation.LocationChanged += HandleLocationChanged;
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+
+        await HydrateWorkspaceFromUrlAsync(Navigation.Uri);
+        _isWorkspaceReady = true;
+    }
+
+    private async Task HydrateWorkspaceFromUrlAsync(string uri)
+    {
+        var workspaces = await WorkspaceRepo.GetAllAsync();
+        WorkspaceState.SetKnownWorkspaces(workspaces);
+
+        var hasUrlWorkspace = WorkspaceUrlHelper.TryExtractWorkspaceId(
+            uri,
+            out var urlWorkspaceId,
+            out var remainingPath,
+            out var queryAndFragment);
+
+        if (hasUrlWorkspace)
+        {
+            var matched = workspaces.FirstOrDefault(w => w.Id == urlWorkspaceId);
+            if (matched != null)
+            {
+                WorkspaceState.SetActiveWorkspace(matched);
+            }
+            else if (workspaces.Count > 0)
+            {
+                WorkspaceState.SetActiveWorkspace(workspaces[0]);
+                var fallbackUrl = WorkspaceUrlHelper.BuildPath(workspaces[0].Id, $"{remainingPath}{queryAndFragment}");
+                Navigation.NavigateTo(fallbackUrl, replace: true);
+            }
+        }
+        else
+        {
+            var isTaskRoute = WorkspaceUrlHelper.TryExtractTaskRoute(uri, out _, out _);
+            if (WorkspaceState.ActiveWorkspace == null && workspaces.Count > 0 && !isTaskRoute)
+            {
+                WorkspaceState.SetActiveWorkspace(workspaces[0]);
+            }
+
+            if (WorkspaceState.ActiveWorkspaceId.HasValue &&
+                !string.IsNullOrEmpty(remainingPath) &&
+                !WorkspaceUrlHelper.IsNonWorkspaceRoute(remainingPath) &&
+                !isTaskRoute)
+            {
+                var normalizedUrl = WorkspaceUrlHelper.BuildPath(
+                    WorkspaceState.ActiveWorkspaceId.Value,
+                    $"{remainingPath}{queryAndFragment}");
+                Navigation.NavigateTo(normalizedUrl, replace: true);
+            }
+        }
+    }
+
+    private void HandleLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        if (_disposed) return;
+
+        if (WorkspaceUrlHelper.TryExtractWorkspaceId(e.Location, out var urlWsId, out var remainingPath, out var queryAndFragment))
+        {
+            if (!WorkspaceState.TryActivateWorkspaceById(urlWsId))
+            {
+                _ = InvokeAsync(async () =>
+                {
+                    if (_disposed) return;
+                    await HydrateWorkspaceFromUrlAsync(e.Location);
+                    StateHasChanged();
+                });
+            }
+        }
+        else if (WorkspaceState.ActiveWorkspaceId.HasValue &&
+                 !string.IsNullOrEmpty(remainingPath) &&
+                 !WorkspaceUrlHelper.IsNonWorkspaceRoute(remainingPath) &&
+                 !WorkspaceUrlHelper.TryExtractTaskRoute(e.Location, out _, out _))
+        {
+            var normalizedUrl = WorkspaceUrlHelper.BuildPath(
+                WorkspaceState.ActiveWorkspaceId.Value,
+                $"{remainingPath}{queryAndFragment}");
+            Navigation.NavigateTo(normalizedUrl, replace: true);
+        }
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        if (_disposed || !WorkspaceState.ActiveWorkspaceId.HasValue) return;
+
+        var hasUrlWs = WorkspaceUrlHelper.TryExtractWorkspaceId(
+            Navigation.Uri,
+            out _,
+            out var remainingPath,
+            out var queryAndFragment);
+
+        if (!hasUrlWs &&
+            !string.IsNullOrEmpty(remainingPath) &&
+            !WorkspaceUrlHelper.IsNonWorkspaceRoute(remainingPath))
+        {
+            var normalizedUrl = WorkspaceUrlHelper.BuildPath(
+                WorkspaceState.ActiveWorkspaceId.Value,
+                $"{remainingPath}{queryAndFragment}");
+            Navigation.NavigateTo(normalizedUrl, replace: true);
+        }
+    }
 
     private void ToggleSidebar()
     {
         _isSidebarCollapsed = !_isSidebarCollapsed;
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Navigation.LocationChanged -= HandleLocationChanged;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
     }
 }

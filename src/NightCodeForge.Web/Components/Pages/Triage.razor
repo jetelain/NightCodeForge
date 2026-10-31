@@ -1,4 +1,5 @@
 @page "/triage"
+@page "/w/{WorkspaceId:int}/triage"
 @namespace NightCodeForge.Web.Components.Pages
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Repositories
@@ -188,7 +189,7 @@
                                     The triage agent verified the report and formulated structured backlog items in status <code class="font-mono">Suggested</code>:
                                 </p>
                             </div>
-                            <a href="/backlog" class="forge-btn forge-btn-secondary btn-sm" id="go-to-backlog-link">
+                            <a href="@WorkspaceState.GetPath("backlog")" class="forge-btn forge-btn-secondary btn-sm" id="go-to-backlog-link">
                                 Go to Backlog ➔
                             </a>
                         </div>
@@ -217,6 +218,8 @@
 </div>
 
 @code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
     private TriageSubmissionModel _model = new();
     private bool _isTriaging;
     private List<ForgeTask> _triagedTasks = new();
@@ -224,9 +227,21 @@
 
     protected override async Task OnInitializedAsync()
     {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
         SyncBaseBranchFromActiveWorkspace();
         await LoadExistingSuggestedTasksAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
     }
 
     private void SyncBaseBranchFromActiveWorkspace()

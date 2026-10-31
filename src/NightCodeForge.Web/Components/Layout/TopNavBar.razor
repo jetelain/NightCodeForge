@@ -99,7 +99,7 @@
         }
 
         <!-- Global + New Task Button -->
-        <NavLink href="tasks/new" class="forge-btn forge-btn-primary btn-sm" id="nav-btn-new-task" style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.75rem; font-size: 0.82rem;" title="Create a new task">
+        <NavLink href="@WorkspaceState.GetNavHref("tasks/new")" class="forge-btn forge-btn-primary btn-sm" id="nav-btn-new-task" style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.75rem; font-size: 0.82rem;" title="Create a new task">
             <span>➕</span>
             <span>New Task</span>
         </NavLink>
@@ -108,7 +108,7 @@
         @{
             var pendingQuestions = WorkerState.Current.PendingQuestionCount;
         }
-        <NavLink href="inbox" class="@(pendingQuestions > 0 ? "question-inbox-pill" : "question-inbox-pill empty")" title="Pending Clarification Questions">
+        <NavLink href="@WorkspaceState.GetNavHref("inbox")" class="@(pendingQuestions > 0 ? "question-inbox-pill" : "question-inbox-pill empty")" title="Pending Clarification Questions">
             <span class="pill-icon">📬</span>
             <span>@(pendingQuestions > 0 ? $"{pendingQuestions} Question{(pendingQuestions > 1 ? "s" : "")}" : "Inbox")</span>
         </NavLink>
@@ -203,12 +203,33 @@
         }
     }
 
-    private async Task LoadWorkspacesAsync()
+    private async Task LoadWorkspacesAsync(bool forceReload = false)
     {
         try
         {
-            _workspaces = await WorkspaceRepo.GetAllAsync();
-            if (WorkspaceState.ActiveWorkspace == null && _workspaces.Count > 0)
+            if (!forceReload && WorkspaceState.KnownWorkspaces.Count > 0)
+            {
+                _workspaces = WorkspaceState.KnownWorkspaces;
+            }
+            else
+            {
+                _workspaces = await WorkspaceRepo.GetAllAsync();
+                WorkspaceState.SetKnownWorkspaces(_workspaces);
+            }
+
+            if (WorkspaceUrlHelper.TryExtractWorkspaceId(Navigation.Uri, out var urlWsId, out _, out _))
+            {
+                var matched = _workspaces.FirstOrDefault(w => w.Id == urlWsId);
+                if (matched != null)
+                {
+                    WorkspaceState.SetActiveWorkspace(matched);
+                    return;
+                }
+            }
+
+            if (WorkspaceState.ActiveWorkspace == null &&
+                _workspaces.Count > 0 &&
+                !WorkspaceUrlHelper.TryExtractTaskRoute(Navigation.Uri, out _, out _))
             {
                 WorkspaceState.SetActiveWorkspace(_workspaces[0]);
             }
@@ -227,32 +248,31 @@
             var matched = _workspaces.FirstOrDefault(w => w.Id == selectedId);
             if (matched != null)
             {
+                var targetUrl = WorkspaceUrlHelper.GetTargetUrlForWorkspaceSwitch(Navigation.Uri, matched.Id);
                 WorkspaceState.SetActiveWorkspace(matched);
+                Navigation.NavigateTo(targetUrl, replace: false);
             }
         }
     }
 
     private void HandleLocationChanged(object? sender, LocationChangedEventArgs e)
     {
+        if (WorkspaceUrlHelper.TryExtractWorkspaceId(e.Location, out var urlWsId, out _, out _))
+        {
+            var matched = _workspaces.FirstOrDefault(w => w.Id == urlWsId);
+            if (matched != null && WorkspaceState.ActiveWorkspaceId != matched.Id)
+            {
+                WorkspaceState.SetActiveWorkspace(matched);
+            }
+        }
+
         UpdateCurrentSection(e.Location);
         _ = InvokeAsync(StateHasChanged);
     }
 
     private void UpdateCurrentSection(string uri)
     {
-        var relative = Navigation.ToBaseRelativePath(uri).Split('?')[0].Trim('/');
-        _currentSection = relative.ToLowerInvariant() switch
-        {
-            "" => "Overview",
-            "ideation" => "Ideation Chat",
-            "backlog" => "Backlog & DAG",
-            "monitoring" => "Live Telemetry",
-            "inbox" => "Question Inbox",
-            "review" => "Review Room",
-            "settings" => "Settings",
-            "transcripts" => "Transcripts & AI",
-            _ => char.ToUpper(relative[0]) + relative[1..]
-        };
+        _currentSection = WorkspaceUrlHelper.GetSectionDisplayName(uri);
     }
 
     private void HandleStateChanged()
@@ -264,7 +284,16 @@
             try
             {
                 if (_disposed) return;
-                await LoadWorkspacesAsync();
+                if (_workspaces.Count == 0 ||
+                    (WorkspaceState.ActiveWorkspaceId.HasValue && _workspaces.All(w => w.Id != WorkspaceState.ActiveWorkspaceId.Value)))
+                {
+                    await LoadWorkspacesAsync(forceReload: WorkspaceState.KnownWorkspaces.Count == 0 ||
+                        (WorkspaceState.ActiveWorkspaceId.HasValue && WorkspaceState.KnownWorkspaces.All(w => w.Id != WorkspaceState.ActiveWorkspaceId.Value)));
+                }
+                else if (WorkspaceState.KnownWorkspaces.Count > 0)
+                {
+                    _workspaces = WorkspaceState.KnownWorkspaces;
+                }
                 StateHasChanged();
             }
             catch (Exception ex)

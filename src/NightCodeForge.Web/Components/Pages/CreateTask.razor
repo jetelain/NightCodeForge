@@ -1,5 +1,7 @@
 @page "/tasks/new"
 @page "/tasks/create"
+@page "/w/{WorkspaceId:int}/tasks/new"
+@page "/w/{WorkspaceId:int}/tasks/create"
 @namespace NightCodeForge.Web.Components.Pages
 @using NightCodeForge.Core.Dependencies
 @using NightCodeForge.Core.Domain
@@ -34,7 +36,7 @@
         <!-- Page Header & Breadcrumbs -->
         <div class="create-task-header">
             <div class="header-breadcrumb">
-                <a href="/backlog" class="text-secondary font-mono" style="text-decoration: none; font-size: 0.85rem;">
+                <a href="@WorkspaceState.GetPath("backlog")" class="text-secondary font-mono" style="text-decoration: none; font-size: 0.85rem;">
                     ← Back to Backlog &amp; DAG
                 </a>
             </div>
@@ -371,7 +373,7 @@
                             💡 Save as Suggested (Triage Queue)
                         </button>
 
-                        <a href="/backlog" class="forge-btn forge-btn-ghost" style="text-align: center; text-decoration: none; font-size: 0.82rem; margin-top: 0.25rem;">
+                        <a href="@WorkspaceState.GetPath("backlog")" class="forge-btn forge-btn-ghost" style="text-align: center; text-decoration: none; font-size: 0.82rem; margin-top: 0.25rem;">
                             Cancel
                         </a>
                     </div>
@@ -382,6 +384,8 @@
 </div>
 
 @code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
     private string _title = string.Empty;
     private string _description = string.Empty;
     private int? _selectedWorkflowId;
@@ -404,7 +408,19 @@
     protected override async Task OnInitializedAsync()
     {
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
         await LoadWorkspaceDataAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
     }
 
     private void HandleWorkspaceChanged()
@@ -579,13 +595,13 @@
                 await TaskRepository.UpdateAsync(created, dependsOn: _selectedPrereqIds);
 
                 ToastService.Show("Task Launched", $"Task #{created.Id} created and dispatched to execution queue.", ToastLevel.Success);
-                Navigation.NavigateTo($"/inspector/{created.Id}");
+                Navigation.NavigateTo(WorkspaceState.GetPath($"inspector/{created.Id}"));
             }
             else
             {
                 var statusText = status == TaskOverallStatus.Suggested ? "Suggested (Triage)" : "Open (Backlog)";
                 ToastService.Show("Task Created", $"Task #{created.Id} saved as {statusText}.", ToastLevel.Success);
-                Navigation.NavigateTo("/backlog");
+                Navigation.NavigateTo(WorkspaceState.GetPath("backlog"));
             }
         }
         catch (Exception ex)

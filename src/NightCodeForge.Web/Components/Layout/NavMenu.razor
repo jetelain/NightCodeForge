@@ -1,4 +1,5 @@
 @inject WorkerStateService WorkerState
+@inject WorkspaceStateService WorkspaceState
 @implements IDisposable
 
 <aside class="forge-sidebar">
@@ -19,34 +20,34 @@
     <div class="sidebar-nav-container">
         <div class="nav-section-label">Workflow</div>
 
-        <NavLink class="forge-nav-link" href="ideation">
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("ideation")">
             <span class="nav-icon">💡</span>
             <span>Ideation Chat</span>
         </NavLink>
 
-        <NavLink class="forge-nav-link" href="backlog">
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("backlog")">
             <span class="nav-icon">📋</span>
             <span>Backlog &amp; DAG</span>
         </NavLink>
 
-        <NavLink class="forge-nav-link" href="triage">
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("triage")">
             <span class="nav-icon">🛡️</span>
             <span>Untrusted Intake</span>
         </NavLink>
 
         <div class="nav-section-label">Execution</div>
 
-        <NavLink class="forge-nav-link" href="monitoring">
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("monitoring")">
             <span class="nav-icon">⚡</span>
             <span>Live Telemetry</span>
         </NavLink>
 
-        <NavLink class="forge-nav-link" href="inspector">
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("inspector")">
             <span class="nav-icon">🔎</span>
             <span>Task Inspector</span>
         </NavLink>
 
-        <NavLink class="forge-nav-link" href="inbox">
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("inbox")">
             <span class="nav-icon">📬</span>
             <span>Question Inbox</span>
             @if (WorkerState.Current.PendingQuestionCount > 0)
@@ -55,29 +56,29 @@
             }
         </NavLink>
 
-        <NavLink class="forge-nav-link" href="review">
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("review")">
             <span class="nav-icon">🔍</span>
             <span>Review Room</span>
         </NavLink>
 
-        <NavLink class="forge-nav-link" href="git-sync">
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("git-sync")">
             <span class="nav-icon">🌿</span>
             <span>Git &amp; Host Sync</span>
         </NavLink>
 
-        <NavLink class="forge-nav-link" href="dev-queue">
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("dev-queue")">
             <span class="nav-icon">⏱️</span>
             <span>Dev-Queue &amp; Locks</span>
         </NavLink>
 
         <div class="nav-section-label">System</div>
 
-        <NavLink class="forge-nav-link" href="settings">
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("settings")">
             <span class="nav-icon">⚙️</span>
             <span>Settings</span>
         </NavLink>
 
-        <NavLink class="forge-nav-link" href="transcripts">
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("transcripts")">
             <span class="nav-icon">📜</span>
             <span>Transcripts &amp; AI</span>
         </NavLink>
@@ -98,10 +99,11 @@
 
     protected override void OnInitialized()
     {
-        WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
+        WorkerState.OnWorkerStateChanged += HandleStateChanged;
+        WorkspaceState.OnWorkspaceChanged += HandleStateChanged;
     }
 
-    private void HandleWorkerStateChanged()
+    private void HandleStateChanged()
     {
         _ = InvokeAsync(StateHasChanged);
     }
@@ -116,6 +118,7 @@
 
     public void Dispose()
     {
-        WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
+        WorkerState.OnWorkerStateChanged -= HandleStateChanged;
+        WorkspaceState.OnWorkspaceChanged -= HandleStateChanged;
     }
 }

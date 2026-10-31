@@ -1,4 +1,5 @@
 @page "/inbox"
+@page "/w/{WorkspaceId:int}/inbox"
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Repositories
 @using NightCodeForge.Core.Workflow
@@ -59,6 +60,8 @@
 </div>
 
 @code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
     private List<Question> _pendingQuestions = new();
     private bool _filterCurrentWorkspaceOnly;
     private bool _isLoading = true;
@@ -87,7 +90,19 @@
     protected override async Task OnInitializedAsync()
     {
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
         await LoadQuestionsAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
     }
 
     private void HandleWorkspaceChanged()

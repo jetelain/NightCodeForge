@@ -1,113 +1,352 @@
 @page "/"
+@page "/w/{WorkspaceId:int}"
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Web.Components.Monitoring
+@using NightCodeForge.Web.Components.Workspaces
+@using NightCodeForge.Web.Services
+@inject IWorkspaceRepository WorkspaceRepository
+@inject ITaskRepository TaskRepository
+@inject IDevQueueService DevQueueService
 @inject WorkspaceStateService WorkspaceState
+@inject WorkerStateService WorkerState
+@inject ILogger<Home> Logger
 @implements IDisposable
 
 <PageTitle>Overview - NightCodeForge</PageTitle>
 
-<div style="display: flex; flex-direction: column; gap: 2rem;">
-    @if (WorkspaceState.ActiveWorkspace == null)
+<div class="home-dashboard" style="display: flex; flex-direction: column; gap: 2rem;">
+    <!-- 1. Top Command Center Banner, Question Inbox, Live Telemetry & Setup New Workspace -->
+    <div class="forge-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1.25rem; padding: 1.5rem;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.35rem;">
+                <span style="font-size: 1.75rem;">🔥</span>
+                <h1 style="margin: 0; font-size: 1.65rem; font-weight: 800;">NightCodeForge Console</h1>
+            </div>
+            <p style="margin: 0; color: var(--text-secondary); font-size: 0.92rem;">
+                Workspace-agnostic command center for autonomous engineering, live hardware telemetry, and multi-repo orchestration.
+            </p>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+            <a href="/inbox"
+               id="home-inbox-btn"
+               class="forge-btn @(_snapshot.PendingQuestionCount > 0 ? "forge-btn-warning" : "forge-btn-secondary")"
+               style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.5rem;">
+                <span>📬</span>
+                <span>Question Inbox</span>
+                <span id="home-inbox-count-badge"
+                      class="forge-badge @(_snapshot.PendingQuestionCount > 0 ? "badge-crimson" : "badge-gray")"
+                      style="font-size: 0.75rem;">
+                    @_snapshot.PendingQuestionCount
+                </span>
+            </a>
+            <a href="/monitoring"
+               id="home-live-telemetry-btn"
+               class="forge-btn forge-btn-secondary"
+               style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.5rem;">
+                <span>⚡</span>
+                <span>Live Telemetry</span>
+            </a>
+            <button type="button"
+                    id="home-refresh-btn"
+                    class="forge-btn forge-btn-outline"
+                    @onclick="RefreshDashboardAsync"
+                    disabled="@_isLoading">
+                @(_isLoading ? "⏳ Refreshing..." : "🔄 Refresh")
+            </button>
+            <button type="button"
+                    id="home-setup-workspace-btn"
+                    class="forge-btn forge-btn-primary hero-launch-btn"
+                    @onclick="() => WorkspaceState.RequestOpenWizard()">
+                ➕ Setup New Workspace
+            </button>
+        </div>
+    </div>
+
+    @if (_snapshot.PendingQuestionCount > 0)
     {
-        <WorkspaceEmptyStateHero />
+        <div id="home-pending-questions-banner"
+             class="forge-card"
+             style="padding: 1.15rem 1.5rem; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.4); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <span style="font-size: 1.5rem;">📬</span>
+                <div>
+                    <strong style="color: var(--accent-amber); font-size: 0.98rem;">
+                        @_snapshot.PendingQuestionCount Question(s) Awaiting Human Clarification
+                    </strong>
+                    <div style="font-size: 0.85rem; color: var(--text-secondary);">
+                        One or more autonomous agent tasks are paused waiting for your guidance in the Question Inbox.
+                    </div>
+                </div>
+            </div>
+            <a href="/inbox"
+               id="home-banner-inbox-link"
+               class="forge-btn forge-btn-warning btn-sm"
+               style="text-decoration: none; white-space: nowrap;">
+                📬 Open Question Inbox (@_snapshot.PendingQuestionCount) ➔
+            </a>
+        </div>
     }
 
-    <!-- Welcome Banner & Quick Status -->
-    <div>
-        <h1>NightCodeForge Console</h1>
-        <p>Autonomous AI Software Engineering Forge with Human-in-the-Loop Orchestration.</p>
-    </div>
-
-    <!-- Active Workspace Card -->
-    <div>
-        <!-- Workspace Card -->
-        <div class="forge-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-                <span style="font-size: 0.8rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Current Workspace</span>
-                <span class="forge-badge badge-indigo">Active Circuit</span>
+    <!-- 2. Recent Workspaces (Direct Access to Backlog & Ideation Chat) -->
+    <section id="home-workspaces-section">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                <span style="font-size: 1.35rem;">🏢</span>
+                <h2 style="margin: 0; font-size: 1.25rem; font-weight: 700;">Recent Workspaces</h2>
+                <span class="forge-badge badge-indigo">@_snapshot.RecentWorkspaces.Count</span>
             </div>
-            <div style="font-size: 1.3rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--text-primary);">
-                @(WorkspaceState.ActiveWorkspace?.Name ?? "No workspace selected")
-            </div>
-            <div class="font-mono" style="font-size: 0.82rem; color: var(--text-secondary); word-break: break-all;">
-                @(WorkspaceState.ActiveWorkspace?.RepositoryPath ?? "Choose a workspace from the top-bar selector")
-            </div>
-            @if (WorkspaceState.ActiveWorkspace != null)
-            {
-                <div style="margin-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    <span class="forge-badge badge-teal">Branch: @WorkspaceState.ActiveWorkspace.DefaultBaseBranch</span>
-                    <span class="forge-badge badge-agentic">Mode: @WorkspaceState.ActiveWorkspace.ExecutionMode</span>
-                </div>
-            }
         </div>
-    </div>
 
-    <!-- Quick Navigation Hub -->
-    <div>
-        <h2 style="margin-bottom: 1rem;">Workspace Workflows</h2>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
-            <NavLink href="ideation" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
-                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
-                    <span style="font-size: 1.5rem;">💡</span>
-                    <div style="font-weight: 600; font-size: 1.05rem;">Ideation Chat</div>
-                </div>
-                <p style="font-size: 0.85rem; margin: 0;">Brainstorm and refine architectural features with the Architect Agent.</p>
-            </NavLink>
+        @if (_snapshot.RecentWorkspaces.Count == 0)
+        {
+            <WorkspaceEmptyStateHero />
+        }
+        else
+        {
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1.25rem;">
+                @foreach (var item in _snapshot.RecentWorkspaces)
+                {
+                    var ws = item.Workspace;
+                    <div class="forge-card workspace-summary-card" id="home-workspace-card-@ws.Id" style="display: flex; flex-direction: column; justify-content: space-between; gap: 1rem;">
+                        <div>
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                <div style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary);">
+                                    @ws.Name
+                                </div>
+                                <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
+                                    @if (item.RunningTaskCount > 0)
+                                    {
+                                        <span class="badge-running" style="font-size: 0.72rem;">
+                                            <span class="pulse-dot"></span> @item.RunningTaskCount Running
+                                        </span>
+                                    }
+                                    <span class="forge-badge badge-teal" style="font-size: 0.72rem;">@ws.DefaultBaseBranch</span>
+                                </div>
+                            </div>
 
-            <NavLink href="backlog" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
-                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
-                    <span style="font-size: 1.5rem;">📋</span>
-                    <div style="font-weight: 600; font-size: 1.05rem;">Backlog &amp; Visual DAG</div>
-                </div>
-                <p style="font-size: 0.85rem; margin: 0;">Visualize task graphs, pipeline topological stages, and task gates.</p>
-            </NavLink>
+                            <div class="font-mono" style="font-size: 0.78rem; color: var(--text-secondary); word-break: break-all; margin-bottom: 0.75rem;">
+                                @ws.RepositoryPath
+                            </div>
 
-            <NavLink href="monitoring" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
-                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
-                    <span style="font-size: 1.5rem;">⚡</span>
-                    <div style="font-weight: 600; font-size: 1.05rem;">Live Telemetry</div>
-                </div>
-                <p style="font-size: 0.85rem; margin: 0;">Real-time GPU gauges, streaming agent thoughts, and tool dispatch logs.</p>
-            </NavLink>
+                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                <span class="forge-badge badge-gray" style="font-size: 0.75rem;">
+                                    Open: @item.OpenTaskCount
+                                </span>
+                                <span class="forge-badge badge-gray" style="font-size: 0.75rem;">
+                                    Suggested: @item.SuggestedTaskCount
+                                </span>
+                                @if (item.PendingQuestionCount > 0)
+                                {
+                                    <a href="@item.InboxUrl"
+                                       id="home-ws-inbox-@ws.Id"
+                                       class="forge-badge badge-crimson"
+                                       style="font-size: 0.75rem; text-decoration: none;">
+                                        📬 Questions: @item.PendingQuestionCount
+                                    </a>
+                                }
+                                else if (item.WaitingOrReviewTaskCount > 0)
+                                {
+                                    <span class="forge-badge badge-amber" style="font-size: 0.75rem;">
+                                        Attention: @item.WaitingOrReviewTaskCount
+                                    </span>
+                                }
+                            </div>
+                        </div>
 
-            <NavLink href="inbox" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
-                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
-                    <span style="font-size: 1.5rem;">📬</span>
-                    <div style="font-weight: 600; font-size: 1.05rem;">Question Inbox</div>
-                </div>
-                <p style="font-size: 0.85rem; margin: 0;">Human-in-the-loop decisions, approval gates, and clarifications.</p>
-            </NavLink>
+                        <div style="display: flex; gap: 0.65rem; padding-top: 0.75rem; border-top: 1px solid var(--border-subtle);">
+                            <a href="@item.BacklogUrl"
+                               id="home-ws-backlog-@ws.Id"
+                               class="forge-btn forge-btn-primary"
+                               style="flex: 1; text-align: center; text-decoration: none; font-size: 0.85rem; padding: 0.45rem 0.75rem;">
+                                📋 Backlog
+                            </a>
+                            <a href="@item.IdeationUrl"
+                               id="home-ws-ideation-@ws.Id"
+                               class="forge-btn forge-btn-secondary"
+                               style="flex: 1; text-align: center; text-decoration: none; font-size: 0.85rem; padding: 0.45rem 0.75rem;">
+                                💡 Ideation Chat
+                            </a>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </section>
 
-            <NavLink href="review" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
-                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
-                    <span style="font-size: 1.5rem;">🔍</span>
-                    <div style="font-weight: 600; font-size: 1.05rem;">Review Room</div>
+    <!-- 3. Running Tasks & Next Scheduled Tasks (Limit 5) -->
+    <section id="home-scheduled-tasks-section" class="forge-card" style="padding: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                <span style="font-size: 1.35rem;">⏱️</span>
+                <div>
+                    <h2 style="margin: 0; font-size: 1.15rem; font-weight: 700;">Running &amp; Next Scheduled Tasks</h2>
+                    <span style="font-size: 0.8rem; color: var(--text-muted);">
+                        Showing up to @HomeDashboardBuilder.MaxScheduledTasks active and upcoming tasks across all workspaces
+                    </span>
                 </div>
-                <p style="font-size: 0.85rem; margin: 0;">Side-by-side git diff inspection, test reports, and squash merges.</p>
-            </NavLink>
-
-            <NavLink href="settings" class="forge-card" style="display: block; text-decoration: none; color: inherit;">
-                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
-                    <span style="font-size: 1.5rem;">⚙️</span>
-                    <div style="font-weight: 600; font-size: 1.05rem;">Settings</div>
-                </div>
-                <p style="font-size: 0.85rem; margin: 0;">Configure LLM inference models, agent profiles, workflows, and host SDKs.</p>
-            </NavLink>
+            </div>
+            <a href="/dev-queue"
+               id="home-open-devqueue-link"
+               class="forge-btn forge-btn-secondary"
+               style="font-size: 0.82rem; padding: 0.35rem 0.85rem; text-decoration: none;">
+                ⏱️ Open Dev-Queue &amp; Locks ➔
+            </a>
         </div>
-    </div>
+
+        @if (_snapshot.RunningAndNextTasks.Count == 0)
+        {
+            <div id="home-no-scheduled-tasks" style="padding: 1.75rem; text-align: center; color: var(--text-muted); background: var(--bg-surface); border-radius: var(--radius-md); font-size: 0.9rem;">
+                No running or queued tasks right now. Promote a task from any workspace backlog to start execution.
+            </div>
+        }
+        else
+        {
+            <div style="display: flex; flex-direction: column; gap: 0.65rem;">
+                @foreach (var task in _snapshot.RunningAndNextTasks)
+                {
+                    <div class="scheduled-task-row"
+                         id="home-scheduled-task-@task.TaskId"
+                         style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; padding: 0.85rem 1rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);">
+                        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; min-width: 0; flex: 1;">
+                            @if (task.IsRunning)
+                            {
+                                <span class="badge-running" style="font-size: 0.75rem;">
+                                    <span class="pulse-dot"></span> Running
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="forge-badge badge-indigo font-mono" style="font-size: 0.75rem;">
+                                    Next · @task.QueueLabel
+                                </span>
+                            }
+
+                            <span class="forge-badge badge-priority-@task.Priority font-mono" style="font-size: 0.75rem;">
+                                P@(task.Priority)
+                            </span>
+
+                            <a href="@task.TaskDetailUrl"
+                               style="font-weight: 700; color: var(--text-primary); text-decoration: none; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                #@task.TaskId: @task.Title
+                            </a>
+
+                            <span class="forge-badge badge-teal" style="font-size: 0.75rem;">
+                                🏢 @task.WorkspaceName
+                            </span>
+
+                            <span class="forge-badge badge-purple font-mono" style="font-size: 0.75rem;">
+                                @task.StageId
+                            </span>
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <a href="@task.InspectorUrl"
+                               class="forge-btn forge-btn-secondary btn-xs"
+                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                🔍 Inspector
+                            </a>
+                            <a href="@task.TaskDetailUrl"
+                               class="forge-btn forge-btn-outline btn-xs"
+                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                📋 Details
+                            </a>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
+    <!-- 4. Workspace-Independent Live Telemetry -->
+    <section id="home-telemetry-section">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.75rem;">
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                <span style="font-size: 1.35rem;">⚡</span>
+                <h2 style="margin: 0; font-size: 1.25rem; font-weight: 700;">Live System Telemetry</h2>
+                <span class="forge-badge badge-teal" style="font-size: 0.75rem;">Global / Workspace-Independent</span>
+            </div>
+            <a href="/monitoring"
+               id="home-full-telemetry-link"
+               class="forge-btn forge-btn-secondary"
+               style="font-size: 0.82rem; padding: 0.35rem 0.85rem; text-decoration: none;">
+                📊 Open Full Live Telemetry &amp; VRAM Monitor ➔
+            </a>
+        </div>
+
+        <ActiveOperationsHero />
+    </section>
 </div>
 
 @code {
-    protected override void OnInitialized()
+    [Parameter] public int? WorkspaceId { get; set; }
+
+    private HomeDashboardSnapshot _snapshot = new(
+        Array.Empty<RecentWorkspaceSummary>(),
+        Array.Empty<HomeScheduledTaskItem>(),
+        0,
+        0);
+    private bool _isLoading;
+    private bool _disposed;
+
+    protected override async Task OnInitializedAsync()
     {
-        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
+        WorkspaceState.OnWorkspaceChanged += HandleStateChanged;
+        WorkerState.OnWorkerStateChanged += HandleStateChanged;
+
+        await RefreshDashboardAsync();
     }
 
-    private void HandleWorkspaceChanged()
+    protected override void OnParametersSet()
     {
-        InvokeAsync(StateHasChanged);
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+    }
+
+    private async Task RefreshDashboardAsync()
+    {
+        if (_isLoading || _disposed) return;
+        _isLoading = true;
+
+        try
+        {
+            _snapshot = await HomeDashboardBuilder.BuildSnapshotAsync(
+                WorkspaceRepository,
+                TaskRepository,
+                DevQueueService,
+                Logger);
+            WorkerState.UpdatePendingQuestions(_snapshot.PendingQuestionCount);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void HandleStateChanged()
+    {
+        if (_disposed) return;
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            await RefreshDashboardAsync();
+            StateHasChanged();
+        });
     }
 
     public void Dispose()
     {
-        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+        _disposed = true;
+        WorkspaceState.OnWorkspaceChanged -= HandleStateChanged;
+        WorkerState.OnWorkerStateChanged -= HandleStateChanged;
     }
 }

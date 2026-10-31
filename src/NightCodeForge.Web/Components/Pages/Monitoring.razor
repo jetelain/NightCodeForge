@@ -1,11 +1,14 @@
 @page "/monitoring"
 @page "/monitoring/{TaskId:int?}"
+@page "/w/{WorkspaceId:int}/monitoring"
+@page "/w/{WorkspaceId:int}/monitoring/{TaskId:int?}"
 @implements IAsyncDisposable
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Components.Monitoring
 @using NightCodeForge.Web.Services
 @inject OperationsTelemetryUiService TelemetryUi
 @inject OrchestratorHubClientConnection HubClient
+@inject WorkspaceStateService WorkspaceState
 @inject NavigationManager Navigation
 @inject Microsoft.Extensions.Logging.ILogger<Monitoring> Logger
 
@@ -39,7 +42,7 @@
         }
 
         <!-- Link to Task-Centric Inspector -->
-        <a href="/inspector" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; text-decoration: none;">
+        <a href="@WorkspaceState.GetPath("inspector")" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.65rem; font-size: 0.78rem; text-decoration: none;">
             🔎 Task Inspector
         </a>
     </div>
@@ -83,6 +86,7 @@
 <ShellCommandOutputModal Command="TelemetryUi.SelectedShellCommand" OnClose="() => TelemetryUi.SelectedShellCommand = null" />
 
 @code {
+    [Parameter] public int? WorkspaceId { get; set; }
     [Parameter] public int? TaskId { get; set; }
 
     private string _activeTab = "llm";
@@ -102,11 +106,16 @@
         }
     }
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
     {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
         if (TaskId.HasValue && TaskId.Value > 0)
         {
-            Navigation.NavigateTo($"/inspector/{TaskId.Value}", replace: true);
+            Navigation.NavigateTo(WorkspaceUrlHelper.BuildPath(WorkspaceId ?? WorkspaceState.ActiveWorkspaceId, $"inspector/{TaskId.Value}"), replace: true);
         }
     }
 

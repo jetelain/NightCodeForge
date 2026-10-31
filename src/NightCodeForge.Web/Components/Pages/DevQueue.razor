@@ -1,9 +1,11 @@
 @page "/dev-queue"
+@page "/w/{WorkspaceId:int}/dev-queue"
 @namespace NightCodeForge.Web.Components.Pages
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Web.Components.DevQueue
 @using NightCodeForge.Core.Execution
 @inject IDevQueueService DevQueueService
+@inject WorkspaceStateService WorkspaceState
 @inject ToastService ToastService
 @inject IBackgroundTaskRunner BackgroundTaskRunner
 @inject ILogger<DevQueue> Logger
@@ -141,6 +143,8 @@
 </div>
 
 @code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
     private List<QueuedJobItem> _urgentJobs = new();
     private List<QueuedJobItem> _codeReviewJobs = new();
     private List<QueuedJobItem> _implementationJobs = new();
@@ -171,8 +175,21 @@
 
     protected override async Task OnInitializedAsync()
     {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
         await RefreshQueueStateAsync();
         StartAutoRefresh();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
     }
 
     private void StartAutoRefresh()

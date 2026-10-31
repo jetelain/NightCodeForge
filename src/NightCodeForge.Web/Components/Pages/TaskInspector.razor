@@ -1,5 +1,7 @@
 @page "/inspector"
 @page "/inspector/{TaskId:int?}"
+@page "/w/{WorkspaceId:int}/inspector"
+@page "/w/{WorkspaceId:int}/inspector/{TaskId:int?}"
 @implements IDisposable
 @using NightCodeForge.Web.Services
 @inject ITaskRepository TaskRepository
@@ -26,11 +28,11 @@
     <div style="display: flex; align-items: center; gap: 0.75rem;">
         @if (_inspectedTaskId.HasValue && _inspectedTaskId.Value > 0)
         {
-            <a href="/tasks/@_inspectedTaskId.Value" class="forge-btn forge-btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem; text-decoration: none;">
+            <a href="@WorkspaceState.GetPath($"tasks/{_inspectedTaskId.Value}")" class="forge-btn forge-btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem; text-decoration: none;">
                 📋 Task Details
             </a>
         }
-        <a href="/monitoring" class="forge-btn forge-btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem; text-decoration: none;">
+        <a href="@WorkspaceState.GetPath("monitoring")" class="forge-btn forge-btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem; text-decoration: none;">
             ⚡ Live Telemetry
         </a>
         <span class="forge-badge badge-indigo" style="font-size: 0.78rem;">
@@ -86,13 +88,14 @@ else if (!_isLoadingTasks)
         <p style="font-size: 0.85rem; margin: 0 auto 1.25rem auto; max-width: 480px;">
             No executed tasks found. Once a task begins execution in the DevQueue or reaches a stage checkpoint, it will be inspectable here.
         </p>
-        <a href="/ideation" class="forge-btn forge-btn-primary" style="padding: 0.4rem 0.9rem; font-size: 0.82rem; text-decoration: none;">
+        <a href="@WorkspaceState.GetPath("ideation")" class="forge-btn forge-btn-primary" style="padding: 0.4rem 0.9rem; font-size: 0.82rem; text-decoration: none;">
             💡 Start Ideation Chat
         </a>
     </div>
 }
 
 @code {
+    [Parameter] public int? WorkspaceId { get; set; }
     [Parameter] public int? TaskId { get; set; }
 
     private int? _inspectedTaskId;
@@ -115,6 +118,29 @@ else if (!_isLoadingTasks)
 
     protected override async Task OnInitializedAsync()
     {
+        if (TaskId.HasValue && TaskId.Value > 0)
+        {
+            var initialTask = await TaskRepository.GetByIdAsync(TaskId.Value);
+            if (initialTask != null && initialTask.WorkspaceId > 0)
+            {
+                WorkspaceState.TryActivateWorkspaceById(initialTask.WorkspaceId);
+                if (WorkspaceId.HasValue && WorkspaceId.Value != initialTask.WorkspaceId)
+                {
+                    Navigation.NavigateTo(
+                        WorkspaceUrlHelper.BuildPath(initialTask.WorkspaceId, $"inspector/{TaskId.Value}"),
+                        replace: true);
+                }
+            }
+            else if (WorkspaceId.HasValue)
+            {
+                WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+            }
+        }
+        else if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
         WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
         TelemetryService.OnActiveTaskChanged += HandleActiveTaskChanged;
@@ -140,13 +166,34 @@ else if (!_isLoadingTasks)
 
     protected override async Task OnParametersSetAsync()
     {
+        if (WorkspaceId.HasValue && (!TaskId.HasValue || TaskId.Value <= 0))
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
         if (TaskId.HasValue && TaskId.Value > 0 && TaskId.Value != _inspectedTaskId)
         {
             _inspectedTaskId = TaskId.Value;
+            var task = await TaskRepository.GetByIdAsync(TaskId.Value);
+            if (task != null && task.WorkspaceId > 0)
+            {
+                WorkspaceState.TryActivateWorkspaceById(task.WorkspaceId);
+                if (WorkspaceId.HasValue && WorkspaceId.Value != task.WorkspaceId)
+                {
+                    Navigation.NavigateTo(
+                        WorkspaceUrlHelper.BuildPath(task.WorkspaceId, $"inspector/{TaskId.Value}"),
+                        replace: true);
+                }
+            }
             if (!_availableTasks.Any(t => t.Id == _inspectedTaskId.Value))
             {
                 await LoadAvailableTasksAsync();
             }
+            StateHasChanged();
+        }
+        else if (!TaskId.HasValue && _inspectedTaskId.HasValue && !_availableTasks.Any(t => t.Id == _inspectedTaskId.Value))
+        {
+            ResolveInitialInspectedTask();
             StateHasChanged();
         }
     }
@@ -212,7 +259,7 @@ else if (!_isLoadingTasks)
         if (int.TryParse(e.Value?.ToString(), out var selectedId) && selectedId > 0)
         {
             _inspectedTaskId = selectedId;
-            Navigation.NavigateTo($"/inspector/{selectedId}", replace: false);
+            Navigation.NavigateTo(WorkspaceState.GetPath($"inspector/{selectedId}"), replace: false);
             StateHasChanged();
         }
     }
@@ -223,7 +270,7 @@ else if (!_isLoadingTasks)
         {
             var activeId = EffectiveActiveTaskId.Value;
             _inspectedTaskId = activeId;
-            Navigation.NavigateTo($"/inspector/{activeId}", replace: false);
+            Navigation.NavigateTo(WorkspaceState.GetPath($"inspector/{activeId}"), replace: false);
             StateHasChanged();
         }
     }
@@ -262,11 +309,11 @@ else if (!_isLoadingTasks)
 
         if (_inspectedTaskId.HasValue)
         {
-            Navigation.NavigateTo($"/inspector/{_inspectedTaskId.Value}", replace: true);
+            Navigation.NavigateTo(WorkspaceState.GetPath($"inspector/{_inspectedTaskId.Value}"), replace: true);
         }
         else
         {
-            Navigation.NavigateTo("/inspector", replace: true);
+            Navigation.NavigateTo(WorkspaceState.GetPath("inspector"), replace: true);
         }
     }
 

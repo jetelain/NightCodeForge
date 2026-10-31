@@ -1,5 +1,7 @@
 @page "/review"
 @page "/review/{TaskId:int}"
+@page "/w/{WorkspaceId:int}/review"
+@page "/w/{WorkspaceId:int}/review/{TaskId:int}"
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Components.Review
@@ -28,7 +30,7 @@
             <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">🔍</div>
             <h3>No Tasks Awaiting Review</h3>
             <p class="text-secondary mb-3">Tasks in <code>Ready</code> status will appear here for maintainer code review and merge gate resolution.</p>
-            <a href="/backlog" class="btn btn-secondary">Go to Backlog</a>
+            <a href="@WorkspaceState.GetPath("backlog")" class="btn btn-secondary">Go to Backlog</a>
         </div>
     }
     else
@@ -62,7 +64,7 @@
                         </div>
                     </div>
                 </div>
-                <a href="/inspector/@_snapshot.TaskId" class="btn btn-sm btn-primary" style="white-space: nowrap;">
+                <a href="@WorkspaceState.GetPath($"inspector/{_snapshot.TaskId}")" class="btn btn-sm btn-primary" style="white-space: nowrap;">
                     🔍 View in Inspector
                 </a>
             </div>
@@ -99,10 +101,10 @@
                     </div>
                 </div>
                 <div class="review-actions d-flex align-items-center gap-2">
-                    <a href="/inspector/@_snapshot.TaskId" class="btn btn-secondary btn-sm" id="btn-header-inspector" title="Open Task Inspector">
+                    <a href="@WorkspaceState.GetPath($"inspector/{_snapshot.TaskId}")" class="btn btn-secondary btn-sm" id="btn-header-inspector" title="Open Task Inspector">
                         🔍 Task Inspector
                     </a>
-                    <a href="/tasks/@_snapshot.TaskId" class="btn btn-secondary btn-sm" id="btn-header-task-details" title="Open Task Details">
+                    <a href="@WorkspaceState.GetPath($"tasks/{_snapshot.TaskId}")" class="btn btn-secondary btn-sm" id="btn-header-task-details" title="Open Task Details">
                         📄 Task Details
                     </a>
                     @if (_snapshot.MergeMode == MergeMode.Automatic && _snapshot.Status == TaskOverallStatus.Closed)
@@ -175,6 +177,7 @@
 }
 
 @code {
+    [Parameter] public int? WorkspaceId { get; set; }
     [Parameter] public int? TaskId { get; set; }
 
     private TaskReviewSnapshot? _snapshot;
@@ -202,10 +205,10 @@
 
     private void HandleWorkspaceChanged()
     {
-        if (_disposed) return;
+        if (_disposed || _isLoading) return;
         InvokeAsync(async () =>
         {
-            if (_disposed) return;
+            if (_disposed || _isLoading) return;
             await LoadReviewDataAsync();
             if (!_disposed) StateHasChanged();
         });
@@ -213,6 +216,30 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        _isLoading = true;
+        if (TaskId.HasValue && TaskId.Value > 0)
+        {
+            var routeTask = await TaskRepository.GetByIdAsync(TaskId.Value);
+            if (routeTask != null && routeTask.WorkspaceId > 0)
+            {
+                WorkspaceState.TryActivateWorkspaceById(routeTask.WorkspaceId);
+                if (WorkspaceId.HasValue && WorkspaceId.Value != routeTask.WorkspaceId)
+                {
+                    NavigationManager.NavigateTo(
+                        WorkspaceUrlHelper.BuildPath(routeTask.WorkspaceId, $"review/{TaskId.Value}"),
+                        replace: true);
+                }
+            }
+            else if (WorkspaceId.HasValue)
+            {
+                WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+            }
+        }
+        else if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
         await LoadReviewDataAsync();
     }
 
@@ -226,7 +253,19 @@
 
             if (TaskId.HasValue)
             {
-                _snapshot = await TaskReviewService.GetSnapshotAsync(TaskId.Value);
+                var task = await TaskRepository.GetByIdAsync(TaskId.Value);
+                if (task != null && (!workspaceId.HasValue || task.WorkspaceId == workspaceId.Value || task.WorkspaceId == 0))
+                {
+                    _snapshot = await TaskReviewService.GetSnapshotAsync(TaskId.Value);
+                }
+                else if (_pendingReviews.Count > 0)
+                {
+                    _snapshot = _pendingReviews[0];
+                }
+                else
+                {
+                    _snapshot = null;
+                }
             }
             else if (_pendingReviews.Count > 0)
             {
@@ -262,7 +301,7 @@
 
     private void SwitchTask(int taskId)
     {
-        NavigationManager.NavigateTo($"/review/{taskId}");
+        NavigationManager.NavigateTo(WorkspaceState.GetPath($"review/{taskId}"));
     }
 
     private void OpenChangeRequestModal()

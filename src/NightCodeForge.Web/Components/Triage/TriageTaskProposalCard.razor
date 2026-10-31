@@ -1,5 +1,6 @@
 @namespace NightCodeForge.Web.Components.Triage
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Web.Services
 
 <div class="task-card-preview" id="triage-task-proposal-@Task.Id">
     <div class="task-proposal-header">
@@ -11,7 +12,7 @@
             <span class="forge-badge badge-priority-@Task.Priority" title="@TaskPriority.GetLabel(Task.Priority)">
                 P@(Task.Priority)
             </span>
-            <a href="/backlog" class="forge-btn forge-btn-outline btn-xs" title="Open Backlog Kanban">
+            <a href="@WorkspaceUrlHelper.BuildPath(Task.WorkspaceId > 0 ? Task.WorkspaceId : null, "backlog")" class="forge-btn forge-btn-outline btn-xs" title="Open Backlog Kanban">
                 Open in Backlog ➔
             </a>
         </div>

@@ -359,7 +359,7 @@
             WorkspaceState.SetActiveWorkspace(_createdWorkspace);
         }
         Close();
-        Navigation.NavigateTo("/");
+        Navigation.NavigateTo(WorkspaceState.GetPath(""));
     }
 
     public void Dispose()

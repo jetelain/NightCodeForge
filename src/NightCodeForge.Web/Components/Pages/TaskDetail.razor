@@ -1,4 +1,5 @@
 @page "/tasks/{TaskId:int}"
+@page "/w/{WorkspaceId:int}/tasks/{TaskId:int}"
 @namespace NightCodeForge.Web.Components.Pages
 @using NightCodeForge.Core.Dependencies
 @using NightCodeForge.Core.Domain
@@ -40,7 +41,7 @@
             <p style="color: var(--text-secondary); font-size: 0.9rem; max-width: 480px; margin: 0 auto 1.5rem auto;">
                 The requested task does not exist or may have been removed. Verify the task ID and workspace.
             </p>
-            <a href="/backlog" class="forge-btn forge-btn-primary" style="text-decoration: none; padding: 0.45rem 1rem;">
+            <a href="@WorkspaceState.GetPath("backlog")" class="forge-btn forge-btn-primary" style="text-decoration: none; padding: 0.45rem 1rem;">
                 ← Return to Backlog &amp; DAG
             </a>
         </div>
@@ -50,7 +51,7 @@
         <!-- Breadcrumb & Quick Actions Header -->
         <div class="task-detail-header">
             <div class="header-breadcrumb" style="margin-bottom: 0.5rem;">
-                <a href="/backlog" class="text-secondary font-mono" style="text-decoration: none; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.35rem;">
+                <a href="@WorkspaceState.GetPath("backlog")" class="text-secondary font-mono" style="text-decoration: none; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.35rem;">
                     <span>←</span> <span>Backlog &amp; DAG</span>
                 </a>
                 <span class="text-muted" style="margin: 0 0.5rem;">/</span>
@@ -107,7 +108,7 @@
                 <div class="header-action-bar" style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
                     @if (_task.Status == TaskOverallStatus.Ready)
                     {
-                        <a href="/review/@_task.Id" class="forge-btn forge-btn-primary" id="btn-open-review-room" style="text-decoration: none;">
+                        <a href="@WorkspaceState.GetPath($"review/{_task.Id}")" class="forge-btn forge-btn-primary" id="btn-open-review-room" style="text-decoration: none;">
                             🔍 Open in Review Room
                         </a>
                     }
@@ -123,7 +124,7 @@
                             🗑️ Reject Task
                         </button>
                     }
-                    <a href="/inspector/@_task.Id" class="forge-btn forge-btn-secondary" style="text-decoration: none;" id="btn-inspect-task">
+                    <a href="@WorkspaceState.GetPath($"inspector/{_task.Id}")" class="forge-btn forge-btn-secondary" style="text-decoration: none;" id="btn-inspect-task">
                         🔍 Live Inspector
                     </a>
                     <button type="button" class="forge-btn forge-btn-secondary" @onclick="() => _showDepModal = true" id="btn-link-dependencies">
@@ -148,7 +149,7 @@
                             </div>
                         </div>
                     </div>
-                    <a href="/inspector/@_task.Id" class="forge-btn forge-btn-primary btn-sm" style="text-decoration: none; padding: 0.35rem 0.8rem; font-size: 0.82rem;">
+                    <a href="@WorkspaceState.GetPath($"inspector/{_task.Id}")" class="forge-btn forge-btn-primary btn-sm" style="text-decoration: none; padding: 0.35rem 0.8rem; font-size: 0.82rem;">
                         Answer Questions &amp; Resume →
                     </a>
                 </div>
@@ -305,7 +306,7 @@
                             <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">
                                 Autonomous Execution Pipeline Records
                             </h3>
-                            <a href="/inspector/@_task.Id" class="forge-btn forge-btn-secondary btn-sm" style="text-decoration: none;">
+                            <a href="@WorkspaceState.GetPath($"inspector/{_task.Id}")" class="forge-btn forge-btn-secondary btn-sm" style="text-decoration: none;">
                                 🔍 Full Conversation Inspector →
                             </a>
                         </div>
@@ -367,7 +368,7 @@
                                 </h3>
                                 @if (_task.Status == TaskOverallStatus.Ready)
                                 {
-                                    <a href="/review/@_task.Id" class="forge-btn forge-btn-primary btn-xs" style="text-decoration: none; padding: 0.2rem 0.6rem; font-size: 0.78rem;">
+                                    <a href="@WorkspaceState.GetPath($"review/{_task.Id}")" class="forge-btn forge-btn-primary btn-xs" style="text-decoration: none; padding: 0.2rem 0.6rem; font-size: 0.78rem;">
                                         🔍 Full Review Room
                                     </a>
                                 }
@@ -530,7 +531,7 @@
                             {
                                 var prereq = _allWorkspaceTasks.FirstOrDefault(t => t.Id == prereqId);
                                 var isClosed = prereq?.Status == TaskOverallStatus.Closed;
-                                <a href="/tasks/@prereqId"
+                                <a href="@WorkspaceState.GetPath($"tasks/{prereqId}")"
                                    class="dependency-item @(isClosed ? "satisfied" : "blocking")"
                                    style="text-decoration: none; display: flex; align-items: center; justify-content: space-between; padding: 0.45rem 0.65rem; border-radius: var(--radius-sm); border: 1px solid @(isClosed ? "rgba(16, 185, 129, 0.3)" : "rgba(245, 158, 11, 0.3)"); background: var(--bg-input);">
                                     <div style="display: flex; align-items: center; gap: 0.4rem; min-width: 0;">
@@ -564,7 +565,7 @@
                             @foreach (var depId in _dependentIds)
                             {
                                 var dep = _allWorkspaceTasks.FirstOrDefault(t => t.Id == depId);
-                                <a href="/tasks/@depId"
+                                <a href="@WorkspaceState.GetPath($"tasks/{depId}")"
                                    class="dependency-item neutral"
                                    style="text-decoration: none; display: flex; align-items: center; justify-content: space-between; padding: 0.45rem 0.65rem; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); background: var(--bg-input);">
                                     <div style="display: flex; align-items: center; gap: 0.4rem; min-width: 0;">
@@ -637,6 +638,7 @@
 </div>
 
 @code {
+    [Parameter] public int? WorkspaceId { get; set; }
     [Parameter] public int TaskId { get; set; }
 
     private ForgeTask? _task;
@@ -679,6 +681,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
         if (HubClient != null)
         {
             HubClient.OnStageTransitionReceived += HandleStageTransition;
@@ -690,6 +693,23 @@
             {
                 Logger.LogWarning(ex, "Hub connection notice: {Message}", ex.Message);
             }
+        }
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        if (_disposed || _isLoading) return;
+        if (_task != null &&
+            WorkspaceState.ActiveWorkspaceId.HasValue &&
+            WorkspaceState.ActiveWorkspaceId.Value != _task.WorkspaceId)
+        {
+            InvokeAsync(() =>
+            {
+                if (!_disposed)
+                {
+                    Navigation.NavigateTo(WorkspaceState.GetPath("backlog"));
+                }
+            });
         }
     }
 
@@ -714,9 +734,16 @@
             if (_task != null)
             {
                 _workspace = await WorkspaceRepository.GetByIdAsync(_task.WorkspaceId);
-                if (_workspace != null && WorkspaceState.ActiveWorkspace?.Id != _workspace.Id)
+                if (_workspace != null)
                 {
-                    WorkspaceState.SetActiveWorkspace(_workspace);
+                    if (WorkspaceState.ActiveWorkspace?.Id != _workspace.Id)
+                    {
+                        WorkspaceState.SetActiveWorkspace(_workspace);
+                    }
+                    if (WorkspaceId.HasValue && WorkspaceId.Value != _workspace.Id)
+                    {
+                        Navigation.NavigateTo(WorkspaceUrlHelper.BuildPath(_workspace.Id, $"tasks/{_task.Id}"), replace: true);
+                    }
                 }
                 var workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(_task.WorkspaceId);
                 _allWorkspaceTasks = workspaceTasks.ToList();
@@ -961,6 +988,7 @@
     public void Dispose()
     {
         _disposed = true;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
         if (HubClient != null)
         {
             HubClient.OnStageTransitionReceived -= HandleStageTransition;

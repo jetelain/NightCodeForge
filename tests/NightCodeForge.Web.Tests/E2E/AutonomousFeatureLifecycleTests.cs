@@ -156,7 +156,7 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
         // =============================================================
         // Step 2: Use Ideation to Plan a Task
         // =============================================================
-        await _page.ClickAsync("a[href='ideation']");
+        await _page.ClickAsync("a[href$='ideation']");
         await _page.WaitForSelectorAsync("textarea.chat-textarea", new PageWaitForSelectorOptions { Timeout = 15000 });
 
         const string prompt = "Add a Multiply(int a, int b) method to Calculator with full XML documentation and corresponding unit tests in CalculatorTests.cs.";
@@ -175,7 +175,7 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
         // =============================================================
         // Step 3: Validate the Task (Auto-Merge)
         // =============================================================
-        await _page.ClickAsync("a[href='backlog']");
+        await _page.ClickAsync("a[href$='backlog']");
         await _page.WaitForSelectorAsync(".kanban-board-container, .kanban-board", new PageWaitForSelectorOptions { Timeout = 15000 });
 
         // Locate suggested task card & trigger promotion modal
@@ -285,7 +285,8 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
                     _output.WriteLine(msg);
                     Console.WriteLine(msg);
 
-                    await _page.GotoAsync($"{_baseUrl}/inbox", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
+                    var wsPrefix = _provisionedWorkspaceId.HasValue ? $"/w/{_provisionedWorkspaceId.Value}" : "";
+                    await _page.GotoAsync($"{_baseUrl}{wsPrefix}/inbox", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
                     await _page.WaitForSelectorAsync(".question-card, #inbox-empty-state", new PageWaitForSelectorOptions { Timeout = 15000 });
 
                     var questionCards = _page.Locator(".question-card");
@@ -309,7 +310,7 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
                         }
                     }
 
-                    await _page.GotoAsync($"{_baseUrl}/backlog", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
+                    await _page.GotoAsync($"{_baseUrl}{wsPrefix}/backlog", new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
                     await _page.WaitForSelectorAsync(".kanban-board-container, .kanban-board", new PageWaitForSelectorOptions { Timeout = 15000 });
                 }
             }

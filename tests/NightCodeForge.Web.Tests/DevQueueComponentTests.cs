@@ -21,6 +21,7 @@ public class DevQueueComponentTests : BunitContext
         _toastService = TestServices.CreateToastService();
 
         Services.AddSingleton<IDevQueueService>(_queueService);
+        Services.AddSingleton(new WorkspaceStateService());
         Services.AddSingleton(_toastService);
         Services.AddSingleton(TestServices.CreateOperationsControlService());
         Services.AddSingleton<IBackgroundTaskRunner>(new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance));

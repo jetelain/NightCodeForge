@@ -1,4 +1,5 @@
 @page "/settings"
+@page "/w/{WorkspaceId:int}/settings"
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Web.Components.Settings
@@ -175,6 +176,8 @@ else
 }
 
 @code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
     public enum SettingsScope { Global, Workspace }
     private SettingsScope _activeScope = SettingsScope.Global;
     private string _activeGlobalTab = "optimizations";
@@ -185,7 +188,19 @@ else
 
     protected override void OnInitialized()
     {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
     }
 
     private void HandleWorkspaceChanged()

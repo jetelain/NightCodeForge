@@ -1,4 +1,5 @@
 @page "/backlog"
+@page "/w/{WorkspaceId:int}/backlog"
 @namespace NightCodeForge.Web.Components.Pages
 @using NightCodeForge.Core.Dependencies
 @using NightCodeForge.Core.Domain
@@ -69,11 +70,11 @@
                     </button>
                 </div>
 
-                <a href="/tasks/new" class="forge-btn forge-btn-primary" id="btn-create-task" style="text-decoration: none;">
+                <a href="@WorkspaceState.GetPath("tasks/new")" class="forge-btn forge-btn-primary" id="btn-create-task" style="text-decoration: none;">
                     ➕ New Task
                 </a>
 
-                <a href="/ideation" class="forge-btn forge-btn-secondary">
+                <a href="@WorkspaceState.GetPath("ideation")" class="forge-btn forge-btn-secondary">
                     💡 Ideate / Propose Tasks
                 </a>
 
@@ -266,6 +267,8 @@
 </div>
 
 @code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
     private enum BacklogViewMode { Kanban, Dag }
 
     public enum PriorityFilterMode
@@ -321,7 +324,20 @@
             Logger.LogWarning(ex, "Hub connection notice: {Message}", ex.Message);
         }
 
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
         await LoadDataAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
     }
 
     private void HandleWorkspaceChanged()
@@ -592,12 +608,12 @@
 
     private void OpenTask(ForgeTask task)
     {
-        Navigation.NavigateTo($"/tasks/{task.Id}");
+        Navigation.NavigateTo(WorkspaceState.GetPath($"tasks/{task.Id}"));
     }
 
     private void OpenInspector(ForgeTask task)
     {
-        Navigation.NavigateTo($"/inspector/{task.Id}");
+        Navigation.NavigateTo(WorkspaceState.GetPath($"inspector/{task.Id}"));
     }
 
     private void OpenPromoteModal(ForgeTask task)

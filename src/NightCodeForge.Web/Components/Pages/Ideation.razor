@@ -1,4 +1,5 @@
 @page "/ideation"
+@page "/w/{WorkspaceId:int}/ideation"
 @inject IIdeationService IdeationService
 @inject WorkspaceStateService WorkspaceState
 @inject ITaskRepository TaskRepository
@@ -488,6 +489,8 @@
 </div>
 
 @code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
     private string _userInput = string.Empty;
     private bool _showCustomPromptConfig;
     private CancellationTokenSource? _cts;
@@ -499,7 +502,20 @@
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
         Session.OnChange += HandleSessionChanged;
 
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
         await ReloadWorkspaceContextAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
