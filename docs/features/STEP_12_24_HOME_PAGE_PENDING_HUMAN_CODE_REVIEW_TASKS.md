@@ -85,4 +85,7 @@ Currently on the Home page ([`Home.razor`](../../src/NightCodeForge.Web/Componen
   - `HomeDashboardBuilder.BuildSnapshotAsync` populates `PendingReviewTasks`, `PendingReviewCount`, and per-workspace `PendingReviewCount` / `ReviewUrl` for tasks with `Status == TaskOverallStatus.Ready && HasExecutionRun == true` (and excludes `Ready` tasks where `HasExecutionRun == false`).
   - `PendingReviewTasks` are ordered by priority ascending, then `UpdatedAt` descending, and accurately surface `HasResolvedConflict` from `PipelineDataJson`.
   - bUnit rendering of `Home.razor` displays `#home-review-btn`, `#home-review-count-badge`, per-workspace `#home-ws-review-{ws.Id}` badges (even when `#home-ws-inbox-{ws.Id}` is also present), and `#home-pending-reviews-section` rows with working `/w/{ws.Id}/review/{task.Id}` links.
+- **Playwright E2E Tests (Zero LLM Calls, `[Trait("Category", "E2E")]`):**
+  - Using `PlaywrightWebHostFixture` ([Step 11.39A](../fixes/STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)), seed tasks across statuses (`Ready` with `HasExecutionRun = true`, `Ready` with `HasExecutionRun = false`, `Open`, `Closed`) and a real feature branch in `SyntheticRepoFixture`.
+  - Verify in headless Chromium on `/` that `#home-review-count-badge`, `#home-ws-review-{ws.Id}`, and `#home-pending-reviews-section` display the expected pending review items, and clicking `#home-review-task-btn-{task.Id}` navigates directly to the Review Room for that task.
 

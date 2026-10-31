@@ -45,7 +45,7 @@
 
 3. **Top Bar Quick Status Strip (`TopNavBar.razor`):**
    - On `< 768px`, hide secondary desktop breadcrumb text and compact the workspace selector and action buttons so they fit without horizontal overflow.
-   - Display a compact active worker pill (e.g. `⚡ #42`) and a fast "+ Note" shortcut button ([Step 12.4](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md)) directly in the mobile top bar.
+   - Display a compact active worker pill (e.g. `⚡ #42`) and the Question Inbox shortcut pill directly in the mobile top bar.
 
 ### 2.2 Touch Target Ergonomics & CSS Polish
 
@@ -55,20 +55,24 @@
 
 ### 2.3 Page-by-Page Mobile Adaptations
 
-#### A. Ideation Chat ([`Ideation.razor`](../../src/NightCodeForge.Web/Components/Pages/Ideation.razor))
-- **Mobile Pane Switcher (`< 768px`):** Collapse `.ideation-grid` into a single-column view with a sticky top segmented switcher bar (`💬 Chat` | `📋 Proposals (@Session.Proposals.Count)` | `💡 Suggestions` from Step 12.4).
-- **Fixed Bottom Input Bar:** Pin the user prompt input box, voice dictation button, and "Send" button to the bottom of the viewport (`position: sticky; bottom: 0; padding-bottom: env(safe-area-inset-bottom);`).
-- **Card Stacking:** [`IdeationProposalCard.razor`](../../src/NightCodeForge.Web/Components/Ideation/IdeationProposalCard.razor) displays actions (`Approve`, `Keep as Suggestion`, `Discard`) as full-width stacked buttons on `< 768px`.
+#### A. Home Dashboard (`Home.razor`) & Live Telemetry (`Monitoring.razor`)
+- **Home Dashboard ([`Home.razor`](../../src/NightCodeForge.Web/Components/Pages/Home.razor)):** Collapse the KPI card row into a `2x2` (or `1fr` on `< 480px`) grid and stack the main two-column dashboard panels (`Action Required: Human Questions`, `Pending Human Code Reviews` from [Step 12.24](STEP_12_24_HOME_PAGE_PENDING_HUMAN_CODE_REVIEW_TASKS.md), `Active Task Execution`, `Workspace Overview`, `Recent Completions & Failures`) into a clean single-column vertical flow on `< 768px`.
+- **Live Telemetry ([`Monitoring.razor`](../../src/NightCodeForge.Web/Components/Pages/Monitoring.razor)):** Stack active worker/GPU telemetry panels and live stream consoles vertically without horizontal overflow.
 
-#### B. Human Question Inbox ([`Inbox.razor`](../../src/NightCodeForge.Web/Components/Pages/Inbox.razor), [`QuestionCard.razor`](../../src/NightCodeForge.Web/Components/Inbox/QuestionCard.razor) & [`AgentQuestionTurnCard.razor`](../../src/NightCodeForge.Web/Components/Monitoring/AgentQuestionTurnCard.razor))
+#### B. Ideation Chat ([`Ideation.razor`](../../src/NightCodeForge.Web/Components/Pages/Ideation.razor))
+- **Mobile Pane Switcher (`< 768px`):** Collapse `.ideation-grid` into a single-column view with a sticky top segmented switcher bar (`💬 Chat` | `📋 Proposals (@Session.Proposals.Count)`).
+- **Fixed Bottom Input Bar:** Pin the user prompt input box and "Send" button to the bottom of the viewport (`position: sticky; bottom: 0; padding-bottom: env(safe-area-inset-bottom);`).
+- **Card Stacking:** [`IdeationProposalCard.razor`](../../src/NightCodeForge.Web/Components/Ideation/IdeationProposalCard.razor) displays its action buttons as full-width stacked buttons on `< 768px`.
+
+#### C. Human Question Inbox ([`Inbox.razor`](../../src/NightCodeForge.Web/Components/Pages/Inbox.razor), [`QuestionCard.razor`](../../src/NightCodeForge.Web/Components/Inbox/QuestionCard.razor) & [`AgentQuestionTurnCard.razor`](../../src/NightCodeForge.Web/Components/Monitoring/AgentQuestionTurnCard.razor))
 - **Deep-Link Query Parameter (`taskId`):** Add `[SupplyParameterFromQuery(Name = "taskId")] public int? TaskId { get; set; }` to `Inbox.razor`. When navigated to via `/inbox?taskId={TaskId}`, ensure the task's workspace/questions are visible and scroll/highlight `#question-card-task-{TaskId}`.
 - **Touch-Friendly Options & Submission:** Style `.agent-option-chip` choice buttons as large touch-friendly pill chips ($\ge 44\text{px}$ height) and anchor `.submit-answer-btn` as a full-width primary button at the bottom of the card on mobile.
 
-#### C. Task Execution Inspector ([`TaskExecutionInspector.razor`](../../src/NightCodeForge.Web/Components/Monitoring/TaskExecutionInspector.razor))
+#### D. Task Execution Inspector ([`TaskExecutionInspector.razor`](../../src/NightCodeForge.Web/Components/Monitoring/TaskExecutionInspector.razor))
 - **Responsive Stage & Run Selector:** Extract the inline two-column grid style in the Stage Conversations tab to `.inspector-conversations-grid`, collapsing to `1fr` on `< 768px` with `StageRunSelector` above `StageConversationViewer`.
 - **Horizontal Stepper & Terminal Line-Wrap:** Make [`PipelineStepper.razor`](../../src/NightCodeForge.Web/Components/Monitoring/PipelineStepper.razor) horizontally touch-scrollable (`overflow-x: auto`) and add a `line-wrap` toggle in [`TerminalConsole.razor`](../../src/NightCodeForge.Web/Components/Monitoring/TerminalConsole.razor).
 
-#### D. Backlog, Task Detail, Review Room & Dev Queue
+#### E. Backlog, Task Detail, Review Room & Dev Queue
 - **Backlog & Kanban Board ([`Backlog.razor`](../../src/NightCodeForge.Web/Components/Pages/Backlog.razor) & `KanbanBoard.razor`):** On `< 768px`, stack Kanban columns vertically as collapsible status sections or scroll horizontally with `scroll-snap-type: x mandatory;`. Style [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) as a **mobile bottom sheet** (`max-height: 90dvh; border-radius: 16px 16px 0 0;`).
 - **Task Detail Page ([`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor)):** Collapse `.task-detail-grid` to a single vertical stack on `< 768px`.
 - **Review Room ([`Review.razor`](../../src/NightCodeForge.Web/Components/Pages/Review.razor) & `DiffWorkspace.razor`):** Stack Review header action buttons into a full-width row and collapse the `DiffWorkspace.razor` file tree sidebar into a collapsible file-picker dropdown above the diff canvas on `< 768px`.
@@ -87,12 +91,15 @@
   - [ ] Implement hamburger toggle in `TopNavBar.razor` and off-canvas mobile drawer with backdrop in `MainLayout.razor` / `NavMenu.razor` for `< 768px`.
   - [ ] Enforce minimum $44\times 44\text{px}$ touch targets and eliminate horizontal root overflow.
 - [ ] **Mobile Page Adaptations:**
-  - [ ] Add mobile pane switcher (`💬 Chat` | `📋 Proposals` | `💡 Suggestions`) and sticky bottom input bar in `Ideation.razor`.
+  - [ ] Adapt `Home.razor` (including Pending Human Code Reviews card from Step 12.24) and `Monitoring.razor` grids for `< 768px` and `768px–1024px`.
+  - [ ] Add mobile pane switcher (`💬 Chat` | `📋 Proposals (@Session.Proposals.Count)`) and sticky bottom input bar in `Ideation.razor`.
   - [ ] Add `[SupplyParameterFromQuery] int? TaskId` in `Inbox.razor` and optimize `AgentQuestionTurnCard.razor` touch chips.
   - [ ] Adapt `TaskExecutionInspector.razor`, `PipelineStepper.razor`, `TerminalConsole.razor`, `Backlog.razor`, `TaskDetailDrawer.razor` (bottom sheet), `TaskDetail.razor`, `Review.razor`, and `DevQueue.razor` tables (card stacks) for `< 768px`.
 - [ ] **Network & Visibility Handling:**
   - [ ] Add non-blocking `"Reconnecting to Forge..."` banner in `MainLayout.razor` and `visibilitychange` foreground state sync.
 - [ ] **Automated Testing:**
   - [ ] bUnit tests asserting responsive mobile navigation drawer toggles and `Inbox.razor?taskId=` deep-linking.
-  - [ ] Playwright viewport tests at $375\times 667\text{px}$ and $390\times 844\text{px}$ verifying zero horizontal overflow and drawer open/close toggles.
+  - [ ] **Playwright E2E Mobile & Tablet Viewport Suite (Zero LLM Calls, `[Trait("Category", "E2E")]`):** Using `PlaywrightWebHostFixture` ([Step 11.39A](../fixes/STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)) with seeded tasks, pending questions, and pending reviews across $375\times 667\text{px}$ (iPhone SE), $390\times 844\text{px}$ (iPhone 14), and $768\times 1024\text{px}$ (iPad) viewports:
+    - [ ] Verify zero horizontal root overflow (`document.documentElement.scrollWidth <= window.innerWidth`) across Home (`/`), Ideation (`/w/{id}/ideation`), Backlog (`/w/{id}/backlog`), Question Inbox (`/w/{id}/inbox?taskId={taskId}`), Task Inspector (`/w/{id}/inspector/{taskId}`), and Review Room (`/w/{id}/review`).
+    - [ ] Verify hamburger button opens the off-canvas `NavMenu` drawer, clicking a nav link navigates and auto-closes the drawer, `Ideation.razor` switches between `💬 Chat` and `📋 Proposals`, and `TaskDetailDrawer` opens as a bottom sheet on `< 768px`.
 

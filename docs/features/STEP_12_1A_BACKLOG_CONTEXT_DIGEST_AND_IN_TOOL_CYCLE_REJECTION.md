@@ -73,6 +73,12 @@ NightCodeForge uses a strict 3-layer prompt structure in [`PromptPrefixStabilize
 > 
 > Therefore, for Stage 1 (Task Review), `<existing_workspace_tasks>` **MUST be injected strictly within Layer 3 (Task Scope)** (appended to `taskScopeAndPlan` in `BuildLayer3TaskScope`). For Ideation, it is placed in the task guidance / workspace context section.
 
+### 2.4 Service & Constructor Hygiene (`AGENTS.md` Compliance)
+- `IWorkspaceBacklogSummaryService` (`WorkspaceBacklogSummaryService`) must have strictly $\le 2$ required constructor parameters (`ITaskRepository`, `IDependencyResolutionEngine`).
+- `PromptPrefixStabilizer` has 0 constructor parameters and exposes static methods; pass the precomputed `<existing_workspace_tasks>` digest string into `BuildLayer3TaskScope(...)` / `AssembleStabilizedPrompt(...)` rather than injecting repositories into `PromptPrefixStabilizer`.
+- Do **not** add new constructor parameters to `CanonicalTools`: attach an `ITaskMarkdownValidator? TaskMarkdownValidator { get; set; }` property on `CanonicalTools` (matching the existing `AskHandler` / `RequestChangesHandler` property pattern), where `TaskMarkdownValidator` has $\le 3$ required constructor parameters (`ITaskRepository`, `IDependencyResolutionEngine`, `ILogger<TaskMarkdownValidator>`).
+- If [Step 11.38C](../fixes/STEP_11_38C_CRUCIBLE_AND_IDEATION_SHARED_SESSION_AND_TOOLSET_FACTORIZATION.md) has already been executed, inject `IWorkspaceBacklogSummaryService` into `ICruciblePromptComposer` and `ITaskMarkdownValidator` into `ICanonicalToolSetFactory`. If `Step 12.1A` is implemented before `Step 11.38C`, fold `IWorkspaceBacklogSummaryService` into a lightweight prompt collaborator so `CrucibleAgentHarness` and `IdeationService` constructor parameter counts do not increase.
+
 ---
 
 ## 3. Agent Instructions & Stage Directives

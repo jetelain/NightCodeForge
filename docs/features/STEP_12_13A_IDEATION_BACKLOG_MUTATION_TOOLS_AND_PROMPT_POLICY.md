@@ -16,17 +16,17 @@
 To maintain strict system safety and prevent code corruption outside of formal workflow pipelines, the Ideation Agent operates within a **strictly read-only workspace** (`isReadOnly = true`). It cannot invoke file-modifying tools (`edit`, `write`) on repository source files or directly edit `docs/tasks/task-{id}.md`.
 
 This step (Part 1 of Step 12.13) equips the Ideation Agent with **scoped, host-level backlog management tools** and enforces the **Upfront Functional & Business Ambiguity Resolution ("Zero-Surprise Scheduling")** policy:
-1. **Scoped Host-Level Mutation Tools in `CanonicalTools`:**
+1. **Scoped Host-Level Mutation Tools via `IBacklogMutationToolService` & `CanonicalTools`:**
    - `get_task(task_id)`: Fetches complete task details on demand without bloating the bootstrap prompt.
-   - `edit_task(task_id, title?, description?, priority?, depends_on_ids?, merge_mode?, base_branch?)`: Updates unstarted tasks (`Suggested`, `Open`, `Draft`), performs circular dependency validation, logs audit snapshots attributed to `AuditActors.IdeationAgent`, and triggers host-level markdown disk synchronization.
-   - `set_task_priority(task_id, priority)` & `rework_priorities(updates)`: Updates priority tiers across one or multiple backlog items.
+   - `edit_task(task_id, title?, description?, priority?, depends_on_ids?, merge_mode?, base_branch?)`: Updates unstarted tasks (`TaskOverallStatus.Suggested` or `TaskOverallStatus.Open` with `!task.HasExecutionRun` and not locked in `IWorkspaceLockProvider`), performs circular dependency validation, logs audit snapshots attributed to `AuditActors.IdeationAgent`, and triggers host-level markdown disk synchronization.
+   - `set_task_priority(task_id, priority)` & `rework_priorities(updates)`: Updates priority tiers across one or multiple unstarted backlog items.
    - `remove_task(task_id, reason)`: Safely deletes or cancels unstarted tasks with active-dependent cascade guards.
 2. **Upfront Ambiguity Resolution ("Zero-Surprise Scheduling"):**
    - The Ideation Agent **must** conduct an interactive interview with the maintainer to resolve all open **functional and business questions** before proposing or updating a task.
    - Ideation is **not** mandated to identify all technical impacts (such as exhaustive affected file lists); detailed technical scoping and symbol mapping belong to downstream **Stage 1 (ForgeTask Review)**.
    - Update [`skills/ncf-backlog/SKILL.md`](../../skills/ncf-backlog/SKILL.md) to align external AI harnesses with this policy.
 
-*(The Web UI "💡 Refine in Ideation" button, `/ideation?taskId={id}` session seeding, and mutation tool call cards are specified in [Step 12.13B](STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md).)*
+*(The Web UI "💡 Refine in Ideation" button, `/w/{workspaceId}/ideation?taskId={id}` session seeding, and mutation tool call cards are specified in [Step 12.13B](STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md).)*
 
 ---
 
@@ -34,42 +34,44 @@ This step (Part 1 of Step 12.13) equips the Ideation Agent with **scoped, host-l
 
 1. **Workspace Filesystem Read-Only Protection:**
    File modification tools (`edit`, `write`) remain disabled in ideation. Task mutations occur strictly through structured domain tools executing host-side database transactions and [`ITaskMarkdownSyncService.SyncTaskToDiskAsync`](../../src/NightCodeForge.Core/Services/ITaskMarkdownSyncService.cs).
-2. **Lifecycle State Guardrails:**
-   - **Permitted States:** Tasks in `TaskOverallStatus.Draft`, `Suggested`, and `Open` (and not currently claimed or executing in a pipeline stage) may be edited, reprioritized, or removed.
-   - **Forbidden States:** Tasks that are currently active in the pipeline (`InProgress`, or currently running Stage 1/2/3 in a worktree) or in terminal states (`Closed`, `Rejected`) **must never** be mutated by ideation chat. Attempting to edit them throws a dedicated domain exception (`TaskCannotBeModifiedException`).
+2. **Lifecycle State Guardrails (Exact `TaskOverallStatus` & Execution Flags):**
+   - **Permitted States:** Tasks where `task.Status is TaskOverallStatus.Suggested or TaskOverallStatus.Open`, `!task.HasExecutionRun`, and `!workspaceLockProvider.IsTaskLocked(task.WorkspaceId, task.Id)` may be edited, reprioritized, or removed.
+   - **Forbidden States:** Tasks that have already entered or completed pipeline execution (`task.HasExecutionRun == true`, `workspaceLockProvider.IsTaskLocked(task.WorkspaceId, task.Id) == true`, or `task.Status is TaskOverallStatus.Reviewed or TaskOverallStatus.Implemented or TaskOverallStatus.Ready or TaskOverallStatus.Closed or TaskOverallStatus.Rejected or TaskOverallStatus.Cancelled`) **must never** be mutated by ideation chat. Attempting to edit or remove them throws a dedicated domain exception (`TaskCannotBeModifiedException`).
 3. **Deterministic Failure & No Silent Failures:**
-   Looking up or modifying a non-existent task throws `TaskNotFoundException` immediately.
+   Looking up or modifying a non-existent task (or a task belonging to a different `WorkspaceId`) throws `TaskNotFoundException` immediately.
 4. **Attribution & Audit Trail:**
-   All mutations performed by the ideation agent record an explicit entry in `TaskStateHistory` with `ChangedBy = AuditActors.IdeationAgent` and a descriptive `ChangeReason`.
+   All mutations performed by the ideation agent record an explicit entry in `ForgeTaskHistory` (`TaskHistories` table) with `ChangedBy = AuditActors.IdeationAgent` and a descriptive `ChangeReason`.
+5. **Constructor Parameter Ceiling (`AGENTS.md` — $\le 10$ Parameters):**
+   Do **not** add `ITaskRepository`, `IDependencyResolutionEngine`, `ITaskMarkdownSyncService`, or `IWorkspaceLockProvider` to `CanonicalTools`'s constructor. Instead, encapsulate the 5 host-level backlog tools inside a cohesive collaborator `IBacklogMutationToolService` (`BacklogMutationToolService` in `NightCodeForge.Agents.Tools`, strictly $\le 6$ required constructor parameters: `ITaskRepository`, `IDependencyResolutionEngine`, `ITaskMarkdownSyncService`, `IWorkspaceLockProvider`, `IAgentActivityStreamer`, `ILogger<BacklogMutationToolService>`) and attach it to `CanonicalTools` via `public IBacklogMutationToolService? BacklogMutationService { get; set; }` (matching the existing `AskHandler` and `RequestChangesHandler` property pattern).
 
 ---
 
 ## 3. Scoped Agent Tools Specification
 
-Registered in [`CanonicalAIFunctionFactory.cs`](../../src/NightCodeForge.Agents/Tools/CanonicalAIFunctionFactory.cs) and enabled for ideation profiles:
+Registered in [`CanonicalAIFunctionFactory.cs`](../../src/NightCodeForge.Agents/Tools/CanonicalAIFunctionFactory.cs), added to [`DefaultAgentTools.All`](../../src/NightCodeForge.Core/Domain/DefaultAgentTools.cs) and `DefaultAgentTools.ReadOnly`, and reconciled onto existing `ideation-brainstormer` profiles in [`AppDbContext.EnsureDefaultGlobalAgentProfilesAsync`](../../src/NightCodeForge.Infrastructure/Data/AppDbContext.cs):
 
 ### 3.1 `get_task`
 - **Parameters:** `taskId` (integer, required).
-- **Behavior:** Queries `ITaskRepository.GetByIdWithDependenciesAsync(taskId)`. Throws `TaskNotFoundException` if missing. Returns JSON containing `id`, `title`, `description`, `status`, `priority`, `mergeMode`, `baseBranch`, `prerequisites`, and `dependentTaskIds`.
+- **Behavior:** Queries `ITaskRepository` for the task and its dependencies within the current `_workspaceId`. Throws `TaskNotFoundException` if missing or in another workspace. Returns JSON containing `id`, `title`, `description`, `status`, `hasExecutionRun`, `priority`, `mergeMode`, `baseBranch`, `prerequisites`, and `dependentTaskIds`.
 
 ### 3.2 `edit_task`
 - **Parameters:** `taskId` (int, required), `title` (string?), `description` (string?), `priority` (int?), `dependsOnIds` (int[]?), `mergeMode` (string?), `baseBranch` (string?).
 - **Behavior:**
-  - Verifies target task exists and is in an editable status (`Draft`, `Suggested`, or unstarted `Open`); otherwise throws `TaskCannotBeModifiedException`.
+  - Verifies target task exists in `_workspaceId` and is in an editable unstarted state (`Status is Suggested or Open`, `!HasExecutionRun`, and not locked in `IWorkspaceLockProvider`); otherwise throws `TaskCannotBeModifiedException`.
   - If `dependsOnIds` is provided, validates DAG acyclicity via `IDependencyResolutionEngine.HasCycle`; throws `CircularDependencyException` on cycles.
   - Updates the [`ForgeTask`](../../src/NightCodeForge.Core/Domain/ForgeTask.cs) record in SQLite, records an audit snapshot with `AuditActors.IdeationAgent`, syncs `docs/tasks/task-{id}.md` via `ITaskMarkdownSyncService`, and broadcasts an `AgentActivityEvent`.
 
 ### 3.3 `set_task_priority` & `rework_priorities`
 - **Parameters (`set_task_priority`):** `taskId` (int, required), `priority` (int, required: `1` Critical to `5` Trivial).
 - **Parameters (`rework_priorities`):** `updates` (array of `{ taskId: int, priority: int }`).
-- **Behavior:** Validates editable state and priority values, updates SQLite, re-syncs markdown files for affected tasks, and returns a confirmation summary.
+- **Behavior:** Validates editable unstarted state and priority values (`1..5`), updates SQLite with `AuditActors.IdeationAgent` history snapshots, re-syncs markdown files for affected tasks, and returns a confirmation summary.
 
 ### 3.4 `remove_task`
 - **Parameters:** `taskId` (int, required), `reason` (string?).
 - **Behavior:**
-  - Verifies task exists and is not running or closed (`TaskCannotBeModifiedException`).
-  - Checks if other active tasks depend on `taskId`. If active dependent tasks exist, fails fast with a descriptive error listing the dependent task IDs.
-  - Deletes or marks `ForgeTask` as cancelled, detaches dependencies, removes/updates `docs/tasks/task-{id}.md`, and logs audit trail.
+  - Verifies task exists in `_workspaceId` and is in an editable unstarted state (`Status is Suggested or Open`, `!HasExecutionRun`, and not locked in `IWorkspaceLockProvider`); otherwise throws `TaskCannotBeModifiedException`.
+  - Checks if other non-cancelled/non-rejected tasks depend on `taskId`. If active dependent tasks exist, fails fast with a descriptive error listing the dependent task IDs.
+  - Marks `ForgeTask` as `TaskOverallStatus.Cancelled` (recording a `ForgeTaskHistory` entry with `AuditActors.IdeationAgent` and `reason`), detaches dependencies, and syncs/updates `docs/tasks/` markdown state.
 
 ---
 
@@ -97,8 +99,8 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
   - [ ] Define `TaskCannotBeModifiedException` and `AuditActors.IdeationAgent`.
   - [ ] Add `GetByIdWithDependenciesAsync`, `UpdateTaskSpecificationAsync`, and `BatchUpdatePrioritiesAsync` to `ITaskRepository` / `ITaskService` as needed.
 - [ ] **Agent Tools Implementation (`NightCodeForge.Agents`):**
-  - [ ] Implement `get_task`, `edit_task`, `set_task_priority`, `rework_priorities`, and `remove_task` in `CanonicalTools` and register in `CanonicalAIFunctionFactory`.
-  - [ ] Enforce state guards (`TaskCannotBeModifiedException`), DAG cycle checks (`CircularDependencyException`), audit trail logging (`AuditActors.IdeationAgent`), and `ITaskMarkdownSyncService.SyncTaskToDiskAsync`.
+  - [ ] Implement `IBacklogMutationToolService` (`BacklogMutationToolService`, $\le 6$ constructor parameters), attach `BacklogMutationService` property on `CanonicalTools`, and register `get_task`, `edit_task`, `set_task_priority`, `rework_priorities`, and `remove_task` in `CanonicalAIFunctionFactory`, `DefaultAgentTools.All`, `DefaultAgentTools.ReadOnly`, and `AppDbContext.EnsureDefaultGlobalAgentProfilesAsync`.
+  - [ ] Enforce state guards (`TaskCannotBeModifiedException` when `HasExecutionRun == true`, task is locked in `IWorkspaceLockProvider`, or `Status` is not `Suggested`/`Open`), DAG cycle checks (`CircularDependencyException`), audit trail logging (`AuditActors.IdeationAgent`), and `ITaskMarkdownSyncService.SyncTaskToDiskAsync`.
 - [ ] **Prompt Engineering & Skills (`NightCodeForge.Agents`, `NightCodeForge.Core`, `skills/ncf-backlog`):**
   - [ ] Update `AgentProfile.CreateDefaultIdeationProfile()` and `IdeationService.cs` (`<task_planning_guidelines>` and `<backlog_management_guidelines>`).
   - [ ] Update [`skills/ncf-backlog/SKILL.md`](../../skills/ncf-backlog/SKILL.md).
