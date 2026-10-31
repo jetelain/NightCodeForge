@@ -273,15 +273,27 @@ public class Service
     private class FakePathResolver : NightCodeForge.Core.Interfaces.IWorkspacePathResolver
     {
         private readonly string _baseDir;
+        private readonly NightCodeForge.Core.Interfaces.IWorkspacePathResolver _inner = TestPathResolver.Create();
         public FakePathResolver(string baseDir) => _baseDir = baseDir;
 
         public string GetAgentWorkingClonePath(int workspaceId) => Path.Combine(_baseDir, workspaceId.ToString());
         public string GetHostRemoteUrl(string repositoryPath) => repositoryPath;
         public string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath)
+            => ResolveCruciblePath(workspaceId, relativeOrContainerPath, null);
+        public string ResolveCruciblePath(int workspaceId, string relativeOrContainerPath, int? taskId)
         {
             var rel = relativeOrContainerPath.TrimStart('/', '\\').Replace('/', Path.DirectorySeparatorChar);
-            return Path.Combine(_baseDir, workspaceId.ToString(), rel);
+            if (NightCodeForge.Infrastructure.Execution.WorkspacePathResolver.TryResolveTmpSubPath(relativeOrContainerPath, out _))
+            {
+                return Path.Combine(_baseDir, workspaceId.ToString(), rel);
+            }
+            var root = taskId.HasValue
+                ? Path.Combine(_baseDir, workspaceId.ToString(), $"task-{taskId.Value}")
+                : Path.Combine(_baseDir, workspaceId.ToString());
+            return string.IsNullOrEmpty(rel) ? root : Path.Combine(root, rel);
         }
+        public string ResolveCruciblePath(string workspaceRoot, string relativeOrContainerPath, int? taskId = null)
+            => _inner.ResolveCruciblePath(workspaceRoot, relativeOrContainerPath, taskId);
         public string GetWslDistributionName() => "Ubuntu";
         public string GetWslUserName() => "user";
     }
@@ -488,6 +500,111 @@ public class Service
 
             Assert.StartsWith("Error: Access denied:", result);
             Assert.Contains("outside the allowed workspace sandbox", result);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task WriteReadEditAsync_TmpDirectoryPath_SucceedsWithinAllowedTmpSandbox()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-sandbox-tmp-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var uniqueScript = $"/tmp/hp_patch_{Guid.NewGuid():N}.py";
+
+        try
+        {
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
+
+            var writeRes = await tools.WriteAsync(uniqueScript, "print('hello')\n");
+            Assert.Contains("Successfully wrote", writeRes);
+
+            var readRes = await tools.ReadAsync(uniqueScript);
+            Assert.Contains("print('hello')", readRes);
+
+            var editRes = await tools.EditAsync(uniqueScript, "hello", "world");
+            Assert.Contains("Successfully applied", editRes);
+
+            var readAfterEdit = await tools.ReadAsync(uniqueScript);
+            Assert.Contains("print('world')", readAfterEdit);
+
+            var expectedHostPath = Path.Combine(tempDir, "tmp", Path.GetFileName(uniqueScript));
+            Assert.True(File.Exists(expectedHostPath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("/tmp/../etc/shadow")]
+    [InlineData("/tmp/../../outside.txt")]
+    [InlineData("/tmp/sub/../../outside.txt")]
+    public async Task WriteAndReadAsync_TmpTraversalEscapingTmp_ReturnsAccessDeniedError(string invalidPath)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-sandbox-tmp-escape-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
+
+            var writeResult = await tools.WriteAsync(invalidPath, "payload");
+            Assert.StartsWith("Error: Access denied:", writeResult);
+
+            var readResult = await tools.ReadAsync(invalidPath);
+            Assert.StartsWith("Error: Access denied:", readResult);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task WriteAndReadAsync_TmpDirectory_WhenTaskCrucibleDirMissing_SucceedsWhetherCrucibleTmpExistsOrNot()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-tmp-asymmetry-" + Guid.NewGuid().ToString("N"));
+        var localCloneDir = Path.Combine(tempDir, "local", "clone");
+        var crucibleBaseDir = Path.Combine(tempDir, "crucible");
+        Directory.CreateDirectory(localCloneDir);
+        Directory.CreateDirectory(crucibleBaseDir);
+
+        try
+        {
+            var fakeResolver = new FakePathResolver(crucibleBaseDir);
+
+            // Case 1: Neither wks/42 (rootCrucibleDir) nor wks/42/tmp exists -> falls back to localCloneDir's parent tmp
+            var toolsFallback = TestCanonicalToolsBuilder.Create(
+                localCloneDir,
+                pathResolver: fakeResolver,
+                workspaceId: 42,
+                taskId: 99);
+
+            var writeRes1 = await toolsFallback.WriteAsync("/tmp/new_fallback.py", "print('fallback')\n");
+            Assert.Contains("Successfully wrote", writeRes1);
+            var readRes1 = await toolsFallback.ReadAsync("/tmp/new_fallback.py");
+            Assert.Contains("print('fallback')", readRes1);
+
+            // Case 2: wks/42/tmp exists on disk, while task worktree crucible dir does not exist -> resolves consistently to wks/42/tmp
+            var crucibleTmpDir = Path.Combine(crucibleBaseDir, "42", "tmp");
+            Directory.CreateDirectory(crucibleTmpDir);
+
+            var toolsCrucibleTmp = TestCanonicalToolsBuilder.Create(
+                localCloneDir,
+                pathResolver: fakeResolver,
+                workspaceId: 42,
+                taskId: 99);
+
+            var writeRes2 = await toolsCrucibleTmp.WriteAsync("/tmp/new_crucible.py", "print('crucible-tmp')\n");
+            Assert.Contains("Successfully wrote", writeRes2);
+            Assert.True(File.Exists(Path.Combine(crucibleTmpDir, "new_crucible.py")));
+
+            var readRes2 = await toolsCrucibleTmp.ReadAsync("/tmp/new_crucible.py");
+            Assert.Contains("print('crucible-tmp')", readRes2);
         }
         finally
         {

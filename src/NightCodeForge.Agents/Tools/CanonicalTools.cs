@@ -6,6 +6,7 @@ using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
+using NightCodeForge.Infrastructure.Execution;
 
 namespace NightCodeForge.Agents.Tools;
 
@@ -109,6 +110,15 @@ public partial class CanonicalTools
                 return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
             }
 
+            if (WorkspacePathResolver.TryResolveTmpSubPath(path, out _))
+            {
+                var crucibleTmpDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, "/tmp", _taskId);
+                if (Directory.Exists(crucibleTmpDir))
+                {
+                    return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
+                }
+            }
+
             var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
             if (File.Exists(cruciblePath) || Directory.Exists(cruciblePath))
             {
@@ -126,10 +136,24 @@ public partial class CanonicalTools
             throw new UnauthorizedAccessException("Access denied: Empty path.");
         }
 
+        var reqNorm = (requestedPath ?? string.Empty).Trim().Replace('\\', '/');
+        if ((reqNorm.Equals("/tmp", StringComparison.OrdinalIgnoreCase) ||
+             reqNorm.StartsWith("/tmp/", StringComparison.OrdinalIgnoreCase)) &&
+            !WorkspacePathResolver.TryResolveTmpSubPath(requestedPath, out _))
+        {
+            _logger?.LogWarning("CanonicalTools: Path traversal outside /tmp sandbox detected: '{Path}' (resolved: '{FullPath}')", requestedPath, fullPath);
+            throw new UnauthorizedAccessException($"Access denied: Path '{requestedPath}' resolves outside the allowed workspace sandbox.");
+        }
+
         var allowedRoots = new List<string>();
         if (!string.IsNullOrWhiteSpace(_workspaceRoot))
         {
             allowedRoots.Add(_workspaceRoot);
+            var workspaceTmpRoot = _pathResolver.ResolveCruciblePath(_workspaceRoot, "/tmp", _taskId);
+            if (!string.IsNullOrWhiteSpace(workspaceTmpRoot))
+            {
+                allowedRoots.Add(workspaceTmpRoot);
+            }
         }
 
         if (_workspaceId.HasValue)
@@ -138,6 +162,12 @@ public partial class CanonicalTools
             if (!string.IsNullOrWhiteSpace(crucibleRoot))
             {
                 allowedRoots.Add(crucibleRoot);
+            }
+
+            var crucibleTmpRoot = _pathResolver.ResolveCruciblePath(_workspaceId.Value, "/tmp", _taskId);
+            if (!string.IsNullOrWhiteSpace(crucibleTmpRoot))
+            {
+                allowedRoots.Add(crucibleTmpRoot);
             }
         }
 
@@ -168,7 +198,8 @@ public partial class CanonicalTools
         var normalized = path.Replace('\\', '/').TrimEnd('/');
         if (Path.IsPathRooted(path) && !normalized.StartsWith("//") && !normalized.StartsWith(@"\\") &&
             !normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.StartsWith("/clone", StringComparison.OrdinalIgnoreCase))
+            !normalized.StartsWith("/clone", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("/tmp", StringComparison.OrdinalIgnoreCase))
         {
             try
             {

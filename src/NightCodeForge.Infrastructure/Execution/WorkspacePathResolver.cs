@@ -85,6 +85,10 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         {
             var distro = GetWslDistributionName();
             var user = GetWslUserName();
+            if (string.IsNullOrWhiteSpace(distro) || string.IsNullOrWhiteSpace(user))
+            {
+                return path;
+            }
             return WslPathConverter.ToWslUncPath(path, distro, user);
         }
 
@@ -149,8 +153,16 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         int wksIdx = normalized.IndexOf(agentWorkingPrefix, StringComparison.OrdinalIgnoreCase);
         if (wksIdx >= 0)
         {
-            var afterPrefix = normalized[(wksIdx + agentWorkingPrefix.Length)..];
-            raw = "/workspace/" + afterPrefix;
+            var afterPrefix = normalized[(wksIdx + agentWorkingPrefix.Length)..].TrimStart('/');
+            if (afterPrefix.Equals("tmp", StringComparison.OrdinalIgnoreCase) ||
+                afterPrefix.StartsWith("tmp/", StringComparison.OrdinalIgnoreCase))
+            {
+                raw = "/" + afterPrefix;
+            }
+            else
+            {
+                raw = "/workspace/" + afterPrefix;
+            }
         }
 
         string baseWorkingRoot;
@@ -196,11 +208,67 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             return raw.Replace('/', '\\');
         }
 
+        var normRoot = workspaceRoot.Replace('\\', '/').TrimEnd('/');
+        var rootLeaf = Path.GetFileName(normRoot);
+        string parentDir;
+        if (rootLeaf.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
+            rootLeaf.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
+            rootLeaf.Equals("mirror", StringComparison.OrdinalIgnoreCase) ||
+            rootLeaf.StartsWith("task-", StringComparison.OrdinalIgnoreCase) ||
+            rootLeaf.StartsWith("wt-", StringComparison.OrdinalIgnoreCase))
+        {
+            parentDir = Path.GetDirectoryName(normRoot) ?? normRoot;
+        }
+        else
+        {
+            parentDir = normRoot;
+        }
+
+        bool isUnix = !IsWindows || (normRoot.StartsWith('/') && !normRoot.StartsWith("//")) || normRoot.StartsWith('~');
+        bool isUnc = normRoot.StartsWith("//") || normRoot.StartsWith(@"\\");
+
+        string FormatPath(string baseDir, string subPath)
+        {
+            if (string.IsNullOrEmpty(subPath))
+            {
+                if (isUnc) return baseDir.Replace('/', '\\');
+                return isUnix ? baseDir.Replace('\\', '/') : Path.GetFullPath(baseDir);
+            }
+
+            if (isUnc)
+            {
+                var cleanBase = baseDir.Replace('/', '\\').TrimEnd('\\');
+                var cleanSub = subPath.Replace('/', '\\').TrimStart('\\');
+                return $@"{cleanBase}\{cleanSub}";
+            }
+
+            if (isUnix)
+            {
+                var cleanBase = baseDir.Replace('\\', '/').TrimEnd('/');
+                var cleanSub = subPath.Replace('\\', '/').TrimStart('/');
+                return $"{cleanBase}/{cleanSub}";
+            }
+
+            return Path.GetFullPath(Path.Combine(baseDir, subPath));
+        }
+
+        var normParent = parentDir.Replace('\\', '/').TrimEnd('/');
+        bool isAlreadyUnderParent =
+            !string.IsNullOrEmpty(normParent) &&
+            (normalized.Equals(normParent, StringComparison.OrdinalIgnoreCase) ||
+             normalized.StartsWith(normParent + "/", StringComparison.OrdinalIgnoreCase));
+
+        if (!isAlreadyUnderParent && TryResolveTmpSubPath(raw, out var tmpSubPath))
+        {
+            var tmpRel = string.IsNullOrEmpty(tmpSubPath) ? "tmp" : $"tmp/{tmpSubPath}";
+            return FormatPath(parentDir, tmpRel);
+        }
+
         if (Path.IsPathRooted(raw) &&
             !normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase) &&
             !normalized.StartsWith("/clone", StringComparison.OrdinalIgnoreCase))
         {
-            return Path.GetFullPath(raw);
+            return isUnix ? normalized : Path.GetFullPath(raw);
         }
 
         bool isClonePrefixed =
@@ -214,50 +282,6 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
                 : string.Empty;
 
             cloneRel = cloneRel.TrimStart('/', '\\');
-
-            var normRoot = workspaceRoot.Replace('\\', '/').TrimEnd('/');
-            var rootLeaf = Path.GetFileName(normRoot);
-            string parentDir;
-            if (rootLeaf.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.Equals("mirror", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.StartsWith("task-", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.StartsWith("wt-", StringComparison.OrdinalIgnoreCase))
-            {
-                parentDir = Path.GetDirectoryName(normRoot) ?? normRoot;
-            }
-            else
-            {
-                parentDir = normRoot;
-            }
-
-            bool isUnix = !IsWindows || (normRoot.StartsWith('/') && !normRoot.StartsWith("//")) || normRoot.StartsWith('~');
-            bool isUnc = normRoot.StartsWith("//") || normRoot.StartsWith(@"\\");
-
-            string FormatPath(string baseDir, string subPath)
-            {
-                if (string.IsNullOrEmpty(subPath))
-                {
-                    if (isUnc) return baseDir.Replace('/', '\\');
-                    return isUnix ? baseDir.Replace('\\', '/') : Path.GetFullPath(baseDir);
-                }
-
-                if (isUnc)
-                {
-                    var cleanBase = baseDir.Replace('/', '\\').TrimEnd('\\');
-                    var cleanSub = subPath.Replace('/', '\\').TrimStart('\\');
-                    return $@"{cleanBase}\{cleanSub}";
-                }
-
-                if (isUnix)
-                {
-                    var cleanBase = baseDir.Replace('\\', '/').TrimEnd('/');
-                    var cleanSub = subPath.Replace('\\', '/').TrimStart('/');
-                    return $"{cleanBase}/{cleanSub}";
-                }
-
-                return Path.GetFullPath(Path.Combine(baseDir, subPath));
-            }
 
             var cloneDir = Path.Combine(parentDir, "clone");
             if (Directory.Exists(cloneDir))
@@ -291,51 +315,6 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             }
 
             rel = rel.TrimStart('/', '\\');
-
-            // Find parentDir (the directory mounted to /workspace in container)
-            var normRoot = workspaceRoot.Replace('\\', '/').TrimEnd('/');
-            var rootLeaf = Path.GetFileName(normRoot);
-            string parentDir;
-            if (rootLeaf.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.Equals("mirror", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.StartsWith("task-", StringComparison.OrdinalIgnoreCase) ||
-                rootLeaf.StartsWith("wt-", StringComparison.OrdinalIgnoreCase))
-            {
-                parentDir = Path.GetDirectoryName(normRoot) ?? normRoot;
-            }
-            else
-            {
-                parentDir = normRoot;
-            }
-
-            bool isUnix = !IsWindows || (normRoot.StartsWith('/') && !normRoot.StartsWith("//")) || normRoot.StartsWith('~');
-            bool isUnc = normRoot.StartsWith("//") || normRoot.StartsWith(@"\\");
-
-            string FormatPath(string baseDir, string subPath)
-            {
-                if (string.IsNullOrEmpty(subPath))
-                {
-                    if (isUnc) return baseDir.Replace('/', '\\');
-                    return isUnix ? baseDir.Replace('\\', '/') : Path.GetFullPath(baseDir);
-                }
-
-                if (isUnc)
-                {
-                    var cleanBase = baseDir.Replace('/', '\\').TrimEnd('\\');
-                    var cleanSub = subPath.Replace('/', '\\').TrimStart('\\');
-                    return $@"{cleanBase}\{cleanSub}";
-                }
-
-                if (isUnix)
-                {
-                    var cleanBase = baseDir.Replace('\\', '/').TrimEnd('/');
-                    var cleanSub = subPath.Replace('\\', '/').TrimStart('/');
-                    return $"{cleanBase}/{cleanSub}";
-                }
-
-                return Path.GetFullPath(Path.Combine(baseDir, subPath));
-            }
 
             if (string.IsNullOrEmpty(rel))
             {
@@ -400,5 +379,54 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         }
 
         return Path.GetFullPath(Path.Combine(workspaceRoot, raw));
+    }
+
+    /// <summary>
+    /// Checks if the given path targets the virtual /tmp directory without escaping via '..' traversal,
+    /// and outputs the normalized relative path within /tmp (empty string if targeting /tmp itself).
+    /// </summary>
+    public static bool TryResolveTmpSubPath(string? path, out string subPath)
+    {
+        subPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var normalized = path.Trim().Replace('\\', '/');
+        if (!normalized.Equals("/tmp", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("/tmp/", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var remainder = normalized.Length > 4 ? normalized[4..].TrimStart('/') : string.Empty;
+        if (string.IsNullOrEmpty(remainder))
+        {
+            return true;
+        }
+
+        var segments = remainder.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var stack = new List<string>(segments.Length);
+        foreach (var seg in segments)
+        {
+            if (seg == ".")
+            {
+                continue;
+            }
+            if (seg == "..")
+            {
+                if (stack.Count == 0)
+                {
+                    return false;
+                }
+                stack.RemoveAt(stack.Count - 1);
+                continue;
+            }
+            stack.Add(seg);
+        }
+
+        subPath = string.Join("/", stack);
+        return true;
     }
 }

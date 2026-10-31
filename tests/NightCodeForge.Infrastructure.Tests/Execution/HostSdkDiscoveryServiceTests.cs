@@ -381,6 +381,20 @@ mdfetch=/home/user/.dotnet/tools/mdfetch=/home/user/.dotnet/tools/mdfetch
     }
 
     [Fact]
+    public void DeriveSdkRootFromBinary_ExtractsAndroidSdkRootFromCmdlineToolsAndExcludesSnapd()
+    {
+        var androidRoot = HostSdkDiscoveryService.DeriveSdkRootFromBinary(
+            "sdkmanager",
+            "/home/user/android-sdk/cmdline-tools/latest/bin/sdkmanager");
+        Assert.Equal("/home/user/android-sdk", androidRoot);
+
+        var snapd = HostSdkDiscoveryService.DeriveSdkRootFromBinary(
+            "node",
+            "/usr/lib/snapd/snap-confine");
+        Assert.Null(snapd);
+    }
+
+    [Fact]
     [Trait("Category", "Integration")]
     public void DiscoverSdkDetails_LiveRealExecution_OutputsRealProbeResult()
     {

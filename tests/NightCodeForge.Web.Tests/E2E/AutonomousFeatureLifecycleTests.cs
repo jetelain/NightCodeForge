@@ -23,6 +23,7 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
     private IPage _page = default!;
     private SyntheticRepoFixture _repo = default!;
     private Process? _webServerProcess;
+    private int? _provisionedWorkspaceId;
     private readonly string _baseUrl = Environment.GetEnvironmentVariable("NCF_BASE_URL") ?? "http://127.0.0.1:5272";
     private readonly string _workspaceSeed = Environment.GetEnvironmentVariable(NightCodeForge.Infrastructure.Data.AppDbContext.WorkspaceIdSeedEnvironmentVariable) 
         ?? NightCodeForge.Infrastructure.Data.AppDbContext.DefaultE2EWorkspaceIdSeed.ToString();
@@ -128,14 +129,14 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
         await _page.WaitForSelectorAsync("#base-branch-select", new PageWaitForSelectorOptions { Timeout = 10000 });
         await _page.ClickAsync("button:has-text('Continue →')");
 
-        // Step 1.4: Execution Environment (Bare Host)
+        // Step 1.4: Execution Environment (Container Sandbox - Recommended Default)
         await _page.WaitForSelectorAsync(".execution-modes-grid", new PageWaitForSelectorOptions { Timeout = 10000 });
-        await _page.ClickAsync(".mode-card:has-text('Bare Host')");
+        await _page.ClickAsync(".mode-card:has-text('Container Sandbox')");
         await _page.ClickAsync("button:has-text('Provision Workspace')");
 
         // Step 1.5: Finish provisioning & activate workspace
         var finishBtn = _page.Locator("button:has-text('Open Workspace in Forge ➔')");
-        await finishBtn.WaitForAsync(new LocatorWaitForOptions { Timeout = 45000 });
+        await finishBtn.WaitForAsync(new LocatorWaitForOptions { Timeout = 60000 });
         await finishBtn.ClickAsync();
         await _page.WaitForTimeoutAsync(1000);
 
@@ -146,6 +147,7 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
             var activeWsVal = await wsDropdown.First.InputValueAsync();
             if (int.TryParse(activeWsVal, out var activeWsId) && int.TryParse(_workspaceSeed, out var expectedMinId))
             {
+                _provisionedWorkspaceId = activeWsId;
                 _output.WriteLine($"[E2E] Provisioned workspace ID: {activeWsId} (minimum expected seed: {expectedMinId})");
                 Assert.True(activeWsId >= expectedMinId, $"Workspace ID {activeWsId} should be >= seed {expectedMinId}");
             }
@@ -481,6 +483,11 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
             await _repo.DisposeAsync();
         }
 
+        if (_provisionedWorkspaceId.HasValue)
+        {
+            await CleanupProvisionedWorkspaceContainersAsync(_provisionedWorkspaceId.Value);
+        }
+
         try
         {
             var prefix = Path.GetFileNameWithoutExtension(_tempDbPath);
@@ -495,5 +502,33 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
             }
         }
         catch { }
+    }
+
+    private static async Task CleanupProvisionedWorkspaceContainersAsync(int workspaceId)
+    {
+        try
+        {
+            var isWindows = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
+            var prefix = $"ncf-sandbox-{workspaceId}";
+            var cmd = $"docker ps -a --filter \"name={prefix}\" -q | xargs -r docker rm -f && rm -rf ~/.nightcodeforge/wks/{workspaceId}";
+            var psi = isWindows
+                ? new ProcessStartInfo("wsl.exe", $"-- bash -c \"{cmd}\"")
+                : new ProcessStartInfo("bash", $"-c \"{cmd}\"");
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+
+            using var proc = Process.Start(psi);
+            if (proc != null)
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                await proc.WaitForExitAsync(cts.Token);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup of E2E sandbox containers and ext4 mirror
+        }
     }
 }

@@ -142,6 +142,51 @@ public class ExecutionEnvironmentTests
         Assert.True(containerExecutor.Options.MountPackageCaches);
         Assert.True(containerExecutor.Options.MountHostSdks);
         Assert.Equal("wsluser", containerExecutor.Options.WslUserName);
+        Assert.Contains(containerExecutor.Options.AdditionalVolumeMounts,
+            m => m.ContainerPath == "/tmp" && m.HostPath == "/home/wsluser/.nightcodeforge/wks/42/tmp" && !m.IsReadOnly);
+    }
+
+    [Theory]
+    [InlineData("ncf-agent-base:latest", ContainerExecutorOptions.DefaultAgentBaseImage)]
+    [InlineData("ncf-agent-base:v1", ContainerExecutorOptions.DefaultAgentBaseImage)]
+    [InlineData("ncf-agent-base:v2", ContainerExecutorOptions.DefaultAgentBaseImage)]
+    [InlineData("nightcodeforge-agent:latest", ContainerExecutorOptions.DefaultAgentBaseImage)]
+    [InlineData("nightcodeforge-agent:v2", ContainerExecutorOptions.DefaultAgentBaseImage)]
+    [InlineData("alpine:3.19", "alpine:3.19")]
+    public void ExecutionEnvironmentProvider_ContainerMode_UpgradesLegacyManagedBaseImages(string configuredImage, string expectedImage)
+    {
+        var pathResolver = new FakePathResolver();
+        var provider = new TestExecutionEnvironmentProviderBuilder { PathResolver = pathResolver }.Build();
+
+        var workspace = new Workspace
+        {
+            Id = 42,
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            ContainerImage = configuredImage
+        };
+
+        var env = provider.GetEnvironment(workspace);
+        var containerExecutor = Assert.IsType<NightCodeForgeContainerExecutor>(env);
+
+        Assert.Equal(expectedImage, containerExecutor.Options.ContainerImage);
+    }
+
+    [Fact]
+    public void ExecutionEnvironmentProvider_RestrictedReadOnly_DoesNotBindMountHostTmp()
+    {
+        var pathResolver = new FakePathResolver();
+        var provider = new TestExecutionEnvironmentProviderBuilder { PathResolver = pathResolver }.Build();
+
+        var workspace = new Workspace
+        {
+            Id = 42,
+            ExecutionMode = ExecutionMode.ContainerSandbox
+        };
+
+        var env = provider.GetEnvironment(workspace, SandboxSecurityTier.RestrictedReadOnly);
+        var containerExecutor = Assert.IsType<NightCodeForgeContainerExecutor>(env);
+
+        Assert.DoesNotContain(containerExecutor.Options.AdditionalVolumeMounts, m => m.ContainerPath == "/tmp");
     }
 
     [Fact]
@@ -198,7 +243,38 @@ public class ExecutionEnvironmentTests
         Assert.Contains("/usr/local/go/bin", path);
         Assert.Contains("/home/user/.nvm/versions/node/v20.10.0/bin", path);
         Assert.Contains("/usr/lib/jvm/java-17-openjdk-amd64/bin", path);
+        Assert.DoesNotContain("/usr/lib/jvm/java-17-openjdk-amd64/default-java/bin", path);
         Assert.Contains("/custom/tools/bin", path);
+    }
+
+    [Fact]
+    public void ContainerExecutor_ComputesPathEnvironmentVariable_SkipsNonBinaryMountsAndDeduplicatesAndroidPaths()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            MountHostSdks = true,
+            SdkMountPaths = new List<string>
+            {
+                "/etc/ssl/certs",
+                "/usr/lib/x86_64-linux-gnu",
+                "/usr/lib/snapd",
+                "/home/user/android-sdk",
+                "/home/user/android-sdk/cmdline-tools/latest",
+                "/home/user/.dotnet"
+            }
+        };
+
+        var path = NightCodeForgeContainerExecutor.ComputePathEnvironmentVariable(options);
+        var entries = path.Split(':');
+
+        Assert.DoesNotContain("/etc/ssl/certs", entries);
+        Assert.DoesNotContain("/usr/lib/x86_64-linux-gnu", entries);
+        Assert.DoesNotContain("/usr/lib/snapd", entries);
+        Assert.DoesNotContain("/home/user/android-sdk/cmdline-tools/latest/cmdline-tools/latest/bin", entries);
+        Assert.Contains("/home/user/android-sdk/platform-tools", entries);
+        Assert.Contains("/home/user/android-sdk/cmdline-tools/latest/bin", entries);
+        Assert.Contains("/home/user/.dotnet/tools", entries);
+        Assert.Contains(ContainerExecutorOptions.HostDotnetToolsContainerPath, entries);
     }
 
     [Fact]

@@ -36,7 +36,9 @@ public class ContainerVolumeMount
 
 public class ContainerExecutorOptions
 {
-    public const string DefaultAgentBaseImage = "ncf-agent-base:v2";
+    public const string DefaultAgentBaseImage = "ncf-agent-base:v3";
+    public const string ContainerHomePath = "/ncf-home";
+    public const string HostDotnetToolsContainerPath = "/opt/ncf-dotnet-tools";
 
     public const string DefaultAgentBaseDockerfile = """
 FROM ubuntu:24.04
@@ -61,9 +63,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && locale-gen en_US.UTF-8 fr_FR.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /cache/nuget /cache/npm /cache/pnpm /cache/uv /cache/m2 \
-    && chmod -R 777 /cache
+RUN mkdir -p /cache/nuget /cache/npm /cache/pnpm /cache/uv /cache/m2 /ncf-home/.dotnet /ncf-home/.local/bin /opt/ncf-dotnet-tools \
+    && chmod -R 777 /cache /ncf-home
 
+ENV HOME=/ncf-home
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
@@ -296,13 +299,13 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             var hasCustomPath = environmentVariables != null && environmentVariables.ContainsKey("PATH");
             if (!hasCustomPath)
             {
-                await _stdin!.WriteLineAsync($"export PATH=\"{computedPath}:$PATH\"");
+                await _stdin!.WriteLineAsync($"export PATH=\"{computedPath}\"");
             }
             await _stdin!.WriteLineAsync("export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0");
             await _stdin!.WriteLineAsync("export LANG=en_US.UTF-8");
             await _stdin!.WriteLineAsync("export LC_ALL=en_US.UTF-8");
-            await _stdin!.WriteLineAsync("export HOME=\"/tmp/ncf-home\"");
-            await _stdin!.WriteLineAsync("mkdir -p /tmp/ncf-home 2>/dev/null || true");
+            await _stdin!.WriteLineAsync($"mkdir -p {ContainerExecutorOptions.ContainerHomePath}/.dotnet 2>/dev/null || true");
+            await _stdin!.WriteLineAsync($"if [ ! -w {ContainerExecutorOptions.ContainerHomePath} ] || [ ! -w {ContainerExecutorOptions.ContainerHomePath}/.dotnet ]; then export HOME=\"/tmp/ncf-home-$(id -u)\"; mkdir -p \"$HOME/.dotnet\" 2>/dev/null || true; else export HOME=\"{ContainerExecutorOptions.ContainerHomePath}\"; fi");
             await _stdin!.WriteLineAsync("git config --global --add safe.directory '*' 2>/dev/null || true");
 
             if (_options.MountPackageCaches)
@@ -831,7 +834,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             // If the alternate image exists and is fresh, tag it
             var altImage = image.StartsWith("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase)
                 ? ContainerExecutorOptions.DefaultAgentBaseImage
-                : "nightcodeforge-agent:v2";
+                : "nightcodeforge-agent:v3";
 
             if (IsImageFresh(_processRunner, altImage, _options, TimeSpan.FromDays(30)))
             {
@@ -1405,36 +1408,72 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             foreach (var sdk in options.SdkMountPaths)
             {
                 if (string.IsNullOrWhiteSpace(sdk)) continue;
-                if (sdk.EndsWith("/dotnet", StringComparison.OrdinalIgnoreCase) || sdk == "/usr/share/dotnet")
+                var trimmedSdk = sdk.Trim().TrimEnd('/');
+                if (string.IsNullOrEmpty(trimmedSdk)) continue;
+
+                // Skip non-executable library/certificate/snap directories
+                if (trimmedSdk.StartsWith("/etc/", StringComparison.OrdinalIgnoreCase) ||
+                    trimmedSdk.Equals("/etc", StringComparison.OrdinalIgnoreCase) ||
+                    trimmedSdk.Equals("/usr/lib/x86_64-linux-gnu", StringComparison.OrdinalIgnoreCase) ||
+                    trimmedSdk.Equals("/usr/lib/aarch64-linux-gnu", StringComparison.OrdinalIgnoreCase) ||
+                    trimmedSdk.Equals("/usr/lib/snapd", StringComparison.OrdinalIgnoreCase) ||
+                    trimmedSdk.StartsWith("/snap", StringComparison.OrdinalIgnoreCase))
                 {
-                    pathEntries.Add(sdk);
+                    continue;
+                }
+
+                if (trimmedSdk.EndsWith("/.dotnet", StringComparison.OrdinalIgnoreCase))
+                {
+                    pathEntries.Add($"{trimmedSdk}/tools");
+                    pathEntries.Add(trimmedSdk);
+                }
+                else if (trimmedSdk.EndsWith("/dotnet", StringComparison.OrdinalIgnoreCase) || trimmedSdk == "/usr/share/dotnet")
+                {
+                    pathEntries.Add(trimmedSdk);
                     pathEntries.Add("/root/.dotnet/tools");
                 }
-                else if (sdk.Contains("jvm", StringComparison.OrdinalIgnoreCase))
+                else if (trimmedSdk.Contains("jvm", StringComparison.OrdinalIgnoreCase))
                 {
-                    pathEntries.Add($"{sdk.TrimEnd('/')}/bin");
-                    pathEntries.Add($"{sdk.TrimEnd('/')}/default-java/bin");
+                    if (trimmedSdk.Equals("/usr/lib/jvm", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pathEntries.Add("/usr/lib/jvm/default-java/bin");
+                    }
+                    else
+                    {
+                        pathEntries.Add($"{trimmedSdk}/bin");
+                    }
                 }
-                else if (sdk.Contains("android", StringComparison.OrdinalIgnoreCase))
+                else if (trimmedSdk.Contains("android", StringComparison.OrdinalIgnoreCase))
                 {
-                    pathEntries.Add($"{sdk.TrimEnd('/')}/platform-tools");
-                    pathEntries.Add($"{sdk.TrimEnd('/')}/cmdline-tools/latest/bin");
+                    if (trimmedSdk.EndsWith("/cmdline-tools/latest", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pathEntries.Add($"{trimmedSdk}/bin");
+                    }
+                    else if (trimmedSdk.EndsWith("/platform-tools", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pathEntries.Add(trimmedSdk);
+                    }
+                    else
+                    {
+                        pathEntries.Add($"{trimmedSdk}/platform-tools");
+                        pathEntries.Add($"{trimmedSdk}/cmdline-tools/latest/bin");
+                    }
                 }
-                else if (sdk.EndsWith("/bin", StringComparison.OrdinalIgnoreCase))
+                else if (trimmedSdk.EndsWith("/bin", StringComparison.OrdinalIgnoreCase))
                 {
-                    pathEntries.Add(sdk);
+                    pathEntries.Add(trimmedSdk);
                 }
-                else if (sdk.Contains("cargo", StringComparison.OrdinalIgnoreCase) ||
-                         sdk.Contains("go", StringComparison.OrdinalIgnoreCase) ||
-                         sdk.Contains("node", StringComparison.OrdinalIgnoreCase) ||
-                         sdk.Contains("nvm", StringComparison.OrdinalIgnoreCase))
+                else if (trimmedSdk.Contains("cargo", StringComparison.OrdinalIgnoreCase) ||
+                         trimmedSdk.Contains("go", StringComparison.OrdinalIgnoreCase) ||
+                         trimmedSdk.Contains("node", StringComparison.OrdinalIgnoreCase) ||
+                         trimmedSdk.Contains("nvm", StringComparison.OrdinalIgnoreCase))
                 {
-                    pathEntries.Add($"{sdk.TrimEnd('/')}/bin");
-                    pathEntries.Add(sdk);
+                    pathEntries.Add($"{trimmedSdk}/bin");
+                    pathEntries.Add(trimmedSdk);
                 }
                 else
                 {
-                    pathEntries.Add(sdk);
+                    pathEntries.Add(trimmedSdk);
                 }
             }
         }
@@ -1445,8 +1484,9 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         }
 
         // 3. User package manager & tool paths
-        pathEntries.Add("/tmp/ncf-home/.dotnet/tools");
-        pathEntries.Add("/tmp/ncf-home/.local/bin");
+        pathEntries.Add(ContainerExecutorOptions.HostDotnetToolsContainerPath);
+        pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools");
+        pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.local/bin");
         pathEntries.Add("/root/.dotnet/tools");
         pathEntries.Add("/root/.local/bin");
         pathEntries.Add("/root/.cargo/bin");
@@ -1488,6 +1528,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
         var computedPath = ComputePathEnvironmentVariable(options);
         args.AddRange(["-e", $"PATH={computedPath}"]);
+        args.AddRange(["-e", $"HOME={ContainerExecutorOptions.ContainerHomePath}"]);
         args.AddRange(["-e", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0"]);
         args.AddRange(["-e", "LANG=en_US.UTF-8"]);
         args.AddRange(["-e", "LC_ALL=en_US.UTF-8"]);
@@ -1536,6 +1577,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             args.AddRange(["--network", "none"]);
             args.AddRange(["--read-only"]);
             args.AddRange(["--tmpfs", "/tmp:rw,noexec,nosuid,size=32m"]);
+            args.AddRange(["--tmpfs", $"{ContainerExecutorOptions.ContainerHomePath}:rw,noexec,nosuid,size=16m"]);
             args.AddRange(["--cap-drop=ALL"]);
             args.AddRange(["--security-opt", "no-new-privileges:true"]);
         }

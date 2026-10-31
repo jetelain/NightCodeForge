@@ -100,7 +100,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         {
             try
             {
-                _gitWorkspaceManager.EnsureWorktreeRelativePathsAsync(workspace, effectiveTaskId.Value).GetAwaiter().GetResult();
+                Task.Run(() => _gitWorkspaceManager.EnsureWorktreeRelativePathsAsync(workspace, effectiveTaskId.Value)).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -209,7 +209,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                 var detectedStack = !string.IsNullOrWhiteSpace(rawPath) ? CodeStackPresets.Detect(rawPath)?.Name ?? CodeStack.DotNet : CodeStack.DotNet;
                 try
                 {
-                    _companionToolInstaller.EnsureToolsInstalledAsync(detectedStack, useWsl, targetDistro).GetAwaiter().GetResult();
+                    Task.Run(() => _companionToolInstaller.EnsureToolsInstalledAsync(detectedStack, useWsl, targetDistro)).GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
@@ -242,16 +242,40 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                 {
                     additionalMounts.Add(new(
                         hostPath: hostToolsSource,
-                        containerPath: "/tmp/ncf-home/.dotnet/tools",
+                        containerPath: ContainerExecutorOptions.HostDotnetToolsContainerPath,
                         isReadOnly: true));
+                }
+
+                if (securityTier != SandboxSecurityTier.RestrictedReadOnly && !string.IsNullOrWhiteSpace(hostWorkspacePath))
+                {
+                    var hostTmpDir = $"{hostWorkspacePath.TrimEnd('/', '\\').Replace('\\', '/')}/tmp";
+                    var hostAccessibleWorkspaceDir = _pathResolver.ToHostPath(hostWorkspacePath);
+                    if (Directory.Exists(hostAccessibleWorkspaceDir))
+                    {
+                        var hostAccessibleTmpDir = _pathResolver.ToHostPath(hostTmpDir);
+                        if (!Directory.Exists(hostAccessibleTmpDir))
+                        {
+                            try
+                            {
+                                Directory.CreateDirectory(hostAccessibleTmpDir);
+                            }
+                            catch (Exception ex)
+                            {
+                                _containerLogger.LogWarning(ex, "Failed to create host tmp directory at {HostTmpDir}", hostAccessibleTmpDir);
+                            }
+                        }
+                    }
+
+                    additionalMounts.Add(new(
+                        hostPath: hostTmpDir,
+                        containerPath: "/tmp",
+                        isReadOnly: false));
                 }
 
                 var options = new ContainerExecutorOptions
                 {
                     ContainerNameOrId = containerName,
-                    ContainerImage = !string.IsNullOrWhiteSpace(workspace.ContainerImage)
-                        ? workspace.ContainerImage
-                        : ContainerExecutorOptions.DefaultAgentBaseImage,
+                    ContainerImage = ResolveContainerImage(workspace),
                     HostWorkspacePath = hostWorkspacePath,
                     CanonicalClonePath = canonicalClonePath,
                     ContainerWorkspacePath = "/workspace",
@@ -294,6 +318,29 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                     ? $"ncf-sandbox-{workspace.Id}"
                     : workspace.ContainerImage)
                 : "ncf-sandbox");
+
+    private static string ResolveContainerImage(Workspace workspace)
+    {
+        if (string.IsNullOrWhiteSpace(workspace.ContainerImage))
+        {
+            return ContainerExecutorOptions.DefaultAgentBaseImage;
+        }
+
+        var trimmed = workspace.ContainerImage.Trim();
+        if (trimmed.Equals("ncf-agent-base", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("ncf-agent-base:latest", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("ncf-agent-base:v1", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("ncf-agent-base:v2", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("nightcodeforge-agent:latest", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("nightcodeforge-agent:v1", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("nightcodeforge-agent:v2", StringComparison.OrdinalIgnoreCase))
+        {
+            return ContainerExecutorOptions.DefaultAgentBaseImage;
+        }
+
+        return trimmed;
+    }
 
     private static string TaskContainerName(string baseContainerName, int taskId) =>
         $"{baseContainerName}{TaskContainerInfix}{taskId}";

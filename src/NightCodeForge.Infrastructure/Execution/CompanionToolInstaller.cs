@@ -82,7 +82,7 @@ public class CompanionToolInstaller : ICompanionToolInstaller
 
         try
         {
-            var result = await _processRunner.RunAsync(spec, ct);
+            var result = await _processRunner.RunAsync(spec, ct).ConfigureAwait(false);
             if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput))
             {
                 // dotnet tool list -g output columns: Package Id, Version, Commands
@@ -146,7 +146,7 @@ public class CompanionToolInstaller : ICompanionToolInstaller
                     FileName = "wsl.exe",
                     Arguments = mkdirArgs,
                     TimeoutSeconds = 10
-                }, ct);
+                }, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -179,7 +179,7 @@ public class CompanionToolInstaller : ICompanionToolInstaller
         {
             ct.ThrowIfCancellationRequested();
 
-            var isInstalled = await IsToolInstalledAsync(tool.ToolCommand, useWsl, wslDistribution, ct);
+            var isInstalled = await IsToolInstalledAsync(tool.ToolCommand, useWsl, wslDistribution, ct).ConfigureAwait(false);
             if (isInstalled)
             {
                 _logger.LogDebug("Companion tool '{ToolCommand}' is already installed (useWsl={UseWsl}).", tool.ToolCommand, useWsl);
@@ -215,7 +215,7 @@ public class CompanionToolInstaller : ICompanionToolInstaller
 
             try
             {
-                var installResult = await _processRunner.RunAsync(installSpec, ct);
+                var installResult = await _processRunner.RunAsync(installSpec, ct).ConfigureAwait(false);
                 if (installResult.ExitCode != 0)
                 {
                     // "already installed" message in stdout or stderr is acceptable

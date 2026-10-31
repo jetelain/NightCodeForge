@@ -270,9 +270,18 @@ public class GitMirrorSyncService : IGitMirrorSyncService
                 var user = _wslMetadataService.GetDefaultUserName();
                 var uncMirror = WslPathConverter.ToWslUncPath(targetMirrorDir, distro, user);
                 var parentUnc = Path.GetDirectoryName(uncMirror);
-                if (!string.IsNullOrEmpty(parentUnc) && !Directory.Exists(parentUnc))
+                if (!string.IsNullOrEmpty(parentUnc))
                 {
-                    Directory.CreateDirectory(parentUnc);
+                    if (!Directory.Exists(parentUnc))
+                    {
+                        Directory.CreateDirectory(parentUnc);
+                    }
+
+                    var tmpUnc = Path.Combine(parentUnc, "tmp");
+                    if (!Directory.Exists(tmpUnc))
+                    {
+                        Directory.CreateDirectory(tmpUnc);
+                    }
                 }
 
                 await _gitCliRunner.ExecuteAsync(
@@ -284,9 +293,18 @@ public class GitMirrorSyncService : IGitMirrorSyncService
             else
             {
                 var parentDir = Path.GetDirectoryName(Path.GetFullPath(targetMirrorDir));
-                if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
+                if (!string.IsNullOrEmpty(parentDir))
                 {
-                    Directory.CreateDirectory(parentDir);
+                    if (!Directory.Exists(parentDir))
+                    {
+                        Directory.CreateDirectory(parentDir);
+                    }
+
+                    var tmpDir = Path.Combine(parentDir, "tmp");
+                    if (!Directory.Exists(tmpDir))
+                    {
+                        Directory.CreateDirectory(tmpDir);
+                    }
                 }
 
                 var cloneDir = Directory.Exists(parentDir) ? parentDir : workspace.RepositoryPath;

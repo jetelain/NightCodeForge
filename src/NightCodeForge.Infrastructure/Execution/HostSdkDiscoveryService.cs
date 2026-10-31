@@ -84,7 +84,10 @@ done";
         "/proc",
         "/sys",
         "/mnt",
-        "/opt"
+        "/opt",
+        "/snap",
+        "/snap/bin",
+        "/usr/lib/snapd"
     };
 
     private readonly IProcessRunner _processRunner;
@@ -368,6 +371,15 @@ done";
         if (string.IsNullOrWhiteSpace(dir) || IsExcludedDirectory(dir))
         {
             return null;
+        }
+
+        if (dir.EndsWith("/cmdline-tools/latest/bin", StringComparison.OrdinalIgnoreCase))
+        {
+            var androidRoot = dir[..^"/cmdline-tools/latest/bin".Length];
+            if (!string.IsNullOrWhiteSpace(androidRoot) && !IsExcludedDirectory(androidRoot))
+            {
+                return androidRoot;
+            }
         }
 
         if (dir.EndsWith("/bin", StringComparison.OrdinalIgnoreCase) ||

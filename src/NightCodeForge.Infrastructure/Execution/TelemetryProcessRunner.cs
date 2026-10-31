@@ -174,7 +174,7 @@ public class TelemetryProcessRunner : IProcessRunner
 
         try
         {
-            var result = await _innerRunner.RunAsync(spec, cancellationToken);
+            var result = await _innerRunner.RunAsync(spec, cancellationToken).ConfigureAwait(false);
             sw.Stop();
 
             var outPreview = !string.IsNullOrEmpty(result.StandardOutput)

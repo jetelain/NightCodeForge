@@ -202,4 +202,47 @@ public class WorkspacePathResolverTests
         Assert.Equal("Debian-Override", resolver.GetWslDistributionName());
         Assert.Equal("root-override", resolver.GetWslUserName());
     }
+
+    [Fact]
+    public void ResolveCruciblePath_ResolvesTmpPaths_OnWindowsAndUnixAndRejectsTraversal()
+    {
+        var winResolver = CreateResolver(
+            isWindowsOverride: true,
+            distributionOverride: "Ubuntu-24.04",
+            userOverride: "devuser");
+
+        var winTmpFile = winResolver.ResolveCruciblePath(10, "/tmp/hp_patch.py", taskId: 35);
+        Assert.Equal(@"\\wsl.localhost\Ubuntu-24.04\home\devuser\.nightcodeforge\wks\10\tmp\hp_patch.py", winTmpFile);
+
+        var unixResolver = CreateResolver(
+            isWindowsOverride: false,
+            distributionOverride: "Ubuntu",
+            userOverride: "julien");
+
+        var unixTmpFile = unixResolver.ResolveCruciblePath("/home/julien/.nightcodeforge/wks/10/task-35", "/tmp/hp_patch.py", taskId: 35);
+        Assert.Equal("/home/julien/.nightcodeforge/wks/10/tmp/hp_patch.py", unixTmpFile);
+
+        // Full WSL path targeting .nightcodeforge/wks/{id}/tmp/... resolves to wks/{id}/tmp/... even with taskId
+        var winEmbeddedWksTmp = winResolver.ResolveCruciblePath(10, "/home/devuser/.nightcodeforge/wks/10/tmp/hp_patch.py", taskId: 35);
+        Assert.Equal(@"\\wsl.localhost\Ubuntu-24.04\home\devuser\.nightcodeforge\wks\10\tmp\hp_patch.py", winEmbeddedWksTmp);
+
+        var unixEmbeddedWksTmp = unixResolver.ResolveCruciblePath(10, "/home/julien/.nightcodeforge/wks/10/tmp/hp_patch.py", taskId: 35);
+        Assert.EndsWith(".nightcodeforge/wks/10/tmp/hp_patch.py", unixEmbeddedWksTmp);
+
+        // When workspaceRoot itself is located under /tmp on Unix, paths already under parentDir are not double-wrapped
+        var unixTmpRootedFile = unixResolver.ResolveCruciblePath("/tmp/ncf-test-wks/clone", "/tmp/ncf-test-wks/clone/src/App.cs");
+        Assert.Equal("/tmp/ncf-test-wks/clone/src/App.cs", unixTmpRootedFile);
+
+        var unixTmpRootedVirtualTmp = unixResolver.ResolveCruciblePath("/tmp/ncf-test-wks/clone", "/tmp/hp_patch.py");
+        Assert.Equal("/tmp/ncf-test-wks/tmp/hp_patch.py", unixTmpRootedVirtualTmp);
+
+        Assert.True(WorkspacePathResolver.TryResolveTmpSubPath("/tmp/hp_patch.py", out var sub1));
+        Assert.Equal("hp_patch.py", sub1);
+
+        Assert.True(WorkspacePathResolver.TryResolveTmpSubPath("/tmp/a/../hp_patch.py", out var sub2));
+        Assert.Equal("hp_patch.py", sub2);
+
+        Assert.False(WorkspacePathResolver.TryResolveTmpSubPath("/tmp/../etc/passwd", out _));
+        Assert.False(WorkspacePathResolver.TryResolveTmpSubPath("/tmp/a/../../etc/passwd", out _));
+    }
 }

@@ -147,7 +147,7 @@ public class ContainerToolsIntegrationTests : IDisposable
             {
                 new(
                     hostPath: hostToolsDir,
-                    containerPath: "/tmp/ncf-home/.dotnet/tools",
+                    containerPath: ContainerExecutorOptions.HostDotnetToolsContainerPath,
                     isReadOnly: false)
             }
         };
@@ -164,17 +164,17 @@ public class ContainerToolsIntegrationTests : IDisposable
             telemetryMock.Object);
 
         // Ensure executable permissions inside the container
-        await executor.ExecuteAsync("chmod +x /tmp/ncf-home/.dotnet/tools/custom-echo-tool");
+        await executor.ExecuteAsync($"chmod +x {ContainerExecutorOptions.HostDotnetToolsContainerPath}/custom-echo-tool");
 
-        // Verify PATH includes /tmp/ncf-home/.dotnet/tools
+        // Verify PATH includes HostDotnetToolsContainerPath
         var pathResult = await executor.ExecuteAsync("echo $PATH");
         Assert.Equal(0, pathResult.ExitCode);
-        Assert.Contains("/tmp/ncf-home/.dotnet/tools", pathResult.StandardOutput);
+        Assert.Contains(ContainerExecutorOptions.HostDotnetToolsContainerPath, pathResult.StandardOutput);
 
         // Verify which resolves custom-echo-tool through PATH
         var whichResult = await executor.ExecuteAsync("which custom-echo-tool");
         Assert.Equal(0, whichResult.ExitCode);
-        Assert.Contains("/tmp/ncf-home/.dotnet/tools/custom-echo-tool", whichResult.StandardOutput.Trim());
+        Assert.Contains($"{ContainerExecutorOptions.HostDotnetToolsContainerPath}/custom-echo-tool", whichResult.StandardOutput.Trim());
 
         // Execute tool directly by name without full path
         var execResult = await executor.ExecuteAsync("custom-echo-tool integration-payload");
@@ -231,10 +231,28 @@ public class ContainerToolsIntegrationTests : IDisposable
         Assert.Equal(0, unameResult.ExitCode);
         Assert.Contains("Linux", unameResult.StandardOutput);
 
-        // 2. Verify PATH contains mounted tools directory
+        // 2. Verify PATH contains mounted tools directory and does not grow across executions
         var pathResult = await env.ExecuteAsync("echo $PATH");
         Assert.Equal(0, pathResult.ExitCode);
-        Assert.Contains("/tmp/ncf-home/.dotnet/tools", pathResult.StandardOutput);
+        Assert.Contains(ContainerExecutorOptions.HostDotnetToolsContainerPath, pathResult.StandardOutput);
+        Assert.Contains($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools", pathResult.StandardOutput);
+
+        var pathResultSecond = await env.ExecuteAsync("echo $PATH");
+        Assert.Equal(0, pathResultSecond.ExitCode);
+        Assert.Equal(pathResult.StandardOutput.Trim(), pathResultSecond.StandardOutput.Trim());
+
+        // 2b. Verify $HOME and $HOME/.dotnet are writable by the container user (so dotnet build sentinel creation succeeds)
+        var homeWritableResult = await env.ExecuteAsync("test -w \"$HOME\" && test -w \"$HOME/.dotnet\" && touch \"$HOME/.dotnet/sentinel.test\" && rm -f \"$HOME/.dotnet/sentinel.test\" && echo home-dotnet-writable");
+        Assert.Equal(0, homeWritableResult.ExitCode);
+        Assert.Contains("home-dotnet-writable", homeWritableResult.StandardOutput);
+
+        // 2c. Verify /tmp is bind-mounted from {hostWorkspacePath}/tmp and shared between host and container
+        var hostTmpFile = pathResolver.ResolveCruciblePath(_testRoot, "/tmp/shared_tmp_check.py");
+        Directory.CreateDirectory(Path.GetDirectoryName(hostTmpFile)!);
+        await File.WriteAllTextAsync(hostTmpFile, "print('shared-tmp-ok')\n");
+        var tmpExecResult = await env.ExecuteAsync("python3 /tmp/shared_tmp_check.py");
+        Assert.Equal(0, tmpExecResult.ExitCode);
+        Assert.Contains("shared-tmp-ok", tmpExecResult.StandardOutput);
 
         // 3. Verify /workspace/skills mount exists and is accessible
         var skillsResult = await env.ExecuteAsync("test -d /workspace/skills && echo skills-dir-exists");
