@@ -26,7 +26,7 @@
 ## 2. Completed Bug Fixes, Onboarding & Hardening (Phase 11 Archive)
 
 - **Master Archive Summary:** [11_EXTEND_FEATURES.md](11_EXTEND_FEATURES.md)
-- **Step Specifications Directory:** [`phase-11/`](phase-11/) (24 completed steps: `11.2`, `11.7`, `11.12`, `11.13`, `11.15`, `11.17`, `11.18`, `11.20`, `11.21`, `11.22`, `11.23`, `11.24`, `11.25`, `11.26`, `11.27`, `11.28`, `11.29`, `11.30`, `11.31`, `11.32`, `11.33`, `11.34`, `11.35`, `11.36`)
+- **Step Specifications Directory:** [`phase-11/`](phase-11/) (25 completed steps: `11.2`, `11.7`, `11.12`, `11.13`, `11.15`, `11.17`, `11.18`, `11.20`, `11.21`, `11.22`, `11.23`, `11.24`, `11.25`, `11.26`, `11.27`, `11.28`, `11.29`, `11.30`, `11.31`, `11.32`, `11.33`, `11.34`, `11.35`, `11.36`, `11.38A`)
 - **Remaining Fixes:** Tracked in [`docs/fixes/README.md`](../fixes/README.md)
 
 ---
