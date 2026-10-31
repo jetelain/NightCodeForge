@@ -592,6 +592,7 @@ public class InMemoryTaskRepository : ITaskRepository
         string? title = null,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_lock)
         {
             var conversation = new Conversation
@@ -630,6 +631,7 @@ public class InMemoryTaskRepository : ITaskRepository
         string? transcriptFileName = null,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_lock)
         {
             if (_conversations.TryGetValue(conversationId, out var conversation))
@@ -658,6 +660,7 @@ public class InMemoryTaskRepository : ITaskRepository
         string? metadataJson = null,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_lock)
         {
             var turn = new ConversationTurn

@@ -23,13 +23,33 @@ public static class ReadOnlyCommandValidator
         "echo", "printf", "true", "false", "test",
         
         // Git (subcommands validated separately)
-        "git"
+        "git",
+
+        // C# Navigation CLI (subcommands validated separately)
+        "csnav"
     };
 
     private static readonly HashSet<string> AllowedGitSubcommands = new(StringComparer.OrdinalIgnoreCase)
     {
         "status", "log", "diff", "show", "branch", "tag", "rev-parse",
         "ls-files", "ls-tree", "grep", "describe", "shortlog", "blame", "remote", "cat-file", "check-ref-format"
+    };
+
+    private static readonly HashSet<string> AllowedCsNavSubcommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "references", "refs",
+        "definition", "def",
+        "implementations", "impl",
+        "api-search", "apis",
+        "explore",
+        "decompile",
+        "sync",
+        "server"
+    };
+
+    private static readonly HashSet<string> AllowedCsNavServerSubcommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "status", "start", "reload"
     };
 
     private static readonly HashSet<string> MutatingGitBranchOrTagFlags = new(StringComparer.OrdinalIgnoreCase)
@@ -84,6 +104,50 @@ public static class ReadOnlyCommandValidator
                 {
                     return (false, gitError);
                 }
+            }
+            else if (string.Equals(cmdName, "csnav", StringComparison.OrdinalIgnoreCase))
+            {
+                var (isCsNavAllowed, csNavError) = ValidateCsNavCommand(tokens);
+                if (!isCsNavAllowed)
+                {
+                    return (false, csNavError);
+                }
+            }
+        }
+
+        return (true, null);
+    }
+
+    private static (bool IsAllowed, string? ErrorMessage) ValidateCsNavCommand(IReadOnlyList<string> tokens)
+    {
+        int i = 1;
+        while (i < tokens.Count && tokens[i].StartsWith("-"))
+        {
+            if (tokens[i] is "-s" or "--solution" or "--format")
+            {
+                i += 2;
+                continue;
+            }
+            i++;
+        }
+
+        if (i >= tokens.Count)
+        {
+            return (true, null);
+        }
+
+        var subcommand = tokens[i].ToLowerInvariant();
+        if (!AllowedCsNavSubcommands.Contains(subcommand))
+        {
+            return (false, $"csnav subcommand '{subcommand}' is not permitted in read-only exploration mode. Allowed csnav subcommands: references, definition, implementations, api-search, explore, decompile, sync, server.");
+        }
+
+        if (subcommand == "server" && i + 1 < tokens.Count && !tokens[i + 1].StartsWith("-"))
+        {
+            var serverSubcommand = tokens[i + 1].ToLowerInvariant();
+            if (!AllowedCsNavServerSubcommands.Contains(serverSubcommand))
+            {
+                return (false, $"csnav server subcommand '{serverSubcommand}' is not permitted in read-only exploration mode. Allowed server subcommands: status, start, reload.");
             }
         }
 

@@ -499,13 +499,13 @@
 
     protected override async Task OnInitializedAsync()
     {
-        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
-        Session.OnChange += HandleSessionChanged;
-
         if (WorkspaceId.HasValue)
         {
             WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
         }
+
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        Session.OnChange += HandleSessionChanged;
 
         await ReloadWorkspaceContextAsync();
     }
@@ -589,10 +589,11 @@
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 _workspaceTasks = Array.Empty<ForgeTask>();
                 _workspaceSessions = Array.Empty<Conversation>();
+                ToastService.Show("Workspace Context Error", ex.Message, ToastLevel.Error);
             }
         }
         else
@@ -884,23 +885,8 @@
         var prompt = _userInput.Trim();
         _userInput = string.Empty;
 
-        var ws = WorkspaceState.ActiveWorkspace;
-        if (!Session.ActiveConversationId.HasValue)
-        {
-            var newConv = await TaskRepository.StartIdeationConversationAsync(
-                ws.Id,
-                title: ChatPresentationHelper.Truncate(prompt, 50));
-            Session.ActiveConversationId = newConv.Id;
-            Session.ActiveConversationTitle = newConv.Title;
-            _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(ws.Id);
-        }
-
-        // Persist User turn
-        await TaskRepository.AddConversationTurnAsync(
-            Session.ActiveConversationId.Value,
-            StageTurnRole.User,
-            content: prompt,
-            cancellationToken: _cts?.Token ?? CancellationToken.None);
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
 
         // Build history from existing completed turns, retaining text & action summaries
         var history = Session.Messages
@@ -915,16 +901,33 @@
         Session.CurrentToolCalls.Clear();
         Session.CurrentParts.Clear();
 
-        _cts?.Dispose();
-        _cts = new CancellationTokenSource();
-
         await ScrollChatToBottomAsync();
 
         var discoveredProposalsThisTurn = new List<IdeationProposal>();
 
         try
         {
-            ws = WorkspaceState.ActiveWorkspace;
+            var ws = WorkspaceState.ActiveWorkspace;
+            if (ws != null)
+            {
+                if (!Session.ActiveConversationId.HasValue)
+                {
+                    var newConv = await TaskRepository.StartIdeationConversationAsync(
+                        ws.Id,
+                        title: ChatPresentationHelper.Truncate(prompt, 50),
+                        cancellationToken: CancellationToken.None);
+                    Session.ActiveConversationId = newConv.Id;
+                    Session.ActiveConversationTitle = newConv.Title;
+                    _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(ws.Id, CancellationToken.None);
+                }
+
+                // Persist User turn
+                await TaskRepository.AddConversationTurnAsync(
+                    Session.ActiveConversationId.Value,
+                    StageTurnRole.User,
+                    content: prompt,
+                    cancellationToken: CancellationToken.None);
+            }
             var baseProfile = ws != null ? await WorkspaceRepository.GetEffectiveAgentProfileAsync(ws.Id, StandardStageIds.Ideation) : null;
             if (baseProfile == null && ws != null)
             {

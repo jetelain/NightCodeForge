@@ -27,6 +27,12 @@ public class ReadOnlyCommandValidatorTests
     [InlineData("git grep \"interface\"")]
     [InlineData("rg -n \"class > IFoo\" src/")] // Redirect symbol inside double quotes
     [InlineData("echo 'data > output'")]        // Redirect symbol inside single quotes
+    [InlineData("csnav definition -t CrucibleAgentHarness")]
+    [InlineData("csnav explore -t IdeationService")]
+    [InlineData("csnav references -t IWorkspaceSymbolService")]
+    [InlineData("csnav api-search -p \"*Symbol*\"")]
+    [InlineData("csnav server status")]
+    [InlineData("csnav server start -s NightCodeForge.sln")]
     public void ValidateCommand_AllowedCommands_Passes(string command)
     {
         var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
@@ -111,6 +117,8 @@ public class ReadOnlyCommandValidatorTests
     [InlineData("git branch -D old-branch")]
     [InlineData("git branch -d old-branch")]
     [InlineData("git tag -d v1.0.0")]
+    [InlineData("csnav skills install")]
+    [InlineData("csnav server stop")]
     public void ValidateCommand_MutatingGitSubcommands_Rejects(string command)
     {
         var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);

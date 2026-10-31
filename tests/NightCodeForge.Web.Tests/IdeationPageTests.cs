@@ -510,6 +510,98 @@ public class IdeationPageTests : BunitContext
         Assert.Single(tasks);
         Assert.Equal(defaultWf.Id, tasks[0].WorkflowId);
     }
+
+    [Fact]
+    public async Task SendMessage_AfterClearChat_SendsMessageCitingClassSuccessfully()
+    {
+        var ws = new Workspace { Id = 46, Name = "ResetAndSendWorkspace", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 46;
+
+        var cut = Render<Ideation>();
+
+        // 1. Send initial message so _cts is created
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "First reply."),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("First reply.", Array.Empty<IdeationProposal>()))
+        };
+        var textarea = cut.Find("textarea.chat-textarea");
+        textarea.Input("Initial prompt");
+        var sendBtn = cut.Find("button.send-btn");
+        await cut.InvokeAsync(() => sendBtn.Click());
+        cut.WaitForAssertion(() => Assert.Equal(2, _sessionState.Messages.Count));
+
+        // 2. Click Clear Chat (which cancels _cts)
+        var clearBtn = cut.Find("button.reset-session-btn");
+        await cut.InvokeAsync(() => clearBtn.Click());
+        Assert.Empty(_sessionState.Messages);
+
+        // 3. Send a new message citing a class in the fresh session
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "CrucibleAgentHarness orchestrates the agent loop."),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("CrucibleAgentHarness orchestrates the agent loop.", Array.Empty<IdeationProposal>()))
+        };
+        textarea = cut.Find("textarea.chat-textarea");
+        textarea.Input("Explain CrucibleAgentHarness");
+        sendBtn = cut.Find("button.send-btn");
+        await cut.InvokeAsync(() => sendBtn.Click());
+
+        cut.WaitForAssertion(() => Assert.Equal(2, _sessionState.Messages.Count));
+        Assert.Equal("Explain CrucibleAgentHarness", _sessionState.Messages[0].Content);
+        Assert.Contains("CrucibleAgentHarness orchestrates", _sessionState.Messages[1].Content);
+    }
+
+    [Fact]
+    public async Task SendMessage_AfterCancelledGeneration_SendsSubsequentMessageSuccessfully()
+    {
+        var ws = new Workspace { Id = 47, Name = "CancelAndResendWorkspace", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 47;
+
+        var cut = Render<Ideation>();
+
+        // 1. Start a generation that waits on a question so we can cancel it mid-flight
+        var pendingQuestion = new IdeationQuestion("Which class?", null, new[] { "ClassA", "ClassB" });
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Checking..."),
+            new(IdeationStreamUpdateKind.QuestionAsked, Question: pendingQuestion)
+        };
+
+        var textarea = cut.Find("textarea.chat-textarea");
+        textarea.Input("First message");
+        var sendBtn = cut.Find("button.send-btn");
+        await cut.InvokeAsync(() => sendBtn.Click());
+
+        cut.WaitForAssertion(() => Assert.True(_sessionState.IsGenerating));
+
+        // 2. Cancel the running generation
+        await cut.InvokeAsync(() => cut.Find("button.cancel-btn").Click());
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.False(_sessionState.IsGenerating);
+            Assert.NotNull(cut.Find("button.send-btn"));
+        });
+
+        // 3. Send a follow-up message citing a class
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Inspected RoslynSymbolIndexProvider."),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Inspected RoslynSymbolIndexProvider.", Array.Empty<IdeationProposal>()))
+        };
+
+        await cut.InvokeAsync(() => cut.Find("textarea.chat-textarea").Input("Inspect RoslynSymbolIndexProvider"));
+        await cut.InvokeAsync(() => cut.Find("button.send-btn").Click());
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains(_sessionState.Messages, m => m.Role == "user" && m.Content == "Inspect RoslynSymbolIndexProvider");
+            Assert.Contains(_sessionState.Messages, m => m.Role == "assistant" && m.Content.Contains("Inspected RoslynSymbolIndexProvider."));
+        });
+    }
 }
 
 public class MockIdeationService : IIdeationService
