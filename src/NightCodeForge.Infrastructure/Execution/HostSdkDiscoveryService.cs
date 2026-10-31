@@ -49,7 +49,7 @@ for c in dotnet node npm java javac go rustc cargo python3 python uv mvn gradle 
   fi
 done
 echo ""---DIR---""
-for d in /usr/share/dotnet /usr/lib/dotnet /usr/lib/jvm /opt/android-sdk /etc/ssl/certs /etc/java-* /usr/lib/x86_64-linux-gnu /usr/local/go ""$HOME/Android/Sdk"" ""$HOME/android-sdk"" ""$HOME/.dotnet"" ""$HOME/.cargo"" ""$HOME/.nvm""; do
+for d in /usr/share/dotnet /usr/lib/dotnet /usr/lib/jvm /opt/android-sdk /etc/ssl/certs /etc/fonts /usr/share/fonts /etc/java-* /usr/lib/x86_64-linux-gnu /usr/local/go ""$HOME/Android/Sdk"" ""$HOME/android-sdk"" ""$HOME/.dotnet"" ""$HOME/.cargo"" ""$HOME/.nvm""; do
   if [ -d ""$d"" ]; then
     if [ ""$d"" = ""/usr/share/dotnet"" ] || [ ""$d"" = ""/usr/lib/dotnet"" ]; then
       ([ -f ""$d/dotnet"" ] || [ -d ""$d/shared"" ]) && echo ""$d""

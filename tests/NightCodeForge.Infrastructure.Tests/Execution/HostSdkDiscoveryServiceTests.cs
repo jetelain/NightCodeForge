@@ -360,6 +360,8 @@ ANDROID_HOME=/opt/android-sdk
         Assert.Contains("codecondenser", script);
         Assert.Contains("mdfetch", script);
         Assert.Contains("/etc/java-*", script);
+        Assert.Contains("/etc/fonts", script);
+        Assert.Contains("/usr/share/fonts", script);
     }
 
     [Fact]

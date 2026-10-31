@@ -60,6 +60,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     locales \
     libicu-dev \
     libunwind8 \
+    fontconfig \
+    fonts-liberation \
+    fonts-dejavu-core \
     && locale-gen en_US.UTF-8 fr_FR.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -196,7 +199,9 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
         "/usr/lib/x86_64-linux-gnu",
         "/usr/lib/jvm",
         "/opt/android-sdk",
-        "/etc/ssl/certs"
+        "/etc/ssl/certs",
+        "/etc/fonts",
+        "/usr/share/fonts"
     };
 
     /// <summary>
@@ -1488,9 +1493,10 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 var trimmedSdk = sdk.Trim().TrimEnd('/');
                 if (string.IsNullOrEmpty(trimmedSdk)) continue;
 
-                // Skip non-executable library/certificate/snap directories
+                // Skip non-executable library/certificate/font/snap directories
                 if (trimmedSdk.StartsWith("/etc/", StringComparison.OrdinalIgnoreCase) ||
                     trimmedSdk.Equals("/etc", StringComparison.OrdinalIgnoreCase) ||
+                    trimmedSdk.StartsWith("/usr/share/fonts", StringComparison.OrdinalIgnoreCase) ||
                     trimmedSdk.Equals("/usr/lib/x86_64-linux-gnu", StringComparison.OrdinalIgnoreCase) ||
                     trimmedSdk.Equals("/usr/lib/aarch64-linux-gnu", StringComparison.OrdinalIgnoreCase) ||
                     trimmedSdk.Equals("/usr/lib/snapd", StringComparison.OrdinalIgnoreCase) ||
@@ -1681,6 +1687,8 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         {
             args.AddRange(["--shm-size", options.SharedMemorySize]);
         }
+
+        args.AddRange(["--ulimit", "core=0"]);
 
         if (options.IsRestrictedReadOnly)
         {

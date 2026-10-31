@@ -96,6 +96,12 @@ public class ExecutionEnvironmentTests
 
         var androidMount = Assert.Single(mounts, m => m.ContainerPath == "/opt/android-sdk");
         Assert.True(androidMount.IsReadOnly);
+
+        var fontsConfigMount = Assert.Single(mounts, m => m.ContainerPath == "/etc/fonts");
+        Assert.True(fontsConfigMount.IsReadOnly);
+
+        var fontsDirMount = Assert.Single(mounts, m => m.ContainerPath == "/usr/share/fonts");
+        Assert.True(fontsDirMount.IsReadOnly);
     }
 
     [Fact]
@@ -174,6 +180,8 @@ public class ExecutionEnvironmentTests
         Assert.Contains("/usr/share/dotnet:/usr/share/dotnet:ro", args);
         Assert.Contains("--shm-size", args);
         Assert.Contains("2g", args);
+        Assert.Contains("--ulimit", args);
+        Assert.Contains("core=0", args);
         Assert.Contains("-w", args);
         Assert.Contains("/workspace", args);
     }
@@ -314,6 +322,8 @@ public class ExecutionEnvironmentTests
             SdkMountPaths = new List<string>
             {
                 "/etc/ssl/certs",
+                "/etc/fonts",
+                "/usr/share/fonts",
                 "/usr/lib/x86_64-linux-gnu",
                 "/usr/lib/snapd",
                 "/home/user/android-sdk",
@@ -326,6 +336,8 @@ public class ExecutionEnvironmentTests
         var entries = path.Split(':');
 
         Assert.DoesNotContain("/etc/ssl/certs", entries);
+        Assert.DoesNotContain("/etc/fonts", entries);
+        Assert.DoesNotContain("/usr/share/fonts", entries);
         Assert.DoesNotContain("/usr/lib/x86_64-linux-gnu", entries);
         Assert.DoesNotContain("/usr/lib/snapd", entries);
         Assert.DoesNotContain("/home/user/android-sdk/cmdline-tools/latest/cmdline-tools/latest/bin", entries);
@@ -391,6 +403,9 @@ public class ExecutionEnvironmentTests
         Assert.Contains("build-essential", dockerfile);
         Assert.Contains("curl", dockerfile);
         Assert.Contains("jq", dockerfile);
+        Assert.Contains("fontconfig", dockerfile);
+        Assert.Contains("fonts-liberation", dockerfile);
+        Assert.Contains("fonts-dejavu-core", dockerfile);
     }
 
     [Fact]
