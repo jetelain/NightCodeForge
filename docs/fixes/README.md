@@ -25,6 +25,7 @@ Once a step is implemented and all unit, integration, and end-to-end tests pass,
 | **11.38D** | [🏗️ Step 11.38D: `TaskOrchestrator` & `StartupRecoveryService` Decomposition and Zero-Exception `<= 10` Constructor Parameter Enforcement](STEP_11_38D_TASK_ORCHESTRATOR_AND_STARTUP_RECOVERY_DECOMPOSITION.md) | Decompose `TaskOrchestrator` (`19 -> <= 9` params) by extracting `ITaskWorkspacePreparer`, `ITaskMergeAndCascadeCoordinator`, and `ITaskLifecycleMutationCoordinator`; decompose `StartupRecoveryService` (`11 -> <= 8` params) by extracting `IWorkspaceGitRecoveryService`; extract `IContainerEnvironmentFactory` from `ExecutionEnvironmentProvider` (`10 -> <= 5` params); and remove the legacy allowlist from `ConstructorParameterCeilingTests` so zero classes in the solution exceed 10 constructor parameters. | Proposed |
 | **11.39A** | [🎭 Step 11.39A: Reusable LLM-Free Playwright E2E Host Fixture & Core Backlog Baseline Tests](STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md) | Reusable `PlaywrightWebHostFixture` (`[Collection("PlaywrightUiE2E")]`, `[Trait("Category", "E2E")]`) booting `NightCodeForge.Web` on an isolated loopback port + temp SQLite DB with `SeedDatabaseAsync` / `QueryDatabaseAsync` and **zero LLM calls**, plus baseline Chromium E2E tests for Workspace Wizard & Switching, Home Dashboard & Pause/Resume toggle, Manual Task Creation (`/tasks/new`), Backlog Kanban/DAG, and `TaskDetail` page. | **Completed** |
 | **11.39B** | [🎭 Step 11.39B: Baseline Playwright E2E Tests for HITL Question Inbox, Review Room, Inspector & Settings](STEP_11_39B_PLAYWRIGHT_E2E_HITL_INBOX_REVIEW_AND_INSPECTOR_TESTS.md) | LLM-free Playwright browser E2E suite covering Human Question Inbox batch answering (`/inbox`), Review Room Git branch diff rendering & task rejection (`/review/{taskId}`), Task Execution Inspector & Transcripts browser (`/inspector`, `/transcripts`), and Settings persistence (`/settings`). | **Completed** |
+| **11.40** | [🛡️ Step 11.40: Bash Timeout Escalation Ladder, In-Container Process Reaper, Stale Container Recycling & WSL2 Self-Healing](STEP_11_40_BASH_TIMEOUT_CONTAINER_PROCESS_REAPER_AND_WSL_RECOVERY.md) | 3-stage self-healing escalation on `bash` timeout: (1) in-container process sweep (`SIGTERM` $\to$ 5s wait $\to$ `SIGKILL`) preserving `PID 1`/`tail` and whitelisted daemons (`csnav`) + stale `index.lock` cleanup, (2) 5s container liveness probe with container kill/recreate and 5s probe retry, (3) Windows-specific `wsl --shutdown` escalation with Docker daemon readiness check and 30s probe retry, plus `--init` zombie reaping, `--pids-limit 4096` guard, and idle container eviction for `Ready`/`WaitingForHuman`/`Failed` tasks. | Proposed |
 
 ---
 
@@ -66,6 +67,14 @@ Once a step is implemented and all unit, integration, and end-to-end tests pass,
 
 - [x] **Step 11.39B (Baseline Playwright E2E Tests for HITL Question Inbox, Review Room, Inspector & Settings):**
   - [x] Implement `HitlAndObservabilityE2ETests` covering Human Question Inbox batch answering (`/inbox`), Review Room Git branch diff rendering & task rejection (`/review/{taskId}`), Task Execution Inspector & Transcripts browser (`/inspector`, `/transcripts`), and Settings persistence (`/settings`).
+
+- [ ] **Step 11.40 (Bash Timeout Escalation Ladder, In-Container Process Reaper, Stale Container Recycling & WSL2 Self-Healing):**
+  - [ ] Add `ProcessKillWhitelist` (defaulting to `["csnav"]`) and `PidsLimit` (defaulting to `4096`) to `ContainerExecutorOptions`, and include `--init` and `--pids-limit` in `BuildDockerRunArgs`.
+  - [ ] Implement Step 1 in-container process reaper (`SIGTERM` $\to$ 5s wait $\to$ `SIGKILL`) on `bash` timeout, preserving `PID 1`/`tail` and whitelisted processes and purging stale `index.lock` files.
+  - [ ] Implement Step 2 container liveness probe (5s timeout), container force-recreation (`docker rm -f` + `EnsureContainerRunning`), and probe retry (5s timeout).
+  - [ ] Implement Step 3 Windows-specific WSL2 shutdown escalation (`wsl --shutdown`), Docker daemon readiness check, and 30s probe retry.
+  - [ ] Expand `TaskContainerReaper` and lifecycle hooks to tear down containers for `Failed`, `Ready`, and `WaitingForHuman` tasks and evict idle workspace containers.
+  - [ ] Author unit tests in `NightCodeForge.Infrastructure.Tests` and `NightCodeForge.Core.Tests`.
 
 ---
 
