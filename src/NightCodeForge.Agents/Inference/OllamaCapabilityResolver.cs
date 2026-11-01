@@ -68,9 +68,11 @@ public sealed class OllamaCapabilityResolver : ILlmCapabilityResolver
         // https://docs.ollama.com/capabilities/thinking
         // think = false, true (default effort), or the effort
 
-        var actualEffort = requestedEffort ?? _options.Value.ReasoningEffort;
+        var actualEffort = !string.IsNullOrWhiteSpace(requestedEffort)
+            ? requestedEffort
+            : _options.Value.ReasoningEffort;
 
-        if (string.IsNullOrEmpty(actualEffort))
+        if (string.IsNullOrWhiteSpace(actualEffort))
         {
             return new AdditionalPropertiesDictionary
             {

@@ -17,6 +17,23 @@ public static class CanonicalToolNames
     public const string LoadSkill = "load_skill";
     public const string ReadSkillResource = "read_skill_resource";
     public const string RunSkillScript = "run_skill_script";
+    public const string GetTask = "get_task";
+    public const string EditTask = "edit_task";
+    public const string SetTaskPriority = "set_task_priority";
+    public const string ReworkPriorities = "rework_priorities";
+    public const string RemoveTask = "remove_task";
+
+    /// <summary>
+    /// Host-level backlog tools exposed to the ideation agent (scoped task mutations; no filesystem writes).
+    /// </summary>
+    public static readonly IReadOnlyList<string> BacklogMutationTools = new[]
+    {
+        GetTask,
+        EditTask,
+        SetTaskPriority,
+        ReworkPriorities,
+        RemoveTask
+    };
 
     /// <summary>
     /// Complete collection of all canonical tools supported by the platform.
@@ -34,6 +51,11 @@ public static class CanonicalToolNames
         RequestChanges,
         LoadSkill,
         ReadSkillResource,
-        RunSkillScript
+        RunSkillScript,
+        GetTask,
+        EditTask,
+        SetTaskPriority,
+        ReworkPriorities,
+        RemoveTask
     };
 }

@@ -4,7 +4,7 @@
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Companion Step:* [Step 12.13B: "Refine in Ideation" Workflow & Mutation Tool Cards (Web UI)](STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md)  
 > *Related Steps:* [Step 11.7: Task State History & Audit Trail](../archive/phase-11/STEP_11_7_TASK_STATE_HISTORY_AND_AUDIT_TRAIL.md) | [Step 12.1A: Backlog Context Digest & Cycle Rejection](STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md) | [Step 12.4: Ideation Quick Notes & Suggestions](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md)  
-> *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Tools`, `skills/ncf-backlog`, `tests/NightCodeForge.Agents.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
+> *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Tools`, `skills/ncf-backlog`, `tests/NightCodeForge.Agents.Tests` | *Status:* ✅ Completed | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -95,16 +95,16 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
 
 ## 5. Implementation Checklist & Deliverables
 
-- [ ] **Domain Exceptions & Interfaces (`NightCodeForge.Core`):**
-  - [ ] Define `TaskCannotBeModifiedException` and `AuditActors.IdeationAgent`.
-  - [ ] Add `GetByIdWithDependenciesAsync`, `UpdateTaskSpecificationAsync`, and `BatchUpdatePrioritiesAsync` to `ITaskRepository` / `ITaskService` as needed.
-- [ ] **Agent Tools Implementation (`NightCodeForge.Agents`):**
-  - [ ] Implement `IBacklogMutationToolService` (`BacklogMutationToolService`, $\le 6$ constructor parameters), attach `BacklogMutationService` property on `CanonicalTools`, and register `get_task`, `edit_task`, `set_task_priority`, `rework_priorities`, and `remove_task` in `CanonicalAIFunctionFactory`, `DefaultAgentTools.All`, `DefaultAgentTools.ReadOnly`, and `AppDbContext.EnsureDefaultGlobalAgentProfilesAsync`.
-  - [ ] Enforce state guards (`TaskCannotBeModifiedException` when `HasExecutionRun == true`, task is locked in `IWorkspaceLockProvider`, or `Status` is not `Suggested`/`Open`), DAG cycle checks (`CircularDependencyException`), audit trail logging (`AuditActors.IdeationAgent`), and `ITaskMarkdownSyncService.SyncTaskToDiskAsync`.
-- [ ] **Prompt Engineering & Skills (`NightCodeForge.Agents`, `NightCodeForge.Core`, `skills/ncf-backlog`):**
-  - [ ] Update `AgentProfile.CreateDefaultIdeationProfile()` and `IdeationService.cs` (`<task_planning_guidelines>` and `<backlog_management_guidelines>`).
-  - [ ] Update [`skills/ncf-backlog/SKILL.md`](../../skills/ncf-backlog/SKILL.md).
-- [ ] **Automated Tests (`tests/NightCodeForge.Agents.Tests`):**
-  - [ ] Unit tests for `get_task`, `edit_task`, `set_task_priority`, `rework_priorities`, and `remove_task` (covering happy paths, `TaskNotFoundException`, `TaskCannotBeModifiedException` on `InProgress`/`Closed` tasks, `CircularDependencyException`, active dependent guard, and markdown sync invocation).
-  - [ ] Unit test verifying `IdeationService` system prompt contains upfront ambiguity resolution and backlog management guidelines.
+- [x] **Domain Exceptions & Interfaces (`NightCodeForge.Core`):**
+  - [x] Define `TaskCannotBeModifiedException` and `AuditActors.IdeationAgent`.
+  - [x] Add `GetByIdWithDependenciesAsync`, `UpdateTaskSpecificationAsync`, and `BatchUpdatePrioritiesAsync` to `ITaskRepository` / `ITaskService` as needed (satisfied via existing `ITaskRepository.GetByIdAsync`, `GetDependenciesAsync`, `GetWorkspaceDependenciesAsync`, `UpdateWithHistoryAsync`, and `IWorkspaceLockProvider.IsTaskLocked`).
+- [x] **Agent Tools Implementation (`NightCodeForge.Agents`):**
+  - [x] Implement `IBacklogMutationToolService` (`BacklogMutationToolService`, $\le 6$ constructor parameters), attach `BacklogMutationService` property on `CanonicalTools`, and register `get_task`, `edit_task`, `set_task_priority`, `rework_priorities`, and `remove_task` in `CanonicalAIFunctionFactory`, `DefaultAgentTools.All`, `DefaultAgentTools.Ideation`, and `AppDbContext.EnsureDefaultGlobalAgentProfilesAsync`.
+  - [x] Enforce state guards (`TaskCannotBeModifiedException` when `HasExecutionRun == true`, task is locked in `IWorkspaceLockProvider`, or `Status` is not `Suggested`/`Open`), DAG cycle checks (`CircularDependencyException`), audit trail logging (`AuditActors.IdeationAgent`), and `ITaskMarkdownSyncService.SyncTaskToDiskAsync`.
+- [x] **Prompt Engineering & Skills (`NightCodeForge.Agents`, `NightCodeForge.Core`, `skills/ncf-backlog`):**
+  - [x] Update `AgentProfile.CreateDefaultIdeationProfile()` and `IdeationService.cs` (`<task_planning_guidelines>` and `<backlog_management_guidelines>`).
+  - [x] Update [`skills/ncf-backlog/SKILL.md`](../../skills/ncf-backlog/SKILL.md).
+- [x] **Automated Tests (`tests/NightCodeForge.Agents.Tests`):**
+  - [x] Unit tests for `get_task`, `edit_task`, `set_task_priority`, `rework_priorities`, and `remove_task` (covering happy paths, `TaskNotFoundException`, `TaskCannotBeModifiedException` on `InProgress`/`Closed` tasks, `CircularDependencyException`, active dependent guard, and markdown sync invocation).
+  - [x] Unit test verifying `IdeationService` system prompt contains upfront ambiguity resolution and backlog management guidelines.
 

@@ -1,0 +1,92 @@
+@namespace NightCodeForge.Web.Components.Transcripts
+@using NightCodeForge.Web.Services
+@inject WorkspaceStateService WorkspaceState
+
+@if (_card == null)
+{
+    <ToolCallCard ToolName="@ToolName"
+                  Arguments="@Arguments"
+                  Result="@Result"
+                  IsError="@IsError"
+                  IsRunning="@IsRunning"
+                  Offset="@Offset" />
+}
+else
+{
+    <div class="backlog-mutation-card @($"kind-{_card.Kind.ToString().ToLowerInvariant()}") @(_card.IsError ? "error" : (_card.IsRunning ? "running" : "completed"))"
+         data-testid="backlog-mutation-card"
+         data-tool="@ToolName">
+        <div class="backlog-mutation-header">
+            <span class="backlog-mutation-icon">@_card.Icon</span>
+            <strong class="backlog-mutation-heading">@_card.Heading</strong>
+            @if (_card.IsRunning)
+            {
+                <span class="status-dot running"></span>
+            }
+            @if (_card.IsError)
+            {
+                <span class="forge-badge badge-crimson">Failed</span>
+            }
+            @if (_card.TaskId.HasValue)
+            {
+                <a class="backlog-mutation-link" href="@WorkspaceState.GetPath($"tasks/{_card.TaskId.Value}")">Open task →</a>
+            }
+            @if (!string.IsNullOrWhiteSpace(Offset))
+            {
+                <span class="badge-tag font-mono">@Offset</span>
+            }
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_card.Subtitle))
+        {
+            <div class="backlog-mutation-subtitle">@_card.Subtitle</div>
+        }
+
+        @if (_card.IsError && !string.IsNullOrWhiteSpace(_card.ErrorMessage))
+        {
+            <div class="backlog-mutation-error">@_card.ErrorMessage</div>
+        }
+
+        @if (_card.Highlights.Count > 0)
+        {
+            <ul class="backlog-mutation-highlights">
+                @foreach (var highlight in _card.Highlights)
+                {
+                    <li>@highlight</li>
+                }
+            </ul>
+        }
+
+        @if (_card.Chips.Count > 0)
+        {
+            <div class="backlog-mutation-chips">
+                @foreach (var chip in _card.Chips)
+                {
+                    <a class="forge-badge badge-indigo backlog-mutation-chip" href="@WorkspaceState.GetPath($"tasks/{chip.TaskId}")">@chip.Label</a>
+                }
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(_card.Reason))
+        {
+            <div class="backlog-mutation-reason">Reason: @_card.Reason</div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string? ToolName { get; set; }
+    [Parameter] public string? Arguments { get; set; }
+    [Parameter] public string? Result { get; set; }
+    [Parameter] public string? Offset { get; set; }
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public bool IsRunning { get; set; }
+
+    private BacklogMutationCard? _card;
+
+    protected override void OnParametersSet()
+    {
+        _card = BacklogMutationCardParser.Parse(ToolName, Arguments, Result, IsError, IsRunning);
+    }
+}
+

@@ -293,6 +293,13 @@ public class SignalRActivityBridgeService : BackgroundService
                 case AgentActivityKind.Notice:
                     await _hubContext.Clients.Group(groupName)
                         .ReceiveExecutionLog(evt.TaskId, evt.StageId, ResilienceConstants.LogLevelWarning, evt.Content, evt.Timestamp);
+
+                    if (evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.ToolName, out var noticeTool) == true
+                        && noticeTool?.ToString() is { } noticeToolName
+                        && CanonicalToolNames.BacklogMutationTools.Contains(noticeToolName, StringComparer.OrdinalIgnoreCase))
+                    {
+                        await _hubContext.Clients.All.ReceiveBacklogMutation(evt.TaskId, noticeToolName, evt.Content);
+                    }
                     break;
             }
         }

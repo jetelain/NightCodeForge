@@ -83,7 +83,7 @@ depends_on: []
 - [ ] <Sub-task 2: Concrete technical item to implement>
 - [ ] <Sub-task 3: Unit test implementation>
 
-### Affected Files
+### Affected Files *(optional in ideation; Stage 1 Task Review maps files)*
 - `<path/to/source.ext>`: <Short description of intended changes>
 - `<tests/path/to/test.ext>`: <Unit test assertions>
 
@@ -95,6 +95,8 @@ depends_on: []
 ### Prerequisite Dependencies
 - <None, or descriptive list of prerequisite tasks>
 ```
+
+> **Forbidden:** lazy `Open Questions`, `TBD`, or `To be decided` sections in authored task files. Resolve every functional or business question with the maintainer first.
 
 ---
 
@@ -173,6 +175,11 @@ Synthesize the requirements into sequential, PR-sized tasks following the contra
 ### Step 4: Write Task Markdown Files (or Refine Existing Tasks)
 - **New Tasks:** Create the markdown files directly in `docs/tasks/` with YAML frontmatter. NightCodeForge will immediately synchronize them into the database and assign task IDs.
 - **Refining Existing Tasks:** When refining an existing backlog task (e.g. from NightCodeForge's "Refine in Ideation" entry point), inspect current requirements, resolve missing functional details with the maintainer, and update the existing task specification in-place.
+  1. Read the current task file (`docs/tasks/<task>.md`) or its database state, and check its status: only `Suggested` or `Open` tasks that have never been executed may be refined. Never rewrite tasks that are already running, reviewed, implemented, ready, closed, rejected or cancelled; file a follow-up task instead.
+  2. Interview the maintainer about every missing functional/business detail before editing.
+  3. Update the title, description, priority, `depends_on`, `merge_mode` or `base_branch` in place, keeping the `id` untouched, and keep the dependency graph acyclic.
+  4. Obsolete or duplicated tasks can be removed only when no active task depends on them.
+  5. NightCodeForge's built-in ideation agent performs the same operations through its host-level tools (`get_task`, `edit_task`, `set_task_priority`, `rework_priorities`, `remove_task`), which are audited and keep the markdown in sync.
 
 ---
 

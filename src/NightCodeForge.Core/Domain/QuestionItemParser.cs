@@ -293,18 +293,10 @@ public static class QuestionItemParser
                             var trimmed = pStr.TrimStart();
                             if (trimmed.StartsWith("{") || trimmed.StartsWith("["))
                             {
-                                try
+                                var innerItems = TryParseQuestionsFromJsonString(pStr, requireJsonPrefix: true);
+                                if (innerItems is { Count: > 0 })
                                 {
-                                    using var innerDoc = JsonDocument.Parse(pStr);
-                                    var innerItems = ParseFromJsonElement(innerDoc.RootElement);
-                                    if (innerItems.Count > 0)
-                                    {
-                                        return innerItems[0];
-                                    }
-                                }
-                                catch (JsonException)
-                                {
-                                    // Fallback: prompt string was not an inner JSON structure
+                                    return innerItems[0];
                                 }
                             }
                             prompt = pStr;
@@ -361,25 +353,10 @@ public static class QuestionItemParser
                     var str = prop.GetString();
                     if (!string.IsNullOrWhiteSpace(str))
                     {
-                        var trimmed = str.TrimStart();
-                        if (trimmed.StartsWith("["))
+                        var parsedOptions = TryParseOptionsArrayFromJsonString(str);
+                        if (parsedOptions is { Count: > 0 })
                         {
-                            try
-                            {
-                                using var optDoc = JsonDocument.Parse(str);
-                                if (optDoc.RootElement.ValueKind == JsonValueKind.Array)
-                                {
-                                    var list = optDoc.RootElement.EnumerateArray()
-                                        .Select(x => x.ValueKind == JsonValueKind.String ? (x.GetString() ?? "") : x.ToString())
-                                        .Where(s => !string.IsNullOrWhiteSpace(s))
-                                        .ToList();
-                                    if (list.Count > 0) return list;
-                                }
-                            }
-                            catch (JsonException)
-                            {
-                                // Fallback: options string was not a valid JSON array
-                            }
+                            return parsedOptions;
                         }
                     }
                 }
@@ -420,25 +397,10 @@ public static class QuestionItemParser
 
         if (opts is string optStr && !string.IsNullOrWhiteSpace(optStr))
         {
-            var trimmed = optStr.TrimStart();
-            if (trimmed.StartsWith("["))
+            var parsedOptions = TryParseOptionsArrayFromJsonString(optStr);
+            if (parsedOptions is { Count: > 0 })
             {
-                try
-                {
-                    using var doc = JsonDocument.Parse(optStr);
-                    if (doc.RootElement.ValueKind == JsonValueKind.Array)
-                    {
-                        var list = doc.RootElement.EnumerateArray()
-                            .Select(x => x.ValueKind == JsonValueKind.String ? (x.GetString() ?? "") : x.ToString())
-                            .Where(s => !string.IsNullOrWhiteSpace(s))
-                            .ToList();
-                        if (list.Count > 0) return list;
-                    }
-                }
-                catch (JsonException)
-                {
-                    // Fallback: options string was not a valid JSON array
-                }
+                return parsedOptions;
             }
         }
 
@@ -446,6 +408,51 @@ public static class QuestionItemParser
         {
             var list = objEnum.Select(o => o?.ToString() ?? "").Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
             return list.Count > 0 ? list : null;
+        }
+
+        return null;
+    }
+
+    private static List<string>? TryParseOptionsArrayFromJsonString(string raw)
+    {
+        var trimmed = raw.TrimStart();
+        if (!trimmed.StartsWith('[') && !trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var candidate = raw;
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(candidate);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    var list = doc.RootElement.EnumerateArray()
+                        .Select(x => x.ValueKind == JsonValueKind.String ? (x.GetString() ?? "") : x.ToString())
+                        .Where(s => !string.IsNullOrWhiteSpace(s))
+                        .ToList();
+                    if (list.Count > 0)
+                    {
+                        return list;
+                    }
+                }
+                return null;
+            }
+            catch (JsonException) when (attempt == 0)
+            {
+                var repaired = JsonRepairHelper.Repair(raw);
+                if (string.Equals(repaired, raw, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+                candidate = repaired;
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
         }
 
         return null;

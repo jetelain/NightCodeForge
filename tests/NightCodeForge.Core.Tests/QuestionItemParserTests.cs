@@ -278,4 +278,37 @@ public class QuestionItemParserTests
         Assert.Equal("Q1", questions[0].Prompt);
         Assert.Equal("Q2", questions[1].Prompt);
     }
+
+    [Fact]
+    public void Parse_WithTruncatedStringifiedOptionsArray_RepairsAndExtractsOptions()
+    {
+        var json = """
+        {
+            "questions": [
+                {
+                    "prompt": "Select target environment",
+                    "options": "[\"Staging\", \"Prod\""
+                }
+            ]
+        }
+        """;
+
+        var questions = QuestionItemParser.Parse(json);
+
+        Assert.Single(questions);
+        Assert.Equal("Select target environment", questions[0].Prompt);
+        Assert.Equal(["Staging", "Prod"], questions[0].Options);
+    }
+
+    [Fact]
+    public void Parse_WithTruncatedDanglingKeyInQuestionObject_RepairsAndParsesQuestion()
+    {
+        var truncated = """{"questions": [{"prompt": "Which DB?", "options": ["SQLite", "Postgres"], "ration""";
+
+        var questions = QuestionItemParser.Parse(truncated);
+
+        Assert.Single(questions);
+        Assert.Equal("Which DB?", questions[0].Prompt);
+        Assert.Equal(["SQLite", "Postgres"], questions[0].Options);
+    }
 }

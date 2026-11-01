@@ -179,4 +179,29 @@ public class JsonRepairHelperTests
         Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
         Assert.Equal("Path C:\\", doc.RootElement.GetProperty("prompt").GetString());
     }
+
+    [Fact]
+    public void Repair_TruncatedAfterPropertyColon_StripsIncompletePropertyAndClosesObject()
+    {
+        var input = """{"questions": [{"prompt": "Which DB?", "options":""";
+        var repaired = JsonRepairHelper.Repair(input);
+
+        using var doc = JsonDocument.Parse(repaired);
+        var questions = doc.RootElement.GetProperty("questions");
+        Assert.Single(questions.EnumerateArray());
+        Assert.Equal("Which DB?", questions[0].GetProperty("prompt").GetString());
+        Assert.False(questions[0].TryGetProperty("options", out _));
+    }
+
+    [Fact]
+    public void Repair_TruncatedMidPropertyKey_StripsDanglingKeyAndClosesObject()
+    {
+        var input = """{"questions": [{"prompt": "Which DB?", "ration""";
+        var repaired = JsonRepairHelper.Repair(input);
+
+        using var doc = JsonDocument.Parse(repaired);
+        var questions = doc.RootElement.GetProperty("questions");
+        Assert.Single(questions.EnumerateArray());
+        Assert.Equal("Which DB?", questions[0].GetProperty("prompt").GetString());
+    }
 }

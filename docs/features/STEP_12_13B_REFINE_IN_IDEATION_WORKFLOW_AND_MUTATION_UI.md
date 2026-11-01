@@ -4,7 +4,7 @@
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Prerequisite Step:* [Step 12.13A: Ideation Backlog Mutation Tools & Prompt Policy](STEP_12_13A_IDEATION_BACKLOG_MUTATION_TOOLS_AND_PROMPT_POLICY.md)  
 > *Related Steps:* [Step 12.4: Ideation Quick Notes & Suggestions](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md)  
-> *Target Components:* `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Components/Ideation`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
+> *Target Components:* `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Components/Ideation`, `tests/NightCodeForge.Web.Tests` | *Status:* ✅ Completed | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -71,15 +71,15 @@ All mutations broadcast `AgentActivityEvent` through [`IAgentActivityStreamer`](
 
 ## 3. Implementation Checklist & Deliverables
 
-- [ ] **Web UI Navigation & Task Detail Entry Points (`NightCodeForge.Web`):**
-  - [ ] Add "💡 Refine in Ideation" button to [`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor) header action bar for unstarted tasks (`(Status is Suggested or Open) && !HasExecutionRun`).
-  - [ ] Add "💡 Refine" button to [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) header actions for unstarted tasks.
-- [ ] **Refinement Session Seeding & Tool Cards (`Ideation.razor` & `IdeationSessionState.cs`):**
-  - [ ] Add `[SupplyParameterFromQuery(Name = "taskId")] public int? TaskId { get; set; }` in [`Ideation.razor`](../../src/NightCodeForge.Web/Components/Pages/Ideation.razor) and implement conversation initialization / pre-seeding in `IdeationSessionState`.
-  - [ ] Implement `BacklogMutationCardParser` in `NightCodeForge.Web.Services` and render compact presentation cards in `Ideation.razor` for `get_task`, `edit_task`, `set_task_priority`, `rework_priorities`, and `remove_task` tool calls.
-  - [ ] Refresh Kanban board and backlog views dynamically on task mutation SignalR events.
-- [ ] **Automated Tests (`tests/NightCodeForge.Web.Tests`):**
-  - [ ] bUnit tests verifying `TaskDetail` and `TaskDetailDrawer` render "Refine in Ideation" only for unstarted tasks (`Suggested`/`Open` with `!HasExecutionRun`) and hide it when `HasExecutionRun == true` or `Status` is `Reviewed`/`Implemented`/`Ready`/`Closed`.
-  - [ ] Unit/bUnit tests for `BacklogMutationCardParser` and `Ideation.razor` `?taskId={id}` query parameter handling.
-  - [ ] **Playwright E2E Tests (Zero LLM Calls, `[Trait("Category", "E2E")]`):** Using `PlaywrightWebHostFixture` ([Step 11.39A](../fixes/STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)), seed an unstarted `Open` task (`HasExecutionRun = false`) and an executed task (`HasExecutionRun = true`) + a seeded ideation conversation with `get_task` / `edit_task` / `set_task_priority` / `remove_task` tool turns; verify in Chromium that `#btn-refine-ideation` and `#btn-drawer-refine-ideation` appear only on the unstarted task, clicking `"💡 Refine in Ideation"` navigates to `/w/{wsId}/ideation?taskId={taskId}` with the pre-seeded refinement prompt, and the backlog mutation tool cards render in the chat transcript.
+- [x] **Web UI Navigation & Task Detail Entry Points (`NightCodeForge.Web`):**
+  - [x] Add "💡 Refine in Ideation" button to [`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor) header action bar for unstarted tasks (`(Status is Suggested or Open) && !HasExecutionRun`).
+  - [x] Add "💡 Refine" button to [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) header actions for unstarted tasks.
+- [x] **Refinement Session Seeding & Tool Cards (`Ideation.razor` & `IdeationSessionState.cs`):**
+  - [x] Add `[SupplyParameterFromQuery(Name = "taskId")] public int? TaskId { get; set; }` in [`Ideation.razor`](../../src/NightCodeForge.Web/Components/Pages/Ideation.razor) and implement conversation initialization / pre-seeding in `IdeationSessionState`.
+  - [x] Implement `BacklogMutationCardParser` in `NightCodeForge.Web.Services` and render compact presentation cards in `Ideation.razor` for `get_task`, `edit_task`, `set_task_priority`, `rework_priorities`, and `remove_task` tool calls.
+  - [x] Refresh Kanban board and backlog views dynamically on task mutation SignalR events.
+- [x] **Automated Tests (`tests/NightCodeForge.Web.Tests`):**
+  - [x] bUnit tests verifying `TaskDetail` and `TaskDetailDrawer` render "Refine in Ideation" only for unstarted tasks (`Suggested`/`Open` with `!HasExecutionRun`) and hide it when `HasExecutionRun == true` or `Status` is `Reviewed`/`Implemented`/`Ready`/`Closed`.
+  - [x] Unit/bUnit tests for `BacklogMutationCardParser` and `Ideation.razor` `?taskId={id}` query parameter handling.
+  - [x] **Playwright E2E Tests (Zero LLM Calls, `[Trait("Category", "E2E")]`):** Using `PlaywrightWebHostFixture` ([Step 11.39A](../fixes/STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)), seed an unstarted `Open` task (`HasExecutionRun = false`) and an executed task (`HasExecutionRun = true`) + a seeded ideation conversation with `get_task` / `edit_task` / `set_task_priority` / `remove_task` tool turns; verify in Chromium that `#btn-refine-ideation` and `#btn-drawer-refine-ideation` appear only on the unstarted task, clicking `"💡 Refine in Ideation"` navigates to `/w/{wsId}/ideation?taskId={taskId}` with the pre-seeded refinement prompt, and the backlog mutation tool cards render in the chat transcript.
 

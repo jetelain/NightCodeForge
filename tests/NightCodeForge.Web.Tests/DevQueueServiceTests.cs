@@ -1444,6 +1444,8 @@ public class DevQueueServiceTests : IDisposable
         public int? LastEmergencyWorkspaceId { get; private set; }
         public int? LastEmergencyTaskId { get; private set; }
 
+        public bool IsTaskLocked(int workspaceId, int taskId) => ActiveLocks.Any(l => l.WorkspaceId == workspaceId && l.TaskId == taskId);
+
         public IReadOnlyList<ActiveLockSnapshot> GetActiveLocks() => ActiveLocks.ToList();
 
         public bool EmergencyRelease(int workspaceId, int? taskId = null)

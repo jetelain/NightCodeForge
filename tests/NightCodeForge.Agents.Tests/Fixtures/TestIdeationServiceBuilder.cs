@@ -44,11 +44,11 @@ public class TestIdeationServiceBuilder
     public IWorkspaceSkillsServiceFactory SkillsServiceFactory { get; set; } = new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance);
     public IWorkspaceRepository WorkspaceRepository { get; set; } = new InMemoryWorkspaceRepository();
     public ITaskMarkdownSyncService MarkdownSyncService { get; set; } = new Mock<ITaskMarkdownSyncService>().Object;
+    public IBacklogPlanningContext BacklogContext { get; set; } = TestBacklogContext.CreateDefault();
     public ILlmGatewayService GatewayService { get; set; } = CreateDefaultGatewayService();
     public ILlmCapabilityResolver? CapabilityResolver { get; set; }
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
     public ILogger<IdeationService> Logger { get; set; } = NullLogger<IdeationService>.Instance;
-    public ILogger<CanonicalTools> CanonicalToolsLogger { get; set; } = NullLogger<CanonicalTools>.Instance;
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     private static ILlmGatewayService CreateDefaultGatewayService()
@@ -84,9 +84,9 @@ public class TestIdeationServiceBuilder
             SkillsServiceFactory,
             WorkspaceRepository,
             MarkdownSyncService,
+            BacklogContext,
             LlmOptions,
             Logger,
-            CanonicalToolsLogger,
             TimeProvider);
     }
 }

@@ -55,11 +55,11 @@ public partial class IdeationService : IIdeationService
     private readonly SessionTranscriptService _transcriptService;
     private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
     private readonly ILogger<IdeationService> _logger;
-    private readonly ILogger<CanonicalTools> _canonicalToolsLogger;
     private readonly LlmProviderOptions _llmOptions;
     private readonly IWorkspaceSkillsServiceFactory _skillsServiceFactory;
     private readonly IWorkspaceRepository _workspaceRepository;
     private readonly TimeProvider _timeProvider;
+    private readonly IBacklogPlanningContext _backlogContext;
 
     public IdeationService(
         IWorkspacePathResolver pathResolver,
@@ -77,9 +77,9 @@ public partial class IdeationService : IIdeationService
         IWorkspaceSkillsServiceFactory skillsServiceFactory,
         IWorkspaceRepository workspaceRepository,
         ITaskMarkdownSyncService markdownSyncService,
+        IBacklogPlanningContext backlogContext,
         Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
         ILogger<IdeationService> logger,
-        ILogger<CanonicalTools> canonicalToolsLogger,
         TimeProvider timeProvider)
     {
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
@@ -97,10 +97,10 @@ public partial class IdeationService : IIdeationService
         _skillsServiceFactory = skillsServiceFactory ?? throw new ArgumentNullException(nameof(skillsServiceFactory));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
+        _backlogContext = backlogContext ?? throw new ArgumentNullException(nameof(backlogContext));
         ArgumentNullException.ThrowIfNull(llmOptions);
         _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _canonicalToolsLogger = canonicalToolsLogger ?? throw new ArgumentNullException(nameof(canonicalToolsLogger));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
@@ -311,14 +311,11 @@ public partial class IdeationService : IIdeationService
             ? customSystemPrompt
             : (!string.IsNullOrWhiteSpace(profile.SystemPrompt)
                 ? profile.SystemPrompt
-                : @"You are the NightCodeForge Ideation & Codebase Discovery Agent.
-Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.
-Each proposed task represents a full Pull Request / Merge Request unit of work with autonomous build, test, and code review gates.
-Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with sub-tasks and open questions to be answered in the task review process.");
+                : AgentProfile.DefaultIdeationSystemPrompt);
 
         var permittedTools = profile.PermittedTools?.Count > 0
             ? profile.PermittedTools
-            : DefaultAgentTools.GetTools(profile.Mode);
+            : DefaultAgentTools.Ideation;
 
         var taskGuidance = @"<task_planning_guidelines>
 When proposing implementation tasks to the developer, adhere to the following rules:
@@ -333,15 +330,16 @@ When proposing implementation tasks to the developer, adhere to the following ru
    - Detail these sub-tasks as an implementation checklist or breakdown inside the task's 'description'.
    - The downstream Implementation Agent will execute all sub-tasks together within the single PR/task lifecycle.
 
-3. OPEN QUESTIONS RESOLVED IN TASK REVIEW:
-   - A task may have open questions! You do not need every minor detail, design alternative, or edge case 100% resolved during ideation.
-   - If there are unresolved architectural questions, alternative approaches, or decisions that require deeper inspection or user input, list them explicitly under an 'Open Questions' section in the task's 'description'.
-   - These open questions will be answered in the task review process (Stage 1: ForgeTask Review), where the review agent inspects the code and can proactively prompt the developer ('ask') before coding begins.
+3. MANDATORY UPFRONT FUNCTIONAL & BUSINESS RESOLUTION (ZERO OPEN BUSINESS QUESTIONS):
+   - Tasks must enter the execution queue fully determined from a functional and business standpoint (""zero-surprise scheduling"").
+   - Before invoking 'propose_tasks' or 'edit_task', conduct an interactive interview with the maintainer (using 'ask') to resolve the user problem, expected behaviors, business rules, edge cases, and acceptance criteria.
+   - Do NOT leave 'Open Questions', 'TBD', or similar placeholder sections about functional or business matters in a task description. If a functional question remains, ask it now.
+   - You are NOT required to identify all technical impacts (such as exhaustive affected-file lists or symbol mapping). Detailed technical scoping is handled downstream by Stage 1 (ForgeTask Review), which can still ask purely technical questions after inspecting the code.
 
 4. TASK PROPOSAL INVOCATION:
    - When you recommend one or more implementation tasks, do NOT output markdown JSON codeblocks in your response.
    - Instead, invoke the 'propose_tasks' tool with your proposed tasks (each having title, description, and optional priority).
-   - Structure each task's description with clear Markdown sections (## Summary, ## Sub-tasks / Scope, ## Testing Plan, ## Open Questions if applicable).
+   - Structure each task's description with clear Markdown sections (## Summary, ## Functional Scope / Sub-tasks, ## Acceptance Criteria, ## Testing Plan).
    - If multiple tasks are proposed, they will be scheduled sequentially with dependencies established automatically (or via dependsOnTitles).
    - After proposing tasks, explain your proposal and architectural rationale clearly to the developer.
 
@@ -350,7 +348,26 @@ When proposing implementation tasks to the developer, adhere to the following ru
    - Before proposing new tasks, inspect 'docs/tasks/' (using 'read' or 'bash' e.g. ls docs/tasks) to understand currently planned, in-progress, or completed work.
    - Do NOT propose duplicate tasks for issues already present in the backlog.
    - You may reference existing task IDs or link dependencies (via dependsOnTitles) to existing backlog tasks when planning follow-ups or prerequisite work.
-</task_planning_guidelines>";
+
+6. DEPENDENCY IDENTIFICATION:
+<dependency_identification_rules>
+When planning or proposing tasks:
+1. Cross-reference your ideas against the `<existing_workspace_tasks>` list above (which contains top active backlog tasks ordered by priority).
+2. DO NOT propose duplicate tasks for capabilities already captured in existing tasks or already merged in the codebase.
+3. If your proposed task builds on, calls, or extends interfaces or data models introduced in an existing open/suggested task, you MUST set 'dependsOnTitles' in your 'propose_tasks' call with the title or numeric ID (e.g., '#101' or '101') of the prerequisite task.
+4. Explain to the developer why this dependency exists and the recommended order of execution.
+5. AVOID CIRCULAR DEPENDENCIES: Ensure your dependencies form a strict acyclic graph. Circular dependencies will be rejected with an error.
+</dependency_identification_rules>
+</task_planning_guidelines>
+
+<backlog_management_guidelines>
+You cannot edit repository files or 'docs/tasks/*.md' directly. Existing backlog tasks are managed exclusively through these host-level tools, which are audited and keep the markdown specifications in sync:
+- 'get_task' (task_id): fetch the full details (description, status, priority, merge mode, base branch, prerequisites, dependents) of a task listed in <existing_workspace_tasks>. Call it before refining a task, instead of guessing its content.
+- 'edit_task' (task_id, title?, description?, priority?, depends_on_ids?, merge_mode?, base_branch?): refine an existing task. Omitted arguments are unchanged; 'description' and 'depends_on_ids' replace the existing value, so start from the 'get_task' output. Resolve functional questions with the maintainer ('ask') BEFORE calling it.
+- 'set_task_priority' (task_id, priority) and 'rework_priorities' (updates: [{ task_id, priority }]): change priority tiers (1 Critical to 5 Trivial) of one or several tasks; prefer 'rework_priorities' when reordering several tasks.
+- 'remove_task' (task_id, reason): cancel a task that is obsolete or duplicated. It is refused while active tasks depend on it; re-link or remove those dependents first.
+Only tasks that are Suggested or Open, never executed, and not currently running can be changed. Tasks that already entered the pipeline (or are Reviewed, Implemented, Ready, Closed, Rejected, Cancelled) are rejected with an error: do not retry, create a follow-up task via 'propose_tasks' instead. Never mutate the backlog without the maintainer's agreement; summarize every change you made afterwards.
+</backlog_management_guidelines>";
 
         // Skills catalog (lean ~25 tokens/skill) is only injected when the agent can call load_skill.
         var skillsService = _skillsServiceFactory.Create(workspace, repoPath, taskId: null);
@@ -364,11 +381,14 @@ When proposing implementation tasks to the developer, adhere to the following ru
         var activeSkills = discoveredSkills.Select(s => s.Name).ToList();
         var skillsSection = string.IsNullOrEmpty(skillsCatalog) ? string.Empty : "\n\n" + skillsCatalog;
 
+        var backlogDigest = await _backlogContext.BuildBacklogDigestAsync(workspace.Id, null, cancellationToken);
+        var backlogSection = string.IsNullOrWhiteSpace(backlogDigest) ? string.Empty : backlogDigest + "\n\n";
+
         var systemPrompt = $@"{basePersona}
 {environmentSection.ToString().TrimEnd()}
 {projectContext}{skillsSection}
 
-{taskGuidance}";
+{backlogSection}{taskGuidance}";
 
         // The system prompt is supplied to HarnessAgent as HarnessInstructions (ChatOptions.Instructions);
         // adding it as a System message too would send it to the model twice.
@@ -420,12 +440,15 @@ When proposing implementation tasks to the developer, adhere to the following ru
             _editorConfigFileApplier,
             _webSearchService,
             skillsService,
-            _canonicalToolsLogger,
+            _backlogContext.CanonicalToolsLogger,
             buildTimeoutSeconds: null,
             testTimeoutSeconds: null,
             workspaceId: workspace.Id,
             taskId: null,
             isReadOnly: profile.Mode == AgentMode.ReadOnly || profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly);
+
+        canonicalTools.TaskMarkdownValidator = _backlogContext.TaskMarkdownValidator;
+        canonicalTools.BacklogMutationService = _backlogContext.BacklogMutationService;
 
         var sessionProposals = new List<IdeationProposal>();
 

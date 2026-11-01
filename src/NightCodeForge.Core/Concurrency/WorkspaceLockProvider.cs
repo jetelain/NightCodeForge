@@ -193,6 +193,19 @@ public class WorkspaceLockProvider : IWorkspaceLockProvider
         }
     }
 
+    public bool IsTaskLocked(int workspaceId, int taskId)
+    {
+        if (!_workspaceStates.TryGetValue(workspaceId, out var state))
+        {
+            return false;
+        }
+
+        lock (state.Sync)
+        {
+            return state.ActiveTaskLocks.ContainsKey(taskId);
+        }
+    }
+
     public IReadOnlyList<ActiveLockSnapshot> GetActiveLocks()
     {
         var now = DateTime.UtcNow;

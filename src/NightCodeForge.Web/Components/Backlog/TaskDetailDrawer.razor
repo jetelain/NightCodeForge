@@ -50,6 +50,12 @@
                         }
                     </div>
                     <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        @if (IdeationRefinementHelper.CanRefine(Task))
+                        {
+                            <a href="@IdeationRefinementHelper.BuildRefineUrl(Task)" class="forge-btn forge-btn-secondary btn-xs" style="padding: 0.25rem 0.6rem; font-size: 0.78rem; text-decoration: none;" id="btn-drawer-refine-ideation" title="Refine in Ideation">
+                                💡 Refine
+                            </a>
+                        }
                         <a href="/inspector/@Task.Id" class="forge-btn forge-btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.78rem; text-decoration: none;">
                             🔍 Inspect
                         </a>

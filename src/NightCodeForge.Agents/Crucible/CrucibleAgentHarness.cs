@@ -42,10 +42,10 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
     private readonly ITaskCancellationManager _cancellationManager;
     private readonly IOperationsControlService _operationsControlService;
+    private readonly IBacklogPlanningContext _backlogContext;
     private readonly ILlmGatewayService _gatewayService;
     private readonly ILlmCapabilityResolver _capabilityResolver;
     private readonly ILogger<CrucibleAgentHarness> _logger;
-    private readonly ILogger<CanonicalTools> _canonicalToolsLogger;
     private readonly LlmProviderOptions _llmOptions;
     private readonly RetryPolicyOptions _retryOptions;
     private readonly TimeProvider _timeProvider;
@@ -73,10 +73,10 @@ public partial class CrucibleAgentHarness : IAgentHarness
         NightCodeForge.Core.Repositories.ITaskRepository taskRepository,
         ITaskCancellationManager cancellationManager,
         IOperationsControlService operationsControlService,
+        IBacklogPlanningContext backlogContext,
         Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
         Microsoft.Extensions.Options.IOptions<RetryPolicyOptions> retryOptions,
         ILogger<CrucibleAgentHarness> logger,
-        ILogger<CanonicalTools> canonicalToolsLogger,
         TimeProvider timeProvider)
     {
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
@@ -97,12 +97,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
         _operationsControlService = operationsControlService ?? throw new ArgumentNullException(nameof(operationsControlService));
+        _backlogContext = backlogContext ?? throw new ArgumentNullException(nameof(backlogContext));
         ArgumentNullException.ThrowIfNull(llmOptions);
         _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
         ArgumentNullException.ThrowIfNull(retryOptions);
         _retryOptions = retryOptions.Value ?? throw new ArgumentNullException(nameof(retryOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _canonicalToolsLogger = canonicalToolsLogger ?? throw new ArgumentNullException(nameof(canonicalToolsLogger));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
@@ -237,7 +237,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             _editorConfigFileApplier,
             _webSearchService,
             skillsService,
-            _canonicalToolsLogger,
+            _backlogContext.CanonicalToolsLogger,
             buildTimeoutSeconds: buildTimeout,
             testTimeoutSeconds: testTimeout,
             workspaceId: workspace.Id,
@@ -245,6 +245,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             isReadOnly: context.Profile.Mode == AgentMode.ReadOnly || context.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly);
 
         var dispatcher = new LenientToolDispatcher(canonicalTools);
+        canonicalTools.TaskMarkdownValidator = _backlogContext.TaskMarkdownValidator;
 
         using var interruptionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         NightCodeForge.Core.Workflow.HumanInterruptionException? capturedInterruption = null;
@@ -360,6 +361,16 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 : "/workspace/clone")
             : workspacePath;
 
+        // The backlog digest only serves the Stage 1 dependency audit, and stays in Layer 3 (Task Scope).
+        string? backlogDigest = null;
+        if (context.StageId is StandardStageIds.TaskReview or "stage-1")
+        {
+            backlogDigest = await _backlogContext.BuildBacklogDigestAsync(
+                workspace.Id,
+                context.ForgeTask.Id > 0 ? context.ForgeTask.Id : null,
+                cancellationToken);
+        }
+
         var stabilizedPrefix = prefixStabilizer.BuildStabilizedPrefix(
             stageDirective,
             taskScope,
@@ -369,7 +380,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
             context.OptimizationFlags,
             customRulesPrompt: harnessConfig.CustomSystemRules,
             customRolePersona: customPersona,
-            workingDirectory: agentWorkingDir);
+            workingDirectory: agentWorkingDir,
+            backlogDigest: backlogDigest);
 
         // 7. Restore or Initialize Conversation History.
         // The system prompt is NOT part of the history: it is supplied to HarnessAgent as HarnessInstructions
@@ -1057,7 +1069,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         {
                             var repository = _taskRepository;
                             var conversationId = conversation.Id;
-                            var resultIsError = resultStr.StartsWith("Error", StringComparison.OrdinalIgnoreCase);
+                            var resultIsError = resultStr.StartsWith("Error", StringComparison.OrdinalIgnoreCase)
+                                || resultStr.StartsWith("[ERROR]", StringComparison.OrdinalIgnoreCase);
                             var metadataObj = new
                             {
                                 CallId = frc.CallId,
@@ -1705,7 +1718,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             StandardStageIds.Triage or "stage-0" =>
                 "Analyze the reported task against the repository base branch. Determine affected files and acceptance criteria. Call propose_tasks to recommend structured backlog items. You have read-only access and cannot modify code or access external networks.",
             StandardStageIds.TaskReview or "stage-1" =>
-                "You are a Staff Software Architect & Requirements Investigator. 1. Thoroughly investigate the task requirements and inspect the codebase using 'read' and 'bash'. 2. MANDATORY FILE EDIT: Edit the task specification document on disk in docs/tasks/ using 'edit' or 'write' with your approved architecture, affected files, technical plan, and acceptance criteria. Your disk changes will be read back upon stage completion to update the task specification. 3. Gather all questions and ambiguities into a single 'ask' call using the question list, expecting all answers at once; follow-up asks are permitted only for newly discovered blockers. Do not guess. 4. Do not write production code.",
+                "You are a Staff Software Architect & Requirements Investigator. 1. Thoroughly investigate the task requirements and inspect the codebase using 'read' and 'bash'. 2. BACKLOG DEPENDENCY AUDIT: Inspect the <existing_workspace_tasks> list (top active tasks by priority). Determine whether this task depends on any unmerged tasks (e.g. shared database migrations, missing models, interface definitions). If a prerequisite is found, record it in the YAML frontmatter under 'depends_on: [ ... ]' (using prerequisite task ID or title) and document the architectural rationale under '## Dependencies' in the markdown body. 3. CIRCULAR DEPENDENCY PREVENTION: Never introduce a circular dependency (e.g. A depends on B when B already depends on A). Cycles are rejected immediately by the edit tool. If an edit fails with a circular dependency error, re-check your assumptions and resolve the link. 4. WORKFLOW SUSPENSION AWARENESS: If you declare a dependency on a task that is not yet merged/closed, this task will be suspended and reset to 'Open' until the prerequisite is completed, after which the full workflow will rerun from Stage 1 with the updated code. 5. MANDATORY FILE EDIT: Edit the task specification document on disk in docs/tasks/ using 'edit' or 'write' with updated frontmatter (including 'depends_on'), approved architecture, affected files, technical plan, dependencies, and acceptance criteria. Your disk changes will be read back upon stage completion to update the task specification. 6. Gather all questions and ambiguities into a single 'ask' call using the question list, expecting all answers at once; follow-up asks are permitted only for newly discovered blockers. Do not guess. 7. Do not write production code.",
             StandardStageIds.Implementation or "stage-2" =>
                 BuildImplementationDirective(),
             StandardStageIds.CodeReviewAndFix or "stage-3" =>

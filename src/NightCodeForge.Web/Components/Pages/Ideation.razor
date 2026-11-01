@@ -9,6 +9,7 @@
 @inject ToastService ToastService
 @inject IdeationSessionState Session
 @inject IJSRuntime JS
+@inject IdeationRefinementService RefinementService
 @using NightCodeForge.Web.Components.Transcripts
 @using NightCodeForge.Web.Services
 @implements IDisposable
@@ -235,7 +236,7 @@
                                     else if (part is ToolCallContentPart tcp)
                                     {
                                         var tool = tcp.ToolCall;
-                                        <ToolCallCard ToolName="@tool.ToolName"
+                                        <IdeationToolCall ToolName="@tool.ToolName"
                                                       Arguments="@tool.Arguments"
                                                       Result="@tool.Result"
                                                       IsError="@tool.IsError"
@@ -281,7 +282,7 @@
                                     <div class="tool-calls-list">
                                         @foreach (var tool in msg.ToolCalls)
                                         {
-                                            <ToolCallCard ToolName="@tool.ToolName"
+                                            <IdeationToolCall ToolName="@tool.ToolName"
                                                           Arguments="@tool.Arguments"
                                                           Result="@tool.Result"
                                                           IsError="@tool.IsError"
@@ -332,7 +333,7 @@
                                     else if (part is ToolCallContentPart toolPart)
                                     {
                                         var tool = toolPart.ToolCall;
-                                        <ToolCallCard ToolName="@tool.ToolName"
+                                        <IdeationToolCall ToolName="@tool.ToolName"
                                                       Arguments="@tool.Arguments"
                                                       Result="@tool.Result"
                                                       IsError="@tool.IsError"
@@ -491,6 +492,10 @@
 @code {
     [Parameter] public int? WorkspaceId { get; set; }
 
+    [SupplyParameterFromQuery(Name = IdeationRefinementHelper.TaskIdQueryParameter)]
+    public int? TaskId { get; set; }
+
+    private int? _handledRefinementTaskId;
     private string _userInput = string.Empty;
     private bool _showCustomPromptConfig;
     private CancellationTokenSource? _cts;
@@ -510,11 +515,58 @@
         await ReloadWorkspaceContextAsync();
     }
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
         if (WorkspaceId.HasValue)
         {
             WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
+        if (!TaskId.HasValue)
+        {
+            _handledRefinementTaskId = null;
+            return;
+        }
+
+        if (TaskId != _handledRefinementTaskId && WorkspaceState.ActiveWorkspace != null)
+        {
+            _handledRefinementTaskId = TaskId;
+            await TryInitializeTaskRefinementAsync(WorkspaceState.ActiveWorkspace.Id, TaskId.Value);
+        }
+    }
+
+    private async Task<bool> TryInitializeTaskRefinementAsync(int workspaceId, int taskId)
+    {
+        if (Session.IsGenerating)
+        {
+            return false;
+        }
+
+        try
+        {
+            var refinement = await RefinementService.InitializeTaskRefinementAsync(workspaceId, taskId);
+            _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(workspaceId);
+
+            if (refinement.IsNew)
+            {
+                Session.Reset();
+                Session.BoundWorkspaceId = workspaceId;
+                Session.ActiveConversationId = refinement.Conversation.Id;
+                Session.ActiveConversationTitle = refinement.Conversation.Title;
+            }
+            else
+            {
+                LoadConversationIntoSession(refinement.Conversation);
+            }
+
+            _userInput = Session.Messages.Count == 0 ? refinement.SeedPrompt : string.Empty;
+            return true;
+        }
+        catch (Exception ex) when (ex is TaskNotFoundException or TaskCannotBeModifiedException)
+        {
+            _userInput = string.Empty;
+            ToastService.Show("Cannot Refine Task", ex.Message, ToastLevel.Error);
+            return false;
         }
     }
 
@@ -546,6 +598,16 @@
             {
                 _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(active.Id);
                 _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(active.Id);
+
+                if (TaskId.HasValue && TaskId != _handledRefinementTaskId)
+                {
+                    _handledRefinementTaskId = TaskId;
+                    if (await TryInitializeTaskRefinementAsync(active.Id, TaskId.Value))
+                    {
+                        await InvokeAsync(StateHasChanged);
+                        return;
+                    }
+                }
 
                 if (Session.BoundWorkspaceId != active.Id)
                 {
@@ -646,7 +708,7 @@
                         ToolName = turn.ToolName ?? "tool",
                         Arguments = turn.ToolArguments ?? string.Empty,
                         Result = turn.ToolResult ?? turn.Content,
-                        IsCompleted = false,
+                        IsCompleted = !string.IsNullOrEmpty(turn.ToolResult),
                         IsError = turn.IsError,
                         DurationMs = turn.DurationMs ?? 0
                     };
@@ -679,7 +741,7 @@
                 }
                 else
                 {
-                    var existingTool = pendingTools.LastOrDefault(t => !t.IsCompleted && t.ToolName == turn.ToolName);
+                    var existingTool = pendingTools.FirstOrDefault(t => !t.IsCompleted && string.Equals(t.ToolName, turn.ToolName, StringComparison.OrdinalIgnoreCase));
                     if (existingTool != null)
                     {
                         existingTool.Result = turn.ToolResult ?? turn.Content;
@@ -1057,6 +1119,15 @@
                                     res = res.Substring("User answered: ".Length).Trim();
                                 }
                                 qPart.Answer = res;
+                            }
+                        }
+
+                        if (!comp.IsError && ws != null && BacklogMutationCardParser.IsBacklogMutationTool(comp.ToolName))
+                        {
+                            _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(ws.Id, CancellationToken.None);
+                            foreach (var pending in Session.Proposals.Where(p => !p.IsAdded))
+                            {
+                                pending.ResolveDependencies(_workspaceTasks);
                             }
                         }
                         StateHasChanged();

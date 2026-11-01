@@ -3,7 +3,7 @@
 > **Feature Implementation Step (Part 1 of 2 — Backlog Context & Agent Validation Layer)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Companion Step:* [Step 12.1B: Orchestrator Prerequisite Suspension & Blocker UI Badges](STEP_12_1B_ORCHESTRATOR_PREREQUISITE_SUSPENSION_AND_BLOCKER_UI.md)  
-> *Target Components:* `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Crucible`, `src/NightCodeForge.Agents/Tools`, `src/NightCodeForge.Core/Services`, `src/NightCodeForge.Web/Services` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
+> *Target Components:* `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Crucible`, `src/NightCodeForge.Agents/Tools`, `src/NightCodeForge.Core/Services`, `src/NightCodeForge.Web/Services` | *Status:* ✅ Completed | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
 ---
@@ -138,18 +138,18 @@ To ensure the agent can self-correct within its active turn instead of failing p
 
 ## 5. Implementation Checklist & Deliverables
 
-- [ ] **Backlog Context Builder:**
-  - [ ] Implement `IWorkspaceBacklogSummaryService` generating compact `<existing_workspace_tasks>` digests.
-  - [ ] Filter out archived and terminal tasks (`Closed`, `Rejected`, `Cancelled`).
-  - [ ] Sort active tasks by `Priority ASC` then `UpdatedAt DESC`, capped to configurable limit (default: 20) with overflow notice.
-  - [ ] Inject summary into [`IdeationService`](../../src/NightCodeForge.Agents/Ideation/IdeationService.cs) system prompt and Stage 1 Task Review prompt in [`PromptPrefixStabilizer`](../../src/NightCodeForge.Agents/Optimizations/PromptPrefixStabilizer.cs) strictly within **Layer 3 (Task Scope)**.
-- [ ] **Stage Directives & Ideation Numeric ID Updates:**
-  - [ ] Update Stage 1 directive in [`CrucibleAgentHarness`](../../src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs) and Ideation planning guidelines.
-  - [ ] Update `IdeationProposalViewModel.ResolveDependencies` in [`IdeationSessionState`](../../src/NightCodeForge.Web/Services/IdeationSessionState.cs) to support numeric IDs (`101`, `#101`).
-- [ ] **In-Tool Cycle Detection & Agent Error Loopback:**
-  - [ ] Add frontmatter dependency validation in [`CanonicalTools`](../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs) for `edit` and `write` targeting `docs/tasks/*.md` using `IDependencyResolutionEngine.HasCycle`.
-- [ ] **Tests:**
-  - [ ] Unit tests verifying backlog summary filtering, priority ordering, task capping, and overflow notice.
-  - [ ] Unit test verifying `<existing_workspace_tasks>` is stabilized in Layer 3 and does not alter Layer 1/2 hash.
-  - [ ] Unit test verifying `CanonicalTools` file edit on `docs/tasks/*.md` rejects circular dependencies in-tool with an actionable error.
+- [x] **Backlog Context Builder:**
+  - [x] Implement `IWorkspaceBacklogSummaryService` generating compact `<existing_workspace_tasks>` digests.
+  - [x] Filter out archived and terminal tasks (`Closed`, `Rejected`, `Cancelled`).
+  - [x] Sort active tasks by `Priority ASC` then `UpdatedAt DESC`, capped to configurable limit (default: 20) with overflow notice.
+  - [x] Inject summary into [`IdeationService`](../../src/NightCodeForge.Agents/Ideation/IdeationService.cs) system prompt and Stage 1 Task Review prompt in [`PromptPrefixStabilizer`](../../src/NightCodeForge.Agents/Optimizations/PromptPrefixStabilizer.cs) strictly within **Layer 3 (Task Scope)**.
+- [x] **Stage Directives & Ideation Numeric ID Updates:**
+  - [x] Update Stage 1 directive in [`CrucibleAgentHarness`](../../src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs) and Ideation planning guidelines.
+  - [x] Update `IdeationProposalViewModel.ResolveDependencies` in [`IdeationSessionState`](../../src/NightCodeForge.Web/Services/IdeationSessionState.cs) to support numeric IDs (`101`, `#101`).
+- [x] **In-Tool Cycle Detection & Agent Error Loopback:**
+  - [x] Add frontmatter dependency validation in [`CanonicalTools`](../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs) for `edit` and `write` targeting `docs/tasks/*.md` using `IDependencyResolutionEngine.HasCycle`.
+- [x] **Tests:**
+  - [x] Unit tests verifying backlog summary filtering, priority ordering, task capping, and overflow notice.
+  - [x] Unit test verifying `<existing_workspace_tasks>` is stabilized in Layer 3 and does not alter Layer 1/2 hash.
+  - [x] Unit test verifying `CanonicalTools` file edit on `docs/tasks/*.md` rejects circular dependencies in-tool with an actionable error.
 

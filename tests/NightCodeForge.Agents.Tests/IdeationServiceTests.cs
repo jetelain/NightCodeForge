@@ -830,7 +830,7 @@ Let me know what you think!";
     }
 
     [Fact]
-    public async Task ConverseStreamingAsync_SystemPrompt_InstructsPullRequestSizingSubTasksAndOpenQuestions()
+    public async Task ConverseStreamingAsync_SystemPrompt_InstructsPullRequestSizingSubTasksAndUpfrontFunctionalResolution()
     {
         List<ChatMessage>? capturedMessages = null;
         var fakeClient = new MessageCapturingChatClient(msgs => capturedMessages = msgs.ToList())
@@ -856,9 +856,33 @@ Let me know what you think!";
         // Sub-tasks within a task
         Assert.Contains("sub-tasks", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
 
-        // Open questions answered in task review
-        Assert.Contains("open questions", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("task review", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
+        // Zero-surprise scheduling: functional/business questions resolved upfront, technical scoping left to review
+        Assert.Contains("ZERO OPEN BUSINESS QUESTIONS", systemMsg.Text);
+        Assert.Contains("interactive interview", systemMsg.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("NOT required to identify all technical impacts", systemMsg.Text);
+        Assert.Contains("Stage 1 (ForgeTask Review)", systemMsg.Text);
+        Assert.DoesNotContain("## Open Questions if applicable", systemMsg.Text);
+    }
+
+    [Fact]
+    public async Task ConverseAsync_SystemPrompt_InjectsBacklogManagementGuidelines()
+    {
+        List<ChatMessage>? capturedMessages = null;
+        var fakeClient = new MessageCapturingChatClient(msgs => capturedMessages = msgs.ToList())
+        {
+            ResponseToReturn = "Ready."
+        };
+
+        var service = CreateService(fakeClient);
+        await service.ConverseAsync(CreateWorkspace(15), "Refine my backlog");
+
+        Assert.NotNull(capturedMessages);
+        var systemMsg = capturedMessages.First(m => m.Role == ChatRole.System);
+        Assert.Contains("<backlog_management_guidelines>", systemMsg.Text);
+        foreach (var tool in CanonicalToolNames.BacklogMutationTools)
+        {
+            Assert.Contains(tool, systemMsg.Text);
+        }
     }
 
     [Fact]
@@ -868,9 +892,25 @@ Let me know what you think!";
 
         Assert.NotNull(profile.SystemPrompt);
         Assert.Contains("Pull Request / Merge Request", profile.SystemPrompt);
-        Assert.Contains("sub-tasks", profile.SystemPrompt);
-        Assert.Contains("open questions", profile.SystemPrompt);
-        Assert.Contains("task review", profile.SystemPrompt);
+        Assert.Contains("functional and business requirements", profile.SystemPrompt);
+        Assert.Contains("not mandated to identify all technical impacts", profile.SystemPrompt);
+        Assert.Contains("downstream review stages", profile.SystemPrompt);
+        Assert.DoesNotContain("open questions", profile.SystemPrompt);
+    }
+
+    [Fact]
+    public void CreateDefaultIdeationProfile_PermitsBacklogMutationToolsButReadOnlyProfilesDoNot()
+    {
+        var profile = AgentProfile.CreateDefaultIdeationProfile();
+
+        Assert.NotNull(profile.PermittedTools);
+        foreach (var tool in CanonicalToolNames.BacklogMutationTools)
+        {
+            Assert.Contains(tool, profile.PermittedTools);
+            Assert.DoesNotContain(tool, DefaultAgentTools.ReadOnly);
+        }
+        Assert.DoesNotContain(CanonicalToolNames.Edit, profile.PermittedTools);
+        Assert.DoesNotContain(CanonicalToolNames.Write, profile.PermittedTools);
     }
 
     [Fact]

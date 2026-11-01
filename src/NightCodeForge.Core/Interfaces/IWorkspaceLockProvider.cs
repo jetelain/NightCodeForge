@@ -36,6 +36,11 @@ public interface IWorkspaceLockProvider
     Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireTaskLockAsync(int workspaceId, int taskId, TimeSpan timeout, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns true when a task-scoped lock is currently held for the given task (i.e. a stage is executing it).
+    /// </summary>
+    bool IsTaskLocked(int workspaceId, int taskId);
+
+    /// <summary>
     /// Returns a real-time snapshot of all currently acquired workspace and task locks.
     /// </summary>
     IReadOnlyList<ActiveLockSnapshot> GetActiveLocks();

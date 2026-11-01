@@ -279,6 +279,13 @@ public partial class LenientToolDispatcher
                 }
                 return dict;
             }
+            if (node is JsonArray arr)
+            {
+                return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["items"] = ConvertJsonNode(arr)
+                };
+            }
         }
         catch (JsonException)
         {
@@ -440,9 +447,17 @@ public partial class LenientToolDispatcher
             }
         }
 
-        if (!norm.ContainsKey("tasks") && raw.TryGetValue("task", out var taskVal) && taskVal != null)
+        if (!norm.ContainsKey("tasks"))
         {
-            norm["tasks"] = taskVal;
+            if (raw.TryGetValue("task", out var taskVal) && taskVal != null)
+            {
+                norm["tasks"] = taskVal;
+            }
+            else if (string.Equals(canonicalName, CanonicalToolNames.ProposeTasks, StringComparison.OrdinalIgnoreCase) &&
+                     raw.TryGetValue("items", out var itemsVal) && itemsVal != null)
+            {
+                norm["tasks"] = itemsVal;
+            }
         }
 
         var questionKeys = new[] { "questions", "question_items", "questionItems", "items" };
@@ -691,6 +706,8 @@ public partial class LenientToolDispatcher
                 return Task.FromResult(tools.RequestChanges(feedback, reason));
             },
             aliases: ["reject_implementation", "requestchanges", "rejectimplementation", "send_back", "sendback"]));
+
+        RegisterBacklogTools(tools);
 
         // Register default translation rules for dropped legacy tools
         RegisterTranslation(new ToolTranslationRule("list_dir", CanonicalToolNames.Bash, args =>

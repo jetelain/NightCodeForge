@@ -248,7 +248,7 @@ public class DomainEntitiesTests
         Assert.Equal("read_skill_resource", CanonicalToolNames.ReadSkillResource);
         Assert.Equal("run_skill_script", CanonicalToolNames.RunSkillScript);
 
-        Assert.Equal(11, CanonicalToolNames.All.Count);
+        Assert.Equal(16, CanonicalToolNames.All.Count);
         Assert.Contains(CanonicalToolNames.Read, CanonicalToolNames.All);
         Assert.Contains(CanonicalToolNames.Edit, CanonicalToolNames.All);
         Assert.Contains(CanonicalToolNames.Write, CanonicalToolNames.All);
@@ -260,6 +260,12 @@ public class DomainEntitiesTests
         Assert.Contains(CanonicalToolNames.LoadSkill, CanonicalToolNames.All);
         Assert.Contains(CanonicalToolNames.ReadSkillResource, CanonicalToolNames.All);
         Assert.Contains(CanonicalToolNames.RunSkillScript, CanonicalToolNames.All);
+        Assert.Equal("get_task", CanonicalToolNames.GetTask);
+        Assert.Equal("edit_task", CanonicalToolNames.EditTask);
+        Assert.Equal("set_task_priority", CanonicalToolNames.SetTaskPriority);
+        Assert.Equal("rework_priorities", CanonicalToolNames.ReworkPriorities);
+        Assert.Equal("remove_task", CanonicalToolNames.RemoveTask);
+        Assert.All(CanonicalToolNames.BacklogMutationTools, t => Assert.Contains(t, CanonicalToolNames.All));
     }
 
     [Fact]

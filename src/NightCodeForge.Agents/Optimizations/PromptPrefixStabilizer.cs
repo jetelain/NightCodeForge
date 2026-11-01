@@ -61,11 +61,20 @@ public class PromptPrefixStabilizer
     public string BuildLayer3TaskScope(
         string taskScopeAndPlan,
         string? workingDirectory = null,
-        string? discoveredSymbols = null)
+        string? discoveredSymbols = null,
+        string? backlogDigest = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<task_scope>");
         sb.AppendLine(taskScopeAndPlan.Trim());
+
+        // The backlog changes whenever any task is created or transitioned: it must stay in this layer
+        // so that Layer 1 and Layer 2 remain byte-identical across tasks (KV cache prefix).
+        if (!string.IsNullOrWhiteSpace(backlogDigest))
+        {
+            sb.AppendLine();
+            sb.AppendLine(backlogDigest.Trim());
+        }
 
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
@@ -94,11 +103,12 @@ public class PromptPrefixStabilizer
         LocalOptimizationFlags? flags = null,
         string? customRulesPrompt = null,
         string? customRolePersona = null,
-        string? workingDirectory = null)
+        string? workingDirectory = null,
+        string? backlogDigest = null)
     {
         var layer1 = BuildLayer1GlobalRules(projectGuidelines, skillsCatalog, customRulesPrompt, customRolePersona);
         var layer2 = BuildLayer2StagePersona(stagePersonaDirective);
-        var layer3 = BuildLayer3TaskScope(taskScopeAndPlan, workingDirectory, discoveredSymbols);
+        var layer3 = BuildLayer3TaskScope(taskScopeAndPlan, workingDirectory, discoveredSymbols, backlogDigest);
         return new PromptLayers(layer1, layer2, layer3);
     }
 
@@ -111,7 +121,8 @@ public class PromptPrefixStabilizer
         LocalOptimizationFlags? flags = null,
         string? customRulesPrompt = null,
         string? customRolePersona = null,
-        string? workingDirectory = null)
+        string? workingDirectory = null,
+        string? backlogDigest = null)
     {
         var layers = BuildLayers(
             stagePersonaDirective,
@@ -122,7 +133,8 @@ public class PromptPrefixStabilizer
             flags,
             customRulesPrompt,
             customRolePersona,
-            workingDirectory);
+            workingDirectory,
+            backlogDigest);
 
         var sb = new StringBuilder();
         sb.AppendLine(layers.Layer1GlobalRules);

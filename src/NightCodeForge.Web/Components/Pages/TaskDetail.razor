@@ -124,6 +124,12 @@
                             🗑️ Reject Task
                         </button>
                     }
+                    @if (IdeationRefinementHelper.CanRefine(_task))
+                    {
+                        <a href="@IdeationRefinementHelper.BuildRefineUrl(_task)" class="forge-btn forge-btn-secondary" style="text-decoration: none;" id="btn-refine-ideation" title="Refine task specification and resolve open questions in Ideation chat">
+                            💡 Refine in Ideation
+                        </a>
+                    }
                     <a href="@WorkspaceState.GetPath($"inspector/{_task.Id}")" class="forge-btn forge-btn-secondary" style="text-decoration: none;" id="btn-inspect-task">
                         🔍 Live Inspector
                     </a>
@@ -685,6 +691,7 @@
         if (HubClient != null)
         {
             HubClient.OnStageTransitionReceived += HandleStageTransition;
+            HubClient.OnBacklogMutationReceived += HandleBacklogMutation;
             try
             {
                 await HubClient.StartAsync();
@@ -806,11 +813,14 @@
 
     private async Task ReloadTaskAsync()
     {
+        if (_disposed) return;
         _diffResult = null;
         await LoadTaskDataAsync();
+        if (_disposed) return;
         if (_activeTab == "changes")
         {
             await LoadDiffFilesAsync();
+            if (_disposed) return;
         }
         StateHasChanged();
     }
@@ -972,6 +982,16 @@
         });
     }
 
+    private void HandleBacklogMutation(int taskId, string toolName, string message)
+    {
+        if (_disposed || (taskId != TaskId && _allWorkspaceTasks.All(t => t.Id != taskId))) return;
+        InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            await ReloadTaskAsync();
+        });
+    }
+
     private static string GetStatusBadgeClass(TaskOverallStatus status) => status switch
     {
         TaskOverallStatus.Suggested => "badge-amber",
@@ -992,6 +1012,7 @@
         if (HubClient != null)
         {
             HubClient.OnStageTransitionReceived -= HandleStageTransition;
+            HubClient.OnBacklogMutationReceived -= HandleBacklogMutation;
         }
     }
 }

@@ -100,20 +100,22 @@ public static class JsonRepairHelper
             {
                 if (stack.Count > 0 && stack.Peek() == c)
                 {
-                    TrimTrailingCommas(sb);
+                    PrepareContainerClose(sb, c);
                     stack.Pop();
                     sb.Append(c);
                 }
                 else if (stack.Count > 0 && stack.Contains(c))
                 {
                     // An inner container was left unclosed before this outer delimiter
-                    TrimTrailingCommas(sb);
                     while (stack.Count > 0 && stack.Peek() != c)
                     {
-                        sb.Append(stack.Pop());
+                        var innerClose = stack.Pop();
+                        PrepareContainerClose(sb, innerClose);
+                        sb.Append(innerClose);
                     }
                     if (stack.Count > 0)
                     {
+                        PrepareContainerClose(sb, c);
                         stack.Pop();
                     }
                     sb.Append(c);
@@ -142,7 +144,9 @@ public static class JsonRepairHelper
         // Append any unclosed brackets/braces in reverse order
         while (stack.Count > 0)
         {
-            sb.Append(stack.Pop());
+            var closeChar = stack.Pop();
+            PrepareContainerClose(sb, closeChar);
+            sb.Append(closeChar);
         }
 
         var result = sb.ToString();
@@ -157,6 +161,111 @@ public static class JsonRepairHelper
         {
             return clean;
         }
+    }
+
+    private static void PrepareContainerClose(StringBuilder sb, char closeChar)
+    {
+        TrimTrailingCommas(sb);
+        if (closeChar != '}')
+        {
+            return;
+        }
+
+        int idx = sb.Length - 1;
+        while (idx >= 0 && char.IsWhiteSpace(sb[idx]))
+        {
+            idx--;
+        }
+
+        if (idx < 0)
+        {
+            return;
+        }
+
+        if (sb[idx] == ':')
+        {
+            int quoteEnd = idx - 1;
+            while (quoteEnd >= 0 && char.IsWhiteSpace(sb[quoteEnd]))
+            {
+                quoteEnd--;
+            }
+
+            if (quoteEnd >= 0 && sb[quoteEnd] == '"')
+            {
+                int quoteStart = FindMatchingOpeningQuote(sb, quoteEnd);
+                if (quoteStart >= 0)
+                {
+                    int beforeKey = quoteStart - 1;
+                    while (beforeKey >= 0 && char.IsWhiteSpace(sb[beforeKey]))
+                    {
+                        beforeKey--;
+                    }
+
+                    if (beforeKey >= 0 && sb[beforeKey] == ',')
+                    {
+                        sb.Length = beforeKey;
+                        TrimTrailingCommas(sb);
+                        return;
+                    }
+
+                    if (beforeKey >= 0 && sb[beforeKey] == '{')
+                    {
+                        sb.Length = beforeKey + 1;
+                        return;
+                    }
+                }
+            }
+
+            sb.Append("null");
+            return;
+        }
+
+        if (sb[idx] == '"')
+        {
+            int quoteStart = FindMatchingOpeningQuote(sb, idx);
+            if (quoteStart >= 0)
+            {
+                int beforeKey = quoteStart - 1;
+                while (beforeKey >= 0 && char.IsWhiteSpace(sb[beforeKey]))
+                {
+                    beforeKey--;
+                }
+
+                if (beforeKey >= 0 && sb[beforeKey] == ',')
+                {
+                    sb.Length = beforeKey;
+                    TrimTrailingCommas(sb);
+                }
+                else if (beforeKey >= 0 && sb[beforeKey] == '{')
+                {
+                    sb.Length = beforeKey + 1;
+                }
+            }
+        }
+    }
+
+    private static int FindMatchingOpeningQuote(StringBuilder sb, int closingQuoteIndex)
+    {
+        for (int i = closingQuoteIndex - 1; i >= 0; i--)
+        {
+            if (sb[i] != '"')
+            {
+                continue;
+            }
+
+            int backslashes = 0;
+            for (int j = i - 1; j >= 0 && sb[j] == '\\'; j--)
+            {
+                backslashes++;
+            }
+
+            if (backslashes % 2 == 0)
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     private static void TrimTrailingCommas(StringBuilder sb)

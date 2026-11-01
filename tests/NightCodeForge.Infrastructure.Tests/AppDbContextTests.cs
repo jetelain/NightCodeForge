@@ -226,6 +226,91 @@ public class AppDbContextTests : IDisposable
     }
 
     [Fact]
+    public async Task EnsureDefaultGlobalAgentProfilesAsync_ReconcilesBacklogToolsAndLegacyPersonaOntoExistingIdeationProfile()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+        await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
+
+        var ideation = await context.AgentProfiles.FirstAsync(p => p.Id == StandardStageIds.Ideation);
+        ideation.PermittedTools = DefaultAgentTools.ReadOnly.ToList();
+        ideation.SystemPrompt = AgentProfile.LegacyIdeationSystemPrompt;
+        await context.SaveChangesAsync();
+
+        await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
+        context.ChangeTracker.Clear();
+
+        var reconciled = await context.AgentProfiles.FirstAsync(p => p.Id == StandardStageIds.Ideation);
+        foreach (var tool in CanonicalToolNames.BacklogMutationTools)
+        {
+            Assert.Contains(tool, reconciled.PermittedTools!);
+        }
+        Assert.Contains(CanonicalToolNames.Read, reconciled.PermittedTools!);
+        Assert.Equal(AgentProfile.DefaultIdeationSystemPrompt, reconciled.SystemPrompt);
+
+        // Untrusted-intake triage never receives backlog mutation tools.
+        var triage = await context.AgentProfiles.FirstAsync(p => p.Id == StandardStageIds.Triage);
+        Assert.DoesNotContain(CanonicalToolNames.EditTask, triage.PermittedTools!);
+    }
+
+    [Fact]
+    public async Task EnsureDefaultGlobalAgentProfilesAsync_KeepsCustomizedIdeationPersona()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+        await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
+
+        var ideation = await context.AgentProfiles.FirstAsync(p => p.Id == StandardStageIds.Ideation);
+        ideation.SystemPrompt = "My custom persona";
+        await context.SaveChangesAsync();
+
+        await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
+        context.ChangeTracker.Clear();
+
+        Assert.Equal("My custom persona", (await context.AgentProfiles.FirstAsync(p => p.Id == StandardStageIds.Ideation)).SystemPrompt);
+    }
+
+    [Fact]
+    public async Task EnsureDefaultGlobalAgentProfilesAsync_ReconcilesWorkspaceScopedIdeationProfiles()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+
+        var ws = new Workspace
+        {
+            Name = "ScopedRepo",
+            RepositoryPath = "/repos/scoped",
+            DefaultBaseBranch = "main"
+        };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        var scopedId = $"ws-{ws.Id}:{StandardStageIds.Ideation}";
+        context.AgentProfiles.Add(new AgentProfile
+        {
+            Id = scopedId,
+            WorkspaceId = ws.Id,
+            Name = "Workspace Ideation",
+            HarnessId = StandardHarnessIds.Crucible,
+            ModelName = "Qwen3.8-27B:latest",
+            Mode = AgentMode.ReadOnly,
+            SecurityTier = SandboxSecurityTier.Standard,
+            PermittedTools = DefaultAgentTools.ReadOnly.ToList(),
+            SystemPrompt = AgentProfile.LegacyIdeationSystemPrompt
+        });
+        await context.SaveChangesAsync();
+
+        await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
+        context.ChangeTracker.Clear();
+
+        var reconciledScoped = await context.AgentProfiles.FirstAsync(p => p.Id == scopedId);
+        foreach (var tool in CanonicalToolNames.BacklogMutationTools)
+        {
+            Assert.Contains(tool, reconciledScoped.PermittedTools!);
+        }
+        Assert.Equal(AgentProfile.DefaultIdeationSystemPrompt, reconciledScoped.SystemPrompt);
+    }
+    [Fact]
     public async Task EnsureDefaultGlobalAgentProfilesAsync_WithLlmProviderOptions_SeedsDifferentiatedProfiles()
     {
         using var context = new AppDbContext(_options);

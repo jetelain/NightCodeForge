@@ -646,9 +646,49 @@ VALUES ('" + AddWorkspaceGlobalSkillsSettingsMigrationId + @"', '10.0.12');";
         if (missingProfiles.Count > 0)
         {
             AgentProfiles.AddRange(missingProfiles);
+        }
+
+        await ReconcileIdeationProfilesAsync(cancellationToken);
+
+        if (ChangeTracker.HasChanges())
+        {
             await SaveChangesAsync(cancellationToken);
         }
     }
+
+    /// <summary>
+    /// Grants the host-level backlog mutation tools to stored ideation profiles (global and workspace-scoped)
+    /// and refreshes the base persona when it still matches the unmodified legacy default.
+    /// </summary>
+    private async Task ReconcileIdeationProfilesAsync(CancellationToken cancellationToken)
+    {
+        var scopedSuffix = ":" + StandardStageIds.Ideation;
+        var ideationProfiles = await AgentProfiles
+            .Where(p => p.Id == StandardStageIds.Ideation || p.Id.EndsWith(scopedSuffix))
+            .ToListAsync(cancellationToken);
+
+        foreach (var profile in ideationProfiles)
+        {
+            if (profile.PermittedTools is { Count: > 0 })
+            {
+                var missingTools = CanonicalToolNames.BacklogMutationTools
+                    .Where(t => !profile.PermittedTools.Contains(t, StringComparer.OrdinalIgnoreCase))
+                    .ToList();
+                if (missingTools.Count > 0)
+                {
+                    profile.PermittedTools = profile.PermittedTools.Concat(missingTools).ToList();
+                }
+            }
+
+            if (profile.SystemPrompt != null &&
+                NormalizeLineEndings(profile.SystemPrompt).Trim() == NormalizeLineEndings(AgentProfile.LegacyIdeationSystemPrompt).Trim())
+            {
+                profile.SystemPrompt = AgentProfile.DefaultIdeationSystemPrompt;
+            }
+        }
+    }
+
+    private static string NormalizeLineEndings(string value) => value.Replace("\r\n", "\n");
 
     /// <summary>
     /// Seeds the standard default workflow ("standard-3-agent") and its 6 stages if not already present in the database.

@@ -196,9 +196,35 @@ public class IdeationProposalViewModel
             return;
         }
 
+        var cancelledOrRejectedIds = existingTasks
+            .Where(t => t.Status is TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected)
+            .Select(t => t.Id)
+            .ToHashSet();
+        if (cancelledOrRejectedIds.Count > 0)
+        {
+            SelectedDependencyIds.RemoveAll(cancelledOrRejectedIds.Contains);
+        }
+
+        var activeTasks = existingTasks
+            .Where(t => t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected))
+            .ToList();
+
         foreach (var depTitle in DependsOnTitles)
         {
-            var matched = existingTasks.FirstOrDefault(t =>
+            if (TryParseTaskId(depTitle, out var referencedId))
+            {
+                var byId = activeTasks.FirstOrDefault(t => t.Id == referencedId);
+                if (byId != null)
+                {
+                    if (!SelectedDependencyIds.Contains(byId.Id))
+                    {
+                        SelectedDependencyIds.Add(byId.Id);
+                    }
+                    continue;
+                }
+            }
+
+            var matched = activeTasks.FirstOrDefault(t =>
                 string.Equals(t.Title, depTitle, StringComparison.OrdinalIgnoreCase) ||
                 t.Title.Contains(depTitle, StringComparison.OrdinalIgnoreCase) ||
                 depTitle.Contains(t.Title, StringComparison.OrdinalIgnoreCase));
@@ -208,6 +234,15 @@ public class IdeationProposalViewModel
                 SelectedDependencyIds.Add(matched.Id);
             }
         }
+    }
+
+    /// <summary>
+    /// Parses a numeric task reference such as "101" or "#101".
+    /// </summary>
+    private static bool TryParseTaskId(string reference, out int taskId)
+    {
+        var trimmed = reference.Trim().TrimStart('#');
+        return int.TryParse(trimmed, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out taskId);
     }
 }
 

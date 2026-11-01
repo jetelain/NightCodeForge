@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Execution;
 
@@ -30,6 +31,12 @@ public partial class CanonicalTools
     /// RequestChangesException so callers (such as agent harnesses) can intercept the rejection.
     /// </summary>
     public Action<string, string?>? RequestChangesHandler { get; set; }
+
+    /// <summary>
+    /// Optional validator for task specification files (<c>docs/tasks/*.md</c>). When present, write and edit
+    /// reject prospective content that creates a dependency cycle, before anything is written to disk.
+    /// </summary>
+    public ITaskMarkdownValidator? TaskMarkdownValidator { get; set; }
 
     [GeneratedRegex(@"\r\n|\r|\n")]
     private static partial Regex NewlineRegex();
@@ -278,6 +285,12 @@ public partial class CanonicalTools
             return $"Error: {ex.Message}";
         }
 
+        var rejection = await ValidateTaskSpecificationAsync(path, content, cancellationToken);
+        if (rejection != null)
+        {
+            return rejection;
+        }
+
         var dir = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {
@@ -290,6 +303,21 @@ public partial class CanonicalTools
 
         await File.WriteAllBytesAsync(fullPath, bytes, cancellationToken);
         return $"Successfully wrote {bytes.Length} bytes to '{path}'.";
+    }
+
+    /// <summary>
+    /// Returns a model-visible error when the prospective task specification content is rejected by the
+    /// <see cref="TaskMarkdownValidator"/>, or null when the write may proceed.
+    /// </summary>
+    private async Task<string?> ValidateTaskSpecificationAsync(string path, string prospectiveContent, CancellationToken cancellationToken)
+    {
+        if (TaskMarkdownValidator == null || !_workspaceId.HasValue || !TaskMarkdownValidator.IsTaskSpecificationPath(path))
+        {
+            return null;
+        }
+
+        var result = await TaskMarkdownValidator.ValidateAsync(_workspaceId.Value, _taskId, path, prospectiveContent, cancellationToken);
+        return result.IsValid ? null : result.ErrorMessage;
     }
 
     /// <summary>
@@ -336,6 +364,12 @@ public partial class CanonicalTools
             var (updatedContent, occurrences) = ApplySingleEdit(currentContent, edit.OldText, edit.NewText, edit.ReplaceAll, isStrictWhitespace, path, i + 1);
             currentContent = updatedContent;
             totalOccurrencesReplaced += occurrences;
+        }
+
+        var rejection = await ValidateTaskSpecificationAsync(path, currentContent, cancellationToken);
+        if (rejection != null)
+        {
+            return rejection;
         }
 
         // Apply EditorConfig compliance

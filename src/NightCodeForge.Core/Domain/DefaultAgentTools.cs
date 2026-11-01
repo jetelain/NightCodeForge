@@ -15,6 +15,9 @@ public static class DefaultAgentTools
         CanonicalToolNames.LoadSkill
     ];
 
+    // Read-only workspace plus scoped host-level backlog tools (never granted to untrusted-intake triage).
+    private static readonly string[] _ideation = [.. _readOnly, .. CanonicalToolNames.BacklogMutationTools];
+
     private static readonly string[] _full =
     [
         CanonicalToolNames.Read,
@@ -41,6 +44,7 @@ public static class DefaultAgentTools
     ];
 
     public static IReadOnlyList<string> ReadOnly => _readOnly;
+    public static IReadOnlyList<string> Ideation => _ideation;
     public static IReadOnlyList<string> Full => _full;
     public static IReadOnlyList<string> Review => _review;
 

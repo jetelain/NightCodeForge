@@ -89,11 +89,11 @@ public static class CanonicalAIFunctionFactory
             AIFunctionFactory.Create(
                 ([Description("List of structured backlog task proposals")] object? tasks = null,
                  [Description("Task title if single proposal")] string? title = null,
-                 [Description("Task description with sub-tasks, testing plan, and open questions if single proposal")] string? description = null,
+                 [Description("Task description with functional scope, acceptance criteria, and testing plan if single proposal")] string? description = null,
                  [Description("Task priority (1 Highest - 5 Lowest) if single proposal")] int? priority = null) =>
                 tools.ProposeTasks(tasks, title, description, priority),
                 "propose_tasks",
-                "Proposes structured backlog items for triage and discovery. Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Include sub-tasks and open questions in the description."),
+                "Proposes structured backlog items for triage and discovery. Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Resolve functional and business questions with the maintainer first, then include scope, acceptance criteria, and testing plan in the description."),
 
             AIFunctionFactory.Create(
                 ([Description("Detailed critique and rework feedback for the implementation agent")] string feedback,
@@ -112,6 +112,11 @@ public static class CanonicalAIFunctionFactory
                 "Searches technical web documentation for APIs, errors, or libraries."));
         }
 
+        if (tools.BacklogMutationService != null)
+        {
+            allTools.AddRange(CreateBacklogMutationTools(tools));
+        }
+
         var lenientTools = allTools
             .Select(t => (AIFunction)new LenientAIFunction(t, effectiveDispatcher))
             .ToList();
@@ -124,6 +129,49 @@ public static class CanonicalAIFunctionFactory
         return lenientTools
             .Where(t => permittedTools.Contains(t.Name, StringComparer.OrdinalIgnoreCase))
             .ToList();
+    }
+
+    private static IEnumerable<AIFunction> CreateBacklogMutationTools(CanonicalTools tools)
+    {
+        yield return AIFunctionFactory.Create(
+            ([Description("Numeric ID of the backlog task")] int task_id,
+             CancellationToken ct = default) => tools.GetTaskAsync(task_id, ct),
+            CanonicalToolNames.GetTask,
+            "Fetches the complete details of one backlog task (description, status, priority, prerequisites, dependents) on demand.");
+
+        yield return AIFunctionFactory.Create(
+            ([Description("Numeric ID of the unstarted task to edit")] int task_id,
+             [Description("New title")] string? title = null,
+             [Description("New full description (replaces the existing one)")] string? description = null,
+             [Description("New priority (1 Critical - 5 Trivial)")] int? priority = null,
+             [Description("Complete new list of prerequisite task IDs (replaces the existing list; cycles are rejected)")] int[]? depends_on_ids = null,
+             [Description("New merge mode: Automatic or ManualReviewRequired")] string? merge_mode = null,
+             [Description("New base branch")] string? base_branch = null,
+             CancellationToken ct = default) =>
+                tools.EditTaskAsync(task_id, title, description, priority, depends_on_ids, merge_mode, base_branch, ct),
+            CanonicalToolNames.EditTask,
+            "Edits an unstarted (Suggested or Open, never executed) backlog task. Omitted arguments are left unchanged. Only functionally resolved changes agreed with the maintainer should be applied.");
+
+        yield return AIFunctionFactory.Create(
+            ([Description("Numeric ID of the unstarted task")] int task_id,
+             [Description("New priority (1 Critical - 5 Trivial)")] int priority,
+             CancellationToken ct = default) => tools.SetTaskPriorityAsync(task_id, priority, ct),
+            CanonicalToolNames.SetTaskPriority,
+            "Changes the priority tier of one unstarted backlog task.");
+
+        yield return AIFunctionFactory.Create(
+            ([Description("Array of { task_id, priority } entries (priority 1 Critical - 5 Trivial)")] object? updates,
+             CancellationToken ct = default) =>
+                tools.ReworkPrioritiesAsync(LenientToolDispatcher.ParsePriorityUpdates(updates), ct),
+            CanonicalToolNames.ReworkPriorities,
+            "Changes the priority tier of several unstarted backlog tasks in one call.");
+
+        yield return AIFunctionFactory.Create(
+            ([Description("Numeric ID of the unstarted task to remove")] int task_id,
+             [Description("Why the task is removed")] string? reason = null,
+             CancellationToken ct = default) => tools.RemoveTaskAsync(task_id, reason, ct),
+            CanonicalToolNames.RemoveTask,
+            "Removes (cancels) an unstarted backlog task. Fails when active tasks still depend on it.");
     }
 
     private sealed class LenientAIFunction : DelegatingAIFunction

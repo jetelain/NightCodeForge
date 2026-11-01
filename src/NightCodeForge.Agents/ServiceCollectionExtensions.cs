@@ -49,6 +49,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<AgentsMdService>();
         services.TryAddSingleton<IMcpClientManager, McpClientManager>();
 
+        // Backlog awareness: prompt digest and task specification (dependency cycle) validation
+        services.TryAddSingleton(new WorkspaceBacklogDigestOptions());
+        services.TryAddScoped<IWorkspaceBacklogSummaryService, WorkspaceBacklogSummaryService>();
+        services.TryAddScoped<ITaskMarkdownValidator, TaskMarkdownValidator>();
+        services.TryAddScoped<IBacklogMutationToolService, BacklogMutationToolService>();
+        services.TryAddScoped<IBacklogPlanningContext, BacklogPlanningContext>();
+
         // 3. Transcripts & Diagnostics
         services.TryAddSingleton<SessionTranscriptService>();
         services.TryAddScoped<TranscriptDiagnosticService>();

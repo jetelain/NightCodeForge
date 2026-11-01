@@ -69,6 +69,22 @@ public class AgentProfile
     public Workspace? Workspace { get; set; }
 
     /// <summary>
+    /// Base persona of the default ideation profile (also the fallback persona of the ideation service).
+    /// </summary>
+    public const string DefaultIdeationSystemPrompt = @"You are the NightCodeForge Ideation & Codebase Discovery Agent.
+Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.
+Each proposed task represents a full Pull Request / Merge Request unit of work with autonomous build, test, and code review gates.
+Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with concrete functional scope. Focus on functional and business requirements: solve all user-facing, behavioral, and acceptance criteria questions with the maintainer in chat before formulating tasks so that tasks enter the execution queue fully determined. You are not mandated to identify all technical impacts (e.g. files); downstream review stages handle technical scoping.";
+
+    /// <summary>
+    /// Persona text shipped before Step 12.13A; reconciled onto existing stored profiles when still unmodified.
+    /// </summary>
+    public const string LegacyIdeationSystemPrompt = @"You are the NightCodeForge Ideation & Codebase Discovery Agent.
+Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.
+Each proposed task represents a full Pull Request / Merge Request unit of work with autonomous build, test, and code review gates.
+Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with sub-tasks and open questions to be answered in the task review process.";
+
+    /// <summary>
     /// Default agent profile used for interactive ideation and codebase discovery.
     /// Not scheduled like other pipeline workloads.
     /// </summary>
@@ -80,13 +96,10 @@ public class AgentProfile
         HarnessId = StandardHarnessIds.Crucible,
         ModelName = defaultModelName,
         Mode = AgentMode.ReadOnly,
-        PermittedTools = DefaultAgentTools.ReadOnly,
+        PermittedTools = DefaultAgentTools.Ideation,
         OptimizationFlags = null,
         RoutingTarget = OllamaRoutingTarget.Auto,
-        SystemPrompt = @"You are the NightCodeForge Ideation & Codebase Discovery Agent.
-Your objective is to explore the codebase, discuss architectural features, and help the developer plan new tasks.
-Each proposed task represents a full Pull Request / Merge Request unit of work with autonomous build, test, and code review gates.
-Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with sub-tasks and open questions to be answered in the task review process.",
+        SystemPrompt = DefaultIdeationSystemPrompt,
         ThinkingEffort = ThinkingEffort.Medium,
         MaxTurns = 300
     };

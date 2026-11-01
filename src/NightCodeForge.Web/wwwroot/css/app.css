@@ -6488,3 +6488,16 @@ div.spinner-pulse {
 
 
 
+
+/* Backlog mutation tool cards (Ideation chat) */
+.backlog-mutation-card { border: 1px solid var(--border-subtle); border-left: 3px solid var(--accent-indigo, #6366f1); border-radius: var(--radius-md); background: var(--bg-input); padding: 0.5rem 0.75rem; margin: 0.4rem 0; font-size: 0.85rem; }
+.backlog-mutation-card.kind-removed { opacity: 0.75; border-left-color: #6b7280; }
+.backlog-mutation-card.kind-removed .backlog-mutation-heading { text-decoration: line-through; }
+.backlog-mutation-card.error { border-left-color: #ef4444; }
+.backlog-mutation-header { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.backlog-mutation-link { margin-left: auto; font-size: 0.78rem; text-decoration: none; }
+.backlog-mutation-subtitle, .backlog-mutation-reason { color: var(--text-secondary); margin-top: 0.25rem; }
+.backlog-mutation-error { color: #fca5a5; margin-top: 0.25rem; }
+.backlog-mutation-highlights { margin: 0.35rem 0 0 1.1rem; padding: 0; }
+.backlog-mutation-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.4rem; }
+.backlog-mutation-chip { text-decoration: none; }

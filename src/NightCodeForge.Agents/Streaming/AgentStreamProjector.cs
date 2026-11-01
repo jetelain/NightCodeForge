@@ -41,7 +41,9 @@ public class AgentStreamProjector
                 {
                     var callId = frc.CallId;
                     var resultStr = frc.Result is Exception ex ? $"Exception: {ex.GetType().Name}: {ex.Message} -> {ex.InnerException?.Message}" : frc.Result?.ToString() ?? string.Empty;
-                    bool isError = frc.Result is Exception || resultStr.StartsWith("Error:", StringComparison.OrdinalIgnoreCase);
+                    bool isError = frc.Result is Exception
+                        || resultStr.StartsWith("Error:", StringComparison.OrdinalIgnoreCase)
+                        || resultStr.StartsWith("[ERROR]", StringComparison.OrdinalIgnoreCase);
                     long durationMs = 0;
                     string toolName = "tool";
                     string argsJson = "{}";

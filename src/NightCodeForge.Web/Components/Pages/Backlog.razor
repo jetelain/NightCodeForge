@@ -313,6 +313,7 @@
         HubConnection.OnStageTransitionReceived += HandleStageTransition;
         HubConnection.OnDeterministicGateResultReceived += HandleGateResult;
         HubConnection.OnWorkerStatusReceived += HandleWorkerStatus;
+        HubConnection.OnBacklogMutationReceived += HandleBacklogMutation;
         OperationsControl.OnOperationsStateChanged += HandleOperationsStateChanged;
 
         try
@@ -394,6 +395,24 @@
             catch (Exception ex)
             {
                 Logger.LogError(ex, "Failed to refresh backlog on gate result for task #{TaskId}.", taskId);
+            }
+        });
+    }
+
+    private void HandleBacklogMutation(int taskId, string toolName, string message)
+    {
+        if (_disposed) return;
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                if (_disposed) return;
+                await LoadDataAsync();
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to refresh backlog on {Tool} mutation of task #{TaskId}.", toolName, taskId);
             }
         });
     }
@@ -668,6 +687,7 @@
         HubConnection.OnStageTransitionReceived -= HandleStageTransition;
         HubConnection.OnDeterministicGateResultReceived -= HandleGateResult;
         HubConnection.OnWorkerStatusReceived -= HandleWorkerStatus;
+        HubConnection.OnBacklogMutationReceived -= HandleBacklogMutation;
         OperationsControl.OnOperationsStateChanged -= HandleOperationsStateChanged;
     }
 }

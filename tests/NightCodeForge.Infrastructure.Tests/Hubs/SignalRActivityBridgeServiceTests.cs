@@ -29,6 +29,34 @@ public class SignalRActivityBridgeServiceTests
     }
 
     [Fact]
+    public async Task DispatchActivityEventAsync_BacklogMutationNotice_BroadcastsBacklogMutationToAll()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var bridge = CreateBridge(fakeHubContext);
+
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent(
+            "ideation-backlog-1",
+            14,
+            StandardStageIds.Ideation,
+            AgentActivityKind.Notice,
+            "Ideation agent edited task #14: description",
+            DateTime.UtcNow,
+            new Dictionary<string, object?> { [AgentActivityMetadataKeys.ToolName] = CanonicalToolNames.EditTask }));
+
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent(
+            "sess",
+            15,
+            "impl",
+            AgentActivityKind.Notice,
+            "plain notice",
+            DateTime.UtcNow));
+
+        var mutation = Assert.Single(fakeHubContext.AllClient.BacklogMutations);
+        Assert.Equal(14, mutation.TaskId);
+        Assert.Equal(CanonicalToolNames.EditTask, mutation.ToolName);
+    }
+
+    [Fact]
     public async Task DispatchActivityEventAsync_ThinkingDelta_RoutesToTaskGroupWithThinkingFlag()
     {
         var fakeHubContext = new FakeHubContext();
@@ -692,6 +720,14 @@ public class SignalRActivityBridgeServiceTests
         public Task ReceiveExecutionLog(int taskId, string stageId, string level, string message, DateTime timestamp)
         {
             ExecutionLogs.Add((taskId, stageId, level, message, timestamp));
+            return Task.CompletedTask;
+        }
+
+        public List<(int TaskId, string ToolName, string Message)> BacklogMutations { get; } = new();
+
+        public Task ReceiveBacklogMutation(int taskId, string toolName, string message)
+        {
+            BacklogMutations.Add((taskId, toolName, message));
             return Task.CompletedTask;
         }
 
