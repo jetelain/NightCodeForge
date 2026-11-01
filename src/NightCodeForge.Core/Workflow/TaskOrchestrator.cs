@@ -519,6 +519,8 @@ public class TaskOrchestrator : ITaskOrchestrator
             Conversation? deterministicConv = null;
             bool deterministicConvFinalized = false;
             IReadOnlyDictionary<int, Services.TaskBaselineEntry>? baselineSnapshot = null;
+            bool wasResumedStageRun = isResumedRun;
+            bool modifiedDuringPreResumeSync = false;
             StageExecutionResult? result = null;
             var startedAt = DateTime.UtcNow;
             int durationMs = 0;
@@ -594,8 +596,11 @@ public class TaskOrchestrator : ITaskOrchestrator
                 // If resuming from human interruption or interrupted stage, run read-back first to preserve edits made before pause
                 if (isResumedRun)
                 {
+                    var preResumeVersion = task.Version;
+                    var preResumeDescription = task.Description;
+                    var preResumeTitle = task.Title;
                     var preserveActor = AuditActors.GetActorForStage(stage.StageId);
-                    await _markdownSyncService.SyncAllTasksFromDiskAsync(
+                    var preResumeTasks = await _markdownSyncService.SyncAllTasksFromDiskAsync(
                         workspace,
                         targetSyncPath,
                         hostRepoPath,
@@ -604,6 +609,14 @@ public class TaskOrchestrator : ITaskOrchestrator
                         TaskSyncConstants.PreserveEditsBeforeResumeReason,
                         currentTaskId: task.Id,
                         cancellationToken: cancellationToken);
+                    var preResumeTask = preResumeTasks?.FirstOrDefault(t => t.Id == task.Id);
+                    if (preResumeTask != null &&
+                        (preResumeTask.Version > preResumeVersion ||
+                         !string.Equals(preResumeTask.Description?.Trim(), preResumeDescription?.Trim(), StringComparison.Ordinal) ||
+                         !string.Equals(preResumeTask.Title?.Trim(), preResumeTitle?.Trim(), StringComparison.Ordinal)))
+                    {
+                        modifiedDuringPreResumeSync = true;
+                    }
                     isResumedRun = false;
                 }
 
@@ -1487,10 +1500,35 @@ public class TaskOrchestrator : ITaskOrchestrator
                     }
                 }
 
-                // Only an earlier recorded modification (version beyond the creation baseline) excuses an unchanged resumed run.
-                bool alreadyModifiedByEarlierRun = baselineSnapshot != null &&
-                                                   baselineSnapshot.TryGetValue(task.Id, out var b) &&
-                                                   b.Version > 1;
+                // Only an earlier modification by this stage during the current pipeline cycle excuses an unchanged resumed run.
+                bool alreadyModifiedByEarlierRun = modifiedDuringPreResumeSync;
+                if (!modifiedInThisStage && !alreadyModifiedByEarlierRun && wasResumedStageRun)
+                {
+                    var history = await _taskRepository.GetHistoryAsync(task.Id, cancellationToken);
+                    if (history != null && history.Count > 0)
+                    {
+                        var lastRestartIndex = -1;
+                        for (int i = history.Count - 1; i >= 0; i--)
+                        {
+                            var reason = history[i].ChangeReason;
+                            if (reason != null &&
+                                reason.Contains("Pipeline restarted", StringComparison.OrdinalIgnoreCase))
+                            {
+                                lastRestartIndex = i;
+                                break;
+                            }
+                        }
+
+                        for (int i = lastRestartIndex + 1; i < history.Count; i++)
+                        {
+                            if (string.Equals(history[i].ChangedBy, stageActor, StringComparison.OrdinalIgnoreCase))
+                            {
+                                alreadyModifiedByEarlierRun = true;
+                                break;
+                            }
+                        }
+                    }
+                }
 
                 if (!modifiedInThisStage && !alreadyModifiedByEarlierRun)
                 {

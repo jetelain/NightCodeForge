@@ -182,6 +182,159 @@ public class OllamaApiClientTests
         Assert.Equal("deepseek-coder:67b", capturedModelId);
     }
 
+    [Fact]
+    public async Task OllamaSharpChatClientAdapter_GetResponseAsync_PreservesThinkingOnOutgoingAndIncomingMessages()
+    {
+        string? capturedRequestJson = null;
+        var handler = new CapturingHttpMessageHandler(async request =>
+        {
+            capturedRequestJson = await request.Content!.ReadAsStringAsync();
+            const string responseJson = """
+                {"model":"qwen3.5:cloud","created_at":"2026-11-01T19:45:00Z","message":{"role":"assistant","content":"Updated file.","thinking":"Now I will edit the specification."},"done":true,"done_reason":"stop","prompt_eval_count":120,"eval_count":45}
+                """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, System.Text.Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var client = OllamaChatClientFactory.CreateOllama(
+            new LlmProviderOptions { Endpoint = "http://localhost:11434", DefaultModelId = "qwen3.5:cloud" },
+            modelId: "qwen3.5:cloud",
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            TimeProvider.System,
+            new NightCodeForge.Core.Resilience.RetryPolicyOptions(),
+            OllamaRoutingTarget.Auto,
+            handler,
+            _ => { });
+
+        var assistantTurnWithThinkingAndToolCall = new ChatMessage(
+            ChatRole.Assistant,
+            new AIContent[]
+            {
+                new TextContent(string.Empty),
+                new TextReasoningContent("Let me inspect the task specification file first."),
+                new FunctionCallContent("call_1", "read_file", new Dictionary<string, object?> { ["path"] = "docs/features/24.md" })
+            });
+
+        var toolResultTurn = new ChatMessage(
+            ChatRole.Tool,
+            new AIContent[]
+            {
+                new FunctionResultContent("call_1", "# Task 24")
+            });
+
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, "You are a reviewer."),
+            new(ChatRole.User, "Review task 24."),
+            assistantTurnWithThinkingAndToolCall,
+            toolResultTurn
+        };
+
+        var response = await client.GetResponseAsync(messages);
+
+        Assert.NotNull(capturedRequestJson);
+        using var doc = System.Text.Json.JsonDocument.Parse(capturedRequestJson!);
+        var sentMessages = doc.RootElement.GetProperty("messages");
+        Assert.Equal(4, sentMessages.GetArrayLength());
+
+        var sentAssistant = sentMessages[2];
+        Assert.Equal("assistant", sentAssistant.GetProperty("role").GetString());
+        Assert.Equal("Let me inspect the task specification file first.", sentAssistant.GetProperty("thinking").GetString());
+        Assert.Equal(1, sentAssistant.GetProperty("tool_calls").GetArrayLength());
+
+        // Verify incoming response thinking is mapped back to TextReasoningContent
+        var responseMessage = Assert.Single(response.Messages);
+        var reasoning = Assert.Single(responseMessage.Contents.OfType<TextReasoningContent>());
+        Assert.Equal("Now I will edit the specification.", reasoning.Text);
+        Assert.Equal("Updated file.", responseMessage.Text);
+    }
+
+    [Fact]
+    public async Task OllamaSharpChatClientAdapter_GetStreamingResponseAsync_PreservesThinkingInMultiTurnRoundTrip()
+    {
+        var capturedRequests = new List<string>();
+        var callCount = 0;
+
+        var handler = new CapturingHttpMessageHandler(async request =>
+        {
+            capturedRequests.Add(await request.Content!.ReadAsStringAsync());
+            callCount++;
+
+            var ndjson = callCount == 1
+                ? string.Join("\n",
+                    """{"model":"qwen3.5:cloud","created_at":"2026-11-01T19:45:00Z","message":{"role":"assistant","content":"","thinking":"Thinking part 1. "},"done":false}""",
+                    """{"model":"qwen3.5:cloud","created_at":"2026-11-01T19:45:01Z","message":{"role":"assistant","content":"","thinking":"Thinking part 2.","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"docs/features/24.md"}}}]},"done":false}""",
+                    """{"model":"qwen3.5:cloud","created_at":"2026-11-01T19:45:02Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":100,"eval_count":30}""")
+                : string.Join("\n",
+                    """{"model":"qwen3.5:cloud","created_at":"2026-11-01T19:45:05Z","message":{"role":"assistant","content":"Done editing.","thinking":"File looks clear."},"done":true,"done_reason":"stop","prompt_eval_count":150,"eval_count":20}""");
+
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(ndjson + "\n", System.Text.Encoding.UTF8, "application/x-ndjson")
+            };
+        });
+
+        using var client = OllamaChatClientFactory.CreateOllama(
+            new LlmProviderOptions { Endpoint = "http://localhost:11434", DefaultModelId = "qwen3.5:cloud" },
+            modelId: "qwen3.5:cloud",
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            TimeProvider.System,
+            new NightCodeForge.Core.Resilience.RetryPolicyOptions(),
+            OllamaRoutingTarget.Auto,
+            handler,
+            _ => { });
+
+        var history = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Please review task 24.")
+        };
+
+        // Turn 1: stream response and aggregate into ChatResponse using Microsoft.Extensions.AI's ToChatResponse
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in client.GetStreamingResponseAsync(history))
+        {
+            updates.Add(update);
+        }
+
+        var turn1Response = updates.ToChatResponse();
+        history.AddRange(turn1Response.Messages);
+
+        var toolCall = turn1Response.Messages
+            .SelectMany(m => m.Contents.OfType<FunctionCallContent>())
+            .Single();
+        history.Add(new ChatMessage(ChatRole.Tool, new AIContent[] { new FunctionResultContent(toolCall.CallId, "file content") }));
+
+        // Turn 2: send aggregated history back through streaming API
+        await foreach (var _ in client.GetStreamingResponseAsync(history))
+        {
+        }
+
+        Assert.Equal(2, capturedRequests.Count);
+        using var turn2Doc = System.Text.Json.JsonDocument.Parse(capturedRequests[1]);
+        var turn2Messages = turn2Doc.RootElement.GetProperty("messages");
+        Assert.Equal(3, turn2Messages.GetArrayLength());
+
+        var assistantMessageJson = turn2Messages[1];
+        Assert.Equal("assistant", assistantMessageJson.GetProperty("role").GetString());
+        Assert.Equal("Thinking part 1. Thinking part 2.", assistantMessageJson.GetProperty("thinking").GetString());
+        Assert.Equal(1, assistantMessageJson.GetProperty("tool_calls").GetArrayLength());
+    }
+
+    private sealed class CapturingHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, Task<HttpResponseMessage>> _responder;
+
+        public CapturingHttpMessageHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> responder)
+        {
+            _responder = responder;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => _responder(request);
+    }
+
     private class TestOllamaChatClientFactory : ILlmChatClientFactory
     {
         private readonly IChatClient _client;

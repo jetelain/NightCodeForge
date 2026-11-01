@@ -1241,11 +1241,11 @@ Mutated spec on disk
             Id = 55,
             WorkspaceId = 1,
             Title = "Resumed Review Task",
-            Description = "Spec that was modified prior to pause",
+            Description = "Initial spec",
             CurrentStageId = "task-review",
             Status = TaskOverallStatus.Open,
             InterruptedStageId = "task-review", // Resumed run
-            Version = 2 // Already modified earlier
+            Version = 1
         };
 
         var workspace = new Workspace
@@ -1258,6 +1258,13 @@ Mutated spec on disk
 
         var (sync, syncRepo, _, _) = CreateTestEnvironment();
         await syncRepo.CreateWithBaselineAsync(task, null, AuditActors.User, "Created");
+        task.Description = "Spec that was modified by task-review prior to pause";
+        await syncRepo.UpdateWithHistoryAsync(
+            task,
+            null,
+            AuditActors.GetActorForStage("task-review"),
+            "Synchronized from markdown during stage 'task-review'");
+
         var workspaceRepo = new InMemoryWorkspaceRepository();
         await workspaceRepo.CreateAsync(workspace);
         var depStore = new InMemoryTaskDependencyStore();

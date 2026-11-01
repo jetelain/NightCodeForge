@@ -50,7 +50,7 @@ public static class OllamaChatClientFactory
 
         configureRouting(httpClient);
 
-        return new OllamaApiClient(httpClient, effectiveModel, null);
+        return new OllamaSharpChatClientAdapter(new OllamaApiClient(httpClient, effectiveModel, null));
     }
 
     public static IChatClient CreateOllama(

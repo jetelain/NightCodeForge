@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Using Include="Microsoft.AspNetCore.Builder" />
     <Using Include="NightCodeForge.Core.Domain" />
     <Using Include="NightCodeForge.Core.Workflow" />
   </ItemGroup>

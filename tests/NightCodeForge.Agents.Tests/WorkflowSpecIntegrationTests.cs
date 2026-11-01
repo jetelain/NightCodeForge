@@ -2177,6 +2177,216 @@ Build FAILED.
         Assert.Equal(TaskOverallStatus.Failed, failedTask.Status);
     }
 
+    [Fact]
+    public async Task TaskReviewStage_WhenSpecificationUnchangedAndVersionGreaterThanOneFromUserEdits_FailsTaskFast()
+    {
+        await using var env = CreateWorkflowEnvironment(targetSeed: 1200076);
+        var (orchestrator, dbContext, connection, workspace, mockLlm, jobQueue) = env;
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Promoted task with untouched spec in review",
+            Description = "Initial description",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.TaskReview,
+            BaseBranch = "main",
+            Priority = TaskPriority.High,
+            Version = 3
+        };
+        dbContext.Tasks.Add(task);
+        await dbContext.SaveChangesAsync();
+
+        dbContext.TaskHistories.AddRange(
+            new ForgeTaskHistory
+            {
+                TaskId = task.Id,
+                Version = 1,
+                Title = task.Title,
+                Description = task.Description,
+                Status = TaskOverallStatus.Suggested,
+                Priority = TaskPriority.Normal,
+                ChangedAt = DateTime.UtcNow.AddMinutes(-10),
+                ChangedBy = AuditActors.User,
+                ChangeReason = "Task created from disk markdown"
+            },
+            new ForgeTaskHistory
+            {
+                TaskId = task.Id,
+                Version = 2,
+                Title = task.Title,
+                Description = task.Description,
+                Status = TaskOverallStatus.Suggested,
+                Priority = TaskPriority.High,
+                ChangedAt = DateTime.UtcNow.AddMinutes(-5),
+                ChangedBy = AuditActors.User,
+                ChangeReason = "Updated Priority from P3 to P4"
+            },
+            new ForgeTaskHistory
+            {
+                TaskId = task.Id,
+                Version = 3,
+                Title = task.Title,
+                Description = task.Description,
+                Status = TaskOverallStatus.Open,
+                Priority = TaskPriority.High,
+                ChangedAt = DateTime.UtcNow.AddMinutes(-1),
+                ChangedBy = AuditActors.User,
+                ChangeReason = "Promoted task from Suggested to Open"
+            });
+        await dbContext.SaveChangesAsync();
+
+        mockLlm.StreamHandler = (ctx, msgs, opts) =>
+        {
+            return ToAsyncEnumerable("Hi! How can I help you today?");
+        };
+
+        await Assert.ThrowsAsync<WorkflowExecutionException>(() => orchestrator.ProcessTaskAsync(task.Id));
+
+        var failedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
+        Assert.NotNull(failedTask);
+        Assert.Equal(TaskOverallStatus.Failed, failedTask.Status);
+    }
+
+    [Fact]
+    public async Task TaskReviewStage_WhenResumedAfterEarlierTaskReviewEdit_AllowsUnchangedResumedRun()
+    {
+        await using var env = CreateWorkflowEnvironment(targetSeed: 1200077);
+        var (orchestrator, dbContext, connection, workspace, mockLlm, jobQueue) = env;
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Feature modified before ask_human",
+            Description = "Initial description",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.TaskReview,
+            BaseBranch = "main",
+            Version = 3
+        };
+        dbContext.Tasks.Add(task);
+        await dbContext.SaveChangesAsync();
+
+        // Run 1: Agent edits the markdown on disk before asking a clarification question
+        mockLlm.StreamHandler = (ctx, msgs, opts) =>
+        {
+            task.Description = "Detailed architecture specification.";
+            task.Version = 4;
+            dbContext.TaskHistories.Add(new ForgeTaskHistory
+            {
+                TaskId = task.Id,
+                Version = 4,
+                Title = task.Title,
+                Description = task.Description,
+                Status = task.Status,
+                Priority = task.Priority,
+                ChangedAt = DateTime.UtcNow,
+                ChangedBy = AuditActors.GetActorForStage(StandardStageIds.TaskReview),
+                ChangeReason = "Stage 'task-review' pausing for human clarification"
+            });
+            dbContext.SaveChanges();
+
+            var update = new ChatResponseUpdate
+            {
+                Contents = new List<AIContent>
+                {
+                    new FunctionCallContent("call_ask_1", CanonicalToolNames.Ask, new Dictionary<string, object?>
+                    {
+                        ["questions"] = new[]
+                        {
+                            new Dictionary<string, object?>
+                            {
+                                ["prompt"] = "Confirm the proposed architecture?",
+                                ["rationale"] = "Verify before implementation",
+                                ["options"] = new[] { "Confirm", "Revise" }
+                            }
+                        }
+                    })
+                }
+            };
+            return ToAsyncEnumerable(update);
+        };
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var pausedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
+        Assert.NotNull(pausedTask);
+        Assert.True(pausedTask.IsWaitingForHuman);
+        Assert.Contains("Detailed architecture specification.", pausedTask.Description);
+
+        await orchestrator.SubmitHumanAnswerAsync(task.Id, "Confirm");
+
+        // Run 2 (resumed): Agent does not modify the markdown file again since human confirmed
+        mockLlm.StreamHandler = (ctx, msgs, opts) =>
+        {
+            return ToAsyncEnumerable("Architecture confirmed, ready for implementation.");
+        };
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        Assert.Contains(task.Id, jobQueue.ImplementationQueue);
+    }
+
+    [Fact]
+    public async Task TaskReviewStage_WhenResumedWithoutEarlierTaskReviewEdit_FailsTaskFast()
+    {
+        await using var env = CreateWorkflowEnvironment(targetSeed: 1200078);
+        var (orchestrator, dbContext, connection, workspace, mockLlm, jobQueue) = env;
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "Feature never modified across runs",
+            Description = "Initial description",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.TaskReview,
+            BaseBranch = "main",
+            Version = 3
+        };
+        dbContext.Tasks.Add(task);
+        await dbContext.SaveChangesAsync();
+
+        // Run 1: Agent asks a question without editing the markdown file
+        mockLlm.StreamHandler = (ctx, msgs, opts) =>
+        {
+            var update = new ChatResponseUpdate
+            {
+                Contents = new List<AIContent>
+                {
+                    new FunctionCallContent("call_ask_2", CanonicalToolNames.Ask, new Dictionary<string, object?>
+                    {
+                        ["questions"] = new[]
+                        {
+                            new Dictionary<string, object?>
+                            {
+                                ["prompt"] = "Should we proceed?",
+                                ["rationale"] = "Clarify",
+                                ["options"] = new[] { "Yes", "No" }
+                            }
+                        }
+                    })
+                }
+            };
+            return ToAsyncEnumerable(update);
+        };
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        await orchestrator.SubmitHumanAnswerAsync(task.Id, "Yes");
+
+        // Run 2 (resumed): Agent still does not edit the markdown file
+        mockLlm.StreamHandler = (ctx, msgs, opts) =>
+        {
+            return ToAsyncEnumerable("Proceeding without editing file.");
+        };
+
+        await Assert.ThrowsAsync<WorkflowExecutionException>(() => orchestrator.ProcessTaskAsync(task.Id));
+
+        var failedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
+        Assert.NotNull(failedTask);
+        Assert.Equal(TaskOverallStatus.Failed, failedTask.Status);
+    }
+
     private static async IAsyncEnumerable<ChatResponseUpdate> ToAsyncEnumerable(string text)
     {
         yield return new ChatResponseUpdate { Contents = [new TextContent(text)] };
