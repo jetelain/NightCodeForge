@@ -5,7 +5,7 @@
 > *Companion Steps:* [Step 12.8B: Installable PWA Manifest & Service Worker Shell](STEP_12_8B_PROGRESSIVE_WEB_APP_MANIFEST_AND_SERVICE_WORKER.md) | [Step 12.8C: Web Worker Notifications & Subject Preferences](STEP_12_8C_WEB_WORKER_NOTIFICATIONS_AND_SUBJECT_PREFERENCES.md)  
 > *Related Steps:* [Step 12.4: Ideation Quick Notes](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md) | [Step 12.12: Voice Support](STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
-> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -86,20 +86,31 @@
 
 ## 3. Implementation Checklist & Deliverables
 
-- [ ] **Global Layout & Responsive Styles:**
-  - [ ] Update viewport meta tag in `App.razor` (`viewport-fit=cover`) and add `100dvh`, `env(safe-area-inset-*)`, and mobile breakpoint rules to `app.css`.
-  - [ ] Implement hamburger toggle in `TopNavBar.razor` and off-canvas mobile drawer with backdrop in `MainLayout.razor` / `NavMenu.razor` for `< 768px`.
-  - [ ] Enforce minimum $44\times 44\text{px}$ touch targets and eliminate horizontal root overflow.
-- [ ] **Mobile Page Adaptations:**
-  - [ ] Adapt `Home.razor` (including Pending Human Code Reviews card from Step 12.24) and `Monitoring.razor` grids for `< 768px` and `768px–1024px`.
-  - [ ] Add mobile pane switcher (`💬 Chat` | `📋 Proposals (@Session.Proposals.Count)`) and sticky bottom input bar in `Ideation.razor`.
-  - [ ] Add `[SupplyParameterFromQuery] int? TaskId` in `Inbox.razor` and optimize `AgentQuestionTurnCard.razor` touch chips.
-  - [ ] Adapt `TaskExecutionInspector.razor`, `PipelineStepper.razor`, `TerminalConsole.razor`, `Backlog.razor`, `TaskDetailDrawer.razor` (bottom sheet), `TaskDetail.razor`, `Review.razor`, and `DevQueue.razor` tables (card stacks) for `< 768px`.
-- [ ] **Network & Visibility Handling:**
-  - [ ] Add non-blocking `"Reconnecting to Forge..."` banner in `MainLayout.razor` and `visibilitychange` foreground state sync.
-- [ ] **Automated Testing:**
-  - [ ] bUnit tests asserting responsive mobile navigation drawer toggles and `Inbox.razor?taskId=` deep-linking.
-  - [ ] **Playwright E2E Mobile & Tablet Viewport Suite (Zero LLM Calls, `[Trait("Category", "E2E")]`):** Using `PlaywrightWebHostFixture` ([Step 11.39A](../fixes/STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)) with seeded tasks, pending questions, and pending reviews across $375\times 667\text{px}$ (iPhone SE), $390\times 844\text{px}$ (iPhone 14), and $768\times 1024\text{px}$ (iPad) viewports:
-    - [ ] Verify zero horizontal root overflow (`document.documentElement.scrollWidth <= window.innerWidth`) across Home (`/`), Ideation (`/w/{id}/ideation`), Backlog (`/w/{id}/backlog`), Question Inbox (`/w/{id}/inbox?taskId={taskId}`), Task Inspector (`/w/{id}/inspector/{taskId}`), and Review Room (`/w/{id}/review`).
-    - [ ] Verify hamburger button opens the off-canvas `NavMenu` drawer, clicking a nav link navigates and auto-closes the drawer, `Ideation.razor` switches between `💬 Chat` and `📋 Proposals`, and `TaskDetailDrawer` opens as a bottom sheet on `< 768px`.
+- [x] **Global Layout & Responsive Styles:**
+  - [x] Update viewport meta tag in `App.razor` (`viewport-fit=cover`) and add `100dvh`, `env(safe-area-inset-*)`, and mobile breakpoint rules to `app.css`.
+  - [x] Implement hamburger toggle in `TopNavBar.razor` and off-canvas mobile drawer with backdrop in `MainLayout.razor` / `NavMenu.razor` for `< 768px`.
+  - [x] Enforce minimum $44\times 44\text{px}$ touch targets and eliminate horizontal root overflow.
+- [x] **Mobile Page Adaptations:**
+  - [x] Adapt `Home.razor` (including Pending Human Code Reviews card from Step 12.24) and `Monitoring.razor` grids for `< 768px` and `768px–1024px`.
+  - [x] Add mobile pane switcher (`💬 Chat` | `📋 Proposals (@Session.Proposals.Count)`) and sticky bottom input bar in `Ideation.razor`.
+  - [x] Add `[SupplyParameterFromQuery] int? TaskId` in `Inbox.razor` and optimize `AgentQuestionTurnCard.razor` touch chips.
+  - [x] Adapt `TaskExecutionInspector.razor`, `PipelineStepper.razor`, `TerminalConsole.razor`, `Backlog.razor`, `TaskDetailDrawer.razor` (bottom sheet), `TaskDetail.razor`, `Review.razor`, and `DevQueue.razor` tables (card stacks) for `< 768px`.
+- [x] **Network & Visibility Handling:**
+  - [x] Add non-blocking `"Reconnecting to Forge..."` banner in `MainLayout.razor` and `visibilitychange` foreground state sync.
+- [x] **Automated Testing:**
+  - [x] bUnit tests asserting responsive mobile navigation drawer toggles and `Inbox.razor?taskId=` deep-linking.
+  - [x] **Playwright E2E Mobile & Tablet Viewport Suite (Zero LLM Calls, `[Trait("Category", "E2E")]`):** Using `PlaywrightWebHostFixture` ([Step 11.39A](../fixes/STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)) with seeded tasks, pending questions, and pending reviews across $375\times 667\text{px}$ (iPhone SE), $390\times 844\text{px}$ (iPhone 14), and $768\times 1024\text{px}$ (iPad) viewports:
+    - [x] Verify zero horizontal root overflow (`document.documentElement.scrollWidth <= window.innerWidth`) across Home (`/`), Ideation (`/w/{id}/ideation`), Backlog (`/w/{id}/backlog`), Question Inbox (`/w/{id}/inbox?taskId={taskId}`), Task Inspector (`/w/{id}/inspector/{taskId}`), and Review Room (`/w/{id}/review`).
+    - [x] Verify hamburger button opens the off-canvas `NavMenu` drawer, clicking a nav link navigates and auto-closes the drawer, `Ideation.razor` switches between `💬 Chat` and `📋 Proposals`, and `TaskDetailDrawer` opens as a bottom sheet on `< 768px`.
 
+---
+
+## 4. Implementation Notes
+
+- **Drawer state** lives in `MainLayout.razor` (`mobile-nav-open`); `TopNavBar` exposes the hamburger (`#mobile-nav-toggle`), `NavMenu` the drawer (`#forge-sidebar.mobile-open`). The drawer closes on backdrop tap, nav-link click (`OnNavigate`) and location change.
+- **Reconnect banner:** `MainLayout.razor` hosts a custom `#components-reconnect-modal` element styled as a non-blocking banner (Blazor toggles its `components-reconnect-*` classes). **Foreground sync:** `app.js` `registerForegroundSync` → `MainLayout.OnTabForegrounded` → `WorkerStateService.RefreshFromTelemetry()`.
+- **Ideation:** `IdeationMobilePane` enum drives the segmented switcher; inactive pane is hidden by CSS under 768px.
+- **Inbox deep link:** `/inbox?taskId=` forces the all-workspaces filter, wraps the matching group in `#question-card-task-{id}` (`.deep-link-highlight`) and scrolls via `NightCodeForge.scrollToElement`.
+- **Other:** `.inspector-conversations-grid`, terminal line-wrap toggle (`#terminal-line-wrap-toggle`), `DiffWorkspace` file-picker toggle, Dev-Queue tables use `.responsive-card-table` + `data-label` card stacks, Kanban uses horizontal scroll-snap columns, `.task-drawer` becomes a bottom sheet (`90dvh`). All mobile rules are in the Step 12.8A section at the end of `app.css`.
+- **Known gap:** `TaskDetailDrawer.razor` is not hosted by any page today; its bottom-sheet CSS is verified in E2E on a synthetic DOM instance.
+- **Tests:** `NavMenuShellTests` (drawer, backdrop, banner, foreground registration), `InboxPageTests` (deep link), `TerminalConsoleTests` (wrap toggle), `E2E/MobileResponsiveLayoutE2ETests` (375×667, 390×844, 768×1024).

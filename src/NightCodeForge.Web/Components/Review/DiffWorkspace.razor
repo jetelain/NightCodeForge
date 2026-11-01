@@ -2,7 +2,15 @@
 @using NightCodeForge.Web.Services
 
 <div class="diff-workspace-grid" id="diff-workspace-grid">
-    <div class="file-tree card-surface">
+    <div class="file-tree card-surface @(_isFilePickerOpen ? "file-picker-open" : "")">
+        <button type="button"
+                class="file-picker-toggle"
+                id="file-picker-toggle"
+                aria-expanded="@(_isFilePickerOpen ? "true" : "false")"
+                @onclick="() => _isFilePickerOpen = !_isFilePickerOpen">
+            <span>📂 @(_activeFile?.Path ?? $"Changed Files ({_filesList.Count})")</span>
+            <span aria-hidden="true">@(_isFilePickerOpen ? "▲" : "▼")</span>
+        </button>
         <h4>Changed Files (@(_filesList.Count))</h4>
         @if (_filesList.Count == 0)
         {
@@ -40,6 +48,7 @@
     [Parameter] public string EmptyMessage { get; set; } = "No file modifications recorded in diff.";
     [Parameter] public string NoFileSelectedMessage { get; set; } = "Select a file on the left to inspect diff and add inline comments.";
 
+    private bool _isFilePickerOpen;
     private List<ReviewFileTreeNode> _treeNodes = new();
     private FileDiffSummary? _activeFile;
     private FileDiffSummary? _lastPassedSelectedFile;
@@ -114,6 +123,7 @@
 
     private async Task SelectFileAsync(FileDiffSummary file)
     {
+        _isFilePickerOpen = false;
         _activeFile = file;
         _lastPassedSelectedFile = file;
         if (SelectedFileChanged.HasDelegate)

@@ -53,7 +53,7 @@
     {
         <div class="queue-table-container font-mono">
             <div class="table-responsive">
-                <table class="table table-dark table-hover m-0" style="background: transparent;" id="sequential-queue-table">
+                <table class="responsive-card-table table table-dark table-hover m-0" style="background: transparent;" id="sequential-queue-table">
                     <thead>
                         <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 0.85rem;">
                             <th>Priority</th>
@@ -68,7 +68,7 @@
                         @foreach (var job in Jobs)
                         {
                             <tr style="vertical-align: middle; border-bottom: 1px solid rgba(255,255,255,0.05);" id="job-row-@job.JobId">
-                                <td>
+                                <td data-label="Priority">
                                     @if (job.Priority == TaskPriority.Critical || job.QueueName == HangfireQueues.LlmUrgent)
                                     {
                                         <span class="forge-badge badge-priority-1"
@@ -93,7 +93,7 @@
                                         </span>
                                     }
                                 </td>
-                                <td>
+                                <td data-label="Queue">
                                     @if (job.QueueName == HangfireQueues.LlmUrgent)
                                     {
                                         <span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; font-size: 0.78rem;" title="Critical / Urgent Queue">
@@ -123,7 +123,7 @@
                                         <code style="color: var(--accent-indigo);">@job.QueueName</code>
                                     }
                                 </td>
-                                <td>
+                                <td data-label="ForgeTask">
                                     @if (job.TaskId > 0)
                                     {
                                         <a href="/inspector/@job.TaskId" style="color: var(--text-primary); text-decoration: none; font-weight: 600;">
@@ -135,10 +135,10 @@
                                         <span class="text-secondary">@job.TaskTitle</span>
                                     }
                                 </td>
-                                <td>
+                                <td data-label="Stage">
                                     <span class="text-muted">@job.StageId</span>
                                 </td>
-                                <td class="text-secondary">
+                                <td data-label="Enqueued" class="text-secondary">
                                     <div>@job.EnqueuedAt.ToString("HH:mm:ss")</div>
                                     @{
                                         var wait = DateTime.UtcNow - job.EnqueuedAt;
@@ -150,7 +150,7 @@
                                         }
                                     }
                                 </td>
-                                <td class="text-end">
+                                <td data-label="Actions" class="text-end">
                                     @if (job.QueueName != HangfireQueues.LlmUrgent)
                                     {
                                         <button class="btn btn-sm btn-outline-danger me-2"

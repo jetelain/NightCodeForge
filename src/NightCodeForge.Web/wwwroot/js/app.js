@@ -326,5 +326,41 @@ window.NightCodeForge = window.NightCodeForge || {};
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
     };
+
+    /**
+     * Scrolls an element into view and keeps it highlighted (deep-link support).
+     * @param {string} elementId
+     */
+    window.NightCodeForge.scrollToElement = function (elementId) {
+        const el = document.getElementById(elementId);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+
+    let foregroundHandler = null;
+
+    /**
+     * Notifies the Blazor circuit whenever a (mobile) browser tab returns to the foreground
+     * so that active task status can be refreshed.
+     * @param {object} dotNetRef - DotNetObjectReference exposing OnTabForegrounded().
+     */
+    window.NightCodeForge.registerForegroundSync = function (dotNetRef) {
+        window.NightCodeForge.unregisterForegroundSync();
+        foregroundHandler = function () {
+            if (document.visibilityState === 'visible') {
+                dotNetRef.invokeMethodAsync('OnTabForegrounded').catch(function (err) {
+                    console.warn('NightCodeForge: foreground sync failed', err);
+                });
+            }
+        };
+        document.addEventListener('visibilitychange', foregroundHandler);
+    };
+
+    window.NightCodeForge.unregisterForegroundSync = function () {
+        if (foregroundHandler) {
+            document.removeEventListener('visibilitychange', foregroundHandler);
+            foregroundHandler = null;
+        }
+    };
 })();
 

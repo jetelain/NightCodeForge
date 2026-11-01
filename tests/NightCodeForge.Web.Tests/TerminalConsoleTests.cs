@@ -130,4 +130,18 @@ public class TerminalConsoleTests : BunitContext
 
         Assert.Equal(500, cut.FindAll(".log-line").Count);
     }
-}
+
+    [Fact]
+    public async Task TerminalConsole_LineWrapToggle_SwitchesBodyWrapClass()
+    {
+        var cut = Render<TerminalConsole>();
+
+        Assert.Contains("line-wrap", cut.Find("#terminal-console-body").ClassName);
+
+        await cut.Find("#terminal-line-wrap-toggle").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        var body = cut.Find("#terminal-console-body");
+        Assert.Contains("no-wrap", body.ClassName);
+        Assert.DoesNotContain("line-wrap", body.ClassName!.Replace("no-wrap", string.Empty));
+        Assert.Equal("false", cut.Find("#terminal-line-wrap-toggle").GetAttribute("aria-pressed"));
+    }}

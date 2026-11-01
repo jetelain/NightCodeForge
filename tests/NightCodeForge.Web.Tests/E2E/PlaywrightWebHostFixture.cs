@@ -65,7 +65,9 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
         return path;
     }
 
-    public async Task<IBrowserContext> CreateContextAsync(ViewportSize? viewport = null)
+    public async Task<IBrowserContext> CreateContextAsync(
+        ViewportSize? viewport = null,
+        IEnumerable<KeyValuePair<string, string>>? extraHttpHeaders = null)
     {
         var videoDir = Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "videos");
         Directory.CreateDirectory(videoDir);
@@ -73,7 +75,8 @@ public class PlaywrightWebHostFixture : IAsyncLifetime
         return await _browser.NewContextAsync(new BrowserNewContextOptions
         {
             ViewportSize = viewport ?? new ViewportSize { Width = 1440, Height = 900 },
-            RecordVideoDir = videoDir
+            RecordVideoDir = videoDir,
+            ExtraHTTPHeaders = extraHttpHeaders
         });
     }
 

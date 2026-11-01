@@ -8,6 +8,8 @@ using NightCodeForge.Infrastructure.Configuration;
 using NightCodeForge.Web.Components;
 using NightCodeForge.Web.Middleware;
 using NightCodeForge.Web.Services;
+using NightCodeForge.Web.Tailscale;
+using Microsoft.AspNetCore.HttpOverrides;
 using Serilog;
 using Serilog.Events;
 
@@ -28,6 +30,9 @@ var userConfigStatus = HostConfigurationSources.AddUserConfiguration(
     builder.Environment.EnvironmentName,
     logger: null,
     loggerAccessor: () => appLogger);
+
+// --tailscale / --tailscale-service / --tailscale-port flags override every other configuration layer.
+builder.Configuration.AddInMemoryCollection(TailscaleCommandLine.ToConfiguration(args));
 
 // Configure Serilog file & console logging
 var rawLogsDir = builder.Configuration["Logging:LogsDirectory"] ?? "logs";
@@ -119,6 +124,15 @@ builder.Services.Configure<HostOptions>(options =>
 {
     options.ShutdownTimeout = HangfireConfigurationExtensions.DefaultHostShutdownTimeout;
 });
+
+// Tailscale: private remote access via `tailscale serve`, plus forwarded headers for requests coming through the local proxy.
+builder.Services.Configure<TailscaleOptions>(builder.Configuration.GetSection(TailscaleOptions.SectionName));
+builder.Services.AddSingleton<ITailscaleCliRunner, TailscaleCliRunner>();
+builder.Services.AddSingleton<TailscaleServeHostedService>();
+builder.Services.AddSingleton<ITailscaleServeService>(sp => sp.GetRequiredService<TailscaleServeHostedService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TailscaleServeHostedService>());
+// The only proxy is the local Tailscale daemon; trust forwarded headers from loopback only.
+builder.Services.Configure<ForwardedHeadersOptions>(ForwardedHeadersConfiguration.ApplyLoopbackTrust);
 
 // Register SignalR Telemetry Hub & Streaming Infrastructure
 builder.Services.AddSignalR();
@@ -229,6 +243,7 @@ using (var scope = app.Services.CreateScope())
 }
 
 // Configure the HTTP request pipeline.
+app.UseForwardedHeaders();
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error", createScopeForErrors: true);

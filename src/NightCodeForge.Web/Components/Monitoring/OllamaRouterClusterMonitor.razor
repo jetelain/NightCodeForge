@@ -55,7 +55,7 @@
         <label style="display: block; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.75rem;">
             @(_status?.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OpenAiCompatible ? "Remote Inference Endpoint & Status" : (_status?.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter ? "Cluster Fleet Nodes & Hardware Latencies" : "Host Inference Backend & Latency"))
         </label>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 1rem;">
             @if (_status?.FleetTargets != null && _status.FleetTargets.Count > 0)
             {
                 @foreach (var target in _status.FleetTargets)

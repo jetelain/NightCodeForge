@@ -9,6 +9,7 @@
 @inject WorkerStateService WorkerState
 @inject ToastService ToastService
 @inject ILogger<Inbox> Logger
+@inject IJSRuntime JS
 @implements IDisposable
 
 <PageTitle>Question Inbox - NightCodeForge</PageTitle>
@@ -50,17 +51,35 @@
         <div class="question-grid" id="inbox-question-grid">
             @foreach (var group in GroupedQuestions)
             {
-                <QuestionCard @key="group.Key" 
-                              Questions="group.Questions" 
-                              OnAnswerSubmitted="HandleAnswerSubmitted" 
-                              OnBatchSubmitted="HandleBatchSubmitted" />
+                var isDeepLinkTarget = group.Key == DeepLinkGroupKey;
+                <div @key="group.Key"
+                     class="question-group-anchor @(isDeepLinkTarget ? "deep-link-highlight" : "")"
+                     id="@(isDeepLinkTarget ? DeepLinkAnchorId : null)">
+                    <QuestionCard Questions="group.Questions"
+                                  OnAnswerSubmitted="HandleAnswerSubmitted"
+                                  OnBatchSubmitted="HandleBatchSubmitted" />
+                </div>
             }
         </div>
     }
 </div>
 
 @code {
+    private const string ScrollToElementFunction = "NightCodeForge.scrollToElement";
+
     [Parameter] public int? WorkspaceId { get; set; }
+
+    /// <summary>Optional deep-link target (<c>/inbox?taskId={id}</c>): scrolls to and highlights that task's question card.</summary>
+    [SupplyParameterFromQuery(Name = "taskId")] public int? TaskId { get; set; }
+
+    private bool _deepLinkScrolled;
+    private int? _lastDeepLinkTaskId;
+    private string DeepLinkAnchorId => $"question-card-task-{TaskId}";
+
+    private string? DeepLinkGroupKey =>
+        TaskId.HasValue
+            ? GroupedQuestions.FirstOrDefault(g => g.Questions[0].TaskId == TaskId.Value)?.Key
+            : null;
 
     private List<Question> _pendingQuestions = new();
     private bool _filterCurrentWorkspaceOnly;
@@ -90,6 +109,11 @@
     protected override async Task OnInitializedAsync()
     {
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        if (TaskId.HasValue)
+        {
+            // A deep-linked task must be visible regardless of the active workspace filter.
+            _filterCurrentWorkspaceOnly = false;
+        }
         if (WorkspaceId.HasValue)
         {
             WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
@@ -97,8 +121,21 @@
         await LoadQuestionsAsync();
     }
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
+        var taskIdChanged = TaskId != _lastDeepLinkTaskId;
+        if (taskIdChanged)
+        {
+            _lastDeepLinkTaskId = TaskId;
+            _deepLinkScrolled = false;
+            if (TaskId.HasValue && _filterCurrentWorkspaceOnly)
+            {
+                // A deep-linked task must be visible regardless of the active workspace filter.
+                _filterCurrentWorkspaceOnly = false;
+                await LoadQuestionsAsync();
+            }
+        }
+
         if (WorkspaceId.HasValue)
         {
             WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
@@ -146,6 +183,15 @@
         {
             _isLoading = false;
         }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!TaskId.HasValue || _deepLinkScrolled || _isLoading) return;
+        if (!_pendingQuestions.Any(q => q.TaskId == TaskId.Value)) return;
+
+        _deepLinkScrolled = true;
+        await JS.InvokeVoidAsync(ScrollToElementFunction, DeepLinkAnchorId);
     }
 
     private async Task HandleAnswerSubmitted(int questionId)

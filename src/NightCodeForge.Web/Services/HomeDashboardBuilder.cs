@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Services;
 
@@ -16,7 +17,23 @@ public record RecentWorkspaceSummary(
     int TotalTaskCount,
     string BacklogUrl,
     string IdeationUrl,
-    string InboxUrl);
+    string InboxUrl,
+    int PendingReviewCount,
+    string ReviewUrl);
+
+public record HomePendingReviewItem(
+    int TaskId,
+    string Title,
+    int WorkspaceId,
+    string WorkspaceName,
+    string FeatureBranch,
+    string BaseBranch,
+    int Priority,
+    bool HasResolvedConflict,
+    DateTime UpdatedAt,
+    string ReviewUrl,
+    string InspectorUrl,
+    string TaskDetailUrl);
 
 public record HomeScheduledTaskItem(
     int TaskId,
@@ -34,7 +51,9 @@ public record HomeDashboardSnapshot(
     IReadOnlyList<RecentWorkspaceSummary> RecentWorkspaces,
     IReadOnlyList<HomeScheduledTaskItem> RunningAndNextTasks,
     int TotalQueuedCount,
-    int PendingQuestionCount);
+    int PendingQuestionCount,
+    IReadOnlyList<HomePendingReviewItem> PendingReviewTasks,
+    int PendingReviewCount);
 
 /// <summary>
 /// Builds the workspace-agnostic homepage snapshot aggregating recent workspaces,
@@ -135,8 +154,9 @@ public static class HomeDashboardBuilder
                 t.Status == TaskOverallStatus.Reviewed ||
                 t.Status == TaskOverallStatus.Implemented);
             var suggestedCount = tasks.Count(t => t.Status == TaskOverallStatus.Suggested);
+            var wsPendingReviewCount = tasks.Count(IsPendingHumanReview);
             var waitingOrReviewCount = tasks.Count(t =>
-                t.IsWaitingForHuman || t.Status == TaskOverallStatus.Ready);
+                t.IsWaitingForHuman || IsPendingHumanReview(t));
             var wsPendingQuestionCount = pendingQuestions.Count(q =>
                 (q.ForgeTask != null && q.ForgeTask.WorkspaceId == ws.Id) ||
                 wsTaskIds.Contains(q.TaskId));
@@ -152,7 +172,9 @@ public static class HomeDashboardBuilder
                 TotalTaskCount: tasks.Count,
                 BacklogUrl: WorkspaceUrlHelper.BuildPath(ws.Id, "backlog"),
                 IdeationUrl: WorkspaceUrlHelper.BuildPath(ws.Id, "ideation"),
-                InboxUrl: WorkspaceUrlHelper.BuildPath(ws.Id, "inbox")));
+                InboxUrl: WorkspaceUrlHelper.BuildPath(ws.Id, "inbox"),
+                PendingReviewCount: wsPendingReviewCount,
+                ReviewUrl: WorkspaceUrlHelper.BuildPath(ws.Id, "review")));
         }
 
         var orderedWorkspaces = workspaceSummaries
@@ -167,11 +189,50 @@ public static class HomeDashboardBuilder
             workspaceById,
             out var totalQueuedCount);
 
+        var pendingReviewTasks = BuildPendingReviewTasks(allTasksById.Values, workspaceById);
+
         return new HomeDashboardSnapshot(
             RecentWorkspaces: orderedWorkspaces,
             RunningAndNextTasks: scheduledItems,
             TotalQueuedCount: totalQueuedCount,
-            PendingQuestionCount: pendingQuestions.Count);
+            PendingQuestionCount: pendingQuestions.Count,
+            PendingReviewTasks: pendingReviewTasks,
+            PendingReviewCount: pendingReviewTasks.Count);
+    }
+
+    public static bool IsPendingHumanReview(ForgeTask task) =>
+        task.Status == TaskOverallStatus.Ready && task.HasExecutionRun;
+
+    public static IReadOnlyList<HomePendingReviewItem> BuildPendingReviewTasks(
+        IEnumerable<ForgeTask> tasks,
+        IReadOnlyDictionary<int, Workspace> workspacesById)
+    {
+        return tasks
+            .Where(IsPendingHumanReview)
+            .OrderBy(t => t.Priority)
+            .ThenByDescending(t => t.UpdatedAt)
+            .ThenBy(t => t.Id)
+            .Select(t =>
+            {
+                var wsName = workspacesById.TryGetValue(t.WorkspaceId, out var ws) ? ws.Name : UnknownWorkspaceName;
+                int? wsId = t.WorkspaceId > 0 ? t.WorkspaceId : null;
+                var hasResolvedConflict = PipelineDataBag.FromJson(t.PipelineDataJson)
+                    .Get<bool?>(PipelineDataBagKeys.HasResolvedConflict) ?? false;
+                return new HomePendingReviewItem(
+                    TaskId: t.Id,
+                    Title: t.Title,
+                    WorkspaceId: t.WorkspaceId,
+                    WorkspaceName: wsName,
+                    FeatureBranch: t.FeatureBranch,
+                    BaseBranch: t.BaseBranch,
+                    Priority: t.Priority,
+                    HasResolvedConflict: hasResolvedConflict,
+                    UpdatedAt: t.UpdatedAt,
+                    ReviewUrl: WorkspaceUrlHelper.BuildPath(wsId, $"review/{t.Id}"),
+                    InspectorUrl: WorkspaceUrlHelper.BuildPath(wsId, $"inspector/{t.Id}"),
+                    TaskDetailUrl: WorkspaceUrlHelper.BuildPath(wsId, $"tasks/{t.Id}"));
+            })
+            .ToList();
     }
 
     public static IReadOnlyList<HomeScheduledTaskItem> BuildRunningAndNextTasks(

@@ -179,6 +179,36 @@ public class WorkerStateService : IWorkerStateService, IDisposable
         OnWorkerStateChanged?.Invoke();
     }
 
+    /// <summary>
+    /// Re-synchronizes the snapshot from live telemetry and notifies subscribers.
+    /// Used when a mobile browser tab returns to the foreground.
+    /// </summary>
+    public void RefreshFromTelemetry()
+    {
+        lock (_lock)
+        {
+            var active = _telemetryService.GetActiveTask();
+            if (!AutonomousTaskClassifier.IsAutonomousTask(active))
+            {
+                active = null;
+            }
+
+            if (active == null && _current.Status == WorkerExecutionStatus.Running)
+            {
+                _current = _current with
+                {
+                    Status = WorkerExecutionStatus.Idle,
+                    ActiveTaskId = null,
+                    ActiveTaskTitle = null,
+                    StageId = null,
+                    StartedAt = null
+                };
+            }
+        }
+        _ = Current;
+        OnWorkerStateChanged?.Invoke();
+    }
+
     public void UpdatePendingQuestions(int count)
     {
         lock (_lock)

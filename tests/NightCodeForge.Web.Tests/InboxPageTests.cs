@@ -141,6 +141,105 @@ public class InboxPageTests : BunitContext
     }
 
     [Fact]
+    public async Task TaskIdQuery_DeepLinksToTaskQuestionCard_HighlightsAndScrolls()
+    {
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 301,
+            Title = "Other task",
+            Questions = new List<Question>
+            {
+                new() { Id = 401, TaskId = 301, Prompt = "Other question", Status = QuestionStatus.Pending }
+            }
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 302,
+            Title = "Deep-linked task",
+            Questions = new List<Question>
+            {
+                new() { Id = 402, TaskId = 302, Prompt = "Deep-linked question", Status = QuestionStatus.Pending }
+            }
+        });
+        JSInterop.SetupVoid("NightCodeForge.scrollToElement", "question-card-task-302");
+
+        Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>().NavigateTo("/inbox?taskId=302");
+        var cut = Render<Inbox>();
+
+        var anchor = cut.Find("#question-card-task-302");
+        Assert.Contains("deep-link-highlight", anchor.ClassName);
+        Assert.Contains("Deep-linked question", anchor.TextContent);
+        Assert.Single(cut.FindAll(".deep-link-highlight"));
+        JSInterop.VerifyInvoke("NightCodeForge.scrollToElement");
+    }
+
+    [Fact]
+    public async Task TaskIdQuery_OverridesActiveWorkspaceFilter_SoDeepLinkedQuestionIsVisible()
+    {
+        _workspaceState.SetActiveWorkspace(new Workspace { Id = 1, Name = "Workspace One" });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 303,
+            WorkspaceId = 2,
+            Title = "Task in other workspace",
+            Questions = new List<Question>
+            {
+                new() { Id = 403, TaskId = 303, Prompt = "Cross-workspace question", Status = QuestionStatus.Pending }
+            }
+        });
+        JSInterop.SetupVoid("NightCodeForge.scrollToElement", "question-card-task-303");
+
+        Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>().NavigateTo("/inbox?taskId=303");
+        var cut = Render<Inbox>();
+
+        Assert.Contains("Cross-workspace question", cut.Find("#question-card-task-303").TextContent);
+    }
+
+    [Fact]
+    public async Task TaskIdQuery_NavigatedAfterFilterChecked_ResetsWorkspaceFilterAndReloadsDeepLinkedQuestion()
+    {
+        var ws1 = new Workspace { Id = 1, Name = "Workspace One" };
+        var ws2 = new Workspace { Id = 2, Name = "Workspace Two" };
+        _workspaceState.SetActiveWorkspace(ws1);
+
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 304,
+            WorkspaceId = 1,
+            Title = "Task in WS 1",
+            Questions = new List<Question>
+            {
+                new() { Id = 404, TaskId = 304, Prompt = "WS 1 question", Status = QuestionStatus.Pending }
+            }
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 305,
+            WorkspaceId = 2,
+            Title = "Task in WS 2",
+            Questions = new List<Question>
+            {
+                new() { Id = 405, TaskId = 305, Prompt = "WS 2 deep-linked question", Status = QuestionStatus.Pending }
+            }
+        });
+        JSInterop.SetupVoid("NightCodeForge.scrollToElement", "question-card-task-305");
+
+        var nav = Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();
+        var cut = Render<Inbox>();
+
+        // User checks "Filter to Active Workspace Only" -> WS 2 question is hidden
+        cut.Find("#filter-workspace-checkbox").Change(true);
+        Assert.DoesNotContain("WS 2 deep-linked question", cut.Markup);
+
+        // Navigating to /inbox?taskId=305 on the already-mounted Inbox component must reset the filter and load WS 2 question
+        nav.NavigateTo("/inbox?taskId=305");
+        cut.WaitForAssertion(() =>
+        {
+            var anchor = cut.Find("#question-card-task-305");
+            Assert.Contains("WS 2 deep-linked question", anchor.TextContent);
+        });
+    }
+    [Fact]
     public async Task AnswerSubmitted_RemovesCardAndUpdatesCount()
     {
         var task = new ForgeTask

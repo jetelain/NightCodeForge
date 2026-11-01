@@ -42,6 +42,18 @@
                     @_snapshot.PendingQuestionCount
                 </span>
             </a>
+            <a href="/review"
+               id="home-review-btn"
+               class="forge-btn @(_snapshot.PendingReviewCount > 0 ? "forge-btn-primary" : "forge-btn-secondary")"
+               style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.5rem;">
+                <span>🔍</span>
+                <span>Review Room</span>
+                <span id="home-review-count-badge"
+                      class="forge-badge @(_snapshot.PendingReviewCount > 0 ? "badge-indigo" : "badge-gray")"
+                      style="font-size: 0.75rem;">
+                    @_snapshot.PendingReviewCount
+                </span>
+            </a>
             <a href="/monitoring"
                id="home-live-telemetry-btn"
                class="forge-btn forge-btn-secondary"
@@ -106,7 +118,7 @@
         }
         else
         {
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1.25rem;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 1.25rem;">
                 @foreach (var item in _snapshot.RecentWorkspaces)
                 {
                     var ws = item.Workspace;
@@ -147,7 +159,16 @@
                                         📬 Questions: @item.PendingQuestionCount
                                     </a>
                                 }
-                                else if (item.WaitingOrReviewTaskCount > 0)
+                                @if (item.PendingReviewCount > 0)
+                                {
+                                    <a href="@item.ReviewUrl"
+                                       id="home-ws-review-@ws.Id"
+                                       class="forge-badge badge-indigo"
+                                       style="font-size: 0.75rem; text-decoration: none;">
+                                        🔍 Review: @item.PendingReviewCount
+                                    </a>
+                                }
+                                @if (item.PendingQuestionCount == 0 && item.PendingReviewCount == 0 && item.WaitingOrReviewTaskCount > 0)
                                 {
                                     <span class="forge-badge badge-amber" style="font-size: 0.75rem;">
                                         Attention: @item.WaitingOrReviewTaskCount
@@ -168,6 +189,72 @@
                                class="forge-btn forge-btn-secondary"
                                style="flex: 1; text-align: center; text-decoration: none; font-size: 0.85rem; padding: 0.45rem 0.75rem;">
                                 💡 Ideation Chat
+                            </a>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
+    <!-- 2b. Tasks Awaiting Human Code Review -->
+    <section id="home-pending-reviews-section" class="forge-card" style="padding: 1.5rem;">
+        <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
+            <span style="font-size: 1.35rem;">🔍</span>
+            <h2 style="margin: 0; font-size: 1.15rem; font-weight: 700;">Tasks Awaiting Human Code Review</h2>
+            <span class="forge-badge badge-indigo">@_snapshot.PendingReviewCount</span>
+        </div>
+
+        @if (_snapshot.PendingReviewTasks.Count == 0)
+        {
+            <div id="home-no-pending-reviews" style="padding: 1.75rem; text-align: center; color: var(--text-muted); background: var(--bg-surface); border-radius: var(--radius-md); font-size: 0.9rem;">
+                No tasks are waiting for human code review.
+            </div>
+        }
+        else
+        {
+            <div style="display: flex; flex-direction: column; gap: 0.65rem;">
+                @foreach (var task in _snapshot.PendingReviewTasks)
+                {
+                    <div class="pending-review-row"
+                         id="home-pending-review-@task.TaskId"
+                         style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; padding: 0.85rem 1rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);">
+                        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; min-width: 0; flex: 1;">
+                            <span class="forge-badge badge-priority-@task.Priority font-mono" style="font-size: 0.75rem;">
+                                P@(task.Priority)
+                            </span>
+                            <a href="@task.ReviewUrl"
+                               style="font-weight: 700; color: var(--text-primary); text-decoration: none; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                #@task.TaskId: @task.Title
+                            </a>
+                            <span class="forge-badge badge-teal" style="font-size: 0.75rem;">
+                                🏢 @task.WorkspaceName
+                            </span>
+                            <span class="forge-badge badge-purple font-mono" style="font-size: 0.75rem;">
+                                @task.FeatureBranch ➔ @task.BaseBranch
+                            </span>
+                            @if (task.HasResolvedConflict)
+                            {
+                                <span class="forge-badge badge-amber" style="font-size: 0.75rem;">⚠️ Conflict Resolved</span>
+                            }
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <a href="@task.ReviewUrl"
+                               id="home-review-task-btn-@task.TaskId"
+                               class="forge-btn forge-btn-primary btn-xs"
+                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                🔍 Review &amp; Merge
+                            </a>
+                            <a href="@task.InspectorUrl"
+                               class="forge-btn forge-btn-secondary btn-xs"
+                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                🔍 Inspector
+                            </a>
+                            <a href="@task.TaskDetailUrl"
+                               class="forge-btn forge-btn-outline btn-xs"
+                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                📋 Details
                             </a>
                         </div>
                     </div>
@@ -288,6 +375,8 @@
         Array.Empty<RecentWorkspaceSummary>(),
         Array.Empty<HomeScheduledTaskItem>(),
         0,
+        0,
+        Array.Empty<HomePendingReviewItem>(),
         0);
     private HomeStateChangeDebouncer? _stateChangeDebouncer;
     private bool _isLoading;

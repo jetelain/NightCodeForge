@@ -162,8 +162,14 @@
         </div>
     }
 
+    <!-- Mobile Pane Switcher (visible < 768px) -->
+    <div class="ideation-mobile-switcher" role="tablist" aria-label="Ideation panes">
+        <button type="button" role="tab" id="ideation-tab-chat" class="ideation-switch-btn @(_mobilePane == IdeationMobilePane.Chat ? "active" : "")" aria-selected="@(_mobilePane == IdeationMobilePane.Chat ? "true" : "false")" @onclick="() => _mobilePane = IdeationMobilePane.Chat">💬 Chat</button>
+        <button type="button" role="tab" id="ideation-tab-proposals" class="ideation-switch-btn @(_mobilePane == IdeationMobilePane.Proposals ? "active" : "")" aria-selected="@(_mobilePane == IdeationMobilePane.Proposals ? "true" : "false")" @onclick="() => _mobilePane = IdeationMobilePane.Proposals">📋 Proposals (@Session.Proposals.Count)</button>
+    </div>
+
     <!-- Two-Pane Main Workspace Grid -->
-    <div class="ideation-grid">
+    <div class="ideation-grid @(_mobilePane == IdeationMobilePane.Chat ? "mobile-pane-chat" : "mobile-pane-proposals")">
         <!-- LEFT PANE: Conversational Stream & Chat Input (~60%) -->
         <div class="chat-pane">
             <!-- Quick Preset Prompts Bar -->
@@ -497,6 +503,7 @@
 
     private int? _handledRefinementTaskId;
     private string _userInput = string.Empty;
+    private IdeationMobilePane _mobilePane = IdeationMobilePane.Chat;
     private bool _showCustomPromptConfig;
     private CancellationTokenSource? _cts;
     private IReadOnlyList<ForgeTask> _workspaceTasks = Array.Empty<ForgeTask>();

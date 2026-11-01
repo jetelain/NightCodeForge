@@ -18,6 +18,12 @@ namespace NightCodeForge.Web.Tests;
 
 public class WorkspaceUrlRoutingTests : BunitContext
 {
+    public WorkspaceUrlRoutingTests()
+    {
+        // MainLayout registers the foreground-sync JS handler after first render.
+        JSInterop.Mode = JSRuntimeMode.Loose;
+    }
+
     [Theory]
     [InlineData("http://localhost/w/5/backlog", 5, "backlog")]
     [InlineData("http://localhost/w/12", 12, "")]

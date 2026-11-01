@@ -2,12 +2,27 @@
 @inject IWorkspaceRepository WorkspaceRepo
 @inject WorkspaceStateService WorkspaceState
 @inject NavigationManager Navigation
-@implements IDisposable
+@inject WorkerStateService WorkerState
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
-<div class="forge-layout @(_isSidebarCollapsed ? "sidebar-collapsed" : "")">
-    <NavMenu IsCollapsed="_isSidebarCollapsed" OnToggleSidebar="ToggleSidebar" />
-    
-    <TopNavBar />
+<div class="forge-layout @(_isSidebarCollapsed ? "sidebar-collapsed" : "") @(_isMobileNavOpen ? "mobile-nav-open" : "")">
+    <NavMenu IsCollapsed="_isSidebarCollapsed"
+             IsMobileOpen="_isMobileNavOpen"
+             OnToggleSidebar="ToggleSidebar"
+             OnNavigate="CloseMobileNav" />
+
+    <TopNavBar IsMobileNavOpen="_isMobileNavOpen" OnToggleMobileNav="ToggleMobileNav" />
+
+    @if (_isMobileNavOpen)
+    {
+        <div class="mobile-nav-backdrop" id="mobile-nav-backdrop" @onclick="CloseMobileNav" aria-hidden="true"></div>
+    }
+
+    <div id="components-reconnect-modal" role="status" aria-live="polite" data-nosnippet>
+        <span class="reconnect-banner-spinner" aria-hidden="true"></span>
+        <span>Reconnecting to Forge...</span>
+    </div>
 
     <main class="forge-main-content">
         <ErrorBoundary @ref="_errorBoundary">
@@ -44,7 +59,11 @@
 
 @code {
     private bool _isSidebarCollapsed = false;
+    private bool _isMobileNavOpen = false;
+    private DotNetObjectReference<MainLayout>? _selfReference;
     private bool _isWorkspaceReady = false;
+    private const string ForegroundSyncRegisterFunction = "NightCodeForge.registerForegroundSync";
+    private const string ForegroundSyncUnregisterFunction = "NightCodeForge.unregisterForegroundSync";
     private bool _disposed = false;
     private ErrorBoundary? _errorBoundary;
 
@@ -107,6 +126,12 @@
     {
         if (_disposed) return;
 
+        if (_isMobileNavOpen)
+        {
+            _isMobileNavOpen = false;
+            _ = InvokeAsync(StateHasChanged);
+        }
+
         if (WorkspaceUrlHelper.TryExtractWorkspaceId(e.Location, out var urlWsId, out var remainingPath, out var queryAndFragment))
         {
             if (!WorkspaceState.TryActivateWorkspaceById(urlWsId))
@@ -157,10 +182,51 @@
         _isSidebarCollapsed = !_isSidebarCollapsed;
     }
 
-    public void Dispose()
+    private void ToggleMobileNav()
+    {
+        _isMobileNavOpen = !_isMobileNavOpen;
+    }
+
+    private void CloseMobileNav()
+    {
+        _isMobileNavOpen = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _selfReference = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync(ForegroundSyncRegisterFunction, _selfReference);
+        }
+    }
+
+    /// <summary>Invoked from app.js when the browser tab returns to the foreground.</summary>
+    [JSInvokable]
+    public void OnTabForegrounded()
+    {
+        if (_disposed) return;
+        WorkerState.RefreshFromTelemetry();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public async ValueTask DisposeAsync()
     {
         _disposed = true;
         Navigation.LocationChanged -= HandleLocationChanged;
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+
+        if (_selfReference != null)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync(ForegroundSyncUnregisterFunction);
+            }
+            catch (JSDisconnectedException)
+            {
+                // Circuit already gone: nothing left to unregister client-side.
+            }
+            _selfReference.Dispose();
+        }
     }
 }

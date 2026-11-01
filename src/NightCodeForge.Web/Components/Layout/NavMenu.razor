@@ -2,7 +2,7 @@
 @inject WorkspaceStateService WorkspaceState
 @implements IDisposable
 
-<aside class="forge-sidebar">
+<aside class="forge-sidebar @(IsMobileOpen ? "mobile-open" : "")" id="forge-sidebar" aria-label="Main navigation">
     <div class="brand-header">
         <NavLink class="brand-logo-wrap" href="" Match="NavLinkMatch.All">
             <img src="favicon.svg" alt="NightCodeForge" class="brand-favicon" />
@@ -17,7 +17,7 @@
         </button>
     </div>
 
-    <div class="sidebar-nav-container">
+    <div class="sidebar-nav-container" @onclick="NotifyNavigate">
         <div class="nav-section-label">Workflow</div>
 
         <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("ideation")">
@@ -95,7 +95,13 @@
     public bool IsCollapsed { get; set; }
 
     [Parameter]
+    public bool IsMobileOpen { get; set; }
+
+    [Parameter]
     public EventCallback OnToggleSidebar { get; set; }
+
+    [Parameter]
+    public EventCallback OnNavigate { get; set; }
 
     protected override void OnInitialized()
     {
@@ -106,6 +112,14 @@
     private void HandleStateChanged()
     {
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task NotifyNavigate()
+    {
+        if (OnNavigate.HasDelegate)
+        {
+            await OnNavigate.InvokeAsync();
+        }
     }
 
     private async Task ToggleSidebar()

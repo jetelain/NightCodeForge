@@ -10,6 +10,17 @@
 
 <header class="top-navbar">
     <div class="top-navbar-left">
+        <!-- Mobile Hamburger (visible < 768px) -->
+        <button type="button"
+                class="mobile-nav-toggle"
+                id="mobile-nav-toggle"
+                aria-controls="forge-sidebar"
+                aria-expanded="@(IsMobileNavOpen ? "true" : "false")"
+                aria-label="Toggle navigation menu"
+                @onclick="ToggleMobileNavAsync">
+            ☰
+        </button>
+
         <!-- Workspace Selector -->
         <div class="workspace-select-wrapper">
             <span class="workspace-select-icon">📁</span>
@@ -48,6 +59,14 @@
     </div>
 
     <div class="top-navbar-right">
+        <!-- Compact active worker pill (mobile quick status) -->
+        @if (WorkerState.Current.ActiveTaskId is int activeTaskId)
+        {
+            <NavLink href="@WorkspaceState.GetNavHref($"inspector/{activeTaskId}")" class="mobile-worker-pill" id="mobile-worker-pill" title="@($"Active task #{activeTaskId}")">
+                <span>⚡ #@activeTaskId</span>
+            </NavLink>
+        }
+
         <!-- Global Operations Pause / Resume (Gamer Mode) -->
         @if (!OperationsControl.IsPaused)
         {
@@ -110,17 +129,31 @@
         }
         <NavLink href="@WorkspaceState.GetNavHref("inbox")" class="@(pendingQuestions > 0 ? "question-inbox-pill" : "question-inbox-pill empty")" title="Pending Clarification Questions">
             <span class="pill-icon">📬</span>
-            <span>@(pendingQuestions > 0 ? $"{pendingQuestions} Question{(pendingQuestions > 1 ? "s" : "")}" : "Inbox")</span>
+            <span class="pill-label">@(pendingQuestions > 0 ? $"{pendingQuestions} Question{(pendingQuestions > 1 ? "s" : "")}" : "Inbox")</span>
         </NavLink>
     </div>
 </header>
 
 @code {
+    [Parameter]
+    public bool IsMobileNavOpen { get; set; }
+
+    [Parameter]
+    public EventCallback OnToggleMobileNav { get; set; }
+
     private IReadOnlyList<Workspace> _workspaces = Array.Empty<Workspace>();
     private string _currentSection = "Overview";
     private bool _disposed;
     private bool _isTogglingPause;
     private int _deferredTaskCount;
+
+    private async Task ToggleMobileNavAsync()
+    {
+        if (OnToggleMobileNav.HasDelegate)
+        {
+            await OnToggleMobileNav.InvokeAsync();
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {

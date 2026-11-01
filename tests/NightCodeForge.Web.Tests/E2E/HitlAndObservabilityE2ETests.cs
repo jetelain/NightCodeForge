@@ -323,6 +323,99 @@ public class HitlAndObservabilityE2ETests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HomePage_ListsPendingHumanCodeReviewTasks_AndNavigatesToReviewRoom()
+    {
+        await using var repo = new SyntheticRepoFixture();
+        await repo.InitializeAsync();
+
+        var ws = new Workspace
+        {
+            Name = repo.WorkspaceName,
+            RepositoryPath = repo.RepositoryPath,
+            DefaultBaseBranch = "main",
+            ExecutionMode = ExecutionMode.BareHost,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        ForgeTask Make(string title, TaskOverallStatus status, bool hasRun) => new()
+        {
+            Title = title,
+            Status = status,
+            MergeMode = MergeMode.ManualReviewRequired,
+            BaseBranch = "main",
+            HasExecutionRun = hasRun,
+            CreatedAt = DateTime.UtcNow.AddMinutes(-20),
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-5)
+        };
+
+        var readyRunTask = Make("Home Pending Review Task", TaskOverallStatus.Ready, true);
+        var readyNoRunTask = Make("Home Ready Without Run", TaskOverallStatus.Ready, false);
+        var openTask = Make("Home Open Task", TaskOverallStatus.Open, false);
+        openTask.IsWaitingForHuman = true; // Prevent background worker pickup during assertion
+        var closedTask = Make("Home Closed Task", TaskOverallStatus.Closed, true);
+
+        await _fixture.SeedDatabaseAsync(async db =>
+        {
+            db.Workspaces.Add(ws);
+            await db.SaveChangesAsync();
+
+            foreach (var t in new[] { readyRunTask, readyNoRunTask, openTask, closedTask })
+            {
+                t.WorkspaceId = ws.Id;
+            }
+
+            db.Tasks.AddRange(readyRunTask, readyNoRunTask, openTask, closedTask);
+            await db.SaveChangesAsync();
+
+            foreach (var t in new[] { readyRunTask, readyNoRunTask, openTask, closedTask })
+            {
+                t.FeatureBranch = $"feature/task-{t.Id}";
+            }
+        });
+
+        var featureBranchName = $"feature/task-{readyRunTask.Id}";
+        await repo.RunGitAsync($"checkout -b {featureBranchName}");
+        var calcPath = Path.Combine(repo.RepositoryPath, "src", "SyntheticLib", "Calculator.cs");
+        await File.WriteAllTextAsync(calcPath, (await File.ReadAllTextAsync(calcPath)) + "\n// pending review change\n");
+        await repo.RunGitAsync("add -A");
+        await repo.RunGitAsync("commit -m \"Pending review change\"");
+        await repo.RunGitAsync("checkout main");
+
+        try
+        {
+            await _page.GotoAsync(_fixture.BaseUrl, new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded });
+            await _page.WaitForSelectorAsync("#home-pending-reviews-section");
+
+            var wsBadge = _page.Locator($"#home-ws-review-{ws.Id}");
+            await wsBadge.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 15000 });
+            Assert.Contains("Review: 1", await wsBadge.InnerTextAsync());
+            Assert.True(int.Parse((await _page.Locator("#home-review-count-badge").InnerTextAsync()).Trim()) >= 1);
+
+            Assert.Equal(1, await _page.Locator($"#home-pending-review-{readyRunTask.Id}").CountAsync());
+            Assert.Equal(0, await _page.Locator($"#home-pending-review-{readyNoRunTask.Id}").CountAsync());
+            Assert.Equal(0, await _page.Locator($"#home-pending-review-{openTask.Id}").CountAsync());
+            Assert.Equal(0, await _page.Locator($"#home-pending-review-{closedTask.Id}").CountAsync());
+
+            await _page.Locator($"#home-review-task-btn-{readyRunTask.Id}").ClickAsync();
+            await _page.WaitForURLAsync(new Regex($@"/w/{ws.Id}/review/{readyRunTask.Id}"), new PageWaitForURLOptions { Timeout = 15000 });
+            await _page.WaitForSelectorAsync(".review-room-container");
+        }
+        finally
+        {
+            await _fixture.SeedDatabaseAsync(async db =>
+            {
+                var tasks = db.Tasks.Where(t => t.WorkspaceId == ws.Id);
+                db.Tasks.RemoveRange(tasks);
+                var workspace = await db.Workspaces.FindAsync(ws.Id);
+                if (workspace != null)
+                {
+                    db.Workspaces.Remove(workspace);
+                }
+            });
+        }
+    }
+
+    [Fact]
     public async Task TaskInspector_And_Transcripts_RenderSeededStagesAndConversationTurns()
     {
         // 1. Initialize synthetic repository for transcript storage

@@ -1,6 +1,6 @@
 # Step 12.24 — Home Page Pending Human Code Review Tasks
 
-**Status:** Planned (Feature / Developer Ergonomics & Review Room Visibility)
+**Status:** ✅ Completed (Feature / Developer Ergonomics & Review Room Visibility)
 
 ---
 
@@ -79,13 +79,18 @@ Currently on the Home page ([`Home.razor`](../../src/NightCodeForge.Web/Componen
 
 ---
 
-## 4. Verification Criteria
+## 4. Implementation Checklist & Verification Criteria
 
-- Unit tests in `HomeDashboardTests.cs` verify:
-  - `HomeDashboardBuilder.BuildSnapshotAsync` populates `PendingReviewTasks`, `PendingReviewCount`, and per-workspace `PendingReviewCount` / `ReviewUrl` for tasks with `Status == TaskOverallStatus.Ready && HasExecutionRun == true` (and excludes `Ready` tasks where `HasExecutionRun == false`).
-  - `PendingReviewTasks` are ordered by priority ascending, then `UpdatedAt` descending, and accurately surface `HasResolvedConflict` from `PipelineDataJson`.
-  - bUnit rendering of `Home.razor` displays `#home-review-btn`, `#home-review-count-badge`, per-workspace `#home-ws-review-{ws.Id}` badges (even when `#home-ws-inbox-{ws.Id}` is also present), and `#home-pending-reviews-section` rows with working `/w/{ws.Id}/review/{task.Id}` links.
-- **Playwright E2E Tests (Zero LLM Calls, `[Trait("Category", "E2E")]`):**
-  - Using `PlaywrightWebHostFixture` ([Step 11.39A](../fixes/STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)), seed tasks across statuses (`Ready` with `HasExecutionRun = true`, `Ready` with `HasExecutionRun = false`, `Open`, `Closed`) and a real feature branch in `SyntheticRepoFixture`.
-  - Verify in headless Chromium on `/` that `#home-review-count-badge`, `#home-ws-review-{ws.Id}`, and `#home-pending-reviews-section` display the expected pending review items, and clicking `#home-review-task-btn-{task.Id}` navigates directly to the Review Room for that task.
+- [x] **`HomeDashboardBuilder` Data Contracts & Aggregation (`NightCodeForge.Web.Services`):**
+  - [x] Implement `HomePendingReviewItem` record.
+  - [x] Extend `RecentWorkspaceSummary` with `int PendingReviewCount` and `string ReviewUrl`.
+  - [x] Extend `HomeDashboardSnapshot` with `IReadOnlyList<HomePendingReviewItem> PendingReviewTasks` and `int PendingReviewCount`.
+  - [x] Implement `BuildPendingReviewTasks` filtering `Status == TaskOverallStatus.Ready && HasExecutionRun == true`, extracting `HasResolvedConflict` from pipeline databag, ordering by priority ascending, `UpdatedAt` descending, `TaskId` ascending, and generating workspace-scoped URLs via `WorkspaceUrlHelper`.
+- [x] **`Home.razor` Presentation & UX Requirements:**
+  - [x] Command Center Header: link button `#home-review-btn` (`href="/review"`) with count badge `#home-review-count-badge` displaying `PendingReviewCount`.
+  - [x] Recent Workspaces section: independent clickable `#home-ws-review-{ws.Id}` badge when `PendingReviewCount > 0`, coexisting with `#home-ws-inbox-{ws.Id}` without being eclipsed.
+  - [x] Dedicated `#home-pending-reviews-section` rendering pending review tasks with priority, workspace, branch targets, conflict-resolved badge, and 1-click `#home-review-task-btn-{taskId}` Review & Merge, Inspector, and Details links.
+- [x] **Automated Tests & Verification:**
+  - [x] Unit and bUnit tests in `HomeDashboardTests.cs` and `HomePendingReviewTests.cs` verifying snapshot aggregation, ordering, conflict detection, and HTML element rendering.
+  - [x] **Playwright E2E Tests (Zero LLM Calls, `[Trait("Category", "E2E")]`):** `HomePage_ListsPendingHumanCodeReviewTasks_AndNavigatesToReviewRoom` in `HitlAndObservabilityE2ETests.cs` verifying badge counts, row filtering across task statuses, and 1-click navigation from Home to Review Room in headless Chromium.
 

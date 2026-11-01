@@ -5,7 +5,7 @@
 > *Companion Step (Post-MVP UI):* [Step 12.16B: Tailscale Settings UI, QR Code Onboarding & Live Mesh Status](STEP_12_16B_TAILSCALE_SETTINGS_UI_AND_LIVE_STATUS.md)  
 > *Related Steps:* [Step 12.8A: Mobile-Responsive Layout & Touch Ergonomics](STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
-> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* **Top Priority (MVP)** | *Target Framework:* .NET 10 (C# 13)
+> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* **Implemented (MVP)** | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -83,9 +83,19 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 ## 3. Implementation Checklist & Deliverables
 
-- [ ] Implement `ITailscaleServeService` / `TailscaleServeHostedService` ($\le 6$ required constructor parameters) with dynamic Kestrel port detection, `svc:ncf` service mode, device fallback mode, hot-apply support, and graceful shutdown drain/clear/reset.
-- [ ] Add factory default `Tailscale` section to `appsettings.json`, `config/config.json` overlay loading, and `--tailscale*` CLI flags in `Program.cs`.
-- [ ] Configure `ForwardedHeadersOptions` (`XForwardedFor | XForwardedProto`) in `Program.cs`.
-- [ ] Add unit and integration tests in `NightCodeForge.Web.Tests` verifying `TailscaleServeHostedService` CLI command generation, Kestrel port resolution, and shutdown teardown.
-- [ ] **Playwright E2E Test (Zero LLM Calls, `[Trait("Category", "E2E")]`):** Using `PlaywrightWebHostFixture` ([Step 11.39A](../fixes/STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)), create a Playwright browser context configured with `ExtraHTTPHeaders = { ["X-Forwarded-Proto"] = "https", ["X-Forwarded-For"] = "100.64.0.10" }` and verify the Blazor InteractiveServer circuit connects and navigates cleanly behind simulated Tailscale reverse-proxy headers.
+- [x] Implement `ITailscaleServeService` / `TailscaleServeHostedService` ($\le 6$ required constructor parameters) with dynamic Kestrel port detection, `svc:ncf` service mode, device fallback mode, hot-apply support, and graceful shutdown drain/clear/reset.
+- [x] Add factory default `Tailscale` section to `appsettings.json`, `config/config.json` overlay loading, and `--tailscale*` CLI flags in `Program.cs`.
+- [x] Configure `ForwardedHeadersOptions` (`XForwardedFor | XForwardedProto`) in `Program.cs`.
+- [x] Add unit and integration tests in `NightCodeForge.Web.Tests` verifying `TailscaleServeHostedService` CLI command generation, Kestrel port resolution, and shutdown teardown.
+- [x] **Playwright E2E Test (Zero LLM Calls, `[Trait("Category", "E2E")]`):** Using `PlaywrightWebHostFixture` ([Step 11.39A](../fixes/STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)), create a Playwright browser context configured with `ExtraHTTPHeaders = { ["X-Forwarded-Proto"] = "https", ["X-Forwarded-For"] = "100.64.0.10" }` and verify the Blazor InteractiveServer circuit connects and navigates cleanly behind simulated Tailscale reverse-proxy headers.
 
+---
+
+## 4. Implementation Notes
+
+- Code: `src/NightCodeForge.Web/Tailscale/` (`TailscaleServeHostedService`/`ITailscaleServeService`, `ITailscaleCliRunner` over `IProcessRunner`, `TailscaleOptions`, target resolver, status parser, `--tailscale*` flag mapping). Tests: `TailscaleServeTests` and `E2E/TailscaleForwardedHeadersE2ETests`.
+- Route is configured on `ApplicationStarted` (Kestrel addresses are only known then); option changes hot-apply (teardown then re-apply).
+- Target: plain HTTP endpoint preferred; HTTPS-only apps are proxied via `https+insecure://127.0.0.1:<port>`.
+- `--tailscale-service <name>` also enables `AutoServe`. Flags are layered last (override `config/config.json`).
+- Hostname banner derives from `tailscale status --json` (`<service>.<tailnet>` in Service Mode).
+- Forwarded headers use `KnownIPNetworks` (`KnownNetworks` is obsolete in .NET 10).
