@@ -691,8 +691,9 @@ VALUES ('" + AddWorkspaceGlobalSkillsSettingsMigrationId + @"', '10.0.12');";
     private static string NormalizeLineEndings(string value) => value.Replace("\r\n", "\n");
 
     /// <summary>
-    /// Seeds the standard default workflow ("standard-3-agent") and its 6 stages if not already present in the database.
-    /// Preserves existing workflows and stages without duplicating them.
+    /// Seeds the standard default workflow ("standard-3-agent") and its stages if not already present in the database,
+    /// and synchronizes existing stages to match canonical definitions in <see cref="StandardWorkflowDefinitions"/>.
+    /// Preserves existing workflows without duplicating them.
     /// </summary>
     public async Task<WorkflowDefinition> EnsureDefaultWorkflowsAsync(CancellationToken cancellationToken = default)
     {
@@ -710,47 +711,114 @@ VALUES ('" + AddWorkspaceGlobalSkillsSettingsMigrationId + @"', '10.0.12');";
         {
             var canonical = StandardWorkflowDefinitions.CreateStandard3AgentWorkflow();
             var modified = false;
-            foreach (var stage in standardWorkflow.Stages)
+
+            if (!standardWorkflow.IsDefault)
             {
-                var canonicalStage = canonical.Stages.FirstOrDefault(s => s.StageId == stage.StageId);
-                if (canonicalStage != null)
+                standardWorkflow.IsDefault = true;
+                modified = true;
+            }
+
+            if (string.IsNullOrWhiteSpace(standardWorkflow.Description))
+            {
+                standardWorkflow.Description = canonical.Description;
+                modified = true;
+            }
+
+            var canonicalStageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var canonicalStage in canonical.Stages)
+            {
+                canonicalStageIds.Add(canonicalStage.StageId);
+                var existingStage = standardWorkflow.Stages.FirstOrDefault(s =>
+                    string.Equals(s.StageId, canonicalStage.StageId, StringComparison.OrdinalIgnoreCase));
+
+                if (existingStage != null)
                 {
-                    if (stage.QueueTier != canonicalStage.QueueTier)
+                    if (existingStage.DisplayName != canonicalStage.DisplayName)
                     {
-                        stage.QueueTier = canonicalStage.QueueTier;
+                        existingStage.DisplayName = canonicalStage.DisplayName;
                         modified = true;
                     }
 
-                    if (stage.ConfigurationJson != null &&
-                        stage.ConfigurationJson.Contains("{{ task.description }}", StringComparison.Ordinal) &&
-                        canonicalStage.ConfigurationJson != null)
+                    if (existingStage.Icon != canonicalStage.Icon)
                     {
-                        stage.ConfigurationJson = canonicalStage.ConfigurationJson;
+                        existingStage.Icon = canonicalStage.Icon;
                         modified = true;
                     }
 
-                    if (stage.StageId == StandardStageIds.CodeReviewAndFix &&
-                        canonicalStage.ConfigurationJson != null &&
-                        stage.ConfigurationJson != null &&
-                        !stage.ConfigurationJson.Contains("review_diff", StringComparison.Ordinal))
+                    if (existingStage.SequenceOrder != canonicalStage.SequenceOrder)
                     {
-                        stage.ConfigurationJson = canonicalStage.ConfigurationJson;
+                        existingStage.SequenceOrder = canonicalStage.SequenceOrder;
                         modified = true;
                     }
 
-                    if (stage.StageId == StandardStageIds.Implementation &&
-                        canonicalStage.ConfigurationJson != null &&
-                        stage.ConfigurationJson != null &&
-                        !stage.ConfigurationJson.Contains("always run 'dotnet build'", StringComparison.Ordinal))
+                    if (existingStage.QueueTier != canonicalStage.QueueTier)
                     {
-                        stage.ConfigurationJson = canonicalStage.ConfigurationJson;
+                        existingStage.QueueTier = canonicalStage.QueueTier;
+                        modified = true;
+                    }
+
+                    if (existingStage.Kind != canonicalStage.Kind)
+                    {
+                        existingStage.Kind = canonicalStage.Kind;
+                        modified = true;
+                    }
+
+                    if (existingStage.CsharpImplementationType != canonicalStage.CsharpImplementationType)
+                    {
+                        existingStage.CsharpImplementationType = canonicalStage.CsharpImplementationType;
+                        modified = true;
+                    }
+
+                    if (!string.Equals(existingStage.ConfigurationJson?.Trim(), canonicalStage.ConfigurationJson?.Trim(), StringComparison.Ordinal))
+                    {
+                        existingStage.ConfigurationJson = canonicalStage.ConfigurationJson ?? "{}";
                         modified = true;
                     }
                 }
+                else
+                {
+                    var newStage = new StageDefinition
+                    {
+                        WorkflowId = standardWorkflow.Id,
+                        Workflow = standardWorkflow,
+                        StageId = canonicalStage.StageId,
+                        DisplayName = canonicalStage.DisplayName,
+                        Icon = canonicalStage.Icon,
+                        SequenceOrder = canonicalStage.SequenceOrder,
+                        QueueTier = canonicalStage.QueueTier,
+                        Kind = canonicalStage.Kind,
+                        CsharpImplementationType = canonicalStage.CsharpImplementationType,
+                        ConfigurationJson = canonicalStage.ConfigurationJson ?? "{}",
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    StageDefinitions.Add(newStage);
+                    if (!standardWorkflow.Stages.Contains(newStage))
+                    {
+                        standardWorkflow.Stages.Add(newStage);
+                    }
+                    modified = true;
+                }
+            }
+
+            // Remove obsolete stages no longer present in canonical standard workflow
+            var stagesToRemove = standardWorkflow.Stages
+                .Where(s => !canonicalStageIds.Contains(s.StageId))
+                .ToList();
+
+            if (stagesToRemove.Count > 0)
+            {
+                StageDefinitions.RemoveRange(stagesToRemove);
+                foreach (var stage in stagesToRemove)
+                {
+                    standardWorkflow.Stages.Remove(stage);
+                }
+                modified = true;
             }
 
             if (modified)
             {
+                standardWorkflow.UpdatedAt = DateTime.UtcNow;
                 await SaveChangesAsync(cancellationToken);
             }
         }
