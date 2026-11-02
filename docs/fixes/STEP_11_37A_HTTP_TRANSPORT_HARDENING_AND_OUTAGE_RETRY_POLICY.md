@@ -1,12 +1,13 @@
 # 🛡️ Step 11.37A: HTTP Transport Hardening, `ConnectionRefused` Classification & 5-Minute Outage Retry Policy
 
-> **Bug Fix & Resiliency Step (Part 1 of 2 — Core & HTTP Transport Layer)**  
+> **Bug Fix & Resiliency Step (Transport-Level Outage Resilience & Live Progress Telemetry)**  
 > *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
-> *Companion Step:* [Step 11.37B: Turn-Level `ResilientChatClient`, 15m Stall Watchdog & Tool Recovery](STEP_11_37B_TURN_LEVEL_RESILIENT_CHAT_CLIENT_AND_TOOL_RECOVERY.md)  
 > *Target Framework:* .NET 10 (C# 13) | *Status:* Proposed  
 > *Target Projects:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`](../../src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)  
 > *Dependencies:* [Step 11.29: Global Operations Pause & GPU VRAM Reclamation](../archive/phase-11/STEP_11_29_GLOBAL_OPERATIONS_PAUSE_AND_GPU_VRAM_RECLAMATION.md), [Step 11.33: Unified LLM Provider Architecture](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 11.35: OpenAI-Compatible LLM Provider](../archive/phase-11/STEP_11_35_OPENAI_COMPATIBLE_LLM_PROVIDER.md)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+
+> This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
 ---
 
@@ -18,7 +19,9 @@ Long-running autonomous coding stages and interactive ideation sessions frequent
 - Short internet, VPN, Wi-Fi, or LAN drops.
 - Model eviction and cold weight reloading under VRAM pressure.
 
-Although NightCodeForge includes [`TransientHttpErrorRetryHandler`](../../src/NightCodeForge.Core/Resilience/TransientHttpErrorRetryHandler.cs) and [`TransientErrorDetector`](../../src/NightCodeForge.Core/Resilience/TransientErrorDetector.cs), the transport and HTTP retry layer currently only survives sub-second network blips.
+Although NightCodeForge includes [`TransientHttpErrorRetryHandler`](../../src/NightCodeForge.Core/Resilience/TransientHttpErrorRetryHandler.cs) and [`TransientErrorDetector`](../../src/NightCodeForge.Core/Resilience/TransientErrorDetector.cs), the transport and HTTP retry layer currently only survives sub-second network blips (~3.5s–7s). Furthermore, retries happen silently at the HTTP layer with zero progress visibility in the UI, and fast health probes are conflated with inference clients.
+
+By consolidating outage resilience into a **hardened HTTP transport layer with live progress notification hooks**, NightCodeForge survives up to 5 minutes of provider downtime cleanly without stacking fragile multi-layer retry systems.
 
 ### 1.2 Transport & Retry Root Causes Covered in Step 11.37A
 
@@ -26,90 +29,113 @@ Although NightCodeForge includes [`TransientHttpErrorRetryHandler`](../../src/Ni
 | :--- | :--- | :--- | :--- |
 | **1** | **3.5s–7s Total Retry Window** | [`RetryPolicyOptions`](../../src/NightCodeForge.Core/Resilience/RetryPolicyOptions.cs) defaults to `MaxRetries = 3`, `BaseDelay = 1s`, `MaxDelay = 15s`. With $[0.5\times, 1.0\times]$ jitter on $1\text{s}, 2\text{s}, 4\text{s}$, all retries finish in **3.5 to 7 seconds**. | Any server restart or internet drop lasting more than ~7 seconds permanently fails the stage. |
 | **2** | **`ConnectionRefused` Fails on Attempt 1** | [`TransientErrorDetector.IsTransient`](../../src/NightCodeForge.Core/Resilience/TransientErrorDetector.cs#L31-L35) explicitly excludes `SocketError.ConnectionRefused`, and [`IsTransientSocketError`](../../src/NightCodeForge.Core/Resilience/TransientErrorDetector.cs#L105-L114) omits DNS/interface transition errors (`TryAgain`, `HostNotFound`, `NoData`, `OperationAborted`, `Interrupted`). | When an inference process restarts while the host OS is up, the OS kernel immediately sends TCP `RST` (`ConnectionRefused`), aborting on Attempt 1 with **0 retries**. |
-| **3** | **HTTP/1.1 Dead-Socket Blindness & Coupled `HttpClient.Timeout`** | [`OllamaHttpConstants`](../../src/NightCodeForge.Agents/Inference/OllamaHttpConstants.cs) sets `KeepAlivePingDelay = 30s` on `SocketsHttpHandler`, which only applies to HTTP/2+ PING frames and is a no-op on HTTP/1.1 inference endpoints. `ConnectTimeout` is unset (~21–120s OS SYN timeout), and `HttpClient.Timeout` (15m) wraps the entire retry handler. | Half-open connections after a router drop or silent reboot hang during connection/streaming, or exhaust the shared `HttpClient.Timeout` across retry attempts. |
-| **4** | **Uncoordinated SDK & Probe Retries** | [`OpenAiCompatibleChatClientFactory`](../../src/NightCodeForge.Agents/Inference/OpenAiCompatibleChatClientFactory.cs#L103-L129) leaves `System.ClientModel`'s default 3-retry policy active on top of `TransientHttpErrorRetryHandler`, and [`InferenceServiceCollectionExtensions`](../../src/NightCodeForge.Infrastructure/InferenceServiceCollectionExtensions.cs#L31-L44) attaches inference retry handlers to 2–3s UI health/catalog probes. | OpenAI-compatible calls multiply retries ($4 \times 4$), and multi-minute retry budgets would block fast UI liveness probes if not separated. |
-
-*(Turn-level `ResilientChatClient`, 15-minute stream stall watchdog, and multi-turn tool history recovery are specified in [Step 11.37B](STEP_11_37B_TURN_LEVEL_RESILIENT_CHAT_CLIENT_AND_TOOL_RECOVERY.md).)*
+| **3** | **UI Progress Black Hole During Outage Retries** | [`TransientHttpErrorRetryHandler`](../../src/NightCodeForge.Core/Resilience/TransientHttpErrorRetryHandler.cs) only writes to `ILogger.LogWarning`. It lacks any callback or event hook to surface retry progress to callers. | During a 2–3 minute Ollama restart, the web UI shows the agent spinning silently with zero feedback until it either succeeds or throws. |
+| **4** | **HTTP/1.1 Dead-Socket Blindness** | [`OllamaHttpConstants`](../../src/NightCodeForge.Agents/Inference/OllamaHttpConstants.cs) sets `KeepAlivePingDelay = 30s` on `SocketsHttpHandler`, which only applies to HTTP/2+ PING frames and is a no-op on HTTP/1.1 inference endpoints. `ConnectTimeout` is unset (~21–120s OS SYN timeout). | Half-open connections after a router drop or silent reboot hang until the full 15-minute `HttpClient.Timeout` expires. |
+| **5** | **Conflated SDK, Search & Probe Retries** | [`InferenceServiceCollectionExtensions`](../../src/NightCodeForge.Infrastructure/InferenceServiceCollectionExtensions.cs#L31-L44) attaches generic retry handlers to 2–3s UI health/catalog probes (`ILlmGatewayService`, `ILlmModelCatalogService`), while [`OpenAiCompatibleChatClientFactory`](../../src/NightCodeForge.Agents/Inference/OpenAiCompatibleChatClientFactory.cs#L103-L129) leaves `System.ClientModel`'s default 3-retry policy active on top of HTTP retries. | Probe failures waste time in backoff loops instead of failing fast, and OpenAI calls multiply retry counts ($4 \times 4$). |
 
 ---
 
 ## 2. Detailed Behavioral & Component Specifications
 
-### 2.1 Outage-Grade Retry Budget & `Retry-After` Support (`RetryPolicyOptions` & `TransientHttpErrorRetryHandler`)
+### 2.1 Dedicated LLM Outage Retry Policy & Live Notification Hook
 
-1. **Default Outage Survival Configuration:**
-   - Update [`RetryPolicyOptions`](../../src/NightCodeForge.Core/Resilience/RetryPolicyOptions.cs) defaults to survive a **5-minute** provider outage while recovering within 1–2 seconds from momentary glitches:
-     - `DefaultMaxRetries = 20` (`MaxRetries`)
-     - `DefaultBaseDelaySeconds = 1.0` (`BaseDelay = 1s`)
-     - `DefaultMaxDelaySeconds = 30.0` (`MaxDelay = 30s`)
-     - `DefaultMaxRetryDurationSeconds = 300.0` (`MaxRetryDuration = 5 minutes`)
-   - Backoff progression follows exponential growth ($1\text{s} \to 2\text{s} \to 4\text{s} \to 8\text{s} \to 16\text{s} \to 30\text{s}$ ceiling) with random jitter in $[0.5\times, 1.0\times]$.
-   - A retry attempt is permitted when **both** `attempt <= MaxRetries` **and** `elapsedOutage < MaxRetryDuration` (when `MaxRetryDuration > TimeSpan.Zero`). If the calculated delay would exceed the remaining `MaxRetryDuration`, clamp the delay to the remaining duration.
+1. **LLM-Specific Retry Options (`LlmRetryPolicyOptions`):**
+   - Retain [`RetryPolicyOptions`](../../src/NightCodeForge.Core/Resilience/RetryPolicyOptions.cs) with its existing fast defaults (`MaxRetries = 3`, `BaseDelay = 1s`, `MaxDelay = 15s`, `MaxRetryDuration = 30s`) so non-inference clients (e.g. `OllamaWebSearchService`) continue to fail fast.
+   - Introduce `LlmRetryPolicyOptions` (inheriting from or specializing `RetryPolicyOptions`) specifically for LLM inference HTTP clients:
+     - `MaxRetries = 20`
+     - `BaseDelay = 1.0s`
+     - `MaxDelay = 30.0s`
+     - `MaxRetryDuration = 5 minutes` (300 seconds)
+   - Add `TimeSpan MaxRetryDuration` to `RetryPolicyOptions` (defaulting to `30s` on base, `300s` on `LlmRetryPolicyOptions`).
+   - In [`TransientHttpErrorRetryHandler`](../../src/NightCodeForge.Core/Resilience/TransientHttpErrorRetryHandler.cs):
+     - Track elapsed outage time via `_timeProvider.GetTimestamp()` and `_timeProvider.GetElapsedTime(startTimestamp)`.
+     - Permit a retry only when `attempt <= MaxRetries` **and** `elapsed < MaxRetryDuration`.
+     - Clamp the calculated jittered backoff delay to the remaining `MaxRetryDuration` (`remaining = MaxRetryDuration - elapsed`).
 
-2. **`Retry-After` Header Compliance:**
+2. **Live Notification Hook for Activity Feeds:**
+   - Define a lightweight notification context (`RetryNotificationContext`) in `NightCodeForge.Core.Resilience` carrying the request target URI, HTTP method, request headers, current attempt number, `MaxRetries`, calculated backoff `Delay`, `ElapsedDuration`, `MaxDuration`, error message, and optional `HttpStatusCode`.
+   - Support attaching a notification callback via `HttpRequestOptionsKey` on `HttpRequestMessage.Options` (preserved across cloned requests in `TransientHttpErrorRetryHandler.CloneRequest`) and/or via `RetryPolicyOptions` / non-optional constructor overloads on `TransientHttpErrorRetryHandler` (strictly avoiding optional constructor parameters on DI services and keeping all service constructors $\le 10$ parameters per [AGENTS.md](../../AGENTS.md)).
+   - When an attempt fails and enters backoff delay, invoke the notification hook if present.
+   - In [`LlmChatClientFactoryBase`](../../src/NightCodeForge.Agents/Inference/LlmChatClientFactories.cs) / agent callers, register a hook that resolves the active session and task context and broadcasts an [`AgentActivityKind.Notice`](../../src/NightCodeForge.Core/Streaming/AgentActivityModels.cs#L18) event via [`IAgentActivityStreamer`](../../src/NightCodeForge.Core/Streaming/AgentActivityModels.cs#L36-L40):
+     > *"Inference endpoint unreachable (Connection refused at http://localhost:11434). Retrying attempt 3/20 in 8.0s (elapsed 15s / 300s)..."*
+   - **Provider-Agnostic Correlation Requirement:** Because [`StandaloneOllamaChatClientFactory`](../../src/NightCodeForge.Agents/Inference/LlmChatClientFactories.cs#L190-L207) and [`OpenAiCompatibleChatClientFactory`](../../src/NightCodeForge.Agents/Inference/OpenAiCompatibleChatClientFactory.cs#L125) suppress `X-OllamaRouter-Session-Id` headers on the wire, and session-less clients are cached in `LlmChatClientFactoryBase`, correlation must not rely solely on `X-OllamaRouter-Session-Id` request headers. Resolve `SessionId`, `TaskId`, and `StageId` across all three providers using closure capture for session-bound clients, ambient `AsyncLocal` activity context set by [`ThinkingAndActivityTracingChatClient`](../../src/NightCodeForge.Agents/Inference/ThinkingAndActivityTracingChatClient.cs), or [`IOperationsTelemetryService.GetActiveTask()`](../../src/NightCodeForge.Core/Interfaces/IOperationsTelemetryService.cs#L75) fallback.
+   - **Scope Boundary (Pre-Header vs. Mid-Stream Failures):** `TransientHttpErrorRetryHandler` operates on `SendAsync` and therefore covers all pre-header connection, DNS, TLS, timeout, and HTTP status failures (`408`, `429`, `500`, `502`, `503`, `504`). Once a streaming response (`GetStreamingResponseAsync` with `ResponseHeadersRead`) has returned `200 OK` headers and begun yielding tokens, any mid-stream socket drop during body enumeration surfaces to the caller via `HttpIOException` / `IOException` (assisted by the OS-level TCP Keep-Alive probes in §2.3.2 so dead connections fail within ~30s rather than hanging for 15 minutes).
+   - **Global Operations Pause Respect:** If operations are paused via [`IOperationsControlService`](../../src/NightCodeForge.Core/Interfaces/IOperationsControlService.cs) while a request is in a retry backoff loop (or if the caller's `CancellationToken` is cancelled), abort the retry loop immediately rather than continuing to poll the inference endpoint during VRAM reclamation.
+
+3. **`Retry-After` Header Compliance:**
    - When [`TransientHttpErrorRetryHandler`](../../src/NightCodeForge.Core/Resilience/TransientHttpErrorRetryHandler.cs) receives a transient status code (`429 TooManyRequests` or `503 ServiceUnavailable`) containing an HTTP `Retry-After` header (`RetryConditionHeaderValue.Delta` or `Date`), use `Max(calculatedJitteredDelay, retryAfterDelay)` clamped to the remaining `MaxRetryDuration`.
 
-3. **Separation of Fast UI Liveness Probes from Long-Horizon Inference Retries:**
-   - Gateway status and model catalog discovery services (`ILlmGatewayService`, `ILlmModelCatalogService`) in [`InferenceServiceCollectionExtensions`](../../src/NightCodeForge.Infrastructure/InferenceServiceCollectionExtensions.cs) execute short 2–3 second probes to report cluster liveness to the UI. They must **not** enter a 5-minute retry loop when the inference server is offline; keep them without long-horizon retries (or bounded to their short probe cancellation tokens) so UI status indicators immediately reflect `Offline` during a restart.
+4. **Strict Separation of Fast UI Liveness Probes:**
+   - In [`InferenceServiceCollectionExtensions`](../../src/NightCodeForge.Infrastructure/InferenceServiceCollectionExtensions.cs):
+     - **Remove** `.AddTransientHttpErrorRetry()` from `ILlmGatewayService` and `ILlmModelCatalogService`.
+     - Gateway status (`/api/ps`) and catalog queries (`/api/tags`) are fast 2–3s probes used by the UI; they must fail immediately when the server is offline so UI status badges reflect `Offline` without blocking.
+     - Keep `.AddTransientHttpErrorRetry()` only on `ILlmModelPreloadService` (or configure it with `LlmRetryPolicyOptions`).
 
-### 2.2 Comprehensive Transient Error & Timeout Classification (`TransientErrorDetector`)
+### 2.2 Comprehensive Transient Error Classification (`TransientErrorDetector`)
 
-1. **Server Restart & Network Transition Socket Errors:**
-   - Update [`TransientErrorDetector`](../../src/NightCodeForge.Core/Resilience/TransientErrorDetector.cs) so `SocketError.ConnectionRefused` (`WSAECONNREFUSED`) is classified as **transient** (removing the `IsConnectionRefused` exclusion).
-   - Expand `IsTransientSocketError` to include transient DNS and network interface transition errors that occur during short internet cuts or router restarts:
-     - `SocketError.ConnectionRefused`
-     - `SocketError.TryAgain` (temporary DNS failure `EAI_AGAIN`)
-     - `SocketError.HostNotFound` and `SocketError.NoData` (DNS resolution failure while WAN/router link is down)
-     - `SocketError.OperationAborted` and `SocketError.Interrupted`
+1. **Reclassify `SocketError.ConnectionRefused` as Transient:**
+   - Remove the `IsConnectionRefused` fail-fast exclusion from [`TransientErrorDetector.IsTransient`](../../src/NightCodeForge.Core/Resilience/TransientErrorDetector.cs#L31-L35).
+   - When a local inference process restarts, the host kernel responds immediately with TCP `RST` (`ConnectionRefused`). Classifying it as transient allows the 5-minute backoff loop to wait until the service binds the port again.
+
+2. **Expand Transient Socket and DNS Errors:**
+   - Expand `IsTransientSocketError` in [`TransientErrorDetector`](../../src/NightCodeForge.Core/Resilience/TransientErrorDetector.cs#L105-L114) to include transient DNS and network interface transition errors:
+     - `SocketError.ConnectionRefused` (10061 / `WSAECONNREFUSED`)
+     - `SocketError.TryAgain` (11002 / `WSATRY_AGAIN` temporary DNS failure)
+     - `SocketError.HostNotFound` (11001 / `WSAHOST_NOT_FOUND`) and `SocketError.NoData` (11004 / `WSANO_DATA`)
+     - `SocketError.OperationAborted` (995 / `WSA_OPERATION_ABORTED`)
+     - `SocketError.Interrupted` (10004 / `WSAEINTR`)
      - Existing codes: `ConnectionReset`, `ConnectionAborted`, `TimedOut`, `HostUnreachable`, `NetworkUnreachable`, `NetworkReset`, `Shutdown`, `NotConnected`.
 
-2. **OpenAI SDK (`System.ClientModel`) Exception & Retry Alignment:**
-   - In [`OpenAiCompatibleChatClientFactory`](../../src/NightCodeForge.Agents/Inference/OpenAiCompatibleChatClientFactory.cs), disable the built-in `System.ClientModel` retry policy (`clientOptions.RetryPolicy = new ClientRetryPolicy(maxRetries: 0)`) so retries are never multiplied across layers.
-   - Ensure `TransientErrorDetector` and `HttpErrorDetailHelper` recognize `ClientResultException` (or exceptions exposing an HTTP status code or inner transport exception) when evaluating transient failures outside the HTTP handler.
+3. **Disable OpenAI SDK (`System.ClientModel`) Duplicate Retries:**
+   - In [`OpenAiCompatibleChatClientFactory`](../../src/NightCodeForge.Agents/Inference/OpenAiCompatibleChatClientFactory.cs), configure `OpenAIClientOptions.RetryPolicy` with `maxRetries: 0` (`new ClientRetryPolicy(maxRetries: 0)`).
+   - Because `TransientHttpErrorRetryHandler` handles all transient HTTP errors directly at the transport layer, outer SDK retries are redundant and multiplying ($4 \times 20$).
 
-3. **Per-Attempt / Stream Stall Timeouts vs. User Cancellation & Global Pause:**
-   - Introduce a dedicated transient timeout exception (`LlmStreamStallException`) produced when an attempt or stream watchdog timer expires while the caller's `CancellationToken` is not cancelled and operations are not paused.
-   - `TransientErrorDetector.IsTransient` must return `true` for `LlmStreamStallException` (unless already marked with `ResilienceConstants.RetriedKey`), while continuing to return `false` for explicit caller `OperationCanceledException` / `TaskCanceledException` and `OperationsPausedException`.
-
-### 2.3 Socket & Transport Hardening (`OllamaHttpConstants`, `OllamaChatClientFactory`, `OpenAiCompatibleChatClientFactory`)
+### 2.3 Socket & Transport Hardening (`OllamaHttpConstants`, `SocketsHttpHandler`)
 
 1. **Fast TCP Connect Timeout:**
-   - Configure `SocketsHttpHandler.ConnectTimeout` to **10 seconds** (`OllamaHttpConstants.DefaultConnectTimeout = TimeSpan.FromSeconds(10)`) so dropped SYN packets during an internet cut or host reboot fail within 10s and enter the backoff loop instead of blocking on a 21–120s OS timeout.
+   - Configure `SocketsHttpHandler.ConnectTimeout` to **10 seconds** (`OllamaHttpConstants.DefaultConnectTimeout = TimeSpan.FromSeconds(10)`).
+   - Dropped SYN packets during an internet cut or host reboot fail within 10s and enter the backoff loop instead of blocking on the OS TCP SYN timeout (21–120s).
 
 2. **OS-Level TCP Keep-Alive for HTTP/1.1 Connections:**
-   - Because `SocketsHttpHandler.KeepAlivePingDelay` only operates on HTTP/2+, configure OS-level TCP Keep-Alive on sockets created by `SocketsHttpHandler` (via `ConnectCallback` or socket options) with:
-     - `SocketOptionName.KeepAlive = true`
-     - `TcpKeepAliveTime = 15s`
-     - `TcpKeepAliveInterval = 5s`
-     - `TcpKeepAliveRetryCount = 3`
-   - Lower `PooledConnectionIdleTimeout` to **1 minute** so idle pooled sockets are recycled proactively.
+   - Because `SocketsHttpHandler.KeepAlivePingDelay` only applies to HTTP/2+, configure OS-level TCP Keep-Alive on sockets created by `SocketsHttpHandler` via `ConnectCallback`:
+     - Create a `Socket(SocketType.Stream, ProtocolType.Tcp)` with `NoDelay = true`.
+     - Enable `SocketOptionName.KeepAlive` with `TcpKeepAliveTime = 15` (15s), `TcpKeepAliveInterval = 5` (5s), and `TcpKeepAliveRetryCount = 3` (detecting dead peers within ~30s).
+     - Connect to `context.DnsEndPoint` using the caller's `CancellationToken` and return a `NetworkStream(socket, ownsSocket: true)`, ensuring `socket.Dispose()` is called on exception before rethrowing.
+   - Configure `PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1)` so idle pooled sockets are recycled proactively.
 
-3. **Decouple `HttpClient.Timeout` from the Multi-Minute Retry Loop:**
-   - Set `HttpClient.Timeout = Timeout.InfiniteTimeSpan` on the `HttpClient` instances created in [`OllamaChatClientFactory`](../../src/NightCodeForge.Agents/Inference/OllamaChatClientFactory.cs) and [`OpenAiCompatibleChatClientFactory`](../../src/NightCodeForge.Agents/Inference/OpenAiCompatibleChatClientFactory.cs) so `HttpClient` does not abort an in-progress multi-minute retry cycle across attempts (per-attempt/per-step 15-minute timeouts are enforced in [Step 11.37B](STEP_11_37B_TURN_LEVEL_RESILIENT_CHAT_CLIENT_AND_TOOL_RECOVERY.md)).
+3. **Targeted 15-Minute `HttpClient.Timeout`:**
+   - Keep `HttpClient.Timeout = TimeSpan.FromMinutes(Math.Max(1, options.RequestTimeoutMinutes))` (default **15 minutes**) in [`OllamaChatClientFactory`](../../src/NightCodeForge.Agents/Inference/OllamaChatClientFactory.cs) and [`OpenAiCompatibleChatClientFactory`](../../src/NightCodeForge.Agents/Inference/OpenAiCompatibleChatClientFactory.cs).
+   - **Do NOT** set `HttpClient.Timeout = Timeout.InfiniteTimeSpan`. Preserving the 15-minute timeout prevents unrecoverable process hangs if a connection stalls permanently, while comfortably allowing local models to recompute large prompt KV-caches after cold reloads.
 
 ---
 
 ## 3. Verification & Test Strategy
 
 1. **`TransientErrorDetectorTests` ([`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests)):**
-   - Verify `SocketError.ConnectionRefused` (direct and wrapped in `HttpRequestException` / `IOException`) returns `true` for `IsTransient`.
+   - Verify `SocketError.ConnectionRefused` (standalone and wrapped in `HttpRequestException` / `IOException`) returns `true` for `IsTransient`.
    - Verify `SocketError.TryAgain`, `HostNotFound`, `NoData`, `OperationAborted`, and `Interrupted` return `true`.
-   - Verify `LlmStreamStallException` returns `true`, whereas caller `OperationCanceledException` and `OperationsPausedException` return `false`.
+   - Verify caller `OperationCanceledException` and `OperationsPausedException` continue to return `false`.
+
 2. **`TransientHttpErrorRetryHandlerTests` ([`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests)):**
    - Verify `ConnectionRefused` is retried across attempts and succeeds when the server comes back online.
-   - Verify `MaxRetryDuration` (time-bounded 5-minute outage budget) stops retrying once total elapsed simulated time (`FakeTimeProvider`) exceeds `MaxRetryDuration`, and permits multiple retries within the 5-minute window with zero real wall-clock delay in tests.
+   - Verify `MaxRetryDuration` stops retrying once total simulated time exceeds `MaxRetryDuration`.
+   - Verify `RetryNotificationContext` hook is called on each retry attempt with accurate `RequestUri`, `RequestHeaders`, attempt, delay, elapsed, and remaining times.
    - Verify HTTP `Retry-After` header (delta seconds and date) on `429` and `503` responses is respected and clamped to remaining `MaxRetryDuration`.
+   - **Test Safety Requirement:** All unit tests verifying retry delays must inject `FakeTimeProvider` or explicit fast test options (`BaseDelay = 1ms`, `MaxDelay = 5ms`, `MaxRetries = 2`, `MaxRetryDuration = 50ms`) to avoid stalling test execution.
+
 3. **`OllamaSharpRetryBehaviorTests` ([`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)):**
-   - Update `GetResponseAsync_ConnectionRefused_FailsFastWithSingleAttempt` to verify that `ConnectionRefused` is now retried up to the configured retry budget and marked as retried upon exhaustion.
+   - Update `GetResponseAsync_ConnectionRefused_FailsFastWithSingleAttempt` to verify that `ConnectionRefused` is now retried up to the configured retry budget and marked with `ResilienceConstants.RetriedKey` upon exhaustion.
 
 ---
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Update `RetryPolicyOptions` with outage-grade defaults (`MaxRetries = 20`, `BaseDelay = 1s`, `MaxDelay = 30s`, `MaxRetryDuration = 5 minutes`) and enforce `MaxRetryDuration` + `Retry-After` header support in `TransientHttpErrorRetryHandler`.
-- [ ] Separate UI liveness/catalog probes (`ILlmGatewayService`, `ILlmModelCatalogService`) from the 5-minute inference retry loop in `InferenceServiceCollectionExtensions`.
-- [ ] Update `TransientErrorDetector` to classify `SocketError.ConnectionRefused`, `TryAgain`, `HostNotFound`, `NoData`, `OperationAborted`, `Interrupted`, `ClientResultException` transient statuses, and `LlmStreamStallException` as transient.
-- [ ] Disable built-in `System.ClientModel` retries (`maxRetries: 0`) in `OpenAiCompatibleChatClientFactory` to prevent retry multiplication.
-- [ ] Harden `SocketsHttpHandler` in `OllamaHttpConstants` / chat client factories with `ConnectTimeout = 10s`, OS-level TCP Keep-Alive sockets, `PooledConnectionIdleTimeout = 1m`, and `HttpClient.Timeout = Timeout.InfiniteTimeSpan`.
-- [ ] Add and update unit tests in `NightCodeForge.Core.Tests` and `NightCodeForge.Agents.Tests` using `TimeProvider` fakes; verify all tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
-
+- [ ] Introduce `LlmRetryPolicyOptions` with 5-minute outage defaults (`MaxRetries = 20`, `BaseDelay = 1s`, `MaxDelay = 30s`, `MaxRetryDuration = 300s`) and add `MaxRetryDuration` support to `RetryPolicyOptions`.
+- [ ] Add `RetryNotificationContext` and notification callback support to `TransientHttpErrorRetryHandler` and wire live `AgentActivityKind.Notice` broadcasting in the LLM chat client factories.
+- [ ] Enforce HTTP `Retry-After` header parsing (delta seconds and date) on 429 and 503 responses in `TransientHttpErrorRetryHandler`.
+- [ ] Remove `.AddTransientHttpErrorRetry()` from fast UI liveness and catalog probes (`ILlmGatewayService`, `ILlmModelCatalogService`) in `InferenceServiceCollectionExtensions`.
+- [ ] Update `TransientErrorDetector` to classify `SocketError.ConnectionRefused`, `TryAgain`, `HostNotFound`, `NoData`, `OperationAborted`, and `Interrupted` as transient.
+- [ ] Disable built-in `System.ClientModel` retries (`maxRetries: 0`) in `OpenAiCompatibleChatClientFactory`.
+- [ ] Harden `SocketsHttpHandler` in `OllamaHttpConstants` / chat client factories with `ConnectTimeout = 10s`, OS-level TCP Keep-Alive via `ConnectCallback`, and `PooledConnectionIdleTimeout = 1m`.
+- [ ] Retain targeted 15-minute `HttpClient.Timeout` (`RequestTimeoutMinutes`) across Ollama and OpenAI-compatible factories.
+- [ ] Add and update unit tests in `NightCodeForge.Core.Tests` and `NightCodeForge.Agents.Tests` using `FakeTimeProvider` or fast retry options; verify all tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
